@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/AccessStructure.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/TimingStats.h"
 
@@ -37,16 +38,18 @@ struct MeasureSpec {
   size_t warmup{2};
 };
 
-// Caps iterations for an encoder where every read decompresses the whole
-// payload, such as a block codec. The fine-grained range and gather sweeps run
-// hundreds of cells, and a full decompress per cell would otherwise dominate
-// wall-clock time. Warmup is dropped for the same reason, which makes these
-// timings noisier than the rest.
-inline MeasureSpec specFor(
-    const MeasureSpec& base,
-    bool wholePayloadCodec,
-    size_t blockCodecIters) {
-  if (!wholePayloadCodec) {
+// Caps iterations for a target where every read decompresses the whole
+// payload, such as a block codec shipped as a single block. The fine-grained
+// range and gather sweeps run hundreds of cells, and a full decompress per cell
+// would otherwise dominate wall-clock time. Warmup is dropped for the same
+// reason, which makes these timings noisier than the rest.
+//
+// Keyed on what the target reports rather than on a flag the arm declared.
+// --mlidc_outer_compression wraps every arm in a whole-payload codec without
+// any of them declaring one, so those runs went uncapped.
+inline MeasureSpec
+specFor(const MeasureSpec& base, ReadPath readPath, size_t blockCodecIters) {
+  if (readPath != ReadPath::kWholePayload) {
     return base;
   }
   MeasureSpec spec = base;

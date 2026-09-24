@@ -36,6 +36,30 @@ DEFINE_int32(grid, 16, "Grid resolution per axis; ~grid^2/2 cells in triangle");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
 DEFINE_bool(validate, false, "Round-trip check before measuring");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
+DEFINE_string(
+    range_sizes,
+    "",
+    "Comma-separated range lengths in elements, e.g. 1,8,64,512. Empty keeps "
+    "the fraction grid, which cannot reach lengths below N/grid. When set, "
+    "offsets are drawn uniformly instead of taken from the grid.");
+DEFINE_int32(
+    range_offsets,
+    32,
+    "Random offsets sampled per range length when --range_sizes is set. One "
+    "count for every size; --range_offsets_by_size overrides it.");
+DEFINE_string(
+    range_offsets_by_size,
+    "",
+    "Per-size offset counts, comma separated and positionally matched to "
+    "--range_sizes, e.g. 8,8,16,32,32,16,8,1. Empty uses --range_offsets for "
+    "every size.\n"
+    "How much the offset matters depends on the size. Measured spread across "
+    "offsets at fixed B: 1.03x at B=1, 1.54x at B=8, 1.86x at B=64, 7.44x at "
+    "B=512, 3.06x at B=4096, 1.62x at B=32768. A handful of offsets is enough "
+    "at either end -- one row lands the same way wherever it is, and a large "
+    "span averages over its own placement -- but the middle needs about 32 "
+    "before the median settles. A flat 32 buys nothing at the ends; a flat 8 "
+    "leaves the middle untrustworthy.");
 
 namespace facebook::nimble::mlidc {
 namespace {
@@ -43,10 +67,14 @@ namespace {
 struct Cell {
   size_t a{};
   size_t b{};
+  double aFrac{};
+  double bFrac{};
 };
 
 Cell resolveCell(double aFrac, double bFrac, size_t n) {
   Cell c;
+  c.aFrac = aFrac;
+  c.bFrac = bFrac;
   c.a = static_cast<size_t>(std::llround(aFrac * static_cast<double>(n)));
   c.b = std::max<size_t>(
       1, static_cast<size_t>(std::llround(bFrac * static_cast<double>(n))));
@@ -59,6 +87,9 @@ Cell resolveCell(double aFrac, double bFrac, size_t n) {
 
 } // namespace
 } // namespace facebook::nimble::mlidc
+
+#include <random>
+#include <sstream>
 
 constexpr std::string_view kDriver = "bench_decode_range";
 
@@ -94,6 +125,64 @@ int runBenchmark() {
       if (a + b <= 1.0 + 1e-9)
         ++cellCount;
 
+  std::vector<size_t> rangeSizes;
+  {
+    std::stringstream ss(FLAGS_range_sizes);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      if (!item.empty()) {
+        rangeSizes.push_back(static_cast<size_t>(std::stoull(item)));
+      }
+    }
+  }
+
+  // One cell list for the whole run, built before the encoder loop so a
+  // random offset per encoder does not compare them on different work.
+  std::vector<Cell> cells;
+  if (rangeSizes.empty()) {
+    for (double a : aFracs) {
+      for (double b : bFracs) {
+        if (a + b > 1.0 + 1e-9) {
+          continue;
+        }
+        cells.push_back(resolveCell(a, b, n));
+      }
+    }
+  } else {
+    std::vector<int> offsetsBySize;
+    {
+      std::stringstream ss(FLAGS_range_offsets_by_size);
+      std::string item;
+      while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+          offsetsBySize.push_back(std::stoi(item));
+        }
+      }
+    }
+    NIMBLE_CHECK(
+        offsetsBySize.empty() || offsetsBySize.size() == rangeSizes.size(),
+        "--range_offsets_by_size must have one entry per --range_sizes entry.");
+    std::mt19937_64 rng(seed);
+    for (size_t sizeIndex = 0; sizeIndex < rangeSizes.size(); ++sizeIndex) {
+      const size_t b = rangeSizes[sizeIndex];
+      if (b == 0 || b > n) {
+        continue;
+      }
+      const int offsetCount = offsetsBySize.empty() ? FLAGS_range_offsets
+                                                    : offsetsBySize[sizeIndex];
+      std::uniform_int_distribution<size_t> pick(0, n - b);
+      for (int i = 0; i < std::max(1, offsetCount); ++i) {
+        Cell c;
+        c.a = pick(rng);
+        c.b = b;
+        c.aFrac = static_cast<double>(c.a) / static_cast<double>(n);
+        c.bFrac = static_cast<double>(b) / static_cast<double>(n);
+        cells.push_back(c);
+      }
+    }
+  }
+  cellCount = cells.size();
+
   auto contextOrNull =
       makeSweepContext<Elem>(/*withOpenZL=*/true, cacheState, n);
   if (!contextOrNull.has_value()) {
@@ -125,6 +214,9 @@ int runBenchmark() {
       "encoding",
       "family",
       "variant",
+      "inventory",
+      "transform",
+      "input_order",
       "is_sequential",
       "fast_skip",
       "random_access",
@@ -148,6 +240,7 @@ int runBenchmark() {
       "elem_Meps",
       "input_MBps",
       "skipped"};
+  appendAccessColumns(csvColumns);
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_range.csv"
       : FLAGS_mlidc_output_csv;
@@ -176,7 +269,7 @@ int runBenchmark() {
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
           spec,
-          enc.wholePayloadCodec,
+          target->readPath(),
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
@@ -187,8 +280,8 @@ int runBenchmark() {
       if (FLAGS_validate && enc.variant != "fpe_noindex") {
         bool ok = true;
         std::vector<Elem> check;
-        for (double aFrac : aFracs) {
-          Cell c = resolveCell(aFrac, bFracs.front(), n);
+        for (size_t ci = 0; ci < cells.size() && ok; ++ci) {
+          const Cell c = cells[ci];
           check.assign(c.b, Elem{});
           target->materializeRange(
               static_cast<uint32_t>(c.a),
@@ -216,12 +309,14 @@ int runBenchmark() {
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
 
-      for (double aFrac : aFracs) {
-        for (double bFrac : bFracs) {
-          if (aFrac + bFrac > 1.0 + 1e-9)
-            continue;
-          const Cell c = resolveCell(aFrac, bFrac, n);
+      // Measured once per encoder rather than per cell: the build does not
+      // depend on which range runs against it, and every cell reports it so
+      // the range time can be read with or without construction.
+      const auto build = measureAccessStructureBuild<Elem>(
+          encSpec, cell.controller, cell.targets, *target);
 
+      {
+        for (const Cell& c : cells) {
           auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
             target->materializeRange(
                 static_cast<uint32_t>(c.a),
@@ -249,13 +344,15 @@ int runBenchmark() {
           setPayloadColumns(csv, payloadBytes, context.rawBytes());
           setMeasureColumns(csv, encSpec);
           csv.set("contract", std::string("range_into"));
-          csv.set("A_frac", aFrac);
-          csv.set("B_frac", bFrac);
+          csv.set("A_frac", c.aFrac);
+          csv.set("B_frac", c.bFrac);
           csv.set("A", static_cast<int64_t>(c.a));
           csv.set("B", static_cast<int64_t>(c.b));
           setTimingColumns(csv, result);
           csv.set("elem_Meps", elemMeps);
           csv.set("input_MBps", inputMBps);
+          setAccessColumns<Elem>(
+              csv, *target, build.time.median_ns, result.time.median_ns);
           csv.set("skipped", int64_t{0});
           csv.endRow();
         }

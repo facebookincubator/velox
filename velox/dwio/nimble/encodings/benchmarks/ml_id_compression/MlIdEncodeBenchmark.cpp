@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include <sys/resource.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
@@ -47,6 +49,26 @@ int runBenchmark() {
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const size_t iters = static_cast<size_t>(FLAGS_mlidc_iters);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
+
+  // The encode cache is switched off here, whatever was asked for. This
+  // driver times enc.factory(), and the cache sits inside it: with a cache
+  // directory set, later iterations would load instead of encode, silently
+  // skewing the measured median. Refused in code rather than left to
+  // whoever writes the launcher, since the failure would be silent.
+  {
+    std::string cacheDir;
+    gflags::GetCommandLineOption("mlidc_encode_cache_dir", &cacheDir);
+    if (!cacheDir.empty()) {
+      std::cout << "  [encode] ignoring --mlidc_encode_cache_dir: this driver "
+                   "measures the encode it would otherwise load\n";
+      gflags::SetCommandLineOption("mlidc_encode_cache_dir", "");
+    }
+  }
+
+  // A Nimble target builds its decoder when first read rather than inside the
+  // timed encode. OpenZL's target builds none, and the one read this driver
+  // makes, --validate, is outside the timing.
+  deferDecoderConstruction() = true;
 
   // No cache sweep here, so the state is fixed at hot.
   auto contextOrNull =
@@ -118,14 +140,31 @@ int runBenchmark() {
 
     for (const auto& enc : context.encoders) {
       facebook::nimble::Encoding::Options opts;
+      // Only the upstream feature switches are applied here; other sweep
+      // flags do not reach this driver.
+      applyUpstreamFeatures(FLAGS_mlidc_sis_upstream_features, opts);
       std::unique_ptr<NimbleBenchTargetBase<Elem>> target;
 
       CacheController controller(hotPolicy, topo);
 
       try {
+        // Process CPU time across every call measure() makes, warmup
+        // included, so that an arm encoding on several threads reports what
+        // it spends as well as how long it takes.
+        rusage before{};
+        getrusage(RUSAGE_SELF, &before);
         auto result = measure(spec, controller, emptyTargets, [&]() {
           target = enc.factory(data, opts);
         });
+        rusage after{};
+        getrusage(RUSAGE_SELF, &after);
+        const auto cpuMicros = [](const rusage& usage) {
+          return (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1'000'000L +
+              usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+        };
+        const double cpuMsPerCall =
+            static_cast<double>(cpuMicros(after) - cpuMicros(before)) / 1e3 /
+            static_cast<double>(spec.iterations + spec.warmup);
 
         const size_t payloadBytes = target->payloadSize();
         const double ratio = rawBytes > 0
@@ -149,7 +188,9 @@ int runBenchmark() {
             timeNs > 0.0 ? static_cast<double>(rawBytes) / timeNs * 1e3 : 0.0;
 
         std::cout << "  " << enc.name << ": " << payloadBytes << " B, "
-                  << std::fixed << std::setprecision(1) << meps << " Melem/s\n";
+                  << std::fixed << std::setprecision(1) << meps << " Melem/s\n"
+                  << "    cpu: " << std::setprecision(2) << cpuMsPerCall
+                  << " ms per encode\n";
 
         csv.beginRow();
         setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);

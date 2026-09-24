@@ -211,6 +211,22 @@ class SubIntSplitEncoding
       const Encoding::Options& options);
 #endif
 
+  // True exactly when this stream carries a transform: reads are then served
+  // out of blockCache_, and reset() keeps that cache. With no blocking
+  // recorded, undoing the transform spans the whole column, so the first
+  // probe decodes everything and later probes copy from cache.
+  bool retainsDecodeCache() const final {
+    return transformInfo_.anyTransform();
+  }
+
+  // Clears the cache so the next read decodes again; materializeTransformed
+  // treats an empty blockCache_ as a miss, so this is a real invalidation.
+  // shrink_to_fit also releases the memory.
+  void dropDecodeCache() final {
+    blockCache_.clear();
+    blockCache_.shrink_to_fit();
+  }
+
   std::string debugString(int offset) const final;
 
  private:

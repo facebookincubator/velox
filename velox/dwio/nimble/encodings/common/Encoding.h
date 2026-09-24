@@ -617,6 +617,20 @@ class Encoding {
     NIMBLE_UNREACHABLE("materializeIndices on non-dictionary encoding");
   }
 
+  /// Whether reads leave a decoded span resident that later reads are
+  /// served from, so the first read after construction carries a one-time
+  /// build cost the ones after it do not. A benchmark needs this to
+  /// attribute that first cost correctly rather than to whichever read
+  /// happens to come first.
+  virtual bool retainsDecodeCache() const {
+    return false;
+  }
+
+  /// Drops the retained decoded span, so the next read rebuilds it. Paired
+  /// with retainsDecodeCache() to let a measurement separate the first
+  /// read's cost from the rest. A no-op where there is no cache.
+  virtual void dropDecodeCache() {}
+
   // A string for debugging/iteration that gives details about *this.
   // Offset adds that many spaces before the msg (useful for children
   // encodings).
