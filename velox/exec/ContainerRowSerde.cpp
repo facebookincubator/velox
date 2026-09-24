@@ -312,6 +312,38 @@ void deserializeOne<TypeKind::ROW>(
   result.setNull(index, false);
 }
 
+// Forward declarations; defined below deserializeArray so
+// deserializeArrayElements can call these specializations.
+template <>
+void deserializeOne<TypeKind::ARRAY>(
+    ByteInputStream& in,
+    vector_size_t index,
+    BaseVector& result);
+
+template <>
+void deserializeOne<TypeKind::MAP>(
+    ByteInputStream& in,
+    vector_size_t index,
+    BaseVector& result);
+
+// Deserializes 'size' elements of a fixed 'Kind' into 'elements' starting at
+// 'offset', reading null flags from 'nulls'.
+template <TypeKind Kind>
+void deserializeArrayElements(
+    ByteInputStream& in,
+    BaseVector& elements,
+    vector_size_t size,
+    vector_size_t offset,
+    const uint64_t* nulls) {
+  for (auto i = 0; i < size; ++i) {
+    if (bits::isBitSet(nulls, i)) {
+      elements.setNull(i + offset, true);
+    } else {
+      deserializeOne<Kind>(in, i + offset, elements);
+    }
+  }
+}
+
 // Reads the size, null flags and deserializes from 'in', appending to
 // the end of 'elements'. Returns the number of added elements and
 // sets 'offset' to the index of the first added element.
@@ -323,13 +355,26 @@ vector_size_t deserializeArray(
   offset = elements.size();
   elements.resize(offset + size);
   NullsReader nulls(in, size);
+  const auto kind = elements.typeKind();
+  // Only non-null elements are serialized. When there are none, the element
+  // kind may be non-dispatchable (UNKNOWN, OPAQUE, FUNCTION), so set the null
+  // flags directly instead of dispatching on it.
+  bool hasNonNull = false;
   for (auto i = 0; i < size; ++i) {
-    if (bits::isBitSet(nulls.data(), i)) {
-      elements.setNull(i + offset, true);
-    } else {
-      deserializeSwitch(in, i + offset, elements);
+    if (!bits::isBitSet(nulls.data(), i)) {
+      hasNonNull = true;
+      break;
     }
   }
+  if (!hasNonNull) {
+    for (auto i = 0; i < size; ++i) {
+      elements.setNull(i + offset, true);
+    }
+    return size;
+  }
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+  VELOX_DYNAMIC_TYPE_DISPATCH(
+      deserializeArrayElements, kind, in, elements, size, offset, nulls.data());
   return size;
 }
 
