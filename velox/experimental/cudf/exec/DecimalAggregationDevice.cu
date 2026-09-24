@@ -98,16 +98,20 @@ struct UnpackStateFunctor {
   cudf::column_device_view state;
   cuda::std::span<__int128_t> sums;
   cuda::std::span<int64_t> counts;
-  int32_t* invalidState;
+  int32_t* invalidStateFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
     if (state.is_null(idx)) {
       return;
     }
     auto const serialized = state.element<cudf::string_view>(idx);
+    auto const isAligned = reinterpret_cast<std::uintptr_t>(serialized.data()) %
+            alignof(DecimalSumState) ==
+        0;
     if (serialized.size_bytes() !=
-        static_cast<cudf::size_type>(detail::kDecimalSumStateSize)) {
-      atomicOr(invalidState, 1);
+            static_cast<cudf::size_type>(detail::kDecimalSumStateSize) ||
+        !isAligned) {
+      atomicOr(invalidStateFlag, 1);
       return;
     }
     auto const* packed =
@@ -324,7 +328,7 @@ bool unpackDecimalSumState(
             .state = *stateDeviceView,
             .sums = cuda::std::span<__int128_t>{sumView.data<__int128_t>(), n},
             .counts = cuda::std::span<int64_t>{countView.data<int64_t>(), n},
-            .invalidState = invalidState.data()};
+            .invalidStateFlag = invalidState.data()};
       },
       stream);
   return invalidState.value(stream) == 0;

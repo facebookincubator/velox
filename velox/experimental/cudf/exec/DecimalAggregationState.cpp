@@ -80,11 +80,6 @@ DecimalSumStateColumns deserializeDecimalSumState(
   }
 
   cudf::strings_column_view strings(stateCol);
-  auto const offsetsView = strings.offsets();
-  VELOX_CHECK_LE(
-      static_cast<size_t>(stateCol.offset()) + static_cast<size_t>(numRows) + 1,
-      static_cast<size_t>(offsetsView.size()),
-      "Decimal sum state offsets do not include every selected row");
 
   auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
   auto const [payloadBegin, payloadEnd] =
@@ -130,8 +125,9 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   VELOX_CHECK(
       detail::unpackDecimalSumState(stateCol, sumView, countView, stream),
-      "Decimal sum state requires every non-null row to be {} bytes",
-      detail::kDecimalSumStateSize);
+      "Decimal sum state requires every non-null row to be {} bytes and {}-byte aligned",
+      detail::kDecimalSumStateSize,
+      alignof(int64_t));
 
   if (stateCol.nullable()) {
     auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);

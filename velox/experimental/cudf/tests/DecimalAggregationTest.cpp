@@ -1368,6 +1368,42 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
   EXPECT_EQ(outCount[2], 2);
 }
 
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateUncompactedSlice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  std::vector<int64_t> sums = {10, 20, 0, 40, 50};
+  std::vector<int64_t> counts = {1, 2, 0, 4, 5};
+  std::vector<bool> sumValid = {true, true, false, true, true};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  cudf::strings_column_view strings(stateCol->view());
+  EXPECT_EQ(
+      strings.chars_size(stream),
+      static_cast<int64_t>(sums.size()) * 32); // 32 == kDecimalSumStateSize
+
+  auto slices = cudf::slice(stateCol->view(), {1, 4});
+  ASSERT_EQ(slices.size(), 1);
+  ASSERT_EQ(slices.front().offset(), 1);
+
+  auto result = deserializeDecimalSumState(slices.front(), 2, stream);
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  ASSERT_EQ(outSum.size(), 3);
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(20));
+  EXPECT_EQ(outCount[0], 2);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(40));
+  EXPECT_EQ(outCount[2], 4);
+}
+
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
@@ -1644,6 +1680,43 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
   VELOX_ASSERT_THROW(
       deserializeDecimalSumState(stateCol->view(), 2, stream),
       "Decimal sum state requires every non-null row to be 32 bytes");
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsMisalignedRow) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto sumCol = makeDecimalColumn<int64_t>({200}, 2, nullptr, stream);
+  auto countCol = makeInt64Column({2}, nullptr, stream);
+  auto alignedState =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+  cudf::strings_column_view alignedStrings(alignedState->view());
+
+  // The only non-null row has the correct width, but starts four bytes into
+  // the chars buffer. The aggregate payload checks still accept the layout:
+  // 32 non-null bytes in a 64-byte payload across three rows.
+  auto offsetsCol = makeFixedWidthColumn<int32_t>(
+      cudf::data_type{cudf::type_id::INT32}, {0, 4, 36, 64}, nullptr, stream);
+  rmm::device_buffer charsBuf(64, stream);
+  auto status = cudaMemcpyAsync(
+      static_cast<uint8_t*>(charsBuf.data()) + 4,
+      alignedStrings.chars_begin(stream),
+      32, // kDecimalSumStateSize
+      cudaMemcpyDeviceToDevice,
+      stream.get());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  std::vector<bool> valid = {false, true, false};
+  auto [nullMask, nullCount] = makeNullMask(valid, stream);
+  auto stateCol = cudf::make_strings_column(
+      3,
+      std::move(offsetsCol),
+      std::move(charsBuf),
+      nullCount,
+      std::move(nullMask));
+
+  VELOX_ASSERT_THROW(
+      deserializeDecimalSumState(stateCol->view(), 2, stream),
+      "Decimal sum state requires every non-null row to be 32 bytes and 8-byte aligned");
 }
 
 TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
