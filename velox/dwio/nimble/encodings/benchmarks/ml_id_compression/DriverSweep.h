@@ -179,6 +179,14 @@ makeSweepContext(bool withOpenZL, CacheState cacheState, uint32_t rows) {
     }
     context.encoders = std::move(filtered);
   }
+  // Outermost and after every arm is registered, blackbox codecs included,
+  // so a writer-sized chunk is what selection, the planner and each codec
+  // see.
+  VELOX_CHECK_GE(FLAGS_mlidc_chunk_rows, 0);
+  for (auto& entry : context.encoders) {
+    entry = withChunking<T>(
+        std::move(entry), static_cast<uint32_t>(FLAGS_mlidc_chunk_rows));
+  }
   context.datasets = defaultDatasets<T>();
   context.topology = CacheTopology::detect();
 

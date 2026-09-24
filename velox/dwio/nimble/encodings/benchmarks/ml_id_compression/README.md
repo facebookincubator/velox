@@ -352,6 +352,7 @@ them from a scratch directory.
 |---|---|---|
 | `--mlidc_dtype` | int64 | Element type: `int32`, `uint32`, `int64`, `uint64`, `float`, `double` |
 | `--mlidc_rows` | 100000 | Rows per dataset |
+| `--mlidc_chunk_rows` | 0 | Encode each column as independently encoded chunks of this many rows, as a chunking Nimble writer flushes a long stream; reads keep the column's row numbering. 0 encodes one block. The writer's largest chunk, 20 MiB raw, is 2,621,440 rows of a 64-bit type |
 | `--mlidc_iters` | 5 | Iterations per (encoder, dataset) cell |
 | `--mlidc_seed` | 42 | Seed for the synthetic generators |
 | `--mlidc_file` | "" | Text file, one value per line, parsed as `--mlidc_dtype`, added as a dataset |

@@ -26,6 +26,13 @@ DEFINE_string(
     "JSON manifest sidecar path");
 DEFINE_int32(mlidc_rows, 100000, "Number of rows per dataset instance");
 DEFINE_int32(
+    mlidc_chunk_rows,
+    0,
+    "Encode each column as independently encoded chunks of this many rows, as "
+    "a chunking Nimble writer flushes a long stream. 0 encodes the column as "
+    "one block. The writer's maximum chunk is 20 MiB raw "
+    "(kChunkingWriterMaxChunkSize), 2,621,440 rows of a 64-bit type.");
+DEFINE_int32(
     mlidc_iters,
     5,
     "Benchmark iterations per (encoder, dataset) pair");

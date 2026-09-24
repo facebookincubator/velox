@@ -67,6 +67,7 @@
 DECLARE_string(mlidc_output_csv);
 DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);
+DECLARE_int32(mlidc_chunk_rows);
 DECLARE_int32(mlidc_iters);
 DECLARE_int64(mlidc_seed);
 DECLARE_string(mlidc_file);
@@ -955,6 +956,201 @@ EncoderEntry<T> withMaterializedAccess(EncoderEntry<T> entry) {
         inner(data, opts), static_cast<uint32_t>(data.size()));
     // The inner factory has already encoded; calling encode() here would
     // encode a second time.
+    return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(target));
+  };
+  return entry;
+}
+
+// ---------------------------------------------------------------------------
+// Writer-sized chunks
+// ---------------------------------------------------------------------------
+
+/// Encodes a column as consecutive, independently encoded chunks of a fixed
+/// row count, the way a chunking Nimble writer flushes a long stream, and
+/// serves reads in the column's row numbering.
+///
+/// Each chunk goes through the arm's own factory, so selection, the split
+/// planner and any outer codec run per chunk exactly as they would for a
+/// chunk a writer flushed. A read that crosses a chunk boundary is split
+/// there; a range list is partitioned so each chunk sees one call with its
+/// own rows, which is what a reader positioned on each chunk in turn issues.
+template <typename T>
+class ChunkedTarget : public NimbleBenchTargetBase<T> {
+ public:
+  /// Builds and encodes one chunk.
+  using Factory = std::function<std::unique_ptr<NimbleBenchTargetBase<T>>(
+      const Vector<T>&,
+      const Encoding::Options&)>;
+
+  ChunkedTarget(Factory factory, uint32_t chunkRows)
+      : factory_{std::move(factory)}, chunkRows_{chunkRows} {
+    VELOX_CHECK_GT(chunkRows_, 0);
+  }
+
+  void encode(const Vector<T>& data, const Encoding::Options& opts) override {
+    chunks_.clear();
+    chunkStarts_.clear();
+    const auto numRows = static_cast<uint32_t>(data.size());
+    for (uint32_t begin = 0; begin < numRows; begin += chunkRows_) {
+      const uint32_t end = begin + std::min(chunkRows_, numRows - begin);
+      Vector<T> chunk{
+          benchmarks::benchmarkPool().get(),
+          data.data() + begin,
+          data.data() + end};
+      chunkStarts_.push_back(begin);
+      chunks_.push_back(factory_(chunk, opts));
+    }
+    chunkStarts_.push_back(numRows);
+  }
+
+  void materializeAll(T* dst, uint32_t n) override {
+    materializeRange(0, n, dst);
+  }
+
+  void materializeRange(uint32_t begin, uint32_t count, T* dst) override {
+    const uint32_t end = begin + count;
+    for (size_t chunk = chunkOf(begin); begin < end; ++chunk) {
+      const uint32_t chunkEnd = std::min(end, chunkStarts_[chunk + 1]);
+      chunks_[chunk]->materializeRange(
+          begin - chunkStarts_[chunk], chunkEnd - begin, dst);
+      dst += chunkEnd - begin;
+      begin = chunkEnd;
+    }
+  }
+
+  // Ranges arrive sorted and disjoint, as the drivers generate them.
+  void skipThenMaterialize(std::span<const nimble::RowRange> ranges, T* dst)
+      override {
+    size_t chunk = ranges.empty() ? 0 : chunkOf(ranges.front().startRow);
+    localRanges_.clear();
+    const auto flush = [&]() {
+      if (localRanges_.empty()) {
+        return;
+      }
+      chunks_[chunk]->skipThenMaterialize(localRanges_, dst);
+      for (const auto& range : localRanges_) {
+        dst += range.numRows();
+      }
+      localRanges_.clear();
+    };
+    for (const auto& range : ranges) {
+      uint32_t start = range.startRow;
+      while (start < range.endRow) {
+        while (start >= chunkStarts_[chunk + 1]) {
+          flush();
+          ++chunk;
+        }
+        const uint32_t stop = std::min(range.endRow, chunkStarts_[chunk + 1]);
+        localRanges_.emplace_back(
+            start - chunkStarts_[chunk], stop - chunkStarts_[chunk]);
+        start = stop;
+      }
+    }
+    flush();
+  }
+
+  size_t payloadSize() const override {
+    size_t total{0};
+    for (const auto& chunk : chunks_) {
+      total += chunk->payloadSize();
+    }
+    return total;
+  }
+
+  size_t residentBytes() const override {
+    size_t total{0};
+    for (const auto& chunk : chunks_) {
+      total += chunk->residentBytes();
+    }
+    return total;
+  }
+
+  std::vector<std::span<const std::byte>> internalBuffers() const override {
+    std::vector<std::span<const std::byte>> buffers;
+    for (const auto& chunk : chunks_) {
+      auto chunkBuffers = chunk->internalBuffers();
+      buffers.insert(buffers.end(), chunkBuffers.begin(), chunkBuffers.end());
+    }
+    return buffers;
+  }
+
+  // Every chunk is built by the same factory, so they share a read path.
+  ReadPath readPath() const override {
+    return chunks_.front()->readPath();
+  }
+
+  bool buildsAccessStructure() const override {
+    return chunks_.front()->buildsAccessStructure();
+  }
+
+  void buildAccessStructure() override {
+    for (auto& chunk : chunks_) {
+      chunk->buildAccessStructure();
+    }
+  }
+
+  void discardAccessStructure() override {
+    for (auto& chunk : chunks_) {
+      chunk->discardAccessStructure();
+    }
+  }
+
+  // The first chunk stands for the column: plans can differ between chunks,
+  // and a per-chunk census is the chunk sweep's to report, not describe()'s.
+  std::string describe() override {
+    return chunks_.front()->describe();
+  }
+
+  std::string describeTree() override {
+    return chunks_.front()->describeTree();
+  }
+
+  std::string describeNodeEstimates() override {
+    return chunks_.front()->describeNodeEstimates();
+  }
+
+  std::string describeSectionChoices() override {
+    return chunks_.front()->describeSectionChoices();
+  }
+
+  /// Chunks the last encode() produced.
+  size_t numChunks() const {
+    return chunks_.size();
+  }
+
+ private:
+  // Index of the chunk holding row.
+  size_t chunkOf(uint32_t row) const {
+    return static_cast<size_t>(
+        std::upper_bound(chunkStarts_.begin(), chunkStarts_.end(), row) -
+        chunkStarts_.begin() - 1);
+  }
+
+  Factory factory_;
+  uint32_t chunkRows_;
+  std::vector<std::unique_ptr<NimbleBenchTargetBase<T>>> chunks_;
+  // First row of each chunk, then the row count, so chunk i covers
+  // [chunkStarts_[i], chunkStarts_[i + 1]).
+  std::vector<uint32_t> chunkStarts_;
+  // Reused across calls so partitioning a range list allocates nothing once
+  // warm, keeping the split out of what a timed read measures.
+  std::vector<nimble::RowRange> localRanges_;
+};
+
+/// Wraps entry's factory so the column is encoded as chunks of chunkRows rows.
+/// Returns the entry unchanged for chunkRows == 0, the one-block setting. The
+/// name is kept: the chunk size is a property of the run, recorded in the
+/// manifest, not of the arm.
+template <typename T>
+EncoderEntry<T> withChunking(EncoderEntry<T> entry, uint32_t chunkRows) {
+  if (chunkRows == 0) {
+    return entry;
+  }
+  auto inner = std::move(entry.factory);
+  entry.factory = [inner = std::move(inner), chunkRows](
+                      const Vector<T>& data, const Encoding::Options& opts) {
+    auto target = std::make_unique<ChunkedTarget<T>>(inner, chunkRows);
+    target->encode(data, opts);
     return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(target));
   };
   return entry;
@@ -1985,6 +2181,55 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
           encoders.push_back(std::move(entry));
         }
       }
+    }
+  }
+
+  // Each transform off, as chosen, and forced, for the transform ablation.
+  // Derived from an existing arm and differing from it in one switch, so any
+  // gap between the pair is that switch's. Chosen is the arm itself: the
+  // row frame is on by default in SIS/realNested, and the key-derived
+  // transform is offered in SIS/key_derived (off is SIS/realNested).
+  {
+    struct AblationArm {
+      const char* base;
+      const char* name;
+      std::function<void(Encoding::Options&)> apply;
+    };
+    const std::vector<AblationArm> ablations{
+        {"SIS/key_derived",
+         "SIS/key_derived_forced",
+         [](Encoding::Options& o) { o.subIntSplitForceApply = true; }},
+        {"SIS/realNested",
+         "SIS/row_frame_off",
+         [](Encoding::Options& o) { o.subIntSplitRowFrame = false; }},
+        {"SIS/realNested",
+         "SIS/row_frame_forced",
+         [](Encoding::Options& o) { o.subIntSplitRowFrameForceApply = true; }},
+    };
+    std::vector<EncoderEntry<T>> derived;
+    for (const auto& ablation : ablations) {
+      for (const char* suffix : {"", "+view"}) {
+        const auto base = std::find_if(
+            encoders.begin(), encoders.end(), [&](const auto& entry) {
+              return entry.name == std::string(ablation.base) + suffix;
+            });
+        if (base == encoders.end()) {
+          continue;
+        }
+        EncoderEntry<T> entry = *base;
+        entry.name = std::string(ablation.name) + suffix;
+        entry.factory = [factory = base->factory, apply = ablation.apply](
+                            const Vector<T>& data,
+                            const Encoding::Options& opts) {
+          Encoding::Options o = opts;
+          apply(o);
+          return factory(data, o);
+        };
+        derived.push_back(std::move(entry));
+      }
+    }
+    for (auto& entry : derived) {
+      encoders.push_back(std::move(entry));
     }
   }
 
