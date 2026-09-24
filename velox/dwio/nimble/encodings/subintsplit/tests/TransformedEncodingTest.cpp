@@ -118,6 +118,29 @@ TEST_F(TransformedEncodingTest, roundTripsThroughTheEncoding) {
   }
 }
 
+// The forced ablation arm leaves the key to the search: every candidate key
+// forces the transform on the other sections, and the smallest of those is
+// kept, so the stream is transformed whatever the cost comparison would have
+// said, and still reads back.
+TEST_F(TransformedEncodingTest, forcedWithASearchedKeyTransforms) {
+  const auto values = packedIdentifiers(4096);
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitTransform =
+      static_cast<uint8_t>(subintsplit::TransformId::KeyDerived);
+  options.subIntSplitKeySection = 0xFF;
+  options.subIntSplitForceApply = true;
+  const auto encoded = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+      buffer, values, CompressionType::Uncompressed, options);
+
+  subintsplit::TransformInfo info;
+  const auto sections =
+      subintsplit::parseSections(encoded, Encoding::kPrefixSize, &info);
+  ASSERT_GT(sections.size(), 1u);
+  ASSERT_TRUE(info.anyTransform());
+  expectMaterializes(encoded, values, options);
+}
+
 // Layout capture is a third reader of this header, after the encoding and the
 // view. It used to walk the header itself and treat the byte after splitCount
 // as reserved, which is the byte that now says whether a transform block

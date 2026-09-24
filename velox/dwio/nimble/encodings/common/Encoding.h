@@ -175,12 +175,20 @@ class Encoding {
     /// format.
     std::unordered_set<EncodingType> subIntSplitAllowedEncodings;
 
-    /// Test-only: skips the opt-in cost comparison that keeps a SubIntSplit
-    /// transform only where it encodes smaller, and applies
+    /// Test and ablation only: skips the opt-in cost comparison that keeps a
+    /// SubIntSplit transform only where it encodes smaller, and applies
     /// subIntSplitTransform to every eligible section regardless. Requires
-    /// subIntSplitTransform to name a real transform and subIntSplitKeySection
-    /// to be a valid section. Never set outside tests.
+    /// subIntSplitTransform to name a real transform. With
+    /// subIntSplitKeySection at 0xFF the key is still searched: each
+    /// candidate key forces the transform on every other section, and the
+    /// smallest of those forced attempts is kept. Never set in a writer.
     bool subIntSplitForceApply = false;
+
+    /// Test and ablation only: keeps a fitted row frame without pricing the
+    /// residuals against the values, so its cost where the planner would
+    /// have declined it can be measured. Inert unless subIntSplitRowFrame is
+    /// set, and where no frame fits. Never set in a writer.
+    bool subIntSplitRowFrameForceApply = false;
 
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader

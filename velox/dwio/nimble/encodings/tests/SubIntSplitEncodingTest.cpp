@@ -763,6 +763,45 @@ TEST(SubIntSplitEncodingTests, stepFrameRoundTripsTimestampCounterIds) {
   EXPECT_FALSE(fitStepFrame(std::span<const uint64_t>(unevenSorted)).active());
 }
 
+// The forced ablation keeps a fitted frame without pricing it, so it is never
+// smaller than the chosen stream, always carries the frame where one fits, and
+// reads back like any framed stream. Where nothing fits it has no frame to
+// force and matches the unframed stream.
+TEST(SubIntSplitEncodingTests, forcedRowFrameIsKeptWhereItFits) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const auto encode = [&](const std::vector<uint64_t>& values,
+                          const nimble::Encoding::Options& options) {
+    return nimble::EncodingFactory::encode<uint64_t>(
+        std::make_unique<ExtendedSubIntSplitPolicy<uint64_t>>(),
+        values,
+        buffer,
+        options);
+  };
+  nimble::Encoding::Options forced;
+  forced.subIntSplitRowFrameForceApply = true;
+
+  const auto ids = makeTimestampCounterIds(65'536, 5);
+  const auto chosen = encode(ids, nimble::Encoding::Options{});
+  const auto kept = encode(ids, forced);
+  EXPECT_TRUE(parseRowFrame(kept).active());
+  EXPECT_GE(kept.size(), chosen.size());
+  expectBitwiseEqual(ids, decodeAll<uint64_t>(kept, *pool));
+
+  std::vector<uint64_t> noise(65'536);
+  uint64_t state = 0x9E3779B97F4A7C15ULL;
+  for (auto& value : noise) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    value = state >> 20;
+  }
+  nimble::Encoding::Options unframed;
+  unframed.subIntSplitRowFrame = false;
+  const auto forcedNoise = encode(noise, forced);
+  EXPECT_FALSE(parseRowFrame(forcedNoise).active());
+  EXPECT_EQ(forcedNoise.size(), encode(noise, unframed).size());
+  expectBitwiseEqual(noise, decodeAll<uint64_t>(forcedNoise, *pool));
+}
+
 // Streams written before the row frame became a transform must still decode, so
 // one written at dac77caca is kept verbatim. The writer no longer reproduces
 // it: the whole-value floor stores the same residuals as one section, 10 bytes

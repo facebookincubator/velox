@@ -1358,6 +1358,7 @@ std::string_view SubIntSplitEncoding<T>::encode(
   deltaOptions.subIntSplitRowFrame = false;
   deltaOptions.subIntSplitAutoTransform = false;
   deltaOptions.subIntSplitForceApply = false;
+  deltaOptions.subIntSplitRowFrameForceApply = false;
   deltaOptions.subIntSplitTransform =
       static_cast<uint8_t>(subintsplit::TransformId::None);
   const std::string_view delta = encodeResiduals(
@@ -1449,6 +1450,11 @@ std::string_view SubIntSplitEncoding<T>::encodeValues(
                           nullptr,
                           nullptr,
                           {});
+  }
+
+  if (options.subIntSplitRowFrameForceApply) {
+    return encodeResiduals(
+        selection, residuals, buffer, options, rowFrame, nullptr, nullptr, {});
   }
 
   // A step frame produces runs of whole values, which the planner's run
@@ -2010,10 +2016,6 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     NIMBLE_CHECK_NOT_NULL(
         transform,
         "subIntSplitForceApply requires a real subIntSplitTransform.");
-    NIMBLE_CHECK_NE(
-        keySection,
-        uint8_t{0xFF},
-        "subIntSplitForceApply requires a pinned subIntSplitKeySection.");
   }
 
   transformInfo.transformIds.assign(splitCount, 0);
