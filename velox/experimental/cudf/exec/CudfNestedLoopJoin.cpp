@@ -228,11 +228,9 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
       CudfJoinOutputLayout(probeType_, buildType_, outputType_, joinType_);
 }
 
-void CudfNestedLoopJoinProbe::initialize() {
+void CudfNestedLoopJoinProbe::doInitialize() {
   // Filter construction is deferred from the ctor to avoid memory allocation
   // during driver initialization. Mirrors #17045 for CudfHashJoinProbe.
-  Operator::initialize();
-
   if (!joinNode_->joinCondition()) {
     return;
   }
@@ -413,7 +411,7 @@ bool CudfNestedLoopJoinProbe::isFinished() {
   return false;
 }
 
-exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
+exec::BlockingReason CudfNestedLoopJoinProbe::doIsBlocked(
     ContinueFuture* future) {
   // For right/full join: after build data is available, also block on peer
   // probes finishing (allPeersFinished barrier in noMoreInput).

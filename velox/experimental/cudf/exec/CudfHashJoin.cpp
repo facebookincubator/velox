@@ -439,9 +439,7 @@ void CudfHashJoinProbe::waitForBuildReady(cuda::stream_ref stream) {
   }
 }
 
-void CudfHashJoinProbe::initialize() {
-  Operator::initialize();
-
+void CudfHashJoinProbe::doInitialize() {
   if (!joinNode_->filter()) {
     return;
   }
@@ -2234,7 +2232,7 @@ bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
       isRightSemiProjectJoin(joinType);
 }
 
-exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfHashJoinProbe::doIsBlocked(ContinueFuture* future) {
   if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin() ||
        joinNode_->isFullJoin()) &&
       hashObject_.has_value()) {
