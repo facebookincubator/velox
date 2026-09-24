@@ -1004,11 +1004,20 @@ based on the value of <cite>adjust_timestamp_to_session_timezone</cite>, as desc
 </section>
 <section id="from-timestamp-with-time-zone">
 <h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#from-timestamp-with-time-zone" title="Link to this heading">¶</a></h3>
-<p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
-<p>If set to true, input timezone is ignored and timestamp is returned as is. For example,
-“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 08:00:00.000”.</p>
-<p>Otherwise, timestamp is shifted by the offset of the timezone. For example,
-“1970-01-01 00:00:00.000 America/Los_Angeles” becomes “1970-01-01 00:00:00.000”.</p>
+<p>The result depends on <cite>adjust_timestamp_to_session_timezone</cite> and
+<cite>legacy_timestamp_with_timezone</cite>.</p>
+<p>When <cite>adjust_timestamp_to_session_timezone</cite> is true, the cast returns the UTC
+instant for either <cite>legacy_timestamp_with_timezone</cite> setting. For example,
+“1970-01-01 00:00:00.000 America/Los_Angeles” becomes
+“1970-01-01 08:00:00.000”.</p>
+<p>When <cite>adjust_timestamp_to_session_timezone</cite> is false, the render time zone
+depends on <cite>legacy_timestamp_with_timezone</cite>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">true</span></code> uses the time zone embedded in the value. The example above becomes
+“1970-01-01 00:00:00.000”.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">false</span></code> uses the session time zone. With session time zone
+“America/New_York”, the example above becomes “1970-01-01 03:00:00.000”.</p></li>
+</ul>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>-- `adjust_timestamp_to_session_timezone` is true
 SELECT to_unixtime(cast(timestamp '1970-01-01 00:00:00 America/Los_Angeles' as timestamp)); -- 28800.0 (1970-01-01 08:00:00.000)
@@ -1016,7 +1025,7 @@ SELECT to_unixtime(cast(timestamp '2012-03-09 10:00:00 Asia/Chongqing' as timest
 SELECT to_unixtime(cast(from_unixtime(0, '+06:00') as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
 SELECT to_unixtime(cast(from_unixtime(0, '-02:00') as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
 
--- `adjust_timestamp_to_session_timezone` is false
+-- `adjust_timestamp_to_session_timezone` is false and `legacy_timestamp_with_timezone` is true
 SELECT to_unixtime(cast(timestamp '1970-01-01 00:00:00 America/Los_Angeles' as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
 SELECT to_unixtime(cast(timestamp '2012-03-09 10:00:00 Asia/Chongqing' as timestamp)); -- 1.3312872E9 (2012-03-09 10:00:00.000)
 SELECT to_unixtime(cast(from_unixtime(0, '+06:00') as timestamp)); -- 21600.0 (1970-01-01 06:00:00.000)
@@ -1094,13 +1103,16 @@ in the input is ignored.</p>
 </section>
 <section id="id14">
 <h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
-<p>Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. If present,
-the part of <cite>hh:mm:ss</cite> in the input is ignored.</p>
-<p>Session time zone does not affect the result.</p>
+<p>Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. The cast renders the
+value in the time zone selected by <cite>legacy_timestamp_with_timezone</cite>, then
+discards the <cite>hh:mm:ss</cite> part. The legacy setting uses the time zone embedded in
+the value. The non-legacy setting uses the session time zone.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">'2024-06-01 01:38:00 America/New_York'</span> <span class="k">as</span> <span class="n">DATE</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2024</span><span class="o">-</span><span class="mi">06</span><span class="o">-</span><span class="mi">01</span>
 </pre></div>
 </div>
+<p>With <cite>legacy_timestamp_with_timezone</cite> set to false and session time zone
+“America/Los_Angeles”, the same value returns <code class="docutils literal notranslate"><span class="pre">2024-05-31</span></code>.</p>
 </section>
 </section>
 <section id="cast-to-decimal">

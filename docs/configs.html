@@ -144,10 +144,12 @@ since epoch) for “America/Los_Angeles”.</p></td>
 <td><p>true</p></td>
 <td><p>Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, each value renders in its own
 embedded time zone. If false, values render the UTC instant in the session time zone, so values that compare
-equal produce equal results. Covers field extraction, formatting, date arithmetic, and <code class="docutils literal notranslate"><span class="pre">CAST</span></code> to <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>,
-<code class="docutils literal notranslate"><span class="pre">DATE</span></code> and <code class="docutils literal notranslate"><span class="pre">TIME</span></code>. Of the interval operators only <code class="docutils literal notranslate"><span class="pre">INTERVAL</span> <span class="pre">YEAR</span> <span class="pre">TO</span> <span class="pre">MONTH</span></code> is affected; <code class="docutils literal notranslate"><span class="pre">INTERVAL</span> <span class="pre">DAY</span> <span class="pre">TO</span>
-<span class="pre">SECOND</span></code> operates on milliseconds and never consults a time zone. <code class="docutils literal notranslate"><span class="pre">CAST</span></code> to <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> is governed by
-<code class="docutils literal notranslate"><span class="pre">adjust_timestamp_to_session_timezone</span></code>.</p></td>
+equal produce equal results. Covers field extraction (except <code class="docutils literal notranslate"><span class="pre">timezone_hour</span></code> and <code class="docutils literal notranslate"><span class="pre">timezone_minute</span></code>, which
+report the offset stored in the value), formatting, date arithmetic, and <code class="docutils literal notranslate"><span class="pre">CAST</span></code> to <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">DATE</span></code>,
+<code class="docutils literal notranslate"><span class="pre">TIME</span></code> and <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>. Of the interval operators only <code class="docutils literal notranslate"><span class="pre">INTERVAL</span> <span class="pre">YEAR</span> <span class="pre">TO</span> <span class="pre">MONTH</span></code> is affected; <code class="docutils literal notranslate"><span class="pre">INTERVAL</span>
+<span class="pre">DAY</span> <span class="pre">TO</span> <span class="pre">SECOND</span></code> operates on milliseconds and never consults a time zone. For <code class="docutils literal notranslate"><span class="pre">CAST</span></code> to <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>,
+<code class="docutils literal notranslate"><span class="pre">adjust_timestamp_to_session_timezone=true</span></code> returns the UTC instant. When that property is false,
+<code class="docutils literal notranslate"><span class="pre">legacy_timestamp_with_timezone</span></code> selects the embedded or session time zone.</p></td>
 </tr>
 <tr class="row-even"><td><p>track_operator_cpu_usage</p></td>
 <td><p>bool</p></td>
