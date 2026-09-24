@@ -22,12 +22,16 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
-// SubIntSplit integration commented out (disabled):
-/*
+// SubIntSplit, FOR and FrequencyPartition are experimental. Builds with
+// NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS can write them, so the legacy read path
+// decodes them in those builds too.
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #endif
-*/
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#endif
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DictionaryEncoding.h"
@@ -298,14 +302,13 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::EliasFanoEncoding, dataType);
     }
-    // SubIntSplit integration commented out (disabled):
-    /*
+    // Experimental: decoded only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // builds.
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::SubIntSplit: {
       RETURN_ENCODING_BY_VARINT_TYPE(SubIntSplitEncoding, dataType);
     }
 #endif
-    */
     case EncodingType::BlockBitPacking: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(
           facebook::nimble::BlockBitPackingEncoding, dataType);
@@ -334,6 +337,18 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       // the base factory on this object also preserves the decoding options.
       return ::facebook::nimble::EncodingFactory::create(
           memoryPool, data, std::move(stringBufferFactory));
+      // Experimental: decoded only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      // builds.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FOR: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::ForEncoding, dataType);
+    }
+    case EncodingType::FrequencyPartition: {
+      RETURN_ENCODING_BY_NON_BOOL_TYPE(
+          ::facebook::nimble::FrequencyPartitionEncoding, dataType);
+    }
+#endif
     case EncodingType::ALP: {
       switch (dataType) {
         case DataType::Float:

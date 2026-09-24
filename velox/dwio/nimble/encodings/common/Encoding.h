@@ -133,6 +133,13 @@ class Encoding {
     /// 2 = TierTagArray, 3 = EliasFano.
     uint8_t frequencyPartitionIndex = 0;
 
+    /// When true, TierTagArray builds a per-tier `resolvedValues` vector at
+    /// decode construction so point/range/bulk decode read the decoded value
+    /// directly instead of chasing `dictionary[indices[rank]]`. Trades extra
+    /// resident memory (up to |T| bytes per row versus 4 for indices) for
+    /// fewer dependent loads on the hot path.
+    bool frequencyPartitionResolveTierValues = true;
+
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader
     /// reads it back from the stream (self-describing).

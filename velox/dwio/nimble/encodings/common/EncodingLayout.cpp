@@ -201,10 +201,61 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::FrequencyPartition: {
+      // Children are indexed by nested identifier, since a replayed encode
+      // asks for them that way. Slots this stream does not carry stay absent
+      // and re-select on replay.
+      using Ids = EncodingIdentifiers::FrequencyPartition;
+      children.resize(Ids::TierTags + 1);
+      const char* pos = encoding.data() + prefixSize;
+      const char* const end = encoding.data() + encoding.size();
+      const auto captureAt = [&](NestedEncodingIdentifier identifier) {
+        const uint32_t size = encoding::readUint32(pos);
+        NIMBLE_CHECK_LE(
+            size, end - pos, "FrequencyPartition nested stream overruns.");
+        const std::string_view nested{pos, size};
+        children[identifier].emplace(capture(nested, options));
+        pos += size;
+        return EncodingPrefix::readRowCount(nested, options.useVarintRowCount);
+      };
+      const uint32_t numPartitions = encoding::readUint32(pos);
+      NIMBLE_CHECK_LE(
+          numPartitions,
+          Ids::UnencodedValues - Ids::Keys1Bit + 1,
+          "FrequencyPartition partition count out of range.");
+      captureAt(Ids::PartitionOffsets);
+      captureAt(Ids::PartitionSizes);
+      // Encode fills tiers in order and gives each at least one value that
+      // occurs, so every coded tier carries a dictionary and a key stream.
+      // The rows they leave are the fallback's.
+      uint32_t codedRows = 0;
+      for (uint32_t tier = 0; tier + 1 < numPartitions; ++tier) {
+        captureAt(Ids::Dict1Bit + tier);
+        codedRows += captureAt(Ids::Keys1Bit + tier);
+      }
+      if (codedRows <
+          EncodingPrefix::readRowCount(encoding, options.useVarintRowCount)) {
+        captureAt(Ids::UnencodedValues);
+      }
+      // Optional index block: format version, index type, payload size. Only
+      // the tag array nests a stream, after its tag width and padding.
+      if (pos < end) {
+        const auto formatVersion = encoding::read<uint8_t>(pos);
+        const auto indexType =
+            static_cast<FreqPartIndexType>(encoding::read<uint8_t>(pos));
+        encoding::readUint32(pos); // payload bytes
+        if (formatVersion ==
+                FrequencyPartitionEncoding<uint32_t>::kFormatVersion &&
+            indexType == FreqPartIndexType::TierTagArray) {
+          pos += 4;
+          captureAt(Ids::TierTags);
+        }
+      }
+      break;
+    }
     case EncodingType::Slice:
       // The wrapped encoding is carried verbatim rather than as a nested
       // stream, and the layout tree describes how data is encoded, not how a
