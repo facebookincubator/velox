@@ -601,7 +601,11 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
 TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   auto queryCtx = core::QueryCtx::create();
   exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool_.get());
-  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DECIMAL(20, 0)});
+  auto rowType = ROW(
+      {{"c0", BIGINT()},
+       {"c1", BIGINT()},
+       {"c2", DECIMAL(20, 0)},
+       {"c3", BOOLEAN()}});
 
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
   SubfieldFilters filters;
@@ -634,6 +638,24 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   auto expectedFilter = exec::betweenHugeint(0, 1);
   ASSERT_TRUE(expectedFilter->testingEquals(*filters.at(Subfield("c2"))));
   ASSERT_FALSE(remaining);
+
+  expr = parseExpr("c3", rowType);
+  filters.clear();
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_TRUE(
+      exec::boolEqual(true)->testingEquals(*filters.at(Subfield("c3"))));
+
+  expr = parseExpr("not c3", rowType);
+  filters.clear();
+  remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_TRUE(
+      exec::boolEqual(false)->testingEquals(*filters.at(Subfield("c3"))));
 
   // parseExpr gives AND/OR with 2 arguments.  We need to construct the node
   // manually to have more than 2.
