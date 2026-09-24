@@ -16,7 +16,9 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
@@ -95,6 +97,14 @@ writeSectionHeader(BitSection range, uint32_t encodedSize, char*& pos) {
   encoding::write<uint8_t>(static_cast<uint8_t>(range.bitStart), pos);
   encoding::write<uint8_t>(static_cast<uint8_t>(range.bitEnd), pos);
   encoding::writeUint32(encodedSize, pos);
+}
+
+/// Whether the stream whose SubIntSplit header starts at `dataOffset` stores
+/// zigzag deltas. Such a stream can only be decoded from row zero.
+inline bool isDeltaStream(std::string_view data, uint32_t dataOffset) {
+  NIMBLE_CHECK_LE(
+      dataOffset + 2, data.size(), "SubIntSplit stream is truncated.");
+  return (static_cast<uint8_t>(data[dataOffset + 1]) & kFlagDelta) != 0;
 }
 
 } // namespace facebook::nimble::subintsplit

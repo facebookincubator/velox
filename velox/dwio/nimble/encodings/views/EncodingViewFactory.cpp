@@ -155,6 +155,14 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        // A delta stream requires every prior value to reconstruct a given
+        // index, so it cannot be read positionally and must be materialized.
+        if (subintsplit::isDeltaStream(
+                data,
+                EncodingPrefix::prefixSize(data, options.useVarintRowCount))) {
+          return std::make_unique<detail::MaterializedEncodingView<T>>(
+              data, pool, options);
+        }
         return std::make_unique<SubIntSplitEncodingView<T>>(
             data, pool, options);
       }
