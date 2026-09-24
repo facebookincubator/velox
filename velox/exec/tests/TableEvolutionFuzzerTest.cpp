@@ -26,6 +26,7 @@
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/parse/TypeResolver.h"
 
@@ -523,6 +524,46 @@ TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
   EXPECT_NO_THROW(fuzzer.run());
 #endif
   EXPECT_FALSE(observerCalled);
+}
+
+// Generated grouping keys and aggregate operands are pasted into expression
+// strings that the parser reads back, so every column name has to be quoted.
+// Unquoted, a name that is a SQL keyword fails to parse, and one that does not
+// lex as a bare identifier loses the offending prefix and silently binds to a
+// different column.
+TEST(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
+  EXPECT_EQ(TableEvolutionFuzzer::quoteIdentifier("table"), "\"table\"");
+  EXPECT_EQ(
+      TableEvolutionFuzzer::quoteIdentifier("1_ensemble_prediction"),
+      "\"1_ensemble_prediction\"");
+  EXPECT_EQ(
+      TableEvolutionFuzzer::quoteIdentifier("odd\"name"), "\"odd\"\"name\"");
+
+  auto schema = ROW(
+      {{"table", BIGINT()},
+       {"window", BIGINT()},
+       {"1_ensemble_prediction", BIGINT()}});
+
+  bool sawAggregate = false;
+  for (uint32_t seed = 0; seed < 64; ++seed) {
+    FuzzerGenerator rng(seed);
+    const auto config =
+        TableEvolutionFuzzer::generateAggregationConfig(schema, rng, {});
+    if (!config.has_value()) {
+      continue;
+    }
+    // Grouping keys stay raw: they are resolved by direct field lookup, not by
+    // parsing, so quoting them would make the lookup miss.
+    for (const auto& groupingKey : config->groupingKeys) {
+      EXPECT_THAT(schema->names(), testing::Contains(groupingKey));
+    }
+    for (const auto& aggregate : config->aggregates) {
+      sawAggregate = true;
+      EXPECT_THAT(aggregate, testing::HasSubstr("(\""));
+      EXPECT_THAT(aggregate, testing::EndsWith("\")"));
+    }
+  }
+  EXPECT_TRUE(sawAggregate);
 }
 
 // A column is "used by aggregation" if it is a grouping key or appears in an

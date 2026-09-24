@@ -307,6 +307,20 @@ class TableEvolutionFuzzer {
   static const std::vector<dwio::common::FileFormat> parseFileFormats(
       std::string input);
 
+  /// Returns 'name' as a double-quoted SQL identifier, doubling any embedded
+  /// quote. Column names reach the parser inside expression strings, so a name
+  /// that collides with a keyword or does not lex as a bare identifier has to
+  /// be quoted to survive the round trip.
+  static std::string quoteIdentifier(std::string_view name);
+
+  /// Generates a pushdown-eligible aggregation over the columns of 'schema'
+  /// that are absent from 'filteredColumns'. Returns nullopt when no column is
+  /// eligible. Grouping keys and aggregate operands are quoted identifiers.
+  static std::optional<AggregationConfig> generateAggregationConfig(
+      const RowTypePtr& schema,
+      FuzzerGenerator& rng,
+      const std::unordered_set<std::string>& filteredColumns);
+
   /// Returns true if 'columnName' is referenced by 'aggregationConfig's
   /// grouping keys or aggregate expressions.
   static bool isColumnUsedByAggregation(
