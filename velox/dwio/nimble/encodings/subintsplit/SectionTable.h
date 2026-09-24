@@ -69,7 +69,7 @@ class SectionTable {
   /// the section headers start once its base class has parsed the common
   /// Encoding prefix, by which point the table already needs its memory pool.
   void load(
-      const char* pos,
+      std::string_view data,
       uint8_t numSections,
       const std::function<void*(uint32_t)>& stringBufferFactory,
       const Encoding::Options& options);
@@ -149,15 +149,38 @@ class SectionTable {
 
 template <typename PhysicalType>
 void SectionTable<PhysicalType>::load(
-    const char* pos,
+    std::string_view data,
     uint8_t numSections,
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options) {
+  const uint32_t sectionHeaderBytes =
+      static_cast<uint32_t>(numSections) * kSectionHeaderSize;
+  NIMBLE_CHECK_FILE(
+      data.size() >= sectionHeaderBytes,
+      "SubIntSplit section headers are truncated.");
+
+  const char* pos = data.data();
   std::vector<SectionHeader> headers;
   headers.reserve(numSections);
+  uint32_t expectedBitStart{0};
+  uint64_t totalEncodedSize{0};
   for (uint8_t i = 0; i < numSections; ++i) {
     headers.push_back(readSectionHeader(pos));
+    const auto& header = headers.back();
+    NIMBLE_CHECK_FILE(
+        header.range.bitStart == expectedBitStart &&
+            header.range.bitEnd >= header.range.bitStart &&
+            header.range.bitEnd < sizeof(PhysicalType) * 8,
+        "SubIntSplit sections must cover the value bits once in order.");
+    expectedBitStart = header.range.bitEnd + 1;
+    totalEncodedSize += header.encodedSize;
   }
+  NIMBLE_CHECK_FILE(
+      expectedBitStart == sizeof(PhysicalType) * 8,
+      "SubIntSplit sections must cover the value bits once in order.");
+  NIMBLE_CHECK_FILE(
+      totalEncodedSize == data.size() - sectionHeaderBytes,
+      "SubIntSplit section payload sizes do not match the stream.");
 
   sections_.resize(numSections);
   for (uint8_t i = 0; i < numSections; ++i) {

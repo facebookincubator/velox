@@ -36,13 +36,20 @@ namespace facebook::nimble::subintsplit {
 /// zero.
 inline constexpr uint8_t kFlagDelta = 1u << 0;
 
+/// All flag bits understood by this reader version.
+inline constexpr uint8_t kKnownFlags = kFlagDelta;
+
+/// Bytes preceding the section header entries.
+inline constexpr uint32_t kStreamHeaderSize = 2;
+
 /// Bytes per section header entry: bitStart + bitEnd + encodedSize.
 inline constexpr uint32_t kSectionHeaderSize = 6;
 
 /// Bytes the SubIntSplit-specific header occupies, excluding the section
 /// payloads and the standard Encoding prefix.
 constexpr uint32_t specificHeaderSize(uint8_t numSections) noexcept {
-  return 2u + static_cast<uint32_t>(numSections) * kSectionHeaderSize;
+  return kStreamHeaderSize +
+      static_cast<uint32_t>(numSections) * kSectionHeaderSize;
 }
 
 /// The two bytes preceding the section headers.

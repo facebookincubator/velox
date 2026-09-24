@@ -198,10 +198,26 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       sections_{pool, options.subIntSplitDecodeChunkSize},
       decodeBuf_{&pool},
       pendingBuf_{&pool} {
+  NIMBLE_CHECK_FILE(
+      data.size() >= this->dataOffset() + subintsplit::kStreamHeaderSize,
+      "SubIntSplit stream header is truncated.");
   const char* pos = data.data() + this->dataOffset();
   const auto header = subintsplit::readStreamHeader(pos);
+  NIMBLE_CHECK_FILE(
+      header.numSections > 0,
+      "SubIntSplit stream must contain at least one section.");
+  NIMBLE_CHECK_FILE(
+      header.numSections <= sizeof(physicalType) * 8,
+      "SubIntSplit stream has too many sections.");
+  NIMBLE_CHECK_FILE(
+      (header.flags & ~subintsplit::kKnownFlags) == 0,
+      "SubIntSplit stream has unsupported flags.");
   deltaEncoded_ = (header.flags & subintsplit::kFlagDelta) != 0;
-  sections_.load(pos, header.numSections, stringBufferFactory, options);
+  sections_.load(
+      {pos, data.size() - this->dataOffset() - subintsplit::kStreamHeaderSize},
+      header.numSections,
+      stringBufferFactory,
+      options);
 }
 
 template <typename T>
@@ -215,19 +231,31 @@ void SubIntSplitEncoding<T>::reset() {
 
 template <typename T>
 void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
-  NIMBLE_CHECK(
-      !deltaEncoded_,
-      "SubIntSplitEncoding: skip() is not supported on delta-encoded streams; "
-      "reconstructing a value requires every preceding delta.");
-
   // The sections already sit past anything still buffered, so those rows are
   // skipped by dropping them rather than by moving the section cursors.
   const uint32_t fromPending = std::min(rowCount, pendingAvailable());
   pendingOffset_ += fromPending;
-  if (rowCount > fromPending) {
-    sections_.skip(rowCount - fromPending);
+  row_ += fromPending;
+
+  uint32_t remaining = rowCount - fromPending;
+  if (remaining == 0) {
+    return;
   }
-  row_ += rowCount;
+
+  if (!deltaEncoded_) {
+    sections_.skip(remaining);
+    row_ += remaining;
+    return;
+  }
+
+  const uint32_t chunkSize = sections_.decodeChunkSize();
+  decodeBuf_.resize(std::min(remaining, chunkSize));
+  while (remaining > 0) {
+    const uint32_t count = std::min(remaining, chunkSize);
+    decodeChunked(count, decodeBuf_.data());
+    row_ += count;
+    remaining -= count;
+  }
 }
 
 template <typename T>
@@ -252,8 +280,9 @@ void SubIntSplitEncoding<T>::refillPending() {
   const uint32_t total = this->rowCount();
   NIMBLE_CHECK(
       row_ < total, "SubIntSplitEncoding: read past the end of the stream.");
-  const uint32_t block = std::min(kSlowPathBlock, total - row_);
-  sections_.decodeChunk(block, pendingBuf_.data());
+  const uint32_t block =
+      std::min({kSlowPathBlock, sections_.decodeChunkSize(), total - row_});
+  decodeChunked(block, pendingBuf_.data());
   pendingOffset_ = 0;
   pendingCount_ = block;
 }
@@ -308,10 +337,6 @@ template <typename V>
 void SubIntSplitEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
-  NIMBLE_CHECK(
-      !deltaEncoded_,
-      "SubIntSplitEncoding: readWithVisitor() is not supported on "
-      "delta-encoded streams; they require sequential reads from row 0.");
   using OutputType = detail::ValueType<typename V::DataType>;
   constexpr bool kIsSuitableWidth =
       (isFourByteIntegralType<physicalType>() ||
