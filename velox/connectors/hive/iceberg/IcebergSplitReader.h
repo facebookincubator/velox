@@ -172,8 +172,10 @@ class IcebergSplitReader : public FileSplitReader {
   // out of its file-natural position.
   folly::F14FastSet<std::string> equalityAugmentedPartitionColumns_;
 
+ protected:
   const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 
+ private:
   /// Read offset to the beginning of the split in number of rows for the
   /// current batch for the base data file.
   uint64_t baseReadOffset_;

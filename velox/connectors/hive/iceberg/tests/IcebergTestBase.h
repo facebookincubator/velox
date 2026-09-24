@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -145,6 +146,44 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   ColumnHandleMap makeColumnHandles(
       const RowTypePtr& rowType,
       const std::unordered_set<int>& partitionIndices = {});
+
+  /// Returns the changelog output ROW type:
+  /// {operation:VARCHAR, ordinal:BIGINT, snapshotid:BIGINT, rowdata:dataType}.
+  static RowTypePtr makeChangelogOutputType(const RowTypePtr& dataType);
+
+  /// Creates changelog scan assignments (operation/ordinal/snapshotid/rowdata)
+  /// as IcebergColumnHandles with synthetic field IDs.
+  static ColumnHandleMap makeChangelogColumnHandles(const RowTypePtr& dataType);
+
+  /// Creates data column handles for a changelog base-table scan, keyed by
+  /// column name, with field IDs matching the IcebergTestBase write path
+  /// (1-based sequential).
+  static std::unordered_map<std::string, IcebergColumnHandlePtr>
+  makeDataColumnHandles(const RowTypePtr& dataType);
+
+  /// Builds an IcebergTableHandle configured for a changelog query over
+  /// 'dataType'. Optional subfieldFilters are baked directly into the handle
+  /// so they land in FileDataSource::filters_ and trigger validation in
+  /// IcebergDataSource::createSplitReader().
+  std::shared_ptr<IcebergTableHandle> makeChangelogTableHandle(
+      const RowTypePtr& dataType,
+      common::SubfieldFilters subfieldFilters = {});
+
+  /// Returns two batches of 100 rows each with columns {id:BIGINT,
+  /// name:VARCHAR} where id and name are sequentially numbered (0..199).
+  std::vector<RowVectorPtr> makeTestBatches();
+
+  /// Returns the sole regular file found under 'directory'. CHECKs that
+  /// exactly one file exists.
+  std::string getOnlyDataFilePath(const std::string& directory);
+
+  /// Creates a HiveIcebergSplit for 'filePath' with the given changelog
+  /// metadata attached. The split covers the full file.
+  std::shared_ptr<HiveIcebergSplit> makeChangelogSplit(
+      const std::string& filePath,
+      ChangelogOperation operation,
+      int64_t ordinal,
+      int64_t snapshotId);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
