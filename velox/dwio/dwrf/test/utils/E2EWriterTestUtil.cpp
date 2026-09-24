@@ -20,6 +20,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
 using namespace ::testing;
@@ -122,10 +123,12 @@ namespace facebook::velox::dwrf {
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
   RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
 
+  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
 
@@ -153,7 +156,7 @@ namespace facebook::velox::dwrf {
 
   auto batchIndex = 0;
   auto rowIndex = 0;
-  VectorPtr batch;
+  VectorPtr batch = BaseVector::create(reader->rowType(), 0, &pool);
   while (dwrfRowReader->next(1000, batch)) {
     for (int32_t i = 0; i < batch->size(); ++i) {
       ASSERT_TRUE(batches[batchIndex]->equalValueAt(batch.get(), rowIndex, i))

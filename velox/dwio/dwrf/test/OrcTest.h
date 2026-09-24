@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
@@ -30,12 +31,19 @@ namespace facebook::velox::dwrf {
 
 using MemoryPool = memory::MemoryPool;
 
+inline std::shared_ptr<velox::common::ScanSpec> makeAllFieldsScanSpec(
+    const RowType& type) {
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(type);
+  return scanSpec;
+}
+
 inline std::string getExampleFilePath(const std::string& fileName) {
   return velox::test::getDataFilePath(
       "velox/dwio/dwrf/test", "examples/" + fileName);
 }
 
-std::unique_ptr<dwio::common::BufferedInput> createFileBufferedInput(
+inline std::unique_ptr<dwio::common::BufferedInput> createFileBufferedInput(
     const std::string& path,
     memory::MemoryPool& pool) {
   return std::make_unique<dwio::common::BufferedInput>(
