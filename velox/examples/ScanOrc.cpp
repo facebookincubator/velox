@@ -23,6 +23,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/vector/BaseVector.h"
 
@@ -64,9 +65,12 @@ int main(int argc, char** argv) {
                             readerOpts.memoryPool()),
                         readerOpts);
 
-  VectorPtr batch;
+  auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(*reader->rowType());
   RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOptions);
+  VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool.get());
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();
     for (vector_size_t i = 0; i < rowVector->size(); ++i) {

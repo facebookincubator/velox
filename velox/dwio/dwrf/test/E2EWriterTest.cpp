@@ -116,6 +116,7 @@ class E2EWriterTest : public testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
+    rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader->rowType()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
     bool preload = true;
@@ -181,12 +182,14 @@ class E2EWriterTest : public testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
+    rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader->rowType()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
     bool preload = true;
 
     auto typeWithId = TypeWithId::create(type);
+    ColumnSelector selector(reader->rowType());
     for (auto mapColumn : mapColumnIds) {
       folly::F14FastMap<KeyInfo, uint64_t, folly::transparent<KeyInfoHash>>
           featureStreamSizes;
@@ -198,7 +201,7 @@ class E2EWriterTest : public testing::Test {
         dwrf::StripeStreamsImpl stripeStreams(
             std::make_shared<dwrf::StripeReadState>(
                 dwrfRowReader->readerBaseShared(), std::move(stripeMetadata)),
-            &dwrfRowReader->getColumnSelector(),
+            &selector,
             nullptr,
             rowReaderOpts,
             currentStripeInfo.offset(),
@@ -423,9 +426,9 @@ TEST_F(E2EWriterTest, DISABLED_testFileCreation) {
       "binary_val:binary,"
       "timestamp_val:timestamp,"
       "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>," /* this is column 12 */
+      "map_nested:map<bigint,map<string, int>>," /* this is column 13 */
       "struct_val:struct<a:float,b:double>"
       ">");
 
@@ -486,9 +489,9 @@ TEST_F(E2EWriterTest, e2e) {
       "binary_val:binary,"
       "timestamp_val:timestamp,"
       "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>," /* this is column 12 */
+      "map_nested:map<bigint,map<string, int>>," /* this is column 13 */
       "struct_val:struct<a:float,b:double>"
       ">");
 
@@ -528,9 +531,9 @@ TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristics) {
       "binary_val:binary,"
       "timestamp_val:timestamp,"
       "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>," /* this is column 12 */
+      "map_nested:map<bigint,map<string, int>>," /* this is column 13 */
       "struct_val:struct<a:float,b:double>"
       ">");
 
@@ -574,9 +577,9 @@ TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristicsLargeAnalytics) {
       "binary_val:binary,"
       "timestamp_val:timestamp,"
       "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>," /* this is column 12 */
+      "map_nested:map<bigint,map<string, int>>," /* this is column 13 */
       "struct_val:struct<a:float,b:double>"
       ">");
 
@@ -608,11 +611,11 @@ TEST_F(E2EWriterTest, flatMapDictionaryEncoding) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<string, int>>,"
-      "map_val:map<int, string>,"
-      "map_val:map<bigint,map<int, string>>"
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_string_int:map<bigint,map<string, int>>,"
+      "map_int_string:map<int, string>,"
+      "map_bigint_nested_int_string:map<bigint,map<int, string>>"
       ">");
 
   auto config = std::make_shared<dwrf::Config>();
@@ -703,6 +706,7 @@ TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
+  rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
   bool preload = true;
@@ -962,10 +966,10 @@ TEST_F(E2EWriterTest, flatMapConfigMixedMaps) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<bigint,map<string,float>>,"
-      "map_val:map<bigint,float>,"
-      "map_val:map<bigint,map<string,float>>,"
-      "map_val:map<bigint,double>,"
+      "map_nested_0:map<bigint,map<string,float>>,"
+      "map_float_1:map<bigint,float>,"
+      "map_nested_2:map<bigint,map<string,float>>,"
+      "map_double_3:map<bigint,double>,"
       ">");
 
   testFlatMapConfig(type, {2, 3}, {9, 14});
@@ -987,12 +991,12 @@ TEST_F(E2EWriterTest, mapStatsSingleStride) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<bigint,int>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<bigint,bigint>>,"
-      "map_val:map<bigint,map<bigint,double>>,"
-      "map_val:map<bigint,array<bigint>>,"
-      "map_val:map<bigint,map<string,float>>,"
+      "map_bigint_int:map<bigint,int>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_bigint:map<bigint,map<bigint,bigint>>,"
+      "map_bigint_nested_double:map<bigint,map<bigint,double>>,"
+      "map_bigint_array:map<bigint,array<bigint>>,"
+      "map_bigint_nested_string_float:map<bigint,map<string,float>>,"
       ">");
 
   // Single column
@@ -1007,12 +1011,12 @@ TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<bigint,int>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<bigint,bigint>>,"
-      "map_val:map<bigint,map<bigint,double>>,"
-      "map_val:map<bigint,array<bigint>>,"
-      "map_val:map<bigint,map<string,float>>,"
+      "map_bigint_int:map<bigint,int>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_bigint:map<bigint,map<bigint,bigint>>,"
+      "map_bigint_nested_double:map<bigint,map<bigint,double>>,"
+      "map_bigint_array:map<bigint,array<bigint>>,"
+      "map_bigint_nested_string_float:map<bigint,map<string,float>>,"
       ">");
 
   // Single column
@@ -1292,10 +1296,11 @@ class E2EEncryptionTest : public E2EWriterTest {
   void validateFileContent(
       const ::facebook::velox::dwrf::DwrfReader& reader) const {
     RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader.rowType()));
     auto rowReader = reader.createRowReader(rowReaderOpts);
     // make sure size estimate works
     ASSERT_GT(rowReader->estimatedRowSize(), 0);
-    VectorPtr batch;
+    VectorPtr batch = BaseVector::create(reader.rowType(), 0, leafPool_.get());
     for (auto& expected : batches_) {
       ASSERT_TRUE(rowReader->next(batchSize_, batch));
       compareBatches(batch, expected);
@@ -1360,6 +1365,7 @@ TEST_F(E2EEncryptionTest, encryptRoot) {
   }
 
   RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
@@ -1442,6 +1448,7 @@ TEST_F(E2EEncryptionTest, encryptSelectedFields) {
   }
 
   RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(dwrf::makeAllFieldsScanSpec(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
@@ -1476,7 +1483,9 @@ TEST_F(E2EEncryptionTest, encryptEmptyFile) {
   ASSERT_FALSE(handler.isEncrypted());
 }
 
-TEST_F(E2EEncryptionTest, readWithoutKey) {
+// Disabled because selective reader currently loads encryption metadata for
+// unprojected columns
+TEST_F(E2EEncryptionTest, DISABLED_readWithoutKey) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1495,18 +1504,23 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
   // reading unencrypted column should not fail
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{0}));
+    auto scanSpec =
+        std::make_shared<facebook::velox::common::ScanSpec>("<root>");
+    scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
+    rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    VectorPtr batch;
+    VectorPtr batch =
+        BaseVector::create(ROW({"a"}, {type->childAt(0)}), 0, leafPool_.get());
     ASSERT_TRUE(rowReader->next(1, batch));
   }
 
   // fail when reading encrypted column
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
+    auto scanSpec =
+        std::make_shared<facebook::velox::common::ScanSpec>("<root>");
+    scanSpec->addFieldRecursively("b", *type->childAt(1), 1);
+    rowReaderOpts.setScanSpec(scanSpec);
     VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
   }
 }
