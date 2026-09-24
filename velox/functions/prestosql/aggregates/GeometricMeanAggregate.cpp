@@ -34,6 +34,8 @@ class GeometricMeanAggregate {
 
   using OutputType = TResult;
 
+  static constexpr bool order_sensitive_ = false;
+
   static bool toIntermediate(
       exec::out_type<Row<double, int64_t>>& out,
       exec::arg_type<TInput> in) {
@@ -139,7 +141,8 @@ void registerGeometricMeanAggregate(
                 inputType->toString());
         }
       },
-      {.orderSensitive = false},
+      exec::simpleAggregateFunctionMetadata<
+          GeometricMeanAggregate<int64_t, double>>(),
       withCompanionFunctions,
       overwrite);
 }

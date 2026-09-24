@@ -22,11 +22,27 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateUtil.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/AggregateRegistryTestUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
+
+namespace {
+
+struct DuplicateInsensitiveAggregate {
+  using IntermediateType = int64_t;
+
+  static constexpr bool ignore_duplicates_ = true;
+  static constexpr bool order_sensitive_ = false;
+};
+
+struct DefaultMetadataAggregate {
+  using IntermediateType = int64_t;
+};
+
+} // namespace
 
 class AggregateFunctionRegistryTest : public testing::Test {
  protected:
@@ -226,6 +242,19 @@ TEST_F(AggregateFunctionRegistryTest, windowFunction) {
 TEST_F(AggregateFunctionRegistryTest, duplicateRegistration) {
   EXPECT_FALSE(registerAggregateFunc("aggregate_func"));
   EXPECT_TRUE(registerAggregateFunc("aggregate_func", true));
+}
+
+TEST_F(AggregateFunctionRegistryTest, simpleAggregateMetadata) {
+  const auto customMetadata =
+      simpleAggregateFunctionMetadata<DuplicateInsensitiveAggregate>();
+  EXPECT_TRUE(customMetadata.ignoreDuplicates);
+  EXPECT_FALSE(customMetadata.orderSensitive);
+
+  const auto conservativeMetadata = simpleAggregateFunctionMetadata<
+      DuplicateInsensitiveAggregate,
+      DefaultMetadataAggregate>();
+  EXPECT_FALSE(conservativeMetadata.ignoreDuplicates);
+  EXPECT_TRUE(conservativeMetadata.orderSensitive);
 }
 
 TEST_F(AggregateFunctionRegistryTest, multipleNames) {
