@@ -86,3 +86,24 @@ add_test(
   --view_fuzzer_iterations=2
   --view_fuzzer_max_rows=128
 )
+
+add_executable(nimble_estimator_refinement_fuzzer_tests EstimatorRefinementFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_encodings_tests_utils
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+  velox_memory
+)
+
+add_test(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_estimator_refinement_fuzzer_tests
+  --estimator_fuzzer_iterations=2
+  --estimator_fuzzer_max_rows=1024
+)
