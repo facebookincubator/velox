@@ -38,9 +38,9 @@ writer context                                      reader context
 serde/layout -> selection -> SubIntSplitEncoding -> encoded bytes
                                   |                       |
                         sample -> plan                    v
-                                  |             factory -> SectionTable
+                                  |             factory -> parseSections
                                   v                       |
-                           SectionEncoder       child decode -> accumulate -> values
+                          encodeResiduals       child decode -> accumulate -> values
 ```
 
 Planning happens only on the write path. The serialized section table is the
@@ -71,7 +71,8 @@ using the final section plan. Child stream `j` stores the bits for section `j`
 from every input row, so all children have the same row count and cursor.
 
 The file header records each section range and child payload size. During
-decode, `SectionTable` advances every dynamic child by the same number of rows.
+decode, `SubIntSplitEncoding` advances every dynamic child by the same number
+of rows.
 `SectionAccumulator` masks each child value to its declared width, shifts it to
 the recorded first bit, and combines it with the constant-section accumulator.
 The resulting physical bits are copied back to the logical type, preserving
@@ -123,10 +124,14 @@ smaller than the limit are sampled in full.
 the sample. Constant bits outside that active interval do not enter the dynamic
 program and become Constant sections.
 
-Inside the active interval, a position becomes a candidate boundary when the
-set rate changes enough between adjacent bit planes. The default relative
-threshold is `0.001`. A caller may also impose a hard limit; the selector keeps
-the strongest set-rate changes and always retains both active-range edges.
+Inside the active interval, a position is a candidate boundary when the set
+rate changes enough between adjacent bit planes; the threshold defaults to
+0.001, and `subIntSplitBoundaryPruneThreshold` overrides it (0.0 keeps every
+position). A caller may also impose a
+hard limit; the selector keeps the strongest set-rate changes and always
+retains both active-range edges. `subIntSplit.trimConstantPlanes`, on by
+default, stores constant edge planes as Constant sections before the grid is
+scored.
 
 This step bounds the expensive work. If there are `B` retained boundaries and
 `S` samples, the cost grid is approximately `O(B² × S)`.
@@ -145,9 +150,15 @@ Narrow sections use a reusable direct-indexed frequency table. Wider sections
 use a capped hash table. Width limits can skip frequency work where Dictionary
 and MainlyConstant are unlikely to win.
 
-The cost model estimates Trivial, FixedBitWidth, Constant, MainlyConstant,
-Dictionary, RLE, and Varint storage. A dynamic program selects the minimum-cost
-partition of the active interval. Each extra section pays:
+The cost models mirror section selection's own size estimators, so the plan
+the planner prices is the one nested selection will realise. They cover
+Trivial, FixedBitWidth, Constant, MainlyConstant, Dictionary, RLE, Varint,
+SimdForBitpack, PFOR, BlockBitPacking, Delta, FOR, and FrequencyPartition.
+Huffman and DeltaBlock are priced only when `subIntSplit.allowHuffman` or
+`subIntSplit.allowDeltaBlock` is set, because section selection does not offer
+them. `subIntSplit.allowedEncodings` narrows the set further. A dynamic program
+selects the minimum-cost partition of the active interval. Each extra section
+pays:
 
 ```text
 splitPenalty + decodeCostBitsPerValue × fullValueCount
@@ -165,9 +176,15 @@ streams retain their normal candidates.
 
 ### 4. Encode each section
 
-`SectionEncoder` extracts one range into its narrow unsigned storage type and
-runs nested selection on the complete extracted stream. FixedBitWidth receives
-the exact section width so a non-byte-aligned range does not round up.
+`SubIntSplitEncoding::encodeResiduals()` extracts each range into its narrow
+unsigned storage type and runs nested selection on the complete extracted
+stream, under the options `sectionEncodingOptions()` derives. FixedBitWidth
+receives the exact section width so a non-byte-aligned range does not round up.
+
+A section's candidates come from `nestedEncodingReadFactors()` in
+`EncodingSelectionPolicy.h`, which adds SimdForBitpack, PFOR, BlockBitPacking,
+Delta, FOR, and FrequencyPartition to the parent's list for a SubIntSplit
+parent. The planner and section selection must agree on this list.
 
 Varint is excluded from automatic section selection because it has no
 `EncodingView`; allowing it would make an otherwise valid SubIntSplit stream
@@ -221,19 +238,25 @@ gaps, overlap, out-of-range endpoints, and incomplete coverage.
 legacy visitor dispatcher also recognizes it, so full materialization and
 selective reads share the same encoded format.
 
-`SectionTable` parses every child header and creates its nested decoder. It then
-classifies the children:
+`parseSections()` in `Format.h` parses the stream header and every child
+header. It rejects, with `NIMBLE_CHECK_FILE`, unknown flags, sections that do
+not tile the value width, child sizes that do not account for the whole stream,
+and more sections than value bits. The constructor also checks each child's
+data type against its bit width, then classifies the children:
 
-- Constant children are read once and folded into a single shifted value.
-- A sole full-width child is a pass-through stream and writes directly to the
-  caller's output.
+- Constant children are read once and folded into a single shifted value
+  (`subIntSplit.foldConstantSections`, on by default).
+- A sole verbatim child is a pass-through stream and writes directly to the
+  caller's output (`subIntSplit.passThrough`, on by default).
 - A sole low-bit Trivial child can widen directly into the output while adding
   any constant prefix.
 - Other children decode into reusable scratch storage and are masked, shifted,
   and OR-ed into the output.
 
-The general path works in chunks. Each dynamic child traverses the same output
-chunk before the decoder advances, keeping reconstruction data cache-local.
+The general path works in chunks of at most `subIntSplitDecodeChunkSize`
+values, with scratch sized to one chunk. Each dynamic child traverses the same
+output chunk before the decoder advances, keeping reconstruction data
+cache-local.
 AVX2 builds use vectorized widening and accumulation for narrower children;
 other widths and tail values use the scalar loop.
 
@@ -246,8 +269,9 @@ the selected positions. Sparse filters therefore avoid one virtual child decode
 per selected value.
 
 Float and double use the general visitor path so conversion from their physical
-bit representation remains correct. The slow path refills a small block instead
-of calling every child decoder once per value.
+bit representation remains correct. With `subIntSplit.visitorBlockBuffer`, on by
+default, the slow path refills a small block instead of calling every child
+decoder once per value.
 
 ### Delta pre-transform
 
@@ -256,9 +280,10 @@ values as zigzag deltas. The writer encodes both raw and delta forms and keeps
 the smaller one.
 
 Delta reconstruction requires all preceding values. A delta SubIntSplit stream
-therefore supports sequential `materialize()` from row zero, while `skip()` and
-`readWithVisitor()` reject it. Keep this option disabled for production until
-the format has restart points.
+is therefore read sequentially from row zero: `skip()` decodes every skipped
+row, `readWithVisitor()` reads through `materialize()`, and point or range reads
+cost a full scan. Keep this option disabled for production until the format has
+restart points.
 
 ## Selection and configuration
 
@@ -321,6 +346,16 @@ planner and decoder costs. Their sentinel defaults preserve standard behavior.
 | `subIntSplitMaxSectionWidth` | `0` | Skip wide grid cells except the full-range fallback |
 | `subIntSplitFrequencyMetricsMaxWidth` | `0` | Skip frequency metrics above a width |
 | `subIntSplitSectionCandidateMargin` | negative → `1.25` | Retain sampled RLE/MainlyConstant candidates within the margin |
+| `subIntSplit.allowedEncodings` | empty | Restrict the encodings the planner prices; empty allows all |
+| `subIntSplit.allowHuffman` | `false` | Let the planner price Huffman |
+| `subIntSplit.allowDeltaBlock` | `false` | Let the planner price DeltaBlock |
+| `subIntSplit.trimConstantPlanes` | `true` | Trim constant edge planes before the DP |
+| `subIntSplit.foldConstantSections` | `true` | Fold Constant sections into one word at open |
+| `subIntSplit.passThrough` | `true` | Decode a sole verbatim section into the caller's buffer |
+| `subIntSplit.visitorBlockBuffer` | `true` | Decode the visitor slow path a block at a time |
+
+The `subIntSplit.*` fields live in `subintsplit::Options`, held by
+`Encoding::Options::subIntSplit`.
 
 Treat these as benchmark controls rather than table-level contracts. Changing
 planner options can change section boundaries and encoded bytes. Reader-only
@@ -397,27 +432,26 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | File | Execution context | Inputs and outputs | Contract to preserve |
 |---|---|---|---|
 | `BitSection.h` | Shared planner/encoder vocabulary | Inclusive first and last bits; produces section ranges and `SectionPlan` entries | Ranges use physical bit positions, remain ordered least-significant first, and report exact widths |
-| `CostModel.h` | Planner interface | Section metrics, width, and value count; exposes candidate costs and pruning decisions | Costs use bits consistently and impossible candidates remain distinguishable from expensive ones |
-| `CostModel.cpp` | Planner computation | Evaluates Trivial, FixedBitWidth, Constant, MainlyConstant, Dictionary, RLE, and Varint estimates | Estimates and candidate exclusions must derive from the same sampled evidence |
+| `CostModel.h` | Planner cost models | Section metrics, width, and value count; exposes candidate costs and pruning decisions | Each model mirrors selection's size estimator for its encoding; costs use bits consistently and impossible candidates remain distinguishable from expensive ones |
+| `DecodeCost.h` | Planner decode-cost weighting | Section encodings and access pattern; produces per-section read costs | Zero weight reproduces size-only planning exactly |
 | `DeltaTransform.h` | Optional write transform and sequential read recovery | Physical values ↔ first value plus zigzag residuals | Arithmetic is bit-preserving for signed extrema; transformed streams require decoding from row zero |
-| `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets | Header sizes and field order remain compatible with stored data; each range fits in one-byte endpoints |
+| `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets; `parseSections()` validates them | Header sizes and field order remain compatible with stored data; malformed headers fail with `NIMBLE_CHECK_FILE` |
+| `Options.h` | Writer and reader configuration | `subintsplit::Options`, held by `Encoding::Options::subIntSplit` | Defaults preserve standard behavior |
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
 | `SectionAccumulator.h` | Full and selective decode hot path | Decoded unsigned section values, range masks, shifts, and an output span | Scalar and AVX2 paths produce identical physical bits and never leak bits outside a section width |
-| `SectionEncoder.h` | Full-data write hot path | One `SectionPlan`, all input values, selection state, and buffer options; produces one child payload | Extraction uses the narrowest safe unsigned type and passes exact bit width plus sampled exclusions to nested selection |
-| `SectionMetrics.h` | Planner statistics interface | Declares range, run, cardinality, and dominant-value measurements consumed by cost models | Metrics describe extracted section values rather than whole input values |
-| `SectionMetrics.cpp` | Planner statistics implementation | Candidate-range samples and reusable frequency storage; produces `SectionMetrics` | Exact distinct counts stop at the configured cap and scratch state is reset between ranges |
-| `SectionTable.h` | Decoder construction and cursor ownership | Serialized section headers and child payloads; produces classified child decoders | Every dynamic child advances by the same logical row count; constants never consume a child cursor |
+| `SectionMetrics.h` | Planner statistics | Candidate-range samples and reusable frequency storage; produces the range, run, cardinality, and dominant-value measurements the cost models read | Metrics describe extracted section values; exact distinct counts stop at the configured cap and scratch state is reset between ranges |
 | `SplitBoundaries.h` | Preserved-layout configuration interface | Declares config keys and parse/serialize APIs for ranges and candidate exclusions | Preserve mode describes a complete physical-width partition |
 | `SplitBoundaries.cpp` | Preserved-layout parsing and validation | Text configs ↔ section plans | Rejects gaps, overlaps, malformed endpoints, out-of-range bits, and exclusion-count mismatches |
-| `SplitSelector.h` | Planner entry point | Samples, physical width, full row count, and `SelectorConfig`; returns `SelectorResult` | Sentinel defaults preserve standard planning and reported total cost matches the returned plan |
-| `SplitSelector.cpp` | Boundary search and dynamic program | Active-bit statistics, retained boundaries, and range costs; produces the minimum-cost partition | Both active-range edges remain candidates, configured caps remain hard limits, and output covers the full width |
+| `SplitSelector.h` | Planner entry point and dynamic program | Samples, physical width, full row count, and `SelectorConfig`; returns `SelectorResult` | Sentinel defaults preserve standard planning, reported total cost matches the returned plan, and output covers the full width |
+| `SplitSelector.cpp` | Boundary search | Active-bit statistics; produces retained boundaries and the grid layout | Both active-range edges remain candidates and configured caps remain hard limits |
 
 ### Registration, selection, and writer configuration
 
 | File | Responsibility and reason to change it |
 |---|---|
-| `encodings/SubIntSplitEncoding.h` | Owns the public encoding implementation. It coordinates planning or layout replay, optional delta comparison, child encoding, serialization, full materialization, skipping, reset, and visitor reads. Start here when behavior spans more than one core helper. |
-| `encodings/common/Encoding.h` | Declares SubIntSplit tuning options and their sentinel defaults. Adding a knob starts here and must preserve default behavior. |
+| `encodings/SubIntSplitEncoding.h` | Owns the public encoding implementation. It coordinates planning or layout replay, optional delta comparison, child encoding, serialization, child decoder construction and cursors, full materialization, skipping, reset, and visitor reads. Start here when behavior spans more than one core helper. |
+| `encodings/common/Encoding.h` | Declares SubIntSplit tuning options and their sentinel defaults, and holds `subintsplit::Options`. Adding a knob must preserve default behavior. |
+| `encodings/selection/EncodingSelectionPolicy.h` | `nestedEncodingReadFactors()` decides the candidates a section is selected from. Change it together with the planner's cost models. |
 | `encodings/common/EncodingFactory.cpp` | Constructs typed SubIntSplit decoders on the normal factory path. |
 | `encodings/legacy/EncodingFactory.cpp` | Constructs the same physical types through the legacy visitor dispatch path. |
 | `encodings/views/SubIntSplitEncodingView.h` | Implements random access over supported nested section encodings. Change it when adding a view-capable child or adjusting per-row reconstruction. |
@@ -436,6 +470,8 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `encodings/tests/SubIntSplitConfiguredSplitTest.cpp` | Explicit boundaries, pinned children, and section-candidate replay. |
 | `encodings/tests/SubIntSplitDecodeOptionsTest.cpp` | Decode cost and chunk-size behavior. |
 | `encodings/tests/SubIntSplitPlannerOptionsTest.cpp` | Planner sentinels, limits, boundary pruning, and hard-cap invariants. |
+| `encodings/tests/SubIntSplitCostModelsTest.cpp` | Per-encoding cost models and metric collection. |
+| `encodings/tests/SubIntSplitSelectorTest.cpp` | Range and partition counts, decode-cost weighting, and plan ranking. |
 | `encodings/tests/SubIntSplitSectionMetricsTest.cpp` | Exact statistics consumed by the cost model. |
 | `encodings/tests/SubIntSplitSectionCandidatesTest.cpp` | Per-section candidate exclusion and nested-selection behavior. |
 | `encodings/tests/SubIntSplitDeltaTest.cpp` | Delta choice, round trips, and restricted reader operations. |
@@ -450,10 +486,10 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 
 | Change | Start in | Inspect together | Focused validation |
 |---|---|---|---|
-| Wire format or flags | `subintsplit/Format.h` and `SubIntSplitEncoding::writeEncoding()` | `SectionTable.h`, legacy factory, and old-format compatibility | Encoding and configured-split tests |
-| Boundary or partition heuristic | `SplitSelector.*` | `Sampler.h`, `SectionMetrics.*`, and `CostModel.*` | Planner-option and section-metrics tests; optimized encode benchmark |
-| Nested child choice | `SectionEncoder.h` | `CostModel.*`, selection policy, and view support | Section-candidate, encoding-view, and production-corpus tests |
-| Full-decode performance | `SectionTable.h` | `SectionAccumulator.h` and `SubIntSplitEncoding::materialize()` | Encoding fuzzer and full-decode benchmarks |
+| Wire format or flags | `subintsplit/Format.h` and `SubIntSplitEncoding::writeEncoding()` | `parseSections()`, legacy factory, and old-format compatibility | Encoding and configured-split tests |
+| Boundary or partition heuristic | `SplitSelector.*` | `Sampler.h`, `SectionMetrics.h`, and `CostModel.h` | Planner-option and section-metrics tests; optimized encode benchmark |
+| Nested child choice | `SubIntSplitEncoding::encodeResiduals()` | `CostModel.h`, `nestedEncodingReadFactors()`, and view support | Section-candidate, encoding-view, and production-corpus tests |
+| Full-decode performance | `SubIntSplitEncoding::materialize()` | `SectionAccumulator.h` and the decoder constructor | Encoding fuzzer and full-decode benchmarks |
 | Filter or projection performance | `SubIntSplitEncoding::readWithVisitor()` | `bulkScan()`, pending-block state, and `SubIntSplitEncodingView.h` | View fuzzer and selective-reader benchmark |
 | Serde property behavior | `velox/NimbleConfig.*` | option builder, `WriterOptions.h`, and `Writer.cpp` | Writer and option-builder tests |
 | Selection eligibility | `EncodingSelectionPolicy.cpp` | Production factors and explicit layouts | Production-corpus comparison against the current default selector |
