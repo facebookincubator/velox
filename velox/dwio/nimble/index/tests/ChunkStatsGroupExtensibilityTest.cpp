@@ -69,6 +69,7 @@ TEST(ChunkStatsGroupExtensibilityTest, dispatchesThroughBaseTypes) {
   EXPECT_EQ(location.rowOffset, 17);
   EXPECT_EQ(stream->chunkNullCount(29), 30);
   EXPECT_EQ(stream->rowCount(), 19);
+  EXPECT_EQ(stream->chunkRange(), std::make_pair(0U, 0U));
 }
 
 } // namespace
