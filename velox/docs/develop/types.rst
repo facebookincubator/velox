@@ -321,6 +321,8 @@ key differences are listed below.
 * Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
   The Parquet reader supports widening DATE columns to TIMESTAMP_UTC, producing
   midnight on the same calendar date without a session timezone adjustment.
+  Widening rejects dates whose midnight is outside the signed 64-bit
+  microsecond range, including when the column is used only in a value filter.
   This does not enable widening DATE to the session-timezone-adjusted TIMESTAMP
   type.
 
