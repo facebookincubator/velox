@@ -15,7 +15,10 @@
  */
 
 #include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
+
 #include <folly/container/F14Set.h>
+#include <algorithm>
+#include <cmath>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
@@ -24,6 +27,7 @@
 #include "velox/dwio/nimble/index/IndexLookup.h"
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
@@ -115,6 +119,225 @@ uint64_t sumProjectedLogicalSize(
     }
   }
   return size;
+}
+
+// Converts exact-width bounds to Velox's int64 statistics representation.
+template <typename T>
+bool readIntegerBounds(
+    const std::pair<ChunkStatValue, ChunkStatValue>& bounds,
+    std::optional<int64_t>& min,
+    std::optional<int64_t>& max) {
+  const auto* typedMin = std::get_if<T>(&bounds.first);
+  const auto* typedMax = std::get_if<T>(&bounds.second);
+  if (typedMin == nullptr || typedMax == nullptr) {
+    return false;
+  }
+  min = static_cast<int64_t>(*typedMin);
+  max = static_cast<int64_t>(*typedMax);
+  return true;
+}
+
+// Adapts V2's typed bounds to the statistics objects used by Velox filters.
+std::unique_ptr<dwio::common::ColumnStatistics> toColumnStatistics(
+    const index::StreamIndex& streamIndex,
+    uint32_t chunkIndex,
+    uint32_t numChunkRows,
+    TypeKind typeKind) {
+  const auto nullCount = streamIndex.chunkNullCount(chunkIndex);
+  if (nullCount.has_value()) {
+    NIMBLE_CHECK_FILE_LE(
+        *nullCount, numChunkRows, "Chunk null count exceeds its row count.");
+  }
+  const std::optional<uint64_t> numValues = nullCount.has_value()
+      ? std::make_optional<uint64_t>(numChunkRows - *nullCount)
+      : std::nullopt;
+  const std::optional<bool> hasNull =
+      nullCount.has_value() ? std::make_optional(*nullCount > 0) : std::nullopt;
+  const auto bounds = streamIndex.chunkBounds(chunkIndex);
+
+  switch (typeKind) {
+    case TypeKind::BIGINT:
+    case TypeKind::INTEGER:
+    case TypeKind::SMALLINT:
+    case TypeKind::TINYINT: {
+      std::optional<int64_t> min;
+      std::optional<int64_t> max;
+      if (bounds.has_value()) {
+        const bool hasValidType = [&] {
+          switch (typeKind) {
+            case TypeKind::TINYINT:
+              return readIntegerBounds<int8_t>(*bounds, min, max);
+            case TypeKind::SMALLINT:
+              return readIntegerBounds<int16_t>(*bounds, min, max);
+            case TypeKind::INTEGER:
+              return readIntegerBounds<int32_t>(*bounds, min, max);
+            case TypeKind::BIGINT:
+              return readIntegerBounds<int64_t>(*bounds, min, max);
+            default:
+              NIMBLE_UNREACHABLE("Expected an integral type.");
+          }
+        }();
+        if (!hasValidType) {
+          return nullptr;
+        }
+      }
+      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+          numValues,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          min,
+          max,
+          std::nullopt);
+    }
+    case TypeKind::REAL: {
+      std::optional<double> min;
+      std::optional<double> max;
+      if (bounds.has_value()) {
+        const auto* typedMin = std::get_if<float>(&bounds->first);
+        const auto* typedMax = std::get_if<float>(&bounds->second);
+        if (typedMin == nullptr || typedMax == nullptr) {
+          return nullptr;
+        }
+        NIMBLE_CHECK_FILE(
+            !std::isnan(*typedMin) && !std::isnan(*typedMax),
+            "Chunk bounds must not be NaN.");
+        NIMBLE_CHECK_FILE_LE(
+            *typedMin, *typedMax, "Chunk minimum must not exceed maximum.");
+        min = *typedMin;
+        max = *typedMax;
+      }
+      return std::make_unique<dwio::common::DoubleColumnStatistics>(
+          numValues,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          min,
+          max,
+          std::nullopt);
+    }
+    case TypeKind::DOUBLE: {
+      std::optional<double> min;
+      std::optional<double> max;
+      if (bounds.has_value()) {
+        const auto* typedMin = std::get_if<double>(&bounds->first);
+        const auto* typedMax = std::get_if<double>(&bounds->second);
+        if (typedMin == nullptr || typedMax == nullptr) {
+          return nullptr;
+        }
+        NIMBLE_CHECK_FILE(
+            !std::isnan(*typedMin) && !std::isnan(*typedMax),
+            "Chunk bounds must not be NaN.");
+        NIMBLE_CHECK_FILE_LE(
+            *typedMin, *typedMax, "Chunk minimum must not exceed maximum.");
+        min = *typedMin;
+        max = *typedMax;
+      }
+      return std::make_unique<dwio::common::DoubleColumnStatistics>(
+          numValues,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          min,
+          max,
+          std::nullopt);
+    }
+    case TypeKind::BOOLEAN: {
+      std::optional<uint64_t> trueCount;
+      if (bounds.has_value()) {
+        const auto* min = std::get_if<bool>(&bounds->first);
+        const auto* max = std::get_if<bool>(&bounds->second);
+        if (min == nullptr || max == nullptr) {
+          return nullptr;
+        }
+        if (!*max) {
+          trueCount = 0;
+        } else if (*min && numValues.has_value()) {
+          trueCount = *numValues;
+        }
+      }
+      return std::make_unique<dwio::common::BooleanColumnStatistics>(
+          numValues, hasNull, std::nullopt, std::nullopt, trueCount);
+    }
+    case TypeKind::VARCHAR: {
+      std::optional<std::string> min;
+      std::optional<std::string> max;
+      if (bounds.has_value()) {
+        const auto* typedMin = std::get_if<std::string>(&bounds->first);
+        const auto* typedMax = std::get_if<std::string>(&bounds->second);
+        if (typedMin == nullptr || typedMax == nullptr) {
+          return nullptr;
+        }
+        NIMBLE_CHECK_FILE_LE(
+            *typedMin, *typedMax, "Chunk minimum must not exceed maximum.");
+        min = *typedMin;
+        max = *typedMax;
+      }
+      return std::make_unique<dwio::common::StringColumnStatistics>(
+          numValues,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          std::move(min),
+          std::move(max),
+          std::nullopt);
+    }
+    default:
+      return std::make_unique<dwio::common::ColumnStatistics>(
+          numValues, hasNull, std::nullopt, std::nullopt);
+  }
+}
+
+// Collects ranges that a filter proves cannot contain matching rows.
+void filterStreamByChunkStats(
+    const index::StreamIndex& streamIndex,
+    const common::Filter* filter,
+    const TypePtr& columnType,
+    uint32_t numStripeRows,
+    std::vector<RowRange>& ranges) {
+  NIMBLE_CHECK_FILE_EQ(
+      streamIndex.rowCount(),
+      numStripeRows,
+      "Chunk rows do not cover the stripe.");
+  const auto [startChunk, endChunk] = streamIndex.chunkRange();
+  for (uint32_t chunkIndex = startChunk; chunkIndex < endChunk; ++chunkIndex) {
+    const uint32_t endRow = streamIndex.chunkEndRow(chunkIndex);
+    const uint32_t startRow =
+        chunkIndex == startChunk ? 0 : streamIndex.chunkEndRow(chunkIndex - 1);
+    NIMBLE_CHECK_FILE_GE(
+        endRow, startRow, "Chunk rows must be non-decreasing.");
+    if (endRow == startRow) {
+      continue;
+    }
+    auto stats = toColumnStatistics(
+        streamIndex, chunkIndex, endRow - startRow, columnType->kind());
+    if (stats != nullptr &&
+        !common::testFilter(
+            filter, stats.get(), endRow - startRow, columnType)) {
+      ranges.emplace_back(startRow, endRow);
+    }
+  }
+}
+
+// Merges overlapping ranges from independently filtered columns.
+void mergeRowRanges(std::vector<RowRange>& ranges) {
+  if (ranges.empty()) {
+    return;
+  }
+  std::sort(ranges.begin(), ranges.end(), [](const auto& lhs, const auto& rhs) {
+    return lhs.startRow != rhs.startRow ? lhs.startRow < rhs.startRow
+                                        : lhs.endRow < rhs.endRow;
+  });
+  size_t outputIndex{0};
+  for (size_t inputIndex = 1; inputIndex < ranges.size(); ++inputIndex) {
+    if (ranges[inputIndex].startRow <= ranges[outputIndex].endRow) {
+      ranges[outputIndex].endRow =
+          std::max(ranges[outputIndex].endRow, ranges[inputIndex].endRow);
+    } else {
+      ranges[++outputIndex] = ranges[inputIndex];
+    }
+  }
+  ranges.resize(outputIndex + 1);
 }
 
 } // namespace
@@ -212,6 +435,15 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   // Called from both setAtEnd() and the destructor.
   void restoreFilters();
 
+  // Computes chunk-statistics skip ranges for the current stripe.
+  void computeSkipRowRanges();
+
+  // Advances past skip ranges and returns readable rows before the next one.
+  int64_t applySkipRowRanges(int64_t numStripeRows);
+
+  // Refreshes future skip ranges after dynamic filters change.
+  void recomputeSkipRowRanges();
+
   // Computes estimated projected row size from file-level vectorized
   // statistics. Only counts columns in the scan spec. Sets statsBasedRowSize_
   // if stats are available.
@@ -267,6 +499,17 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   dwio::common::SplitStats splitStats_{dwio::common::FileFormat::NIMBLE};
   std::unique_ptr<RowSizeTracker> rowSizeTracker_;
 
+  // Sorted, non-overlapping row ranges to skip in the current stripe.
+  std::vector<RowRange> skipRanges_;
+  // Identifies the next range that can affect the current read position.
+  size_t skipRangeIndex_{0};
+  // Excludes rows skipped by index bounds or random sampling.
+  int64_t chunkStatsSkippedRows_{0};
+  // Excludes rows outside the split and index bounds.
+  int64_t chunkStatsProcessedRows_{0};
+  // Preserves the current effective range before stripe completion.
+  int64_t currentStripeRows_{0};
+
   // Cached row size estimate derived from file-level statistics.
   mutable std::optional<size_t> statsBasedRowSize_;
   // Whether we've already attempted to compute statsBasedRowSize_.
@@ -301,11 +544,13 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
         continue;
       }
       loadCurrentStripe();
+      computeSkipRowRanges();
     }
     if (endRowInCurrentStripe_.has_value()) {
       NIMBLE_CHECK_LE(endRowInCurrentStripe_.value(), numStripeRows);
       numStripeRows = endRowInCurrentStripe_.value();
     }
+    applySkipRowRanges(numStripeRows);
     if (rowInCurrentStripe_ < numStripeRows) {
       nextRowNumber_ = stripeRowOffsets_[currentStripe_] + rowInCurrentStripe_;
       return *nextRowNumber_;
@@ -322,9 +567,13 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
 }
 
 void SelectiveNimbleRowReader::advanceToNextStripe() {
+  chunkStatsProcessedRows_ += currentStripeRows_;
   ++currentStripe_;
   rowInCurrentStripe_ = 0;
   endRowInCurrentStripe_.reset();
+  skipRanges_.clear();
+  skipRangeIndex_ = 0;
+  currentStripeRows_ = 0;
 }
 
 uint32_t SelectiveNimbleRowReader::currentStripe() const {
@@ -333,17 +582,24 @@ uint32_t SelectiveNimbleRowReader::currentStripe() const {
 
 int64_t SelectiveNimbleRowReader::nextReadSize(uint64_t size) {
   NIMBLE_DCHECK_GT(size, 0, "Read size must be greater than 0");
-  if (nextRowNumber() == kAtEnd) {
-    return kAtEnd;
+  while (true) {
+    if (nextRowNumber() == kAtEnd) {
+      return kAtEnd;
+    }
+    int64_t numStripeRows =
+        readerBase_->tablet().stripeRowCount(currentStripe_);
+    if (endRowInCurrentStripe_.has_value()) {
+      numStripeRows = endRowInCurrentStripe_.value();
+    }
+    const auto readableRows = applySkipRowRanges(numStripeRows);
+    if (rowInCurrentStripe_ >= numStripeRows) {
+      nextRowNumber_.reset();
+      continue;
+    }
+    const auto rowsToRead = std::min(size, static_cast<uint64_t>(readableRows));
+    NIMBLE_DCHECK_GT(rowsToRead, 0);
+    return static_cast<int64_t>(rowsToRead);
   }
-  auto numStripeRows = readerBase_->tablet().stripeRowCount(currentStripe_);
-  if (endRowInCurrentStripe_.has_value()) {
-    numStripeRows = endRowInCurrentStripe_.value();
-  }
-  const auto rowsToRead =
-      std::min<int64_t>(size, numStripeRows - rowInCurrentStripe_);
-  NIMBLE_DCHECK_GT(rowsToRead, 0);
-  return rowsToRead;
 }
 
 uint64_t SelectiveNimbleRowReader::next(
@@ -373,11 +629,102 @@ void SelectiveNimbleRowReader::updateRuntimeStats(
   stats.footerBufferOverread += tabletStats.footerBufferOverread;
   stats.footerBufferUnderread += tabletStats.footerBufferUnderread;
   stats.footerCacheHit += tabletStats.footerCacheHit ? 1 : 0;
+  stats.chunkStatsSkippedRows += chunkStatsSkippedRows_;
+  stats.chunkStatsProcessedRows += chunkStatsProcessedRows_;
+  if (currentStripe_ < endStripe_) {
+    stats.chunkStatsProcessedRows += currentStripeRows_;
+  }
 }
 
 void SelectiveNimbleRowReader::resetFilterCaches() {
   if (columnReader_) {
     columnReader_->resetFilterCaches();
+    if (currentStripe_ < endStripe_) {
+      recomputeSkipRowRanges();
+    }
+  }
+}
+
+void SelectiveNimbleRowReader::computeSkipRowRanges() {
+  skipRanges_.clear();
+  skipRangeIndex_ = 0;
+  if (readerBase_->randomSkip()) {
+    return;
+  }
+
+  const auto* scanSpec = options_.scanSpec().get();
+  if (columnReader_ == nullptr || scanSpec == nullptr) {
+    return;
+  }
+
+  const auto& nimbleRoot = readerBase_->nimbleSchema()->asRow();
+  const auto& rootType = readerBase_->fileSchemaWithId();
+  const auto numStripeRows =
+      readerBase_->tablet().stripeRowCount(currentStripe_);
+  for (uint32_t i = 0; i < rootType->size() && i < nimbleRoot.childrenCount();
+       ++i) {
+    const auto* childSpec =
+        scanSpec->childByName(rootType->type()->asRow().nameOf(i));
+    if (childSpec == nullptr || childSpec->filter() == nullptr ||
+        !childSpec->readFromFile() || childSpec->hasTransform() ||
+        !nimbleRoot.childAt(i)->isScalar()) {
+      continue;
+    }
+    const auto streamId =
+        nimbleRoot.childAt(i)->asScalar().scalarDescriptor().offset();
+    const auto streamIndex = streams_.streamIndex(streamId);
+    if (streamIndex == nullptr) {
+      continue;
+    }
+    filterStreamByChunkStats(
+        *streamIndex,
+        childSpec->filter(),
+        rootType->childAt(i)->type(),
+        numStripeRows,
+        skipRanges_);
+  }
+  mergeRowRanges(skipRanges_);
+}
+
+int64_t SelectiveNimbleRowReader::applySkipRowRanges(int64_t numStripeRows) {
+  NIMBLE_CHECK_GE(numStripeRows, 0);
+  while (skipRangeIndex_ < skipRanges_.size()) {
+    const auto currentRow = static_cast<uint32_t>(rowInCurrentStripe_);
+    const auto& skipRange = skipRanges_[skipRangeIndex_];
+    if (skipRange.endRow <= currentRow) {
+      ++skipRangeIndex_;
+      continue;
+    }
+    if (currentRow < skipRange.startRow) {
+      return std::min<int64_t>(skipRange.startRow, numStripeRows) - currentRow;
+    }
+
+    const auto effectiveSkipEnd = static_cast<uint32_t>(
+        std::min<int64_t>(skipRange.endRow, numStripeRows));
+    chunkStatsSkippedRows_ += effectiveSkipEnd - currentRow;
+    rowInCurrentStripe_ = effectiveSkipEnd;
+    nextRowNumber_.reset();
+    ++skipRangeIndex_;
+    if (effectiveSkipEnd < numStripeRows) {
+      columnReader_->seekTo(effectiveSkipEnd, /*readsNullsOnly=*/false);
+    }
+  }
+  return numStripeRows - rowInCurrentStripe_;
+}
+
+void SelectiveNimbleRowReader::recomputeSkipRowRanges() {
+  nextRowNumber_.reset();
+  const auto currentRow = static_cast<uint32_t>(rowInCurrentStripe_);
+  computeSkipRowRanges();
+  const auto firstFutureRange = std::lower_bound(
+      skipRanges_.begin(),
+      skipRanges_.end(),
+      currentRow,
+      [](const auto& range, uint32_t row) { return range.endRow <= row; });
+  skipRanges_.erase(skipRanges_.begin(), firstFutureRange);
+  skipRangeIndex_ = 0;
+  if (!skipRanges_.empty() && skipRanges_.front().startRow < currentRow) {
+    skipRanges_.front().startRow = currentRow;
   }
 }
 
@@ -591,6 +938,11 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
   columnReader_->setIsTopLevel();
   streams_.load();
   setStripeRowRange();
+  const int64_t numStripeRows =
+      readerBase_->tablet().stripeRowCount(currentStripe_);
+  const int64_t stripeEnd = endRowInCurrentStripe_.value_or(numStripeRows);
+  NIMBLE_CHECK_LE(rowInCurrentStripe_, stripeEnd);
+  currentStripeRows_ = stripeEnd - rowInCurrentStripe_;
 }
 
 bool SelectiveNimbleRowReader::hasIndexBounds() const {

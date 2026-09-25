@@ -22,6 +22,8 @@ namespace facebook::velox::dwio::common {
 namespace {
 
 constexpr std::string_view kUnknown = "unknown";
+constexpr std::string_view kChunkStatsSkippedRows = "chunkStatsSkippedRows";
+constexpr std::string_view kChunkStatsProcessedRows = "chunkStatsProcessedRows";
 
 template <typename T>
 std::string toStringOr(
@@ -326,6 +328,14 @@ RuntimeStats::toRuntimeMetricMap() const {
   }
   if (processedStrides > 0) {
     result.emplace("processedStrides", RuntimeMetric(processedStrides));
+  }
+  if (chunkStatsSkippedRows > 0) {
+    result.emplace(
+        kChunkStatsSkippedRows, RuntimeMetric(chunkStatsSkippedRows));
+  }
+  if (chunkStatsProcessedRows > 0) {
+    result.emplace(
+        kChunkStatsProcessedRows, RuntimeMetric(chunkStatsProcessedRows));
   }
   if (footerBufferOverread > 0) {
     result.emplace(
