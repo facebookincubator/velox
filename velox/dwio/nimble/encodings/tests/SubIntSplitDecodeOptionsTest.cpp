@@ -151,10 +151,10 @@ TEST_F(SubIntSplitDecodeOptionsTest, decodeCostReducesSectionCount) {
 }
 
 // A term large enough to outweigh any real saving leaves the active bit range
-// as a single section. The plan still reports two, because the constant high
-// prefix is re-attached after the DP and is not charged for: a constant section
-// is folded into a single OR at construction and never decoded per value, so it
-// genuinely costs nothing.
+// as a single section, beside the constant high prefix that is re-attached
+// after the DP. That two-section plan stores the same bits as one whole-value
+// section plus a second section's header, so the whole-value floor replaces it
+// and the stream is written as a single section.
 TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
   const auto values = makeMultiFieldValues(10'000);
 
@@ -165,7 +165,7 @@ TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
   prohibitive.subIntSplit.trimConstantPlanes = true;
   const auto encoded = encode(values, prohibitive);
 
-  EXPECT_EQ(sectionCount(encoded), 2u);
+  EXPECT_EQ(sectionCount(encoded), 1u);
   EXPECT_EQ(decode(encoded, values.size(), {}), values);
 }
 
