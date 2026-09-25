@@ -408,8 +408,8 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
-  /// Bulk variant of process() with SIMD paths for AlwaysTrue and
-  /// deterministic integer filters; otherwise per-row fallback.
+  /// Processes a run of values. Dense deterministic filters append matches to
+  /// the supplied buffers and update numValues, using SIMD where supported.
   template <bool hasFilter, bool hasHook, bool scatter>
   FOLLY_ALWAYS_INLINE void processRun(
       const T* input,
@@ -428,32 +428,34 @@ class ColumnVisitor {
     }
     if constexpr (
         hasFilter && !hasHook && !scatter && isDense &&
-        TFilter::deterministic &&
-        (std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
-         std::is_same_v<T, int16_t>)) {
+        TFilter::deterministic) {
       const int32_t firstRow = currentRow();
-      constexpr int32_t kWidth = xsimd::batch<T>::size;
-      constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
       int32_t i = 0;
-      while (i + kWidth <= numInput) {
-        auto batch = xsimd::load_unaligned(input + i);
-        processFixedFilter<
-            T,
-            /*filterOnly=*/false,
-            /*scatter=*/false,
-            /*dense=*/true>(
-            batch,
-            kWidth,
-            firstRow + i,
-            filter_,
-            [&](int32_t offset) {
-              return simd::loadGatherIndices<T>(
-                  rows_ + rowIndex_ + i + offset * kIndexLaneCount);
-            },
-            values,
-            filterHits,
-            numValues);
-        i += kWidth;
+      if constexpr (
+          std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+          std::is_same_v<T, int16_t>) {
+        constexpr int32_t kWidth = xsimd::batch<T>::size;
+        constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
+        while (i + kWidth <= numInput) {
+          auto batch = xsimd::load_unaligned(input + i);
+          processFixedFilter<
+              T,
+              /*filterOnly=*/false,
+              /*scatter=*/false,
+              /*dense=*/true>(
+              batch,
+              kWidth,
+              firstRow + i,
+              filter_,
+              [&](int32_t offset) {
+                return simd::loadGatherIndices<T>(
+                    rows_ + rowIndex_ + i + offset * kIndexLaneCount);
+              },
+              values,
+              filterHits,
+              numValues);
+          i += kWidth;
+        }
       }
       for (; i < numInput; ++i) {
         if (velox::common::applyFilter(filter_, input[i])) {
