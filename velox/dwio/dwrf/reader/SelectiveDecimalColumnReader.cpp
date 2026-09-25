@@ -252,6 +252,18 @@ void SelectiveDecimalColumnReader<DataT>::read(
     const uint64_t* incomingNulls) {
   VELOX_CHECK(!scanSpec_->valueHook());
   prepareRead<int64_t>(offset, rows, incomingNulls);
+  if (returnReaderNulls()) {
+    // Decimal decoding uses visitors that write nulls alongside values. The
+    // generic bulk path keeps these nulls only in nullsInReadRange_, so make
+    // a writable result bitmap before decoding.
+    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), pool_);
+    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+    memcpy(
+        rawResultNulls_,
+        nullsInReadRange_->as<uint64_t>(),
+        bits::nbytes(rows.size()));
+    returnReaderNulls_ = false;
+  }
   if (!scanSpec_->keepValues() && scanSpec_->filter() &&
       (!resultNulls_ || !resultNulls_->unique() ||
        resultNulls_->capacity() * 8 < rows.size())) {

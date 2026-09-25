@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/common/base/BitSet.h"
-#include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/Statistics.h"
@@ -101,11 +100,6 @@ class StripeStreams {
   ///
   /// @return DwrfFormat
   virtual DwrfFormat format() const = 0;
-
-  /// get column selector for current stripe reading session
-  ///
-  /// @return column selector will hold column projection info
-  virtual const dwio::common::ColumnSelector& getColumnSelector() const = 0;
 
   /// Session timezone used for reading Timestamp.
   virtual const tz::TimeZone* sessionTimezone() const = 0;
@@ -224,7 +218,6 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   StripeStreamsImpl(
       std::shared_ptr<StripeReadState> readState,
-      const dwio::common::ColumnSelector* selector,
       std::shared_ptr<BitSet> projectedNodes,
       const dwio::common::RowReaderOptions& opts,
       uint64_t stripeStart,
@@ -234,7 +227,6 @@ class StripeStreamsImpl : public StripeStreamsBase {
       dwio::common::SplitStats* splitStats = nullptr)
       : StripeStreamsBase{&readState->readerBase->memoryPool()},
         readState_(std::move(readState)),
-        selector_{selector},
         opts_{opts},
         projectedNodes_{std::move(projectedNodes)},
         stripeStart_{stripeStart},
@@ -249,10 +241,6 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   DwrfFormat format() const override {
     return readState_->readerBase->format();
-  }
-
-  const dwio::common::ColumnSelector& getColumnSelector() const override {
-    return *selector_;
   }
 
   const tz::TimeZone* sessionTimezone() const override {
@@ -379,10 +367,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   void loadStreams();
 
   const std::shared_ptr<StripeReadState> readState_;
-  const dwio::common::ColumnSelector* const selector_;
   const dwio::common::RowReaderOptions& opts_;
-  // When selector_ is null, this needs to be passed in constructor; otherwise
-  // leave it as null and it will be populated from selector_.
   std::shared_ptr<BitSet> projectedNodes_;
   const uint64_t stripeStart_;
   const int64_t stripeNumberOfRows_;

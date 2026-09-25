@@ -68,7 +68,8 @@ TEST_F(OrcReaderTest, testOrcReaderSimple) {
   size_t rowNumber = 0;
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();
-    auto strings = rowVector->childAt(0)->as<SimpleVector<StringView>>();
+    auto strings =
+        rowVector->childAt(0)->loadedVector()->as<SimpleVector<StringView>>();
     for (size_t i = 0; i < rowVector->size(); ++i) {
       std::stringstream stream;
       stream << std::setfill('0') << std::setw(6) << rowNumber;
@@ -126,8 +127,10 @@ TEST_F(OrcReaderTest, testOrcReaderVarchar) {
   int counter = 0;
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();
-    auto ints = rowVector->childAt(0)->as<SimpleVector<int32_t>>();
-    auto strings = rowVector->childAt(1)->as<SimpleVector<StringView>>();
+    auto ints =
+        rowVector->childAt(0)->loadedVector()->as<SimpleVector<int32_t>>();
+    auto strings =
+        rowVector->childAt(1)->loadedVector()->as<SimpleVector<StringView>>();
     for (size_t i = 0; i < rowVector->size(); ++i) {
       counter++;
       EXPECT_EQ(counter, ints->valueAt(i));
@@ -159,7 +162,8 @@ TEST_F(OrcReaderTest, testOrcReaderDate) {
   int year = 1900;
   while (rowReader->next(1000, batch)) {
     auto rowVector = batch->as<RowVector>();
-    auto dates = rowVector->childAt(1)->as<SimpleVector<int32_t>>();
+    auto dates =
+        rowVector->childAt(1)->loadedVector()->as<SimpleVector<int32_t>>();
 
     std::stringstream stream;
     stream << year << "-12-25";
@@ -205,21 +209,33 @@ TEST_F(OrcReaderTest, testOrcReadAllType) {
   VectorPtr batch;
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();
-    auto integerCol = rowVector->childAt(0)->as<SimpleVector<int32_t>>();
-    auto bigintCol = rowVector->childAt(1)->as<SimpleVector<int64_t>>();
-    auto tinyintCol = rowVector->childAt(2)->as<SimpleVector<int8_t>>();
-    auto smallintCol = rowVector->childAt(3)->as<SimpleVector<int16_t>>();
-    auto realCol = rowVector->childAt(4)->as<SimpleVector<float>>();
-    auto doubleCol = rowVector->childAt(5)->as<SimpleVector<double>>();
-    auto varcharCol = rowVector->childAt(6)->as<SimpleVector<StringView>>();
-    auto booleanCol = rowVector->childAt(7)->as<SimpleVector<bool>>();
-    auto longDecimalCol = rowVector->childAt(8)->as<SimpleVector<int128_t>>();
-    auto shortDecimalCol = rowVector->childAt(9)->as<SimpleVector<int64_t>>();
-    auto dateCol = rowVector->childAt(10)->as<SimpleVector<int32_t>>();
-    auto timestampCol = rowVector->childAt(11)->as<SimpleVector<Timestamp>>();
-    auto arrayCol = rowVector->childAt(12)->as<ArrayVector>();
-    auto mapCol = rowVector->childAt(13)->as<MapVector>();
-    auto structCol = rowVector->childAt(14)->as<RowVector>();
+    auto integerCol =
+        rowVector->childAt(0)->loadedVector()->as<SimpleVector<int32_t>>();
+    auto bigintCol =
+        rowVector->childAt(1)->loadedVector()->as<SimpleVector<int64_t>>();
+    auto tinyintCol =
+        rowVector->childAt(2)->loadedVector()->as<SimpleVector<int8_t>>();
+    auto smallintCol =
+        rowVector->childAt(3)->loadedVector()->as<SimpleVector<int16_t>>();
+    auto realCol =
+        rowVector->childAt(4)->loadedVector()->as<SimpleVector<float>>();
+    auto doubleCol =
+        rowVector->childAt(5)->loadedVector()->as<SimpleVector<double>>();
+    auto varcharCol =
+        rowVector->childAt(6)->loadedVector()->as<SimpleVector<StringView>>();
+    auto booleanCol =
+        rowVector->childAt(7)->loadedVector()->as<SimpleVector<bool>>();
+    auto longDecimalCol =
+        rowVector->childAt(8)->loadedVector()->as<SimpleVector<int128_t>>();
+    auto shortDecimalCol =
+        rowVector->childAt(9)->loadedVector()->as<SimpleVector<int64_t>>();
+    auto dateCol =
+        rowVector->childAt(10)->loadedVector()->as<SimpleVector<int32_t>>();
+    auto timestampCol =
+        rowVector->childAt(11)->loadedVector()->as<SimpleVector<Timestamp>>();
+    auto arrayCol = rowVector->childAt(12)->loadedVector()->as<ArrayVector>();
+    auto mapCol = rowVector->childAt(13)->loadedVector()->as<MapVector>();
+    auto structCol = rowVector->childAt(14)->loadedVector()->as<RowVector>();
 
     EXPECT_EQ(1, rowVector->size());
     EXPECT_EQ(integerCol->valueAt(0), 111);
