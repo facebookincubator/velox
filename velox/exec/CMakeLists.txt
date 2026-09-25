@@ -57,6 +57,7 @@ velox_add_library(
   IndexLookupJoin.cpp
   IndexLookupJoinBridge.cpp
   JoinBridge.cpp
+  JoinTableBuilder.cpp
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
@@ -167,6 +168,7 @@ velox_add_library(
   IndexLookupJoin.h
   IndexLookupJoinBridge.h
   JoinBridge.h
+  JoinTableBuilder.h
   Limit.h
   LocalPartition.h
   LocalPlanner.h
