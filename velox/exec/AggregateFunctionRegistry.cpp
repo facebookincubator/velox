@@ -90,6 +90,19 @@ TypePtr resolveIntermediateType(
   }
 }
 
+std::optional<bool> aggregateFunctionIgnoresNullInputs(
+    const std::string& name) {
+  const auto sanitizedName = sanitizeName(name);
+  return aggregateFunctions().withRLock(
+      [&](const auto& functions) -> std::optional<bool> {
+        const auto it = functions.find(sanitizedName);
+        if (it == functions.end()) {
+          return std::nullopt;
+        }
+        return it->second.metadata.ignoreNullInputs;
+      });
+}
+
 std::vector<std::string> getAggregateFunctionNames() {
   std::vector<std::string> names;
   exec::aggregateFunctions().withRLock([&](const auto& map) {

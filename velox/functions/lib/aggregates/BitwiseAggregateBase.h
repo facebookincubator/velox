@@ -117,7 +117,9 @@ std::vector<exec::AggregateRegistrationResult> registerBitwise(
                 inputType->kindName());
         }
       },
-      {.ignoreDuplicates = ignoreDuplicates, .orderSensitive = false},
+      {.ignoreDuplicates = ignoreDuplicates,
+       .orderSensitive = false,
+       .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

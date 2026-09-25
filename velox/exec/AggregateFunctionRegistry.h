@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,11 @@ TypePtr resolveResultTypeWithCoercions(
 TypePtr resolveIntermediateType(
     const std::string& name,
     const std::vector<TypePtr>& argTypes);
+
+/// Returns whether the aggregate registered under a name ignores input rows
+/// containing nulls.
+/// Returns std::nullopt if the aggregate is not registered.
+std::optional<bool> aggregateFunctionIgnoresNullInputs(const std::string& name);
 
 /// Returns all the registered aggregation function names.
 std::vector<std::string> getAggregateFunctionNames();
