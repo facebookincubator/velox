@@ -129,6 +129,46 @@ void IcebergFileNameGenerator::registerSerDe() {
       "IcebergFileNameGenerator", IcebergFileNameGenerator::deserialize);
 }
 
+namespace {
+
+// Returns true if 'type' has UNKNOWN in a position that cannot be physically
+// encoded in an Iceberg file format:
+//   - ARRAY element or MAP key/value of type UNKNOWN.
+//   - ROW where every field is UNKNOWN (nothing can be written).
+// A ROW that has at least one non-UNKNOWN field is valid: UNKNOWN fields are
+// written as Parquet INT32 with null logical type and always read back as null.
+bool hasNestedUnknown(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+      for (auto i = 0; i < type->size(); ++i) {
+        const auto& child = type->childAt(i);
+        if (child->kind() == TypeKind::UNKNOWN || hasNestedUnknown(child)) {
+          return true;
+        }
+      }
+      return false;
+    case TypeKind::ROW: {
+      bool hasNonUnknown = false;
+      for (auto i = 0; i < type->size(); ++i) {
+        const auto& child = type->childAt(i);
+        if (child->kind() != TypeKind::UNKNOWN) {
+          hasNonUnknown = true;
+          if (hasNestedUnknown(child)) {
+            return true;
+          }
+        }
+      }
+      // All-UNKNOWN struct: no non-UNKNOWN fields exist to write.
+      return !hasNonUnknown;
+    }
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<IcebergColumnHandlePtr> inputColumns,
     LocationHandlePtr locationHandle,
@@ -171,6 +211,21 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
       isSupportedFileFormat(tableStorageFormat),
       "Unsupported file format for writing Iceberg tables: {}",
       dwio::common::FileFormatName::toName(tableStorageFormat));
+  for (const auto& column : inputColumns_) {
+    const auto& colType = column->dataType();
+    // A top-level empty struct is a valid all-UNKNOWN column (every field was
+    // pruned by the Iceberg writer). Skip the nested-unknown check because
+    // hasNestedUnknown(ROW({})) returns true (no non-UNKNOWN fields) even
+    // though there is nothing invalid to write.
+    if (colType->kind() == TypeKind::ROW && colType->size() == 0) {
+      continue;
+    }
+    VELOX_USER_CHECK(
+        !hasNestedUnknown(colType),
+        "Writing to a column with UNKNOWN type nested inside a complex type is not supported: column {}, type {}",
+        column->name(),
+        colType->toString());
+  }
 }
 
 namespace {
