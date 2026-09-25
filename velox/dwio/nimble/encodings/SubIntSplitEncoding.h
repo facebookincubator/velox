@@ -599,8 +599,12 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
   // dominate the encoded size for multi-field values, where byte rounding
   // wasted up to 7 bits/value per section. FixedBitWidth records its own bit
   // width, so the decode path is unaffected.
+  //
+  // Sections are also priced with the refined estimators, so that a section's
+  // estimate tracks the bytes its encoding really writes.
   Encoding::Options sectionOptions = options;
   sectionOptions.fixedBitWidthUseExactBits = true;
+  sectionOptions.sectionEstimatorRefinements = true;
 
   std::vector<std::string_view> payloads;
   payloads.reserve(sections.size());
