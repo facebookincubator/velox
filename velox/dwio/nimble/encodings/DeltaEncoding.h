@@ -26,6 +26,9 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -97,6 +100,52 @@ class DeltaEncoding final
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Size estimate for encoding selection, counted from the adjacent-pair
+  /// statistics rather than assumed from the value range.
+  ///
+  /// computeDeltas puts a pair in the delta stream when it does not descend
+  /// and restates it when it does, so given the count of non-decreasing pairs
+  /// both stream lengths are known exactly, and the widest rising step is what
+  /// a fixed-width delta array must be sized to. The three nested streams are
+  /// priced by the estimators selection would apply to them rather than by a
+  /// formula here, so this tracks their accuracy instead of drifting from it.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options = {}) {
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+
+    const auto& pairs = statistics.adjacentPairStats();
+    const uint64_t deltaCount = pairs.nonDecreasingCount;
+    const uint64_t restatementCount = rowCount - deltaCount;
+
+    const uint64_t deltasSize = deltaCount == 0
+        ? 0
+        : std::min(
+              TrivialEncoding<physicalType>::estimateSize(deltaCount),
+              FixedBitWidthEncoding<physicalType>::estimateSize(
+                  deltaCount, /*minValue=*/0, pairs.maxIncrease, options));
+    const uint64_t restatementsSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(restatementCount),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            restatementCount, statistics.min(), statistics.max(), options));
+    // Sparse when restatements are rare, which is the case the encoding is
+    // for, and bit-packed otherwise.
+    const uint64_t isRestatementsSize = std::min(
+        SparseBoolEncoding::estimateSize(rowCount, restatementCount, options),
+        EncodingPrefix::kFixedPrefixSize + 1 + velox::bits::nbytes(rowCount));
+
+    // Outer prefix plus two 4-byte relative offsets; nested headers are
+    // counted by the estimators above.
+    constexpr uint64_t kOuterHeaderSize = EncodingPrefix::kFixedPrefixSize + 8;
+    return kOuterHeaderSize + deltasSize + restatementsSize +
+        isRestatementsSize;
+  }
+#endif
 
  private:
   // Ensures isRestatementsBitmap_ has capacity for rowCount bits and

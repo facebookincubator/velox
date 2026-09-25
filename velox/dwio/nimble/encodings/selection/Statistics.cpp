@@ -242,6 +242,45 @@ void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populateAdjacentPairStats() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  AdjacentPairStats stats;
+  // Compared in the unsigned physical domain, which is the domain the
+  // encodings that read this store their deltas in; a signed comparison here
+  // would report steps no delta stream can hold.
+  using unsignedType = typename std::make_unsigned<T>::type;
+  // Written to avoid a conditional on each step's direction: a falling step
+  // is masked to zero rather than branched around.
+  constexpr size_t kBlock{4'096};
+  const size_t size = data_.size();
+  for (size_t start = 1; start < size; start += kBlock) {
+    const size_t end = std::min(size, start + kBlock);
+    uint64_t blockSum{0};
+    uint32_t blockNonDecreasing{0};
+    unsignedType blockMaxIncrease{0};
+    for (size_t i = start; i < end; ++i) {
+      const auto previous = static_cast<unsignedType>(data_[i - 1]);
+      const auto value = static_cast<unsignedType>(data_[i]);
+      const auto larger = std::max(value, previous);
+      const auto delta =
+          static_cast<unsignedType>(larger - std::min(value, previous));
+      const auto rising = static_cast<unsignedType>(larger == value);
+      blockSum += delta;
+      blockNonDecreasing += rising;
+      blockMaxIncrease = std::max(
+          blockMaxIncrease,
+          static_cast<unsignedType>(
+              delta & static_cast<unsignedType>(unsignedType{0} - rising)));
+    }
+    stats.sumAbsoluteDelta += blockSum;
+    stats.nonDecreasingCount += blockNonDecreasing;
+    stats.maxIncrease = std::max<uint64_t>(stats.maxIncrease, blockMaxIncrease);
+  }
+  adjacentPairStats_ = stats;
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateUniques() const {
   MapType<T, InputType> uniqueCounts;
   if constexpr (nimble::isBoolType<T>()) {
@@ -329,6 +368,35 @@ void Statistics<T, InputType>::populateBucketCounts() const {
   }
 
   bucketCounts_ = std::move(bucketCounts);
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateDistinctLowerBound() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  using UnsignedT = std::make_unsigned_t<T>;
+  if (data_.empty()) {
+    distinctLowerBound_ = 0;
+    return;
+  }
+  const auto base = static_cast<UnsignedT>(min());
+  const int bits = std::min<int>(
+      kDistinctBoundBits,
+      static_cast<int>(std::bit_width(
+          static_cast<uint64_t>(
+              static_cast<UnsignedT>(static_cast<UnsignedT>(max()) - base)))));
+  const uint64_t mask = (uint64_t{1} << bits) - 1;
+  std::vector<uint64_t> seen(((uint64_t{1} << bits) + 63) / 64, 0);
+  for (const auto value : data_) {
+    const uint64_t offset =
+        static_cast<UnsignedT>(static_cast<UnsignedT>(value) - base) & mask;
+    seen[offset >> 6] |= uint64_t{1} << (offset & 63);
+  }
+  uint64_t distinct{0};
+  for (const uint64_t word : seen) {
+    distinct += std::popcount(word);
+  }
+  distinctLowerBound_ = distinct;
 }
 
 template <typename T, typename InputType>
@@ -494,6 +562,15 @@ template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
 template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
     const noexcept;
 
+template void Statistics<int8_t>::populateAdjacentPairStats() const;
+template void Statistics<uint8_t>::populateAdjacentPairStats() const;
+template void Statistics<int16_t>::populateAdjacentPairStats() const;
+template void Statistics<uint16_t>::populateAdjacentPairStats() const;
+template void Statistics<int32_t>::populateAdjacentPairStats() const;
+template void Statistics<uint32_t>::populateAdjacentPairStats() const;
+template void Statistics<int64_t>::populateAdjacentPairStats() const;
+template void Statistics<uint64_t>::populateAdjacentPairStats() const;
+
 // populateMinMaxBlocks is used through the estimation path where T is always
 // the unsigned physicalType.
 template void Statistics<uint8_t>::populateMinMaxBlocks(uint16_t) const;
@@ -515,5 +592,14 @@ template void Statistics<uint64_t>::populateBucketCounts() const;
 template void Statistics<std::string_view>::populateStringLength() const;
 template void Statistics<std::string_view, std::string>::populateStringLength()
     const;
+
+template void Statistics<int8_t>::populateDistinctLowerBound() const;
+template void Statistics<uint8_t>::populateDistinctLowerBound() const;
+template void Statistics<int16_t>::populateDistinctLowerBound() const;
+template void Statistics<uint16_t>::populateDistinctLowerBound() const;
+template void Statistics<int32_t>::populateDistinctLowerBound() const;
+template void Statistics<uint32_t>::populateDistinctLowerBound() const;
+template void Statistics<int64_t>::populateDistinctLowerBound() const;
+template void Statistics<uint64_t>::populateDistinctLowerBound() const;
 
 } // namespace facebook::nimble

@@ -99,6 +99,29 @@ using EncodingSelectionPolicyCreator =
 #define UNIQUE_PTR_FACTORY(data_type, class, ...) \
   UNIQUE_PTR_FACTORY_EXTRA(data_type, class, , __VA_ARGS__)
 
+/// The read factor select() weighs `encodingType` by: the table's factor,
+/// except Trivial's is withheld (raised to 1.0) where taking it would cost
+/// compression. Trivial stores at the storage type's width rather than the
+/// value width, so against a stream it does not fit exactly it is always
+/// larger; its low factor can still let it out-cost a narrower FixedBitWidth
+/// on the weighted comparison, silently spending bits on decode speed.
+/// Withholding it only when it is no smaller than FixedBitWidth keeps the
+/// discount wherever it is actually free, and does not by itself hand the
+/// stream to FixedBitWidth if some other candidate's own factor beats it.
+///
+/// select() applies it only under
+/// Encoding::Options::sectionEstimatorRefinements. A free function because anything modelling selection, such as the oracle
+/// harness, must reach the same answer or silently drift from it.
+inline float effectiveReadFactor(
+    EncodingType encodingType,
+    float tableReadFactor,
+    uint64_t estimatedSize,
+    const std::optional<uint64_t>& fixedBitWidthSize) {
+  const bool trivialKeepsItsDiscount = encodingType != EncodingType::Trivial ||
+      !fixedBitWidthSize.has_value() || estimatedSize <= *fixedBitWidthSize;
+  return trivialKeepsItsDiscount ? tableReadFactor : 1.0f;
+}
+
 /// Manual encoding selection implementation.
 /// Uses a manually crafted model to choose the most appropriate encoding based
 /// on the provided statistics.
@@ -158,6 +181,20 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
+    // FixedBitWidth's size, when it is a candidate, so effectiveReadFactor
+    // can withhold Trivial's discount where taking it would cost compression.
+    std::optional<uint64_t> fixedBitWidthSize;
+    if (options.sectionEstimatorRefinements &&
+        std::any_of(
+            candidateEncodingReadFactors.begin(),
+            candidateEncodingReadFactors.end(),
+            [](const auto& entry) {
+              return entry.first == EncodingType::FixedBitWidth;
+            })) {
+      fixedBitWidthSize = detail::EncodingSizeEstimation<T>::estimateSize(
+          EncodingType::FixedBitWidth, values, statistics, options);
+    }
+
     float minCost = std::numeric_limits<float>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
     std::optional<uint64_t> selectedEstimatedSize;
@@ -173,9 +210,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         continue;
       }
 
-      // We use read factor weights to raise/lower the favorability of each
-      // encoding.
-      const auto readFactor = entry.second;
+      // Read factor weights raise/lower the favorability of each encoding,
+      // except where Trivial's would be unearned; see effectiveReadFactor.
+      // Without a FixedBitWidth size it returns the table's factor unchanged.
+      const auto readFactor = effectiveReadFactor(
+          encodingType, entry.second, estimatedSize.value(), fixedBitWidthSize);
       const auto cost = estimatedSize.value() * readFactor;
       NIMBLE_SELECTION_LOG(
           "Encoding: " << encodingType << ", Size: "
