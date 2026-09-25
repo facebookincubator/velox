@@ -20,15 +20,23 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
-// On-disk layout of a SubIntSplit encoding, after the standard Encoding prefix:
-//
-//   [1 byte]  numSections (1..64)
-//   [1 byte]  flags
-//   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
-//   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
-//
-// Sections are stored in LSB-first order (section 0 covers the lowest bits).
-// Section identifiers equal the section index (0, 1, …, numSections-1).
+/// On-disk layout of a SubIntSplit encoding, after the standard Encoding
+/// prefix:
+///
+///   [1 byte]  numSections (1..64)
+///   [1 byte]  flags
+///   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
+///   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
+///
+/// Sections are stored in LSB-first order (section 0 covers the lowest bits).
+/// Section identifiers equal the section index (0, 1, …, numSections-1).
+///
+/// Persistence context:
+///
+///   writeEncoding() -> [header helpers] -> bytes -> SectionTable::load()
+///
+/// This boundary is persisted. Field order, widths, flag meanings, and section
+/// ordering must remain readable by older and newer decoders.
 
 namespace facebook::nimble::subintsplit {
 

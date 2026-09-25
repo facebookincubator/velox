@@ -19,13 +19,21 @@
 #include <span>
 #include <type_traits>
 
-// Zigzag-delta pre-transform applied to a stream before it is split into bit
-// ranges.
-//
-// Zigzag maps signed deltas onto unsigned values so that small negative steps
-// stay small instead of wrapping to near-2^64. Mirrors the mapping OpenZL's
-// delta path uses, and is the difference between ReverseSorted compressing and
-// actively regressing.
+/// Zigzag-delta pre-transform applied to a stream before it is split into bit
+/// ranges.
+///
+/// Zigzag maps signed deltas onto unsigned values so that small negative steps
+/// stay small instead of wrapping to near-2^64. Mirrors the mapping OpenZL's
+/// delta path uses, and is the difference between ReverseSorted compressing and
+/// actively regressing.
+///
+/// Transform context:
+///
+///   physical values -> [zigzag delta] -> split planner and section encoder
+///   decoded residuals -> [prefix recovery] -> physical values
+///
+/// The first value is stored verbatim. Every later value depends on its
+/// predecessor, so transformed streams support sequential reconstruction only.
 
 namespace facebook::nimble::subintsplit {
 

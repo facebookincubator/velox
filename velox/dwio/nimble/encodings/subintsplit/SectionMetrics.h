@@ -21,12 +21,19 @@
 
 #include "absl/container/flat_hash_map.h" // @manual=fbsource//third-party/abseil-cpp:container__flat_hash_map
 
-// Per-section metric collection for the SubIntSplit DP planner.
-//
-// Deliberately minimal: only the statistics the cost models read, with no HLL,
-// no entropy, and no residual-frame tracking. Nimble's Statistics<T> already
-// handles those heavier computations for full-stream outer selection; this
-// collector handles the 64×64 bit-range grid on a small sample.
+/// Per-section metric collection for the SubIntSplit DP planner.
+///
+/// Deliberately minimal: only the statistics the cost models read, with no HLL,
+/// no entropy, and no residual-frame tracking. Nimble's Statistics<T> already
+/// handles those heavier computations for full-stream outer selection; this
+/// collector handles the 64×64 bit-range grid on a small sample.
+///
+/// Planner context:
+///
+///   extracted candidate values -> [MetricCollector] -> CostModel
+///
+/// Flags prevent computing evidence unused by the enabled models. Capped
+/// cardinality means "too many to be competitive," rather than an exact count.
 
 namespace facebook::nimble::subintsplit {
 

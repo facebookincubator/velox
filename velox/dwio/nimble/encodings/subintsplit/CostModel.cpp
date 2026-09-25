@@ -21,6 +21,14 @@
 
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
+// Planner context:
+//
+//   sampled range statistics -> [cost formulas] -> comparable bit estimates
+//
+// This file models serialized children but never writes them. Keep constants
+// aligned with the corresponding encoding formats so the dynamic program
+// compares candidates in the same units as their eventual payloads.
+
 namespace facebook::nimble::subintsplit {
 namespace {
 

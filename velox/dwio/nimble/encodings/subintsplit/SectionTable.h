@@ -30,6 +30,17 @@
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
 
+/// Read context:
+///
+///   section headers + payloads -> [child decoders and cursors]
+///                                      |
+///                                      v
+///                         decodeChunk -> accumulated values
+///
+/// All dynamic children represent the same logical row. Reset, skip, and decode
+/// must advance them together; constant children contribute bits without a
+/// cursor.
+
 namespace facebook::nimble::subintsplit {
 
 /// The nested encodings a SubIntSplit stream is split into, and the machinery
