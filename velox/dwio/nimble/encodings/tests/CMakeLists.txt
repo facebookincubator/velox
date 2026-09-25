@@ -90,6 +90,7 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
       SubIntSplitSelectorTest.cpp
       SubIntSplitDecodeOptionsTest.cpp
       SubIntSplitPlannerOptionsTest.cpp
+      SubIntSplitDeltaTest.cpp
   )
 endif()
 
