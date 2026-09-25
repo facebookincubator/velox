@@ -257,6 +257,54 @@ TEST_F(DecoderUtilTest, columnVisitorSmallintRowIndices) {
   }
 }
 
+TEST_F(DecoderUtilTest, columnVisitorInt128Run) {
+  constexpr int32_t kNumRows = 2'049;
+  constexpr int32_t kBatchSize = 128;
+  const int128_t base = int128_t{1} << 80;
+  const common::HugeintRange filter(base + 10, base + 1'040, false);
+  raw_vector<int32_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::vector<int32_t> expectedRows{-1};
+  std::vector<int128_t> expectedValues{-1};
+  for (auto row = 10; row <= 1'040; ++row) {
+    expectedRows.push_back(row);
+    expectedValues.push_back(base + row);
+  }
+
+  const auto test = [&](auto extractValues) {
+    std::vector<int128_t> values(kNumRows + 1);
+    std::vector<int32_t> hits(kNumRows + 1);
+    values[0] = -1;
+    hits[0] = -1;
+    int32_t numValues = 1;
+    // Dense runs append to the supplied buffers without accessing the reader.
+    ColumnVisitor<int128_t, common::HugeintRange, decltype(extractValues), true>
+        visitor(filter, nullptr, rows, extractValues);
+    for (auto row = 0; row < kNumRows; row += kBatchSize) {
+      const auto numInput = std::min(kBatchSize, kNumRows - row);
+      for (auto i = 0; i < numInput; ++i) {
+        values[numValues + i] = base + row + i;
+      }
+      visitor.template processRun<true, false, false>(
+          values.data() + numValues,
+          numInput,
+          nullptr,
+          hits.data(),
+          values.data(),
+          numValues);
+      EXPECT_EQ(visitor.rowIndex(), row + numInput);
+    }
+    values.resize(numValues);
+    hits.resize(numValues);
+    EXPECT_THAT(hits, testing::ElementsAreArray(expectedRows));
+    if constexpr (!std::is_same_v<decltype(extractValues), DropValues>) {
+      EXPECT_THAT(values, testing::ElementsAreArray(expectedValues));
+    }
+  };
+  test(ExtractToReader(nullptr));
+  test(DropValues{});
+}
+
 TEST_F(DecoderUtilTest, processFixedWidthRunSmallintRowIndices) {
   // Verify that the second row-index batch advances by the int32 SIMD lane
   // count when processing one full SMALLINT batch.
