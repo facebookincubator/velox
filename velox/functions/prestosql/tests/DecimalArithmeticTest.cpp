@@ -44,11 +44,10 @@ class DecimalArithmeticTest : public FunctionBaseTest {
 
   // Returns a tester lambda that takes an InputType and an EvalType and which
   // can be called to test the expression with specific input and expected
-  // output values. Currently only used by floorAndCeil test.
-  // See Issue #16464 for details.
+  // output values. See Issue #16464 for details.
   template <typename InputType, TypeKind K>
   std::function<void(InputType, typename TypeTraits<K>::NativeType)>
-  makeDecimalExprTester(
+  makeUnaryDecimalExprTester(
       const TypePtr& inType,
       const TypePtr& outType,
       const std::string& exprStr) {
@@ -57,6 +56,89 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       auto v = makeFlatVector<InputType>({input}, inType);
       testDecimalExpr<K>(
           makeFlatVector<EvalType>({out}, outType), exprStr, {v});
+    };
+  }
+
+  // Returns a lambda (InputType) that runs the expression with one value and
+  // asserts the given exception message.
+  template <typename InputType, TypeKind K = TypeKind::BIGINT>
+  std::function<void(InputType)> makeUnaryDecimalExprExceptionTester(
+      const TypePtr& inType,
+      const std::string& exprStr,
+      const std::string& exceptionMessage) {
+    return [this, inType, exprStr, exceptionMessage](InputType input) {
+      VELOX_ASSERT_USER_THROW(
+          testDecimalExpr<K>(
+              {}, exprStr, {makeFlatVector<InputType>({input}, inType)}),
+          exceptionMessage);
+    };
+  }
+
+  // Same for binary expressions: returns (in1, in2) -> assert expression
+  // throws.
+  template <
+      typename InputType1,
+      typename InputType2,
+      TypeKind K = TypeKind::HUGEINT>
+  std::function<void(InputType1, InputType2)>
+  makeBinaryDecimalExprExceptionTester(
+      const TypePtr& inType1,
+      const TypePtr& inType2,
+      const std::string& exprStr,
+      const std::string& exceptionMessage) {
+    return [this, inType1, inType2, exprStr, exceptionMessage](
+               InputType1 in1, InputType2 in2) {
+      VELOX_ASSERT_USER_THROW(
+          testDecimalExpr<K>(
+              {},
+              exprStr,
+              {makeFlatVector<InputType1>({in1}, inType1),
+               makeFlatVector<InputType2>({in2}, inType2)}),
+          exceptionMessage);
+    };
+  }
+
+  // Same idiom for binary decimal expressions (e.g. "plus(c0, c1)"): one test
+  // call per (in1, in2, expected) value.
+  template <typename InputType1, typename InputType2, TypeKind K>
+  std::function<
+      void(InputType1, InputType2, typename TypeTraits<K>::NativeType)>
+  makeBinaryDecimalExprTester(
+      const TypePtr& inType1,
+      const TypePtr& inType2,
+      const TypePtr& outType,
+      const std::string& exprStr) {
+    using EvalType = typename TypeTraits<K>::NativeType;
+    return [this, inType1, inType2, outType, exprStr](
+               InputType1 in1, InputType2 in2, EvalType out) {
+      auto v1 = makeFlatVector<InputType1>({in1}, inType1);
+      auto v2 = makeFlatVector<InputType2>({in2}, inType2);
+      testDecimalExpr<K>(
+          makeFlatVector<EvalType>({out}, outType), exprStr, {v1, v2});
+    };
+  }
+
+  // Same idiom for binary expressions with nullable inputs/output: one test
+  // call per (in1, in2, expected) where any may be std::nullopt.
+  template <typename InputType1, typename InputType2, TypeKind K>
+  std::function<void(
+      std::optional<InputType1>,
+      std::optional<InputType2>,
+      std::optional<typename TypeTraits<K>::NativeType>)>
+  makeBinaryDecimalExprTesterNullable(
+      const TypePtr& inType1,
+      const TypePtr& inType2,
+      const TypePtr& outType,
+      const std::string& exprStr) {
+    using EvalType = typename TypeTraits<K>::NativeType;
+    return [this, inType1, inType2, outType, exprStr](
+               std::optional<InputType1> in1,
+               std::optional<InputType2> in2,
+               std::optional<EvalType> expected) {
+      auto v1 = makeNullableFlatVector<InputType1>({in1}, inType1);
+      auto v2 = makeNullableFlatVector<InputType2>({in2}, inType2);
+      auto expectedVec = makeNullableFlatVector<EvalType>({expected}, outType);
+      testDecimalExpr<K>(expectedVec, exprStr, {v1, v2});
     };
   }
 
@@ -84,231 +166,338 @@ class DecimalArithmeticTest : public FunctionBaseTest {
 } // namespace facebook::velox
 
 TEST_F(DecimalArithmeticTest, add) {
-  auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(18, 3));
   // Add short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({2000, 4000}, DECIMAL(19, 3)),
-      "plus(c0, c1)",
-      {shortFlat, shortFlat});
-
+  {
+    const auto inType = DECIMAL(18, 3);
+    const auto outType = DECIMAL(19, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "plus(c0, c1)");
+    test(1000, 1000, 2000);
+    test(2000, 2000, 4000);
+  }
   // Add short and long, returning long.
-  auto longFlat = makeFlatVector<int128_t>({1000, 2000}, DECIMAL(19, 3));
-  auto expectedLongFlat =
-      makeFlatVector<int128_t>({2000, 4000}, DECIMAL(20, 3));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "plus(c0, c1)", {shortFlat, longFlat});
-
-  // Add short and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "plus(c0, c1)", {longFlat, shortFlat});
-
+  {
+    const auto shortType = DECIMAL(18, 3);
+    const auto longType = DECIMAL(19, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "plus(c0, c1)");
+    test(1000, int128_t{1000}, 2000);
+    test(2000, int128_t{2000}, 4000);
+  }
+  // Add long and short, returning long.
+  {
+    const auto longType = DECIMAL(19, 3);
+    const auto shortType = DECIMAL(18, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::HUGEINT>(
+            longType, shortType, outType, "plus(c0, c1)");
+    test(int128_t{1000}, 1000, 2000);
+    test(int128_t{2000}, 2000, 4000);
+  }
   // Add long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "c0 + c1", {longFlat, longFlat});
-
+  {
+    const auto inType = DECIMAL(19, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int128_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "c0 + c1");
+    test(int128_t{1000}, int128_t{1000}, 2000);
+    test(int128_t{2000}, int128_t{2000}, 4000);
+  }
   // Add short and short, returning short.
-  shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(10, 3));
-  auto expectedShortFlat =
-      makeFlatVector<int64_t>({2000, 4000}, DECIMAL(11, 3));
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedShortFlat, "c0 + c1", {shortFlat, shortFlat});
-
-  auto expectedConstantFlat =
-      makeFlatVector<int64_t>({2000, 3000}, DECIMAL(11, 3));
-
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType, inType, outType, "c0 + c1");
+    test(1000, 1000, 2000);
+    test(2000, 2000, 4000);
+  }
   // Constant and Flat arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "plus(1.00, c0)", {shortFlat});
-
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "plus(1.00, c0)");
+    test(1000, 2000);
+    test(2000, 3000);
+  }
   // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "plus(c0,1.00)", {shortFlat});
-
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeNullableFlatVector<int64_t>(
-          {2, 4, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(11, 3)),
-      "plus(c0, c1)",
-      {makeNullableFlatVector<int64_t>(
-           {1, 2, std::nullopt, 6, std::nullopt}, DECIMAL(10, 3)),
-       makeNullableFlatVector<int64_t>(
-           {1, 2, 5, std::nullopt, std::nullopt}, DECIMAL(10, 3))});
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "plus(c0,1.00)");
+    test(1000, 2000);
+    test(2000, 3000);
+  }
+  // Nullable inputs (one call per row).
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test =
+        makeBinaryDecimalExprTesterNullable<int64_t, int64_t, TypeKind::BIGINT>(
+            inType, inType, outType, "plus(c0, c1)");
+    test(1000, 1000, 2000);
+    test(2000, 2000, 4000);
+    test(std::nullopt, 5000, std::nullopt);
+    test(6000, std::nullopt, std::nullopt);
+    test(std::nullopt, std::nullopt, std::nullopt);
+  }
 
   // Addition overflow.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 + cast(1.00 as decimal(2,0))",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-              DECIMAL(38, 0))}),
-      "Decimal overflow. Value '100000000000000000000000000000000000000' is not in the range of Decimal Type");
-
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprExceptionTester<
+        int128_t,
+        TypeKind::HUGEINT>(
+        inType,
+        "c0 + cast(1.00 as decimal(2,0))",
+        "Decimal overflow. Value '100000000000000000000000000000000000000' is not in the range of Decimal Type");
+    test(DecimalUtil::kLongDecimalMax);
+  }
   // Rescaling LHS overflows.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 + 0.01",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-              DECIMAL(38, 0))}),
-      "Decimal overflow: 99999999999999999999999999999999999999 + 1");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test =
+        makeUnaryDecimalExprExceptionTester<int128_t, TypeKind::HUGEINT>(
+            inType,
+            "c0 + 0.01",
+            "Decimal overflow: 99999999999999999999999999999999999999 + 1");
+    test(DecimalUtil::kLongDecimalMax);
+  }
   // Rescaling RHS overflows.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "0.01 + c0",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-              DECIMAL(38, 0))}),
-      "Decimal overflow: 1 + 99999999999999999999999999999999999999");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test =
+        makeUnaryDecimalExprExceptionTester<int128_t, TypeKind::HUGEINT>(
+            inType,
+            "0.01 + c0",
+            "Decimal overflow: 1 + 99999999999999999999999999999999999999");
+    test(DecimalUtil::kLongDecimalMax);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, subtract) {
-  auto shortFlatA = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(18, 3));
   // Subtract short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({500, 1000}, DECIMAL(19, 3)),
-      "minus(c0, c1)",
-      {shortFlatA, makeFlatVector<int64_t>({500, 1000}, DECIMAL(18, 3))});
-
+  {
+    const auto inType = DECIMAL(18, 3);
+    const auto outType = DECIMAL(19, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "minus(c0, c1)");
+    test(1000, 500, 500);
+    test(2000, 1000, 1000);
+  }
   // Subtract short and long, returning long.
-  auto longFlatA = makeFlatVector<int128_t>({100, 200}, DECIMAL(19, 3));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({900, 1800}, DECIMAL(20, 3)),
-      "minus(c0, c1)",
-      {shortFlatA, longFlatA});
-
+  {
+    const auto shortType = DECIMAL(18, 3);
+    const auto longType = DECIMAL(19, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "minus(c0, c1)");
+    test(1000, 100, 900);
+    test(2000, 200, 1800);
+  }
   // Subtract long and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({-900, -1800}, DECIMAL(20, 3)),
-      "minus(c0, c1)",
-      {longFlatA, shortFlatA});
-
+  {
+    const auto longType = DECIMAL(19, 3);
+    const auto shortType = DECIMAL(18, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::HUGEINT>(
+            longType, shortType, outType, "minus(c0, c1)");
+    test(100, 1000, -900);
+    test(200, 2000, -1800);
+  }
   // Subtract long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({-900, -1800}, DECIMAL(21, 3)),
-      "c0 - c1",
-      {longFlatA, makeFlatVector<int128_t>({100, 200}, DECIMAL(19, 2))});
-
+  {
+    const auto inType1 = DECIMAL(19, 3);
+    const auto inType2 = DECIMAL(19, 2);
+    const auto outType = DECIMAL(21, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int128_t, TypeKind::HUGEINT>(
+            inType1, inType2, outType, "c0 - c1");
+    test(100, 100, -900);
+    test(200, 200, -1800);
+  }
   // Subtract short and short, returning short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({500, 1000}, DECIMAL(11, 3)),
-      "minus(c0, c1)",
-      {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(10, 3)),
-       makeFlatVector<int64_t>({500, 1000}, DECIMAL(10, 3))});
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType, inType, outType, "minus(c0, c1)");
+    test(1000, 500, 500);
+    test(2000, 1000, 1000);
+  }
   // Constant and Flat arguments.
-  shortFlatA = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(10, 3));
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({0, -1000}, DECIMAL(11, 3)),
-      "minus(1.00, c0)",
-      {shortFlatA});
-
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "minus(1.00, c0)");
+    test(1000, 0);
+    test(2000, -1000);
+  }
   // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({0, 1000}, DECIMAL(11, 3)),
-      "minus(c0, 1.00)",
-      {shortFlatA});
-
-  // Input with NULLs.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeNullableFlatVector<int64_t>(
-          {2, 4, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(11, 3)),
-      "minus(c0, c1)",
-      {makeNullableFlatVector<int64_t>(
-           {3, 6, std::nullopt, 6, std::nullopt}, DECIMAL(10, 3)),
-       makeNullableFlatVector<int64_t>(
-           {1, 2, 5, std::nullopt, std::nullopt}, DECIMAL(10, 3))});
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "minus(c0, 1.00)");
+    test(1000, 0);
+    test(2000, 1000);
+  }
+  // Input with NULLs (one call per row).
+  {
+    const auto inType = DECIMAL(10, 3);
+    const auto outType = DECIMAL(11, 3);
+    auto test =
+        makeBinaryDecimalExprTesterNullable<int64_t, int64_t, TypeKind::BIGINT>(
+            inType, inType, outType, "minus(c0, c1)");
+    test(3000, 1000, 2000);
+    test(6000, 2000, 4000);
+    test(std::nullopt, 5000, std::nullopt);
+    test(6000, std::nullopt, std::nullopt);
+    test(std::nullopt, std::nullopt, std::nullopt);
+  }
 
   // Subtraction overflow.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 - cast(1.00 as decimal(2,0))",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMin},
-              DECIMAL(38, 0))}),
-      "Decimal overflow. Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprExceptionTester<
+        int128_t,
+        TypeKind::HUGEINT>(
+        inType,
+        "c0 - cast(1.00 as decimal(2,0))",
+        "Decimal overflow. Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
+    test(DecimalUtil::kLongDecimalMin);
+  }
   // Rescaling LHS overflows.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 - 0.01",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMin},
-              DECIMAL(38, 0))}),
-      "Decimal overflow: -99999999999999999999999999999999999999 - 1");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test =
+        makeUnaryDecimalExprExceptionTester<int128_t, TypeKind::HUGEINT>(
+            inType,
+            "c0 - 0.01",
+            "Decimal overflow: -99999999999999999999999999999999999999 - 1");
+    test(DecimalUtil::kLongDecimalMin);
+  }
   // Rescaling RHS overflows.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "0.01 - c0",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMin},
-              DECIMAL(38, 0))}),
-      "Decimal overflow: 1 - -99999999999999999999999999999999999999");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test =
+        makeUnaryDecimalExprExceptionTester<int128_t, TypeKind::HUGEINT>(
+            inType,
+            "0.01 - c0",
+            "Decimal overflow: 1 - -99999999999999999999999999999999999999");
+    test(DecimalUtil::kLongDecimalMin);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, multiply) {
-  auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
   // Multiply short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(34, 6)),
-      "multiply(c0, c1)",
-      {shortFlat, shortFlat});
+  {
+    const auto inType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(34, 6);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "multiply(c0, c1)");
+    test(1000, 1000, 1000000);
+    test(2000, 2000, 4000000);
+  }
   // Multiply short and long, returning long.
-  auto longFlat = makeFlatVector<int128_t>({1000, 2000}, DECIMAL(20, 3));
-  auto expectedLongFlat =
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(37, 6));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "multiply(c0, c1)", {shortFlat, longFlat});
+  {
+    const auto shortType = DECIMAL(17, 3);
+    const auto longType = DECIMAL(20, 3);
+    const auto outType = DECIMAL(37, 6);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "multiply(c0, c1)");
+    test(1000, int128_t{1000}, 1000000);
+    test(2000, int128_t{2000}, 4000000);
+  }
   // Multiply long and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      expectedLongFlat, "multiply(c0, c1)", {longFlat, shortFlat});
-
+  {
+    const auto longType = DECIMAL(20, 3);
+    const auto shortType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(37, 6);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::HUGEINT>(
+            longType, shortType, outType, "multiply(c0, c1)");
+    test(int128_t{1000}, 1000, 1000000);
+    test(int128_t{2000}, 2000, 4000000);
+  }
   // Multiply long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({1000000, 4000000}, DECIMAL(38, 6)),
-      "multiply(c0, c1)",
-      {longFlat, longFlat});
-
+  {
+    const auto inType = DECIMAL(20, 3);
+    const auto outType = DECIMAL(38, 6);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int128_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "multiply(c0, c1)");
+    test(int128_t{1000}, int128_t{1000}, 1000000);
+    test(int128_t{2000}, int128_t{2000}, 4000000);
+  }
   // Multiply short and short, returning short.
-  shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(6, 3));
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({1000000, 4000000}, DECIMAL(12, 6)),
-      "c0 * c1",
-      {shortFlat, shortFlat});
-  auto expectedConstantFlat =
-      makeFlatVector<int64_t>({100000, 200000}, DECIMAL(9, 5));
-
+  {
+    const auto inType = DECIMAL(6, 3);
+    const auto outType = DECIMAL(12, 6);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType, inType, outType, "c0 * c1");
+    test(1000, 1000, 1000000);
+    test(2000, 2000, 4000000);
+  }
   // Constant and Flat arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "1.00 * c0", {shortFlat});
-
+  {
+    const auto inType = DECIMAL(6, 3);
+    const auto outType = DECIMAL(9, 5);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "1.00 * c0");
+    test(1000, 100000);
+    test(2000, 200000);
+  }
   // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::BIGINT>(
-      expectedConstantFlat, "c0 * 1.00", {shortFlat});
+  {
+    const auto inType = DECIMAL(6, 3);
+    const auto outType = DECIMAL(9, 5);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "c0 * 1.00");
+    test(1000, 100000);
+    test(2000, 200000);
+  }
 
   // Long decimal limits
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 * cast(10.00 as decimal(2,0))",
-          {makeFlatVector(
-              std::vector<int128_t>{
-                  HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)},
-              DECIMAL(38, 0))}),
-      "Decimal overflow. Value '119630519620642428561342635425231011830' is not in the range of Decimal Type");
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto overflowValue =
+        HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF);
+    auto test = makeUnaryDecimalExprExceptionTester<
+        int128_t,
+        TypeKind::HUGEINT>(
+        inType,
+        "c0 * cast(10.00 as decimal(2,0))",
+        "Decimal overflow. Value '119630519620642428561342635425231011830' is not in the range of Decimal Type");
+    test(overflowValue);
+  }
 
   // Rescaling the final result overflows.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 * cast(1.00 as decimal(2,1))",
-          {makeFlatVector(
-              std::vector<int128_t>{
-                  HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)},
-              DECIMAL(38, 0))}),
-      "Decimal overflow. Value '119630519620642428561342635425231011830' is not in the range of Decimal Type");
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto overflowValue =
+        HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF);
+    auto test = makeUnaryDecimalExprExceptionTester<
+        int128_t,
+        TypeKind::HUGEINT>(
+        inType,
+        "c0 * cast(1.00 as decimal(2,1))",
+        "Decimal overflow. Value '119630519620642428561342635425231011830' is not in the range of Decimal Type");
+    test(overflowValue);
+  }
 
   // The sum of input scales exceeds 38.
   VELOX_ASSERT_THROW(
@@ -320,267 +509,422 @@ TEST_F(DecimalArithmeticTest, multiply) {
 }
 
 TEST_F(DecimalArithmeticTest, decimalDivTest) {
-  auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
   // Divide short and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({500, 2000}, DECIMAL(20, 3)),
-      "divide(c0, c1)",
-      {makeFlatVector<int64_t>({500, 4000}, DECIMAL(17, 3)), shortFlat});
-
+  {
+    const auto inType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(20, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::HUGEINT>(
+            inType, inType, outType, "divide(c0, c1)");
+    test(500, 1000, 500);
+    test(4000, 2000, 2000);
+  }
   // Divide short and long, returning long.
-  auto longFlat = makeFlatVector<int128_t>({500, 4000}, DECIMAL(20, 2));
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({5000, 20000}, DECIMAL(24, 3)),
-      "divide(c0, c1)",
-      {longFlat, shortFlat});
-
+  {
+    const auto longType = DECIMAL(20, 2);
+    const auto shortType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(24, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::HUGEINT>(
+            longType, shortType, outType, "divide(c0, c1)");
+    test(500, 1000, 5000);
+    test(4000, 2000, 20000);
+  }
   // Divide long and short, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({200, 50}, DECIMAL(19, 3)),
-      "divide(c0, c1)",
-      {shortFlat, longFlat});
-
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>(
-          {HugeInt::parse("20000000000000000"),
-           HugeInt::parse("50000000000000000")},
-          DECIMAL(38, 19)),
-      "divide(c0, c1)",
-      {makeFlatVector<int64_t>({100, 200}, DECIMAL(17, 4)),
-       makeFlatVector<int128_t>(
-           {HugeInt::parse("50000000000000000000"),
-            HugeInt::parse("40000000000000000000")},
-           DECIMAL(21, 19))});
-
+  {
+    const auto shortType = DECIMAL(17, 3);
+    const auto longType = DECIMAL(20, 2);
+    const auto outType = DECIMAL(19, 3);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "divide(c0, c1)");
+    test(1000, 500, 200);
+    test(2000, 4000, 50);
+  }
+  // Divide with large values.
+  {
+    const auto shortType = DECIMAL(17, 4);
+    const auto longType = DECIMAL(21, 19);
+    const auto outType = DECIMAL(38, 19);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "divide(c0, c1)");
+    test(
+        100,
+        HugeInt::parse("50000000000000000000"),
+        HugeInt::parse("20000000000000000"));
+    test(
+        200,
+        HugeInt::parse("40000000000000000000"),
+        HugeInt::parse("50000000000000000"));
+  }
   // Divide long and long, returning long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({500, 300}, DECIMAL(22, 2)),
-      "divide(c0, c1)",
-      {makeFlatVector<int128_t>({2500, 12000}, DECIMAL(20, 2)), longFlat});
-
+  {
+    const auto inType1 = DECIMAL(20, 2);
+    const auto inType2 = DECIMAL(20, 2);
+    const auto outType = DECIMAL(22, 2);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int128_t, TypeKind::HUGEINT>(
+            inType1, inType2, outType, "divide(c0, c1)");
+    test(2500, 500, 500);
+    test(12000, 4000, 300);
+  }
   // Divide short and short, returning short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({500, 300}, DECIMAL(7, 5)),
-      "divide(c0, c1)",
-      {makeFlatVector<int64_t>({2500, 12000}, DECIMAL(5, 5)),
-       makeFlatVector<int64_t>({500, 4000}, DECIMAL(5, 2))});
-
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({1000, 500}, DECIMAL(7, 3)),
-      "1.00 / c0",
-      {shortFlat});
-
-  // Flat and Constant arguments.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({500, 1000}, DECIMAL(19, 3)),
-      "c0 / 2.00",
-      {shortFlat});
-
+  {
+    const auto inType1 = DECIMAL(5, 5);
+    const auto inType2 = DECIMAL(5, 2);
+    const auto outType = DECIMAL(7, 5);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType1, inType2, outType, "divide(c0, c1)");
+    test(2500, 500, 500);
+    test(12000, 4000, 300);
+  }
+  // Constant and Flat: 1.00 / c0.
+  {
+    const auto inType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(7, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "1.00 / c0");
+    test(1000, 1000);
+    test(2000, 500);
+  }
+  // Flat and Constant: c0 / 2.00.
+  {
+    const auto inType = DECIMAL(17, 3);
+    const auto outType = DECIMAL(19, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::HUGEINT>(
+        inType, outType, "c0 / 2.00");
+    test(1000, 500);
+    test(2000, 1000);
+  }
   // Divide and round-up.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({6, -1, -11, -15, 0, 8}, DECIMAL(3, 1))},
-      "c0 / -6.0",
-      {makeFlatVector<int64_t>({-34, 5, 65, 90, 2, -49}, DECIMAL(2, 1))});
+  {
+    const auto inType = DECIMAL(2, 1);
+    const auto outType = DECIMAL(3, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "c0 / -6.0");
+    test(-34, 6);
+    test(5, -1);
+    test(65, -11);
+    test(90, -15);
+    test(2, 0);
+    test(-49, 8);
+  }
 
   // Divide by zero.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::BIGINT>({}, "c0 / 0.0", {shortFlat}),
-      "Division by zero");
+  {
+    const auto inType = DECIMAL(17, 3);
+    auto test = makeUnaryDecimalExprExceptionTester<int64_t>(
+        inType, "c0 / 0.0", "Division by zero");
+    test(1000);
+    test(2000);
+  }
 
   // Long decimal limits.
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::HUGEINT>(
-          {},
-          "c0 / 0.01",
-          {makeFlatVector(
-              std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-              DECIMAL(38, 0))}),
-      "Decimal overflow: 99999999999999999999999999999999999999 * 10000");
+  {
+    const auto inType = DECIMAL(38, 0);
+    auto test =
+        makeUnaryDecimalExprExceptionTester<int128_t, TypeKind::HUGEINT>(
+            inType,
+            "c0 / 0.01",
+            "Decimal overflow: 99999999999999999999999999999999999999 * 10000");
+    test(DecimalUtil::kLongDecimalMax);
+  }
 
   // Rescale factor > max precision (38).
-  VELOX_ASSERT_USER_THROW(
-      evaluate(
-          "divide(c0, c1)",
-          makeRowVector(
-              {makeFlatVector<int128_t>({5000, 20000}, DECIMAL(20, 1)),
-               makeFlatVector<int128_t>({5000, 20000}, DECIMAL(33, 32))})),
-      "Decimal overflow");
+  {
+    const auto inType1 = DECIMAL(20, 1);
+    const auto inType2 = DECIMAL(33, 32);
+    auto test = makeBinaryDecimalExprExceptionTester<int128_t, int128_t>(
+        inType1, inType2, "divide(c0, c1)", "Decimal overflow");
+    test(5000, 5000);
+    test(20000, 20000);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, decimalDivDifferentTypes) {
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1, 1, -1, 1}, DECIMAL(12, 2))},
-      "cast(c0 as decimal(12,2)) / c1",
-      {makeFlatVector<int64_t>({100, 200, -300, 400}, DECIMAL(12, 2)),
-       makeFlatVector<int128_t>({100, 200, 300, 400}, DECIMAL(19, 0))});
-
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({100, 100, -100, 100}, DECIMAL(14, 2))},
-      "cast(c0 as decimal(12,2)) / c1",
-      {makeFlatVector<int128_t>({1, 2, 3, 4}, DECIMAL(19, 0)),
-       makeFlatVector<int64_t>({100, 200, -300, 400}, DECIMAL(12, 2))});
+  {
+    const auto inType1 = DECIMAL(12, 2);
+    const auto inType2 = DECIMAL(19, 0);
+    const auto outType = DECIMAL(12, 2);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::BIGINT>(
+            inType1, inType2, outType, "cast(c0 as decimal(12,2)) / c1");
+    test(100, 100, 1);
+    test(200, 200, 1);
+    test(-300, 300, -1);
+    test(400, 400, 1);
+  }
+  {
+    const auto inType1 = DECIMAL(19, 0);
+    const auto inType2 = DECIMAL(12, 2);
+    const auto outType = DECIMAL(14, 2);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::BIGINT>(
+            inType1, inType2, outType, "cast(c0 as decimal(12,2)) / c1");
+    test(1, 100, 100);
+    test(2, 200, 100);
+    test(3, -300, -100);
+    test(4, 400, 100);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, decimalMod) {
   // short % short -> short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({0, 0}, DECIMAL(2, 1)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({0, 50}, DECIMAL(2, 1)),
-       makeFlatVector<int64_t>({20, 25}, DECIMAL(2, 1))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({3, -3, 3, -3}, DECIMAL(2, 1)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({13, -13, 13, -13}, DECIMAL(3, 1)),
-       makeFlatVector<int64_t>({5, 5, -5, -5}, DECIMAL(2, 1))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({90, -245, 245, -90}, DECIMAL(3, 2)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({50, -50, 50, -50}, DECIMAL(2, 1)),
-       makeFlatVector<int64_t>({205, 255, -255, -205}, DECIMAL(3, 2))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({2500, -12000}, DECIMAL(5, 3)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({2500, -12000}, DECIMAL(5, 3)),
-       makeFlatVector<int64_t>({600, 5000}, DECIMAL(5, 2))});
-
+  {
+    const auto inType = DECIMAL(2, 1);
+    const auto outType = DECIMAL(2, 1);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType, inType, outType, "mod(c0, c1)");
+    test(0, 20, 0);
+    test(50, 25, 0);
+  }
+  {
+    const auto inType1 = DECIMAL(3, 1);
+    const auto inType2 = DECIMAL(2, 1);
+    const auto outType = DECIMAL(2, 1);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType1, inType2, outType, "mod(c0, c1)");
+    test(13, 5, 3);
+    test(-13, 5, -3);
+    test(13, -5, 3);
+    test(-13, -5, -3);
+  }
+  {
+    const auto inType1 = DECIMAL(2, 1);
+    const auto inType2 = DECIMAL(3, 2);
+    const auto outType = DECIMAL(3, 2);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType1, inType2, outType, "mod(c0, c1)");
+    test(50, 205, 90);
+    test(-50, 255, -245);
+    test(50, -255, 245);
+    test(-50, -205, -90);
+  }
+  {
+    const auto inType1 = DECIMAL(5, 3);
+    const auto inType2 = DECIMAL(5, 2);
+    const auto outType = DECIMAL(5, 3);
+    auto test = makeBinaryDecimalExprTester<int64_t, int64_t, TypeKind::BIGINT>(
+        inType1, inType2, outType, "mod(c0, c1)");
+    test(2500, 600, 2500);
+    test(-12000, 5000, -12000);
+  }
   // short % long -> short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 15)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 15)),
-       makeFlatVector<int128_t>({13, 17, -13, -17}, DECIMAL(20, 10))});
-
+  {
+    const auto shortType = DECIMAL(17, 15);
+    const auto longType = DECIMAL(20, 10);
+    const auto outType = DECIMAL(17, 15);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::BIGINT>(
+            shortType, longType, outType, "mod(c0, c1)");
+    test(1000, 13, 1000);
+    test(-600, 17, -600);
+    test(1000, -13, 1000);
+    test(-600, -17, -600);
+  }
   // long % short -> short.
-  testDecimalExpr<TypeKind::BIGINT>(
-      makeFlatVector<int64_t>({8, -11, 8, -11}, DECIMAL(17, 15)),
-      "mod(c0, c1)",
-      {makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(20, 10)),
-       makeFlatVector<int64_t>({17, 19, -17, -19}, DECIMAL(17, 15))});
-
+  {
+    const auto longType = DECIMAL(20, 10);
+    const auto shortType = DECIMAL(17, 15);
+    const auto outType = DECIMAL(17, 15);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::BIGINT>(
+            longType, shortType, outType, "mod(c0, c1)");
+    test(500, 17, 8);
+    test(-4000, 19, -11);
+    test(500, -17, 8);
+    test(-4000, -19, -11);
+  }
   // short % long -> long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({0, -16, 0, -16}, DECIMAL(25, 10)),
-      "mod(c0, c1)",
-      {makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 2)),
-       makeFlatVector<int128_t>({400, 38, -400, -38}, DECIMAL(30, 10))});
-
+  {
+    const auto shortType = DECIMAL(17, 2);
+    const auto longType = DECIMAL(30, 10);
+    const auto outType = DECIMAL(25, 10);
+    auto test =
+        makeBinaryDecimalExprTester<int64_t, int128_t, TypeKind::HUGEINT>(
+            shortType, longType, outType, "mod(c0, c1)");
+    test(1000, 400, 0);
+    test(-600, 38, -16);
+    test(1000, -400, 0);
+    test(-600, -38, -16);
+  }
   // long % short -> long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(25, 10)),
-      "mod(c0, c1)",
-      {makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(30, 10)),
-       makeFlatVector<int64_t>({1000, 2000, -1000, -2000}, DECIMAL(17, 2))});
-
+  {
+    const auto longType = DECIMAL(30, 10);
+    const auto shortType = DECIMAL(17, 2);
+    const auto outType = DECIMAL(25, 10);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int64_t, TypeKind::HUGEINT>(
+            longType, shortType, outType, "mod(c0, c1)");
+    test(500, 1000, 500);
+    test(-4000, 2000, -4000);
+    test(500, -1000, 500);
+    test(-4000, -2000, -4000);
+  }
   // long % long -> long.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      makeFlatVector<int128_t>({2500, -12000, 2500, -12000}, DECIMAL(23, 5)),
-      "mod(c0, c1)",
-      {makeFlatVector<int128_t>({2500, -12000, 2500, -12000}, DECIMAL(25, 5)),
-       makeFlatVector<int128_t>({500, 4000, -500, -4000}, DECIMAL(20, 2))});
+  {
+    const auto inType1 = DECIMAL(25, 5);
+    const auto inType2 = DECIMAL(20, 2);
+    const auto outType = DECIMAL(23, 5);
+    auto test =
+        makeBinaryDecimalExprTester<int128_t, int128_t, TypeKind::HUGEINT>(
+            inType1, inType2, outType, "mod(c0, c1)");
+    test(2500, 500, 2500);
+    test(-12000, 4000, -12000);
+    test(2500, -500, 2500);
+    test(-12000, -4000, -12000);
+  }
 
-  VELOX_ASSERT_USER_THROW(
-      testDecimalExpr<TypeKind::BIGINT>(
-          {},
-          "c0 % 0.0",
-          {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))}),
-      "Modulus by zero");
+  // Modulus by zero: one test per value using unary exception tester.
+  {
+    const auto inType = DECIMAL(17, 3);
+    auto test = makeUnaryDecimalExprExceptionTester<int64_t>(
+        inType, "c0 % 0.0", "Modulus by zero");
+    test(1000);
+    test(2000);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, round) {
   // Round short decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 1, -1, 0}, DECIMAL(1, 0))},
-      "round(c0)",
-      {makeFlatVector<int64_t>({123, 542, -999, 0}, DECIMAL(3, 3))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1111, 1112, -9999, 10000}, DECIMAL(5, 0))},
-      "round(c0)",
-      {makeFlatVector<int64_t>({11112, 11115, -99989, 99999}, DECIMAL(5, 1))});
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(1, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0)");
+    test(123, 0);
+    test(542, 1);
+    test(-999, -1);
+    test(0, 0);
+  }
+  {
+    const auto inType = DECIMAL(5, 1);
+    const auto outType = DECIMAL(5, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0)");
+    test(11112, 1111);
+    test(11115, 1112);
+    test(-99989, -9999);
+    test(99999, 10000);
+  }
   // Round long decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 1, -1, 0}, DECIMAL(1, 0))},
-      "round(c0)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5000000000000000000, -9000000000000000000, 0},
-          DECIMAL(19, 19))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kPowersOfTen[37], -DecimalUtil::kPowersOfTen[37]},
-          DECIMAL(38, 0))},
-      "round(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 1))});
-
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(1, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0)");
+    test(int128_t{1234567890123456789}, 0);
+    test(int128_t{5000000000000000000}, 1);
+    test(int128_t{-9000000000000000000}, -1);
+    test(int128_t{0}, 0);
+  }
+  {
+    const auto inType = DECIMAL(38, 1);
+    const auto outType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "round(c0)");
+    test(DecimalUtil::kLongDecimalMax, DecimalUtil::kPowersOfTen[37]);
+    test(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[37]);
+  }
   // Min and max short decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 0))},
-      "round(c0)",
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 0))});
-
+  {
+    const auto inType = DECIMAL(15, 0);
+    const auto outType = DECIMAL(15, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0)");
+    test(DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMax);
+    test(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
+  }
   // Min and max long decimals.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))},
-      "round(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))});
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto outType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "round(c0)");
+    test(DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
+    test(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, roundN) {
-  // Round upto 'scale' decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(4, 3))},
-      "round(c0, CAST(3 as integer))",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
-  // Round upto scale-1 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({120, 550, -1000, 0}, DECIMAL(4, 3))},
-      "round(c0, CAST(2 as integer))",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
-  // Round upto 0 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({100, 600, -1000, 0}, DECIMAL(4, 2))},
-      "round(c0, CAST(0 as integer))",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 2))});
-  // Round upto -1 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({100, 600, -1000, 0}, DECIMAL(4, 1))},
-      "round(c0, CAST(-1 as integer))",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
-  // Round upto -2 decimal places. Here precision == scale - decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(4, 1))},
-      "round(c0, CAST(-2 as integer))",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
-
-  // Round up long decimals scale - 5 decimal places.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {1234567890123500000,
-           5000000000000000000,
-           -10'000'000'000'000'000'00,
-           0},
-          DECIMAL(20, 19))},
-      "round(c0, CAST(14 as integer))",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5000000000000000000, -999999999999999999, 0},
-          DECIMAL(19, 19))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {1234600000000000000, 5555600000000000000, -1000000000000000000, 0},
-          DECIMAL(20, 5))},
-      "round(c0, CAST(-9 as integer))",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5555555555555555555, -999999999999999999, 0},
-          DECIMAL(19, 5))});
+  // Round up to 'scale' decimal places.
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(4, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0, CAST(3 as integer))");
+    test(123, 123);
+    test(552, 552);
+    test(-999, -999);
+    test(0, 0);
+  }
+  // Round up to scale-1 decimal places.
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(4, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0, CAST(2 as integer))");
+    test(123, 120);
+    test(552, 550);
+    test(-999, -1000);
+    test(0, 0);
+  }
+  // Round up to 0 decimal places.
+  {
+    const auto inType = DECIMAL(3, 2);
+    const auto outType = DECIMAL(4, 2);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0, CAST(0 as integer))");
+    test(123, 100);
+    test(552, 600);
+    test(-999, -1000);
+    test(0, 0);
+  }
+  // Round up to -1 decimal places.
+  {
+    const auto inType = DECIMAL(3, 1);
+    const auto outType = DECIMAL(4, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0, CAST(-1 as integer))");
+    test(123, 100);
+    test(552, 600);
+    test(-999, -1000);
+    test(0, 0);
+  }
+  // Round up to -2 decimal places.
+  {
+    const auto inType = DECIMAL(3, 1);
+    const auto outType = DECIMAL(4, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "round(c0, CAST(-2 as integer))");
+    test(123, 0);
+    test(552, 0);
+    test(-999, 0);
+    test(0, 0);
+  }
+  // Round long decimals to 14 decimal places.
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(20, 19);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "round(c0, CAST(14 as integer))");
+    test(int128_t{1234567890123456789}, int128_t{1234567890123500000});
+    test(int128_t{5000000000000000000}, int128_t{5000000000000000000});
+    test(int128_t{-999999999999999999}, int128_t{-10'000'000'000'000'000'00});
+    test(int128_t{0}, int128_t{0});
+  }
+  // Round long decimals to -9 decimal places.
+  {
+    const auto inType = DECIMAL(19, 5);
+    const auto outType = DECIMAL(20, 5);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "round(c0, CAST(-9 as integer))");
+    test(int128_t{1234567890123456789}, int128_t{1234600000000000000});
+    test(int128_t{5555555555555555555}, int128_t{5555600000000000000});
+    test(int128_t{-999999999999999999}, int128_t{-1000000000000000000});
+    test(int128_t{0}, int128_t{0});
+  }
 }
 
 // Proposed new style for all these tests (and perhaps the SparkSQL equivalents)
@@ -595,9 +939,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(3, 2);
     const auto outType = DECIMAL(2, 0);
-    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "ceil(c0)");
     testFloor(0, 0);
     testFloor(1, 0);
@@ -625,9 +969,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(5, 2);
     const auto outType = DECIMAL(4, 0);
-    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "ceil(c0)");
     testFloor(12300, 123);
     testFloor(-12300, -123);
@@ -660,9 +1004,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(18, 0);
     const auto outType = DECIMAL(18, 0);
-    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
         inType, outType, "ceil(c0)");
     testFloor(DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMax);
     testFloor(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
@@ -675,9 +1019,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(20, 2);
     const auto outType = DECIMAL(19, 0);
-    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "ceil(c0)");
     testFloor(0, 0);
     testFloor(1, 0);
@@ -705,9 +1049,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(38, 5);
     const auto outType = DECIMAL(34, 0);
-    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "ceil(c0)");
     testFloor(DecimalUtil::kLongDecimalMax, DecimalUtil::kPowersOfTen[33] - 1);
     testFloor(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[33]);
@@ -720,9 +1064,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(38, 0);
     const auto outType = DECIMAL(38, 0);
-    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
         inType, outType, "ceil(c0)");
     testFloor(DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
     testFloor(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
@@ -735,9 +1079,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
   {
     const auto inType = DECIMAL(19, 19);
     const auto outType = DECIMAL(1, 0);
-    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::BIGINT>(
+    auto testFloor = makeUnaryDecimalExprTester<int128_t, TypeKind::BIGINT>(
         inType, outType, "floor(c0)");
-    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::BIGINT>(
+    auto testCeil = makeUnaryDecimalExprTester<int128_t, TypeKind::BIGINT>(
         inType, outType, "ceil(c0)");
     testFloor(int128_t{1234567890123456789}, 0);
     testFloor(int128_t{5000000000000000000}, 0);
@@ -754,171 +1098,218 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
 
 TEST_F(DecimalArithmeticTest, truncate) {
   // Truncate short decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(1, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int64_t>({123, 542, -999, 0}, DECIMAL(3, 3))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1111, 1111, -9998, 9999}, DECIMAL(4, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int64_t>({11112, 11115, -99989, 99999}, DECIMAL(5, 1))});
-
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(1, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0)");
+    test(123, 0);
+    test(542, 0);
+    test(-999, 0);
+    test(0, 0);
+  }
+  {
+    const auto inType = DECIMAL(5, 1);
+    const auto outType = DECIMAL(4, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0)");
+    test(11112, 1111);
+    test(11115, 1111);
+    test(-99989, -9998);
+    test(99999, 9999);
+  }
   // Truncate long decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(1, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5000000000000000000, -9000000000000000000, 0},
-          DECIMAL(19, 19))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kPowersOfTen[37] - 1,
-           -DecimalUtil::kPowersOfTen[37] + 1},
-          DECIMAL(37, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 1))});
-
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(1, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0)");
+    test(int128_t{1234567890123456789}, 0);
+    test(int128_t{5000000000000000000}, 0);
+    test(int128_t{-9000000000000000000}, 0);
+    test(int128_t{0}, 0);
+  }
+  {
+    const auto inType = DECIMAL(38, 1);
+    const auto outType = DECIMAL(37, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "truncate(c0)");
+    test(DecimalUtil::kLongDecimalMax, DecimalUtil::kPowersOfTen[37] - 1);
+    test(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[37] + 1);
+  }
   // Min and max short decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 0))});
-
+  {
+    const auto inType = DECIMAL(15, 0);
+    const auto outType = DECIMAL(15, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0)");
+    test(DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMax);
+    test(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
+  }
   // Min and max long decimals.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))},
-      "truncate(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))});
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto outType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "truncate(c0)");
+    test(DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
+    test(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, truncateN) {
-  // Truncate to 'scale' decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))},
-      "truncate(c0, 3::integer)",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
-
-  // Truncate to 'scale' - 1 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({120, 550, -990, 0}, DECIMAL(3, 3))},
-      "truncate(c0, 2::integer)",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
-
+  // Truncate to 3 decimal places.
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(3, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0, 3::integer)");
+    test(123, 123);
+    test(552, 552);
+    test(-999, -999);
+    test(0, 0);
+  }
+  // Truncate to 2 decimal places.
+  {
+    const auto inType = DECIMAL(3, 3);
+    const auto outType = DECIMAL(3, 3);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0, 2::integer)");
+    test(123, 120);
+    test(552, 550);
+    test(-999, -990);
+    test(0, 0);
+  }
   // Truncate to 0 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({100, 500, -900, 0}, DECIMAL(3, 2))},
-      "truncate(c0, 0::integer)",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 2))});
-
+  {
+    const auto inType = DECIMAL(3, 2);
+    const auto outType = DECIMAL(3, 2);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0, 0::integer)");
+    test(123, 100);
+    test(552, 500);
+    test(-999, -900);
+    test(0, 0);
+  }
   // Truncate to -1 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({100, 500, -900, 0}, DECIMAL(3, 1))},
-      "truncate(c0, '-1'::integer)",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
-
+  {
+    const auto inType = DECIMAL(3, 1);
+    const auto outType = DECIMAL(3, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0, '-1'::integer)");
+    test(123, 100);
+    test(552, 500);
+    test(-999, -900);
+    test(0, 0);
+  }
   // Truncate to -2 decimal places.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(3, 1))},
-      "truncate(c0, '-2'::integer)",
-      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
-
-  // Truncate long decimals to 'scale' - 5 decimal places.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {1234567890123400000, 5000000000000000000, -999999999999900000, 0},
-          DECIMAL(19, 19))},
-      "truncate(c0, 14::integer)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5000000000000000000, -999999999999999999, 0},
-          DECIMAL(19, 19))});
-
+  {
+    const auto inType = DECIMAL(3, 1);
+    const auto outType = DECIMAL(3, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "truncate(c0, '-2'::integer)");
+    test(123, 0);
+    test(552, 0);
+    test(-999, 0);
+    test(0, 0);
+  }
+  // Truncate long decimals to 14 decimal places.
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(19, 19);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "truncate(c0, 14::integer)");
+    test(int128_t{1234567890123456789}, int128_t{1234567890123400000});
+    test(int128_t{5000000000000000000}, int128_t{5000000000000000000});
+    test(int128_t{-999999999999999999}, int128_t{-999999999999900000});
+    test(int128_t{0}, int128_t{0});
+  }
   // Truncate long decimals to -9 decimal places.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {1234500000000000000, 5555500000000000000, -999900000000000000, 0},
-          DECIMAL(19, 5))},
-      "truncate(c0, '-9'::integer)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789, 5555555555555555555, -999999999999999999, 0},
-          DECIMAL(19, 5))});
+  {
+    const auto inType = DECIMAL(19, 5);
+    const auto outType = DECIMAL(19, 5);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "truncate(c0, '-9'::integer)");
+    test(int128_t{1234567890123456789}, int128_t{1234500000000000000});
+    test(int128_t{5555555555555555555}, int128_t{5555500000000000000});
+    test(int128_t{-999999999999999999}, int128_t{-999900000000000000});
+    test(int128_t{0}, int128_t{0});
+  }
 }
 
 TEST_F(DecimalArithmeticTest, abs) {
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1111, 1112, 9999, 0}, DECIMAL(5, 1))},
-      "abs(c0)",
-      {makeFlatVector<int64_t>({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {11111111, 11112112, 99999999, 0}, DECIMAL(19, 19))},
-      "abs(c0)",
-      {makeFlatVector<int128_t>(
-          {-11111111, 11112112, -99999999, 0}, DECIMAL(19, 19))});
-
+  {
+    const auto inType = DECIMAL(5, 1);
+    const auto outType = DECIMAL(5, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "abs(c0)");
+    test(-1111, 1111);
+    test(1112, 1112);
+    test(-9999, 9999);
+    test(0, 0);
+  }
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(19, 19);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "abs(c0)");
+    test(int128_t{-11111111}, int128_t{11111111});
+    test(int128_t{11112112}, int128_t{11112112});
+    test(int128_t{-99999999}, int128_t{99999999});
+    test(int128_t{0}, int128_t{0});
+  }
   // Min and max short decimals.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector(
-          std::vector<int64_t>{DecimalUtil::kShortDecimalMax}, DECIMAL(15, 0))},
-      "abs(c0)",
-      {makeFlatVector(
-          std::vector<int64_t>{DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 0))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector(
-          std::vector<int64_t>{DecimalUtil::kShortDecimalMax},
-          DECIMAL(15, 15))},
-      "abs(c0)",
-      {makeFlatVector(
-          std::vector<int64_t>{DecimalUtil::kShortDecimalMin},
-          DECIMAL(15, 15))});
-
+  {
+    const auto inType = DECIMAL(15, 0);
+    const auto outType = DECIMAL(15, 0);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "abs(c0)");
+    test(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMax);
+  }
+  {
+    const auto inType = DECIMAL(15, 15);
+    const auto outType = DECIMAL(15, 15);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "abs(c0)");
+    test(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMax);
+  }
   // Min and max long decimals.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector(
-          std::vector<int128_t>{DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0))},
-      "abs(c0)",
-      {makeFlatVector(
-          std::vector<int128_t>{DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector(
-          std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-          DECIMAL(38, 38))},
-      "abs(c0)",
-      {makeFlatVector(
-          std::vector<int128_t>{DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 38))});
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto outType = DECIMAL(38, 0);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "abs(c0)");
+    test(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMax);
+  }
+  {
+    const auto inType = DECIMAL(38, 38);
+    const auto outType = DECIMAL(38, 38);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "abs(c0)");
+    test(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMax);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, negate) {
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1111, -1112, 9999, 0}, DECIMAL(5, 1))},
-      "negate(c0)",
-      {makeFlatVector<int64_t>({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {11111111,
-           -11112112,
-           99999999,
-           -DecimalUtil::kLongDecimalMax,
-           -DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 19))},
-      "negate(c0)",
-      {makeFlatVector<int128_t>(
-          {-11111111,
-           11112112,
-           -99999999,
-           DecimalUtil::kLongDecimalMax,
-           DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 19))});
+  {
+    const auto inType = DECIMAL(5, 1);
+    const auto outType = DECIMAL(5, 1);
+    auto test = makeUnaryDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "negate(c0)");
+    test(-1111, 1111);
+    test(1112, -1112);
+    test(-9999, 9999);
+    test(0, 0);
+  }
+  {
+    const auto inType = DECIMAL(38, 19);
+    const auto outType = DECIMAL(38, 19);
+    auto test = makeUnaryDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "negate(c0)");
+    test(int128_t{-11111111}, int128_t{11111111});
+    test(int128_t{11112112}, int128_t{-11112112});
+    test(int128_t{-99999999}, int128_t{99999999});
+    test(-DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
+    test(-DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
+  }
 }
