@@ -1325,6 +1325,90 @@ TEST_F(MergeJoinTest, antiJoinWithFilter) {
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
 }
 
+// The output batch is cut exactly at the boundary between two left rows of
+// the same key run ('leftMatch_' is still set for the run), and every output
+// row of the just-finished left row fails the filter. applyFilter must close
+// that row's block of output rows before the batch is returned: the pending
+// block state holds 'currentRow_', an output index into THIS batch. If the
+// close is wrongly deferred, the next applyFilter call fires onMiss on that
+// stale index: it appends numRows + 1 dictionary indices (malformed
+// dictionary vector) and nulls right-side projections of an unrelated row.
+TEST_F(MergeJoinTest, leftJoinFilterCutAtLeftRowBoundary) {
+  // One key run: 3 left rows x 5 right rows, output batch size 5 => every
+  // output batch ends exactly at a left-row block boundary. t1 = 0 makes all
+  // 5 output rows of the first left row fail the filter; the other left rows
+  // pass on all of theirs.
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2}),
+       makeFlatVector<int64_t>({0, 1, 2, 10})});
+
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({1, 1, 1, 1, 1, 2}),
+       makeFlatVector<int64_t>({100, 200, 300, 400, 500, 600})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t1 > 0",
+              {"t0", "t1", "u0", "u1"},
+              core::JoinType::kLeft)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t0 = u0 AND t1 > 0");
+}
+
+// Anti-join flavor of the wrongly deferred block close: onMiss is the emit
+// path for anti join rows, so the stale index emits the WRONG left row as
+// "unmatched" (silent wrong results, no crash).
+TEST_F(MergeJoinTest, antiJoinFilterCutAtLeftRowBoundary) {
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2}),
+       makeFlatVector<int64_t>({0, 1, 2, 10})});
+
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({1, 1, 1, 1, 1, 2}),
+       makeFlatVector<int64_t>({100, 200, 300, 400, 500, 600})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t1 > 0",
+              {"t0", "t1"},
+              core::JoinType::kAnti)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT t0, t1 FROM t WHERE NOT exists "
+          "(select 1 from u where t0 = u0 AND t1 > 0)");
+}
+
 TEST_F(MergeJoinTest, antiJoinFailed) {
   auto size = 1'00;
   auto left = makeRowVector(
