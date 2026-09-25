@@ -15,13 +15,16 @@
  */
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 
+#include <cstdint>
 #include <functional>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "folly/container/F14Map.h"
 #include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 
 namespace facebook::nimble {
@@ -725,12 +728,96 @@ std::shared_ptr<TypeBuilder> buildProjectedNimbleType(
   }
 }
 
+// Copies an HFM value subtree into the projected root's SchemaBuilder before
+// later siblings are created, preserving physical kinds and attributes while
+// allocating fresh stream descriptors.
+std::shared_ptr<TypeBuilder> buildHybridFlatMapValueType(
+    SchemaBuilder& builder,
+    const Type& source) {
+  const auto withAttributes =
+      [&source](auto type) -> std::shared_ptr<TypeBuilder> {
+    type->setAttributes(source.attributes());
+    return type;
+  };
+  switch (source.kind()) {
+    case Kind::Scalar:
+      return withAttributes(builder.createScalarTypeBuilder(
+          source.asScalar().scalarDescriptor().scalarKind()));
+    case Kind::TimestampMicroNano:
+      return withAttributes(builder.createTimestampMicroNanoTypeBuilder());
+    case Kind::Row: {
+      const auto& row = source.asRow();
+      auto result = builder.createRowTypeBuilder(row.childrenCount());
+      for (size_t i = 0; i < row.childrenCount(); ++i) {
+        result->addChild(
+            std::string(row.nameAt(i)),
+            buildHybridFlatMapValueType(builder, *row.childAt(i)));
+      }
+      return withAttributes(std::move(result));
+    }
+    case Kind::Array: {
+      auto result = builder.createArrayTypeBuilder();
+      result->setChildren(
+          buildHybridFlatMapValueType(builder, *source.asArray().elements()));
+      return withAttributes(std::move(result));
+    }
+    case Kind::ArrayWithOffsets: {
+      auto result = builder.createArrayWithOffsetsTypeBuilder();
+      result->setChildren(buildHybridFlatMapValueType(
+          builder, *source.asArrayWithOffsets().elements()));
+      return withAttributes(std::move(result));
+    }
+    case Kind::Map: {
+      const auto& map = source.asMap();
+      auto result = builder.createMapTypeBuilder();
+      auto keys = buildHybridFlatMapValueType(builder, *map.keys());
+      auto values = buildHybridFlatMapValueType(builder, *map.values());
+      result->setChildren(std::move(keys), std::move(values));
+      return withAttributes(std::move(result));
+    }
+    case Kind::SlidingWindowMap: {
+      const auto& map = source.asSlidingWindowMap();
+      auto result = builder.createSlidingWindowMapTypeBuilder();
+      auto keys = buildHybridFlatMapValueType(builder, *map.keys());
+      auto values = buildHybridFlatMapValueType(builder, *map.values());
+      result->setChildren(std::move(keys), std::move(values));
+      return withAttributes(std::move(result));
+    }
+    case Kind::FlatMap:
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Nested FlatMap values are not supported by hybrid FlatMap.");
+  }
+  NIMBLE_UNREACHABLE("Unknown type kind: {}.", source.kind());
+}
+
+// Builds selected HFM groups before later siblings so their descriptors are
+// allocated in final projected-schema order.
+std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
+    SchemaBuilder& builder,
+    const ProjectedHybridFlatMap& projectedHybridFlatMap) {
+  NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
+  NIMBLE_CHECK(!projectedHybridFlatMap.groupIndices.empty());
+  auto result = builder.createHybridFlatMapTypeBuilder(
+      projectedHybridFlatMap.source->keyScalarKind(), /*projection=*/true);
+  result->setAttributes(projectedHybridFlatMap.source->attributes());
+  for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
+    const auto& group = projectedHybridFlatMap.source->groupAt(groupIndex);
+    result->addGroup(
+        group.groupId,
+        group.groupKeys,
+        buildHybridFlatMapValueType(builder, *group.valueType));
+  }
+  return result;
+}
+
 } // namespace
 
 std::shared_ptr<const Type> buildProjectedNimbleType(
     const velox::RowType& type,
     const std::vector<velox::common::Subfield>& projectedSubfields,
-    const ColumnEncodings& columnEncodings) {
+    const ColumnEncodings& columnEncodings,
+    const ProjectedHybridFlatMaps& projectedHybridFlatMaps) {
   NIMBLE_CHECK(
       !projectedSubfields.empty(), "projectedSubfields must not be empty");
 
@@ -751,6 +838,13 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
   for (size_t i = 0; i < type.size(); ++i) {
     const auto& name = type.nameOf(i);
     if (!selectedTopLevelColumns.contains(name)) {
+      continue;
+    }
+
+    if (const auto it = projectedHybridFlatMaps.find(i);
+        it != projectedHybridFlatMaps.end()) {
+      root->addChild(
+          name, buildProjectedHybridFlatMapType(builder, it->second));
       continue;
     }
 
@@ -780,17 +874,16 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
 
 namespace {
 
-// Tracks the source children the projection touches at each Row or FlatMap
-// node, stored as the child's source-side index. For a Row, the indices are
-// Row child positions. For a FlatMap, the indices are positions of source
-// keys that match a requested subscript. FlatMap subscripts whose key is NOT
-// in the source go into `missingChildren` below instead.
+// Tracks the source children the projection touches. These are Row child
+// positions, FlatMap key positions, or Hybrid FlatMap group positions.
+// FlatMap subscripts whose key is not in the source go into
+// `missingChildren` below instead.
 using SelectedChildrenMap = folly::F14FastMap<const Type*, std::set<size_t>>;
 
 // Tracks the FlatMap subscript keys the projection requested that do NOT
 // exist in the source. The offset walker iterates them alphabetically and
-// emits UINT32_MAX placeholder slots so the projected blob lines up with the
-// projected schema's synthetic children (created by the velox-source
+// emits UINT32_MAX placeholder slots so the projected blob lines up
+// with the projected schema's synthetic children (created by the velox-source
 // `buildProjectedNimbleType`).
 using MissingChildrenMap =
     folly::F14FastMap<const Type*, std::set<std::string>>;
@@ -802,6 +895,24 @@ inline void appendProjectedStream(
     bool isRowOrFlatMapNullStream) {
   projectedStreamOffsets.emplace_back(sourceStreamOffset);
   rowOrFlatMapNullStreams.emplace_back(isRowOrFlatMapNullStream);
+}
+
+void validateProjectedHybridFlatMapSchema(const Type& schema) {
+  const auto& root = schema.asRow();
+  for (size_t childIndex = 0; childIndex < root.childrenCount(); ++childIndex) {
+    const auto& child = *root.childAt(childIndex);
+    if (!child.isHybridFlatMap()) {
+      continue;
+    }
+    const auto& hybridMap = child.asHybridFlatMap();
+    detail::validateHybridFlatMapGroups(
+        hybridMap.groupCount(),
+        /*hasDefault=*/false,
+        [&hybridMap](size_t group) { return hybridMap.groupAt(group).groupId; },
+        [&hybridMap](size_t group) -> const auto& {
+          return hybridMap.groupAt(group).groupKeys;
+        });
+  }
 }
 
 // Resolves a single subfield path against a source nimble schema, populating
@@ -818,7 +929,8 @@ void resolveSubfield(
 
   const auto* current = type;
 
-  for (const auto& element : path) {
+  for (size_t pathIndex = 0; pathIndex < path.size(); ++pathIndex) {
+    const auto& element = path[pathIndex];
     const auto kind = element->kind();
     if (kind == SubfieldKind::kNestedField) {
       const auto* nested = element->asChecked<Subfield::NestedField>();
@@ -846,6 +958,32 @@ void resolveSubfield(
           : std::to_string(
                 element->asChecked<Subfield::LongSubscript>()->index());
 
+      if (current->isHybridFlatMap()) {
+        NIMBLE_CHECK(
+            !keyName.empty(),
+            "Hybrid FlatMap key projection cannot use an empty key.");
+        NIMBLE_CHECK_EQ(
+            pathIndex + 1,
+            path.size(),
+            "Nested projection inside hybrid FlatMap key '{}' is not supported.",
+            keyName);
+        const auto& hybridMap = current->asHybridFlatMap();
+        auto groupIndex = hybridMap.findGroup(keyName);
+        if (!groupIndex.has_value()) {
+          for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+            if (hybridMap.groupAt(i).groupId ==
+                HybridFlatMap::kDefaultGroupId) {
+              groupIndex = i;
+              break;
+            }
+          }
+        }
+        NIMBLE_CHECK(
+            groupIndex.has_value(), "Hybrid FlatMap Default group is missing.");
+        selectedChildren[current].insert(*groupIndex);
+        return;
+      }
+
       NIMBLE_CHECK(
           current->isFlatMap(),
           "Subscript '{}' only supported on FlatMap in subfield path '{}'",
@@ -867,6 +1005,18 @@ void resolveSubfield(
           "Unsupported subfield kind {} in subfield path '{}'",
           kind,
           subfield.toString());
+    }
+  }
+
+  // Reaching a Hybrid FlatMap after consuming the full subfield path means
+  // the caller selected the map column without specifying feature keys.
+  // Preserve whole-map projection semantics by selecting every physical
+  // group. An unselected column never reaches resolveSubfield().
+  if (current->isHybridFlatMap()) {
+    const auto& hybridMap = current->asHybridFlatMap();
+    auto& selectedGroups = selectedChildren[current];
+    for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+      selectedGroups.insert(i);
     }
   }
 }
@@ -1022,8 +1172,8 @@ void projectFlatmapStreamOffsets(
 
   struct Entry {
     std::string keyName;
-    // Missing keys use nullopt and emit UINT32_MAX placeholders for the value
-    // subtree and inMap stream.
+    // Missing keys use nullopt and emit UINT32_MAX placeholders for
+    // the value subtree and inMap stream.
     std::optional<size_t> valueIndex;
   };
   std::vector<Entry> entries;
@@ -1111,12 +1261,47 @@ void projectStreamOffsets(
   }
 }
 
+// Projects only the resolved physical groups and compacts their descriptors
+// into the response-local stream namespace.
+void projectHybridFlatMapStreamOffsets(
+    const ProjectedHybridFlatMap& projectedHybridFlatMap,
+    std::vector<uint32_t>& projectedStreamOffsets,
+    std::vector<bool>& rowOrFlatMapNullStreams) {
+  NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
+  const auto& hybridMap = *projectedHybridFlatMap.source;
+  const SelectedChildrenMap noSelectedChildren;
+
+  appendProjectedStream(
+      projectedStreamOffsets,
+      rowOrFlatMapNullStreams,
+      hybridMap.nullsDescriptor().offset(),
+      /*isRowOrFlatMapNullStream=*/true);
+  for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
+    const auto& sourceGroup = hybridMap.groupAt(groupIndex);
+    projectStreamOffsets(
+        sourceGroup.valueType.get(),
+        noSelectedChildren,
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams);
+    appendProjectedStream(
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams,
+        sourceGroup.keyDescriptor.offset(),
+        /*isRowOrFlatMapNullStream=*/true);
+    appendProjectedStream(
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams,
+        sourceGroup.inMapDescriptor.offset(),
+        /*isRowOrFlatMapNullStream=*/false);
+  }
+}
+
 // Classifies each top-level column of the source nimble Row by `Kind` to
 // build the encoding hints the velox-source `buildProjectedNimbleType`
 // overload requires: FlatMap → flatMapColumns, ArrayWithOffsets →
 // dictionaryArrayColumns, SlidingWindowMap → deduplicatedMapColumns. Other
-// kinds produce no entry (plain encoding). Internal helper of
-// `buildProjectedNimbleType` (nimble-source overload).
+// kinds produce no entry (plain encoding).
+// Internal helper of `buildProjectedNimbleType` (nimble-source overload).
 ColumnEncodings getColumnEncodings(const RowType& nimbleType) {
   ColumnEncodings encodings;
   for (size_t i = 0; i < nimbleType.childrenCount(); ++i) {
@@ -1174,20 +1359,45 @@ NimbleTypeProjection buildProjectedNimbleType(
       !selectedColumnIndices.empty(),
       "No top-level columns resolved from projectedSubfields");
 
-  // Build the projected schema from the velox view of the source. The velox
-  // MAP<K,V> view discards FlatMap key inventory, so the velox-source
-  // builder produces one alphabetically-sorted child per requested subscript
-  // key regardless of source presence — exactly the shape we need for the
-  // source-offset walker below to align positionally.
+  ProjectedHybridFlatMaps projectedHybridFlatMaps;
+  for (const auto columnIndex : selectedColumnIndices) {
+    const auto* child = rootRow.childAt(columnIndex).get();
+    if (!child->isHybridFlatMap()) {
+      continue;
+    }
+    const auto& hybridFlatMap = child->asHybridFlatMap();
+    const auto selectedGroups = selectedChildren.find(child);
+    NIMBLE_CHECK(
+        selectedGroups != selectedChildren.end(),
+        "Hybrid FlatMap projection requires selected groups.");
+    projectedHybridFlatMaps.emplace(
+        columnIndex,
+        ProjectedHybridFlatMap{
+            .source = &hybridFlatMap,
+            .groupIndices = std::vector<size_t>(
+                selectedGroups->second.begin(), selectedGroups->second.end()),
+        });
+  }
+
+  // Build the final projected schema before emitting source-stream mappings.
+  // Projected Hybrid FlatMaps preserve the group metadata that the Velox Map
+  // view cannot represent and reserve the exact descriptor count for later
+  // siblings.
   auto veloxSource = convertToVeloxType(*type);
   const auto encodings = getColumnEncodings(rootRow);
   projection.nimbleType = buildProjectedNimbleType(
-      veloxSource->asRow(), projectedSubfields, encodings);
+      veloxSource->asRow(),
+      projectedSubfields,
+      encodings,
+      projectedHybridFlatMaps);
+  const auto& projectedRoot = projection.nimbleType->asRow();
+  std::vector<std::shared_ptr<const Type>> projectedChildren(
+      projectedRoot.children());
 
   // Walk the source nimble in the same DFS pre-order + FlatMap-alphabetical
   // traversal the velox-source builder uses, emitting one source stream offset
-  // and Row/FlatMap null stream bit per projected stream position (UINT32_MAX
-  // for missing keys).
+  // and Row/FlatMap null stream bit per projected stream position
+  // (UINT32_MAX for missing keys).
   appendProjectedStream(
       projection.streamOffsets,
       projection.rowOrFlatMapNullStreams,
@@ -1195,7 +1405,14 @@ NimbleTypeProjection buildProjectedNimbleType(
       /*isRowOrFlatMapNullStream=*/true);
   for (size_t columnIdx : selectedColumnIndices) {
     const auto* child = rootRow.childAt(columnIdx).get();
-    if (child->kind() == Kind::FlatMap) {
+    if (child->kind() == Kind::HybridFlatMap) {
+      const auto& projectedHybridFlatMap =
+          projectedHybridFlatMaps.at(columnIdx);
+      projectHybridFlatMapStreamOffsets(
+          projectedHybridFlatMap,
+          projection.streamOffsets,
+          projection.rowOrFlatMapNullStreams);
+    } else if (child->kind() == Kind::FlatMap) {
       projectFlatmapStreamOffsets(
           child->asFlatMap(),
           selectedChildren,
@@ -1210,6 +1427,17 @@ NimbleTypeProjection buildProjectedNimbleType(
           projection.rowOrFlatMapNullStreams);
     }
   }
+  projection.nimbleType = std::make_shared<RowType>(
+      projectedRoot.nullsDescriptor(),
+      std::vector<std::string>(projectedRoot.names()),
+      std::move(projectedChildren),
+      rootRow.attributes());
+  validateProjectedHybridFlatMapSchema(*projection.nimbleType);
+  // schemaNodes() materializes the projected schema, so keep this debug-only.
+  NIMBLE_DCHECK_EQ(
+      projection.streamOffsets.size(),
+      schemaNodes(*projection.nimbleType).size(),
+      "Projected visible stream count does not match projected schema.");
   NIMBLE_DCHECK_EQ(
       projection.streamOffsets.size(),
       projection.rowOrFlatMapNullStreams.size());

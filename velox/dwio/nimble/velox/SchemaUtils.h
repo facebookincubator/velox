@@ -18,9 +18,13 @@
 #include <string_view>
 #include <vector>
 
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
+#include <cstdint>
+#include <string>
 #include "velox/dwio/common/TypeWithId.h"
+
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -52,13 +56,27 @@ const TypeBuilder& resolveValueStreamSubfield(
 
 /// Encoding types for top-level columns extracted from a nimble file schema.
 /// Records which columns use encoding-specific types (ArrayWithOffsets,
-/// SlidingWindowMap, FlatMap), enabling the Serializer to produce output
-/// consistent with the file's encoding.
+/// SlidingWindowMap, FlatMap), enabling the Serializer
+/// to produce output consistent with the file's encoding.
 struct ColumnEncodings {
   folly::F14FastSet<std::string> dictionaryArrayColumns;
   folly::F14FastSet<std::string> deduplicatedMapColumns;
   folly::F14FastSet<std::string> flatMapColumns;
 };
+
+/// Non-owning projection plan for one top-level Hybrid FlatMap column.
+struct ProjectedHybridFlatMap {
+  /// Source Hybrid FlatMap. It must outlive this projection plan.
+  const HybridFlatMapType* source;
+
+  /// Selected group indices in source-schema order.
+  std::vector<size_t> groupIndices;
+};
+
+/// Maps each top-level column index to the source Hybrid FlatMap and its
+/// selected physical groups, which are not represented by the Velox Map view.
+using ProjectedHybridFlatMaps =
+    folly::F14FastMap<size_t, ProjectedHybridFlatMap>;
 
 /// Converts a projected velox RowType to a nimble schema, including only the
 /// projected columns. Supports arbitrary-depth subfield projections:
@@ -73,16 +91,22 @@ struct ColumnEncodings {
 std::shared_ptr<const Type> buildProjectedNimbleType(
     const velox::RowType& type,
     const std::vector<velox::common::Subfield>& projectedSubfields,
-    const ColumnEncodings& columnEncodings = {});
+    const ColumnEncodings& columnEncodings = {},
+    const ProjectedHybridFlatMaps& projectedHybridFlatMaps = {});
 
 /// Contains a projected Nimble schema and its mapping to source streams.
 struct NimbleTypeProjection {
   std::shared_ptr<const Type> nimbleType;
   std::vector<uint32_t> streamOffsets;
+  /// Marks streams whose presence requires retaining the input decode barrier.
+  /// This includes Row/FlatMap null streams and Hybrid FlatMap group key
+  /// streams.
   std::vector<bool> rowOrFlatMapNullStreams;
 };
 
-/// Builds a projected Nimble schema and its source-stream mapping.
+/// Builds a projected Nimble schema and its source-stream mapping. A projected
+/// Hybrid FlatMap contains only selected physical groups and compacts their
+/// descriptors into the response-local stream namespace.
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
     const std::vector<velox::common::Subfield>& projectedSubfields);

@@ -20,11 +20,15 @@
 
 #include <folly/Random.h>
 
+#include <algorithm>
+#include <initializer_list>
 #include <memory>
+#include <string_view>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -32,8 +36,50 @@
 using namespace facebook;
 using namespace facebook::nimble;
 using Subfield = velox::common::Subfield;
+using testing::ElementsAre;
+using testing::FieldsAre;
+using testing::IsEmpty;
+using testing::Optional;
 
 namespace {
+
+std::vector<Subfield> makeSubfields(
+    std::initializer_list<std::string_view> paths) {
+  std::vector<Subfield> subfields;
+  subfields.reserve(paths.size());
+  for (const auto path : paths) {
+    subfields.emplace_back(std::string{path});
+  }
+  return subfields;
+}
+
+std::shared_ptr<TypeBuilder> makeAllKindValueType(SchemaBuilder& builder) {
+  auto scalar = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  scalar->setAttributes({{"scalar", "attribute"}});
+  auto timestamp = builder.createTimestampMicroNanoTypeBuilder();
+  timestamp->setAttributes({{"timestamp", "attribute"}});
+  auto array =
+      test::array(builder, builder.createScalarTypeBuilder(ScalarKind::Int32));
+  auto offsetArray = test::arrayWithOffsets(
+      builder, builder.createScalarTypeBuilder(ScalarKind::Int16));
+  auto mapKeys = builder.createScalarTypeBuilder(ScalarKind::String);
+  auto mapValues = builder.createScalarTypeBuilder(ScalarKind::Double);
+  auto map = test::map(builder, std::move(mapKeys), std::move(mapValues));
+  auto slidingKeys = builder.createScalarTypeBuilder(ScalarKind::Int8);
+  auto slidingValues = builder.createScalarTypeBuilder(ScalarKind::Bool);
+  auto slidingMap = test::slidingWindowMap(
+      builder, std::move(slidingKeys), std::move(slidingValues));
+  auto row = test::row(
+      builder,
+      {{"scalar", std::move(scalar)},
+       {"timestamp", std::move(timestamp)},
+       {"array", std::move(array)},
+       {"offset_array", std::move(offsetArray)},
+       {"map", std::move(map)},
+       {"sliding_map", std::move(slidingMap)}});
+  row->setAttributes({{"value", "attribute"}});
+  return row;
+}
 
 // Recursively compares two nimble Type trees for structural equivalence.
 // Checks kind, names, children count, scalar kinds, and FlatMap key scalar
@@ -524,6 +570,276 @@ TEST(SchemaUtilsTest, projectionStreamOffsets) {
           features.inMapDescriptorAt(0).offset(),
           features.childAt(1)->asScalar().scalarDescriptor().offset(),
           features.inMapDescriptorAt(1).offset()));
+}
+
+TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  root->setAttributes({{"root", "attribute"}});
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  hybridMap->addGroup(0, {"1"}, makeAllKindValueType(builder));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(builder));
+  root->addChild("features", hybridMap);
+  const auto source = SchemaReader::getSchema(builder.schemaNodes());
+  const auto projection =
+      buildProjectedNimbleType(source.get(), makeSubfields({"features[1]"}));
+  EXPECT_EQ(
+      projection.nimbleType->attributes(),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"root", "attribute"}}));
+  const auto& projectedMap =
+      projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
+  const auto& row = projectedMap.groupAt(0).valueType->asRow();
+  EXPECT_EQ(row.nullsDescriptor().offset(), 2);
+  EXPECT_EQ(row.childAt(0)->asScalar().scalarDescriptor().offset(), 3);
+  EXPECT_EQ(
+      row.childAt(1)->asTimestampMicroNano().microsDescriptor().offset(), 4);
+  EXPECT_EQ(
+      row.childAt(1)->asTimestampMicroNano().nanosDescriptor().offset(), 5);
+  EXPECT_EQ(row.childAt(2)->asArray().lengthsDescriptor().offset(), 6);
+  EXPECT_EQ(
+      row.childAt(2)
+          ->asArray()
+          .elements()
+          ->asScalar()
+          .scalarDescriptor()
+          .offset(),
+      7);
+  EXPECT_EQ(
+      row.childAt(3)->asArrayWithOffsets().offsetsDescriptor().offset(), 8);
+  EXPECT_EQ(
+      row.childAt(3)->asArrayWithOffsets().lengthsDescriptor().offset(), 9);
+  EXPECT_EQ(
+      row.childAt(3)
+          ->asArrayWithOffsets()
+          .elements()
+          ->asScalar()
+          .scalarDescriptor()
+          .offset(),
+      10);
+  const auto& map = row.childAt(4)->asMap();
+  EXPECT_EQ(map.lengthsDescriptor().offset(), 11);
+  EXPECT_EQ(map.keys()->asScalar().scalarDescriptor().offset(), 12);
+  EXPECT_EQ(map.values()->asScalar().scalarDescriptor().offset(), 13);
+  const auto& slidingMap = row.childAt(5)->asSlidingWindowMap();
+  EXPECT_EQ(slidingMap.offsetsDescriptor().offset(), 14);
+  EXPECT_EQ(slidingMap.lengthsDescriptor().offset(), 15);
+  EXPECT_EQ(slidingMap.keys()->asScalar().scalarDescriptor().offset(), 16);
+  EXPECT_EQ(slidingMap.values()->asScalar().scalarDescriptor().offset(), 17);
+  EXPECT_EQ(projectedMap.groupAt(0).keyDescriptor.offset(), 18);
+  EXPECT_EQ(projectedMap.groupAt(0).inMapDescriptor.offset(), 19);
+  EXPECT_EQ(
+      row.attributes(),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"value", "attribute"}}));
+  EXPECT_EQ(
+      row.childAt(0)->attributes(),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"scalar", "attribute"}}));
+  EXPECT_EQ(
+      row.childAt(1)->attributes(),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"timestamp", "attribute"}}));
+  const auto& sourceRoot = source->asRow();
+  const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
+  const auto& sourceGroup = sourceMap.groupAt(0);
+  const auto& sourceValue = sourceGroup.valueType->asRow();
+  const auto& sourceTimestamp = sourceValue.childAt(1)->asTimestampMicroNano();
+  const auto& sourceArray = sourceValue.childAt(2)->asArray();
+  const auto& sourceOffsetArray = sourceValue.childAt(3)->asArrayWithOffsets();
+  const auto& sourceNestedMap = sourceValue.childAt(4)->asMap();
+  const auto& sourceSlidingMap = sourceValue.childAt(5)->asSlidingWindowMap();
+  std::vector<uint32_t> expectedStreamOffsets{
+      sourceRoot.nullsDescriptor().offset(),
+      sourceMap.nullsDescriptor().offset(),
+      sourceValue.nullsDescriptor().offset(),
+      sourceValue.childAt(0)->asScalar().scalarDescriptor().offset(),
+      sourceTimestamp.microsDescriptor().offset(),
+      sourceTimestamp.nanosDescriptor().offset(),
+      sourceArray.lengthsDescriptor().offset(),
+      sourceArray.elements()->asScalar().scalarDescriptor().offset(),
+      sourceOffsetArray.offsetsDescriptor().offset(),
+      sourceOffsetArray.lengthsDescriptor().offset(),
+      sourceOffsetArray.elements()->asScalar().scalarDescriptor().offset(),
+      sourceNestedMap.lengthsDescriptor().offset(),
+      sourceNestedMap.keys()->asScalar().scalarDescriptor().offset(),
+      sourceNestedMap.values()->asScalar().scalarDescriptor().offset(),
+      sourceSlidingMap.offsetsDescriptor().offset(),
+      sourceSlidingMap.lengthsDescriptor().offset(),
+      sourceSlidingMap.keys()->asScalar().scalarDescriptor().offset(),
+      sourceSlidingMap.values()->asScalar().scalarDescriptor().offset(),
+      sourceGroup.keyDescriptor.offset(),
+      sourceGroup.inMapDescriptor.offset(),
+  };
+  EXPECT_EQ(projection.streamOffsets, expectedStreamOffsets);
+  EXPECT_EQ(
+      std::find(
+          projection.streamOffsets.begin(),
+          projection.streamOffsets.end(),
+          UINT32_MAX),
+      projection.streamOffsets.end());
+
+  std::vector<bool> expectedBarriers(expectedStreamOffsets.size(), false);
+  expectedBarriers[0] = true;
+  expectedBarriers[1] = true;
+  expectedBarriers[2] = true;
+  expectedBarriers[18] = true;
+  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+
+  SchemaBuilder nestedFlatMapBuilder;
+  auto nestedRoot = nestedFlatMapBuilder.createRowTypeBuilder(1);
+  auto nestedHybrid =
+      nestedFlatMapBuilder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  const auto makeFlatMapValue = [&]() {
+    auto value =
+        nestedFlatMapBuilder.createFlatMapTypeBuilder(ScalarKind::Int32);
+    value->addChild(
+        "1", nestedFlatMapBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+    return value;
+  };
+  nestedHybrid->addGroup(0, {"1"}, makeFlatMapValue());
+  nestedHybrid->addGroup(
+      HybridFlatMap::kDefaultGroupId, {}, makeFlatMapValue());
+  nestedRoot->addChild("features", nestedHybrid);
+  const auto nestedSchema =
+      SchemaReader::getSchema(nestedFlatMapBuilder.schemaNodes());
+  NIMBLE_ASSERT_THROW(
+      buildProjectedNimbleType(
+          nestedSchema.get(), makeSubfields({"features[1]"})),
+      "Nested FlatMap values are not supported");
+}
+
+TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  const auto addGroup = [&](uint32_t groupId, std::vector<std::string> keys) {
+    hybridMap->addGroup(
+        groupId,
+        std::move(keys),
+        builder.createScalarTypeBuilder(ScalarKind::Double));
+  };
+  addGroup(0, {"1"});
+  addGroup(1, {"2", "3"});
+  addGroup(HybridFlatMap::kDefaultGroupId, {});
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto& sourceRoot = schema->asRow();
+  const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
+
+  // Key "2" resolves to group 1, so only that physical group appears in the
+  // projected schema and stream mapping.
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[2]");
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto& projectedMap =
+      projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(projectedMap.groupAt(0).groupId, 1);
+  EXPECT_EQ(
+      projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"2", "3"}));
+  EXPECT_EQ(
+      projectedMap.valueType().asScalar().scalarDescriptor().scalarKind(),
+      ScalarKind::Double);
+  EXPECT_TRUE(projectedMap.attributes().empty());
+  const auto& sourceGroup = sourceMap.groupAt(1);
+  EXPECT_THAT(
+      projection.streamOffsets,
+      ElementsAre(
+          sourceRoot.nullsDescriptor().offset(),
+          sourceMap.nullsDescriptor().offset(),
+          sourceGroup.valueType->asScalar().scalarDescriptor().offset(),
+          sourceGroup.keyDescriptor.offset(),
+          sourceGroup.inMapDescriptor.offset()));
+  EXPECT_THAT(
+      projection.rowOrFlatMapNullStreams,
+      ElementsAre(true, true, false, true, false));
+
+  SchemaSerializer serializer;
+  const auto serializedProjection =
+      std::string(serializer.serialize(*projection.nimbleType));
+  const auto roundTripped =
+      SchemaDeserializer::deserialize(serializedProjection);
+  const auto& roundTrippedMap =
+      roundTripped->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(roundTrippedMap.groupCount(), 1);
+  EXPECT_EQ(roundTrippedMap.groupAt(0).groupId, 1);
+  EXPECT_EQ(
+      roundTrippedMap.groupAt(0).groupKeys,
+      (std::vector<std::string>{"2", "3"}));
+  EXPECT_TRUE(roundTrippedMap.attributes().empty());
+
+  // A key outside every configured group selects only Default's streams.
+  std::vector<Subfield> unconfigured;
+  unconfigured.emplace_back("features[9]");
+  const auto defaultProjection =
+      buildProjectedNimbleType(schema.get(), unconfigured);
+  const auto& defaultMap =
+      defaultProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(defaultMap.groupCount(), 1);
+  EXPECT_EQ(defaultMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(defaultMap.groupAt(0).groupKeys.empty());
+  const auto& sourceDefault = sourceMap.defaultGroup();
+  EXPECT_THAT(
+      defaultProjection.streamOffsets,
+      ElementsAre(
+          sourceRoot.nullsDescriptor().offset(),
+          sourceMap.nullsDescriptor().offset(),
+          sourceDefault.valueType->asScalar().scalarDescriptor().offset(),
+          sourceDefault.keyDescriptor.offset(),
+          sourceDefault.inMapDescriptor.offset()));
+
+  // A configured key and an unconfigured one select group 1 and Default.
+  std::vector<Subfield> mixed;
+  mixed.emplace_back("features[2]");
+  mixed.emplace_back("features[9]");
+  const auto mixedProjection = buildProjectedNimbleType(schema.get(), mixed);
+  const auto& mixedMap =
+      mixedProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(mixedMap.groupCount(), 2);
+  EXPECT_EQ(mixedMap.groupAt(0).groupId, 1);
+  EXPECT_EQ(
+      mixedMap.groupAt(0).groupKeys, (std::vector<std::string>{"2", "3"}));
+  EXPECT_EQ(mixedMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(mixedMap.groupAt(1).groupKeys.empty());
+  EXPECT_THAT(
+      mixedProjection.streamOffsets,
+      ElementsAre(
+          sourceRoot.nullsDescriptor().offset(),
+          sourceMap.nullsDescriptor().offset(),
+          sourceGroup.valueType->asScalar().scalarDescriptor().offset(),
+          sourceGroup.keyDescriptor.offset(),
+          sourceGroup.inMapDescriptor.offset(),
+          sourceDefault.valueType->asScalar().scalarDescriptor().offset(),
+          sourceDefault.keyDescriptor.offset(),
+          sourceDefault.inMapDescriptor.offset()));
+  EXPECT_THAT(
+      mixedProjection.rowOrFlatMapNullStreams,
+      ElementsAre(true, true, false, true, false, false, true, false));
+
+  // Group selection is deduplicated and emitted in source schema order, not
+  // request order.
+  std::vector<Subfield> reordered;
+  reordered.emplace_back("features[9]");
+  reordered.emplace_back("features[3]");
+  reordered.emplace_back("features[1]");
+  reordered.emplace_back("features[2]");
+  const auto reorderedProjection =
+      buildProjectedNimbleType(schema.get(), reordered);
+  const auto& reorderedMap =
+      reorderedProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(reorderedMap.groupCount(), 3);
+  EXPECT_EQ(reorderedMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(reorderedMap.groupAt(1).groupId, 1);
+  EXPECT_EQ(reorderedMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_EQ(reorderedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
+  EXPECT_EQ(
+      reorderedMap.groupAt(1).groupKeys, (std::vector<std::string>{"2", "3"}));
+  EXPECT_TRUE(reorderedMap.groupAt(2).groupKeys.empty());
 }
 
 // --- convertToNimbleType with projected subfields tests ---
@@ -1101,6 +1417,43 @@ TEST(SchemaUtilsTest, projectionMarksRowOrFlatMapNullStreams) {
   }
 }
 
+TEST(SchemaUtilsTest, projectionMissingFlatMapComplexValueUsesPlaceholders) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto flatMap = builder.createFlatMapTypeBuilder(ScalarKind::String);
+  auto scalar = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  auto timestamp = builder.createTimestampMicroNanoTypeBuilder();
+  auto array =
+      test::array(builder, builder.createScalarTypeBuilder(ScalarKind::Int32));
+  auto mapKey = builder.createScalarTypeBuilder(ScalarKind::String);
+  auto mapValue = builder.createScalarTypeBuilder(ScalarKind::Double);
+  auto map = test::map(builder, std::move(mapKey), std::move(mapValue));
+  auto value = test::row(
+      builder,
+      {{"scalar", std::move(scalar)},
+       {"timestamp", std::move(timestamp)},
+       {"array", std::move(array)},
+       {"map", std::move(map)}});
+  flatMap->addChild("present", std::move(value));
+  root->addChild("features", flatMap);
+  const auto source = SchemaReader::getSchema(builder.schemaNodes());
+
+  const auto projection = buildProjectedNimbleType(
+      source.get(), makeSubfields({"features[\"missing\"]"}));
+  std::vector<uint32_t> expectedStreamOffsets(12, UINT32_MAX);
+  const auto& sourceRoot = source->asRow();
+  const auto& sourceMap = sourceRoot.childAt(0)->asFlatMap();
+  expectedStreamOffsets[0] = sourceRoot.nullsDescriptor().offset();
+  expectedStreamOffsets[1] = sourceMap.nullsDescriptor().offset();
+  EXPECT_EQ(projection.streamOffsets, expectedStreamOffsets);
+
+  std::vector<bool> expectedBarriers(12, false);
+  expectedBarriers[0] = true;
+  expectedBarriers[1] = true;
+  expectedBarriers[2] = true;
+  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+}
+
 TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
   SchemaBuilder schemaBuilder;
   test::FlatMapChildAdder featuresAdder;
@@ -1124,7 +1477,7 @@ TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
       "FlatMap projection is supported only for top-level columns");
 }
 
-TEST(SchemaUtilsTest, hybridFlatMapRequiresGroupAwareProjection) {
+TEST(SchemaUtilsTest, hybridFlatMapProjectionUsesSchemaGroups) {
   SchemaBuilder schemaBuilder;
   auto root = schemaBuilder.createRowTypeBuilder(1);
   auto features =
@@ -1142,9 +1495,227 @@ TEST(SchemaUtilsTest, hybridFlatMapRequiresGroupAwareProjection) {
   std::vector<Subfield> subfields;
   subfields.emplace_back("features");
 
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto& projectedMap =
+      projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedMap.groupCount(), 2);
+  EXPECT_EQ(projectedMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(projectedMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
+
+  const auto configuredProjection = buildProjectedNimbleType(
+      schema.get(), makeSubfields({"features[\"configured\"]"}));
+  const auto& configuredMap =
+      configuredProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(configuredMap.groupCount(), 1);
+  EXPECT_EQ(configuredMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(
+      configuredMap.groupAt(0).groupKeys,
+      (std::vector<std::string>{"configured"}));
   NIMBLE_ASSERT_THROW(
-      buildProjectedNimbleType(schema.get(), subfields),
-      "Hybrid FlatMap projection requires group-aware projection");
+      buildProjectedNimbleType(schema.get(), makeSubfields({"features[\"\"]"})),
+      "Hybrid FlatMap key projection cannot use an empty key");
+  NIMBLE_ASSERT_THROW(
+      buildProjectedNimbleType(
+          schema.get(), makeSubfields({"features[\"configured\"].nested"})),
+      "Nested projection inside hybrid FlatMap key 'configured' is not supported");
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(2);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  root->addChild(
+      "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"configured\"]");
+  subfields.emplace_back("id");
+
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+
+  // A projected descriptor offset indexes projection.streamOffsets. The final
+  // Hybrid FlatMap shape is built before the following column, so the latter
+  // receives the next dense offset.
+  const auto& projectedRoot = projection.nimbleType->asRow();
+  EXPECT_EQ(
+      projectedRoot.childAt(1)->asScalar().scalarDescriptor().offset(),
+      projection.streamOffsets.size() - 1);
+
+  // Descriptor offsets must be dense and in walk order, because the reader
+  // resolves a decoder by the offset and the blob numbers its slots by
+  // position in streamOffsets.
+  EXPECT_EQ(projectedRoot.nullsDescriptor().offset(), 0);
+  const auto& projectedMap = projectedRoot.childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(projectedMap.nullsDescriptor().offset(), 1);
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(
+      projectedMap.groupAt(0).valueType->asScalar().scalarDescriptor().offset(),
+      2);
+  EXPECT_EQ(projectedMap.groupAt(0).keyDescriptor.offset(), 3);
+  EXPECT_EQ(projectedMap.groupAt(0).inMapDescriptor.offset(), 4);
+  EXPECT_EQ(projection.streamOffsets.size(), 6);
+  EXPECT_EQ(
+      projection.rowOrFlatMapNullStreams.size(),
+      projection.streamOffsets.size());
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(2);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  auto flatMap = schemaBuilder.createFlatMapTypeBuilder(ScalarKind::String);
+  flatMap->addChild(
+      "a", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  flatMap->addChild(
+      "b", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("fm", flatMap);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"configured\"]");
+  subfields.emplace_back("fm[\"a\"]");
+
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+
+  // A FlatMap carries an in-map descriptor per key alongside its nulls stream,
+  // so it verifies every following descriptor is allocated after the HFM.
+  const auto& projectedFlatMap =
+      projection.nimbleType->asRow().childAt(1)->asFlatMap();
+  ASSERT_EQ(projectedFlatMap.childrenCount(), 1);
+  EXPECT_EQ(projectedFlatMap.nullsDescriptor().offset(), 5);
+  EXPECT_EQ(
+      projectedFlatMap.childAt(0)->asScalar().scalarDescriptor().offset(), 6);
+  EXPECT_EQ(projectedFlatMap.inMapDescriptorAt(0).offset(), 7);
+  EXPECT_EQ(projection.streamOffsets.size(), 8);
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersMultipleHybridColumns) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(3);
+  const auto addHybrid = [&](std::string_view name) {
+    auto map = schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    map->addGroup(
+        0,
+        {std::string{name} + "_key"},
+        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+    map->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        {},
+        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+    root->addChild(std::string{name}, map);
+  };
+  addHybrid("first");
+  addHybrid("second");
+  root->addChild(
+      "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("first[\"first_key\"]");
+  subfields.emplace_back("second[\"second_key\"]");
+  subfields.emplace_back("id");
+
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+
+  // Each selected HFM is built with its final stream count before the next
+  // column, so the second HFM and trailing scalar receive cumulative offsets.
+  const auto& projectedRoot = projection.nimbleType->asRow();
+  EXPECT_EQ(projection.streamOffsets.size(), 10);
+  EXPECT_EQ(
+      projectedRoot.childAt(1)->asHybridFlatMap().nullsDescriptor().offset(),
+      5);
+  EXPECT_EQ(
+      projectedRoot.childAt(2)->asScalar().scalarDescriptor().offset(), 9);
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingNestedRow) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(2);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  auto nested = schemaBuilder.createRowTypeBuilder(2);
+  nested->addChild(
+      "scalar", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  auto array = schemaBuilder.createArrayTypeBuilder();
+  array->setChildren(schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  nested->addChild("array", array);
+  root->addChild("nested", nested);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"configured\"]");
+  subfields.emplace_back("nested");
+
+  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+
+  // The following nested subtree is allocated contiguously after the HFM.
+  const auto& projectedNested =
+      projection.nimbleType->asRow().childAt(1)->asRow();
+  EXPECT_EQ(projectedNested.nullsDescriptor().offset(), 5);
+  EXPECT_EQ(
+      projectedNested.childAt(0)->asScalar().scalarDescriptor().offset(), 6);
+  const auto& projectedArray = projectedNested.childAt(1)->asArray();
+  EXPECT_EQ(projectedArray.lengthsDescriptor().offset(), 7);
+  EXPECT_EQ(
+      projectedArray.elements()->asScalar().scalarDescriptor().offset(), 8);
+  EXPECT_EQ(projection.streamOffsets.size(), 9);
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingArrayWithOffsets) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(2);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  auto array = schemaBuilder.createArrayWithOffsetsTypeBuilder();
+  array->setChildren(schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("array", array);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  const auto projection = buildProjectedNimbleType(
+      schema.get(), makeSubfields({"features[\"configured\"]", "array"}));
+
+  const auto& projectedArray =
+      projection.nimbleType->asRow().childAt(1)->asArrayWithOffsets();
+  EXPECT_EQ(projectedArray.offsetsDescriptor().offset(), 5);
+  EXPECT_EQ(projectedArray.lengthsDescriptor().offset(), 6);
+  EXPECT_EQ(
+      projectedArray.elements()->asScalar().scalarDescriptor().offset(), 7);
+  EXPECT_EQ(projection.streamOffsets.size(), 8);
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
@@ -1279,7 +1850,8 @@ TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
   //   dedup_map offsets (6), lengths (7), key (4), value (5),
   //   features.nulls (8),
   //     "a" value (10), "a" inMap (11),
-  //     "missing" value (UINT32_MAX), "missing" inMap (UINT32_MAX).
+  //     "missing" value (UINT32_MAX), "missing" inMap
+  //     (UINT32_MAX).
   EXPECT_EQ(
       projection.streamOffsets,
       std::vector<uint32_t>(
