@@ -399,7 +399,7 @@ std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
 }
 
 const Type& HybridFlatMapType::valueType() const {
-  return *defaultGroup().valueType;
+  return *groups_.front().valueType;
 }
 
 ArrayWithOffsetsType::ArrayWithOffsetsType(
@@ -428,17 +428,17 @@ namespace {
 
 void validateHybridFlatMapGroups(
     const std::vector<HybridFlatMapType::Group>& groups) {
-  HybridFlatMap::validate(
+  detail::validateHybridFlatMapGroups(
       groups.size(),
+      /*hasDefault=*/false,
       [&groups](size_t index) { return groups[index].groupId; },
       [&groups](size_t index) -> const auto& {
         return groups[index].groupKeys;
       });
-
   const auto& expectedValueType = *groups.front().valueType;
-  for (const auto& group : groups) {
+  for (size_t i = 1; i < groups.size(); ++i) {
     const bool hasSameLogicalType =
-        detail::sameLogicalType(expectedValueType, *group.valueType);
+        detail::sameLogicalType(expectedValueType, *groups[i].valueType);
     NIMBLE_CHECK(
         hasSameLogicalType,
         "Hybrid FlatMap groups must have the same logical value type.");

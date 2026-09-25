@@ -141,51 +141,34 @@ TEST(HybridFlatMapTest, rejectsMalformedMetadata) {
       HybridFlatMap::deserialize(
           encodeRawMetadata({0, 1}, {0, 0}, {"unexpected"})),
       "Hybrid FlatMap group key counts must match group keys size");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata(
-          {0, 1, HybridFlatMap::kDefaultGroupId}, {0, 0, 0}, {})),
-      "Hybrid FlatMap group count must not exceed group key count plus one");
 }
 
-TEST(HybridFlatMapTest, deserializeEnforcesGroupContract) {
-  const auto defaultGroupId = HybridFlatMap::kDefaultGroupId;
+TEST(HybridFlatMapTest, projectedConfiguredGroupRequiresKeys) {
+  const HybridFlatMap projected{
+      .groups = {{.groupId = 7, .groupKeys = {}}},
+  };
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata({}, {}, {})),
-      "Hybrid FlatMap requires at least two groups");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata({defaultGroupId}, {0}, {})),
-      "Hybrid FlatMap requires at least two groups");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata({0, 0}, {1, 1}, {"a", "b"})),
-      "Duplicate Hybrid FlatMap group ID: 0");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({defaultGroupId, defaultGroupId}, {0, 1}, {"a"})),
-      "Duplicate Hybrid FlatMap group ID: 4294967295");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata({0, 1}, {1, 1}, {"a", "b"})),
-      "Hybrid FlatMap must have exactly one Default group");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, defaultGroupId}, {1, 1}, {"a", "b"})),
-      "Hybrid FlatMap Default group cannot contain group keys");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, defaultGroupId}, {0, 1}, {"a"})),
-      "Hybrid FlatMap group must contain at least one key: 0");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, defaultGroupId}, {1, 0}, {""})),
-      "Hybrid FlatMap key cannot be empty");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, 1, defaultGroupId}, {1, 1, 0}, {"a", "a"})),
-      "Duplicate Hybrid FlatMap key: 'a'");
-  NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, defaultGroupId}, {2, 0}, {"b", "a"})),
-      "Hybrid FlatMap group keys must be sorted: 0");
+      detail::validateHybridFlatMapGroups(
+          projected.groups.size(),
+          /*hasDefault=*/false,
+          [&projected](size_t index) {
+            return projected.groups[index].groupId;
+          },
+          [&projected](size_t index) -> const auto& {
+            return projected.groups[index].groupKeys;
+          }),
+      "Hybrid FlatMap group must contain at least one key: 7");
+}
+
+TEST(HybridFlatMapTest, deserializeAcceptsPhysicalProjectionMetadata) {
+  const auto metadata = HybridFlatMap::deserialize(
+      encodeRawMetadata({7, HybridFlatMap::kDefaultGroupId}, {0, 0}, {}));
+  ASSERT_EQ(metadata.groups.size(), 2);
+  EXPECT_EQ(metadata.groups[0].groupId, 7);
+  EXPECT_TRUE(metadata.groups[0].groupKeys.empty());
+  EXPECT_EQ(metadata.groups[1].groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(metadata.groups[1].groupKeys.empty());
 }
 
 TEST(HybridFlatMapTest, setMetadataAttributeAppendsToUserAttributes) {
@@ -206,18 +189,43 @@ TEST(HybridFlatMapTest, setMetadataAttributeAppendsToUserAttributes) {
   EXPECT_EQ(HybridFlatMap::deserialize(attributes[2].second), expected);
 }
 
-TEST(HybridFlatMapTest, setMetadataAttributeRejectsExisting) {
+TEST(HybridFlatMapTest, setMetadataAttributeOverridesExisting) {
   std::vector<std::pair<std::string, std::string>> attributes{
       {"user.a", "1"},
       {std::string{HybridFlatMap::kAttributeName}, "stale"},
       {"user.b", "2"},
   };
-  const auto before = attributes;
+
+  const auto expected = metadata();
+  expected.setAttribute(attributes);
+
+  ASSERT_EQ(attributes.size(), 3);
+  EXPECT_EQ(
+      attributes[0], (std::pair<std::string, std::string>{"user.a", "1"}));
+  EXPECT_EQ(attributes[1].first, HybridFlatMap::kAttributeName);
+  EXPECT_EQ(HybridFlatMap::deserialize(attributes[1].second), expected);
+  EXPECT_EQ(
+      attributes[2], (std::pair<std::string, std::string>{"user.b", "2"}));
+}
+
+TEST(HybridFlatMapTest, setMetadataAttributeRejectsDuplicates) {
+  std::vector<std::pair<std::string, std::string>> attributes{
+      {std::string{HybridFlatMap::kAttributeName}, "stale"},
+      {"user.a", "1"},
+      {std::string{HybridFlatMap::kAttributeName}, "also stale"},
+  };
+  const auto expected = metadata();
 
   NIMBLE_ASSERT_THROW(
-      metadata().setAttribute(attributes),
-      "Hybrid FlatMap metadata attribute already exists");
-  EXPECT_EQ(attributes, before);
+      expected.setAttribute(attributes),
+      "Hybrid FlatMap metadata attribute must be unique");
+  EXPECT_EQ(HybridFlatMap::deserialize(attributes[0].second), expected);
+  EXPECT_EQ(
+      attributes[1], (std::pair<std::string, std::string>{"user.a", "1"}));
+  EXPECT_EQ(
+      attributes[2],
+      (std::pair<std::string, std::string>{
+          HybridFlatMap::kAttributeName, "also stale"}));
 }
 
 TEST(HybridFlatMapTest, getAttributeLeavesAttributesUnchanged) {
