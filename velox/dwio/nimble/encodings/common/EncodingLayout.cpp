@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 namespace facebook::nimble {
@@ -224,36 +225,35 @@ EncodingLayout EncodingLayoutCapture::capture(
       break;
     }
     case EncodingType::SubIntSplit: {
-      const auto dataType = EncodingPrefix::dataType(encoding);
-      const auto physicalBits = detail::dataTypeSize(dataType) * 8;
-      const char* pos = encoding.data() + prefixSize;
-      const auto numSections = encoding::read<uint8_t>(pos);
-      // Skip the reserved section-order byte.
-      encoding::read<uint8_t>(pos);
+      // Walked by the shared parser rather than a local header walk, so the
+      // flag byte and the row frame block it announces are read the same way
+      // the encoding reads them.
+      subintsplit::RowFrame rowFrame;
+      const auto sections = subintsplit::parseSections(
+          encoding, prefixSize, /*flags=*/nullptr, &rowFrame);
 
       std::vector<subintsplit::SectionPlan> segments;
-      std::vector<uint32_t> encodedSizes;
-      segments.reserve(numSections);
-      encodedSizes.reserve(numSections);
-      uint32_t expectedBitStart{0};
-      for (uint8_t section{0}; section < numSections; ++section) {
-        const auto bitStart = encoding::read<uint8_t>(pos);
-        const auto bitEnd = encoding::read<uint8_t>(pos);
-        NIMBLE_CHECK_EQ(bitStart, expectedBitStart);
-        NIMBLE_CHECK_GE(bitEnd, bitStart);
-        NIMBLE_CHECK_LT(bitEnd, physicalBits);
-        segments.push_back({.bitStart = bitStart, .bitEnd = bitEnd});
-        encodedSizes.push_back(encoding::readUint32(pos));
-        expectedBitStart = bitEnd + 1;
+      segments.reserve(sections.size());
+      children.reserve(sections.size());
+      for (const auto& section : sections) {
+        segments.push_back(
+            {.bitStart = section.bitStart, .bitEnd = section.bitEnd});
+        const char* sectionPos = section.stream.data();
+        captureChild(
+            children,
+            sectionPos,
+            static_cast<uint32_t>(section.stream.size()),
+            options);
       }
-      NIMBLE_CHECK_EQ(expectedBitStart, physicalBits);
-
-      children.reserve(numSections);
-      for (const auto encodedSize : encodedSizes) {
-        captureChild(children, pos, encodedSize, options);
+      auto config = subintsplit::makePreserveSplitConfig(segments);
+      // A replay of these boundaries takes a frame exactly when this stream
+      // carried one, since the boundaries were planned on its residuals.
+      if (rowFrame.active()) {
+        config.emplace(
+            std::string(subintsplit::kRowFrameConfigKey),
+            std::string(subintsplit::kRowFramePresent));
       }
-      encodingConfig = EncodingLayout::Config{
-          subintsplit::makePreserveSplitConfig(segments)};
+      encodingConfig = EncodingLayout::Config{std::move(config)};
       break;
     }
     case EncodingType::ALPRD: {
