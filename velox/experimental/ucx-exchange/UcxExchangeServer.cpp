@@ -126,7 +126,7 @@ void UcxExchangeServer::process() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      queueMgr_->getData(
+      outputQueue_ = queueMgr_->getData(
           partitionKey_.taskId,
           partitionKey_.destination,
           [weakQueue](
@@ -305,7 +305,8 @@ void UcxExchangeServer::sendData() {
               key, nullptr, /*numRows=*/0, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      queueMgr_->deleteResultsForQueue(outputQueue_, partitionKey_.destination);
+      outputQueue_.reset();
 
       // Wait for source to acknowledge atEnd before finishing
       setState(ServerState::WaitingForIntraNodeRetrieve);
@@ -442,7 +443,8 @@ void UcxExchangeServer::sendData() {
       VLOG(3) << "@" << partitionKey_.taskId
               << " Finished transferring partition for task "
               << partitionKey_.toString();
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      queueMgr_->deleteResultsForQueue(outputQueue_, partitionKey_.destination);
+      outputQueue_.reset();
       setState(ServerState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
     }
