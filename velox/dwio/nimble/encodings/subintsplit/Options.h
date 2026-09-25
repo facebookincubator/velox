@@ -70,6 +70,19 @@ struct Options {
   /// applies to streams with no transform, row frame or delta. On by
   /// default, as the slow path has always decoded in blocks.
   bool visitorBlockBuffer{true};
+
+  /// Whether SubIntSplit may subtract a fitted slope * row + base (a line
+  /// frame) or a per-row step (a step frame) from every value before
+  /// planning its sections (see RowFrame.h). Either frame is kept only where
+  /// it encodes smaller than the plain values; a read pays one multiply-add
+  /// per row. On by default.
+  bool rowFrame{true};
+
+  /// Test and ablation only: keeps a fitted row frame without comparing the
+  /// residuals against the values, so its cost where the encoder would have
+  /// declined it can be measured. Inert unless rowFrame is set, and where no
+  /// frame fits. Never set in a writer.
+  bool rowFrameForceApply{false};
 };
 
 } // namespace facebook::nimble::subintsplit

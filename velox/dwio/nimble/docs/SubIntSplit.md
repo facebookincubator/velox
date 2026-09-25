@@ -204,6 +204,10 @@ payload is:
 ```text
 uint8  number of sections
 uint8  flags
+only when flag bit one is set (row frame):
+  uint8  guard, 0xFE
+  uint64 slope
+  uint64 base
 repeat number of sections times:
   uint8  first bit, inclusive
   uint8  last bit, inclusive
@@ -217,8 +221,12 @@ Section headers and payloads are stored in least-significant-bit order. Each
 child payload is a complete Nimble encoding and therefore carries its own type,
 row count, and encoding-specific bytes.
 
-Flag bit zero records the optional zigzag-delta pre-transform. Streams written
-before the flag was introduced have a zero flags byte and decode as raw values.
+Flag bit zero records the optional zigzag-delta pre-transform. Flag bit one
+records a row frame and announces the 17-byte frame block after the flags byte.
+A reader rejects any flag it does not know, and rejects a delta stream that
+also carries a frame. Streams written before the flags were introduced have a
+zero flags byte and decode as raw values; a stream with no frame is
+byte-identical to one written before frames existed.
 
 Captured layouts serialize three pieces of planner state:
 
@@ -227,6 +235,9 @@ Captured layouts serialize three pieces of planner state:
   `start-end;start-end;...`.
 - `subintsplit.section_candidate_exclusions` retains sampled RLE and
   MainlyConstant pruning decisions.
+- `subintsplit.row_frame=1` records that the stream carried a row frame, so a
+  replay plans the same boundaries over the same residuals. Absent means no
+  frame.
 
 `subintsplit.section_encodings` can additionally pin a child encoding per
 section. Empty entries retain normal nested selection. Boundary parsing rejects
@@ -284,6 +295,45 @@ is therefore read sequentially from row zero: `skip()` decodes every skipped
 row, `readWithVisitor()` reads through `materialize()`, and point or range reads
 cost a full scan. Keep this option disabled for production until the format has
 restart points.
+
+### Row frame
+
+Some packed IDs carry a per-row counter: XMark pre/post identifiers grow by
+2^28 + 1 per row in their low 56 bits, and the high half of a UUIDv7 steps by
+one within each millisecond. No bit boundary isolates such a counter, because
+its carries cross whichever boundary the planner picks. With
+`subIntSplit.rowFrame`, on by default, the writer subtracts a predictor
+`slope * row + base` from every value, in the physical type's modular
+arithmetic, and plans the sections over the residuals. `RowFrame.h` fits two
+kinds of frame:
+
+- A line frame. `fitRowFrame` reads the growth of the low bits over strides of
+  1,024 rows and takes the widest low-bit width at which at least 90% of the
+  strides agree with the median slope to within half a stride. The slope must
+  also hold over strides of 1,000 rows, which rules out a field whose period
+  divides the first stride. A column needs at least 16 strides. The base is
+  the most negative residual of those low bits, so the fields below the width
+  stay non-negative and do not borrow from the fields above them.
+- A step frame, tried only when no line fits. `fitStepFrame` takes the most
+  common non-zero step between adjacent rows, found with three Misra-Gries
+  counters and then counted exactly, when at least a quarter of the row pairs
+  take it. Its base is zero.
+
+A fitted frame is kept only where it encodes smaller. A line frame is priced
+by the split DP over the residuals and over the values, the frame block
+included, and the winner's cost grid is the one the encoder plans on. A step
+frame turns counters into runs of whole values that the planner's run models
+misprice, so the writer encodes both forms and keeps the smaller. A
+preserve-mode replay takes a frame exactly when the captured layout recorded
+one. The delta form never carries a frame. `subIntSplit.rowFrameForceApply`
+keeps any fitted frame without the comparison and exists for ablation only.
+
+Reads add the frame back after the sections are reassembled, one add per row,
+from the row's position in the stream. `skip()` only moves the cursor, so a
+framed stream keeps random access. The visitor fast path already decodes
+through `materialize()`, and the slow path defers to `materialize()` for a
+framed stream. `createEncodingView` serves any stream with a flag set through
+a full-decode view, since the positional view does not add the frame back.
 
 ## Selection and configuration
 
@@ -353,6 +403,8 @@ planner and decoder costs. Their sentinel defaults preserve standard behavior.
 | `subIntSplit.foldConstantSections` | `true` | Fold Constant sections into one word at open |
 | `subIntSplit.passThrough` | `true` | Decode a sole verbatim section into the caller's buffer |
 | `subIntSplit.visitorBlockBuffer` | `true` | Decode the visitor slow path a block at a time |
+| `subIntSplit.rowFrame` | `true` | Fit a row frame and keep it where it encodes smaller |
+| `subIntSplit.rowFrameForceApply` | `false` | Ablation only: keep any fitted row frame unpriced |
 
 The `subIntSplit.*` fields live in `subintsplit::Options`, held by
 `Encoding::Options::subIntSplit`.
@@ -437,6 +489,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `DeltaTransform.h` | Optional write transform and sequential read recovery | Physical values ↔ first value plus zigzag residuals | Arithmetic is bit-preserving for signed extrema; transformed streams require decoding from row zero |
 | `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets; `parseSections()` validates them | Header sizes and field order remain compatible with stored data; malformed headers fail with `NIMBLE_CHECK_FILE` |
 | `Options.h` | Writer and reader configuration | `subintsplit::Options`, held by `Encoding::Options::subIntSplit` | Defaults preserve standard behavior |
+| `RowFrame.h` | Optional write transform and per-row read recovery | Physical values ↔ residuals from a fitted `slope * row + base` | Arithmetic is modular in the physical width; a read adds the frame back from the row index alone |
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
 | `SectionAccumulator.h` | Full and selective decode hot path | Decoded unsigned section values, range masks, shifts, and an output span | Scalar and AVX2 paths produce identical physical bits and never leak bits outside a section width |
 | `SectionMetrics.h` | Planner statistics | Candidate-range samples and reusable frequency storage; produces the range, run, cardinality, and dominant-value measurements the cost models read | Metrics describe extracted section values; exact distinct counts stop at the configured cap and scratch state is reset between ranges |

@@ -24,17 +24,22 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/RowFrame.h"
 
 /// On-disk layout of a SubIntSplit encoding, after the standard Encoding
 /// prefix:
 ///
 ///   [1 byte]  numSections (1..64)
-///   [1 byte]  flags
+///   [1 byte]  flags: kFlagDelta, kFlagRowFrame
+///   [17 bytes, only with kFlagRowFrame]  {guard(1B), slope(8B), base(8B)}
 ///   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
 ///   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
 ///
 /// Sections are stored in LSB-first order (section 0 covers the lowest bits).
 /// Section identifiers equal the section index (0, 1, …, numSections-1).
+///
+/// A stream with flags zero is laid out exactly as streams written before any
+/// flag existed.
 ///
 /// Persistence context:
 ///
@@ -50,10 +55,12 @@ namespace facebook::nimble::subintsplit {
 ///
 /// The sections hold zigzag deltas of the values rather than the values.
 inline constexpr uint8_t kFlagDelta = 1u << 0;
+/// A row frame block follows the flag byte; see RowFrame.
+inline constexpr uint8_t kFlagRowFrame = 1u << 1;
 /// Every flag this reader understands. A stream carrying any other bit was
 /// written by a newer writer, and reading it as if the bit were absent would
 /// return wrong values with no error.
-inline constexpr uint8_t kKnownFlags = kFlagDelta;
+inline constexpr uint8_t kKnownFlags = kFlagDelta | kFlagRowFrame;
 
 /// Bytes preceding the section header entries.
 inline constexpr uint32_t kStreamHeaderSize = 2;
@@ -61,11 +68,17 @@ inline constexpr uint32_t kStreamHeaderSize = 2;
 /// Bytes per section header entry: bitStart + bitEnd + encodedSize.
 inline constexpr uint32_t kSectionHeaderSize = 6;
 
-/// Bytes the SubIntSplit-specific header occupies, excluding the section
-/// payloads and the standard Encoding prefix.
+/// Bytes the SubIntSplit-specific header occupies, excluding the optional row
+/// frame block, the section payloads and the standard Encoding prefix.
 constexpr uint32_t specificHeaderSize(uint8_t numSections) noexcept {
   return kStreamHeaderSize +
       static_cast<uint32_t>(numSections) * kSectionHeaderSize;
+}
+
+/// Bytes the row frame block occupies, zero for a stream without a frame so
+/// that such a stream is byte-identical to one written before frames existed.
+inline uint32_t rowFrameHeaderSize(const RowFrame& frame) noexcept {
+  return frame.active() ? kRowFrameHeaderSize : 0;
 }
 
 /// The two bytes preceding the section headers.
@@ -145,18 +158,21 @@ struct StoredSection {
   std::string_view stream;
 };
 
-/// Walks the SubIntSplit header: numSections, the flag byte, one
-/// {bitStart, bitEnd, encodedSize} triple per section, then the section
-/// payloads back to back in LSB-first order.
+/// Walks the SubIntSplit header: numSections, the flag byte, the row frame
+/// block when the flag byte announces one, one {bitStart, bitEnd, encodedSize}
+/// triple per section, then the section payloads back to back in LSB-first
+/// order.
 ///
 /// Shared by the encoding and the view so a wire format change cannot reach
 /// only one of them. `data` is the whole stream, `dataOffset` its prefix size.
 /// Rejects a flag it does not know, since skipping it would read the stream
-/// wrongly with no error. `flags`, when not null, receives the flag byte.
+/// wrongly with no error. `flags`, when not null, receives the flag byte, and
+/// `rowFrame`, when not null, the row frame (inactive when the stream has none).
 inline std::vector<StoredSection> parseSections(
     std::string_view data,
     uint32_t dataOffset,
-    uint8_t* flags = nullptr) {
+    uint8_t* flags = nullptr,
+    RowFrame* rowFrame = nullptr) {
   const char* pos = data.data() + dataOffset;
   // Every field below comes off the wire as arbitrary bytes; without these
   // checks a bad length walks pos past the buffer, a bad entry count resizes
@@ -185,8 +201,27 @@ inline std::vector<StoredSection> parseSections(
   NIMBLE_CHECK_FILE(
       (header.flags & ~kKnownFlags) == 0,
       "SubIntSplit stream has unsupported flags.");
+  // Delta residuals are undone by the running sum over every earlier row, so
+  // a frame, which is undone per row, cannot be layered under them.
+  NIMBLE_CHECK_FILE(
+      (header.flags & kFlagDelta) == 0 || (header.flags & kFlagRowFrame) == 0,
+      "SubIntSplit delta streams carry no row frame.");
   if (flags != nullptr) {
     *flags = header.flags;
+  }
+
+  RowFrame parsedFrame;
+  if ((header.flags & kFlagRowFrame) != 0) {
+    requireBytes(
+        kRowFrameHeaderSize, "SubIntSplit row frame block is truncated.");
+    NIMBLE_CHECK_FILE(
+        encoding::read<uint8_t>(pos) == kRowFrameGuard,
+        "SubIntSplit row frame block is corrupt.");
+    parsedFrame.slope = encoding::read<uint64_t>(pos);
+    parsedFrame.base = encoding::read<uint64_t>(pos);
+  }
+  if (rowFrame != nullptr) {
+    *rowFrame = parsedFrame;
   }
 
   std::vector<StoredSection> sections(numSections);
@@ -233,12 +268,18 @@ inline std::vector<StoredSection> parseSections(
   return sections;
 }
 
+/// The flag byte of the stream whose SubIntSplit header starts at
+/// `dataOffset`.
+inline uint8_t streamFlags(std::string_view data, uint32_t dataOffset) {
+  NIMBLE_CHECK_LE(
+      dataOffset + 2, data.size(), "SubIntSplit stream is truncated.");
+  return static_cast<uint8_t>(data[dataOffset + 1]);
+}
+
 /// Whether the stream whose SubIntSplit header starts at `dataOffset` stores
 /// zigzag deltas. Such a stream can only be decoded from row zero.
 inline bool isDeltaStream(std::string_view data, uint32_t dataOffset) {
-  NIMBLE_CHECK_LE(
-      dataOffset + 2, data.size(), "SubIntSplit stream is truncated.");
-  return (static_cast<uint8_t>(data[dataOffset + 1]) & kFlagDelta) != 0;
+  return (streamFlags(data, dataOffset) & kFlagDelta) != 0;
 }
 
 } // namespace facebook::nimble::subintsplit
