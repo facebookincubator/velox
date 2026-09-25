@@ -447,6 +447,58 @@ TEST_P(MultiTopNRowNumberTest, abandonPartialEarly) {
   }
 }
 
+TEST_P(MultiTopNRowNumberTest, abandonPartialEarlySinglePartition) {
+  auto data = makeRowVector(
+      {"s"},
+      {
+          makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId topNRowNumberId;
+  auto runPlan = [&](int32_t minRows) {
+    auto plan = PlanBuilder()
+                    .values(split(data, 10))
+                    .topNRank(functionName_, {}, {"s"}, 99, false)
+                    .capturePlanNodeId(topNRowNumberId)
+                    .topNRank(functionName_, {}, {"s"}, 99, true)
+                    .planNode();
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kAbandonPartialTopNRowNumberMinRows,
+                fmt::format("{}", minRows))
+            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
+            .assertResults(
+                fmt::format(
+                    "SELECT * FROM (SELECT *, {}() over (order by s) as rn FROM tmp) "
+                    "WHERE rn <= 99",
+                    functionName_));
+
+    return exec::toPlanStats(task->taskStats());
+  };
+
+  // The limit is close to the input batch size, so the partial retains 99 of
+  // the first 100 rows and is abandoned.
+  {
+    auto taskStats = runPlan(100);
+    const auto& stats = taskStats.at(topNRowNumberId);
+    ASSERT_EQ(stats.customStats.at("abandonedPartial").sum, 1);
+    // The 99 accumulated rows are flushed, then the remaining 900 input rows
+    // pass through.
+    ASSERT_EQ(stats.outputRows, 999);
+  }
+
+  // Partial operator continues for all of input.
+  {
+    auto taskStats = runPlan(100'000);
+    const auto& stats = taskStats.at(topNRowNumberId);
+    ASSERT_EQ(stats.outputRows, 99);
+    ASSERT_EQ(stats.customStats.count("abandonedPartial"), 0);
+  }
+}
+
 TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
   auto data = makeRowVector(
       ROW({"a", "b", "c", "d", "e"},
