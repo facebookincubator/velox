@@ -16,7 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <unordered_map>
+
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 
@@ -91,6 +94,107 @@ TEST_F(AggregationFunctionRegTest, orderSensitive) {
   for (const auto& entry : orderSensitiveFunctions) {
     ASSERT_TRUE(exec::getAggregateFunctionMetadata(entry).orderSensitive);
   }
+}
+
+TEST_F(AggregationFunctionRegTest, ignoreNullInputs) {
+  clearAndCheckRegistry();
+  aggregate::prestosql::registerAllAggregateFunctions(
+      "", /*withCompanionFunctions=*/false);
+
+  const std::unordered_map<std::string, bool> expected = {
+      {kApproxDistinct, false},
+      {kApproxMostFrequent, false},
+      {kApproxPercentile, false},
+      {kApproxSet, false},
+      {kApproxWinsorizedMean, false},
+      {kArbitrary, true},
+      {kAnyValue, true},
+      {kArrayAgg, false},
+      {kAvg, true},
+      {kBitwiseAnd, true},
+      {kBitwiseOr, true},
+      {kBitwiseXor, true},
+      {kBoolAnd, true},
+      {kBoolOr, true},
+      {kChecksum, false},
+      {kClassificationFallout, true},
+      {kClassificationMissRate, true},
+      {kClassificationPrecision, true},
+      {kClassificationRecall, true},
+      {kClassificationThreshold, true},
+      {kConvexHull, true},
+      {kCorr, true},
+      {kCount, true},
+      {kCountIf, true},
+      {kCovarPop, true},
+      {kCovarSamp, true},
+      {kEntropy, true},
+      {kEvery, true},
+      {kGeometricMean, true},
+      {kGeometryUnion, true},
+      {kHistogram, true},
+      {kKHyperLogLogAgg, true},
+      {kKurtosis, true},
+      {kMapAgg, false},
+      {kMapUnion, true},
+      {kMapUnionSum, true},
+      {kMakeSetDigest, true},
+      {kMax, true},
+      {kMaxBy, false},
+      {kMaxSizeForStats, true},
+      {kMerge, true},
+      {kMergeSetDigest, true},
+      {kMin, true},
+      {kMinBy, false},
+      {kMultiMapAgg, false},
+      {kNoisyApproxDistinctSfm, false},
+      {kNoisyApproxSetSfm, false},
+      {kNoisyApproxSetSfmFromIndexAndZeros, false},
+      {kNoisyAvgGaussian, false},
+      {kNoisyCountGaussian, false},
+      {kNoisyCountIfGaussian, false},
+      {kNoisySumGaussian, false},
+      {kNumericHistogram, true},
+      {kQDigestAgg, true},
+      {kReduceAgg, false},
+      {kRegrAvgx, true},
+      {kRegrAvgy, true},
+      {kRegrCount, true},
+      {kRegrIntercept, true},
+      {kRegrR2, true},
+      {kRegrSlop, true},
+      {kRegrSxx, true},
+      {kRegrSxy, true},
+      {kRegrSyy, true},
+      {kReservoirSample, false},
+      {kSetAgg, false},
+      {kSetUnion, false},
+      {kSkewness, true},
+      {kStdDev, true},
+      {kStdDevPop, true},
+      {kStdDevSamp, true},
+      {kSum, true},
+      {kSumDataSizeForStats, true},
+      {kTDigestAgg, false},
+      {kVariance, true},
+      {kVarPop, true},
+      {kVarSamp, true},
+      {kVectorSum, true},
+  };
+
+  exec::aggregateFunctions().withRLock([&](const auto& functions) {
+    size_t numChecked = 0;
+    for (const auto& [name, entry] : functions) {
+      if (entry.metadata.companionFunction) {
+        continue;
+      }
+      const auto expectedIt = expected.find(name);
+      ASSERT_NE(expectedIt, expected.end()) << name;
+      EXPECT_EQ(entry.metadata.ignoreNullInputs, expectedIt->second) << name;
+      ++numChecked;
+    }
+    EXPECT_EQ(numChecked, expected.size());
+  });
 }
 
 TEST_F(AggregationFunctionRegTest, prestoSupportedSignatures) {

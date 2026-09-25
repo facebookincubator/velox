@@ -143,6 +143,37 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
       "aggregateFunc1_extract", {ARRAY(BIGINT())}, BIGINT());
 }
 
+TEST_F(AggregateCompanionRegistryTest, metadata) {
+  std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
+      AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("array(bigint)")
+          .argumentType("bigint")
+          .build()};
+  registerAggregateFunction(
+      "aggregateFuncMetadata",
+      signatures,
+      [](core::AggregationNode::Step,
+         const std::vector<TypePtr>&,
+         const TypePtr& resultType,
+         const core::QueryConfig&) {
+        return std::make_unique<DummyDicitonaryFunction>(resultType);
+      },
+      {.ignoreNullInputs = true},
+      /*registerCompanionFunctions=*/true,
+      /*overwrite=*/false);
+
+  EXPECT_EQ(aggregateFunctionIgnoresNullInputs("aggregateFuncMetadata"), true);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("aggregateFuncMetadata_partial"),
+      true);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("aggregateFuncMetadata_merge"), true);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("aggregateFuncMetadata_merge_extract"),
+      true);
+}
+
 TEST_F(AggregateCompanionRegistryTest, extractFunctionNameWithSuffix) {
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
       AggregateFunctionSignatureBuilder()

@@ -159,7 +159,7 @@ void registerAverageAggregate(
           }
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

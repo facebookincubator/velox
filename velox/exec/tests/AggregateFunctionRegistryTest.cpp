@@ -228,6 +228,54 @@ TEST_F(AggregateFunctionRegistryTest, duplicateRegistration) {
   EXPECT_TRUE(registerAggregateFunc("aggregate_func", true));
 }
 
+TEST_F(AggregateFunctionRegistryTest, ignoreNullInputs) {
+  const auto factory = [](core::AggregationNode::Step,
+                          const std::vector<TypePtr>&,
+                          const TypePtr& resultType,
+                          const core::QueryConfig&) {
+    return std::make_unique<AggregateFunc>(resultType);
+  };
+  const auto signatures = AggregateFunc::signatures();
+
+  EXPECT_TRUE(registerAggregateFunction(
+                  "ignore_null_inputs",
+                  signatures,
+                  factory,
+                  {.ignoreNullInputs = true},
+                  /*registerCompanionFunctions=*/false,
+                  /*overwrite=*/false)
+                  .mainFunction);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("Ignore_Null_Inputs"),
+      std::optional<bool>{true});
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("missing_aggregate"), std::nullopt);
+
+  EXPECT_FALSE(registerAggregateFunction(
+                   "ignore_null_inputs",
+                   signatures,
+                   factory,
+                   {.ignoreNullInputs = false},
+                   /*registerCompanionFunctions=*/false,
+                   /*overwrite=*/false)
+                   .mainFunction);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("ignore_null_inputs"),
+      std::optional<bool>{true});
+
+  EXPECT_TRUE(registerAggregateFunction(
+                  "ignore_null_inputs",
+                  signatures,
+                  factory,
+                  {.ignoreNullInputs = false},
+                  /*registerCompanionFunctions=*/false,
+                  /*overwrite=*/true)
+                  .mainFunction);
+  EXPECT_EQ(
+      aggregateFunctionIgnoresNullInputs("ignore_null_inputs"),
+      std::optional<bool>{false});
+}
+
 TEST_F(AggregateFunctionRegistryTest, multipleNames) {
   auto signatures = AggregateFunc::signatures();
   auto factory = [&](core::AggregationNode::Step step,

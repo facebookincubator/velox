@@ -116,6 +116,7 @@ std::vector<exec::AggregateRegistrationResult> registerCentralMoments(
               TResultAccessor>>(resultType);
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

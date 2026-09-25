@@ -161,6 +161,7 @@ std::vector<exec::AggregateRegistrationResult> registerVariance(
           return std::make_unique<TClass<int64_t>>(resultType);
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

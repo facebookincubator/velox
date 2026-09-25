@@ -108,6 +108,7 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
             hllAsRawInput,
             defaultError);
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }
