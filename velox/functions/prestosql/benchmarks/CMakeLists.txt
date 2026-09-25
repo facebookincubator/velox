@@ -66,17 +66,8 @@ target_link_libraries(
   velox_functions_prestosql_benchmarks_string_ascii_utf_functions
   ${BENCHMARK_DEPENDENCIES}
   velox_common_fuzzer_util
+  velox_functions_benchmark_util
 )
-if(VELOX_ENABLE_SPARK_FUNCTIONS)
-  target_link_libraries(
-    velox_functions_prestosql_benchmarks_string_ascii_utf_functions
-    velox_functions_spark
-  )
-  target_compile_definitions(
-    velox_functions_prestosql_benchmarks_string_ascii_utf_functions
-    PRIVATE VELOX_ENABLE_SPARK_FUNCTIONS
-  )
-endif()
 
 add_executable(velox_functions_prestosql_benchmarks_not NotBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_not ${BENCHMARK_DEPENDENCIES})

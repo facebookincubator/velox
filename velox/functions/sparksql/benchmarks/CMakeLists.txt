@@ -73,6 +73,7 @@ add_executable(velox_sparksql_benchmarks_get_funcs FunctionBenchmark.cpp)
 target_link_libraries(
   velox_sparksql_benchmarks_get_funcs
   velox_functions_spark
+  velox_functions_benchmark_util
   velox_exec_test_lib
   velox_parse_utils
   Folly::folly
