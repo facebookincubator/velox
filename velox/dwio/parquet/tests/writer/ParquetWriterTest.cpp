@@ -82,6 +82,16 @@ class ParquetWriterTest : public ParquetTestBase {
     return data;
   }
 
+  // Creates an all-null flat vector without a values buffer.
+  template <typename T>
+  std::shared_ptr<FlatVector<T>> makeAllNullFlatVector(
+      const TypePtr& type,
+      vector_size_t size,
+      const BufferPtr& nulls) {
+    return std::make_shared<FlatVector<T>>(
+        leafPool_.get(), type, nulls, size, nullptr, std::vector<BufferPtr>{});
+  }
+
   // Builds a dictionary column of 'size' rows over 'values', mapping each row
   // to values[indexAt(row)], optionally applying a null buffer.
   VectorPtr makeDictionaryColumn(
@@ -1953,29 +1963,56 @@ TEST_F(ParquetWriterTest, selectiveFlatteningMixedEncodings) {
 }
 
 TEST_F(ParquetWriterTest, allNulls) {
-  auto schema = ROW({"c0"}, {INTEGER()});
-  const int64_t kRows = 4096;
-  // Create a column with all elements being null.
-  auto nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
-  auto flatVector = std::make_shared<FlatVector<int32_t>>(
-      pool_.get(),
-      schema->childAt(0),
-      nulls,
-      kRows,
-      /*values=*/nullptr,
-      std::vector<BufferPtr>());
-  auto data = std::make_shared<RowVector>(
-      pool_.get(), schema, nullptr, kRows, std::vector<VectorPtr>{flatVector});
+  auto rowType = ROW({
+      {"bool_col", BOOLEAN()},
+      {"tinyint_col", TINYINT()},
+      {"smallint_col", SMALLINT()},
+      {"int_col", INTEGER()},
+      {"bigint_col", BIGINT()},
+      {"float_col", REAL()},
+      {"double_col", DOUBLE()},
+      {"string_col", VARCHAR()},
+      {"binary_col", VARBINARY()},
+      {"date_col", DATE()},
+      {"timestamp_col", TIMESTAMP()},
+      {"decimal_col", DECIMAL(10, 2)},
+  });
 
-  auto* sinkPtr = write(data);
+  const int64_t kRows = 100;
+
+  // Create a nulls buffer with all bits set to null (0).
+  BufferPtr nulls = AlignedBuffer::allocate<bool>(kRows, leafPool_.get());
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::fillBits(rawNulls, 0, kRows, bits::kNull);
+
+  auto vector = std::make_shared<RowVector>(
+      leafPool_.get(),
+      rowType,
+      nullptr,
+      kRows,
+      std::vector<VectorPtr>{
+          makeAllNullFlatVector<bool>(BOOLEAN(), kRows, nulls),
+          makeAllNullFlatVector<int8_t>(TINYINT(), kRows, nulls),
+          makeAllNullFlatVector<int16_t>(SMALLINT(), kRows, nulls),
+          makeAllNullFlatVector<int32_t>(INTEGER(), kRows, nulls),
+          makeAllNullFlatVector<int64_t>(BIGINT(), kRows, nulls),
+          makeAllNullFlatVector<float>(REAL(), kRows, nulls),
+          makeAllNullFlatVector<double>(DOUBLE(), kRows, nulls),
+          makeAllNullFlatVector<StringView>(VARCHAR(), kRows, nulls),
+          makeAllNullFlatVector<StringView>(VARBINARY(), kRows, nulls),
+          makeAllNullFlatVector<int32_t>(DATE(), kRows, nulls),
+          makeAllNullFlatVector<Timestamp>(TIMESTAMP(), kRows, nulls),
+          makeAllNullFlatVector<int64_t>(DECIMAL(10, 2), kRows, nulls),
+      });
+
+  auto sinkPtr = write(vector);
 
   auto reader = createReaderInMemory(*sinkPtr);
-
   ASSERT_EQ(reader->numberOfRows(), kRows);
-  ASSERT_EQ(*reader->rowType(), *schema);
+  ASSERT_EQ(*reader->rowType(), *rowType);
 
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  auto rowReader = createRowReaderFromReader(*reader, rowType);
+  assertReadWithReaderAndExpected(rowType, *rowReader, vector, *leafPool_);
 }
 
 // Verifies that close() without any prior write() does not crash.
