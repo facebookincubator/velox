@@ -143,6 +143,8 @@ TEST(RuntimeStatsTest, toRuntimeMetricMap) {
   stats.processedSplits = 15;
   stats.skippedStrides = 10;
   stats.processedStrides = 30;
+  stats.chunkStatsSkippedRows = 20;
+  stats.chunkStatsProcessedRows = 40;
   stats.numStripes = 4;
   splitStats.getOrCreateColumnStats(1, TypeKind::BIGINT)
       .accumulateStat(kExampleFormatMetric, 1'000);
@@ -170,6 +172,8 @@ TEST(RuntimeStatsTest, toRuntimeMetricMap) {
   EXPECT_EQ(result["processedSplits"].sum, 15);
   EXPECT_EQ(result["skippedStrides"].sum, 10);
   EXPECT_EQ(result["processedStrides"].sum, 30);
+  EXPECT_EQ(result["chunkStatsSkippedRows"].sum, 20);
+  EXPECT_EQ(result["chunkStatsProcessedRows"].sum, 40);
   EXPECT_EQ(result["numStripes"].sum, 4);
   const auto prefix =
       fmt::format("{}.", FileFormatName::toName(kExampleFormat));

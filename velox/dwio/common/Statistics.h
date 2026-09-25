@@ -576,6 +576,12 @@ struct RuntimeStats {
   // Number of strides (row groups) processed based on statistics.
   int64_t processedStrides{0};
 
+  // Rows skipped by chunk-level statistics filtering.
+  int64_t chunkStatsSkippedRows{0};
+
+  // Rows considered by chunk-level statistics filtering.
+  int64_t chunkStatsProcessedRows{0};
+
   // Records extra bytes read past the ideal footer size.
   int64_t footerBufferOverread{0};
 
