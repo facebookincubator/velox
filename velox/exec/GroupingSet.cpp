@@ -682,7 +682,7 @@ bool GroupingSet::getGlobalAggregationOutput(
 
   auto* groups = lookup_->hits.data();
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    if (!aggregates_[i].sortingKeys.empty()) {
+    if (!aggregates_[i].sortingKeys.empty() || aggregates_[i].distinct) {
       continue;
     }
 
@@ -861,7 +861,7 @@ void GroupingSet::extractGroups(
         keyVector);
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    if (!aggregates_[i].sortingKeys.empty()) {
+    if (!aggregates_[i].sortingKeys.empty() || aggregates_[i].distinct) {
       continue;
     }
 
