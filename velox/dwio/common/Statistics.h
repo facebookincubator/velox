@@ -604,6 +604,9 @@ struct RuntimeStats {
   /// Merges one split's format-specific and per-column statistics.
   void mergeFrom(const SplitStats& split);
 
+  /// Returns the exported name of a format-specific runtime metric.
+  static std::string formatMetricName(FileFormat format, std::string_view name);
+
   // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;
 };
