@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Options.h"
 
 #include <memory>
 #include <string_view>
@@ -171,6 +172,10 @@ class Encoding {
     /// skip() and readWithVisitor() reject them. Do not enable for production
     /// until restatement points are added.
     bool subIntSplitDeltaPreTransform{false};
+
+    /// Settings selection consults on SubIntSplit's behalf; see
+    /// subintsplit::Options. Callers leave it unset.
+    subintsplit::Options subIntSplit{};
 
     /// Output elements SubIntSplit combines per pass when decoding.
     ///

@@ -144,6 +144,26 @@ TEST(StatisticsTest, runValues) {
   EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runValues().empty());
 }
 
+TEST(StatisticsTest, runLengths) {
+  const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3, 3};
+  const std::vector<uint32_t> expected = {2, 2, 1, 3};
+  for (const bool populateRunValuesFirst : {false, true}) {
+    SCOPED_TRACE(populateRunValuesFirst);
+    const auto statistics = nimble::Statistics<int32_t>::create(data);
+    if (populateRunValuesFirst) {
+      EXPECT_EQ(statistics.runValues().size(), expected.size());
+    }
+
+    const auto& runLengths = statistics.runLengths();
+    EXPECT_EQ(runLengths, expected);
+    EXPECT_EQ(&statistics.runLengths(), &runLengths);
+    EXPECT_EQ(runLengths.size(), statistics.consecutiveRepeatCount());
+  }
+
+  const std::vector<int32_t> empty;
+  EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runLengths().empty());
+}
+
 TEST(StatisticsTest, minMaxBlocks) {
   const std::vector<uint64_t> data = {9, 3, 7, 2, 10, 4, 5};
   const auto statistics = nimble::Statistics<uint64_t>::create(data);
@@ -416,6 +436,39 @@ TYPED_TEST(StatisticsIntegerTests, uniqueCountsDenseRange) {
   }
 }
 
+// Exact while the offsets from min fit in the bits it tells apart, a lower
+// bound past that, and the exact count once the unique counts exist.
+TYPED_TEST(StatisticsIntegerTests, distinctLowerBound) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+  using UnsignedType = std::make_unsigned_t<ValueType>;
+
+  std::vector<ValueType> narrow;
+  for (int i = 0; i < 1'000; ++i) {
+    narrow.push_back(
+        static_cast<ValueType>(
+            static_cast<UnsignedType>(
+                std::numeric_limits<ValueType>::lowest()) +
+            static_cast<UnsignedType>(i % 97)));
+  }
+  const auto narrowStatistics = T::create({narrow});
+  EXPECT_EQ(97, narrowStatistics.distinctLowerBound());
+
+  if constexpr (sizeof(ValueType) >= 4) {
+    // Distinct values that collide in their low bits: the bound sees 3 of 6.
+    const uint64_t high = uint64_t{1}
+        << nimble::Statistics<ValueType>::kDistinctBoundBits;
+    std::vector<ValueType> wide;
+    for (uint64_t i = 0; i < 6; ++i) {
+      wide.push_back(static_cast<ValueType>((i % 3) + (i / 3) * high));
+    }
+    const auto wideStatistics = T::create({wide});
+    EXPECT_EQ(3, wideStatistics.distinctLowerBound());
+    EXPECT_EQ(6, wideStatistics.uniqueCounts().value().size());
+    EXPECT_EQ(6, wideStatistics.distinctLowerBound());
+  }
+}
+
 template <typename T>
 void verifyString(
     std::function<T(std::vector<std::string> data)> genStatisticsType) {
@@ -574,6 +627,49 @@ TYPED_TEST(StatisticsNumericTests, repeat) {
     EXPECT_EQ(test.expectedMaxRepeat, statistics.maxRepeat());
     EXPECT_EQ(test.expectedMin, statistics.min());
     EXPECT_EQ(test.expectedMax, statistics.max());
+  }
+}
+
+// Accumulated in blocks, so the reference below walks the rows one at a
+// time, over lengths that leave partial blocks and over values that reach
+// both ends of the type.
+TYPED_TEST(StatisticsIntegerTests, adjacentPairStats) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+  using UnsignedType = std::make_unsigned_t<ValueType>;
+
+  std::mt19937_64 rng{kShuffleSeed};
+  for (const size_t size :
+       {size_t{1}, size_t{2}, size_t{5'000}, size_t{9'000}}) {
+    SCOPED_TRACE(size);
+    std::vector<ValueType> data(size);
+    for (size_t i = 0; i < size; ++i) {
+      // Mostly the extremes, so steps span the whole range.
+      const uint64_t draw = rng();
+      data[i] = draw % 3 == 0 ? std::numeric_limits<ValueType>::max()
+          : draw % 3 == 1     ? std::numeric_limits<ValueType>::lowest()
+                              : static_cast<ValueType>(draw >> 8);
+    }
+
+    uint64_t nonDecreasingCount{0};
+    uint64_t maxIncrease{0};
+    uint64_t sumAbsoluteDelta{0};
+    for (size_t i = 1; i < size; ++i) {
+      const uint64_t previous = static_cast<UnsignedType>(data[i - 1]);
+      const uint64_t value = static_cast<UnsignedType>(data[i]);
+      if (value >= previous) {
+        ++nonDecreasingCount;
+        maxIncrease = std::max(maxIncrease, value - previous);
+        sumAbsoluteDelta += value - previous;
+      } else {
+        sumAbsoluteDelta += previous - value;
+      }
+    }
+    const auto statistics = T::create({data});
+    const auto& pairs = statistics.adjacentPairStats();
+    EXPECT_EQ(nonDecreasingCount, pairs.nonDecreasingCount);
+    EXPECT_EQ(maxIncrease, pairs.maxIncrease);
+    EXPECT_EQ(sumAbsoluteDelta, pairs.sumAbsoluteDelta);
   }
 }
 
