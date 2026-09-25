@@ -2517,6 +2517,12 @@ bool Task::checkIfFinishedLocked() {
   }
 
   if (allFinished) {
+    // Execution is complete even if downstream consumers have not yet drained
+    // the output buffers. Preserve this boundary on subsequent checks so that
+    // endTimeMs - executionEndTimeMs measures the output-consumption tail.
+    if (taskStats_.executionEndTimeMs == 0) {
+      taskStats_.executionEndTimeMs = getCurrentTimeMs();
+    }
     if (!hasPartitionedOutput() || partitionedOutputConsumed_) {
       taskStats_.endTimeMs = getCurrentTimeMs();
       return true;

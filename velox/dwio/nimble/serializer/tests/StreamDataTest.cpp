@@ -66,8 +66,13 @@ TEST_F(StreamDataTest, zeroCountDecodeIsNoOp) {
   // encoding. A zero-count decode of such a stream must be a no-op rather than
   // throwing on the missing encoding.
   std::vector<BufferPtr> stringBuffers;
+  BufferPtr decompressionBuffer;
   serde::StreamData sd(
-      /*data=*/{}, stringBuffers, pool_.get(), serde::StreamData::Options{});
+      /*data=*/{},
+      ScalarKind::Undefined,
+      stringBuffers,
+      pool_.get(),
+      serde::StreamData::Options{.decompressionBuffer = &decompressionBuffer});
   ASSERT_FALSE(sd.hasEncoding());
 
   const auto result =
@@ -78,8 +83,13 @@ TEST_F(StreamDataTest, zeroCountDecodeIsNoOp) {
 
 TEST_F(StreamDataTest, decodeWithoutEncodingThrows) {
   std::vector<BufferPtr> stringBuffers;
+  BufferPtr decompressionBuffer;
   serde::StreamData sd(
-      /*data=*/{}, stringBuffers, pool_.get(), serde::StreamData::Options{});
+      /*data=*/{},
+      ScalarKind::Undefined,
+      stringBuffers,
+      pool_.get(),
+      serde::StreamData::Options{.decompressionBuffer = &decompressionBuffer});
 
   std::vector<int32_t> output(4);
   NIMBLE_ASSERT_THROW(

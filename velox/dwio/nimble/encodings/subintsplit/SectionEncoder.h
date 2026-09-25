@@ -26,6 +26,14 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
+/// Write context:
+///
+///   full values + SectionPlan -> [extract narrow values] -> nested child bytes
+///
+/// Each child receives one right-aligned value per input row. Its storage type
+/// is the narrowest unsigned type that fits the section, while exact bit width
+/// and planner exclusions flow into nested selection.
+
 namespace facebook::nimble::subintsplit {
 
 /// Copies bits [range] out of each value into `out`, right-aligned.

@@ -113,28 +113,42 @@ class MapConcatFunction : public exec::VectorFunction {
 };
 } // namespace
 
-void registerMapConcatFunction(const std::string& name) {
+void registerMapConcatFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
-          /*emptyForNull=*/false, /*allowSingleArg=*/false));
+          /*emptyForNull=*/false, /*allowSingleArg=*/false),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 
-void registerMapConcatAllowSingleArg(const std::string& name) {
+void registerMapConcatAllowSingleArg(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
-          /*emptyForNull=*/false, /*allowSingleArg=*/true));
+          /*emptyForNull=*/false, /*allowSingleArg=*/true),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 
-void registerMapConcatEmptyNullsFunction(const std::string& name) {
+void registerMapConcatEmptyNullsFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
           /*emptyForNull=*/true, /*allowSingleArg=*/false),
-      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+      /*overwrite=*/true,
+      defaultOwner);
 }
 } // namespace facebook::velox::functions

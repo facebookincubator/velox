@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
 
 #include <algorithm>
+#include <iterator>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaGenerated.h"
@@ -95,7 +96,6 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       numGroupIds,
       groupKeyCounts->size(),
       "Hybrid FlatMap group IDs and key counts must have the same size");
-
   HybridFlatMap hybridMap;
   hybridMap.groups.reserve(numGroupIds);
   flatbuffers::uoffset_t groupKeyIndex{0};
@@ -109,8 +109,11 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
         numGroupKeys,
         numKeys - groupKeyIndex,
         "Hybrid FlatMap group key counts must match group keys size");
-    auto& group =
-        hybridMap.groups.emplace_back(Group{.groupId = groupIds->Get(i)});
+    auto& group = hybridMap.groups.emplace_back(
+        Group{
+            .groupId = groupIds->Get(i),
+            .groupKeys = {},
+        });
     group.groupKeys.reserve(numGroupKeys);
     for (uint32_t j = 0; j < numGroupKeys; ++j) {
       const auto* key = groupKeys->Get(groupKeyIndex++);
@@ -122,25 +125,28 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       groupKeyIndex,
       numKeys,
       "Hybrid FlatMap group key counts must match group keys size");
-  validate(
-      hybridMap.groups.size(),
-      [&hybridMap](size_t index) { return hybridMap.groups[index].groupId; },
-      [&hybridMap](size_t index) -> const auto& {
-        return hybridMap.groups[index].groupKeys;
-      });
   return hybridMap;
 }
 
 void HybridFlatMap::setAttribute(
     std::vector<std::pair<std::string, std::string>>& attributes) const {
+  const auto isHybridFlatMapAttribute = [](const auto& attribute) {
+    return attribute.first == kAttributeName;
+  };
+  const auto existing = std::find_if(
+      attributes.begin(), attributes.end(), isHybridFlatMapAttribute);
   auto serialized = serialize();
-  const bool alreadySet = std::any_of(
-      attributes.begin(), attributes.end(), [](const auto& attribute) {
-        return attribute.first == kAttributeName;
-      });
-  NIMBLE_CHECK(
-      !alreadySet, "Hybrid FlatMap metadata attribute already exists.");
-  attributes.emplace_back(kAttributeName, std::move(serialized));
+  if (existing == attributes.end()) {
+    attributes.emplace_back(kAttributeName, std::move(serialized));
+  } else {
+    existing->second = std::move(serialized);
+  }
+
+  NIMBLE_CHECK_EQ(
+      std::count_if(
+          attributes.begin(), attributes.end(), isHybridFlatMapAttribute),
+      1,
+      "Hybrid FlatMap metadata attribute must be unique.");
 }
 
 HybridFlatMap HybridFlatMap::getAttribute(

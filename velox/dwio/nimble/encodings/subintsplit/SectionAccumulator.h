@@ -22,9 +22,17 @@
 #include <immintrin.h>
 #endif
 
-// Combines one decoded section's values back into the output stream: mask off
-// the section's bits, shift them to their place in the value, and either write
-// or OR them into the output.
+/// Combines one decoded section's values back into the output stream: mask off
+/// the section's bits, shift them to their place in the value, and either write
+/// or OR them into the output.
+///
+/// Decode context:
+///
+///   child values -> mask -> shift -> [scalar or AVX2 accumulate] -> output
+///
+/// Scalar and vector paths must produce identical physical bits. The first
+/// dynamic section initializes each output lane; later sections only OR into
+/// it.
 
 namespace facebook::nimble::subintsplit {
 namespace detail {

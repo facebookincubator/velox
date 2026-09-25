@@ -154,6 +154,9 @@ class JoinMaker {
         core::ExecutionStrategy::kUngrouped};
     bool mixedGroupedExecution;
     int32_t numGroups;
+    /// Extra query configs to run this plan under. Lets the same plan be
+    /// checked under a config that is meant to leave results unchanged.
+    std::unordered_map<std::string, std::string> queryConfigs;
 
     explicit PlanWithSplits(
         const core::PlanNodePtr& _plan,
@@ -209,6 +212,15 @@ class JoinMaker {
   /// Returns whether or not the join type supports reversing the order of the
   /// inputs in a nested loop join.
   bool supportsFlippingNestedLoopJoin() const;
+
+  /// Whether 'merge_join_stream_left_side' changes anything for this join, so
+  /// that the fuzzer only bothers running a second plan when it does. Mirrors
+  /// MergeJoin::canStreamLeftSide(): inner and left joins only, and only
+  /// without a filter.
+  bool supportsStreamingLeftSide() const {
+    return supportsMergeJoin() && filter_.empty() &&
+        (core::isInnerJoin(joinType_) || core::isLeftJoin(joinType_));
+  }
 
   bool supportsMergeJoin() const {
     return core::MergeJoinNode::isSupported(joinType_);

@@ -16,6 +16,7 @@
 
 #include "velox/dwio/nimble/serializer/StreamReader.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -44,6 +45,22 @@ class StringViewStreamLoader final : public StreamLoader {
  private:
   const std::string_view stream_;
 };
+
+void validateFieldReaderOffsets(
+    std::span<const uint32_t> projectionOffsets,
+    std::vector<uint32_t> readerOffsets) {
+  NIMBLE_CHECK_EQ(
+      projectionOffsets.size(),
+      readerOffsets.size(),
+      "Projection and FieldReader stream counts must match");
+  auto sortedProjectionOffsets =
+      std::vector<uint32_t>{projectionOffsets.begin(), projectionOffsets.end()};
+  std::sort(sortedProjectionOffsets.begin(), sortedProjectionOffsets.end());
+  std::sort(readerOffsets.begin(), readerOffsets.end());
+  NIMBLE_CHECK(
+      sortedProjectionOffsets == readerOffsets,
+      "Projection and FieldReader stream offsets must match");
+}
 
 // Validates one request and builds its dense source-to-output mapping.
 std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
@@ -128,13 +145,16 @@ void StreamReader::init() {
           velox::dwio::common::TypeWithId::create(outputType_)};
   auto readerParams = FieldReaderParams{};
   readerParams.optimizeStringBufferHandling = true;
+  std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
       readerParams,
       type_,
       typeWithId,
-      readerOffsets_,
+      readerOffsets,
       [](uint32_t /*nodeId*/) { return true; },
       pool_);
+  inputOffsets_ = projectionStreamOffsets(*type_);
+  validateFieldReaderOffsets(inputOffsets_, std::move(readerOffsets));
 }
 
 StreamReader::~StreamReader() = default;
@@ -154,7 +174,7 @@ folly::coro::Task<void> StreamReader::co_read(
     velox::VectorPtr& output) {
   const auto outputRanges = makeOutputRanges(
       streams.size(),
-      readerOffsets_.size(),
+      inputOffsets_.size(),
       outputType_,
       ranges,
       outputOffset,
@@ -190,7 +210,7 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
   chunkedStreams_.reserve(streams.size());
   for (size_t i{0}; i < streams.size(); ++i) {
     if (!streams[i].empty()) {
-      streamDecoders_.emplace(readerOffsets_[i], makeDecoder(streams[i]));
+      streamDecoders_.emplace(inputOffsets_[i], makeDecoder(streams[i]));
     }
   }
   reader_ = readerFactory_->createReader(streamDecoders_);

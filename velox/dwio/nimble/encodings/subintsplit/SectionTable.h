@@ -25,9 +25,21 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
+
+/// Read context:
+///
+///   section headers + payloads -> [child decoders and cursors]
+///                                      |
+///                                      v
+///                         decodeChunk -> accumulated values
+///
+/// All dynamic children represent the same logical row. Reset, skip, and decode
+/// must advance them together; constant children contribute bits without a
+/// cursor.
 
 namespace facebook::nimble::subintsplit {
 
@@ -40,15 +52,27 @@ namespace facebook::nimble::subintsplit {
 template <typename PhysicalType>
 class SectionTable {
  public:
-  /// Output elements combined per call to decodeChunk(). Chosen so the output
-  /// slice and the scratch buffer together stay in cache across the whole
-  /// section loop:
-  ///   uint64 output + uint64 scratch: 4096 * 8 * 2 = 64 KB (fits 256 KB L2)
-  ///   uint64 output + uint8  scratch: 4096 * 8 + 4096 = 36 KB (fits L1)
-  static constexpr uint32_t kDecodeChunkSize = 4096;
+  /// Output elements combined per call to decodeChunk() when the caller does
+  /// not choose one.
+  ///
+  /// decodeChunk() makes one read-modify-write pass over the chunk per section,
+  /// which suggests a chunk small enough to stay in L1 across every pass. A
+  /// sweep of 4096/2048/1024/512 over 20 data patterns says otherwise: mean
+  /// decode was 4416/4430/4447/4411 MB/s, flat within noise even on the 7-
+  /// section streams. The output is cache-resident either way, and the cost of
+  /// an extra section is its child materialize(), not the combine pass. The
+  /// value is left configurable for unusual cache geometries, but there is no
+  /// tuning win here on current hardware.
+  static constexpr uint32_t kDefaultDecodeChunkSize = 4096;
 
-  explicit SectionTable(velox::memory::MemoryPool& pool)
-      : pool_{pool}, scratch_{&pool} {}
+  SectionTable(velox::memory::MemoryPool& pool, uint32_t decodeChunkSize)
+      : decodeChunkSize_{decodeChunkSize > 0 ? decodeChunkSize : kDefaultDecodeChunkSize},
+        pool_{pool},
+        scratch_{&pool} {}
+
+  uint32_t decodeChunkSize() const noexcept {
+    return decodeChunkSize_;
+  }
 
   /// Parses `numSections` section headers at `pos` and builds a nested encoding
   /// for each.
@@ -57,7 +81,7 @@ class SectionTable {
   /// the section headers start once its base class has parsed the common
   /// Encoding prefix, by which point the table already needs its memory pool.
   void load(
-      const char* pos,
+      std::string_view data,
       uint8_t numSections,
       const std::function<void*(uint32_t)>& stringBufferFactory,
       const Encoding::Options& options);
@@ -67,7 +91,7 @@ class SectionTable {
   void skip(uint32_t numRows);
 
   /// Combines every section for `numValues` values, starting at the current
-  /// cursors, into `output`. `numValues` must not exceed kDecodeChunkSize.
+  /// cursors, into `output`. `numValues` must not exceed decodeChunkSize().
   void decodeChunk(uint32_t numValues, PhysicalType* output);
 
   /// True when a single section reproduces each value verbatim -- it spans the
@@ -126,6 +150,8 @@ class SectionTable {
 
   bool passThrough_{false};
 
+  const uint32_t decodeChunkSize_;
+
   velox::memory::MemoryPool& pool_;
 
   // Holds one chunk of one section's values between materialize() and the
@@ -135,15 +161,38 @@ class SectionTable {
 
 template <typename PhysicalType>
 void SectionTable<PhysicalType>::load(
-    const char* pos,
+    std::string_view data,
     uint8_t numSections,
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options) {
+  const uint32_t sectionHeaderBytes =
+      static_cast<uint32_t>(numSections) * kSectionHeaderSize;
+  NIMBLE_CHECK_FILE(
+      data.size() >= sectionHeaderBytes,
+      "SubIntSplit section headers are truncated.");
+
+  const char* pos = data.data();
   std::vector<SectionHeader> headers;
   headers.reserve(numSections);
+  uint32_t expectedBitStart{0};
+  uint64_t totalEncodedSize{0};
   for (uint8_t i = 0; i < numSections; ++i) {
     headers.push_back(readSectionHeader(pos));
+    const auto& header = headers.back();
+    NIMBLE_CHECK_FILE(
+        header.range.bitStart == expectedBitStart &&
+            header.range.bitEnd >= header.range.bitStart &&
+            header.range.bitEnd < sizeof(PhysicalType) * 8,
+        "SubIntSplit sections must cover the value bits once in order.");
+    expectedBitStart = header.range.bitEnd + 1;
+    totalEncodedSize += header.encodedSize;
   }
+  NIMBLE_CHECK_FILE(
+      expectedBitStart == sizeof(PhysicalType) * 8,
+      "SubIntSplit sections must cover the value bits once in order.");
+  NIMBLE_CHECK_FILE(
+      totalEncodedSize == data.size() - sectionHeaderBytes,
+      "SubIntSplit section payload sizes do not match the stream.");
 
   sections_.resize(numSections);
   for (uint8_t i = 0; i < numSections; ++i) {
@@ -151,8 +200,20 @@ void SectionTable<PhysicalType>::load(
     section.range = headers[i].range;
     section.mask = section.range.mask();
     section.storageBytes = sectionStorageBytes(section.range.width());
+
+    const std::string_view sectionData{pos, headers[i].encodedSize};
+    NIMBLE_CHECK_FILE(
+        sectionData.size() >= EncodingPrefix::kRowCountOffset,
+        "SubIntSplit section encoding prefix is truncated.");
+    const auto expectedDataType =
+        dispatchStorageType(section.storageBytes, []<typename StorageType>() {
+          return TypeTraits<StorageType>::dataType;
+        });
+    NIMBLE_CHECK_FILE(
+        EncodingPrefix::dataType(sectionData) == expectedDataType,
+        "SubIntSplit section data type does not match its bit width.");
     section.encoding = EncodingFactory().create(
-        pool_, {pos, headers[i].encodedSize}, stringBufferFactory, options);
+        pool_, sectionData, stringBufferFactory, options);
     pos += headers[i].encodedSize;
 
     if (section.encoding->encodingType() == EncodingType::Constant) {
@@ -219,10 +280,10 @@ void SectionTable<PhysicalType>::decodeChunk(
     return;
   }
 
-  constexpr uint32_t kScratchBytes =
-      kDecodeChunkSize * static_cast<uint32_t>(sizeof(PhysicalType));
-  if (scratch_.size() < kScratchBytes) [[unlikely]] {
-    scratch_.resize(kScratchBytes);
+  const uint64_t scratchBytes =
+      static_cast<uint64_t>(numValues) * sizeof(PhysicalType);
+  if (scratch_.size() < scratchBytes) [[unlikely]] {
+    scratch_.resize(scratchBytes);
   }
 
   for (size_t i = 0; i < dynamicSections_.size(); ++i) {

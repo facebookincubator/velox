@@ -75,8 +75,8 @@ struct TaskStats {
   /// Epoch time (ms) when task starts to run
   uint64_t executionStartTimeMs{0};
 
-  /// Epoch time (ms) when last split is processed. For some tasks there might
-  /// be some additional time to send buffered results before the task finishes.
+  /// Epoch time (ms) when execution completes, before buffered results are
+  /// consumed. Set on termination if execution has not completed.
   uint64_t executionEndTimeMs{0};
 
   /// Epoch time (ms) when first split is fetched from the task by an operator.

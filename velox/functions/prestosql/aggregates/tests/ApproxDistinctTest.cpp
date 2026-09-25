@@ -116,9 +116,13 @@ class ApproxDistinctTest : public AggregationTestBase {
     auto vectors = makeRowVector({keys, values});
     auto expected = toRowVector(expectedResults);
 
-    testAggregations({vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
+    testAggregations(
+        {vectors, vectors, vectors},
+        {"c0"},
+        {"approx_distinct(c1)"},
+        {expected});
     testAggregationsWithCompanion(
-        {vectors},
+        {vectors, vectors, vectors},
         [](auto& /*builder*/) {},
         {"c0"},
         {"approx_distinct(c1)"},
@@ -128,7 +132,7 @@ class ApproxDistinctTest : public AggregationTestBase {
 
     if (testApproxSet) {
       testAggregations(
-          {vectors},
+          {vectors, vectors, vectors},
           {"c0"},
           {"approx_set(c1)"},
           {"c0", "cardinality(a0)"},
@@ -186,8 +190,9 @@ TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
   auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
 
   testGroupByAgg(keys, values, {{0, 516}, {1, 507}}, false);
+  auto vectors = makeRowVector({keys, values});
   testAggregations(
-      {makeRowVector({keys, values})},
+      {vectors, vectors, vectors},
       {"c0"},
       {"approx_set(c1)"},
       {"c0", "cardinality(a0)"},
@@ -212,9 +217,10 @@ TEST_F(ApproxDistinctTest, groupByAllNulls) {
   auto vectors = makeRowVector({keys, values});
   auto expected = toRowVector<int32_t, int64_t>({{0, 0}, {1, 3}});
 
-  testAggregations({vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
+  testAggregations(
+      {vectors, vectors, vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
   testAggregationsWithCompanion(
-      {vectors},
+      {vectors, vectors, vectors},
       [](auto& /*builder*/) {},
       {"c0"},
       {"approx_distinct(c1)"},

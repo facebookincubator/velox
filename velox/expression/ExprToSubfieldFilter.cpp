@@ -467,6 +467,22 @@ std::shared_ptr<ExprToSubfieldFilterParser>
     ExprToSubfieldFilterParser::parser_ =
         std::make_shared<PrestoExprToSubfieldFilterParser>();
 
+std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+ExprToSubfieldFilterParser::leafToSubfieldFilter(
+    const core::ITypedExpr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated) {
+  common::Subfield subfield;
+  if (expr.type()->isBoolean() && toSubfield(&expr, subfield)) {
+    return std::make_pair(std::move(subfield), boolEqual(!negated));
+  }
+
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(&expr)) {
+    return leafCallToSubfieldFilter(*call, evaluator, negated);
+  }
+  return std::nullopt;
+}
+
 // static
 bool ExprToSubfieldFilterParser::toSubfield(
     const core::ITypedExpr* field,

@@ -19,65 +19,74 @@
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox::functions {
-void registerJsonFunctions(const std::string& prefix) {
+void registerJsonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerJsonType();
 
   registerFunction<IsJsonScalarFunction, bool, Json>(
-      {prefix + "is_json_scalar"});
+      {prefix + "is_json_scalar"}, {}, true, defaultOwner);
   registerFunction<IsJsonScalarFunction, bool, Varchar>(
-      {prefix + "is_json_scalar"});
+      {prefix + "is_json_scalar"}, {}, true, defaultOwner);
 
   registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
-      {prefix + "json_extract_scalar"});
+      {prefix + "json_extract_scalar"}, {}, true, defaultOwner);
   registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
-      {prefix + "json_extract_scalar"});
+      {prefix + "json_extract_scalar"}, {}, true, defaultOwner);
 
   registerFunction<JsonArrayLengthFunction, int64_t, Json>(
-      {prefix + "json_array_length"});
+      {prefix + "json_array_length"}, {}, true, defaultOwner);
   registerFunction<JsonArrayLengthFunction, int64_t, Varchar>(
-      {prefix + "json_array_length"});
+      {prefix + "json_array_length"}, {}, true, defaultOwner);
 
   registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Varchar, bool>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Varchar, int64_t>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Json, double>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Varchar, double>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
   registerFunction<JsonArrayContainsFunction, bool, Varchar, Varchar>(
-      {prefix + "json_array_contains"});
+      {prefix + "json_array_contains"}, {}, true, defaultOwner);
 
   registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
-      {prefix + "json_size"});
+      {prefix + "json_size"}, {}, true, defaultOwner);
   registerFunction<JsonSizeFunction, int64_t, Varchar, Varchar>(
-      {prefix + "json_size"});
+      {prefix + "json_size"}, {}, true, defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_extract, prefix + "json_extract");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_json_extract, prefix + "json_extract", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_format, prefix + "json_format");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_json_format, prefix + "json_format", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, prefix + "json_parse");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_json_parse, prefix + "json_parse", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_array_get, prefix + "json_array_get");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_json_array_get, prefix + "json_array_get", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_$internal$_json_string_to_array,
-      prefix + "$internal$json_string_to_array_cast");
+      prefix + "$internal$json_string_to_array_cast",
+      defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_$internal$_json_string_to_map,
-      prefix + "$internal$json_string_to_map_cast");
+      prefix + "$internal$json_string_to_map_cast",
+      defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_$internal$_json_string_to_row,
-      prefix + "$internal$json_string_to_row_cast");
+      prefix + "$internal$json_string_to_row_cast",
+      defaultOwner);
 }
 
 } // namespace facebook::velox::functions

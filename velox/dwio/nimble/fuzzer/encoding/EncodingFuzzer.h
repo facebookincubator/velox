@@ -187,6 +187,64 @@ Vector<T> makeBitStructuredData(
   return data;
 }
 
+// Cycles through masks whose transitions land on every physical bit. This
+// catches section merge bugs that random values rarely isolate, especially at
+// byte boundaries and in floating-point sign and exponent fields.
+template <typename T, typename RNG>
+Vector<T> makeAdversarialBitPatternData(
+    velox::memory::MemoryPool& pool,
+    [[maybe_unused]] RNG& rng,
+    uint32_t rowCount,
+    [[maybe_unused]] Buffer* buffer) {
+  Vector<T> data(&pool);
+  data.reserve(rowCount);
+  if constexpr (
+      std::is_arithmetic_v<T> && !std::is_same_v<T, bool> && sizeof(T) >= 4) {
+    using UintType = std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>;
+    constexpr uint32_t kBitWidth = sizeof(UintType) * 8;
+    constexpr UintType kAlternating = static_cast<UintType>(
+        sizeof(T) == 4 ? 0xAAAAAAAAu : 0xAAAAAAAAAAAAAAAAULL);
+    constexpr UintType kInverseAlternating = ~kAlternating;
+    constexpr UintType kAllBits = ~UintType{0};
+
+    for (uint32_t row = 0; row < rowCount; ++row) {
+      const uint32_t bit = (row / 8) % kBitWidth;
+      const UintType oneBit = UintType{1} << bit;
+      const UintType lowMask = bit + 1 == kBitWidth
+          ? kAllBits
+          : static_cast<UintType>((UintType{1} << (bit + 1)) - 1);
+      UintType bits{0};
+      switch (row % 8) {
+        case 0:
+          break;
+        case 1:
+          bits = kAllBits;
+          break;
+        case 2:
+          bits = kAlternating;
+          break;
+        case 3:
+          bits = kInverseAlternating;
+          break;
+        case 4:
+          bits = oneBit;
+          break;
+        case 5:
+          bits = static_cast<UintType>(~oneBit);
+          break;
+        case 6:
+          bits = lowMask;
+          break;
+        case 7:
+          bits = static_cast<UintType>(~lowMask);
+          break;
+      }
+      data.push_back(std::bit_cast<T>(bits));
+    }
+  }
+  return data;
+}
+
 template <typename T, typename RNG>
 Vector<T> makeFloatingPointDecimalData(
     velox::memory::MemoryPool& pool,
@@ -543,6 +601,12 @@ class EncodingFuzzer {
       datasets.push_back(
           makeSnowflakeData<T>(*pool_, rng, largeInputRows_, buffer_.get()));
     }
+    if constexpr (
+        Encoder<EncodingClass>::encodingType() == EncodingType::SubIntSplit) {
+      datasets.push_back(
+          makeAdversarialBitPatternData<T>(
+              *pool_, rng, largeInputRows_, buffer_.get()));
+    }
 
     for (auto& data : datasets) {
       if (data.empty()) {
@@ -570,8 +634,8 @@ class EncodingFuzzer {
         throw;
       }
 
-      auto encoding =
-          std::make_unique<EncodingClass>(*pool_, encoded, stringBufferFactory);
+      auto encoding = std::make_unique<EncodingClass>(
+          *pool_, encoded, stringBufferFactory, options_);
       EXPECT_EQ(encoding->rowCount(), data.size());
 
       encoding->reset();
@@ -674,6 +738,13 @@ class EncodingFuzzer {
           makeSnowflakeData<T>(*pool_, rng, rowCount, buffer_.get()));
     }
 
+    if constexpr (
+        Encoder<EncodingClass>::encodingType() == EncodingType::SubIntSplit) {
+      datasets.push_back(
+          makeAdversarialBitPatternData<T>(
+              *pool_, rng, rowCount, buffer_.get()));
+    }
+
     if constexpr (std::is_floating_point_v<T>) {
       datasets.push_back(
           makeFloatingPointDecimalData<T>(
@@ -721,8 +792,8 @@ class EncodingFuzzer {
       throw;
     }
 
-    auto encoding =
-        std::make_unique<EncodingClass>(*pool_, encoded, stringBufferFactory);
+    auto encoding = std::make_unique<EncodingClass>(
+        *pool_, encoded, stringBufferFactory, options_);
 
     EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
     EXPECT_EQ(encoding->rowCount(), data.size());

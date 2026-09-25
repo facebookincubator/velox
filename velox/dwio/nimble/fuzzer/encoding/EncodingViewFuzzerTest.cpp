@@ -145,19 +145,31 @@ std::vector<Vector<typename EncodingClass::cppDataType>> makeDatasets(
     }
     return datasets;
   } else {
-    return makeViewDatasets<T>(pool, rng, rowCount, buffer);
+    auto datasets = makeViewDatasets<T>(pool, rng, rowCount, buffer);
+    if constexpr (
+        Encoder<EncodingClass>::encodingType() == EncodingType::SubIntSplit) {
+      datasets.push_back(
+          makeAdversarialBitPatternData<T>(pool, rng, rowCount, buffer));
+    }
+    return datasets;
   }
 }
 
 std::vector<uint32_t> makeProbeRows(std::mt19937& rng, uint32_t rowCount) {
   const auto probeCount = std::min<uint32_t>(rowCount, 256);
   std::vector<uint32_t> rows;
-  rows.reserve(probeCount + std::min<uint32_t>(rowCount, 16));
+  rows.reserve(probeCount + 32);
   for (uint32_t i = 0; i < probeCount; ++i) {
     rows.push_back(folly::Random::rand32(rng) % rowCount);
   }
-  for (uint32_t i = 0; i < rowCount && i < 16; ++i) {
-    rows.push_back(i);
+  for (const uint32_t row :
+       {0u, 1u, 2u, 7u, 8u, 15u, 16u, 255u, 256u, 257u, 4095u, 4096u}) {
+    if (row < rowCount) {
+      rows.push_back(row);
+    }
+  }
+  if (rowCount > 0) {
+    rows.push_back(rowCount - 1);
   }
   return rows;
 }
@@ -220,15 +232,31 @@ void runEncodingViewFuzzer(
             *pool, serialized, stringBufferFactory, options);
         ASSERT_NE(encoding, nullptr);
 
+        const auto probeRows = makeProbeRows(rng, data.size());
         T expected;
         T actual;
-        for (const auto row : makeProbeRows(rng, data.size())) {
+        for (const auto row : probeRows) {
           SCOPED_TRACE(::testing::Message() << "row=" << row);
           encoding->reset();
           encoding->skip(row);
           encoding->materialize(1, &expected);
           view->readAt(row, &actual);
           expectEqual(expected, actual, row);
+        }
+
+        Vector<T> gathered(pool.get(), probeRows.size());
+        view->readAt(probeRows, gathered.data());
+        for (size_t i = 0; i < probeRows.size(); ++i) {
+          expectEqual(data[probeRows[i]], gathered[i], probeRows[i]);
+        }
+
+        const uint32_t rangeOffset = folly::Random::rand32(rng) % data.size();
+        const uint32_t rangeLength = std::min<uint32_t>(
+            513, static_cast<uint32_t>(data.size()) - rangeOffset);
+        Vector<T> contiguous(pool.get(), rangeLength);
+        view->read(rangeOffset, rangeLength, contiguous.data());
+        for (uint32_t i = 0; i < rangeLength; ++i) {
+          expectEqual(data[rangeOffset + i], contiguous[i], rangeOffset + i);
         }
       }
     }

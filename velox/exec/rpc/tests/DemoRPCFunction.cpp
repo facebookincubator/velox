@@ -92,7 +92,7 @@ AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
     if (!response.hasError() &&
         responseAs<TextPayload>(response).text.find("OVERLOAD") !=
             std::string::npos) {
-      return CongestionSignal::kError;
+      return CongestionSignal::kOverloaded;
     }
   }
   // Healthy completions feed RTT to the gradient window (the kSuccess path);

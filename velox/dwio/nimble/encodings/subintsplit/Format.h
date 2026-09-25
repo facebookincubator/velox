@@ -20,15 +20,23 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
-// On-disk layout of a SubIntSplit encoding, after the standard Encoding prefix:
-//
-//   [1 byte]  numSections (1..64)
-//   [1 byte]  flags
-//   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
-//   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
-//
-// Sections are stored in LSB-first order (section 0 covers the lowest bits).
-// Section identifiers equal the section index (0, 1, …, numSections-1).
+/// On-disk layout of a SubIntSplit encoding, after the standard Encoding
+/// prefix:
+///
+///   [1 byte]  numSections (1..64)
+///   [1 byte]  flags
+///   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
+///   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
+///
+/// Sections are stored in LSB-first order (section 0 covers the lowest bits).
+/// Section identifiers equal the section index (0, 1, …, numSections-1).
+///
+/// Persistence context:
+///
+///   writeEncoding() -> [header helpers] -> bytes -> SectionTable::load()
+///
+/// This boundary is persisted. Field order, widths, flag meanings, and section
+/// ordering must remain readable by older and newer decoders.
 
 namespace facebook::nimble::subintsplit {
 
@@ -36,13 +44,20 @@ namespace facebook::nimble::subintsplit {
 /// zero.
 inline constexpr uint8_t kFlagDelta = 1u << 0;
 
+/// All flag bits understood by this reader version.
+inline constexpr uint8_t kKnownFlags = kFlagDelta;
+
+/// Bytes preceding the section header entries.
+inline constexpr uint32_t kStreamHeaderSize = 2;
+
 /// Bytes per section header entry: bitStart + bitEnd + encodedSize.
 inline constexpr uint32_t kSectionHeaderSize = 6;
 
 /// Bytes the SubIntSplit-specific header occupies, excluding the section
 /// payloads and the standard Encoding prefix.
 constexpr uint32_t specificHeaderSize(uint8_t numSections) noexcept {
-  return 2u + static_cast<uint32_t>(numSections) * kSectionHeaderSize;
+  return kStreamHeaderSize +
+      static_cast<uint32_t>(numSections) * kSectionHeaderSize;
 }
 
 /// The two bytes preceding the section headers.

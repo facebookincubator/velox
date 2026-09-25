@@ -240,7 +240,7 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(
       SchemaDeserializer::deserialize(schemaWithEmptyMetadata),
-      "Hybrid FlatMap requires at least two groups");
+      "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(
@@ -248,8 +248,8 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       "Hybrid FlatMap group IDs and key counts must have the same size");
 
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(
-          encodeRawMetadata({0, HybridFlatMap::kDefaultGroupId}, {1, 0}, {})),
+      HybridFlatMap::deserialize(encodeRawMetadata(
+          {0, HybridFlatMap::kDefaultGroupId}, {1, 1}, {"a"})),
       "Hybrid FlatMap group key counts must match group keys size");
 
   NIMBLE_ASSERT_THROW(
