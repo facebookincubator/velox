@@ -128,8 +128,10 @@ class OutputBufferManager {
   /// Whether the output buffer is over-utilized: filled enough to risk soon
   /// reaching capacity and back-pressuring its producers, though it is not
   /// blocking them yet. The threshold is implementation-defined. nullopt if
-  /// 'taskId' is unknown. Consumed to drive dynamic consumer scaling, e.g.
-  /// adding TableWriter tasks.
+  /// 'taskId' is unknown or the transport has no bounded capacity -- the same
+  /// two cases as getUtilization(), since without a capacity there is nothing
+  /// to be over. Consumed to drive dynamic consumer scaling, e.g. adding
+  /// TableWriter tasks.
   virtual std::optional<bool> isOverutilized(const std::string& taskId) = 0;
 
   /// Human-readable dump of the task's output buffer state.
