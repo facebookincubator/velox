@@ -16,6 +16,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -27,6 +28,7 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -34,7 +36,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 // Frame of Reference encoding. Divides data into fixed-size frames, storing
 // a reference value per frame and bit-packing the exceptions (value - ref).
@@ -91,6 +92,145 @@ class ForEncoding final
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Size estimate measured over the values, walking the frames encode() will
+  /// build.
+  ///
+  /// A frame's local range cannot be recovered from any global adjacent-pair
+  /// statistic: small steps and a wide local span are compatible, and so are
+  /// large steps and a narrow one. Framing is a property of the values in
+  /// position, so the only way to price it accurately is to look.
+  static uint64_t estimateSize(
+      std::span<const physicalType> values,
+      const Encoding::Options& options = {}) {
+    const uint64_t rowCount = values.size();
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    constexpr uint32_t kFrameSize = 128;
+    const auto firstFrameRows =
+        static_cast<uint32_t>(std::min<uint64_t>(rowCount, kFrameSize));
+    const Header header{
+        static_cast<uint32_t>(rowCount),
+        kFrameSize,
+        ForEncoding<T>::numFrames(
+            static_cast<uint32_t>(rowCount), kFrameSize, firstFrameRows),
+        firstFrameRows};
+
+    uint64_t totalBits = 0;
+    uint8_t minFrameBitWidth = std::numeric_limits<uint8_t>::max();
+    uint8_t maxFrameBitWidth = 0;
+    auto minReference = values[0];
+    auto maxReference = values[0];
+
+    for (uint32_t frameIdx = 0; frameIdx < header.numFrames; ++frameIdx) {
+      const uint32_t frameStart = frameRowOffset(header, frameIdx);
+      const uint32_t frameLength = frameRowCount(header, frameIdx);
+      const uint32_t frameEnd = frameStart + frameLength;
+
+      auto minValue = values[frameStart];
+      auto maxValue = values[frameStart];
+      for (uint32_t i = frameStart; i < frameEnd; ++i) {
+        minValue = std::min(minValue, values[i]);
+        maxValue = std::max(maxValue, values[i]);
+      }
+
+      uint64_t maxException = 0;
+      if constexpr (std::is_signed_v<physicalType>) {
+        maxException = static_cast<uint64_t>(
+            static_cast<int64_t>(maxValue) - static_cast<int64_t>(minValue));
+      } else {
+        maxException = static_cast<uint64_t>(maxValue - minValue);
+      }
+      const uint8_t bitWidth = estimateBitWidth(maxException);
+
+      totalBits += static_cast<uint64_t>(bitWidth) * frameLength;
+      minFrameBitWidth = std::min(minFrameBitWidth, bitWidth);
+      maxFrameBitWidth = std::max(maxFrameBitWidth, bitWidth);
+      minReference = std::min(minReference, minValue);
+      maxReference = std::max(maxReference, minValue);
+    }
+
+    return frameMetadataSize(
+               header.numFrames,
+               minFrameBitWidth,
+               maxFrameBitWidth,
+               minReference,
+               maxReference,
+               totalBits,
+               options) +
+        velox::bits::nbytes(totalBits);
+  }
+
+  /// Size estimate for a caller holding only statistics.
+  ///
+  /// Deliberately conservative: without the values there is no way to know how
+  /// much a frame's local range narrows against the column's, so this assumes
+  /// it does not narrow at all.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options = {}) {
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    constexpr uint32_t kFrameSize = 128;
+    const auto firstFrameRows =
+        static_cast<uint32_t>(std::min<uint64_t>(rowCount, kFrameSize));
+    const uint32_t frames = ForEncoding<T>::numFrames(
+        static_cast<uint32_t>(rowCount), kFrameSize, firstFrameRows);
+
+    const auto fullRange =
+        static_cast<uint64_t>(statistics.max() - statistics.min());
+    const uint8_t localBits = estimateBitWidth(fullRange);
+    const uint64_t totalBits = static_cast<uint64_t>(localBits) * rowCount;
+
+    return frameMetadataSize(
+               frames,
+               localBits,
+               localBits,
+               statistics.min(),
+               statistics.max(),
+               totalBits,
+               options) +
+        velox::bits::nbytes(totalBits);
+  }
+
+ private:
+  /// The three per-frame metadata streams plus the fixed header, priced by the
+  /// estimators nested selection would apply to each. Shared by both
+  /// estimateSize overloads so they cannot describe different layouts.
+  static uint64_t frameMetadataSize(
+      uint32_t frames,
+      uint8_t minFrameBitWidth,
+      uint8_t maxFrameBitWidth,
+      physicalType minReference,
+      physicalType maxReference,
+      uint64_t totalBits,
+      const Encoding::Options& options) {
+    const uint64_t bitWidthsSize = std::min(
+        TrivialEncoding<uint8_t>::estimateSize(frames),
+        FixedBitWidthEncoding<uint8_t>::estimateSize(
+            frames, minFrameBitWidth, maxFrameBitWidth, options));
+    const uint64_t referencesSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(frames),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            frames, minReference, maxReference, options));
+    const uint64_t bitOffsetsSize = std::min(
+        TrivialEncoding<uint64_t>::estimateSize(frames),
+        FixedBitWidthEncoding<uint64_t>::estimateSize(
+            frames, /*minValue=*/0, totalBits, options));
+
+    // Fixed prefix plus FOR's own fixed fields, plus each of the four
+    // sub-streams' 4-byte size prefix.
+    constexpr uint64_t kForSpecificFixedFieldsSize = 10;
+    return EncodingPrefix::kFixedPrefixSize + kForSpecificFixedFieldsSize + 4 +
+        bitWidthsSize + 4 + referencesSize + 4 + bitOffsetsSize + 4;
+  }
+
+ public:
+#endif
 
   std::string debugString(int offset) const final;
 
@@ -224,9 +364,13 @@ class ForEncoding final
   // FOR stores residual widths using a fixed set of wire-supported widths.
   // velox::bits::bitsRequired returns the exact bit count; this rounds that
   // count up to the nearest width the FOR payload writer can encode.
+  //
+  // A frame whose values are all equal has a zero residual range and needs no
+  // payload bits: the reference alone reconstructs every value. Width 0 says
+  // so, letting decoders skip bit extraction for it entirely.
   static uint8_t minBitWidth(uint64_t maxValue) {
     if (maxValue == 0) {
-      return 1;
+      return 0;
     }
 
     constexpr std::array<uint8_t, 7> kBitWidths = {1, 2, 4, 8, 16, 32, 64};
@@ -237,6 +381,13 @@ class ForEncoding final
       }
     }
     return 64;
+  }
+
+  // Prices a frame for the size estimators one rung above minBitWidth:
+  // letting the zero-width rung shrink the estimate too would make FOR look
+  // cheaper than it decodes, biasing selection toward it.
+  static uint8_t estimateBitWidth(uint64_t maxValue) {
+    return std::max<uint8_t>(minBitWidth(maxValue), uint8_t{1});
   }
 
   static void prepareSliceHeaderMetadata(
@@ -422,6 +573,39 @@ void ForEncoding<T>::decodeRange(
 
     const uint64_t mask = (bitWidth == 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
 
+    // Topping the buffer up a byte at a time only keeps every bit while at
+    // most 56 bits are already buffered; past that the byte's high bits are
+    // shifted out of the 64-bit buffer and lost, and a 64-bit value would also
+    // hit `bitBuffer >>= 64`, which is undefined. Values wider than 56 bits
+    // are therefore assembled from what the buffer already holds plus the low
+    // bits of the next byte.
+    if (bitWidth > 56) {
+      for (uint32_t i = 0; i < rowsToDecode; ++i) {
+        while (bitsInBuffer <= 56 && bitsInBuffer < bitWidth) {
+          bitBuffer |= static_cast<uint64_t>(static_cast<uint8_t>(*byteCursor))
+              << bitsInBuffer;
+          ++byteCursor;
+          bitsInBuffer += 8;
+        }
+        if (bitsInBuffer >= bitWidth) {
+          decodeException(i, bitBuffer & mask);
+          bitsInBuffer -= bitWidth;
+          bitBuffer = (bitWidth == 64) ? 0 : (bitBuffer >> bitWidth);
+          continue;
+        }
+        const uint8_t missingBits = bitWidth - bitsInBuffer;
+        const uint64_t nextByte = static_cast<uint8_t>(*byteCursor);
+        ++byteCursor;
+        decodeException(
+            i,
+            bitBuffer |
+                ((nextByte & ((1ULL << missingBits) - 1)) << bitsInBuffer));
+        bitBuffer = nextByte >> missingBits;
+        bitsInBuffer = 8u - missingBits;
+      }
+      return;
+    }
+
     for (uint32_t i = 0; i < rowsToDecode; ++i) {
       while (bitsInBuffer < bitWidth) {
         bitBuffer |= static_cast<uint64_t>(static_cast<uint8_t>(*byteCursor))
@@ -432,6 +616,47 @@ void ForEncoding<T>::decodeRange(
       decodeException(i, bitBuffer & mask);
       bitBuffer >>= bitWidth;
       bitsInBuffer -= bitWidth;
+    }
+  };
+
+  // Byte-aligned narrow widths (1, 2 and 4 bits) unpack a 64-bit word at a
+  // time in place of decodeBitStream's per-value refill test; a sliced stream
+  // can start part-way through a byte and keeps the bit-stream path instead.
+  //
+  // The last load is bounded by the end of the packed payload rather than
+  // relying on trailing slack: FOR's packed data is the final field of the
+  // encoding, so nothing guarantees readable bytes past it.
+  const uint8_t* const packedDataEnd =
+      reinterpret_cast<const uint8_t*>(packedData_) + header_.packedDataSize;
+
+  auto decodeNarrowAligned = [&]<uint8_t kBitWidth>(
+                                 const uint8_t* byteCursor,
+                                 uint32_t rowsToDecode,
+                                 auto&& decodeException) {
+    constexpr uint32_t kValuesPerWord = 64 / kBitWidth;
+    constexpr uint64_t kMask = (1ULL << kBitWidth) - 1ULL;
+
+    uint32_t row = 0;
+    while (row + kValuesPerWord <= rowsToDecode &&
+           byteCursor + sizeof(uint64_t) <= packedDataEnd) {
+      uint64_t word;
+      std::memcpy(&word, byteCursor, sizeof(uint64_t));
+      byteCursor += sizeof(uint64_t);
+      for (uint32_t i = 0; i < kValuesPerWord; ++i) {
+        decodeException(row + i, (word >> (i * kBitWidth)) & kMask);
+      }
+      row += kValuesPerWord;
+    }
+
+    if (row < rowsToDecode) {
+      decodeBitStream(
+          byteCursor,
+          0,
+          kBitWidth,
+          rowsToDecode - row,
+          [&](uint32_t i, uint64_t residual) {
+            decodeException(row + i, residual);
+          });
     }
   };
 
@@ -476,6 +701,18 @@ void ForEncoding<T>::decodeRange(
         // Byte-aligned: use typed loads for power-of-two widths, bit-stream
         // otherwise
         switch (frame.bitWidth) {
+          case 1:
+            decodeNarrowAligned.template operator()<1>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
+          case 2:
+            decodeNarrowAligned.template operator()<2>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
+          case 4:
+            decodeNarrowAligned.template operator()<4>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
           case 8:
             for (uint32_t i = 0; i < rowsToDecode; ++i) {
               decodeException(i, byteCursor[i]);

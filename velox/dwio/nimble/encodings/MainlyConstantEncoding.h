@@ -152,13 +152,38 @@ class MainlyConstantEncodingBase
       return outerEncodingSize + otherValuesSize + isCommonEncodingSize;
     } else {
       const uint64_t commonValueSize = sizeof(physicalType);
-      // Other values are encoded as a FixedBitWidth child.
-      // TODO(nimble): restore precise other-values estimation (materialize the
-      // non-common values and compare Dictionary / Constant / nested-ALP
-      // candidates), bounded so it stays cheap on dense columns.
-      const uint64_t otherValuesSize =
-          FixedBitWidthEncoding<physicalType>::estimateSize(
-              uncommonCount, statistics.min(), statistics.max(), options);
+      // The other-values child holds every value except the common one, so it
+      // is priced over the range of those values rather than over the whole
+      // stream's: the common value is often an out-of-band sentinel at one
+      // end of the range, and including it would inflate the bit width
+      // charged to every uncommon row.
+      physicalType uncommonMin{};
+      physicalType uncommonMax{};
+      bool hasUncommonValue{false};
+      for (const auto& uniqueCount : uniqueCounts) {
+        if (uniqueCount.first == maxUniqueCount.first) {
+          continue;
+        }
+        if (!hasUncommonValue) {
+          uncommonMin = uniqueCount.first;
+          uncommonMax = uniqueCount.first;
+          hasUncommonValue = true;
+          continue;
+        }
+        uncommonMin = std::min(uncommonMin, uniqueCount.first);
+        uncommonMax = std::max(uncommonMax, uniqueCount.first);
+      }
+
+      // Trivial is considered alongside FixedBitWidth because a child whose
+      // values span the full width of the type gains nothing from bit
+      // packing. Dictionary and nested ALP would need a Statistics over the
+      // uncommon values, which isn't available here.
+      const uint64_t otherValuesSize = hasUncommonValue
+          ? std::min(
+                TrivialEncoding<physicalType>::estimateSize(uncommonCount),
+                FixedBitWidthEncoding<physicalType>::estimateSize(
+                    uncommonCount, uncommonMin, uncommonMax, options))
+          : EncodingPrefix::kFixedPrefixSize;
       const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
           2 * sizeof(uint32_t) + commonValueSize;
       return outerEncodingSize + otherValuesSize + isCommonEncodingSize;

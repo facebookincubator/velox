@@ -223,6 +223,16 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) = 0;
 
+  /// Returns a policy offering only this policy's candidates that `keep`
+  /// admits, at the same read factors and compression, and offering nested
+  /// streams what this policy would offer them. Null when the policy cannot be
+  /// narrowed. A caller that wants one encoding's real bytes under this
+  /// policy's rules narrows it to that encoding.
+  virtual std::unique_ptr<EncodingSelectionPolicy<T>> narrowed(
+      const std::function<bool(EncodingType)>& /* keep */) const {
+    return nullptr;
+  }
+
   virtual ~EncodingSelectionPolicy() = default;
 };
 

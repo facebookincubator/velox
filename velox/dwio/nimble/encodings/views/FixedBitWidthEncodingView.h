@@ -16,7 +16,9 @@
 #pragma once
 
 #include <algorithm>
+#include <limits>
 
+#include "velox/common/memory/RawVector.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
@@ -63,6 +65,54 @@ class FixedBitWidthEncodingView final : public TypedEncodingView<T> {
       return;
     }
     fixedBitArray_.bulkGetWithBaseline(offset, length, output, baseline_);
+  }
+
+  // Raw values already sit in [0, 2^bitWidth_), so a direct-mapped table can
+  // translate value to id without hashing. Declined past
+  // kMaxDirectTableBitWidth, since a section needing that many bits was not
+  // chosen for having few distinct values.
+  bool denseRunIds(
+      uint32_t offset,
+      uint32_t length,
+      std::vector<uint32_t>& ids,
+      std::vector<uint64_t>& table) const final {
+    static constexpr uint32_t kMaxDirectTableBitWidth = 20; // 1M entries.
+    if (bitWidth_ > kMaxDirectTableBitWidth) {
+      return false;
+    }
+    this->checkReadRange(offset, length);
+
+    // Raw, pre-baseline values; every element is overwritten below before
+    // being read, so the uninitialised allocation is safe.
+    velox::raw_vector<physicalType> raw(length);
+    if (bitWidth_ == 0) {
+      std::fill(raw.begin(), raw.end(), physicalType{0});
+    } else {
+      fixedBitArray_.bulkGetWithBaseline(
+          offset, length, raw.data(), physicalType{0});
+    }
+
+    constexpr uint32_t kUnassigned = std::numeric_limits<uint32_t>::max();
+    const uint32_t alphabetSize = uint32_t{1} << bitWidth_;
+    // kUnassigned is a sentinel tested for below, not just initial padding.
+    std::vector<uint32_t> valueToId(alphabetSize, kUnassigned);
+    ids.clear();
+    ids.reserve(length);
+    table.clear();
+    for (uint32_t i = 0; i < length; ++i) {
+      const auto rawValue = static_cast<uint32_t>(raw[i]);
+      auto& id = valueToId[rawValue];
+      if (id == kUnassigned) {
+        id = static_cast<uint32_t>(table.size());
+        uint64_t bits = 0;
+        const physicalType value =
+            static_cast<physicalType>(rawValue) + baseline_;
+        __builtin_memcpy(&bits, &value, sizeof(physicalType));
+        table.push_back(bits);
+      }
+      ids.push_back(id);
+    }
+    return true;
   }
 
   physicalType baseline_;

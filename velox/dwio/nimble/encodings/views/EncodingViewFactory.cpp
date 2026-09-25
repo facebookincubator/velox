@@ -135,6 +135,25 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
+      if constexpr (
+          isNumericType<physicalType>() &&
+          (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        // A delta stream requires every prior value to reconstruct a given
+        // index, so it cannot be read positionally and must be materialized.
+        if (subintsplit::isDeltaStream(
+                data,
+                EncodingPrefix::prefixSize(data, options.useVarintRowCount))) {
+          return std::make_unique<detail::MaterializedEncodingView<T>>(
+              data, pool, options);
+        }
+        return std::make_unique<SubIntSplitEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SubIntSplit encoding only supports 32- and 64-bit numeric data types, got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::BitRangeSplit:
       if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
         return std::make_unique<BitRangeSplitEncodingView<T>>(
@@ -151,17 +170,6 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
-    case EncodingType::SubIntSplit:
-      if constexpr (
-          isNumericType<physicalType>() &&
-          (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
-        return std::make_unique<SubIntSplitEncodingView<T>>(
-            data, pool, options);
-      }
-      NIMBLE_INCOMPATIBLE_ENCODING(
-          "SubIntSplit encoding only supports 32- and 64-bit numeric data "
-          "types, got {}.",
-          TypeTraits<T>::dataType);
     default:
       NIMBLE_UNSUPPORTED("{} does not support EncodingView.", encodingType);
   }
@@ -211,7 +219,8 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
-      EncodingType::SubIntSplit};
+      EncodingType::SubIntSplit,
+      EncodingType::SubIntSplitReordered};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),
