@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/Task.h"
+
+#include <functional>
+
 #include "folly/OperationCancelled.h"
 #include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
@@ -29,6 +32,8 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -515,6 +520,86 @@ class TestShouldYieldOperator : public exec::Operator {
   bool shouldYieldResult_{false};
 };
 
+class TestExchangeClient : public ExchangeClient {
+ public:
+  explicit TestExchangeClient(
+      std::function<void()> noMoreRemoteTasksCallback = nullptr)
+      : noMoreRemoteTasksCallback_{std::move(noMoreRemoteTasksCallback)} {}
+
+  void addRemoteTaskId(std::string_view /*remoteTaskId*/) override {}
+
+  void noMoreRemoteTasks() override {
+    if (noMoreRemoteTasksCallback_ != nullptr) {
+      noMoreRemoteTasksCallback_();
+    }
+  }
+
+  void close() override {}
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override {
+    return {};
+  }
+
+  std::string toString() const override {
+    return "test";
+  }
+
+  folly::dynamic toJson() const override {
+    return folly::dynamic::object;
+  }
+
+ private:
+  std::function<void()> noMoreRemoteTasksCallback_;
+};
+
+class TestExchangeOperator : public SourceOperator {
+ public:
+  TestExchangeOperator(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::ExchangeNode>& node)
+      : SourceOperator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            "TestExchange") {}
+
+  RowVectorPtr getOutput() override {
+    return nullptr;
+  }
+
+  BlockingReason isBlocked(ContinueFuture* future) override {
+    if (!future_.valid()) {
+      return BlockingReason::kNotBlocked;
+    }
+    *future = std::move(future_);
+    return BlockingReason::kWaitForProducer;
+  }
+
+  bool isFinished() override {
+    return false;
+  }
+
+  void close() override {
+    if (!promise_.isFulfilled()) {
+      promise_.setValue();
+    }
+    SourceOperator::close();
+  }
+
+ private:
+  ContinuePromise promise_{"TestExchangeOperator"};
+  ContinueFuture future_{promise_.getSemiFuture()};
+};
+
+struct TestExchangeTransportState {
+  std::weak_ptr<Task> task;
+  bool clientFactoryCalledWithTaskMutex{false};
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInOperator{nullptr};
+};
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
@@ -811,6 +896,151 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(
       valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
+}
+
+TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
+  // An ExchangeNode naming a transport with no registered client is a
+  // misconfiguration: resolution fails fast rather than silently receiving over
+  // another transport.
+  const std::string transportKind{"ucx-unregistered"};
+  ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW({"a"}, {BIGINT()}), "Presto", transportKind)
+                  .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-unregistered",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "No exchange client registered for transport 'ucx-unregistered'");
+}
+
+TEST_F(TaskTest, customExchangeTransportLifecycle) {
+  const std::string transportKind{"test-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  auto transportState = std::make_shared<TestExchangeTransportState>();
+  std::weak_ptr<TestExchangeTransportState> transportStateReference =
+      transportState;
+  bool transportStateAvailableOnNoMoreRemoteTasks{false};
+  auto entry = ExchangeTransportEntry::make<TestExchangeClient>(
+      [transportState,
+       transportStateReference,
+       &transportStateAvailableOnNoMoreRemoteTasks](
+          const ExchangeClientContext&) {
+        auto task = transportState->task.lock();
+        if (task != nullptr) {
+          std::thread mutexProbe([&] {
+            if (task->mutex().try_lock()) {
+              task->mutex().unlock();
+            } else {
+              transportState->clientFactoryCalledWithTaskMutex = true;
+            }
+          });
+          mutexProbe.join();
+        }
+        auto client = std::make_shared<TestExchangeClient>(
+            [transportStateReference,
+             &transportStateAvailableOnNoMoreRemoteTasks] {
+              transportStateAvailableOnNoMoreRemoteTasks =
+                  !transportStateReference.expired();
+            });
+        transportState->clientFromFactory = client.get();
+        return client;
+      },
+      [transportState](
+          int32_t operatorId,
+          DriverCtx* ctx,
+          const std::shared_ptr<const core::ExchangeNode>& node,
+          const std::shared_ptr<TestExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        transportState->clientInOperator = client.get();
+        return std::make_unique<TestExchangeOperator>(operatorId, ctx, node);
+      });
+  queryRegistry->insert(transportKind, entry);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW({"a"}, {BIGINT()}), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-exchange-transport",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  transportState->task = task;
+
+  task->start(1, 1);
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
+  task->noMoreSplits(exchangeNodeId);
+
+  EXPECT_TRUE(transportState->clientFactoryCalledWithTaskMutex);
+  ASSERT_NE(transportState->clientFromFactory, nullptr);
+  EXPECT_EQ(
+      transportState->clientInOperator, transportState->clientFromFactory);
+
+  ASSERT_TRUE(queryRegistry->erase(transportKind));
+  entry.reset();
+  transportState.reset();
+  EXPECT_FALSE(transportStateReference.expired());
+
+  task->requestAbort().wait();
+  EXPECT_TRUE(transportStateAvailableOnNoMoreRemoteTasks);
+  EXPECT_TRUE(transportStateReference.expired());
+}
+
+TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
+  // A transport may register no merge exchange builder. A MergeExchangeNode
+  // naming it must fail rather than fall back to another transport's operator.
+  const std::string transportKind{"no-merge-transport"};
+  ExchangeTransportRegistry::global().insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }),
+      /*overwrite=*/true);
+  SCOPE_EXIT {
+    ExchangeTransportRegistry::global().erase(transportKind);
+  };
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW({"a"}, {BIGINT()}), {"a"}, "Presto", transportKind)
+          .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-without-merge",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "Exchange transport does not support merge exchange: no-merge-transport");
 }
 
 TEST_F(TaskTest, duplicatePlanNodeIds) {

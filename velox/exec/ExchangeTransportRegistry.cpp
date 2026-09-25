@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 
 #include <memory>
 #include <string>
@@ -23,7 +23,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 
 namespace facebook::velox::exec {
 
@@ -33,15 +33,15 @@ namespace {
 // first-class entry so lookups and enumeration stay plain reads.
 //
 // Backward-compat shim: kInMemory must resolve with zero registration to
-// preserve the pre-registry guarantee that the default output buffer manager is
-// always present. The target end state is to register kInMemory explicitly at
-// engine init like any other transport, which retires this seeding (and the
+// preserve the pre-registry guarantee that an exchange client is always
+// available. The target end state is to register kInMemory explicitly at engine
+// init like any other transport, which retires this seeding (and the
 // unregisterAll() re-seed) and leaves a plain map: unregisterAll() fully clears
 // and isolation is uniform.
-void registerBuiltinDefault(OutputTransportRegistry::Registry& registry) {
+void registerBuiltinDefault(ExchangeTransportRegistry::Registry& registry) {
   registry.insert(
       std::string{core::TransportKind::kInMemory},
-      DefaultOutputBufferManager::makeDefaultTransportEntry(),
+      InMemoryExchangeClient::makeDefaultTransportEntry(),
       /*overwrite=*/true);
 }
 
@@ -49,57 +49,58 @@ void registerBuiltinDefault(OutputTransportRegistry::Registry& registry) {
 // on first access -- before any child scope can exist, since children are
 // created via create(&global()) -- so scoped lookups never mutate a parent, per
 // ScopedRegistry's contract.
-ScopedRegistry<std::string, OutputTransportEntry>& outputTransports() {
-  static ScopedRegistry<std::string, OutputTransportEntry> instance;
-  [[maybe_unused]] static const bool seeded = [] {
+ScopedRegistry<std::string, ExchangeTransportEntry>& exchangeTransports() {
+  static ScopedRegistry<std::string, ExchangeTransportEntry> instance;
+  [[maybe_unused]] static const bool kSeeded = [] {
     registerBuiltinDefault(instance);
     return true;
   }();
   return instance;
 }
 
-OutputTransportRegistry::Registry& registryFor(const core::QueryCtx& queryCtx) {
-  auto registry = queryCtx.registry<OutputTransportRegistry::Registry>(
-      OutputTransportRegistry::kRegistryKey);
-  return registry ? *registry : OutputTransportRegistry::global();
+ExchangeTransportRegistry::Registry& registryFor(
+    const core::QueryCtx& queryCtx) {
+  auto registry = queryCtx.registry<ExchangeTransportRegistry::Registry>(
+      ExchangeTransportRegistry::kRegistryKey);
+  return registry ? *registry : ExchangeTransportRegistry::global();
 }
 
 } // namespace
 
 // static
-OutputTransportRegistry::Registry& OutputTransportRegistry::global() {
-  return outputTransports();
+ExchangeTransportRegistry::Registry& ExchangeTransportRegistry::global() {
+  return exchangeTransports();
 }
 
 // static
-std::shared_ptr<OutputTransportRegistry::Registry>
-OutputTransportRegistry::create(const Registry* parent) {
+std::shared_ptr<ExchangeTransportRegistry::Registry>
+ExchangeTransportRegistry::create(const Registry* parent) {
   return std::make_shared<Registry>(parent);
 }
 
 // static
-std::shared_ptr<OutputTransportEntry> OutputTransportRegistry::tryGet(
+std::shared_ptr<ExchangeTransportEntry> ExchangeTransportRegistry::tryGet(
     const core::QueryCtx& queryCtx,
     const std::string& id) {
   return registryFor(queryCtx).find(id);
 }
 
 // static
-std::shared_ptr<OutputTransportEntry> OutputTransportRegistry::tryGet(
+std::shared_ptr<ExchangeTransportEntry> ExchangeTransportRegistry::tryGet(
     const std::string& id) {
   return global().find(id);
 }
 
 // static
-std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
-OutputTransportRegistry::getAll(const core::QueryCtx& queryCtx) {
+std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
+ExchangeTransportRegistry::getAll(const core::QueryCtx& queryCtx) {
   return snapshot(queryCtx);
 }
 
 // static
-std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
-OutputTransportRegistry::getAll() {
-  std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
+std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
+ExchangeTransportRegistry::getAll() {
+  std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
       result;
   for (auto& [id, entry] : global().snapshot()) {
     if (entry != nullptr) {
@@ -110,16 +111,16 @@ OutputTransportRegistry::getAll() {
 }
 
 // static
-void OutputTransportRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
-  auto registry = queryCtx.registry<OutputTransportRegistry::Registry>(
-      OutputTransportRegistry::kRegistryKey);
+void ExchangeTransportRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
+  auto registry = queryCtx.registry<ExchangeTransportRegistry::Registry>(
+      ExchangeTransportRegistry::kRegistryKey);
   if (registry) {
     registry->clear();
   }
 }
 
 // static
-void OutputTransportRegistry::unregisterAll() {
+void ExchangeTransportRegistry::unregisterAll() {
   // Reset to baseline: drop user registrations and restore the built-in
   // in-memory default. The re-seed is part of the backward-compat shim (see
   // registerBuiltinDefault); with init-time registration this reduces to a
@@ -128,16 +129,16 @@ void OutputTransportRegistry::unregisterAll() {
   Registry::Map entries;
   entries.emplace(
       std::string{core::TransportKind::kInMemory},
-      DefaultOutputBufferManager::makeDefaultTransportEntry());
+      InMemoryExchangeClient::makeDefaultTransportEntry());
   global().replaceAll(std::move(entries));
 }
 
 // static
-std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
-OutputTransportRegistry::snapshot(const core::QueryCtx& queryCtx) {
+std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
+ExchangeTransportRegistry::snapshot(const core::QueryCtx& queryCtx) {
   // Merges the per-query override with the global registry, consistent with
   // tryGet(queryCtx, ...).
-  std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
+  std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
       result;
   for (auto& [id, entry] : registryFor(queryCtx).snapshot()) {
     if (entry != nullptr) {
