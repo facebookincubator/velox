@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 #include "velox/dwio/nimble/encodings/subintsplit/DeltaTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
+#include "velox/dwio/nimble/encodings/subintsplit/RowFrame.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
@@ -69,8 +70,8 @@
 // sections under e.g. Dictionary or Trivial encoding.
 //
 // The pieces live in encodings/subintsplit/: SplitSelector plans the bit
-// ranges over a cost grid priced by CostModel, and Format.h documents the
-// binary layout.
+// ranges over a cost grid priced by CostModel, RowFrame subtracts a
+// predictor from the values, and Format.h documents the binary layout.
 
 namespace facebook::nimble::subintsplit {
 
@@ -193,15 +194,46 @@ class SubIntSplitEncoding
   static subintsplit::SamplerConfig plannerSamplerConfig(
       const Encoding::Options& options);
 
-  // Plans `values` into sections and encodes each. `extraFlags` goes into the
-  // header's flag byte, for instance to record that `values` are zigzag
-  // deltas.
+  // A column's planner sample and the split grid costed over it. Costing the
+  // grid is most of what planning costs, so the row frame decision, which has
+  // to cost a grid for the values and for the residuals, hands the winner's to
+  // the encode instead of the encode costing it a third time.
+  struct PlanningSample {
+    std::vector<uint64_t> sample;
+    std::vector<subintsplit::SectionCost> grid;
+  };
+
+  // Samples `values` and costs the split grid over the sample.
+  static PlanningSample costPlanningSample(
+      std::span<const physicalType> values,
+      const Encoding::Options& options);
+
+  // Encodes `values` as they are, fitting a row frame first when the options
+  // ask for one. encode() calls this once, or twice when it also tries the
+  // delta pre-transform.
+  static std::string_view encodeValues(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options);
+
+  // Plans `values` into sections and encodes each. `values` have `rowFrame`
+  // already subtracted from them, and the header records the frame so reads
+  // add it back. `planning`, when not null, is the sample and grid already
+  // costed for exactly these values. `extraFlags` goes into the header's flag
+  // byte, for instance to record that `values` are zigzag deltas.
   static std::string_view encodeResiduals(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options,
+      const subintsplit::RowFrame& rowFrame = {},
+      PlanningSample* planning = nullptr,
       uint8_t extraFlags = 0);
+
+  // Predictor the encoder subtracted before planning, inactive when it did
+  // not. Every value leaving this class has it added back.
+  subintsplit::RowFrame rowFrame_;
 
   // Persistent scratch buffer reused across materialize() calls. Grown to one
   // chunk of the current read, at most decodeChunkSize_ values of
@@ -296,8 +328,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       pendingBuf_{&pool},
       decodeBuf_{&pool} {
   uint8_t flags{0};
-  const auto parsed =
-      subintsplit::parseSections(data, this->dataOffset(), &flags);
+  const auto parsed = subintsplit::parseSections(
+      data, this->dataOffset(), &flags, &rowFrame_);
   deltaEncoded_ = (flags & subintsplit::kFlagDelta) != 0;
   if (options.subIntSplitDecodeChunkSize > 0) {
     decodeChunkSize_ = options.subIntSplitDecodeChunkSize;
@@ -405,6 +437,9 @@ void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   const uint32_t firstRow = row_;
   decodeUntransformed(rowCount, output);
   row_ += rowCount;
+  if (rowFrame_.active()) {
+    subintsplit::addRowFrame(rowFrame_, firstRow, output, rowCount);
+  }
   if (deltaEncoded_) {
     subintsplit::decodeDeltas<physicalType>(
         {output, rowCount}, deltaAccumulator_, firstRow == 0);
@@ -582,9 +617,10 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       params,
       [&](auto toSkip) { skip(toSkip); },
       [&] {
-        // A delta stream rebuilds each value from every earlier row, which
-        // only materialize() tracks, so this path defers to it.
-        if (deltaEncoded_) {
+        // A delta stream rebuilds each value from every earlier row, and a row
+        // frame is added back by the row a value sits at, both of which only
+        // materialize() tracks, so this path defers to it.
+        if (deltaEncoded_ || rowFrame_.active()) {
           physicalType value = 0;
           materialize(1, &value);
           return value;
@@ -751,23 +787,136 @@ std::string_view SubIntSplitEncoding<T>::encode(
     Buffer& buffer,
     const Encoding::Options& options) {
   if (!options.subIntSplitDeltaPreTransform || values.size() < 2) {
-    return encodeResiduals(selection, values, buffer, options);
+    return encodeValues(selection, values, buffer, options);
   }
   // Encode both forms and keep the smaller, so the pre-transform can never
   // regress a stream it does not suit -- interleaved counters, for instance,
   // are worse under delta because interleaved shards break monotonicity.
   const std::string_view plain =
-      encodeResiduals(selection, values, buffer, options);
+      encodeValues(selection, values, buffer, options);
   Vector<physicalType> residuals{&buffer.getMemoryPool(), values.size()};
   subintsplit::encodeDeltas<physicalType>(
       values, {residuals.data(), residuals.size()});
+  // Deltas are undone by a running sum over every earlier row, which a frame
+  // cannot sit beneath, so the delta form plans its sections over the
+  // residuals alone.
   const std::string_view delta = encodeResiduals(
       selection,
       std::span<const physicalType>(residuals.data(), residuals.size()),
       buffer,
       options,
+      subintsplit::RowFrame{},
+      nullptr,
       subintsplit::kFlagDelta);
   return delta.size() < plain.size() ? delta : plain;
+}
+
+template <typename T>
+std::string_view SubIntSplitEncoding<T>::encodeValues(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  if (!options.subIntSplit.rowFrame) {
+    return encodeResiduals(selection, values, buffer, options);
+  }
+  constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
+  // Fitted in place first, so a column that follows no line, which is most of
+  // them, is not copied just to learn that.
+  const auto lineFrame = subintsplit::fitRowFrame<physicalType>(values);
+  // Whether the frame came from adjacent steps rather than from a line
+  // through the stream, which decides how it is priced below.
+  const bool stepFrame = !lineFrame.active();
+  const auto rowFrame =
+      stepFrame ? subintsplit::fitStepFrame<physicalType>(values) : lineFrame;
+  if (!rowFrame.active()) {
+    return encodeResiduals(selection, values, buffer, options);
+  }
+  std::vector<physicalType> residuals;
+  subintsplit::subtractRowFrame<physicalType>(rowFrame, values, residuals);
+
+  // A preserve-mode encode replays boundaries without running the planner,
+  // so it has nothing to price a frame with. It takes one exactly when the
+  // captured layout carried one, since those boundaries were planned on that
+  // stream's residuals or values specifically.
+  const auto modeConfig =
+      selection.getConfig(std::string(subintsplit::kSplitModeConfigKey));
+  if (modeConfig.has_value() &&
+      *modeConfig == subintsplit::kSplitModePreserve) {
+    const auto frameConfig =
+        selection.getConfig(std::string(subintsplit::kRowFrameConfigKey));
+    const bool captured = frameConfig.has_value() &&
+        *frameConfig == subintsplit::kRowFramePresent;
+    return captured
+        ? encodeResiduals(selection, residuals, buffer, options, rowFrame)
+        : encodeResiduals(selection, values, buffer, options);
+  }
+
+  if (options.subIntSplit.rowFrameForceApply) {
+    return encodeResiduals(selection, residuals, buffer, options, rowFrame);
+  }
+
+  // A step frame produces runs of whole values, which the planner's run
+  // models can misprice, so both streams are encoded, into a scratch buffer
+  // so the loser takes no space in the stream, and the smaller is kept.
+  if (stepFrame) {
+    Buffer scratch{buffer.getMemoryPool()};
+    const auto framed =
+        encodeResiduals(selection, residuals, scratch, options, rowFrame);
+    const auto unframed = encodeResiduals(selection, values, scratch, options);
+    const std::string_view smaller =
+        framed.size() < unframed.size() ? framed : unframed;
+    char* reserved = buffer.reserve(smaller.size());
+    std::memcpy(reserved, smaller.data(), smaller.size());
+    return {reserved, smaller.size()};
+  }
+
+  // Fitting only says the column follows a line, not that sections encode
+  // the distance from it more cheaply than the values themselves. So both
+  // are priced with the planner's own DP over the same inventory and
+  // configuration, and the frame is kept only when its estimate, header
+  // included, is smaller; the winner's grid is the one the encode plans on.
+  const auto selectorConfig = plannerSelectorConfig(options, values.size());
+  auto residualPlanning = costPlanningSample(residuals, options);
+  auto valuePlanning = costPlanningSample(values, options);
+  const double frameBits = subintsplit::selectSplitsOverGrid(
+                               residualPlanning.grid, kBits, selectorConfig)
+                               .totalSizeBits +
+      8.0 * subintsplit::kRowFrameHeaderSize;
+  const double valueBits = subintsplit::selectSplitsOverGrid(
+                               valuePlanning.grid, kBits, selectorConfig)
+                               .totalSizeBits;
+  if (frameBits >= valueBits) {
+    return encodeResiduals(
+        selection,
+        values,
+        buffer,
+        options,
+        subintsplit::RowFrame{},
+        &valuePlanning);
+  }
+  return encodeResiduals(
+      selection, residuals, buffer, options, rowFrame, &residualPlanning);
+}
+
+template <typename T>
+typename SubIntSplitEncoding<T>::PlanningSample
+SubIntSplitEncoding<T>::costPlanningSample(
+    std::span<const physicalType> values,
+    const Encoding::Options& options) {
+  constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
+  PlanningSample planning;
+  subintsplit::sampleIntoU64<physicalType>(
+      values, planning.sample, plannerSamplerConfig(options));
+  NIMBLE_CHECK(
+      !planning.sample.empty(), "SubIntSplit planner sample is empty.");
+  planning.grid = subintsplit::buildRestrictedCostGrid(
+      planning.sample,
+      kBits,
+      values.size(),
+      options.subIntSplit.allowedEncodings,
+      plannerSelectorConfig(options, values.size()));
+  return planning;
 }
 
 template <typename T>
@@ -855,6 +1004,8 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     std::span<const physicalType> values,
     Buffer& buffer,
     const Encoding::Options& options,
+    const subintsplit::RowFrame& rowFrame,
+    PlanningSample* planning,
     uint8_t extraFlags) {
   const bool useVarint = options.useVarintRowCount;
   const uint32_t valueCount = static_cast<uint32_t>(values.size());
@@ -880,19 +1031,25 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     segments = std::move(parsed.value());
   } else {
     // Default behavior: recompute the split boundaries from the sampled data.
-    std::vector<uint64_t> sampleBuf;
-    subintsplit::sampleIntoU64<physicalType>(
-        values, sampleBuf, plannerSamplerConfig(options));
-
-    // An empty allowed set costs every encoding, so this is the production
-    // path unless a caller has deliberately narrowed the inventory.
     const auto selectorConfig = plannerSelectorConfig(options, valueCount);
-    auto selectorResult = subintsplit::selectSplitsRestricted(
-        sampleBuf,
-        kBits,
-        valueCount,
-        options.subIntSplit.allowedEncodings,
-        selectorConfig);
+    subintsplit::SelectorResult selectorResult;
+    if (planning != nullptr) {
+      selectorResult = subintsplit::selectSplitsOverGrid(
+          planning->grid, kBits, selectorConfig);
+    } else {
+      std::vector<uint64_t> sampleBuf;
+      subintsplit::sampleIntoU64<physicalType>(
+          values, sampleBuf, plannerSamplerConfig(options));
+
+      // An empty allowed set costs every encoding, so this is the production
+      // path unless a caller has deliberately narrowed the inventory.
+      selectorResult = subintsplit::selectSplitsRestricted(
+          sampleBuf,
+          kBits,
+          valueCount,
+          options.subIntSplit.allowedEncodings,
+          selectorConfig);
+    }
     segments = std::move(selectorResult.sections);
   }
 
@@ -1017,7 +1174,8 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   // Write final encoding to main buffer.
   const uint32_t prefixSize =
       Encoding::serializePrefixSize(valueCount, useVarint);
-  const uint32_t specificHeader = subintsplit::specificHeaderSize(splitCount);
+  const uint32_t specificHeader = subintsplit::specificHeaderSize(splitCount) +
+      subintsplit::rowFrameHeaderSize(rowFrame);
   uint32_t sectionsSize = 0;
   for (const auto& sv : sectionData) {
     sectionsSize += static_cast<uint32_t>(sv.size());
@@ -1035,7 +1193,15 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
       pos);
 
   encoding::write<uint8_t>(splitCount, pos);
-  encoding::write<uint8_t>(extraFlags, pos);
+  const uint8_t flags = extraFlags |
+      (rowFrame.active() ? subintsplit::kFlagRowFrame : uint8_t{0});
+  encoding::write<uint8_t>(flags, pos);
+
+  if (rowFrame.active()) {
+    encoding::write<uint8_t>(subintsplit::kRowFrameGuard, pos);
+    encoding::write<uint64_t>(rowFrame.slope, pos);
+    encoding::write<uint64_t>(rowFrame.base, pos);
+  }
 
   for (uint8_t s = 0; s < splitCount; ++s) {
     const auto& seg = segments[s];
@@ -1060,6 +1226,10 @@ std::string SubIntSplitEncoding<T>::debugString(int offset) const {
   std::string indent(offset, ' ');
   std::string result = indent +
       "SubIntSplitEncoding sections=" + std::to_string(sections_.size());
+  if (rowFrame_.active()) {
+    result += fmt::format(
+        " rowFrame=(slope={:#x} base={:#x})", rowFrame_.slope, rowFrame_.base);
+  }
   if (deltaEncoded_) {
     result += " delta=yes";
   }
