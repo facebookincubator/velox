@@ -80,13 +80,15 @@ Mathematical Functions
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
 
-.. function:: checked_add(x, y) -> [same as x]
+.. spark:function:: checked_add(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of adding x to y. The types of x and y must be the same.
     For integral and interval types, overflow results in an error. Corresponds
     to Spark's operator ``+`` with ``failOnError`` as true.
 
-.. function:: checked_div(x, y) -> bigint
+.. spark:function:: checked_div(x, y) -> bigint
+   :noindex:
 
     Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
     Supported types are integral types, ``x`` and ``y`` must have the same type.
@@ -98,12 +100,14 @@ Mathematical Functions
     Returns the results of dividing x by y. The types of x and y must be the same.
     Division by zero results in an error. Corresponds to Spark's operator ``/`` with ``failOnError`` as true.
 
-.. function:: checked_multiply(x, y) -> [same as x]
+.. spark:function:: checked_multiply(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``*`` with ``failOnError`` as true.
 
-.. function:: checked_subtract(x, y) -> [same as x]
+.. spark:function:: checked_subtract(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
     For integral and interval types, overflow results in an error. Corresponds
