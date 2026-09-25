@@ -20,6 +20,7 @@
 
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
