@@ -520,6 +520,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // aborted.
   void checkIfAborted(ArbitrationOperation& op);
 
+  // Throws when this ordinary allocation's independent token is cancelled.
+  void checkIfAllocationCancelled(ArbitrationOperation& op);
+
   // Checks if the operation has timed out or not. The function throws if timed
   // out.
   void checkIfTimeout(ArbitrationOperation& op);
@@ -603,7 +606,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // Removes the arbitration operation with 'id' from the global arbitration
   // wait list. It is invoked by participant abort or global arbitration wait
   // time out.
-  void removeGlobalArbitrationWaiter(uint64_t id);
+  // Returns true only when a still-pending waiter was removed.
+  bool removeGlobalArbitrationWaiter(uint64_t id);
 
   // Increments the global arbitration wait count in both arbitrator and the
   // corresponding operator's runtime stats.

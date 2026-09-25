@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include <folly/CancellationToken.h>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
@@ -499,6 +500,43 @@ class ScopedMemoryArbitrationContext {
   MemoryArbitrationContext* const savedArbitrationCtx_{nullptr};
   MemoryArbitrationContext currentArbitrationCtx_;
 };
+
+/// Cancellation attached to one ordinary memory allocation. This is separate
+/// from MemoryArbitrationContext: installing it must not make the caller
+/// underMemoryArbitration() or relax normal reservation checks.
+struct MemoryAllocationCancellationContext {
+  folly::CancellationToken taskToken;
+  folly::CancellationToken operationToken;
+
+  bool canBeCancelled() const {
+    return taskToken.canBeCancelled() || operationToken.canBeCancelled();
+  }
+
+  bool cancellationRequested() const {
+    return taskToken.isCancellationRequested() ||
+        operationToken.isCancellationRequested();
+  }
+};
+
+class ScopedMemoryAllocationCancellationContext {
+ public:
+  ScopedMemoryAllocationCancellationContext(
+      folly::CancellationToken taskToken,
+      folly::CancellationToken operationToken);
+  ~ScopedMemoryAllocationCancellationContext();
+
+  ScopedMemoryAllocationCancellationContext(
+      const ScopedMemoryAllocationCancellationContext&) = delete;
+  ScopedMemoryAllocationCancellationContext& operator=(
+      const ScopedMemoryAllocationCancellationContext&) = delete;
+
+ private:
+  const MemoryAllocationCancellationContext* const savedContext_{nullptr};
+  const MemoryAllocationCancellationContext context_;
+};
+
+const MemoryAllocationCancellationContext*
+memoryAllocationCancellationContext();
 
 /// Object used to setup arbitration section for a memory pool.
 class MemoryPoolArbitrationSection {
