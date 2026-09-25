@@ -33,6 +33,7 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
@@ -1397,6 +1398,96 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
   EXPECT_EQ(outCount[2], 2);
 }
 
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateUncompactedSlice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  std::vector<int64_t> sums = {10, 20, 0, 40, 50};
+  std::vector<int64_t> counts = {1, 2, 0, 4, 5};
+  std::vector<bool> sumValid = {true, true, false, true, true};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  cudf::strings_column_view strings(stateCol->view());
+  EXPECT_EQ(
+      strings.chars_size(stream),
+      static_cast<int64_t>(sums.size()) * 32); // 32 == kDecimalSumStateSize
+
+  auto slices = cudf::slice(stateCol->view(), {1, 4});
+  ASSERT_EQ(slices.size(), 1);
+  ASSERT_EQ(slices.front().offset(), 1);
+
+  auto result = deserializeDecimalSumState(slices.front(), 2, stream);
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  ASSERT_EQ(outSum.size(), 3);
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(20));
+  EXPECT_EQ(outCount[0], 2);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(40));
+  EXPECT_EQ(outCount[2], 4);
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // Slice the sum/count inputs first to pin serialization offset handling.
+  // Round-trip through Arrow so the null row has a 0-byte payload, then slice
+  // the state so deserialization must shift both offsets and validity bits.
+  std::vector<int64_t> sums = {-999, 10, 20, 0, 40, 50, 999};
+  std::vector<int64_t> counts = {9, 1, 2, 0, 4, 5, 9};
+  std::vector<bool> sumValid = {true, true, true, false, true, true, true};
+  auto sumParent = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countParent = makeInt64Column(counts, nullptr, stream);
+  auto sumSlices = cudf::slice(sumParent->view(), {1, 6});
+  auto countSlices = cudf::slice(countParent->view(), {1, 6});
+  ASSERT_EQ(sumSlices.size(), 1);
+  ASSERT_EQ(countSlices.size(), 1);
+  ASSERT_EQ(sumSlices.front().offset(), 1);
+  ASSERT_EQ(countSlices.front().offset(), 1);
+  auto stateCol = serializeDecimalSumState(
+      sumSlices.front(), countSlices.front(), stream, mr);
+
+  auto expectedType = ROW({{"s", VARBINARY()}});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{stateCol->view()}},
+      pool(),
+      expectedType,
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+  auto compactStateView = compactTable->view().column(0);
+  cudf::strings_column_view strings(compactStateView);
+  EXPECT_LT(
+      strings.chars_size(stream), static_cast<int64_t>(stateCol->size()) * 32);
+
+  auto slices = cudf::slice(compactStateView, {1, 4});
+  ASSERT_EQ(slices.size(), 1);
+  ASSERT_EQ(slices.front().offset(), 1);
+
+  auto result = deserializeDecimalSumState(slices.front(), 2, stream);
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  ASSERT_EQ(outSum.size(), 3);
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(20));
+  EXPECT_EQ(outCount[0], 2);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(40));
+  EXPECT_EQ(outCount[2], 4);
+}
+
 // Reproduces the TPC-DS Q1 failure in CudfGroupbyFINAL: the streaming final
 // aggregation concatenates its buffered result -- which came straight from
 // serializeDecimalSumState and so keeps a 32-byte payload for null rows -- with
@@ -1604,6 +1695,60 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
   }
 }
 
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
+  auto stream = cudf::get_default_stream();
+
+  // The total payload size is valid, but neither row contains a complete
+  // serialized state. This exercises the per-row check rather than the
+  // aggregate payload-size check.
+  auto offsetsCol = makeFixedWidthColumn<int32_t>(
+      cudf::data_type{cudf::type_id::INT32}, {0, 16, 64}, nullptr, stream);
+  rmm::device_buffer charsBuf(64, stream);
+  auto stateCol = cudf::make_strings_column(
+      2, std::move(offsetsCol), std::move(charsBuf), 0, rmm::device_buffer{});
+
+  VELOX_ASSERT_THROW(
+      deserializeDecimalSumState(stateCol->view(), 2, stream),
+      "Decimal sum state requires every non-null row to be 32 bytes");
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsMisalignedRow) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto sumCol = makeDecimalColumn<int64_t>({200}, 2, nullptr, stream);
+  auto countCol = makeInt64Column({2}, nullptr, stream);
+  auto alignedState =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+  cudf::strings_column_view alignedStrings(alignedState->view());
+
+  // The only non-null row has the correct width, but starts four bytes into
+  // the chars buffer. The aggregate payload checks still accept the layout:
+  // 32 non-null bytes in a 64-byte payload across three rows.
+  auto offsetsCol = makeFixedWidthColumn<int32_t>(
+      cudf::data_type{cudf::type_id::INT32}, {0, 4, 36, 64}, nullptr, stream);
+  rmm::device_buffer charsBuf(64, stream);
+  auto status = cudaMemcpyAsync(
+      static_cast<uint8_t*>(charsBuf.data()) + 4,
+      alignedStrings.chars_begin(stream),
+      32, // kDecimalSumStateSize
+      cudaMemcpyDeviceToDevice,
+      stream.get());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  std::vector<bool> valid = {false, true, false};
+  auto [nullMask, nullCount] = makeNullMask(valid, stream);
+  auto stateCol = cudf::make_strings_column(
+      3,
+      std::move(offsetsCol),
+      std::move(charsBuf),
+      nullCount,
+      std::move(nullMask));
+
+  VELOX_ASSERT_THROW(
+      deserializeDecimalSumState(stateCol->view(), 2, stream),
+      "Decimal sum state requires every non-null row to be 32 bytes and 8-byte aligned");
+}
+
 TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
@@ -1690,6 +1835,50 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
   for (size_t i = 0; i < sums.size(); ++i) {
     bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64Slice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<int64_t> parentSums = {999, 100, 105, 250, -125, -999};
+  std::vector<int64_t> parentCounts = {9, 4, 2, 0, 2, 9};
+  std::vector<bool> parentSumValid = {true, true, true, true, true, true};
+  std::vector<bool> parentCountValid = {true, true, false, true, true, true};
+
+  auto sumParent =
+      makeDecimalColumn<int64_t>(parentSums, 2, &parentSumValid, stream);
+  auto countParent = makeInt64Column(parentCounts, &parentCountValid, stream);
+  auto sumSlices = cudf::slice(sumParent->view(), {1, 5});
+  auto countSlices = cudf::slice(countParent->view(), {1, 5});
+  ASSERT_EQ(sumSlices.size(), 1);
+  ASSERT_EQ(countSlices.size(), 1);
+  ASSERT_EQ(sumSlices.front().offset(), 1);
+  ASSERT_EQ(countSlices.front().offset(), 1);
+
+  auto avgCol =
+      computeDecimalAverage(sumSlices.front(), countSlices.front(), stream, mr);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+
+  std::vector<int64_t> sums = {100, 105, 250, -125};
+  std::vector<int64_t> counts = {4, 2, 0, 2};
+  std::vector<bool> countValid = {true, false, true, true};
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  ASSERT_EQ(outAvg.size(), sums.size());
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = countValid[i] && counts[i] != 0;
     EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
     if (expectedValid) {
       EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
