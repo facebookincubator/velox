@@ -97,6 +97,14 @@ writeSectionHeader(BitSection range, uint32_t encodedSize, char*& pos) {
   encoding::writeUint32(encodedSize, pos);
 }
 
+/// Whether the stream whose SubIntSplit header starts at `dataOffset` stores
+/// zigzag deltas. Such a stream can only be decoded from row zero.
+inline bool isDeltaStream(std::string_view data, uint32_t dataOffset) {
+  NIMBLE_CHECK_LE(
+      dataOffset + 2, data.size(), "SubIntSplit stream is truncated.");
+  return (static_cast<uint8_t>(data[dataOffset + 1]) & kFlagDelta) != 0;
+}
+
 /// Bits in one value of the stream, read from the data type in its Encoding
 /// prefix. The sections of a stream tile exactly this many bits.
 inline int streamValueBits(std::string_view data) {

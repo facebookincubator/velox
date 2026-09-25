@@ -92,6 +92,7 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
       EncodingSizeEstimationTest.cpp
       EstimatorAccuracyTest.cpp
       SubIntSplitDecodeOptionsTest.cpp
+      SubIntSplitDeltaTest.cpp
       SubIntSplitPlannerOptionsTest.cpp
   )
 endif()
