@@ -26,6 +26,9 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/writer/Writer.h"
+#endif
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -132,13 +135,30 @@ class IcebergReadTest : public test::IcebergTestBase {
       const RowTypePtr& scanSpecType,
       const std::vector<FieldIdColumnSpec>& columns,
       const std::vector<RowVectorPtr>& expected,
-      const std::optional<std::string>& subfieldFilter = std::nullopt) {
+      const std::optional<std::string>& subfieldFilter = std::nullopt,
+      const std::unordered_map<std::string, std::string>& tableParameters =
+          {}) {
     exec::test::PlanBuilder planBuilder;
     auto& tableScanBuilder = planBuilder.startTableScan()
                                  .connectorId(test::kIcebergConnectorId)
                                  .outputType(outputType)
-                                 .dataColumns(scanSpecType)
-                                 .assignments(makeFieldIdAssignments(columns));
+                                 .dataColumns(scanSpecType);
+    if (tableParameters.empty()) {
+      tableScanBuilder.assignments(makeFieldIdAssignments(columns));
+    } else {
+      VELOX_CHECK(!subfieldFilter.has_value());
+      tableScanBuilder
+          .tableHandle(
+              std::make_shared<HiveTableHandle>(
+                  test::kIcebergConnectorId,
+                  "iceberg_table",
+                  common::SubfieldFilters{},
+                  nullptr,
+                  scanSpecType,
+                  std::vector<std::string>{},
+                  tableParameters))
+          .assignments(makeFieldIdAssignments(columns));
+    }
     if (subfieldFilter.has_value()) {
       tableScanBuilder.subfieldFilter(*subfieldFilter);
     }
@@ -156,6 +176,31 @@ class IcebergReadTest : public test::IcebergTestBase {
     const auto dataSink =
         createDataSinkAndAppendData(data, outputDirectory->getPath());
     dataSink->close();
+    return outputDirectory;
+  }
+
+  std::shared_ptr<test::TempDirectoryPath> writeLegacyParquetData(
+      const std::vector<RowVectorPtr>& data) {
+    VELOX_CHECK(!data.empty());
+    fileFormat_ = dwio::common::FileFormat::PARQUET;
+    auto outputDirectory = test::TempDirectoryPath::create();
+    const auto filePath =
+        fmt::format("{}/legacy.parquet", outputDirectory->getPath());
+
+    auto writerPool =
+        memory::memoryManager()->addRootPool("LegacyParquetWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    options.formatSpecificOptions =
+        std::make_shared<parquet::ParquetWriterOptions>();
+    auto sink = dwio::common::FileSink::create(
+        fmt::format("file:{}", filePath), {.pool = writerPool.get()});
+    parquet::Writer writer(
+        std::move(sink), options, writerPool, data.front()->rowType());
+    for (const auto& vector : data) {
+      writer.write(vector);
+    }
+    writer.close();
     return outputDirectory;
   }
 
@@ -470,6 +515,55 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
         readCase.columns,
         {readCase.expected});
   }
+}
+
+TEST_F(IcebergReadTest, readLegacyParquetByFieldId) {
+  const auto physicalType =
+      ROW({"legacy_id", "legacy_label"}, {BIGINT(), VARCHAR()});
+  const std::vector<RowVectorPtr> data{makeRowVector(
+      physicalType->names(),
+      {makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<std::string>({"a", "b", "c"})})};
+  const auto outputDirectory = writeLegacyParquetData(data);
+
+  const auto outputType = ROW({"label", "id"}, {VARCHAR(), BIGINT()});
+  const auto tableType = ROW({"id", "label"}, {BIGINT(), VARCHAR()});
+  assertParquetFieldIdRead(
+      outputDirectory->getPath(),
+      outputType,
+      tableType,
+      {
+          {"id", "id", BIGINT(), makeFieldId(1), {}},
+          {"label", "label", VARCHAR(), makeFieldId(2), {}},
+      },
+      {makeRowVector(
+          outputType->names(),
+          {makeFlatVector<std::string>({"a", "b", "c"}),
+           makeFlatVector<int64_t>({10, 20, 30})})},
+      std::nullopt,
+      {{"schema.name-mapping.default",
+        R"([{"field-id":1,"names":["legacy_id"]},{"field-id":2,"names":["legacy_label"]}])"}});
+}
+
+TEST_F(IcebergReadTest, defaultNameMappingDoesNotReuseName) {
+  const auto physicalType = ROW({"status"}, {VARCHAR()});
+  const std::vector<RowVectorPtr> data{makeRowVector(
+      physicalType->names(),
+      {makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
+  const auto outputDirectory = writeLegacyParquetData(data);
+
+  assertParquetFieldIdRead(
+      outputDirectory->getPath(),
+      physicalType,
+      physicalType,
+      {{"status", "status", VARCHAR(), makeFieldId(2), {}}},
+      {makeRowVector(
+          physicalType->names(),
+          {makeNullableFlatVector<std::string>(
+              {std::nullopt, std::nullopt, std::nullopt})})},
+      std::nullopt,
+      {{"schema.name-mapping.default",
+        R"([{"field-id":1,"names":["status"]},{"field-id":2,"names":[]}])"}});
 }
 
 TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
