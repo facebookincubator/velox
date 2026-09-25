@@ -24,6 +24,7 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/EventCount.h>
@@ -1565,26 +1566,25 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
   }
 }
 
-// Regression test: aborting a source task while UCXX tagRecv requests are
-// in-flight must not crash.  Before the deferred-request-cleanup fix,
-// UcxExchangeSource::cleanUp() would destroy the request (and its GPU
-// buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
-// ucp_mem_type_unpack.  The fix moves outstanding requests to
-// Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
-TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
+// Smoke test: aborting a source task after starting a UCX exchange must not
+// crash or leave the sink driver hanging.
+TEST_P(UcxExchangeTest, sourceTaskAbortDoesNotCrashOrHang) {
   // This test doesn't use parameters — run only for the first param set.
   {
     ExchangeTestParams p = GetParam();
     if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
         p.numChunks != 100 || p.numUpstreamTasks != 1 ||
         p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "deferredRequestCleanupOnTaskAbort: runs only once";
+      GTEST_SKIP() << "sourceTaskAbortDoesNotCrashOrHang: runs only once";
     }
   }
 
   // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
   config.intraNodeExchange = false;
 
   const std::string taskPrefix = getUniqueTaskPrefix();
@@ -1593,7 +1593,7 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   const int numPartitions = 1;
   const int partitionId = 0;
   const int numDrivers = 1;
-  // Enough data to keep UCXX transfers actively in-flight when we abort.
+  // Generate data for the exchange before aborting the source.
   const int numChunks = 50;
   const int numRowsPerChunk = 100000;
 
@@ -1625,18 +1625,19 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   sourceMock->run();
   sinkDriver->run();
 
-  // 4. Wait for UCXX transfers to be actively in-flight.
+  // 4. Allow the exchange to start before aborting.
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // 5. Abort the source task while transfers are in-flight.
-  //    This triggers UcxExchangeServer::close() which cancels tagSend,
-  //    and eventually UcxExchangeSource::cleanUp() which must defer
-  //    the request (with its GPU buffer) to Communicator::deferredRequests_.
+  // 5. Stop the mock publisher, which is not owned by the task, so it cannot
+  //    enqueue into a terminated output queue after abort.
+  sourceMock->requestStop();
+  sourceMock->joinThreads();
+
   srcTask->requestAbort();
   queueManager_->removeTask(srcTaskId);
 
   // 6. Wait for the sink driver to complete (it should detect the abort
-  //    and finish, not crash with cudaErrorIllegalAddress).
+  //    and finish without crashing).
   auto future =
       std::async(std::launch::async, [&]() { sinkDriver->joinThreads(); });
   auto status = future.wait_for(std::chrono::seconds(15));
@@ -1645,19 +1646,13 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
     sinkTask->requestAbort();
     future.wait();
     FAIL() << "Sink driver did not complete within 15s after source abort"
-           << " — possible hang in UCXX request cleanup";
+           << " — possible exchange abort hang";
   }
 
-  // 7. Join source mock threads.
-  sourceMock->joinThreads();
-
-  // 8. Allow Communicator's event loop to sweep deferred requests.
+  // 7. Allow the Communicator's event loop to run before teardown.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // If we reach here without crashing, the deferred cleanup is working.
-  VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
-
-  config.intraNodeExchange = origIntraNode;
+  VLOG(0) << "sourceTaskAbortDoesNotCrashOrHang: completed without crash";
 }
 
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
