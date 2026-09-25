@@ -64,7 +64,7 @@ target_link_libraries(
 
 add_executable(velox_hash_rows_benchmark HashRowsBenchmark.cpp)
 
-target_link_libraries(velox_hash_rows_benchmark Folly::folly Folly::follybenchmark)
+target_link_libraries(velox_hash_rows_benchmark velox_test_util Folly::folly Folly::follybenchmark)
 
 add_executable(velox_row_container_list_rows_benchmark RowContainerListRowsBenchmark.cpp)
 

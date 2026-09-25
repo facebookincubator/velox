@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <chrono>
 
+#include "velox/common/testutil/TestValue.h"
+
 namespace facebook::velox::exec {
 
 /// Adaptive prefetch look-ahead for loops with random memory accesses where
@@ -53,6 +55,14 @@ class AdaptivePrefetch {
     auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::steady_clock::now() - start_)
                          .count();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::AdaptivePrefetch::computeLookAhead",
+        &elapsedNs);
+    // The measurement may be shorter than the clock's resolution.
+    if (elapsedNs <= 0) {
+      lookAhead_ = kMaxLookAhead;
+      return;
+    }
     lookAhead_ = std::clamp(
         static_cast<int32_t>(
             kCoefficient * kAssumedDramLatencyNs * kMeasurementIterations /
