@@ -24,6 +24,7 @@ The following table shows the list of already supported encodings.
 | **Nullable** | Nullable data | Explicit null bitmap + non-null values stream. |
 | **SparseBool** | Skewed on false/true | Stores positions of the minority boolean value. |
 | **Prefix** | Shared prefixes | Prefix-based string encoding. |
+| **SubIntSplit** | Structured 32/64-bit numeric values | Splits physical values into independently encoded bit ranges. See [SubIntSplit encoding](SubIntSplit.md). |
 
 ## Cascading (Recursive) Encoding
 
