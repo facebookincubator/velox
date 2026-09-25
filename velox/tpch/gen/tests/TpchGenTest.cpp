@@ -849,6 +849,116 @@ TEST_F(TpchGenTestCustomerTest, reproducible) {
   }
 }
 
+class TpchGenTestForeignKeyTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    pool_ = memory::memoryManager()->addLeafPool("TpchGenTestForeignKeyTest");
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_;
+};
+
+// Ensures that FK values are within the range of the actual row counts.
+TEST_F(TpchGenTestForeignKeyTest, smallScaleFactorFKMismatch) {
+  constexpr double scaleFactor = 0.01;
+
+  // Expected row counts at SF=0.01.
+  size_t supplierCount = getRowCount(Table::TBL_SUPPLIER, scaleFactor); // 100
+  size_t partCount = getRowCount(Table::TBL_PART, scaleFactor); // 2,000
+  size_t customerCount = getRowCount(Table::TBL_CUSTOMER, scaleFactor); // 1,500
+  size_t orderCount = getRowCount(Table::TBL_ORDERS, scaleFactor); // 15,000
+  size_t partSuppCount = getRowCount(Table::TBL_PARTSUPP, scaleFactor); // 8,000
+
+  LOG(INFO) << "Row counts for scale_factor 0.01 - supplier: " << supplierCount
+            << ", part: " << partCount << ", customer: " << customerCount
+            << ", order: " << orderCount << ", partsupp: " << partSuppCount;
+
+  // Check lineitem FK values (l_suppkey, l_partkey)
+  auto lineItems = genTpchLineItem(pool_.get(), orderCount, 0, scaleFactor);
+  auto lineItemCount = lineItems->size();
+
+  auto suppKeyVector = lineItems->childAt(2)->asFlatVector<int64_t>();
+  auto partKeyVector = lineItems->childAt(1)->asFlatVector<int64_t>();
+
+  int64_t maxSuppKey = 0;
+  int64_t maxPartKey = 0;
+  size_t suppKeyViolations = 0;
+  size_t partKeyViolations = 0;
+
+  for (size_t i = 0; i < lineItemCount; ++i) {
+    auto sk = suppKeyVector->valueAt(i);
+    auto pk = partKeyVector->valueAt(i);
+
+    if (sk > maxSuppKey)
+      maxSuppKey = sk;
+    if (pk > maxPartKey)
+      maxPartKey = pk;
+
+    if (sk > static_cast<int64_t>(supplierCount))
+      ++suppKeyViolations;
+    if (pk > static_cast<int64_t>(partCount))
+      ++partKeyViolations;
+  }
+
+  LOG(INFO) << "lineitem rows: " << lineItemCount;
+  LOG(INFO) << "l_suppkey: max=" << maxSuppKey
+            << ", violations=" << suppKeyViolations << "/" << lineItemCount;
+  LOG(INFO) << "l_partkey: max=" << maxPartKey
+            << ", violations=" << partKeyViolations << "/" << lineItemCount;
+
+  EXPECT_LE(maxSuppKey, static_cast<int64_t>(supplierCount));
+  EXPECT_LE(maxPartKey, static_cast<int64_t>(partCount));
+  EXPECT_EQ(suppKeyViolations, 0);
+  EXPECT_EQ(partKeyViolations, 0);
+
+  // Check orders FK values (o_custkey)
+  auto orders = genTpchOrders(pool_.get(), orderCount, 0, scaleFactor);
+  auto custKeyVector = orders->childAt(1)->asFlatVector<int64_t>();
+
+  int64_t maxCustKey = 0;
+  size_t custKeyViolations = 0;
+
+  for (size_t i = 0; i < orders->size(); ++i) {
+    auto ck = custKeyVector->valueAt(i);
+    if (ck > maxCustKey)
+      maxCustKey = ck;
+    if (ck > static_cast<int64_t>(customerCount))
+      ++custKeyViolations;
+  }
+
+  LOG(INFO) << "o_custkey: max=" << maxCustKey
+            << ", violations=" << custKeyViolations << "/" << orders->size();
+
+  EXPECT_LE(maxCustKey, static_cast<int64_t>(customerCount));
+  EXPECT_EQ(custKeyViolations, 0);
+
+  // Check partsupp FK values (ps_suppkey)
+  auto partSupps = genTpchPartSupp(pool_.get(), partSuppCount, 0, scaleFactor);
+  auto psSuppKeyVector = partSupps->childAt(1)->asFlatVector<int64_t>();
+
+  int64_t maxPsSuppKey = 0;
+  size_t psSuppKeyViolations = 0;
+
+  for (size_t i = 0; i < partSupps->size(); ++i) {
+    auto sk = psSuppKeyVector->valueAt(i);
+    if (sk > maxPsSuppKey)
+      maxPsSuppKey = sk;
+    if (sk > static_cast<int64_t>(supplierCount))
+      ++psSuppKeyViolations;
+  }
+
+  LOG(INFO) << "ps_suppkey: max=" << maxPsSuppKey
+            << ", violations=" << psSuppKeyViolations << "/"
+            << partSupps->size();
+
+  EXPECT_LE(maxPsSuppKey, static_cast<int64_t>(supplierCount));
+  EXPECT_EQ(psSuppKeyViolations, 0);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
