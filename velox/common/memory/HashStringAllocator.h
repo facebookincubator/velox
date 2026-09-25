@@ -560,7 +560,8 @@ class HashStringAllocator::InputStream : public ByteInputStream {
   }
 
   void seekp(std::streampos pos) final {
-    VELOX_CHECK_GE(pos, 0, "Seeking past start of stream");
+    VELOX_CHECK_GE(
+        static_cast<int64_t>(pos), 0, "Seeking past start of stream");
     setHeader(begin_);
     skipImpl(pos);
   }
