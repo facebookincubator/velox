@@ -16,6 +16,7 @@
 
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include <gtest/gtest.h>
+#include <limits>
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -207,8 +208,7 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
 
-  // TODO Optimize to notEqual(42).
-  VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
+  VELOX_ASSERT_FILTER(notEqual(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
@@ -219,7 +219,8 @@ TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
     ASSERT_TRUE(filter);
     validateSubfield(subfield, {"a"});
 
-    VELOX_ASSERT_FILTER(lessThan(std::numeric_limits<int64_t>::max()), filter);
+    VELOX_ASSERT_FILTER(
+        notEqual(std::numeric_limits<int64_t>::max()), filter);
   }
 
   {
@@ -231,7 +232,7 @@ TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
     validateSubfield(subfield, {"a"});
 
     VELOX_ASSERT_FILTER(
-        greaterThan(std::numeric_limits<int64_t>::min()), filter);
+        notEqual(std::numeric_limits<int64_t>::min()), filter);
   }
 }
 
