@@ -850,6 +850,45 @@ TEST_F(AggregationTest, rangeToDistinct) {
       " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
+TEST_F(AggregationTest, timestampRangeToDistinct) {
+  // Start in millisecond range mode, then switch to exact distinct value ids.
+  auto firstBatch = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp::fromMillis(1),
+           Timestamp::fromMillis(2),
+           Timestamp::fromMillis(1)}),
+  });
+  auto secondBatch = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp::fromMicros(1'001),
+           Timestamp::fromMicros(1'999),
+           Timestamp::fromMicros(1'001)}),
+  });
+
+  core::PlanNodeId aggNodeId;
+  auto plan = PlanBuilder()
+                  .values({firstBatch, secondBatch})
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp::fromMillis(1),
+           Timestamp::fromMillis(2),
+           Timestamp::fromMicros(1'001),
+           Timestamp::fromMicros(1'999)}),
+      makeFlatVector<int64_t>({2, 1, 2, 1}),
+  });
+
+  auto task = AssertQueryBuilder(plan).maxDrivers(1).assertResults(expected);
+  const auto runtimeStats =
+      toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+  EXPECT_EQ(
+      static_cast<int64_t>(BaseHashTable::HashMode::kArray),
+      runtimeStats.at(std::string(BaseHashTable::kHashMode)).sum);
+}
+
 TEST_F(AggregationTest, allKeyTypes) {
   // Covers different key types. Unlike the integer/string tests, the
   // hash table begins life in the generic mode, not array or
