@@ -34,6 +34,7 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -42,6 +43,10 @@ using namespace facebook::velox::connector;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
+  /// DWIO bytes read, preserved separately from ReadFile bytes.
+  static constexpr std::string_view kDwioStorageReadBytes{
+      "dwio.storageReadBytes"};
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,

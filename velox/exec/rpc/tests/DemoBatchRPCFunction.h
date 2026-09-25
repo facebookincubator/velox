@@ -92,11 +92,10 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   int32_t pendingBatchSize() const override;
 
-  /// Test hook: a batch carrying any errored response is treated as backend
-  /// overload (kError), an empty batch as kNone, anything else as a clean
-  /// drain (kSuccess). Lets a test drive the operator's AIMD paths in BATCH
-  /// mode; inert unless the backend is configured adaptive, which is off by
-  /// default.
+  /// Treats rate limits and timeouts as overload, other errors as non-overload
+  /// failures, an empty batch as neutral, and every other batch as successful.
+  /// Lets tests drive the operator's AIMD paths in BATCH mode; inert unless the
+  /// backend is configured adaptive, which is off by default.
   CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& responses) const override;
 

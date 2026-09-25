@@ -392,5 +392,51 @@ TEST_F(CountAggregationTest, unknownType) {
       }));
 }
 
+TEST_F(CountAggregationTest, toIntermediate) {
+  constexpr vector_size_t kBatchSize = 10;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 2; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "c", "v", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int64_t>(
+             kBatchSize,
+             [](auto row) { return row; },
+             [](auto row) { return row % 3 == 0; }),
+         makeFlatVector<int64_t>(kBatchSize, [](auto row) { return row; }),
+         makeFlatVector<bool>(
+             kBatchSize, [](auto row) { return row % 2 == 0; })}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"}, {"count(v)", "count()", "count(c)"}, {"", "m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults(
+              "SELECT k, count(v), count(1) FILTER (WHERE m), count(c) "
+              "FROM tmp GROUP BY k");
+
+  const auto stats = toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

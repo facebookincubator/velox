@@ -75,55 +75,68 @@ class HybridFlatMap {
   static HybridFlatMap extractAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes);
 
-  /// Appends the reserved metadata attribute to `attributes`, which must not
-  /// already contain it. The attribute is owned by the schema, so a caller
-  /// supplying its own copy is setting reserved state it does not control.
+  /// Appends the reserved metadata attribute when absent, or replaces its
+  /// stale value in place.
   void setAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes) const;
-
-  /// Validates full-plan group IDs and keys. Accessors decouple validation
-  /// from writer- and reader-side group representations.
-  template <typename GroupIdAt, typename GroupKeysAt>
-  static void
-  validate(size_t groupCount, GroupIdAt groupIdAt, GroupKeysAt groupKeysAt) {
-    NIMBLE_CHECK_GT(
-        groupCount, 1, "Hybrid FlatMap requires at least two groups.");
-    folly::F14FastSet<uint32_t> groupIds;
-    folly::F14FastSet<std::string> keys;
-    bool hasDefaultGroup{false};
-    for (size_t i = 0; i < groupCount; ++i) {
-      const auto groupId = groupIdAt(i);
-      const auto& groupKeys = groupKeysAt(i);
-      const bool uniqueGroupId = groupIds.insert(groupId).second;
-      NIMBLE_CHECK(
-          uniqueGroupId, "Duplicate Hybrid FlatMap group ID: {}.", groupId);
-      if (groupId == kDefaultGroupId) {
-        hasDefaultGroup = true;
-        NIMBLE_CHECK(
-            groupKeys.empty(),
-            "Hybrid FlatMap Default group cannot contain group keys.");
-      } else {
-        NIMBLE_CHECK(
-            !groupKeys.empty(),
-            "Hybrid FlatMap group must contain at least one key: {}.",
-            groupId);
-      }
-      NIMBLE_CHECK(
-          std::is_sorted(groupKeys.begin(), groupKeys.end()),
-          "Hybrid FlatMap group keys must be sorted: {}.",
-          groupId);
-      for (const auto& key : groupKeys) {
-        NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-        const bool uniqueKey = keys.insert(key).second;
-        NIMBLE_CHECK(uniqueKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-      }
-    }
-    NIMBLE_CHECK(
-        hasDefaultGroup, "Hybrid FlatMap must have exactly one Default group.");
-  }
 };
 
 namespace detail {
+
+template <typename GroupIdAt, typename GroupKeysAt>
+void validateHybridFlatMapGroups(
+    size_t groupCount,
+    bool hasDefault,
+    GroupIdAt groupIdAt,
+    GroupKeysAt groupKeysAt) {
+  const auto minGroupCount = 1 + static_cast<size_t>(hasDefault);
+  NIMBLE_CHECK_GE(
+      groupCount,
+      minGroupCount,
+      "Hybrid FlatMap requires at least {} group(s).",
+      minGroupCount);
+  folly::F14FastSet<uint32_t> groupIds;
+  folly::F14FastSet<std::string> keys;
+  bool foundDefault{false};
+  for (size_t i = 0; i < groupCount; ++i) {
+    const auto groupId = groupIdAt(i);
+    const auto& groupKeys = groupKeysAt(i);
+    NIMBLE_CHECK(
+        groupIds.insert(groupId).second,
+        "Duplicate Hybrid FlatMap group ID: {}.",
+        groupId);
+    if (i > 0) {
+      NIMBLE_CHECK_LT(
+          groupIdAt(i - 1),
+          groupId,
+          "Hybrid FlatMap group IDs must be in ascending order.");
+    }
+    if (groupId == HybridFlatMap::kDefaultGroupId) {
+      foundDefault = true;
+      NIMBLE_CHECK(
+          groupKeys.empty(),
+          "Hybrid FlatMap Default group cannot contain group keys.");
+    } else {
+      NIMBLE_CHECK(
+          !groupKeys.empty(),
+          "Hybrid FlatMap group must contain at least one key: {}.",
+          groupId);
+    }
+    NIMBLE_CHECK(
+        std::is_sorted(groupKeys.begin(), groupKeys.end()),
+        "Hybrid FlatMap group keys must be sorted: {}.",
+        groupId);
+    for (const auto& key : groupKeys) {
+      NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
+      NIMBLE_CHECK(
+          keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
+    }
+  }
+  if (hasDefault) {
+    NIMBLE_CHECK(
+        foundDefault, "Hybrid FlatMap must have exactly one Default group.");
+  }
+}
 
 // Normalizes child accessors across the two schema-tree representations:
 // TypeBuilder exposes children by reference (`const TypeBuilder&`) while Type
@@ -199,19 +212,21 @@ bool sameLogicalType(const TypeLike& lhs, const TypeLike& rhs) {
     case Kind::FlatMap: {
       const auto& lhsMap = lhs.asFlatMap();
       const auto& rhsMap = rhs.asFlatMap();
-      NIMBLE_CHECK_GT(
-          lhsMap.childrenCount(), 0, "FlatMap must have at least one child.");
-      NIMBLE_CHECK_GT(
-          rhsMap.childrenCount(), 0, "FlatMap must have at least one child.");
+      const auto lhsChildrenCount = lhsMap.childrenCount();
+      const auto rhsChildrenCount = rhsMap.childrenCount();
+      if (lhsChildrenCount == 0 || rhsChildrenCount == 0) {
+        return lhsChildrenCount == rhsChildrenCount &&
+            lhsMap.keyScalarKind() == rhsMap.keyScalarKind();
+      }
       const auto& lhsValueType = dereferenceType(lhsMap.childAt(0));
-      for (size_t i = 1; i < lhsMap.childrenCount(); ++i) {
+      for (size_t i = 1; i < lhsChildrenCount; ++i) {
         if (!sameLogicalType(
                 lhsValueType, dereferenceType(lhsMap.childAt(i)))) {
           return false;
         }
       }
       const auto& rhsValueType = dereferenceType(rhsMap.childAt(0));
-      for (size_t i = 1; i < rhsMap.childrenCount(); ++i) {
+      for (size_t i = 1; i < rhsChildrenCount; ++i) {
         if (!sameLogicalType(
                 rhsValueType, dereferenceType(rhsMap.childAt(i)))) {
           return false;

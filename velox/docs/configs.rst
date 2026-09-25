@@ -33,6 +33,15 @@ Generic Configuration
      - Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
        and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
        dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.
+   * - merge_join_stream_left_side
+     - bool
+     - true
+     - Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group. When a key
+       is skewed the group can span many input batches and all of them are held until the group is done. With this
+       set, such joins drop the left batches whose rows have been emitted and resume the group from the batches read
+       next, bounding left-side retention to two batches. Only applies to inner and left joins without a filter;
+       every other join type revisits the left group, so the config is inert there. Set to false to restore
+       buffering of the whole group.
    * - max_elements_size_in_repeat_and_sequence
      - integer
      - 10000
@@ -77,10 +86,12 @@ Generic Configuration
      - true
      - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, each value renders in its own
        embedded time zone. If false, values render the UTC instant in the session time zone, so values that compare
-       equal produce equal results. Covers field extraction, formatting, date arithmetic, and ``CAST`` to ``VARCHAR``,
-       ``DATE`` and ``TIME``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
-       SECOND`` operates on milliseconds and never consults a time zone. ``CAST`` to ``TIMESTAMP`` is governed by
-       ``adjust_timestamp_to_session_timezone``.
+       equal produce equal results. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which
+       report the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``,
+       ``TIME`` and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL
+       DAY TO SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
+       ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false,
+       ``legacy_timestamp_with_timezone`` selects the embedded or session time zone.
    * - track_operator_cpu_usage
      - bool
      - true

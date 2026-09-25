@@ -185,6 +185,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
 ///   filters := {a: gt(0)}
 ///   sampleRate := 0.1
 ///   return value is a < b
+///
+/// A null 'expr', a scan with no remaining filter, returns nullptr.
 core::TypedExprPtr extractFiltersFromRemainingFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,

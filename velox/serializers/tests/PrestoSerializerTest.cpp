@@ -837,6 +837,36 @@ class PrestoSerializerTest
   folly::Random::DefaultGenerator rng_;
 };
 
+TEST(PrestoVectorSerdeTest, estimateColumnarChannels) {
+  EXPECT_EQ(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(
+          *ROW("c", BIGINT())),
+      2);
+  EXPECT_EQ(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(
+          *ROW("c", VARCHAR())),
+      3);
+  EXPECT_EQ(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(
+          *ROW("c", ROW({}))),
+      2);
+  EXPECT_EQ(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(
+          *ROW("c", ARRAY(BIGINT()))),
+      4);
+  EXPECT_EQ(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(*ROW({
+          {"fixed", BIGINT()},
+          {"variable", VARCHAR()},
+          {"complex", MAP(VARCHAR(), ROW({{"a", BIGINT()}, {"b", VARCHAR()}}))},
+      })),
+      17);
+  VELOX_ASSERT_THROW(
+      serializer::presto::PrestoVectorSerde::estimateColumnarChannels(
+          *ROW("c", FUNCTION({BIGINT()}, BIGINT()))),
+      "Unsupported type: FUNCTION");
+}
+
 TEST_P(PrestoSerializerTest, basic) {
   vector_size_t numRows = 1'000;
   auto rowVector = makeTestVector(numRows);

@@ -269,7 +269,8 @@ class HybridFlatMapType : public Type {
   /// Returns the scalar type used by map keys and group keys streams.
   ScalarKind keyScalarKind() const;
 
-  /// Returns the number of physical groups, including Default.
+  /// Returns the number of physical groups present in this schema. Complete
+  /// writer schemas include Default; projected schemas may omit it.
   size_t groupCount() const;
 
   /// Returns the group at zero-based schema-order `index`. The index is an
@@ -277,7 +278,8 @@ class HybridFlatMapType : public Type {
   /// `defaultGroup()` for Default.
   const Group& groupAt(size_t index) const;
 
-  /// Returns the reserved Default group.
+  /// Returns the reserved Default group. Fails when a projected schema omitted
+  /// Default because it was not selected.
   const Group& defaultGroup() const;
 
   /// Returns the schema-order index of the configured group containing `key`.
@@ -285,7 +287,7 @@ class HybridFlatMapType : public Type {
   /// both keys routed to Default and keys unknown to the schema.
   std::optional<size_t> findGroup(std::string_view key) const;
 
-  /// Returns the common logical value type using Default's real subtree.
+  /// Returns the common logical value type from the first group.
   const Type& valueType() const;
 
  private:
@@ -459,49 +461,60 @@ bool visitValueStreamLeaves(const TypeT& type, Visitor&& visit) {
   return visitValueStreamLeaves(type, visitRef);
 }
 
-/// Visits stream offsets whose presence proves `type` has data in the current
-/// stripe. Unlike visitValueStreamLeaves(), this includes container presence
-/// streams such as Row and FlatMap null streams, and nested FlatMap in-map
-/// streams.
-template <typename Visitor>
-bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
+// Invokes visitType before each node, then visits that node's presence streams
+// in descriptor order. A true stream-visitor result stops the traversal.
+template <typename TypeVisitor, typename StreamVisitor>
+bool visitPresenceStreamOffsets(
+    const Type& type,
+    uint32_t level,
+    TypeVisitor& visitType,
+    StreamVisitor& visitStream) {
+  visitType(type, level);
   switch (type.kind()) {
     case Kind::Scalar:
-      return visit(type.asScalar().scalarDescriptor().offset());
+      return visitStream(type.asScalar().scalarDescriptor().offset());
     case Kind::TimestampMicroNano:
-      return visit(type.asTimestampMicroNano().microsDescriptor().offset()) ||
-          visit(type.asTimestampMicroNano().nanosDescriptor().offset());
+      return visitStream(
+                 type.asTimestampMicroNano().microsDescriptor().offset()) ||
+          visitStream(type.asTimestampMicroNano().nanosDescriptor().offset());
     case Kind::Array: {
       const auto& array = type.asArray();
-      return visit(array.lengthsDescriptor().offset()) ||
-          visitPresenceStreamOffsets(*array.elements(), visit);
+      return visitStream(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *array.elements(), level + 1, visitType, visitStream);
     }
     case Kind::ArrayWithOffsets: {
       const auto& array = type.asArrayWithOffsets();
-      return visit(array.offsetsDescriptor().offset()) ||
-          visit(array.lengthsDescriptor().offset()) ||
-          visitPresenceStreamOffsets(*array.elements(), visit);
+      return visitStream(array.offsetsDescriptor().offset()) ||
+          visitStream(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *array.elements(), level + 1, visitType, visitStream);
     }
     case Kind::Map: {
       const auto& map = type.asMap();
-      return visit(map.lengthsDescriptor().offset()) ||
-          visitPresenceStreamOffsets(*map.keys(), visit) ||
-          visitPresenceStreamOffsets(*map.values(), visit);
+      return visitStream(map.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *map.keys(), level + 1, visitType, visitStream) ||
+          visitPresenceStreamOffsets(
+                 *map.values(), level + 1, visitType, visitStream);
     }
     case Kind::SlidingWindowMap: {
       const auto& map = type.asSlidingWindowMap();
-      return visit(map.offsetsDescriptor().offset()) ||
-          visit(map.lengthsDescriptor().offset()) ||
-          visitPresenceStreamOffsets(*map.keys(), visit) ||
-          visitPresenceStreamOffsets(*map.values(), visit);
+      return visitStream(map.offsetsDescriptor().offset()) ||
+          visitStream(map.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *map.keys(), level + 1, visitType, visitStream) ||
+          visitPresenceStreamOffsets(
+                 *map.values(), level + 1, visitType, visitStream);
     }
     case Kind::Row: {
       const auto& row = type.asRow();
-      if (visit(row.nullsDescriptor().offset())) {
+      if (visitStream(row.nullsDescriptor().offset())) {
         return true;
       }
       for (size_t i = 0; i < row.childrenCount(); ++i) {
-        if (visitPresenceStreamOffsets(*row.childAt(i), visit)) {
+        if (visitPresenceStreamOffsets(
+                *row.childAt(i), level + 1, visitType, visitStream)) {
           return true;
         }
       }
@@ -509,12 +522,13 @@ bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
     }
     case Kind::FlatMap: {
       const auto& flatMap = type.asFlatMap();
-      if (visit(flatMap.nullsDescriptor().offset())) {
+      if (visitStream(flatMap.nullsDescriptor().offset())) {
         return true;
       }
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        if (visit(flatMap.inMapDescriptorAt(i).offset()) ||
-            visitPresenceStreamOffsets(*flatMap.childAt(i), visit)) {
+        if (visitStream(flatMap.inMapDescriptorAt(i).offset()) ||
+            visitPresenceStreamOffsets(
+                *flatMap.childAt(i), level + 1, visitType, visitStream)) {
           return true;
         }
       }
@@ -522,14 +536,15 @@ bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
     }
     case Kind::HybridFlatMap: {
       const auto& hybridFlatMap = type.asHybridFlatMap();
-      if (visit(hybridFlatMap.nullsDescriptor().offset())) {
+      if (visitStream(hybridFlatMap.nullsDescriptor().offset())) {
         return true;
       }
       for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
         const auto& group = hybridFlatMap.groupAt(i);
-        if (visit(group.keyDescriptor.offset()) ||
-            visit(group.inMapDescriptor.offset()) ||
-            visitPresenceStreamOffsets(*group.valueType, visit)) {
+        if (visitStream(group.keyDescriptor.offset()) ||
+            visitStream(group.inMapDescriptor.offset()) ||
+            visitPresenceStreamOffsets(
+                *group.valueType, level + 1, visitType, visitStream)) {
           return true;
         }
       }
@@ -540,10 +555,20 @@ bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
   }
 }
 
-template <typename Visitor>
-bool visitPresenceStreamOffsets(const Type& type, Visitor&& visit) {
-  auto&& visitRef = std::forward<Visitor>(visit);
-  return visitPresenceStreamOffsets(type, visitRef);
+/// Visits stream offsets whose presence proves `type` has data in the current
+/// stripe. Unlike visitValueStreamLeaves(), this includes container presence
+/// streams such as Row and FlatMap null streams, and nested FlatMap in-map
+/// streams.
+template <typename StreamVisitor>
+bool visitPresenceStreamOffsets(const Type& type, StreamVisitor& visitStream) {
+  static auto visitType = [](const Type&, uint32_t) {};
+  return visitPresenceStreamOffsets(type, 0, visitType, visitStream);
+}
+
+template <typename StreamVisitor>
+bool visitPresenceStreamOffsets(const Type& type, StreamVisitor&& visitStream) {
+  auto&& visitStreamRef = std::forward<StreamVisitor>(visitStream);
+  return visitPresenceStreamOffsets(type, visitStreamRef);
 }
 
 } // namespace facebook::nimble

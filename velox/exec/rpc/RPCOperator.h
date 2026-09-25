@@ -118,6 +118,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionWindowFinal{
       "rpcCongestionWindowFinal"};
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
+  static inline const std::string kRpcCongestionOverloadShrinks{
+      "rpcCongestionOverloadShrinks"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -130,9 +132,7 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
-  // Per-tier RPCRateLimiter observability (capacity trajectory), refreshed on
-  // every stats() call. The rpcCongestion* stats above are the per-DRIVER
-  // window; these are the capacity shared by every driver on the tier.
+  // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
@@ -145,6 +145,12 @@ class RPCOperator : public exec::Operator {
   /// the RPC executor threads, so it moves even while the driver is blocked.
   static inline const std::string kRpcCompletionsSignaled{
       "rpcCompletionsSignaled"};
+  /// Monotonic count of retry attempts the function's transports have
+  /// scheduled. A retry is neither a dispatch nor a completion, so a request
+  /// climbing a doubling backoff schedule leaves both counters above frozen
+  /// for as long as the ladder runs. Advances from the transport executor
+  /// threads, so it moves even while the driver is blocked.
+  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
 
  private:
   // How much of the accumulator a dispatch is willing to send.
@@ -198,8 +204,7 @@ class RPCOperator : public exec::Operator {
   // the whole input against a busy backend.
   bool inputBufferIsFull() const;
 
-  // Returns false when the flush did not happen: nothing accumulated, or the
-  // tier had no free slot. Callers loop on this so they stop rather than spin.
+  // Returns true if at least one accumulated row was admitted and flushed.
   bool flushBatchRequests(int32_t maxRows = 0);
 
   // Builds the output RowVector from a completed batch (BATCH mode).
@@ -243,7 +248,7 @@ class RPCOperator : public exec::Operator {
   RowVectorPtr finishIfDrained();
 
   // Feeds one drained unit's verdict to both controllers -- the per-driver
-  // window and the backend's shared cap. They must back off together: a
+  // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
   void recordCongestion(
@@ -261,10 +266,8 @@ class RPCOperator : public exec::Operator {
   std::optional<exec::BlockingReason> tryClaimOrParkOnBatch(
       ContinueFuture* future,
       bool isBackpressure);
-  // Asks the backend whether it can take work and parks on the answer.
-  // admitOrWait() decides and enrols under one lock, so there is no window in
-  // which the caller is neither admitted nor waiting on anything.
-  exec::BlockingReason parkOnTierCapacity(ContinueFuture* future);
+  // Parks if shared admission is full; otherwise returns kNotBlocked.
+  exec::BlockingReason parkOnAdmission(ContinueFuture* future);
 
   // Hands 'waitFuture' to the driver and starts a block-wait measurement.
   exec::BlockingReason
@@ -305,17 +308,18 @@ class RPCOperator : public exec::Operator {
   void addLiveProgressStats(exec::OperatorStats& stats, bool includeGauges)
       const;
 
-  // The two objects addLiveProgressStats() reads. They are published here
-  // instead of being read from state_ / limiter_ directly because stats() runs
-  // on the task stats collector thread while the driver thread may be in
-  // initialize() (which sets limiter_) or close() (which drops state_), and
-  // racing on the pointers themselves is undefined behaviour. Holding the read
-  // lock across the sample also keeps close() from freeing RPCState underneath
-  // an in-progress read. Off every hot path: written twice per operator, read
-  // once per stats sample.
+  // The objects addLiveProgressStats() reads. They are published here instead
+  // of being read from state_ / limiter_ / function_ directly because stats()
+  // runs on the task stats collector thread while the driver thread may be in
+  // initialize() (which sets limiter_ and function_) or close() (which drops
+  // state_ and function_), and racing on the pointers themselves is undefined
+  // behaviour. Holding the read lock across the sample also keeps close() from
+  // freeing RPCState or the function underneath an in-progress read. Off every
+  // hot path: written twice per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    std::shared_ptr<AsyncRPCFunction> function;
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
@@ -324,14 +328,11 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Identifies the provisioned capacity this operator admits against: a
-  // backend tier plus the credential used to reach it (from
-  // function_->tierKey()). Everything sharing this key shares one quota.
-  std::string tierKey_;
+  // Operators with the same admission key share rate-limiter capacity.
+  std::string admissionKey_;
 
-  // Admission control for tierKey_, resolved before the first dispatch. Points
-  // into the process-scoped RPCRateLimiterRegistry, which outlives every
-  // operator and every token captured into a continuation.
+  // Process-scoped controller for admissionKey_, resolved before the first
+  // dispatch; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
@@ -406,10 +407,9 @@ class RPCOperator : public exec::Operator {
   // Whether we've detected the finish condition.
   bool finished_{false};
 
-  // Timeout for batch RPC calls (30 minutes).
-  // This is a ceiling — the operator returns as soon as results are ready.
-  // Batch LLM inference can take many minutes due to MetaGen queuing
-  // and GPU scheduling, so the timeout needs generous headroom.
+  // Ceiling for batch RPC calls; the operator returns as soon as results are
+  // ready. An offline batch job can take many minutes in backend queueing and
+  // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats.

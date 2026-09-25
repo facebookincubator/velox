@@ -32,7 +32,8 @@ using namespace facebook::velox::functions;
 namespace facebook::velox::functions {
 extern void registerSubscriptFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner = {});
 }
 
 int main(int argc, char** argv) {

@@ -7252,6 +7252,36 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
   testCurrentTime(1717243200000, "America/Los_Angeles", 18000000, 421);
 }
 
+TEST_F(DateTimeFunctionsTest, currentTimeMissingTimeZone) {
+  const auto currentTime = [&]() {
+    return evaluateOnce<int64_t>(
+        "current_time()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        TIME_WITH_TIME_ZONE());
+  };
+
+  {
+    queryCtx_->testingOverrideConfigUnsafe({});
+    VELOX_ASSERT_USER_THROW(currentTime(), "Timezone cannot be null");
+  }
+
+  {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+    });
+    VELOX_ASSERT_USER_THROW(currentTime(), "Timezone cannot be null");
+  }
+
+  {
+    queryCtx_->testingOverrideConfigUnsafe({});
+    const std::vector<core::TypedExprPtr> plans{
+        makeTypedExpr("current_time()", ROW({}))};
+    EXPECT_NO_THROW({ exec::ExprSet exprSet(plans, &execCtx_, true); });
+  }
+}
+
 TEST_F(DateTimeFunctionsTest, currentTimezone) {
   {
     setQueryTimeZone("Asia/Kolkata");

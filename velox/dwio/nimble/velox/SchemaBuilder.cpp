@@ -358,17 +358,14 @@ const StreamDescriptorBuilder& FlatMapTypeBuilder::addChild(
 
 HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
     SchemaBuilder& schemaBuilder,
-    ScalarKind keyScalarKind)
+    ScalarKind keyScalarKind,
+    bool requiresDefaultGroup)
     : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
       keyScalarKind_{keyScalarKind},
+      requiresDefaultGroup_{requiresDefaultGroup},
       nullsDescriptor_{
           schemaBuilder_.allocateStreamOffset(),
-          ScalarKind::Bool} {
-  NIMBLE_USER_CHECK(
-      HybridFlatMap::supportedKeyKind(keyScalarKind_),
-      "Hybrid FlatMap key kind is unsupported: {}.",
-      keyScalarKind_);
-}
+          ScalarKind::Bool} {}
 
 const StreamDescriptorBuilder& HybridFlatMapTypeBuilder::nullsDescriptor()
     const {
@@ -377,6 +374,10 @@ const StreamDescriptorBuilder& HybridFlatMapTypeBuilder::nullsDescriptor()
 
 ScalarKind HybridFlatMapTypeBuilder::keyScalarKind() const {
   return keyScalarKind_;
+}
+
+bool HybridFlatMapTypeBuilder::requiresDefaultGroup() const {
+  return requiresDefaultGroup_;
 }
 
 HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
@@ -531,12 +532,25 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 }
 
 std::shared_ptr<HybridFlatMapTypeBuilder>
-SchemaBuilder::createHybridFlatMapTypeBuilder(ScalarKind keyScalarKind) {
+SchemaBuilder::createHybridFlatMapTypeBuilder(
+    ScalarKind keyScalarKind,
+    bool projection) {
+  NIMBLE_USER_CHECK(
+      HybridFlatMap::supportedKeyKind(keyScalarKind),
+      "Hybrid FlatMap key kind is unsupported: {}.",
+      keyScalarKind);
   struct MakeSharedEnabler : public HybridFlatMapTypeBuilder {
-    MakeSharedEnabler(SchemaBuilder& schemaBuilder, ScalarKind keyScalarKind)
-        : HybridFlatMapTypeBuilder(schemaBuilder, keyScalarKind) {}
+    MakeSharedEnabler(
+        SchemaBuilder& schemaBuilder,
+        ScalarKind keyScalarKind,
+        bool projection)
+        : HybridFlatMapTypeBuilder(
+              schemaBuilder,
+              keyScalarKind,
+              /*requiresDefaultGroup=*/!projection) {}
   };
-  auto type = std::make_shared<MakeSharedEnabler>(*this, keyScalarKind);
+  auto type =
+      std::make_shared<MakeSharedEnabler>(*this, keyScalarKind, projection);
   roots_.insert(type);
   return type;
 }
@@ -617,15 +631,18 @@ const Type& schemaChild(const std::shared_ptr<const Type>& type) {
 }
 
 void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
-  HybridFlatMap::validate(
+  detail::validateHybridFlatMapGroups(
       hybridMap.groupCount(),
+      hybridMap.requiresDefaultGroup(),
       [&hybridMap](size_t index) { return hybridMap.groupAt(index).groupId; },
       [&hybridMap](size_t index) -> const auto& {
         return hybridMap.groupAt(index).groupKeys;
       });
 
+  // Group validation guarantees at least one group, so group 0 is the
+  // reference and the comparison starts at 1.
   const auto& expectedValueType = hybridMap.groupAt(0).valueType;
-  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+  for (size_t i = 1; i < hybridMap.groupCount(); ++i) {
     const auto& valueType = hybridMap.groupAt(i).valueType;
     const bool hasSameLogicalType =
         detail::sameLogicalType(expectedValueType, valueType);
@@ -635,6 +652,7 @@ void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
   }
 }
 
+// A reader-side type validates its groups in HybridFlatMapType's constructor.
 void validateForSerialization(const HybridFlatMapType&) {}
 
 template <typename TypeLike>

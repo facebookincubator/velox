@@ -146,8 +146,8 @@ class AsyncRPCFunction {
   /// Called once for each non-empty input vector before the operator binds or
   /// reserves backend capacity. Implementations may resolve and validate
   /// input-dependent transport/admission configuration and cache parsed row
-  /// state consumed by dispatchPerRow() or accumulateBatch(). tierKey() and
-  /// configuredCeiling() must remain stable after the first
+  /// state consumed by dispatchPerRow() or accumulateBatch(). admissionKey()
+  /// and configuredCeiling() must remain stable after the first
   /// kRequiresAdmission result. A kLocalOnly result promises that dispatch for
   /// every selected row returns an immediately ready, non-exceptional response
   /// without contacting a backend.
@@ -178,10 +178,28 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Returns the service tier key for rate limiting.
-  /// Empty string means "no tier configured — uses global default limit."
-  virtual std::string tierKey() const {
+  /// Identifies the shared admission bucket for this function.
+  /// Empty string uses the global default bucket. The key may include more
+  /// than a service tier, such as a credential discriminator or tenant.
+  virtual std::string admissionKey() const {
     return "";
+  }
+
+  /// Returns how many retry attempts this function's transports have
+  /// scheduled since the function was created, summed across them. A
+  /// transport retrying a request holds the row open without resolving its
+  /// future, so both the dispatch and the completion counters stand still for
+  /// however long the retry sequence runs. This is what distinguishes that
+  /// from a backend that has stopped answering.
+  ///
+  /// Called from the task stats collector thread while the driver runs, so an
+  /// override must read thread-safe state. Must be monotonically increasing
+  /// and scoped to this function instance: a caller reading it for liveness
+  /// takes movement as proof that this operator is still working.
+  ///
+  /// Defaults to 0 for functions whose transport does not retry.
+  virtual int64_t numRetriesAttempted() const {
+    return 0;
   }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
@@ -256,6 +274,20 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the number of currently pending rows this function will accept in
+  /// one flush, up to `desired`. A function may return fewer when its backend
+  /// caps a request by serialized bytes, tokens, or protocol size; the
+  /// framework deals only in rows.
+  ///
+  /// `desired` is positive. The return value must be in [1, desired] so the
+  /// drain always makes progress without exceeding the operator's requested row
+  /// count. A row that cannot be sent at all is failed loudly inside
+  /// flushBatch() rather than stalling the loop. Rows are counted from the
+  /// front of the pending queue, matching flushBatch()'s order.
+  virtual int32_t maxRowsPerFlush(int32_t desired) const {
+    return desired;
+  }
+
   /// Returns the number of backend admission slots needed to flush 'numRows'.
   /// The result must be positive and nondecreasing with 'numRows', and one row
   /// must require exactly one unit. Native and asynchronous batch APIs consume
@@ -281,20 +313,26 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
-    kError,
+    /// Unit completed cleanly, but its latency is not a congestion sample.
+    /// Recover shared admission without updating the gradient window.
+    kSuccessNoLatency,
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed without explicit evidence of overload. Neither controller
+    /// reacts; reducing admission concurrency would not address this signal.
+    kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluate congestion from completed responses. Called by RPCOperator after
-  /// a unit (a drained set of PER_ROW rows, or one BATCH) completes. The
-  /// function inspects responses and returns a signal the operator maps to the
-  /// latency-gradient window: kSuccess feeds the unit's round-trip latency as a
-  /// gradient sample, kError applies a multiplicative decrease. User-data
-  /// errors (bad handle, null input) must classify as kNone so they never move
-  /// the window — only true backend overload should back off. Default: kNone
-  /// (no congestion control).
+  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
+  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient
+  /// and recovers shared admission; kSuccessNoLatency only recovers shared
+  /// admission; kOverloaded applies a multiplicative decrease to both
+  /// controllers; kNonOverloadError reports a failure without moving either
+  /// controller; and kNone skips evaluation. Defaults to kNone (no congestion
+  /// control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;

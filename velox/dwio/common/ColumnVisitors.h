@@ -433,6 +433,7 @@ class ColumnVisitor {
          std::is_same_v<T, int16_t>)) {
       const int32_t firstRow = currentRow();
       constexpr int32_t kWidth = xsimd::batch<T>::size;
+      constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
       int32_t i = 0;
       while (i + kWidth <= numInput) {
         auto batch = xsimd::load_unaligned(input + i);
@@ -445,8 +446,9 @@ class ColumnVisitor {
             kWidth,
             firstRow + i,
             filter_,
-            [&](int32_t /*offset*/) {
-              return simd::loadGatherIndices<T>(rows_ + rowIndex_ + i);
+            [&](int32_t offset) {
+              return simd::loadGatherIndices<T>(
+                  rows_ + rowIndex_ + i + offset * kIndexLaneCount);
             },
             values,
             filterHits,
