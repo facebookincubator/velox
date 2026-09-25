@@ -116,7 +116,8 @@ class ChunkedDecoder {
   void readWithVisitor(
       DecoderVisitor& visitor,
       velox::vector_size_t readOffset = 0,
-      const SaveStringBufferCallback& saveStringBuffersFn = nullptr) {
+      const SaveStringBufferCallback& saveStringBuffersFn = nullptr,
+      bool dictionaryAwareReads = false) {
     NIMBLE_CHECK(
         readOffset == 0 || stringDecoderZeroCopy_,
         "readOffset is only valid for dict→flat encoding fallback reads");
@@ -130,6 +131,7 @@ class ChunkedDecoder {
     const auto numRows = visitor.numRows();
     ReadWithVisitorParams params{};
     params.numScanned = readOffset;
+    params.dictionaryAwareReads = dictionaryAwareReads;
     // readOffset > 0 means a single read range is being decoded in segments
     // across multiple readWithVisitor calls (e.g. the dict→flat
     // abandon-dictionary fallback resuming at the abandoned chunk boundary), so

@@ -578,7 +578,9 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
       options_.stringDecoderZeroCopy(),
       options_.preserveFlatMapsInMemory(),
       options_.nimblePreserveDictionaryEncoding(),
-      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_);
+      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_,
+      /*lazyColumnIo=*/false,
+      options_.nimbleIntegerDictionaryAwareFiltering());
 
   columnReader_ = buildColumnReader(
       options_.requestedType() ? options_.requestedType()

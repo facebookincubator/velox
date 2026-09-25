@@ -105,6 +105,10 @@ struct ReadWithVisitorParams {
   // Number of rows scanned so far.  Contains rows scanned in previous chunks
   // during this read call as well.
   vector_size_t numScanned;
+
+  // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
+  // instead of the two-pass DictionaryIndicesHook fallback.
+  bool dictionaryAwareReads{false};
 };
 
 class Encoding {

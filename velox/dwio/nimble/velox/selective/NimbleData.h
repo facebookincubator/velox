@@ -144,7 +144,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       bool preserveFlatMapsInMemory = false,
       bool nimblePreserveDictionaryEncoding = false,
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
-      bool lazyColumnIo = false)
+      bool lazyColumnIo = false,
+      bool integerDictionaryAwareFiltering = false)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -154,7 +155,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         encodingFactory_(&encodingFactory),
         lazyColumnIo_(lazyColumnIo),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
-        nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding} {}
+        nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
+        integerDictionaryAwareFiltering_{integerDictionaryAwareFiltering} {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& /*type*/,
@@ -172,7 +174,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         preserveFlatMapsInMemory_,
         nimblePreserveDictionaryEncoding_,
         /*lazyIoColumns=*/nullptr,
-        lazyColumnIo_);
+        lazyColumnIo_,
+        integerDictionaryAwareFiltering_);
   }
 
   const std::shared_ptr<const Type>& nimbleType() const {
@@ -213,6 +216,10 @@ class NimbleParams : public velox::dwio::common::FormatParams {
     return lazyIoColumns_ != nullptr && lazyIoColumns_->count(name) > 0;
   }
 
+  bool integerDictionaryAwareFiltering() const {
+    return integerDictionaryAwareFiltering_;
+  }
+
   RowSizeTracker* rowSizeTracker() const {
     return rowSizeTracker_;
   }
@@ -235,6 +242,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   ChunkedDecoder* inMapDecoder_{nullptr};
   bool stringDecoderZeroCopy_{false};
   bool nimblePreserveDictionaryEncoding_{false};
+  bool integerDictionaryAwareFiltering_{false};
 };
 
 } // namespace facebook::nimble

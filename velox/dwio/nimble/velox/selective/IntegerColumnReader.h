@@ -30,7 +30,9 @@ class IntegerColumnReader
       NimbleParams& params,
       velox::common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(requestedType, params, scanSpec, fileType),
-        decoder_(formatData().as<NimbleData>().makeScalarDecoder()) {}
+        decoder_(formatData().as<NimbleData>().makeScalarDecoder()),
+        integerDictionaryAwareFiltering_{
+            params.integerDictionaryAwareFiltering()} {}
 
   uint64_t skip(uint64_t numValues) override;
 
@@ -41,7 +43,11 @@ class IntegerColumnReader
 
   template <typename DecoderVisitor>
   void readWithVisitor(const velox::RowSet& /*rows*/, DecoderVisitor visitor) {
-    decoder_.readWithVisitor(visitor);
+    decoder_.readWithVisitor(
+        visitor,
+        /*readOffset=*/0,
+        /*saveStringBuffersFn=*/nullptr,
+        /*dictionaryAwareReads=*/integerDictionaryAwareFiltering_);
   }
 
   bool estimateMaterializedSize(size_t& byteSize, size_t& rowCount)
@@ -53,6 +59,7 @@ class IntegerColumnReader
   }
 
   ChunkedDecoder decoder_;
+  const bool integerDictionaryAwareFiltering_;
 };
 
 } // namespace facebook::nimble
