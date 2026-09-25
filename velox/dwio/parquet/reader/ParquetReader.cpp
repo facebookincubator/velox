@@ -1127,6 +1127,31 @@ TypePtr ReaderBase::convertType(
     return UNKNOWN();
   }
 
+  // A Parquet UUID is a 16-byte FIXED_LEN_BYTE_ARRAY. Velox's UUID type is
+  // hugeint-backed, so a hugeint request decodes those bytes as a 128-bit
+  // integer; see UuidColumnReader for the byte order it produces. Any other
+  // request (VARCHAR, VARBINARY) keeps reading the raw bytes, which is how
+  // UUID columns were read before the hugeint mapping existed.
+  if (schemaElement.logicalType() &&
+      schemaElement.logicalType()->getType() ==
+          thrift::LogicalType::Type::UUID &&
+      requestedType != nullptr &&
+      isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+        return type->kind() == TypeKind::HUGEINT && !type->isDecimal();
+      })) {
+    VELOX_CHECK_EQ(
+        *schemaElement.type(),
+        thrift::Type::FIXED_LEN_BYTE_ARRAY,
+        "UUID logical type requires FIXED_LEN_BYTE_ARRAY for file column '{}'",
+        *schemaElement.name());
+    VELOX_CHECK_EQ(
+        *schemaElement.type_length(),
+        16,
+        "UUID logical type requires a 16 byte length for file column '{}'",
+        *schemaElement.name());
+    return HUGEINT();
+  }
+
   if (schemaElement.converted_type()) {
     switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:
