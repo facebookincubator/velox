@@ -709,6 +709,41 @@ TEST_F(ComparisonsTest, dateTypes) {
   test(intervalYearInputs);
 }
 
+TEST_F(ComparisonsTest, timestampUtc) {
+  std::vector<VectorPtr> timestampUtcInputs = {
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(126, 0), Timestamp(128, 0), std::nullopt},
+          TIMESTAMP_UTC()),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(126, 0), Timestamp(127, 0), std::nullopt},
+          TIMESTAMP_UTC())};
+
+  runAndCompare(
+      "equalnullsafe",
+      timestampUtcInputs,
+      makeFlatVector<bool>({true, false, true}));
+  runAndCompare(
+      "equalto",
+      timestampUtcInputs,
+      makeNullableFlatVector<bool>({true, false, std::nullopt}));
+  runAndCompare(
+      "lessthan",
+      timestampUtcInputs,
+      makeNullableFlatVector<bool>({false, false, std::nullopt}));
+  runAndCompare(
+      "lessthanorequal",
+      timestampUtcInputs,
+      makeNullableFlatVector<bool>({true, false, std::nullopt}));
+  runAndCompare(
+      "greaterthan",
+      timestampUtcInputs,
+      makeNullableFlatVector<bool>({false, true, std::nullopt}));
+  runAndCompare(
+      "greaterthanorequal",
+      timestampUtcInputs,
+      makeNullableFlatVector<bool>({true, true, std::nullopt}));
+}
+
 TEST_F(ComparisonsTest, notSupportedTypes) {
   const auto candidataFuncs = {
       "lessthan", "lessthanorequal", "greaterthan", "greaterthanorequal"};
