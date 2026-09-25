@@ -201,7 +201,8 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
                                   .start(hiveSplit->start)
                                   .length(hiveSplit->length)
                                   .connectorId(hiveSplit->connectorId)
-                                  .splitWeight(hiveSplit->splitWeight);
+                                  .splitWeight(hiveSplit->splitWeight)
+                                  .cacheable(hiveSplit->cacheable);
   for (auto const& infoColumn : hiveSplit->infoColumns) {
     cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
   }
