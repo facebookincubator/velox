@@ -41,13 +41,15 @@ void UcxOutputQueueManager::initializeTask(
     int numDrivers,
     const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
+  std::vector<UcxDataAvailable> notifications;
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskId);
     if (it == queues.end()) {
       queues[taskId] = std::make_shared<UcxOutputQueue>(
           std::move(task), numDestinations, numDrivers, kind);
     } else {
-      if (!it->second->initialize(task, numDestinations, numDrivers, kind)) {
+      if (!it->second->initialize(
+              task, notifications, numDestinations, numDrivers, kind)) {
         VELOX_FAIL(
             "Registering a cudf output queue for pre-existing taskId {}",
             taskId);
@@ -60,6 +62,14 @@ void UcxOutputQueueManager::initializeTask(
   // Clear any stale "cancelled" state in the intra-node registry so
   // that the cancelledTasks_ set doesn't grow unboundedly across queries.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+  if (kind == core::PartitionedOutputNode::Kind::kPartitioned &&
+      !notifications.empty()) {
+    VLOG(1) << "UCX reader requests outside partitioned destinations: task="
+            << taskId << " rejected=" << notifications.size();
+  }
+  for (auto& notification : notifications) {
+    notification.notify();
+  }
 }
 
 bool UcxOutputQueueManager::updateOutputBuffers(
@@ -129,7 +139,7 @@ void UcxOutputQueueManager::getData(
       VLOG(2)
           << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
           << " creating placeholder queue (server arrived before task init)";
-      outputQueue = std::make_shared<UcxOutputQueue>(nullptr, destination, 0);
+      outputQueue = std::make_shared<UcxOutputQueue>(nullptr, 0, 0);
       queues[taskIdStr] = outputQueue;
     } else {
       // queue exists.
