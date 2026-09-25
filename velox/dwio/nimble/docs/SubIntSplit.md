@@ -194,7 +194,33 @@ normal nested selection.
 
 The outer stream is assembled only after all child payloads have been produced.
 Temporary section buffers can use `Encoding::Options::bufferPool` so repeated
-encodes reuse allocation capacity.
+encodes reuse allocation capacity. With `subIntSplit.sectionExecutor` set,
+sections are encoded concurrently, each into its own buffer.
+
+### 5. Hold the plan to a whole-value floor
+
+A written stream is never larger than one whole-value section. After planning,
+`WholeValueFloor` compares the plan with FixedBitWidth's exact size and with
+section selection's pick for the whole value, priced on eight spread sample
+blocks. A candidate is encoded only when its estimate, divided by a
+per-encoding slack for estimators known to over-quote, undercuts the plan.
+When the sample's quote is well under the planner's own estimate, the
+fallback is priced first and the plan is abandoned at the first section whose
+written bytes already lose. Replayed (preserve-mode) layouts are left alone.
+
+### Decode costs and the hybrid planner
+
+Both are off by default and leave the plan unchanged at their defaults.
+
+- `subIntSplit.decodeWeight` adds a per-encoding decode cost from
+  `DecodeCost.h`, for `subIntSplit.decodeAccessPattern` and
+  `subIntSplit.decodeReadPath`, to the planner's DP and to each section's own
+  encoding selection. Every decode-weighted choice is bounded on size by
+  `subIntSplit.maxSizeRegression` against the size-only choice, and the
+  whole-value floor admits the same regression.
+- `subIntSplit.hybridPlanner` uses the DP only as a shortlister: it re-prices
+  the best plans with section selection's estimators on the planner sample
+  (`PlanRefiner`), then moves boundaries locally while the price improves.
 
 ## On-disk format
 
@@ -353,6 +379,12 @@ planner and decoder costs. Their sentinel defaults preserve standard behavior.
 | `subIntSplit.foldConstantSections` | `true` | Fold Constant sections into one word at open |
 | `subIntSplit.passThrough` | `true` | Decode a sole verbatim section into the caller's buffer |
 | `subIntSplit.visitorBlockBuffer` | `true` | Decode the visitor slow path a block at a time |
+| `subIntSplit.sectionExecutor` | null | Encode sections concurrently |
+| `subIntSplit.decodeWeight` | `0.0` | Bytes per ns-per-row of decode charged to sections |
+| `subIntSplit.decodeAccessPattern` | `Bulk` | Read shape decode is priced for |
+| `subIntSplit.decodeReadPath` | `Cursor` | Reader decode is priced for |
+| `subIntSplit.maxSizeRegression` | `0.05` | Size a decode-weighted choice may give up |
+| `subIntSplit.hybridPlanner` | `false` | Re-price a DP shortlist and refine the winner |
 
 The `subIntSplit.*` fields live in `subintsplit::Options`, held by
 `Encoding::Options::subIntSplit`.
@@ -437,6 +469,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `DeltaTransform.h` | Optional write transform and sequential read recovery | Physical values ↔ first value plus zigzag residuals | Arithmetic is bit-preserving for signed extrema; transformed streams require decoding from row zero |
 | `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets; `parseSections()` validates them | Header sizes and field order remain compatible with stored data; malformed headers fail with `NIMBLE_CHECK_FILE` |
 | `Options.h` | Writer and reader configuration | `subintsplit::Options`, held by `Encoding::Options::subIntSplit` | Defaults preserve standard behavior |
+| `PlanRefiner.h`, `PlanRefiner.cpp` | Hybrid planner | Planner sample, DP shortlist, and options; returns the refined plan and its estimated size | Prices ranges as `ManualEncodingSelectionPolicy::select` would; kept in step with it by hand |
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
 | `SectionAccumulator.h` | Full and selective decode hot path | Decoded unsigned section values, range masks, shifts, and an output span | Scalar and AVX2 paths produce identical physical bits and never leak bits outside a section width |
 | `SectionMetrics.h` | Planner statistics | Candidate-range samples and reusable frequency storage; produces the range, run, cardinality, and dominant-value measurements the cost models read | Metrics describe extracted section values; exact distinct counts stop at the configured cap and scratch state is reset between ranges |

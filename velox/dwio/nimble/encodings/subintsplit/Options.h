@@ -18,6 +18,11 @@
 #include <unordered_set>
 
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/DecodeCost.h"
+
+namespace folly {
+class Executor;
+} // namespace folly
 
 namespace facebook::nimble::subintsplit {
 
@@ -70,6 +75,50 @@ struct Options {
   /// applies to streams with no transform, row frame or delta. On by
   /// default, as the slow path has always decoded in blocks.
   bool visitorBlockBuffer{true};
+
+  /// Executor SubIntSplit encodes its sections on concurrently. Null, the
+  /// default, encodes them one after another on the calling thread.
+  folly::Executor* sectionExecutor{nullptr};
+
+  /// How much a section's decode cost counts against its encoded size when
+  /// the split planner chooses boundaries and encodings. Zero, the default,
+  /// is size-only selection. The unit is bytes of encoded size per
+  /// nanosecond per row of decode; a caller picks this as an exchange rate,
+  /// not a measurement. See DecodeCost.h for where the per-encoding rates
+  /// come from.
+  double decodeWeight{0.0};
+
+  /// The read shape section decode is costed for when decodeWeight is
+  /// non-zero. Encodings do not rank the same way on every access pattern,
+  /// so weighting decode without naming the pattern would optimise for
+  /// whichever one the rates were fitted on.
+  DecodeAccessPattern decodeAccessPattern{DecodeAccessPattern::Bulk};
+
+  /// The reader section decode is costed for when decodeWeight is non-zero.
+  /// Pricing section opens for a reader that amortises them buys faster
+  /// opens at the cost of slower reads.
+  DecodeReadPath decodeReadPath{DecodeReadPath::Cursor};
+
+  /// Whether these options are the ones a SubIntSplit section is being
+  /// encoded with, rather than a column's own options. Set only by
+  /// sectionEncodingOptions and read by encoding selection to decide whether
+  /// decodeWeight applies. Marks the whole subtree below a section, so a
+  /// nested stream is priced on decode too.
+  bool sectionSelection{false};
+
+  /// The most encoded size, as a fraction, that decode weighting may give up
+  /// against what size-only selection would have chosen for the same
+  /// column. Enforced wherever a decode-weighted choice is made: the split
+  /// planner, the hybrid planner and a section's encoding selection. Inert
+  /// at the default decode weight of zero.
+  double maxSizeRegression{0.05};
+
+  /// Chooses split boundaries with the hybrid planner instead of trusting
+  /// the split DP's argmin. The DP serves as a shortlister; a small set of
+  /// candidate plans is re-priced with section selection's own estimators
+  /// and the winner is refined locally. Off by default; costs roughly twice
+  /// the planning time.
+  bool hybridPlanner{false};
 };
 
 } // namespace facebook::nimble::subintsplit

@@ -117,4 +117,22 @@ void sampleIntoU64(
   sampleIntoU64WithRows<physicalType>(values, out, nullptr, cfg);
 }
 
+/// Copies `numBlocks` contiguous blocks of `blockRows` rows, spread evenly
+/// over `values`, so runs, frames and local ranges survive in the sample.
+/// `values` must hold at least `numBlocks * blockRows` rows.
+template <typename T>
+std::vector<T> sampleSpreadBlocks(
+    std::span<const T> values,
+    size_t numBlocks,
+    size_t blockRows) {
+  std::vector<T> sample;
+  sample.reserve(numBlocks * blockRows);
+  const size_t stride = values.size() / numBlocks;
+  for (size_t block = 0; block < numBlocks; ++block) {
+    const auto first = values.begin() + block * stride;
+    sample.insert(sample.end(), first, first + blockRows);
+  }
+  return sample;
+}
+
 } // namespace facebook::nimble::subintsplit

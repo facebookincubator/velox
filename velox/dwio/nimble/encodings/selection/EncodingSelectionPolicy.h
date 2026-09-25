@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
+#include "velox/dwio/nimble/encodings/subintsplit/DecodeCost.h"
 
 namespace facebook::nimble {
 
@@ -217,9 +218,26 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
-    float minCost = std::numeric_limits<float>::max();
+    // How much a section's decode counts against its size, and for which
+    // read shape. Zero unless this is a SubIntSplit section and the caller
+    // asked for decode to count, in which case the term below vanishes and
+    // selection falls back to size alone.
+    const auto& subIntSplitOptions = options.subIntSplit;
+    const double decodeWeight = subIntSplitOptions.sectionSelection
+        ? subIntSplitOptions.decodeWeight
+        : 0.0;
+
+    // Costs are compared in double so the decode term, which is in bytes and
+    // can be large, does not lose the size term to rounding.
+    double minCost = std::numeric_limits<double>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
     std::optional<uint64_t> selectedEstimatedSize;
+    // What size alone would have chosen, held against the decode-weighted
+    // winner below. Tracked unconditionally, since it is the incumbent when
+    // the weight is zero.
+    double minSizeCost = std::numeric_limits<double>::max();
+    EncodingType sizeSelectedEncoding = EncodingType::Trivial;
+    std::optional<uint64_t> sizeSelectedEstimatedSize;
     // Iterate on all candidate encodings, and pick the encoding with the
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
@@ -235,7 +253,29 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       // We use read factor weights to raise/lower the favorability of each
       // encoding.
       const auto readFactor = entry.second;
-      const auto cost = estimatedSize.value() * readFactor;
+      // Size, plus what reading the section back costs. Section decode times
+      // add rather than max, so a slow section is paid in full by every scan
+      // of the column, which choosing on size alone cannot see. See
+      // subintsplit/DecodeCost.h for the per-encoding rates.
+      const double sizeCost =
+          static_cast<double>(estimatedSize.value() * readFactor);
+      if (sizeCost < minSizeCost) {
+        minSizeCost = sizeCost;
+        sizeSelectedEncoding = encodingType;
+        sizeSelectedEstimatedSize = estimatedSize;
+      }
+      double cost = sizeCost;
+      if (decodeWeight != 0.0) {
+        const double nanosPerRow = subintsplit::decodeNanosPerRow(
+            encodingType,
+            subIntSplitOptions.decodeAccessPattern,
+            subIntSplitOptions.decodeReadPath,
+            static_cast<double>(estimatedSize.value()) * 8.0,
+            values.size());
+        cost += subintsplit::decodeCostBits(
+                    nanosPerRow, values.size(), decodeWeight) /
+            8.0;
+      }
       NIMBLE_SELECTION_LOG(
           "Encoding: " << encodingType << ", Size: "
                        << velox::succinctBytes(estimatedSize.value())
@@ -244,6 +284,19 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         minCost = cost;
         selectedEncoding = encodingType;
         selectedEstimatedSize = estimatedSize;
+      }
+    }
+
+    // Bounded on size: without this, a section can be handed an encoding
+    // that reads faster but stores the column arbitrarily worse.
+    if (decodeWeight != 0.0 && selectedEstimatedSize.has_value() &&
+        sizeSelectedEstimatedSize.has_value()) {
+      const double allowedSize =
+          static_cast<double>(sizeSelectedEstimatedSize.value()) *
+          (1.0 + subIntSplitOptions.maxSizeRegression);
+      if (static_cast<double>(selectedEstimatedSize.value()) > allowedSize) {
+        selectedEncoding = sizeSelectedEncoding;
+        selectedEstimatedSize = sizeSelectedEstimatedSize;
       }
     }
 
@@ -299,6 +352,24 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   const std::vector<std::pair<EncodingType, float>>&
   candidateEncodingReadFactors() const {
     return candidateEncodingReadFactors_;
+  }
+
+  std::unique_ptr<EncodingSelectionPolicy<T>> narrowed(
+      const std::function<bool(EncodingType)>& keep) const override {
+    std::vector<std::pair<EncodingType, float>> kept;
+    for (const auto& entry : candidateEncodingReadFactors_) {
+      if (keep(entry.first)) {
+        kept.push_back(entry);
+      }
+    }
+    // Nested streams are offered what createImpl would offer them.
+    return std::make_unique<ManualEncodingSelectionPolicy<T>>(
+        std::move(kept),
+        compressionOptions_,
+        identifier_,
+        nestedEncodingReadFactorsOverride_.has_value()
+            ? nestedEncodingReadFactorsOverride_.value()
+            : candidateEncodingReadFactors_);
   }
 
  protected:
