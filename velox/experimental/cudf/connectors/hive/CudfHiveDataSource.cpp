@@ -38,10 +38,57 @@
 
 #include <cudf/stream_compaction.hpp>
 
+#include <folly/String.h>
+
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+using PhysicalColumnNames = std::unordered_map<std::string, std::string>;
+
+// Builds a lookup from normalized logical names to physical file names.
+PhysicalColumnNames makePhysicalColumnNames(
+    const ColumnHandleMap& columnHandles,
+    const std::vector<HiveColumnHandlePtr>& filterColumnHandles) {
+  PhysicalColumnNames physicalColumnNames;
+  for (const auto& [logicalName, columnHandle] : columnHandles) {
+    auto* handle = static_cast<const HiveColumnHandle*>(columnHandle.get());
+    auto normalizedName = logicalName;
+    folly::toLowerAscii(normalizedName);
+    physicalColumnNames.emplace(std::move(normalizedName), handle->name());
+  }
+  for (const auto& handle : filterColumnHandles) {
+    auto normalizedName = handle->name();
+    folly::toLowerAscii(normalizedName);
+    physicalColumnNames.emplace(std::move(normalizedName), handle->name());
+  }
+  return physicalColumnNames;
+}
+
+// Resolves a logical column name to its physical file name.
+const std::string& resolvePhysicalColumnName(
+    const PhysicalColumnNames& physicalColumnNames,
+    const std::string& name) {
+  auto normalizedName = name;
+  folly::toLowerAscii(normalizedName);
+  const auto it = physicalColumnNames.find(normalizedName);
+  return it == physicalColumnNames.end() ? name : it->second;
+}
+
+// Resolves a physical column name into its index
+uint32_t resolveColumnIndex(const RowType& rowType, const std::string& name) {
+  if (const auto childIndex = rowType.getChildIdxIfExists(name)) {
+    return *childIndex;
+  }
+  auto normalizedName = name;
+  folly::toLowerAscii(normalizedName);
+  return rowType.getChildIdx(normalizedName);
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -62,6 +109,16 @@ CudfHiveDataSource::CudfHiveDataSource(
       outputType_(outputType),
       pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
+  tableHandle_ =
+      std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
+  VELOX_CHECK_NOT_NULL(
+      tableHandle_, "TableHandle must be an instance of HiveTableHandle");
+
+  // Presto logical names are lowercase, while Hive handles preserve the
+  // physical Parquet column names.
+  const auto physicalColumnNames = makePhysicalColumnNames(
+      columnHandles, tableHandle_->hiveFilterColumnHandles());
+
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
@@ -75,11 +132,6 @@ CudfHiveDataSource::CudfHiveDataSource(
     readColumnSet_.emplace(handle->name());
     readColumnNames_.emplace_back(handle->name());
   }
-
-  tableHandle_ =
-      std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      tableHandle_, "TableHandle must be an instance of HiveTableHandle");
 
   // Copy subfield filters.
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
@@ -99,9 +151,10 @@ CudfHiveDataSource::CudfHiveDataSource(
 
   // Add fields in the filter to the columns to read if not there
   for (const auto& [field, _] : subfieldFilters_) {
-    if (readColumnSet_.count(field.toString()) == 0) {
-      readColumnSet_.emplace(field.toString());
-      readColumnNames_.emplace_back(field.toString());
+    const auto& physicalName =
+        resolvePhysicalColumnName(physicalColumnNames, getColumnName(field));
+    if (readColumnSet_.emplace(physicalName).second) {
+      readColumnNames_.emplace_back(physicalName);
     }
   }
   // Optimize (rewrites + constant folding) the remaining filter before
@@ -124,9 +177,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     // they reference. Read-column order does not affect results: the data
     // source projects its output to the requested output type.
     for (const auto& name : referencedInputFields(optimizedRemainingFilter_)) {
-      if (readColumnSet_.count(name) == 0) {
-        readColumnSet_.emplace(name);
-        readColumnNames_.emplace_back(name);
+      const auto& physicalName =
+          resolvePhysicalColumnName(physicalColumnNames, name);
+      if (readColumnSet_.emplace(physicalName).second) {
+        readColumnNames_.emplace_back(physicalName);
       }
     }
 
@@ -391,9 +445,10 @@ const RowTypePtr CudfHiveDataSource::getTableRowType() {
     std::vector<std::string> names;
     std::vector<TypePtr> types;
     for (const auto& name : readColumnNames_) {
-      auto parsedType = tableHandle_->dataColumns()->findChild(name);
-      names.emplace_back(std::move(name));
-      types.push_back(parsedType);
+      const auto childIndex =
+          resolveColumnIndex(*tableHandle_->dataColumns(), name);
+      names.emplace_back(tableHandle_->dataColumns()->nameOf(childIndex));
+      types.push_back(tableHandle_->dataColumns()->childAt(childIndex));
     }
     cachedTableRowType_ = ROW(std::move(names), std::move(types));
     return cachedTableRowType_;
