@@ -587,12 +587,12 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
-  bool nimbleIntegerDictionaryAwareFiltering() const {
-    return nimbleIntegerDictionaryAwareFiltering_;
+  bool nimbleDictionaryAwareReads() const {
+    return nimbleDictionaryAwareReads_;
   }
 
-  void setNimbleIntegerDictionaryAwareFiltering(bool value) {
-    nimbleIntegerDictionaryAwareFiltering_ = value;
+  void setNimbleDictionaryAwareReads(bool value) {
+    nimbleDictionaryAwareReads_ = value;
   }
 
   bool lazyColumnIo() const {
@@ -693,8 +693,8 @@ class RowReaderOptions {
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
-  // Enables dictionary-aware filtering for Nimble integer columns.
-  bool nimbleIntegerDictionaryAwareFiltering_{false};
+  // Enables dictionary-aware reads for Nimble dictionary-encoded columns.
+  bool nimbleDictionaryAwareReads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;

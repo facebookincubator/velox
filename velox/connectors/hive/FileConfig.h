@@ -122,15 +122,14 @@ class FileConfig {
       "allocated, never which bytes are read.")
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kNimbleIntegerDictionaryAwareFilteringSession,
-      kNimbleIntegerDictionaryAwareFiltering,
-      nimbleIntegerDictionaryAwareFiltering,
-      "nimble_integer_dictionary_aware_filtering",
-      "nimble.integer-dictionary-aware-filtering",
+      kNimbleDictionaryAwareReadsSession,
+      kNimbleDictionaryAwareReads,
+      nimbleDictionaryAwareReads,
+      "nimble_dictionary_aware_reads",
+      "nimble.dictionary-aware-reads",
       bool,
       false,
-      "Enable dictionary-aware filtering for Nimble integer columns. Requires "
-      "nimble_string_decoder_zero_copy.")
+      "Enable dictionary-aware reads for Nimble dictionary-encoded columns.")
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
