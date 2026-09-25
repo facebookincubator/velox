@@ -165,7 +165,8 @@ bool UcxOutputQueue::initialize(
     std::shared_ptr<exec::Task> task,
     uint32_t numDestinations,
     uint32_t numDrivers,
-    core::PartitionedOutputNode::Kind kind) {
+    core::PartitionedOutputNode::Kind kind,
+    bool& outputFinished) {
   std::lock_guard<std::mutex> l(mutex_);
   if (task_) {
     // already initialized!
@@ -185,6 +186,7 @@ bool UcxOutputQueue::initialize(
     // create the destination queues inside the vector using emplace_back.
     queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
   }
+  outputFinished = isFinishedLocked();
   return true;
 }
 
@@ -269,6 +271,7 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
 
 void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
   UcxDestinationQueue::Data data;
+  std::shared_ptr<exec::Task> task;
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -318,12 +321,15 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
     } else {
       data = UcxDestinationQueue::Data{nullptr, 0, {}, true};
     }
+    if (!data.immediate) {
+      task = task_;
+    }
   }
   // outside lock: If we have data, then return it immediately.
   if (data.immediate) {
     notify(std::move(data.data), data.numRows, std::move(data.remainingBytes));
   } else {
-    VLOG(2) << "[QUEUE] task=" << (task_ ? task_->taskId() : "n/a")
+    VLOG(2) << "[QUEUE] task=" << (task ? task->taskId() : "n/a")
             << " dest=" << destination
             << " server waiting for data (callback installed)";
   }
@@ -439,18 +445,17 @@ bool UcxOutputQueue::isFinishedLocked() {
 
 void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   using Kind = core::PartitionedOutputNode::Kind;
-  if (kind_ == Kind::kPartitioned) {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK_EQ(queues_.size(), numBuffers);
-    VELOX_CHECK(noMoreBuffers);
-    noMoreQueues_ = true;
-    return;
-  }
-
-  VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
-  bool isFinished;
+  std::shared_ptr<exec::Task> task;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    if (kind_ == Kind::kPartitioned) {
+      VELOX_CHECK_EQ(queues_.size(), numBuffers);
+      VELOX_CHECK(noMoreBuffers);
+      noMoreQueues_ = true;
+      return;
+    }
+
+    VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
 
     if (numBuffers > queues_.size()) {
       // Add new destination queues and backfill with broadcast data.
@@ -478,16 +483,18 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
 
     noMoreQueues_ = true;
     dataToBroadcast_.clear();
-    isFinished = isFinishedLocked();
+    if (isFinishedLocked()) {
+      task = task_;
+    }
   }
 
-  if (isFinished && task_) {
-    task_->setAllOutputConsumed();
+  if (task) {
+    task->setAllOutputConsumed();
   }
 }
 
 void UcxOutputQueue::deleteResults(int destination) {
-  bool isFinished;
+  std::shared_ptr<exec::Task> task;
   UcxDataAvailable dataAvailable;
   std::vector<ContinuePromise> promises;
   {
@@ -509,7 +516,9 @@ void UcxOutputQueue::deleteResults(int destination) {
     dataAvailable = queue->getAndClearNotify();
     queue->finish();
     queues_[destination] = nullptr;
-    isFinished = isFinishedLocked();
+    if (isFinishedLocked()) {
+      task = task_;
+    }
     // update UcxOutputQueue stats
     updateStatsWithFreedLocked(bytes, packedCols, promises);
   }
@@ -521,8 +530,8 @@ void UcxOutputQueue::deleteResults(int destination) {
     promise.setValue();
   }
 
-  if (isFinished && task_) {
-    task_->setAllOutputConsumed();
+  if (task) {
+    task->setAllOutputConsumed();
   }
 }
 
@@ -555,6 +564,17 @@ void UcxOutputQueue::terminate() {
   // Unblock any blocked producers.
   for (auto& promise : promises) {
     promise.setValue();
+  }
+}
+
+void UcxOutputQueue::setError(std::string_view message) {
+  std::shared_ptr<exec::Task> task;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    task = task_;
+  }
+  if (task) {
+    task->setError(std::string(message));
   }
 }
 
