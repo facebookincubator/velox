@@ -988,6 +988,22 @@ TEST_F(BinaryFunctionsTest, murmur3X64128) {
   EXPECT_EQ(murmur3_x64_128(std::nullopt), std::nullopt);
 }
 
+TEST_F(BinaryFunctionsTest, toBase32) {
+  const auto toBase32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("to_base32(cast(c0 as varbinary))", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toBase32(std::nullopt));
+  EXPECT_EQ("", toBase32(""));
+  EXPECT_EQ("MY======", toBase32("f"));
+  EXPECT_EQ("MZXQ====", toBase32("fo"));
+  EXPECT_EQ("MZXW6===", toBase32("foo"));
+  EXPECT_EQ("MZXW6YQ=", toBase32("foob"));
+  EXPECT_EQ("MZXW6YTB", toBase32("fooba"));
+  EXPECT_EQ("MZXW6YTBOI======", toBase32("foobar"));
+  EXPECT_EQ("NBSWY3DPEB3W64TMMQ======", toBase32("hello world"));
+}
+
 TEST_F(BinaryFunctionsTest, fromBase32) {
   const auto fromBase32 = [&](const std::optional<std::string>& value) {
     // from_base32 allows VARCHAR and VARBINARY inputs.
