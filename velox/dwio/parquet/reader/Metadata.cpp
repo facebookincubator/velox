@@ -232,12 +232,15 @@ inline std::optional<std::string> getMax(
       : columnChunkStats.max().to_optional();
 }
 
-std::optional<Timestamp> int64ToTimestamp(
+std::optional<Timestamp> integerToTimestamp(
     std::optional<int64_t> value,
     std::optional<thrift::ConvertedType> convertedType,
     const std::optional<thrift::LogicalType>& logicalType) {
   if (!value.has_value()) {
     return std::nullopt;
+  }
+  if (convertedType == thrift::ConvertedType::DATE) {
+    return Timestamp::fromDate(static_cast<int32_t>(value.value()));
   }
   if (logicalType.has_value() &&
       logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP) {
@@ -341,16 +344,18 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<std::string>(columnChunkStats),
           std::nullopt);
     case TypeKind::TIMESTAMP:
-      if (physicalType == thrift::Type::INT64 &&
-          (convertedType.has_value() || logicalType.has_value())) {
+      if ((physicalType == thrift::Type::INT32 &&
+           convertedType == thrift::ConvertedType::DATE) ||
+          (physicalType == thrift::Type::INT64 &&
+           (convertedType.has_value() || logicalType.has_value()))) {
         return std::make_unique<dwio::common::TimestampColumnStatistics>(
             valueCount,
             hasNull,
             std::nullopt,
             std::nullopt,
-            int64ToTimestamp(
+            integerToTimestamp(
                 getMin<int64_t>(columnChunkStats), convertedType, logicalType),
-            int64ToTimestamp(
+            integerToTimestamp(
                 getMax<int64_t>(columnChunkStats), convertedType, logicalType));
       }
       return std::make_unique<dwio::common::ColumnStatistics>(
