@@ -45,6 +45,37 @@ digits after the percent character "%". All the url extract functions will retur
     SELECT url_extract_path('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%'); -- NULL (1 row)
     SELECT url_extract_host('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%'); -- NULL (1 row)
 
+Extraction Functions
+--------------------
+
+.. spark:function:: parse_url(url, part) -> varchar
+
+    Extracts a part from ``url``. ``part`` must be one of (case-sensitive):
+    ``PROTOCOL``, ``HOST``, ``PATH``, ``REF``, ``AUTHORITY``, ``FILE``,
+    ``USERINFO``, ``QUERY``. Returns ``NULL`` if ``url`` is invalid or the
+    requested part is absent.
+
+    .. code-block::
+
+        SELECT parse_url('http://facebook.com/path1/p.php?k1=v1&k2=v2#Ref1', 'HOST');
+        -- 'facebook.com'
+
+.. spark:function:: parse_url(url, part, key) -> varchar
+
+    Extracts the value of ``key`` from the query string of ``url``. Only
+    valid when ``part`` is ``'QUERY'``. ``key`` is interpreted as a regular
+    expression fragment.
+
+    Note: ``key`` is compiled with RE2. For non-constant keys, each distinct
+    pattern is compiled at most once per function instance, and the number of
+    compiled patterns is capped by ``expression.max_compiled_regexes``
+    (default 100); exceeding the cap fails the query.
+
+    .. code-block::
+
+        SELECT parse_url('http://facebook.com/path1/p.php?k1=v1&k2=v2#Ref1', 'QUERY', 'k1');
+        -- 'v1'
+
 Encoding Functions
 ------------------
 
