@@ -230,6 +230,11 @@ class Encoding {
     /// unusable and the pass is skipped. 0 is unlimited.
     uint32_t subIntSplitFrequencyMetricsMaxWidth{0};
 
+    /// Prices a Huffman tree deeper than HuffmanEncoding::kMaxCodeBits at its
+    /// Shannon bound instead of declining it. encode() length-limits such a
+    /// tree, so it remains encodable. On by default.
+    bool huffmanPriceLengthLimited{true};
+
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 
