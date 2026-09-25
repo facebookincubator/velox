@@ -18,6 +18,7 @@
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 #include <thrift/lib/cpp2/FieldRef.h>
+#include <limits>
 
 namespace facebook::velox::parquet {
 
@@ -240,6 +241,12 @@ std::optional<Timestamp> integerToTimestamp(
     return std::nullopt;
   }
   if (convertedType == thrift::ConvertedType::DATE) {
+    constexpr int64_t kMicrosecondsInDay =
+        Timestamp::kSecondsInDay * Timestamp::kMicrosecondsInSecond;
+    if (*value < std::numeric_limits<int64_t>::min() / kMicrosecondsInDay ||
+        *value > std::numeric_limits<int64_t>::max() / kMicrosecondsInDay) {
+      return std::nullopt;
+    }
     return Timestamp::fromDate(static_cast<int32_t>(value.value()));
   }
   if (logicalType.has_value() &&
@@ -348,15 +355,19 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
            convertedType == thrift::ConvertedType::DATE) ||
           (physicalType == thrift::Type::INT64 &&
            (convertedType.has_value() || logicalType.has_value()))) {
+        auto minimum = integerToTimestamp(
+            getMin<int64_t>(columnChunkStats), convertedType, logicalType);
+        auto maximum = integerToTimestamp(
+            getMax<int64_t>(columnChunkStats), convertedType, logicalType);
+        if (convertedType == thrift::ConvertedType::DATE &&
+            (!minimum || !maximum)) {
+          // Pruning must not hide overflows when the date range is unknown
+          // or exceeds the microsecond timestamp range.
+          minimum.reset();
+          maximum.reset();
+        }
         return std::make_unique<dwio::common::TimestampColumnStatistics>(
-            valueCount,
-            hasNull,
-            std::nullopt,
-            std::nullopt,
-            integerToTimestamp(
-                getMin<int64_t>(columnChunkStats), convertedType, logicalType),
-            integerToTimestamp(
-                getMax<int64_t>(columnChunkStats), convertedType, logicalType));
+            valueCount, hasNull, std::nullopt, std::nullopt, minimum, maximum);
       }
       return std::make_unique<dwio::common::ColumnStatistics>(
           valueCount, hasNull, std::nullopt, std::nullopt);

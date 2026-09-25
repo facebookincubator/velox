@@ -23,6 +23,11 @@
 namespace facebook::velox::parquet {
 namespace {
 
+// Check the microsecond range regardless of the requested read precision.
+Timestamp toDateTimestamp(int32_t value) {
+  return Timestamp::fromMicros(Timestamp::fromDate(value).toMicros());
+}
+
 Timestamp toInt64Timestamp(int64_t value, TimestampPrecision filePrecision) {
   switch (filePrecision) {
     case TimestampPrecision::kMilliseconds:
@@ -67,7 +72,7 @@ class ParquetTimestampRange final : public common::TimestampRange {
   bool testInt128(const int128_t& value) const final {
     Timestamp ts;
     if constexpr (std::is_same_v<T, int32_t>) {
-      ts = Timestamp::fromDate(static_cast<int32_t>(value));
+      ts = toDateTimestamp(static_cast<int32_t>(value));
     } else if constexpr (std::is_same_v<T, int64_t>) {
       ts = toInt64Timestamp(value, filePrecision_);
     } else if constexpr (std::is_same_v<T, int128_t>) {
@@ -153,7 +158,7 @@ class TimestampColumnReader : public IntegerColumnReader {
 
       const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
       if constexpr (std::is_same_v<T, int32_t>) {
-        rawValues[i] = Timestamp::fromDate(static_cast<int32_t>(encoded));
+        rawValues[i] = toDateTimestamp(static_cast<int32_t>(encoded));
       } else if constexpr (std::is_same_v<T, int64_t>) {
         rawValues[i] = toInt64Timestamp(encoded, filePrecision_);
         if (needsConversion_) {

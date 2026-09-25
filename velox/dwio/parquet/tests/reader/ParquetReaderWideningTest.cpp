@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -431,7 +433,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
   const std::vector<int32_t> days{
-      std::numeric_limits<int32_t>::min(),
+      -106'751'991,
       -719'162,
       -141'427,
       -1,
@@ -439,7 +441,7 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
       1,
       18'329,
       2'932'896,
-      std::numeric_limits<int32_t>::max(),
+      106'751'991,
   };
   const auto dates = makeFlatVector<int32_t>(
       2'000,
@@ -458,10 +460,18 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
           [&](auto row) { return dates->isNullAt(row); },
           TIMESTAMP_UTC())});
 
-  for (bool enableDictionary : {false, true}) {
-    SCOPED_TRACE(enableDictionary);
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
+    const bool enableDictionary =
+        encoding == parquet::arrow::Encoding::kRleDictionary;
     ParquetWriterOptions writerOptions;
     writerOptions.enableDictionary = enableDictionary;
+    writerOptions.encoding =
+        enableDictionary ? parquet::arrow::Encoding::kPlain : encoding;
     auto* sink = write(data, writerOptions);
 
     auto readerOptions = makeWideningReaderOptions(readSchema);
@@ -481,9 +491,9 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
         dynamic_cast<TimestampColumnStatistics*>(statistics.get());
     ASSERT_NE(timestampStatistics, nullptr);
     EXPECT_EQ(
-        timestampStatistics->getMinimum(), Timestamp(-185'542'587'187'200, 0));
+        timestampStatistics->getMinimum(), Timestamp(-9'223'372'022'400, 0));
     EXPECT_EQ(
-        timestampStatistics->getMaximum(), Timestamp(185'542'587'100'800, 0));
+        timestampStatistics->getMaximum(), Timestamp(9'223'372'022'400, 0));
 
     for (auto precision : {
              TimestampPrecision::kMilliseconds,
@@ -539,8 +549,8 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
       {0},
       {1, 2},
       {std::nullopt},
-      {std::numeric_limits<int32_t>::min()},
-      {std::numeric_limits<int32_t>::max()},
+      {-106'751'991},
+      {106'751'991},
   };
   std::vector<RowVectorPtr> batches;
   for (const auto& group : days) {
@@ -566,7 +576,7 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
       std::make_unique<TimestampRange>(
           Timestamp(-86'400, 1), Timestamp(-1, 999'999'999), false),
       6);
-  for (auto seconds : {-185'542'587'187'200LL, 185'542'587'100'800LL}) {
+  for (auto seconds : {-9'223'372'022'400LL, 9'223'372'022'400LL}) {
     filters.emplace_back(
         std::make_unique<TimestampRange>(
             Timestamp(seconds, 0), Timestamp(seconds, 0), false),
@@ -587,10 +597,18 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
   dwio::common::Mutation mutation;
   mutation.deletedRows = deleted.data();
 
-  for (bool enableDictionary : {false, true}) {
-    SCOPED_TRACE(enableDictionary);
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
     ParquetWriterOptions writerOptions;
-    writerOptions.enableDictionary = enableDictionary;
+    writerOptions.enableDictionary =
+        encoding == parquet::arrow::Encoding::kRleDictionary;
+    writerOptions.encoding = *writerOptions.enableDictionary
+        ? parquet::arrow::Encoding::kPlain
+        : encoding;
     dwio::common::WriterOptions options;
     options.memoryPool = rootPool_.get();
     options.flushPolicyFactory = [=]() {
@@ -647,6 +665,157 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
         rowReader->updateRuntimeStats(statistics);
         EXPECT_EQ(statistics.skippedStrides, skippedGroups);
       }
+    }
+  }
+}
+
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtcDeltaPageBoundaries) {
+  const auto readSchema = ROW({{"id", BIGINT()}, {"col", TIMESTAMP_UTC()}});
+  const auto data = makeRowVector(
+      {"id", "col"},
+      {makeFlatVector<int64_t>(4'096, [](auto row) { return row; }),
+       makeFlatVector<int32_t>(
+           4'096,
+           [](auto row) { return row < 1'000 ? row % 8 - 4 : row - 2'000; },
+           nullptr,
+           DATE())});
+  const auto expected = makeRowVector(
+      {"id", "col"},
+      {makeFlatVector<int64_t>({31, 127, 255, 2'047}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(259'200, 0),
+            Timestamp(259'200, 0),
+            Timestamp(259'200, 0),
+            Timestamp(4'060'800, 0)},
+           TIMESTAMP_UTC())});
+  for (bool useV2 : {false, true}) {
+    SCOPED_TRACE(useV2);
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary = false;
+    writerOptions.encoding = parquet::arrow::Encoding::kDeltaBinaryPacked;
+    writerOptions.useParquetDataPageV2 = useV2;
+    writerOptions.dataPageSize = 128;
+    writerOptions.batchSize = 64;
+    auto* sink = write(data, writerOptions);
+    for (auto batchSize : {127, 128, 1'024}) {
+      SCOPED_TRACE(batchSize);
+      auto reader =
+          createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
+      EXPECT_THAT(
+          reader->fileMetaData().rowGroup(0).columnChunk(1).encodings(),
+          testing::Contains(thrift::Encoding::DELTA_BINARY_PACKED));
+      auto scanSpec = makeScanSpec(readSchema);
+      scanSpec->childByName("id")->setFilter(
+          exec::in({3, 31, 32, 127, 128, 255, 1'001, 2'047, 4'095}));
+      scanSpec->childByName("col")->setFilter(
+          exec::between(Timestamp(-86'400, 1), Timestamp(4'320'000, 0)));
+      auto rowOptions = makeRowReaderOpts(readSchema);
+      rowOptions.setScanSpec(scanSpec);
+      auto rowReader = reader->createRowReader(rowOptions);
+      VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
+      vector_size_t total = 0;
+      while (rowReader->next(batchSize, result)) {
+        assertEqualVectorPart(expected, result, total);
+        total += result->size();
+      }
+      EXPECT_EQ(total, expected->size());
+    }
+  }
+}
+
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtcOverflow) {
+  const auto readSchema = ROW({{"id", BIGINT()}, {"col", TIMESTAMP_UTC()}});
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
+    for (int32_t date : {
+             -106'751'992,
+             106'751'992,
+             std::numeric_limits<int32_t>::min(),
+             std::numeric_limits<int32_t>::max(),
+         }) {
+      SCOPED_TRACE(date);
+      const auto data = makeRowVector(
+          {"id", "col"},
+          {makeFlatVector<int64_t>(256, [](auto row) { return row; }),
+           makeFlatVector<int32_t>(
+               256,
+               [&](auto row) { return row % 2 == 0 ? date : 0; },
+               nullEvery(7),
+               DATE())});
+      ParquetWriterOptions writerOptions;
+      writerOptions.enableDictionary =
+          encoding == parquet::arrow::Encoding::kRleDictionary;
+      writerOptions.encoding = *writerOptions.enableDictionary
+          ? parquet::arrow::Encoding::kPlain
+          : encoding;
+      auto* sink = write(data, writerOptions);
+      const auto message = fmt::format(
+          "Could not convert Timestamp({}, 0) to microseconds",
+          int64_t{date} * Timestamp::kSecondsInDay);
+      std::vector<std::unique_ptr<Filter>> filters;
+      filters.push_back(nullptr);
+      filters.push_back(exec::greaterThanOrEqual(Timestamp(0, 0)));
+      filters.push_back(exec::between(Timestamp(-2, 0), Timestamp(-1, 0)));
+      filters.push_back(
+          exec::orFilter(
+              exec::between(Timestamp(1, 0), Timestamp(2, 0)),
+              exec::between(Timestamp(3, 0), Timestamp(4, 0))));
+
+      for (const auto& filter : filters) {
+        SCOPED_TRACE(filter ? filter->toString() : "no filter");
+        for (bool projectOut : {false, true}) {
+          if (!projectOut && !filter) {
+            continue;
+          }
+          SCOPED_TRACE(projectOut);
+          auto reader = createReaderInMemory(
+              *sink, makeWideningReaderOptions(readSchema));
+          auto statistics = reader->columnStatistics(
+              reader->typeWithId()->childByName("col")->id());
+          auto* timestampStatistics =
+              dynamic_cast<TimestampColumnStatistics*>(statistics.get());
+          ASSERT_NE(timestampStatistics, nullptr);
+          EXPECT_FALSE(timestampStatistics->getMinimum().has_value());
+          EXPECT_FALSE(timestampStatistics->getMaximum().has_value());
+          auto scanSpec = makeScanSpec(readSchema);
+          auto* column = scanSpec->childByName("col");
+          column->setProjectOut(projectOut);
+          if (filter) {
+            column->setFilter(filter->clone());
+            EXPECT_TRUE(
+                connector::hive::testFilters(
+                    scanSpec.get(),
+                    reader.get(),
+                    "dates.parquet",
+                    {},
+                    {},
+                    false));
+          }
+          auto rowOptions = makeRowReaderOpts(readSchema);
+          rowOptions.setScanSpec(scanSpec);
+          rowOptions.setTimestampPrecision(TimestampPrecision::kMicroseconds);
+          auto rowReader = reader->createRowReader(rowOptions);
+          VectorPtr result = BaseVector::create(
+              projectOut ? readSchema : ROW("id", BIGINT()),
+              0,
+              leafPool_.get());
+          const auto read = [&]() {
+            while (rowReader->next(256, result)) {
+              if (projectOut && result->size() > 0) {
+                result->as<RowVector>()->childAt(1)->loadedVector();
+              }
+            }
+          };
+          VELOX_ASSERT_THROW(read(), message);
+        }
+      }
+      auto dateReader = readerBuilder(*sink, data->rowType()).build();
+      assertReadWithReaderAndExpected(
+          data->rowType(), *dateReader.rowReader, data, *leafPool_);
     }
   }
 }
