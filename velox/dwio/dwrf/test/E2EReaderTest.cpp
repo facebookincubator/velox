@@ -26,6 +26,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
@@ -121,8 +122,9 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
   std::iota(flatMapCols.begin(), flatMapCols.end(), 0);
 
   std::string schema = "struct<";
+  size_t i = 0;
   for (auto& valueType : GetParam()) {
-    schema += folly::to<std::string>("map_val:map<int,", valueType, ">,");
+    schema += folly::to<std::string>("map_", i++, ":map<int,", valueType, ">,");
   }
   schema.append(">");
   HiveTypeParser parser;
@@ -191,23 +193,34 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
   rowReaderOptions.setDecodingExecutor(GetParam().decodingExecutor());
   rowReaderOptions.setDecodingParallelismFactor(
       GetParam().decodingParallelismFactor());
-  rowReaderOptions.select(cs);
 
   const bool asStruct = GetParam().isReadAsStruct();
+  auto outputType = reader->rowType();
   if (asStruct) {
-    std::unordered_map<uint32_t, std::vector<std::string>> structEncodingMap;
-    for (auto& [id, keys] : structEncodingProtoMap) {
-      structEncodingMap[id].reserve(keys.size());
-      for (auto& key : keys) {
-        structEncodingMap[id].push_back(key);
-      }
+    std::vector<TypePtr> outputChildren;
+    const auto& schemaRow = type->asRow();
+    outputChildren.reserve(schemaRow.size());
+    for (size_t col = 0; col < schemaRow.size(); ++col) {
+      const auto& keys =
+          structEncodingProtoMap.at(schemaWithId->childAt(col)->id());
+      std::vector<std::string> fieldNames(keys.begin(), keys.end());
+      const auto& valueType = schemaRow.childAt(col)->asMap().valueType();
+      outputChildren.push_back(
+          ROW(fieldNames, std::vector<TypePtr>(fieldNames.size(), valueType)));
     }
-    rowReaderOptions.setFlatmapNodeIdsAsStruct(structEncodingMap);
+    outputType = ROW(schemaRow.names(), outputChildren);
   }
+  auto scanSpec = makeAllFieldsScanSpec(*outputType);
+  if (asStruct) {
+    for (const auto& name : outputType->names()) {
+      scanSpec->childByName(name)->setFlatMapAsStruct(true);
+    }
+  }
+  rowReaderOptions.setScanSpec(scanSpec);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
-  VectorPtr batch;
+  VectorPtr batch = BaseVector::create(outputType, 0, pool.get());
   while (rowReader->next(100, batch)) {
     ASSERT_TRUE(type->isRow());
     ASSERT_TRUE(batch->type()->isRow());
@@ -223,7 +236,8 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
         ASSERT_TRUE(resultTypeRow.childAt(col)->isRow());
         ASSERT_EQ(batchRow->childAt(col)->typeKind(), TypeKind::ROW);
         auto& resultTypeChild = resultTypeRow.childAt(col)->as<TypeKind::ROW>();
-        auto* batchRowChild = batchRow->childAt(col)->as<RowVector>();
+        auto* batchRowChild =
+            batchRow->childAt(col)->loadedVector()->as<RowVector>();
         ASSERT_EQ(resultTypeChild.size(), batchRowChild->children().size());
         for (uint32_t feature = 0, features = resultTypeChild.size();
              feature < features;
