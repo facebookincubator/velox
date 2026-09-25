@@ -239,13 +239,20 @@ inline void toJson<TypeKind::TIMESTAMP>(
     folly::toAppend<std::string, int64_t>(value.toMicros(), &result);
   } else {
     // Spark converts Timestamp in ISO8601 format by default.
-    static const auto formatter =
+    static const auto kTimestampFormatter =
         functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
             .value();
-    const auto maxSize = formatter->maxResultSize(options.timeZone);
+    static const auto kTimestampUtcFormatter =
+        functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSS")
+            .value();
+    const bool isTimestampUtc = input.type()->equivalent(*TIMESTAMP_UTC());
+    const auto& formatter =
+        isTimestampUtc ? kTimestampUtcFormatter : kTimestampFormatter;
+    const auto* timeZone = isTimestampUtc ? nullptr : options.timeZone;
+    const auto maxSize = formatter->maxResultSize(timeZone);
     std::vector<char> buffer(maxSize);
-    auto size = formatter->format(
-        value, options.timeZone, maxSize, buffer.data(), false, "Z");
+    auto size =
+        formatter->format(value, timeZone, maxSize, buffer.data(), false, "Z");
     result.append("\"").append(buffer.data(), size).append("\"");
   }
 }
