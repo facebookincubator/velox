@@ -1,0 +1,61 @@
+test=FollyHttpTransportC1Test.SixtyFourDownloadsOneEventBase
+result=PASS
+
+Post-format repeat run 1:
+requests=64
+connections=32
+peak_active=32
+runtime_threads=1
+body_bytes=268435456
+body_bytes_each=4194304
+rss_baseline_kib=20580
+rss_peak_kib=28284
+rss_growth_kib=7704
+modeled_bound_kib=18432
+full_buffer_kib=262144
+
+Post-format repeat run 2:
+requests=64
+connections=32
+peak_active=32
+runtime_threads=1
+body_bytes=268435456
+body_bytes_each=4194304
+rss_baseline_kib=24768
+rss_peak_kib=28356
+rss_growth_kib=3588
+modeled_bound_kib=18432
+full_buffer_kib=262144
+
+Post-format repeat run 3:
+requests=64
+connections=32
+peak_active=32
+runtime_threads=1
+body_bytes=268435456
+body_bytes_each=4194304
+rss_baseline_kib=24772
+rss_peak_kib=28360
+rss_growth_kib=3588
+modeled_bound_kib=18432
+full_buffer_kib=262144
+
+Final GDB-instrumented run:
+result=PASS
+elapsed_seconds=5.977
+rss_growth_kib=7956
+
+Final strace-instrumented run:
+result=PASS
+elapsed_seconds=9.643
+rss_growth_kib=7764
+
+Assertions passed in every normal repeat:
+- All 64 futures were pending after 32 requests were active and before any response header was sent.
+- All 64 calls used the real Azure BlobClient::Download path and Azure response parsing.
+- All 64 results contained 4 MiB and the deterministic checksum.
+- Exactly one EventBase/FiberManager runtime OS thread executed every Azure call.
+- The runtime thread differed from the submitting test thread.
+- The pool used exactly 32 physical connections and reached 32 leased/active requests.
+- Pool waiters and leases were zero after completion.
+- RSS growth stayed below half of the 256 MiB full-buffer counterfactual.

@@ -59,6 +59,12 @@ class DynamicSasTokenClientProvider : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
 
+  /// Creates a fiber read client with bounded dynamic token refresh.
+  std::unique_ptr<AzureBlobClient> getReadFileClientForAsync(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config,
+      const AzureAsyncReadContext& context) override;
+
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;

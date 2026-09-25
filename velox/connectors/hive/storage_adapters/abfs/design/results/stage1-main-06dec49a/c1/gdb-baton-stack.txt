@@ -1,0 +1,30 @@
+tool=GDB 15.1
+result=PASS
+test_result=PASS
+test_elapsed_seconds=5.977
+
+Breakpoint:
+folly::fibers::Baton::wait()
+
+Named runtime thread stack:
+0 folly::fibers::Baton::wait
+1 EventSocketChannelFactory::connect
+2 FollyHttpConnectionPool::acquire
+3 FollyHttpTransport::Send
+4 Azure Core TransportPolicy::Send
+5 Azure Core NextHttpPolicy::Send
+6 Azure Core LogPolicy::Send
+8 Azure Core RequestActivityPolicy::Send
+10 Azure Storage StoragePerRetryPolicy::Send
+12 Azure Storage StorageSwitchToSecondaryPolicy::Send
+14 Azure Core RetryPolicy::Send
+16 Azure Core TelemetryPolicy::Send
+
+Thread separation at the same sample:
+- abfs-c1-event: suspended in fiber Baton wait inside the real Azure policy and custom transport stack.
+- loopback server thread: blocking poll in C1Server only.
+- RSS sampler thread: nanosleep only.
+- submitting test thread: condition-variable wait for the server gate.
+
+Interpretation:
+The synchronous Azure SDK stack waits through a Folly fiber Baton on the one EventBase runtime thread. Blocking server and sampler operations are confined to their dedicated test threads.
