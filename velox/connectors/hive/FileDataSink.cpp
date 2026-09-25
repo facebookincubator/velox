@@ -244,6 +244,58 @@ void FileDataSink::finalizeWriterFile(size_t index) {
   info->cumulativeWrittenBytes = ioStats_[index]->rawBytesWritten();
 }
 
+void FileDataSink::closeWriterAndFinalize(size_t index) {
+  VELOX_CHECK_LT(index, writers_.size());
+  VELOX_CHECK_LT(index, writerInfo_.size());
+
+  if (writers_[index] == nullptr) {
+    return;
+  }
+
+  WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
+
+  writers_[index]->close();
+  finalizeWriterFile(index);
+  mergeWriterStats(closedWriterStats_, writers_[index]->runtimeStats());
+  writers_[index].reset();
+}
+
+std::shared_ptr<WriterInfo> FileDataSink::releaseWriter(
+    size_t index,
+    const WriterId& id) {
+  VELOX_CHECK_EQ(index + 1, writers_.size());
+  VELOX_CHECK_EQ(writers_.size(), writerInfo_.size());
+  VELOX_CHECK_EQ(writerInfo_.size(), ioStats_.size());
+  VELOX_CHECK_EQ(ioStats_.size(), partitionSizes_.size());
+  VELOX_CHECK_EQ(partitionSizes_.size(), partitionRows_.size());
+  VELOX_CHECK_EQ(partitionRows_.size(), rawPartitionRows_.size());
+  VELOX_CHECK_NULL(writers_[index]);
+
+  const auto mapIt = writerIndexMap_.find(id);
+  VELOX_CHECK(mapIt != writerIndexMap_.end());
+  VELOX_CHECK_EQ(mapIt->second, index);
+
+  auto info = std::move(writerInfo_[index]);
+  VELOX_CHECK_NOT_NULL(info);
+
+  releasedWriterStats_.numWrittenBytes += ioStats_[index]->rawBytesWritten();
+  releasedWriterStats_.writeIOTimeUs += ioStats_[index]->writeIOTimeUs();
+  releasedWriterStats_.numWrittenFiles += info->writtenFiles.size();
+  if (!info->spillStats->empty()) {
+    releasedWriterStats_.spillStats += *info->spillStats;
+  }
+
+  writerIndexMap_.erase(mapIt);
+  writers_.pop_back();
+  writerInfo_.pop_back();
+  ioStats_.pop_back();
+  partitionSizes_.pop_back();
+  partitionRows_.pop_back();
+  rawPartitionRows_.pop_back();
+
+  return info;
+}
+
 void FileDataSink::rotateWriter(size_t index) {
   VELOX_CHECK_LT(index, writers_.size());
   VELOX_CHECK_LT(index, writerInfo_.size());
@@ -286,6 +338,8 @@ DataSink::Stats FileDataSink::stats() const {
     return stats;
   }
 
+  stats.numWrittenBytes = releasedWriterStats_.numWrittenBytes;
+  stats.writeIOTimeUs = releasedWriterStats_.writeIOTimeUs;
   for (const auto& ioStats : ioStats_) {
     stats.numWrittenBytes += ioStats->rawBytesWritten();
     stats.writeIOTimeUs += ioStats->writeIOTimeUs();
@@ -304,10 +358,10 @@ DataSink::Stats FileDataSink::stats() const {
     }
   }
 
-  // Count total files written, including rotated files.
-  stats.numWrittenFiles = 0;
-  for (size_t i = 0; i < writerInfo_.size(); ++i) {
-    const auto& info = writerInfo_.at(i);
+  // Count total files written, including rotated and released files.
+  stats.numWrittenFiles = releasedWriterStats_.numWrittenFiles;
+  stats.spillStats += releasedWriterStats_.spillStats;
+  for (const auto& info : writerInfo_) {
     VELOX_CHECK_NOT_NULL(info);
     stats.numWrittenFiles += info->writtenFiles.size();
     if (!info->spillStats->empty()) {
@@ -465,12 +519,11 @@ uint32_t FileDataSink::appendWriter(const WriterId& id) {
   if (sortWrite()) {
     sortPool = createSortPool(writerPool);
   }
-  writerInfo_.emplace_back(
-      std::make_shared<WriterInfo>(
-          std::move(writerParameters),
-          std::move(writerPool),
-          std::move(sinkPool),
-          std::move(sortPool)));
+  writerInfo_.emplace_back(std::make_shared<WriterInfo>(
+      std::move(writerParameters),
+      std::move(writerPool),
+      std::move(sinkPool),
+      std::move(sortPool)));
   ioStats_.emplace_back(std::make_unique<io::IoStatistics>());
 
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
