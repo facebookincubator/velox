@@ -162,9 +162,255 @@ TEST_F(CustomMemoryPoolTest, addCustomPoolDirectly) {
   EXPECT_THROW(queryCtx->addCustomPool("", pool), VeloxRuntimeError);
 }
 
+TEST_F(CustomMemoryPoolTest, registrationDoesNotInvokeQueryFactory) {
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  int legacyCalls{0};
+  int queryCalls{0};
+  core::QueryCtx* expectedQuery{nullptr};
+  MemoryPool* expectedPool{nullptr};
+  auto resource = std::make_shared<CustomMemoryResource>(
+      "gpu",
+      std::make_shared<MallocAllocator>(options),
+      MemoryArbitrator::create({}),
+      [&]() {
+        ++legacyCalls;
+        return MemoryReclaimer::create(0);
+      },
+      options.capacity,
+      CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = [&](core::QueryCtx* query, MemoryPool* pool) {
+            ++queryCalls;
+            EXPECT_EQ(query, expectedQuery);
+            EXPECT_EQ(pool, expectedPool);
+            return core::QueryCtx::MemoryReclaimer::create(query, pool);
+          }});
+  auto pool = memoryManager()->addCustomRootPool(
+      "q-opt-in.gpu",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-opt-in").build();
+  expectedQuery = queryCtx.get();
+  expectedPool = pool.get();
+  EXPECT_EQ(pool->reclaimer(), nullptr);
+  EXPECT_EQ(legacyCalls, 0);
+  EXPECT_EQ(queryCalls, 0);
+  auto* cpuReclaimer = queryCtx->pool()->reclaimer();
+  ASSERT_NE(cpuReclaimer, nullptr);
+
+  queryCtx->addCustomPool(resource->tag(), pool);
+  EXPECT_EQ(queryCalls, 0);
+  EXPECT_EQ(pool->reclaimer(), nullptr);
+  pool->setReclaimer(resource->newQueryReclaimer(queryCtx.get(), pool.get()));
+  ASSERT_NE(pool->reclaimer(), nullptr);
+  EXPECT_EQ(queryCalls, 1);
+  EXPECT_EQ(legacyCalls, 0);
+  EXPECT_EQ(queryCtx->pool()->reclaimer(), cpuReclaimer);
+  EXPECT_THROW(
+      queryCtx->addCustomPool(resource->tag(), pool), VeloxRuntimeError);
+  EXPECT_EQ(queryCalls, 1);
+  auto builderPool = memoryManager()->addCustomRootPool(
+      "builder.gpu",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto builderQuery = core::QueryCtx::Builder()
+                          .queryId("builder")
+                          .customPool(resource->tag(), builderPool)
+                          .build();
+  EXPECT_EQ(builderQuery->customPool(resource->tag()), builderPool);
+  EXPECT_EQ(queryCalls, 1);
+  EXPECT_EQ(builderPool->reclaimer(), nullptr);
+
+  queryCtx.reset();
+  MemoryReclaimer::Stats stats;
+  EXPECT_EQ(pool->reclaim(1024, 0, stats), 0);
+}
+
+TEST_F(CustomMemoryPoolTest, registrationPreservesExistingReclaimer) {
+  auto base = makeResource("base");
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  int queryCalls{0};
+  auto resource = std::make_shared<CustomMemoryResource>(
+      "gpu",
+      std::make_shared<MallocAllocator>(options),
+      MemoryArbitrator::create({}),
+      []() { return MemoryReclaimer::create(0); },
+      options.capacity,
+      CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = [&](core::QueryCtx* query, MemoryPool* pool) {
+            ++queryCalls;
+            return core::QueryCtx::MemoryReclaimer::create(query, pool);
+          }});
+  auto pool = memoryManager()->addCustomRootPool(
+      "q-preserve.gpu",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity(),
+      MemoryReclaimer::create(7));
+  auto* reclaimer = pool->reclaimer();
+  ASSERT_NE(reclaimer, nullptr);
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-preserve").build();
+  queryCtx->addCustomPool(resource->tag(), pool);
+  EXPECT_EQ(pool->reclaimer(), reclaimer);
+  EXPECT_EQ(queryCalls, 0);
+  EXPECT_THROW(
+      queryCtx->addCustomPool(base->tag(), nullptr), VeloxRuntimeError);
+}
+
+TEST_F(CustomMemoryPoolTest, nullQueryFactoryResultDoesNotFallBack) {
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  int legacyCalls{0};
+  auto resource = std::make_shared<CustomMemoryResource>(
+      "gpu",
+      std::make_shared<MallocAllocator>(options),
+      MemoryArbitrator::create({}),
+      [&]() {
+        ++legacyCalls;
+        return MemoryReclaimer::create(0);
+      },
+      options.capacity,
+      CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = [](core::QueryCtx*, MemoryPool*) {
+            return std::unique_ptr<MemoryReclaimer>{};
+          }});
+  auto pool = memoryManager()->addCustomRootPool(
+      "q-null.gpu",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-null").build();
+  EXPECT_EQ(resource->newQueryReclaimer(queryCtx.get(), pool.get()), nullptr);
+  queryCtx->addCustomPool(resource->tag(), pool);
+  EXPECT_EQ(pool->reclaimer(), nullptr);
+  EXPECT_EQ(legacyCalls, 0);
+}
+
+TEST_F(CustomMemoryPoolTest, queryFactoryPropagatesFailure) {
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  auto resource = std::make_shared<CustomMemoryResource>(
+      "gpu",
+      std::make_shared<MallocAllocator>(options),
+      MemoryArbitrator::create({}),
+      []() { return MemoryReclaimer::create(0); },
+      options.capacity,
+      CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = [](core::QueryCtx*,
+                      MemoryPool*) -> std::unique_ptr<MemoryReclaimer> {
+            VELOX_FAIL("query factory failed");
+          }});
+  auto pool = memoryManager()->addCustomRootPool(
+      "q-fail.gpu",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto queryCtx = core::QueryCtx::Builder().queryId("q-fail").build();
+  EXPECT_THROW(
+      resource->newQueryReclaimer(queryCtx.get(), pool.get()),
+      VeloxRuntimeError);
+  EXPECT_EQ(queryCtx->customPool("gpu"), nullptr);
+  EXPECT_EQ(pool->reclaimer(), nullptr);
+}
+
 TEST_F(CustomMemoryPoolTest, addCustomRootPoolRejectsNullResource) {
   auto* manager = memoryManager();
   EXPECT_THROW(manager->addCustomRootPool("q.null", nullptr), VeloxUserError);
+}
+
+TEST_F(CustomMemoryPoolTest, componentRootWithoutReclaimer) {
+  constexpr int64_t kCapacity = 64L << 20;
+  MemoryAllocator::Options options;
+  options.capacity = kCapacity;
+  auto allocator = std::make_shared<MallocAllocator>(options);
+  auto arbitrator = MemoryArbitrator::create({});
+  auto root = memoryManager()->addCustomRootPool(
+      "standalone.cache", allocator.get(), arbitrator.get(), kCapacity);
+
+  EXPECT_EQ(root->reclaimer(), nullptr);
+  EXPECT_EQ(root->maxCapacity(), kCapacity);
+  EXPECT_EQ(root->arbitrator(), arbitrator.get());
+  EXPECT_EQ(
+      static_cast<MemoryPoolImpl*>(root.get())->testingAllocator(),
+      allocator.get());
+  auto leaf = root->addLeafChild("buffers");
+  auto* buffer = leaf->allocate(1024);
+  EXPECT_EQ(leaf->usedBytes(), 1024);
+  leaf->free(buffer, 1024);
+  EXPECT_EQ(leaf->usedBytes(), 0);
+  EXPECT_EQ(root->reclaimer(), nullptr);
+}
+
+TEST_F(CustomMemoryPoolTest, componentRootUsesSuppliedReclaimer) {
+  auto resource = makeResource("components");
+  auto reclaimer = MemoryReclaimer::create(23);
+  auto* expected = reclaimer.get();
+  auto root = memoryManager()->addCustomRootPool(
+      "standalone.custom",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity(),
+      std::move(reclaimer));
+
+  EXPECT_EQ(root->reclaimer(), expected);
+  EXPECT_EQ(root->reclaimer()->priority(), 23);
+}
+
+TEST_F(CustomMemoryPoolTest, componentRootRejectsMissingBackends) {
+  auto resource = makeResource("components");
+  EXPECT_THROW(
+      memoryManager()->addCustomRootPool(
+          "missing.allocator",
+          nullptr,
+          resource->arbitrator(),
+          resource->maxCapacity()),
+      VeloxUserError);
+  EXPECT_THROW(
+      memoryManager()->addCustomRootPool(
+          "missing.arbitrator",
+          resource->allocator(),
+          nullptr,
+          resource->maxCapacity()),
+      VeloxUserError);
+}
+
+TEST_F(CustomMemoryPoolTest, resourceRootUsesLegacyFactoryWithQueryFactory) {
+  MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  int legacyCalls{0};
+  int queryCalls{0};
+  auto resource = std::make_shared<CustomMemoryResource>(
+      "shared",
+      std::make_shared<MallocAllocator>(options),
+      MemoryArbitrator::create({}),
+      [&]() {
+        ++legacyCalls;
+        return MemoryReclaimer::create(19);
+      },
+      options.capacity,
+      CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = [&](core::QueryCtx*, MemoryPool*) {
+            ++queryCalls;
+            return MemoryReclaimer::create(29);
+          }});
+
+  auto root = memoryManager()->addCustomRootPool("ordinary.root", resource);
+  ASSERT_NE(root->reclaimer(), nullptr);
+  EXPECT_EQ(root->reclaimer()->priority(), 19);
+  EXPECT_EQ(legacyCalls, 1);
+  EXPECT_EQ(queryCalls, 0);
+
+  auto noReclaimer = memoryManager()->addCustomRootPool(
+      "ordinary.unreclaimed",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  EXPECT_EQ(noReclaimer->reclaimer(), nullptr);
+  EXPECT_EQ(legacyCalls, 1);
+  EXPECT_EQ(queryCalls, 0);
 }
 
 namespace {

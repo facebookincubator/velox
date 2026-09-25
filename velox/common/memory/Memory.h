@@ -224,15 +224,30 @@ class MemoryManager {
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
           std::nullopt);
 
-  /// Creates a root memory pool backed by 'resource'. The pool's capacity
-  /// comes from 'resource->maxCapacity'; its reclaimer comes from
-  /// 'resource->reclaimerFactory()'; its allocator and arbitrator are
-  /// borrowed from 'resource->allocator' and 'resource->arbitrator'. The
+  /// Creates a root memory pool backed by 'resource'. The pool's maximum
+  /// capacity comes from 'resource->maxCapacity'; its reclaimer comes from
+  /// 'resource->newReclaimer()', independently of any query/task factories.
+  /// Its allocator and arbitrator are borrowed from 'resource->allocator' and
+  /// 'resource->arbitrator'. The
   /// caller (typically via CustomMemoryResourceRegistry) is responsible
   /// for keeping 'resource' alive while the pool exists.
   std::shared_ptr<MemoryPool> addCustomRootPool(
       const std::string& name,
       std::shared_ptr<CustomMemoryResource> resource,
+      const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
+          std::nullopt);
+
+  /// Creates a root using the supplied components without invoking a resource
+  /// factory. The allocator and arbitrator must be non-null and outlive the
+  /// pool. Installs exactly 'reclaimer'; nullptr means no reclaimer. If a
+  /// caller installs a query-specific reclaimer later, it must finish setup
+  /// before starting Tasks or allocating from the pool.
+  std::shared_ptr<MemoryPool> addCustomRootPool(
+      const std::string& name,
+      MemoryAllocator* allocator,
+      MemoryArbitrator* arbitrator,
+      int64_t maxCapacity,
+      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
           std::nullopt);
 
