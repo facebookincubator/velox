@@ -217,7 +217,7 @@ static constexpr Encoding::type DEFAULT_ENCODING = Encoding::kUnknown;
 static const char DEFAULT_CREATED_BY[] = CREATED_BY_VERSION;
 static constexpr Compression::type DEFAULT_COMPRESSION_TYPE =
     Compression::UNCOMPRESSED;
-static constexpr bool DEFAULT_IS_PAGE_INDEX_ENABLED = false;
+static constexpr bool DEFAULT_IS_PAGE_INDEX_ENABLED = true;
 
 class PARQUET_EXPORT ColumnProperties {
  public:
@@ -682,7 +682,7 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Enable writing page index in general for all columns. Default disabled.
+    /// Enable writing page index in general for all columns. Default enabled.
     ///
     /// Writing statistics to the page index disables the old method of writing
     /// statistics to each data page header.
@@ -697,35 +697,35 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Disable writing page index in general for all columns. Default disabled.
+    /// Disable writing page index in general for all columns. Default enabled.
     Builder* disableWritePageIndex() {
       defaultColumnProperties_.setPageIndexEnabled(false);
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = true;
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->enableWritePageIndex(path->toDotString());
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = false;
       return this;
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->disableWritePageIndex(path->toDotString());

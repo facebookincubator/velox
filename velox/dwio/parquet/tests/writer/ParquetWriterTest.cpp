@@ -17,6 +17,7 @@
 #include <arrow/io/memory.h>
 #include <arrow/type.h>
 #include <folly/init/Init.h>
+#include <thrift/lib/cpp2/protocol/Serializer.h>
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -273,7 +274,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
 
   // When unset in both connector and session config, the option is left unset
-  // so the writer falls back to its default (page index off).
+  // so the writer falls back to its default (page index on).
   {
     auto defaultOptions =
         checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
@@ -308,10 +309,14 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
         if (isFirstPage) {
           return readPageHeader(sinkPtr, 0);
         }
-        constexpr int64_t kFirstDataPageCompressedSize = 1291;
-        constexpr int64_t kFirstDataPageHeaderSize = 48;
+        const auto firstPageHeader = readPageHeader(sinkPtr, 0);
+        const auto firstPageHeaderSize =
+            apache::thrift::CompactSerializer::serialize<std::string>(
+                firstPageHeader)
+                .size();
         return readPageHeader(
-            sinkPtr, kFirstDataPageCompressedSize + kFirstDataPageHeaderSize);
+            sinkPtr,
+            firstPageHeaderSize + *firstPageHeader.compressed_page_size());
       };
 
   // Test default config (i.e., no explicit config)
@@ -803,8 +808,8 @@ TEST_F(ParquetWriterTest, writePageIndex) {
     return {columnChunk.hasColumnIndex(), columnChunk.hasOffsetIndex()};
   };
 
-  // Unset leaves the page index off (default behavior).
-  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(false, false));
+  // Unset leaves the page index on (default behavior).
+  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(true, true));
   // Explicitly disabled leaves the page index off.
   EXPECT_EQ(writeAndReadPageIndex(false), std::make_pair(false, false));
   // Enabled writes both the column index and the offset index.
