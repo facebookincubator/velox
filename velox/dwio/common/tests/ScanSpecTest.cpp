@@ -110,6 +110,38 @@ TEST_F(ScanSpecTest, setFilterResetsHasFilter) {
   ASSERT_TRUE(scanSpec.hasFilter());
 }
 
+TEST_F(ScanSpecTest, setFilterEnabled) {
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>({5, 15, 25}),
+  });
+  ScanSpec scanSpec("<root>");
+  scanSpec.addAllChildFields(*rowVector->type());
+  auto* child = scanSpec.childByName("c0");
+  child->setFilter(std::make_shared<BigintRange>(10, 20, false));
+  BigintRange metadataFilter(0, 100, false);
+  child->addMetadataFilter(nullptr, &metadataFilter);
+  scanSpec.resetCachedValues(false);
+  ASSERT_TRUE(scanSpec.hasFilter());
+
+  child->setFilterEnabled(false);
+  scanSpec.resetCachedValues(false);
+  EXPECT_EQ(child->filter(), nullptr);
+  EXPECT_EQ(child->numMetadataFilters(), 0);
+  EXPECT_FALSE(child->hasFilter());
+  EXPECT_FALSE(scanSpec.hasFilter());
+
+  // The disabled filter still applies when evaluated explicitly.
+  uint64_t result = -1ll;
+  child->applyFilter(*rowVector->childAt(0), rowVector->size(), &result);
+  EXPECT_EQ(result & 0b111, 0b010);
+
+  child->setFilterEnabled(true);
+  scanSpec.resetCachedValues(false);
+  EXPECT_NE(child->filter(), nullptr);
+  EXPECT_EQ(child->numMetadataFilters(), 1);
+  EXPECT_TRUE(scanSpec.hasFilter());
+}
+
 TEST_F(ScanSpecTest, testFilterOnConstant) {
   auto test = [&](auto&& setup, bool expected) {
     ScanSpec scanSpec("<root>");
