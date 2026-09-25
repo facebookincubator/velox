@@ -35,6 +35,12 @@
 /// it.
 
 namespace facebook::nimble::subintsplit {
+
+/// Output elements combined per chunk when decoding, unless the caller asks
+/// for another size. Sized so the output slice and scratch buffer together
+/// fit in L2 across every section of a chunk.
+inline constexpr uint32_t kDecodeChunkSize = 4096;
+
 namespace detail {
 
 #ifdef __AVX2__
