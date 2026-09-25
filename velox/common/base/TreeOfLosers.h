@@ -49,6 +49,7 @@ class MergeStream {
   /// Returns < 0 if 'this' is < 'other, '0' if equal and > 0 otherwise.
   virtual int32_t compare(const MergeStream& /*other*/) const {
     VELOX_UNSUPPORTED();
+    return 0; // Unreachable, but MSVC requires a return statement
   }
 };
 

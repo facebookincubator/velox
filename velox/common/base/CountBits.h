@@ -18,8 +18,38 @@
 
 #include <folly/CPortability.h>
 
+#ifdef _MSC_VER
+#include <type_traits>
+#endif
+
 namespace facebook::velox {
 
+#ifdef _MSC_VER
+template <
+    typename T,
+    typename = std::enable_if_t<std::is_integral_v<T> && (sizeof(T) <= 8)>>
+FOLLY_ALWAYS_INLINE int countDigits(T n) {
+  using Unsigned = std::make_unsigned_t<T>;
+  auto value = static_cast<Unsigned>(n);
+  int count = 1;
+  for (;;) {
+    if (value < 10) {
+      return count;
+    }
+    if (value < 100) {
+      return count + 1;
+    }
+    if (value < 1000) {
+      return count + 2;
+    }
+    if (value < 10000) {
+      return count + 3;
+    }
+    value /= 10000u;
+    count += 4;
+  }
+}
+#else
 // Copied from format.h of fmt.
 FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
   int count = 1;
@@ -40,5 +70,6 @@ FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
     count += 4;
   }
 }
+#endif
 
 } // namespace facebook::velox
