@@ -1047,6 +1047,84 @@ TEST_F(StringTest, trim) {
       "\u6574\u6570 \u6570\u636E!");
 }
 
+TEST_F(StringTest, trimAsciiEncodings) {
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    const auto expression = fmt::format("{}(c0)", function);
+    const bool left = function != "rtrim";
+    const bool right = function != "ltrim";
+    for (auto length : {10, 12, 13, 64, 256}) {
+      SCOPED_TRACE(fmt::format("{} length {}", expression, length));
+      const std::string body(length, 'a');
+      const std::string shortened(length - 2, 'b');
+      auto input = makeNullableFlatVector<std::string>(
+          {body,
+           left ? (right ? " " + shortened + " " : "  " + shortened)
+                : shortened + "  ",
+           "",
+           std::string(length, ' '),
+           std::nullopt,
+           " " + body,
+           body + " ",
+           "\t" + body + "\n"});
+      auto expected = makeNullableFlatVector<std::string>(
+          {body,
+           shortened,
+           "",
+           "",
+           std::nullopt,
+           left ? body : " " + body,
+           right ? body : body + " ",
+           "\t" + body + "\n"});
+      const auto check = [&](const VectorPtr& encodedInput,
+                             const VectorPtr& encodedExpected) {
+        const auto data = makeRowVector({encodedInput});
+        velox::test::assertEqualVectors(
+            encodedExpected, evaluate(expression, data));
+        SelectivityVector rows(encodedInput->size(), false);
+        rows.setValid(0, true);
+        rows.setValid(1, true);
+        rows.setValid(4, true);
+        rows.updateBounds();
+        velox::test::assertEqualVectors(
+            encodedExpected, evaluate(expression, data, rows), rows);
+      };
+      check(input, expected);
+      auto indices =
+          makeIndices(16, [](vector_size_t row) { return (row * 3 + 1) % 8; });
+      check(
+          wrapInDictionary(indices, 16, input),
+          wrapInDictionary(indices, 16, expected));
+      for (auto row : {0, 1, 4}) {
+        check(
+            BaseVector::wrapInConstant(8, row, input),
+            BaseVector::wrapInConstant(8, row, expected));
+      }
+    }
+  }
+}
+
+TEST_F(StringTest, trimAsciiStringLifetime) {
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    SCOPED_TRACE(function);
+    VectorPtr result;
+    std::weak_ptr<BaseVector> inputReference;
+    {
+      auto input = makeFlatVector<std::string>(
+          {std::string(64, 'a'), "  " + std::string(256, 'b') + "  "});
+      inputReference = input;
+      result =
+          evaluate(fmt::format("{}(c0)", function), makeRowVector({input}));
+    }
+    ASSERT_TRUE(inputReference.expired());
+    ASSERT_FALSE(result->as<FlatVector<StringView>>()->stringBuffers().empty());
+    const auto expected = makeFlatVector<std::string>(
+        {std::string(64, 'a'),
+         (function == "rtrim" ? "  " : "") + std::string(256, 'b') +
+             (function == "ltrim" ? "  " : "")});
+    velox::test::assertEqualVectors(expected, result);
+  }
+}
+
 TEST_F(StringTest, empty2Null) {
   const auto empty2Null = [&](const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("empty2null(c0)", a);
