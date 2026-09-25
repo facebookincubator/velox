@@ -1017,6 +1017,58 @@ uint64_t Variant::hash() const {
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
 }
 
+template <TypeKind KIND>
+uint64_t Variant::estimateValueSize() const {
+  if constexpr (is_string_kind(KIND)) {
+    return value<KIND>().size();
+  } else {
+    return sizeof(typename TypeTraits<KIND>::NativeType);
+  }
+}
+
+namespace {
+
+uint64_t estimateValuesSize(const std::vector<Variant>& values) {
+  uint64_t size{0};
+  for (const auto& value : values) {
+    size += value.estimateValueSize();
+  }
+  return size;
+}
+
+} // namespace
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::ARRAY>() const {
+  return estimateValuesSize(value<TypeKind::ARRAY>());
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::ROW>() const {
+  return estimateValuesSize(value<TypeKind::ROW>());
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::MAP>() const {
+  uint64_t size{0};
+  for (const auto& [key, mappedValue] : value<TypeKind::MAP>()) {
+    size += key.estimateValueSize() + mappedValue.estimateValueSize();
+  }
+  return size;
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::OPAQUE>() const {
+  return 0;
+}
+
+uint64_t Variant::estimateValueSize() const {
+  if (isNull()) {
+    return 0;
+  }
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(estimateValueSize, kind_);
+}
+
 namespace {
 
 // Compare floating point numbers using relative epsilon comparison.
