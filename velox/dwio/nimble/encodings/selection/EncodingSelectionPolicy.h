@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TopLevelPolicy.h"
 
 namespace facebook::nimble {
 
@@ -208,6 +209,56 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       }
     }
 
+    // A nested stream (one this policy was created for by a parent encoding)
+    // is not offered SubIntSplit when the caller withholds it; see
+    // subintsplit::Options::inNestedStreams.
+    if (identifier_.has_value() && !options.subIntSplit.inNestedStreams) {
+      candidateEncodingReadFactors.erase(
+          std::remove_if(
+              candidateEncodingReadFactors.begin(),
+              candidateEncodingReadFactors.end(),
+              [](const auto& entry) {
+                return entry.first == EncodingType::SubIntSplit;
+              }),
+          candidateEncodingReadFactors.end());
+    }
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // A bit-flip admission decides from the profile alone whether SubIntSplit
+    // is worth costing: a rejected stream loses the candidate, an admitted
+    // one still has to win the ordinary size comparison.
+    // subintsplit::Options::admissionForces instead makes an admitted stream
+    // SubIntSplit without pricing it, so forcing holds even where the estimate
+    // declines, such as under substream compression.
+    bool subIntSplitForced{false};
+    if constexpr (
+        isIntegralType<T>() &&
+        (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+      const auto admission = options.subIntSplit.admission;
+      const auto subIntSplit = std::find_if(
+          candidateEncodingReadFactors.begin(),
+          candidateEncodingReadFactors.end(),
+          [](const auto& entry) {
+            return entry.first == EncodingType::SubIntSplit;
+          });
+      if (admission != subintsplit::SubIntSplitAdmission::kEstimate &&
+          subIntSplit != candidateEncodingReadFactors.end()) {
+        const bool admitted = subintsplit::bitFlipAdmits(
+            subintsplit::bitFlipAdmissionProfile(
+                values, admission, options.subIntSplit.admissionProfilePairs),
+            admission,
+            subintsplit::TopLevelPolicyConfig{});
+        if (!admitted) {
+          candidateEncodingReadFactors.erase(subIntSplit);
+        } else if (options.subIntSplit.admissionForces) {
+          const auto entry = *subIntSplit;
+          candidateEncodingReadFactors.assign(1, entry);
+          subIntSplitForced = true;
+        }
+      }
+    }
+#endif
+
     // Fast path: when there are no candidate encodings, fall back to Trivial.
     if (candidateEncodingReadFactors.empty()) {
       return {
@@ -216,6 +267,15 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
           .estimatedSize = std::nullopt,
       };
     }
+
+    // A size estimate counts bytes on disk, which are compressed bytes when
+    // this policy hands its streams to a substream compressor; this flag
+    // tells an estimate which world it is pricing. Copied, not mutated,
+    // since the caller's options are shared with the encode.
+    Encoding::Options estimationOptions = options;
+    estimationOptions.subIntSplit.substreamCompression =
+        compressionOptions_.has_value() &&
+        compressionOptions_->compressionType != CompressionType::Uncompressed;
 
     float minCost = std::numeric_limits<float>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
@@ -226,7 +286,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const auto encodingType = entry.first;
       const auto estimatedSize =
           detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
+              encodingType, values, statistics, estimationOptions);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
@@ -246,6 +306,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         selectedEstimatedSize = estimatedSize;
       }
     }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    if (subIntSplitForced) {
+      selectedEncoding = EncodingType::SubIntSplit;
+    }
+#endif
 
     NIMBLE_SELECTION_LOG(
         "Selected Encoding"

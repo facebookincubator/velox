@@ -321,14 +321,37 @@ takes precedence for streams configured by both mechanisms.
 
 ### Selection status
 
-The production path in this stack is explicit serde routing. SubIntSplit is a
-registered encoding type, while the current default selection factors do not
-choose it automatically. The global-candidate benchmark is an experiment used
-to compare policies; it is not the rollout behavior documented here.
+SubIntSplit is not in `defaultEncodingReadFactors()`, so default selection
+never chooses it. A writer opts in by adding SubIntSplit to its read factors;
+selection then prices it with the estimate below and can screen it with the
+admission gate. Making it a default waits for reader coverage of every
+encoding a section can take: `EncodingView` support for Varint, Delta and
+FrequencyPartition, and a SubIntSplit case in the legacy encoding factory.
+Explicit serde routing works as before.
 
 Explicit routing may produce a one-section encoding when the configured stream
 has no profitable split. Benchmark each routed stream because the wrapper adds
 metadata without decomposing the value in that case.
+
+### Admission into default selection
+
+`SubIntSplitEncoding::estimateSize()` runs the same split DP as the encoder
+over a smaller sample (512 values in 64-row blocks), on size alone, and adds
+the header bytes of the plan it finds. It returns nothing, so selection skips
+the candidate, when no plan can be priced, or when the policy's streams go to
+a substream compressor and `subIntSplit.estimateCompressionGuard` is set,
+since the estimate counts uncompressed bytes.
+
+`subIntSplit.admission` can put a cheap screen in front of the estimate. The
+screen is a bit-flip profile: per bit position, how often that bit differs
+between consecutive values, over `subIntSplit.admissionProfilePairs` strided
+pairs. `kBitFlip` offers SubIntSplit as a candidate only when the profile's
+gradient shows a field boundary (`bitFlipGradientGate()`); `kBitFlipEntropy`
+also requires the flipping bits to be less than random. An admitted stream
+still has to win on size unless `subIntSplit.admissionForces` is set, which
+selects an admitted stream without pricing it.
+`subIntSplit.inNestedStreams = false` keeps nested streams such as RLE run
+values from choosing SubIntSplit.
 
 ## Tuning options
 
@@ -353,6 +376,11 @@ planner and decoder costs. Their sentinel defaults preserve standard behavior.
 | `subIntSplit.foldConstantSections` | `true` | Fold Constant sections into one word at open |
 | `subIntSplit.passThrough` | `true` | Decode a sole verbatim section into the caller's buffer |
 | `subIntSplit.visitorBlockBuffer` | `true` | Decode the visitor slow path a block at a time |
+| `subIntSplit.admission` | `kEstimate` | Screen candidacy with the bit-flip profile |
+| `subIntSplit.admissionForces` | `false` | Let an admitted stream skip the size comparison |
+| `subIntSplit.admissionProfilePairs` | `1024` | Pairs the admission profile samples; zero is every pair |
+| `subIntSplit.inNestedStreams` | `true` | Let nested streams choose SubIntSplit |
+| `subIntSplit.estimateCompressionGuard` | `true` | Decline to estimate under substream compression |
 
 The `subIntSplit.*` fields live in `subintsplit::Options`, held by
 `Encoding::Options::subIntSplit`.
@@ -431,10 +459,12 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 
 | File | Execution context | Inputs and outputs | Contract to preserve |
 |---|---|---|---|
+| `BitFlipProfile.h` | Admission statistics | Integral values; produces per-bit flip probabilities, their variance and gradient, and optionally the varying bits | Sampled pairs keep adjacency; the scalar and AVX2 counters agree |
 | `BitSection.h` | Shared planner/encoder vocabulary | Inclusive first and last bits; produces section ranges and `SectionPlan` entries | Ranges use physical bit positions, remain ordered least-significant first, and report exact widths |
 | `CostModel.h` | Planner cost models | Section metrics, width, and value count; exposes candidate costs and pruning decisions | Each model mirrors selection's size estimator for its encoding; costs use bits consistently and impossible candidates remain distinguishable from expensive ones |
 | `DecodeCost.h` | Planner decode-cost weighting | Section encodings and access pattern; produces per-section read costs | Zero weight reproduces size-only planning exactly |
 | `DeltaTransform.h` | Optional write transform and sequential read recovery | Physical values ↔ first value plus zigzag residuals | Arithmetic is bit-preserving for signed extrema; transformed streams require decoding from row zero |
+| `Estimator.h` | Benchmark and test helper | Values and gate config; returns the gate decision and an ungated DP cost | Not used by production selection |
 | `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets; `parseSections()` validates them | Header sizes and field order remain compatible with stored data; malformed headers fail with `NIMBLE_CHECK_FILE` |
 | `Options.h` | Writer and reader configuration | `subintsplit::Options`, held by `Encoding::Options::subIntSplit` | Defaults preserve standard behavior |
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
@@ -444,6 +474,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `SplitBoundaries.cpp` | Preserved-layout parsing and validation | Text configs ↔ section plans | Rejects gaps, overlaps, malformed endpoints, out-of-range bits, and exclusion-count mismatches |
 | `SplitSelector.h` | Planner entry point and dynamic program | Samples, physical width, full row count, and `SelectorConfig`; returns `SelectorResult` | Sentinel defaults preserve standard planning, reported total cost matches the returned plan, and output covers the full width |
 | `SplitSelector.cpp` | Boundary search | Active-bit statistics; produces retained boundaries and the grid layout | Both active-range edges remain candidates and configured caps remain hard limits |
+| `TopLevelPolicy.h` | Admission gates | `BitFlipProfile` and `TopLevelPolicyConfig`; decides whether SubIntSplit is a candidate | `kEstimate` always admits; gates only decide candidacy unless forcing is asked for |
 
 ### Registration, selection, and writer configuration
 

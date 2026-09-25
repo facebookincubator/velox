@@ -159,6 +159,19 @@ class SubIntSplitEncoding
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Estimates what a split would store `values` in by running the same
+  /// split DP the encoder uses, over a smaller sample and priced on size
+  /// alone. nullopt when no plan can be priced, or when the streams will be
+  /// handed to a substream compressor and
+  /// subintsplit::Options::estimateCompressionGuard is set.
+  static std::optional<uint64_t> estimateSize(
+      uint64_t rowCount,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options);
+#endif
+
   std::string debugString(int offset) const final;
 
  private:
@@ -192,6 +205,17 @@ class SubIntSplitEncoding
   // Options::subIntSplitPlannerMaxSamples.
   static subintsplit::SamplerConfig plannerSamplerConfig(
       const Encoding::Options& options);
+
+  // The sample estimateSize plans over. Smaller than the encoder's, because
+  // the estimate only has to rank a split against the other candidates, not
+  // choose the boundaries the encoder will use, and the DP is linear in the
+  // sample: see estimateSize for what the difference costs and buys.
+  static subintsplit::SamplerConfig estimatorSamplerConfig();
+
+  // Bytes a split's header costs beyond its sections: the outer prefix and
+  // compression type, plus a prefix and a relative offset per section.
+  static constexpr uint64_t kOuterOverheadBytes{6u + 2u};
+  static constexpr uint64_t kPerSectionOverheadBytes{6u + 8u};
 
   // Plans `values` into sections and encodes each. `extraFlags` goes into the
   // header's flag byte, for instance to record that `values` are zigzag
@@ -847,6 +871,64 @@ subintsplit::SamplerConfig SubIntSplitEncoding<T>::plannerSamplerConfig(
     samplerConfig.maxSamples = options.subIntSplitPlannerMaxSamples;
   }
   return samplerConfig;
+}
+
+template <typename T>
+subintsplit::SamplerConfig SubIntSplitEncoding<T>::estimatorSamplerConfig() {
+  // A quarter of the encoder's sample, in blocks half as long. The DP is
+  // O(kBits^2 * sampleSize), so this is the term that decides what the
+  // estimate costs; halving the block keeps the same number of distinct
+  // stretches of the stream in a smaller sample, which is what the run-length
+  // and frame-residual models in the cost grid read.
+  //
+  // Halving it again does not pay: fitting the row frame and drawing the
+  // sample are passes over the whole column, so the DP is not all of the
+  // cost, while the estimate/actual ratio worsens enough to lose selections.
+  return subintsplit::SamplerConfig{.maxSamples = 512, .blockSize = 64};
+}
+
+template <typename T>
+std::optional<uint64_t> SubIntSplitEncoding<T>::estimateSize(
+    uint64_t rowCount,
+    std::span<const physicalType> values,
+    const Statistics<physicalType>& /* statistics */,
+    const Encoding::Options& options) {
+  constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
+  if (values.empty()) {
+    return std::nullopt;
+  }
+
+  // A split is ranked here on uncompressed bytes, and where a substream
+  // compressor follows the encode those are not the bytes on disk. See
+  // subintsplit::Options::estimateCompressionGuard.
+  if (options.subIntSplit.substreamCompression &&
+      options.subIntSplit.estimateCompressionGuard) {
+    return std::nullopt;
+  }
+
+  std::vector<uint64_t> samples;
+  subintsplit::sampleIntoU64<physicalType>(
+      values, samples, estimatorSamplerConfig());
+  if (samples.empty()) {
+    return std::nullopt;
+  }
+
+  // Priced on size alone. The planner's objective carries a per-boundary
+  // penalty and, when a caller asks for it, a decode term; neither is bytes on
+  // disk, and selection is comparing bytes here.
+  auto selectorConfig = plannerSelectorConfig(options, rowCount);
+  selectorConfig.decodeWeighting = subintsplit::DecodeCostWeighting{};
+  const auto plan = subintsplit::selectSplitsRestricted(
+      samples,
+      kBits,
+      rowCount,
+      options.subIntSplit.allowedEncodings,
+      selectorConfig);
+  if (!std::isfinite(plan.totalSizeBits) || plan.sections.empty()) {
+    return std::nullopt;
+  }
+  return static_cast<uint64_t>(std::ceil(plan.totalSizeBits / 8.0)) +
+      kOuterOverheadBytes + plan.sections.size() * kPerSectionOverheadBytes;
 }
 
 template <typename T>
