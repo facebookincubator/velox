@@ -15,24 +15,12 @@
  */
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
-#include "velox/functions/sparksql/registration/Register.h"
-#endif
 
 using namespace std::string_literals;
 using facebook::velox::test::assertEqualVectors;
 
 namespace facebook::velox::functions {
 namespace {
-
-std::vector<std::string> registerTrimDialects() {
-#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
-  sparksql::registerFunctions("spark_");
-  return {"", "spark_"};
-#else
-  return {""};
-#endif
-}
 
 class TrimFunctionsTest : public test::FunctionBaseTest {
  protected:
@@ -285,85 +273,79 @@ TEST_F(TrimFunctionsTest, rtrim) {
 }
 
 TEST_F(TrimFunctionsTest, asciiEncodings) {
-  for (const auto& prefix : registerTrimDialects()) {
-    for (const std::string function : {"trim", "ltrim", "rtrim"}) {
-      const auto expression = fmt::format("{}{}(c0)", prefix, function);
-      const bool left = function != "rtrim";
-      const bool right = function != "ltrim";
-      for (auto length : {10, 12, 13, 64, 256}) {
-        SCOPED_TRACE(fmt::format("{} length {}", expression, length));
-        const std::string body(length, 'a');
-        const std::string shortened(length - 2, 'b');
-        auto input = makeNullableFlatVector<std::string>(
-            {body,
-             left ? (right ? " " + shortened + " " : "  " + shortened)
-                  : shortened + "  ",
-             "",
-             std::string(length, ' '),
-             std::nullopt,
-             " " + body,
-             body + " ",
-             "\t" + body + "\n"});
-        auto expected = makeNullableFlatVector<std::string>(
-            {body,
-             shortened,
-             "",
-             "",
-             std::nullopt,
-             left ? body : " " + body,
-             right ? body : body + " ",
-             prefix.empty() ? (left ? "" : "\t") + body + (right ? "" : "\n")
-                            : "\t" + body + "\n"});
-        const auto check = [&](const VectorPtr& encodedInput,
-                               const VectorPtr& encodedExpected) {
-          const auto data = makeRowVector({encodedInput});
-          assertEqualVectors(encodedExpected, evaluate(expression, data));
-          SelectivityVector rows(encodedInput->size(), false);
-          rows.setValid(0, true);
-          rows.setValid(1, true);
-          rows.setValid(4, true);
-          rows.updateBounds();
-          assertEqualVectors(
-              encodedExpected, evaluate(expression, data, rows), rows);
-        };
-        check(input, expected);
-        auto indices = makeIndices(
-            16, [](vector_size_t row) { return (row * 3 + 1) % 8; });
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    const auto expression = fmt::format("{}(c0)", function);
+    const bool left = function != "rtrim";
+    const bool right = function != "ltrim";
+    for (auto length : {10, 12, 13, 64, 256}) {
+      SCOPED_TRACE(fmt::format("{} length {}", expression, length));
+      const std::string body(length, 'a');
+      const std::string shortened(length - 2, 'b');
+      auto input = makeNullableFlatVector<std::string>(
+          {body,
+           left ? (right ? " " + shortened + " " : "  " + shortened)
+                : shortened + "  ",
+           "",
+           std::string(length, ' '),
+           std::nullopt,
+           " " + body,
+           body + " ",
+           "\t" + body + "\n"});
+      auto expected = makeNullableFlatVector<std::string>(
+          {body,
+           shortened,
+           "",
+           "",
+           std::nullopt,
+           left ? body : " " + body,
+           right ? body : body + " ",
+           (left ? "" : "\t") + body + (right ? "" : "\n")});
+      const auto check = [&](const VectorPtr& encodedInput,
+                             const VectorPtr& encodedExpected) {
+        const auto data = makeRowVector({encodedInput});
+        assertEqualVectors(encodedExpected, evaluate(expression, data));
+        SelectivityVector rows(encodedInput->size(), false);
+        rows.setValid(0, true);
+        rows.setValid(1, true);
+        rows.setValid(4, true);
+        rows.updateBounds();
+        assertEqualVectors(
+            encodedExpected, evaluate(expression, data, rows), rows);
+      };
+      check(input, expected);
+      auto indices =
+          makeIndices(16, [](vector_size_t row) { return (row * 3 + 1) % 8; });
+      check(
+          wrapInDictionary(indices, 16, input),
+          wrapInDictionary(indices, 16, expected));
+      for (auto row : {0, 1, 4}) {
         check(
-            wrapInDictionary(indices, 16, input),
-            wrapInDictionary(indices, 16, expected));
-        for (auto row : {0, 1, 4}) {
-          check(
-              BaseVector::wrapInConstant(8, row, input),
-              BaseVector::wrapInConstant(8, row, expected));
-        }
+            BaseVector::wrapInConstant(8, row, input),
+            BaseVector::wrapInConstant(8, row, expected));
       }
     }
   }
 }
 
 TEST_F(TrimFunctionsTest, asciiStringLifetime) {
-  for (const auto& prefix : registerTrimDialects()) {
-    for (const std::string function : {"trim", "ltrim", "rtrim"}) {
-      SCOPED_TRACE(prefix + function);
-      VectorPtr result;
-      std::weak_ptr<BaseVector> inputReference;
-      {
-        auto input = makeFlatVector<std::string>(
-            {std::string(64, 'a'), "  " + std::string(256, 'b') + "  "});
-        inputReference = input;
-        result = evaluate(
-            fmt::format("{}{}(c0)", prefix, function), makeRowVector({input}));
-      }
-      ASSERT_TRUE(inputReference.expired());
-      ASSERT_FALSE(
-          result->as<FlatVector<StringView>>()->stringBuffers().empty());
-      const auto expected = makeFlatVector<std::string>(
-          {std::string(64, 'a'),
-           (function == "rtrim" ? "  " : "") + std::string(256, 'b') +
-               (function == "ltrim" ? "  " : "")});
-      assertEqualVectors(expected, result);
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    SCOPED_TRACE(function);
+    VectorPtr result;
+    std::weak_ptr<BaseVector> inputReference;
+    {
+      auto input = makeFlatVector<std::string>(
+          {std::string(64, 'a'), "  " + std::string(256, 'b') + "  "});
+      inputReference = input;
+      result =
+          evaluate(fmt::format("{}(c0)", function), makeRowVector({input}));
     }
+    ASSERT_TRUE(inputReference.expired());
+    ASSERT_FALSE(result->as<FlatVector<StringView>>()->stringBuffers().empty());
+    const auto expected = makeFlatVector<std::string>(
+        {std::string(64, 'a'),
+         (function == "rtrim" ? "  " : "") + std::string(256, 'b') +
+             (function == "ltrim" ? "  " : "")});
+    assertEqualVectors(expected, result);
   }
 }
 
