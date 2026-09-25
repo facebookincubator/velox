@@ -55,74 +55,64 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
           : context.getEstimatedOutputStreamSize()};
 }
 
-uint64_t orcWriterMaxStripeSize(
+std::optional<uint64_t> orcWriterMaxStripeSize(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return config::toCapacity(
-      session
-          .getLegacyWithFallback<std::string>(
-              dwrf::Config::kOrcWriterMaxStripeSizeSession,
-              config,
-              dwrf::Config::kOrcWriterMaxStripeSize)
-          .value_or("64MB"),
-      config::CapacityUnit::BYTE);
+  const auto value = session.getLegacyWithFallback<std::string>(
+      dwrf::Config::kOrcWriterMaxStripeSizeSession,
+      config,
+      dwrf::Config::kOrcWriterMaxStripeSize);
+  return value.has_value() ? std::optional<uint64_t>(config::toCapacity(
+                                 *value, config::CapacityUnit::BYTE))
+                           : std::nullopt;
 }
 
-uint64_t orcWriterMaxDictionaryMemory(
+std::optional<uint64_t> orcWriterMaxDictionaryMemory(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return config::toCapacity(
-      session
-          .getLegacyWithFallback<std::string>(
-              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
-              config,
-              dwrf::Config::kOrcWriterMaxDictionaryMemory)
-          .value_or("16MB"),
-      config::CapacityUnit::BYTE);
+  const auto value = session.getLegacyWithFallback<std::string>(
+      dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+      config,
+      dwrf::Config::kOrcWriterMaxDictionaryMemory);
+  return value.has_value() ? std::optional<uint64_t>(config::toCapacity(
+                                 *value, config::CapacityUnit::BYTE))
+                           : std::nullopt;
 }
 
-bool isOrcWriterIntegerDictionaryEncodingEnabled(
+std::optional<bool> isOrcWriterIntegerDictionaryEncodingEnabled(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session
-      .getLegacyWithFallback<bool>(
-          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
-          config,
-          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabled)
-      .value_or(true);
+  return session.getLegacyWithFallback<bool>(
+      dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
+      config,
+      dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabled);
 }
 
-bool isOrcWriterStringDictionaryEncodingEnabled(
+std::optional<bool> isOrcWriterStringDictionaryEncodingEnabled(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session
-      .getLegacyWithFallback<bool>(
-          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
-          config,
-          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabled)
-      .value_or(true);
+  return session.getLegacyWithFallback<bool>(
+      dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
+      config,
+      dwrf::Config::kOrcWriterStringDictionaryEncodingEnabled);
 }
 
-bool orcWriterLinearStripeSizeHeuristics(
+std::optional<bool> orcWriterLinearStripeSizeHeuristics(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session
-      .getLegacyWithFallback<bool>(
-          dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
-          config,
-          dwrf::Config::kOrcWriterLinearStripeSizeHeuristics)
-      .value_or(true);
+  return session.getLegacyWithFallback<bool>(
+      dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
+      config,
+      dwrf::Config::kOrcWriterLinearStripeSizeHeuristics);
 }
 
-uint64_t orcWriterMinCompressionSize(
+std::optional<uint64_t> orcWriterMinCompressionSize(
     const config::ConfigBase& config,
     const config::ConfigBase& session) {
-  return session
-      .getLegacyWithFallback<uint64_t>(
-          dwrf::Config::kOrcWriterMinCompressionSizeSession,
-          config,
-          dwrf::Config::kOrcWriterMinCompressionSize)
-      .value_or(1024);
+  return session.getLegacyWithFallback<uint64_t>(
+      dwrf::Config::kOrcWriterMinCompressionSizeSession,
+      config,
+      dwrf::Config::kOrcWriterMinCompressionSize);
 }
 
 std::optional<uint8_t> orcWriterCompressionLevel(
@@ -134,59 +124,57 @@ std::optional<uint8_t> orcWriterCompressionLevel(
       dwrf::Config::kOrcWriterCompressionLevel);
 }
 
-uint8_t orcWriterZLIBCompressionLevel(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
-  constexpr uint8_t kDefaultZlibCompressionLevel = 4;
-  return orcWriterCompressionLevel(config, session)
-      .value_or(kDefaultZlibCompressionLevel);
-}
-
-uint8_t orcWriterZSTDCompressionLevel(
-    const config::ConfigBase& config,
-    const config::ConfigBase& session) {
-  constexpr uint8_t kDefaultZstdCompressionLevel = 3;
-  return orcWriterCompressionLevel(config, session)
-      .value_or(kDefaultZstdCompressionLevel);
-}
-
 void addOrcWriterConfigs(
     std::map<std::string, std::string>& configs,
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) {
-  configs.emplace(
-      dwrf::Config::STRIPE_SIZE.key,
-      std::to_string(orcWriterMaxStripeSize(connectorConfig, session)));
+  const auto addIfSet = [&configs](const auto& entry, const auto& value) {
+    if (value.has_value()) {
+      configs.emplace(entry.key, std::to_string(*value));
+    }
+  };
+  addIfSet(
+      dwrf::Config::STRIPE_SIZE,
+      orcWriterMaxStripeSize(connectorConfig, session));
+  addIfSet(
+      dwrf::Config::MAX_DICTIONARY_SIZE,
+      orcWriterMaxDictionaryMemory(connectorConfig, session));
+  addIfSet(
+      dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED,
+      isOrcWriterIntegerDictionaryEncodingEnabled(connectorConfig, session));
+  addIfSet(
+      dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED,
+      isOrcWriterStringDictionaryEncodingEnabled(connectorConfig, session));
+  addIfSet(
+      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN,
+      orcWriterMinCompressionSize(connectorConfig, session));
+  addIfSet(
+      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS,
+      orcWriterLinearStripeSizeHeuristics(connectorConfig, session));
 
-  configs.emplace(
-      dwrf::Config::MAX_DICTIONARY_SIZE.key,
-      std::to_string(orcWriterMaxDictionaryMemory(connectorConfig, session)));
+  const auto compressionLevel =
+      orcWriterCompressionLevel(connectorConfig, session);
+  addIfSet(dwrf::Config::ZLIB_COMPRESSION_LEVEL, compressionLevel);
+  addIfSet(dwrf::Config::ZSTD_COMPRESSION_LEVEL, compressionLevel);
+}
 
+void addOrcWriterDefaultConfigs(std::map<std::string, std::string>& configs) {
+  configs.emplace(
+      dwrf::Config::STRIPE_SIZE.key, std::to_string(64 * 1024 * 1024));
+  configs.emplace(
+      dwrf::Config::MAX_DICTIONARY_SIZE.key, std::to_string(16 * 1024 * 1024));
   configs.emplace(
       dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key,
-      std::to_string(isOrcWriterIntegerDictionaryEncodingEnabled(
-          connectorConfig, session)));
+      std::to_string(true));
   configs.emplace(
       dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key,
-      std::to_string(isOrcWriterStringDictionaryEncodingEnabled(
-          connectorConfig, session)));
-
+      std::to_string(true));
   configs.emplace(
-      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key,
-      std::to_string(orcWriterMinCompressionSize(connectorConfig, session)));
-
+      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key, std::to_string(1024));
   configs.emplace(
-      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key,
-      std::to_string(
-          orcWriterLinearStripeSizeHeuristics(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::ZLIB_COMPRESSION_LEVEL.key,
-      std::to_string(orcWriterZLIBCompressionLevel(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::ZSTD_COMPRESSION_LEVEL.key,
-      std::to_string(orcWriterZSTDCompressionLevel(connectorConfig, session)));
+      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key, std::to_string(true));
+  configs.emplace(dwrf::Config::ZLIB_COMPRESSION_LEVEL.key, std::to_string(4));
+  configs.emplace(dwrf::Config::ZSTD_COMPRESSION_LEVEL.key, std::to_string(3));
 }
 
 #define NON_RECLAIMABLE_SECTION_CHECK() \
@@ -199,6 +187,7 @@ std::shared_ptr<const Config> Writer::makeWriterConfig(
   std::map<std::string, std::string> configs = options.serdeParameters;
   auto formatConfigs = dwrfOptions.config->toSerdeParams();
   configs.merge(formatConfigs);
+  addOrcWriterDefaultConfigs(configs);
 
   if (options.compressionKind.has_value()) {
     configs.emplace(
