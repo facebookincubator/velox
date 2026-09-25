@@ -53,71 +53,68 @@ inline SamplerConfig defaultSamplerConfig() noexcept {
   return SamplerConfig{};
 }
 
-namespace detail {
+// Fills `out` with up to cfg.maxSamples uint64_t values drawn from `values`,
+// resizing in place. Block-stratified sampling (cfg.blockSize > 0) preserves
+// local temporal structure, needed for accurate run-length and frame-residual
+// metrics; stride sampling spreads samples uniformly. When `rows` is not
+// null, records the row each sample came from, for callers that need to
+// evaluate something positional over the sample without materialising the
+// whole stream.
+template <typename physicalType>
+void sampleIntoU64WithRows(
+    std::span<const physicalType> values,
+    std::vector<uint64_t>& out,
+    std::vector<size_t>* rows,
+    const SamplerConfig& cfg = defaultSamplerConfig()) {
+  static_assert(sizeof(physicalType) <= 8);
 
-template <typename PhysicalType>
-inline uint64_t toBits(const PhysicalType& value) noexcept {
-  uint64_t bits = 0;
-  __builtin_memcpy(&bits, &value, sizeof(PhysicalType));
-  return bits;
-}
+  const size_t n = values.size();
+  out.clear();
+  if (rows != nullptr) {
+    rows->clear();
+  }
+  if (n == 0) {
+    return;
+  }
 
-// Evenly-spaced contiguous windows. Preserves local temporal structure, which
-// is what makes the run-length and frame-residual metrics meaningful.
-template <typename PhysicalType>
-inline void sampleBlocks(
-    std::span<const PhysicalType> values,
-    size_t target,
-    size_t blockSize,
-    std::vector<uint64_t>& out) {
-  const size_t numBlocks = std::max<size_t>(1, target / blockSize);
-  const size_t blockStride = std::max<size_t>(1, values.size() / numBlocks);
-  for (size_t block = 0; block < numBlocks && out.size() < target; ++block) {
-    const size_t start = block * blockStride;
-    const size_t end = std::min(start + blockSize, values.size());
-    for (size_t i = start; i < end && out.size() < target; ++i) {
-      out.push_back(toBits(values[i]));
+  const size_t target = std::min(cfg.maxSamples > 0 ? cfg.maxSamples : n, n);
+  out.reserve(target);
+  if (rows != nullptr) {
+    rows->reserve(target);
+  }
+  const auto take = [&](size_t i) {
+    uint64_t bits = 0;
+    __builtin_memcpy(&bits, &values[i], sizeof(physicalType));
+    out.push_back(bits);
+    if (rows != nullptr) {
+      rows->push_back(i);
+    }
+  };
+
+  if (cfg.blockSize > 0) {
+    const size_t numBlocks = std::max<size_t>(1, target / cfg.blockSize);
+    const size_t blockStride = std::max<size_t>(1, n / numBlocks);
+    for (size_t b = 0; b < numBlocks && out.size() < target; ++b) {
+      const size_t start = b * blockStride;
+      const size_t end = std::min(start + cfg.blockSize, n);
+      for (size_t i = start; i < end && out.size() < target; ++i) {
+        take(i);
+      }
+    }
+  } else {
+    const size_t stride = std::max<size_t>(1, n / target);
+    for (size_t i = 0; i < n; i += stride) {
+      take(i);
     }
   }
 }
 
-template <typename PhysicalType>
-inline void sampleStride(
-    std::span<const PhysicalType> values,
-    size_t target,
-    std::vector<uint64_t>& out) {
-  const size_t stride = std::max<size_t>(1, values.size() / target);
-  for (size_t i = 0; i < values.size(); i += stride) {
-    out.push_back(toBits(values[i]));
-  }
-}
-
-} // namespace detail
-
-/// Fills `out` with up to `config.maxSamples` bit patterns drawn from `values`.
-/// `out` is resized in place, so no heap allocation occurs when it already has
-/// sufficient capacity.
-template <typename PhysicalType>
+template <typename physicalType>
 void sampleIntoU64(
-    std::span<const PhysicalType> values,
+    std::span<const physicalType> values,
     std::vector<uint64_t>& out,
-    const SamplerConfig& config = defaultSamplerConfig()) {
-  static_assert(sizeof(PhysicalType) <= 8);
-
-  out.clear();
-  if (values.empty()) {
-    return;
-  }
-
-  const size_t target = std::min(
-      config.maxSamples > 0 ? config.maxSamples : values.size(), values.size());
-  out.reserve(target);
-
-  if (config.blockSize > 0) {
-    detail::sampleBlocks(values, target, config.blockSize, out);
-  } else {
-    detail::sampleStride(values, target, out);
-  }
+    const SamplerConfig& cfg = defaultSamplerConfig()) {
+  sampleIntoU64WithRows<physicalType>(values, out, nullptr, cfg);
 }
 
 } // namespace facebook::nimble::subintsplit
