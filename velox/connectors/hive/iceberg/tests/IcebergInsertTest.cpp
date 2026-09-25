@@ -300,7 +300,7 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     return files.size();
   };
 
-  ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
+  ASSERT_EQ(writeAndRead("512B"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
 }
 
