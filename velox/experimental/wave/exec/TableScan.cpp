@@ -82,11 +82,12 @@ void TableScan::updateStats(
     }
     if (UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
       lockedStats->runtimeStats.insert(
-          std::make_pair(name, RuntimeMetric(counter.unit)));
+          std::make_pair(
+              name, RuntimeMetric(counter.unit, counter.aggregation)));
     } else {
       VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, counter.unit);
     }
-    lockedStats->runtimeStats.at(name).addValue(counter.value);
+    lockedStats->runtimeStats.at(name).merge(counter);
   }
 }
 
@@ -105,7 +106,7 @@ void TableScan::updateStats(
     }
     if (UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
       lockedStats->runtimeStats.insert(
-          std::make_pair(name, RuntimeMetric(metric.unit)));
+          std::make_pair(name, RuntimeMetric(metric.unit, metric.aggregation)));
     } else {
       VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, metric.unit);
     }

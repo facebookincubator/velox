@@ -61,6 +61,9 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   ASSERT_TRUE(
       stats.columnMetrics.find(metricName) != stats.columnMetrics.end());
   EXPECT_GT(stats.columnMetrics.at(metricName).sum, 0);
+  EXPECT_EQ(
+      stats.columnMetrics.at(metricName).aggregation,
+      RuntimeCounter::AggregationKind::kPerOperator);
 }
 
 TEST_F(ParquetPageReaderTest, largePage) {
