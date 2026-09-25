@@ -43,12 +43,47 @@ class DictionaryEncodingView final : public TypedEncodingView<T> {
         this->pool_,
         options);
     NIMBLE_CHECK_NOT_NULL(indices_);
+
+    // Resolving the alphabet once avoids a virtual call per row later, but is
+    // only worth it while the alphabet is small relative to the rows it
+    // serves, which is the case a dictionary is chosen for.
+    const auto alphabetRows = alphabet_->rowCount();
+    if (alphabetRows > 0 && alphabetRows <= kResolvedAlphabetLimit &&
+        alphabetRows < this->rowCount_) {
+      resolved_.resize(alphabetRows);
+      alphabet_->read(0, alphabetRows, resolved_.data());
+    }
+  }
+
+  // Hands over the indices and resolved alphabet directly; declines when the
+  // alphabet was not resolved (too large relative to row count).
+  bool denseRunIds(
+      uint32_t offset,
+      uint32_t length,
+      std::vector<uint32_t>& ids,
+      std::vector<uint64_t>& table) const final {
+    if (resolved_.empty()) {
+      return false;
+    }
+    ids.resize(length);
+    indices_->read(offset, length, ids.data());
+    table.resize(resolved_.size());
+    for (size_t i = 0; i < resolved_.size(); ++i) {
+      uint64_t bits = 0;
+      __builtin_memcpy(&bits, &resolved_[i], sizeof(physicalType));
+      table[i] = bits;
+    }
+    return true;
   }
 
  private:
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
-    return alphabet_->readAt(indices_->readAt(index));
+    const auto position = indices_->readAt(index);
+    if (!resolved_.empty()) {
+      return detail::castFromPhysicalType<T>(resolved_[position]);
+    }
+    return alphabet_->readAt(position);
   }
 
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
@@ -60,11 +95,23 @@ class DictionaryEncodingView final : public TypedEncodingView<T> {
     };
     indices.resize(length);
     indices_->read(offset, length, indices.data());
+    if (!resolved_.empty()) {
+      for (uint32_t i = 0; i < length; ++i) {
+        output[i] = resolved_[indices[i]];
+      }
+      return;
+    }
     for (uint32_t i = 0; i < length; ++i) {
       alphabet_->readAt(indices[i], output + i);
     }
   }
 
+  // Entries past this many are left to resolve per value: the point is to
+  // hold a table that is small against the column, not to copy a large one.
+  static constexpr uint32_t kResolvedAlphabetLimit = 1u << 16;
+
+  // The alphabet, already decoded. Empty when it was not worth holding.
+  std::vector<physicalType> resolved_;
   std::unique_ptr<TypedEncodingView<T>> alphabet_;
   std::unique_ptr<TypedEncodingView<uint32_t>> indices_;
 };

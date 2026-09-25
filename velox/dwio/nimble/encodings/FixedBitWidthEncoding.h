@@ -128,16 +128,26 @@ class FixedBitWidthEncoding final
  private:
   static constexpr int kPrefixSize = 2 + sizeof(T);
 
+  // Bytes the packed payload occupies in the stream, which is what
+  // FixedBitArray::bufferSize reserves and what encode() writes, including
+  // the slop bytes bufferSize adds so decoding can read whole machine words
+  // past the last value. Omitting that slop understates the size on small
+  // streams, where the estimate is too small to separate candidates and a
+  // wrong estimate can pick among encodings with very different decode
+  // costs.
   static uint64_t bitPackedBytes(
       uint64_t minValue,
       uint64_t maxValue,
       uint64_t count,
       bool useExactBitWidth) {
+    // Keep in step with FixedBitArray::bufferSize, which is where encode() gets
+    // the number it actually reserves.
+    constexpr uint64_t kFixedBitArraySlopBytes = 7;
     auto bitWidth = velox::bits::bitsRequired(maxValue - minValue);
     if (!useExactBitWidth) {
       bitWidth = velox::bits::roundUp(bitWidth, 8);
     }
-    return velox::bits::nbytes(bitWidth * count);
+    return velox::bits::nbytes(bitWidth * count) + kFixedBitArraySlopBytes;
   }
 
   int bitWidth_;

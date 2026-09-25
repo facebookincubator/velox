@@ -52,4 +52,25 @@ void traverseEncodings(
 std::string getStreamInputLabel(nimble::ChunkedStream& stream);
 std::string getEncodingLabel(std::string_view stream);
 
+/// One line per node of an encoding tree, for diffing what a change moved.
+///
+/// getEncodingLabel is written for a person and nests its children inside the
+/// parent's line, which makes a node's position in the text depend on its
+/// siblings. Two parsers of it have already misread a tree: one under-counted
+/// switches by zipping node lists positionally, and one reported a column as
+/// unchanged when a nested encoding under a Dictionary had in fact switched
+/// and halved that column's decode throughput. This format is for scripts:
+/// every node is one record, and every record carries the path that identifies
+/// it, so a diff keys on identity rather than on order.
+///
+/// Tab-separated, with a leading `#` header naming the columns:
+///
+///   depth  path  index  encoding  dataType  bytes  compression
+///
+/// `path` is `/` at the root and slash-joined nested encoding names below it,
+/// so a node is `/Section2/Indices/Baselines`. `bytes` is the node's whole
+/// encoded span, its children included, so a parent's bytes minus its
+/// children's is what that node spends on itself.
+std::string getEncodingTreeLabel(std::string_view stream);
+
 } // namespace facebook::nimble::tools

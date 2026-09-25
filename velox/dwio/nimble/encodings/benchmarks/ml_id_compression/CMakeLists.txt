@@ -41,12 +41,17 @@ target_link_libraries(nimble_ml_id_benchmark_common PUBLIC gflags)
 velox_add_test_headers(
   nimble_ml_id_benchmark_common
   AblationPolicy.h
+  AccessStructure.h
   Axes.h
   BenchCommon.h
+  BlockCodecTarget.h
   CachePolicy.h
   DriverSweep.h
   ElemType.h
+  EncodeCache.h
+  EncodingNodeEstimates.h
   GatherTraceGen.h
+  InputOrder.h
   MeasureLoop.h
   OpenZLBenchTarget.h
   PointTraceGen.h
@@ -72,6 +77,9 @@ function(nimble_add_ml_id_benchmark NAME SOURCE)
     nimble_ml_id_benchmark_common
     nimble_encodings
     nimble_common
+    # For tools::getEncodingTreeLabel, which BenchCommon's describeTree uses to
+    # dump a machine-readable encoding tree under --mlidc_dump_encoding.
+    nimble_tools_common
     Folly::folly
     velox_memory
     gflags
@@ -91,6 +99,12 @@ nimble_add_ml_id_benchmark(
 # MlIdDecodeBulkBenchmark: full-materialization decode throughput.
 nimble_add_ml_id_benchmark(
   nimble_ml_id_decode_bulk_benchmark MlIdDecodeBulkBenchmark.cpp OPENZL
+)
+
+# MlIdAdmissionBenchmark: precision and recall of the SubIntSplit admission
+# heuristic against the bytes splitting actually saves.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_admission_benchmark MlIdAdmissionBenchmark.cpp
 )
 
 # MlIdDecodeRangeBenchmark: contiguous-range decode across (start, length).
@@ -136,3 +150,10 @@ nimble_add_ml_id_benchmark(
 nimble_add_ml_id_benchmark(
   nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp
 )
+
+# Correctness tests for the block-codec arms. The benchmark drivers report
+# numbers rather than assert them, so the block indexing -- which decides both
+# what a read returns and how much it decompresses -- is pinned here instead.
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

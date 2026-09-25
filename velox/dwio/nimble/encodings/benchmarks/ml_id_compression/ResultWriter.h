@@ -39,6 +39,7 @@
 DECLARE_string(mlidc_output_csv);
 DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);
+DECLARE_int32(mlidc_chunk_rows);
 DECLARE_int32(mlidc_iters);
 DECLARE_int64(mlidc_seed);
 DECLARE_string(mlidc_file);
@@ -215,6 +216,7 @@ inline void writeRunManifest(const std::string& path) {
   // differ only in compressor produce different numbers under the same
   // encoder names, so a result set is not interpretable without them.
   manifest["flags"] = folly::dynamic::object("mlidc_rows", FLAGS_mlidc_rows)(
+      "mlidc_chunk_rows", FLAGS_mlidc_chunk_rows)(
       "mlidc_iters", FLAGS_mlidc_iters)("mlidc_seed", FLAGS_mlidc_seed)(
       "mlidc_file", FLAGS_mlidc_file)(
       "mlidc_dataset_name", FLAGS_mlidc_dataset_name)(

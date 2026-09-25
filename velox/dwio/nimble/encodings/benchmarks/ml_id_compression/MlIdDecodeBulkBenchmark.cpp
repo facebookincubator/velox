@@ -80,12 +80,34 @@ int runBenchmark() {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",        "dtype",       "dataset",       "encoding",
-      "family",        "variant",     "is_sequential", "fast_skip",
-      "random_access", "N",           "seed",          "cache_state",
-      "evict_method",  "evict_ns",    "payload_bytes", "compression_ratio",
-      "iterations",    "warmup",      "time_ns",       "time_p90_ns",
-      "time_min_ns",   "decode_Meps", "decode_MBps",   "skipped"};
+      "driver",
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "inventory",
+      "transform",
+      "input_order",
+      "is_sequential",
+      "fast_skip",
+      "random_access",
+      "N",
+      "seed",
+      "cache_state",
+      "evict_method",
+      "evict_ns",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "decode_Meps",
+      "decode_MBps",
+      "skipped"};
+  appendAccessColumns(csvColumns);
 
   std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_decode_bulk.csv"
                                                        : FLAGS_mlidc_output_csv;
@@ -145,6 +167,11 @@ int runBenchmark() {
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
 
+      // A view's construction cost is charged here so a bulk read through a
+      // view accounts for both build and read, not just the read.
+      const auto build = measureAccessStructureBuild<Elem>(
+          spec, cell.controller, cell.targets, *target);
+
       auto result = measure(spec, cell.controller, cell.targets, [&]() {
         target->materializeAll(sink.data(), n);
       });
@@ -171,6 +198,8 @@ int runBenchmark() {
       setTimingColumns(csv, result);
       csv.set("decode_Meps", meps);
       csv.set("decode_MBps", mbps);
+      setAccessColumns<Elem>(
+          csv, *target, build.time.median_ns, result.time.median_ns);
       csv.set("skipped", int64_t{0});
       csv.endRow();
       csv.flush();

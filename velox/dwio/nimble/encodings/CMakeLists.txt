@@ -25,6 +25,9 @@ add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
+if(NIMBLE_BUILD_TESTING AND NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_subdirectory(subintsplit/tests)
+endif()
 
 add_library(
   nimble_encodings
@@ -42,21 +45,25 @@ add_library(
   SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
-  subintsplit/CostModel.cpp
-  subintsplit/CostModel.h
   subintsplit/BitSection.h
+  subintsplit/CostModel.h
+  subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
+  subintsplit/Estimator.h
   subintsplit/Format.h
+  subintsplit/PlanRefiner.cpp
+  subintsplit/PlanRefiner.h
+  subintsplit/RowFrame.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
-  subintsplit/SectionEncoder.h
-  subintsplit/SectionMetrics.cpp
   subintsplit/SectionMetrics.h
-  subintsplit/SectionTable.h
+  subintsplit/SectionTransform.h
+  subintsplit/SectionTransforms.cpp
   subintsplit/SplitBoundaries.cpp
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
   subintsplit/SplitSelector.h
+  subintsplit/TopLevelPolicy.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
@@ -93,6 +100,7 @@ add_library(
   selection/EncodingSelectionPolicy.h
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
+  selection/BitFlipProfile.h
   common/EncodingUtils.h
   common/SortedPositionSlots.h
   common/EncodingType.h

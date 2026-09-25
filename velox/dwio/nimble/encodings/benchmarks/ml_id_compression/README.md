@@ -126,12 +126,58 @@ decompression but discards the output, since the inner target still holds the
 payload it encoded. A real reader would also rebuild the `Encoding` from the
 decompressed bytes, so the penalty measured there is a **lower bound**.
 
+### Block-addressable codec arms
+
+`openzl/auto` compresses the whole column as one unit, which makes read cost a
+function of column length. That is one way to deploy a block codec, not the only
+one: a columnar format ships a codec in fixed-size blocks and decompresses only
+the blocks a read overlaps. `BlockCodecTarget.h` is that addressable sibling, and
+the two together separate the codec from the granularity it is shipped at.
+
+`BlockCompressedTarget` splits the column into blocks of K elements, compresses
+each independently, and serves a read of `count` elements at `begin` by
+decompressing exactly the blocks in `[begin / K, (begin + count - 1) / K]` — that
+is `floor((begin + count - 1) / K) - floor(begin / K) + 1` blocks, never more. A
+point read costs one block whatever the column length is. Within one
+`skipThenMaterialize` call the scratch block is reused, so two ranges landing in
+the same block cost one decompression; nothing is cached across calls, matching
+`OuterCompressedTarget`, which charges every call for its own decompression.
+
+The arms are `zstd/block-K` and `openzl/block-K` for K in 1024, 65536 and 262144
+elements — 8 KB, 512 KB and 2 MB at eight bytes per element. The Zstd arms need
+no OpenZL and are added by every driver; the OpenZL arms follow `openzl/auto`.
+`openzl/block-K` uses the same `select_numeric` graph as `openzl/auto`, applied
+one block at a time, so the block size is the only difference between them.
+The Zstd arms go through nimble's own compressor registry, so Zstd here is the
+same Zstd the encodings use for their sub-streams. Zstd declines an
+incompressible block, which a block of random IDs routinely is; those blocks are
+stored verbatim and the block directory records which form each one is in.
+
+`payloadSize()` includes the block directory, since a reader cannot address a
+block without it: five bytes per block (a 32-bit start offset and a stored-form
+byte), one terminating offset, and an eight-byte header of element count and
+block size. At K = 1024 and eight-byte elements that is 0.061% of the raw column,
+and it falls by 64x at K = 65536.
+
+`BlockCompressedTarget` reports `ReadPath::kBlock`, so the iteration caps below
+leave it alone: a read does not decompress the whole payload, and capping these
+arms would hide the block-size effect they exist to measure. The one exception
+is derived rather than declared — a column short enough to fit in a single block
+reports `kWholePayload`, because an arm holding all of it in one block is a
+whole-payload codec whatever K was set to. `zstd/whole` is that case on purpose.
+`tests/BlockCodecTargetTest.cpp` pins both the round trip — including partial
+final blocks, single-element columns and ranges spanning block boundaries — and
+the "decompresses only what it overlaps" property itself.
+
 ### Keeping the sweeps bounded
 
-Entries where every read decompresses everything are marked
-`EncoderEntry::wholePayloadCodec`. The range and gather drivers sweep hundreds of
-grid cells, and a full decompress per cell would dominate wall-clock time, so
-`specFor()` in `MeasureLoop.h` caps those entries at
+Targets where every read decompresses everything report
+`ReadPath::kWholePayload` from `NimbleBenchTargetBase::readPath()`. This used to
+be a flag on `EncoderEntry`, which `--mlidc_outer_compression` made wrong: that
+flag wraps every arm in a whole-payload codec without any of them declaring one,
+so those runs went uncapped. The range and gather drivers sweep hundreds of grid
+cells, and a full decompress per cell would dominate wall-clock time, so
+`specFor()` in `MeasureLoop.h` caps those targets at
 `--mlidc_block_codec_iters` (default 1) and drops warmup. Their timings are
 correspondingly noisier than the rest, which is the intended trade: enough signal
 to compare orders of magnitude, without the sweep taking hours.
@@ -146,6 +192,140 @@ used, not the nominal flag values.
 Note that the sequential Nimble encodings are slow here too, for a different reason:
 a probe resets the encoding and skips from position zero, so cost grows with the row
 index. Expect to lower `--probes` for a run that includes RLE or SIS.
+
+## View construction, and what it is amortised over
+
+A view, or a decoded buffer, costs something to build and then serves reads
+cheaply. Reporting only one of those two numbers is misleading in whichever
+direction the arm happens to favour, so the harness reports both, always, and
+from one run.
+
+`NimbleBenchTargetBase` exposes the question directly: `readPath()` says how a
+read reaches its rows, `buildsAccessStructure()` says whether there is a
+one-time build at all, and `buildAccessStructure()` / `discardAccessStructure()`
+let a driver time it. A driver asks the target rather than reading the arm's
+name. That is not hypothetical tidiness — the point driver's
+`emulated_point_read` column used to be written as a constant `1` for every arm
+including the view arms it was meant to separate, and a previous analysis had to
+reconstruct it from the encoding name. It now reads `0` exactly when the target
+answers a one-row probe with one row's work.
+
+Every measured driver therefore writes four extra columns: `read_path`,
+`builds_access_structure`, `build_ns`, and `time_incl_build_ns`. `time_ns` stays
+the read time with the structure already built, so both numbers are on the same
+row and neither can be quoted without the other. This replaces the old
+`SIS/...+view+ctor` arms, which covered two view arms out of a dozen and put the
+two numbers on different rows.
+
+Blackbox codecs are on the same curves. `openzl/auto` and `zstd/whole`
+decompress everything per read, which is what a reader holding only the
+compressed column pays, and it is why `openzl/auto` reads 7.5e-05 Mprobes/s on
+snowflake. That is a property of the deployment rather than of the codec, so
+`MaterializingTarget` wraps either one to decompress once on the first access
+and serve the rest from the decoded buffer — the structure
+`MaterializedEncodingView` already uses for a section whose encoding has no
+view. The `openzl/auto+materialize` and `zstd/whole+materialize` arms are those,
+and they encode to the same bytes as their bare twins, so the pair differs in
+how a read is addressed and in nothing else.
+
+## Resident memory as an axis
+
+Time alone made the amortisation curves compare unlike things, and the
+comparison flattered whichever arm was willing to hold the most memory.
+`+materialize` decompresses the **entire** column and answers reads by indexing
+a flat array. A view does not: it materialises only the sections that lack a
+real view and serves the rest from the compressed representation. Both answer
+the same reads, so on a time-only chart `openzl/auto+materialize` looked
+unanswerable — 13.7 ms build and 35.9 ns/op on snowflake point against
+`SIS/realNested+view`'s 71.7 ms and 765 ns/op — while holding roughly 8 MB of
+uncompressed column to do it, against about 5 MB compressed. That is a cache
+result reported as a compression result.
+
+Decompressing both in full is not the fix; that is bulk decode, which
+`nimble_ml_id_decode_bulk_benchmark` already measures. The fix is to let each
+system materialise lazily at its own natural granularity and to put what it
+holds on an axis of its own. Every measured driver therefore writes a
+`resident_bytes` column beside `read_path` and `build_ns`.
+
+`NimbleBenchTargetBase::residentBytes()` is **pure**, for the same reason
+`readPath()` is: a target that quietly held a decoded copy of the column would
+otherwise be compared on time alone against one holding only compressed bytes,
+and the two would look like the same deployment. Each target answers for what
+it actually keeps — the cursor and view targets report their encoded bytes plus
+their own memory pool, `MaterializingTarget` adds the decoded buffer,
+`BlockCompressedTarget` reports payload plus directory plus scratch,
+`OpenZLBenchTarget` its frame plus scratch, and `OuterCompressedTarget` sums
+the compressed bytes, the inner target and the last decompressed buffer.
+
+Two details make those numbers honest rather than nominal.
+
+**Per-target memory pools.** Each target takes its own
+`memoryManager()->addLeafPool("mlidc_target_N")` via `makeTargetPool()` instead
+of sharing `benchmarks::benchmarkPool()`. (That pool is itself a leaf, so it
+cannot have children — a target sharing it would report the whole sweep's
+allocations as its own.) This is what makes a view's index structures genuinely
+measured rather than estimated from bits per element, since they and the buffer
+a `MaterializedEncodingView` decodes a viewless section into are both
+pool-backed.
+
+**Decode caches that no pool can see.** A transformed SubIntSplit stream keeps
+a decoded block across `reset()`, in plain `std::vector`s rather than
+pool-backed `Vector<T>`s, so neither `payloadSize()` nor the pool reports it.
+Worse, the block size is only ever assigned under a condition no existing
+transform satisfies, so the "block" is the whole column: the first probe
+decodes every row and every probe after it copies out of that cache. Measured
+on a 1M-row column that is roughly 8 MB held against a 4.98 MB payload, and it
+is why such an arm reads flat in N while its untransformed twin scales
+linearly. `resident_bytes` does not count it.
+
+The same finding gives those arms a build cost the harness used to attribute
+nowhere: a whole-column decode hidden entirely by warmup. `Encoding` therefore
+also answers `retainsDecodeCache()` and `dropDecodeCache()`, and the cursor
+target reports `buildsAccessStructure()` true exactly when the encoding retains
+a cache, builds it by forcing that first read, and discards it for real. A
+transformed arm now appears on the amortisation curves as build-plus-residency,
+next to the materialised blackbox arms it actually resembles, rather than as a
+per-probe constant that is really a memcpy.
+
+`resident_bytes` is sampled in `setAccessColumns()`, which every driver calls
+while writing the row — that is **after** that row's reads, not after its
+build. The ordering is deliberate: an arm that materialises lazily has no final
+footprint until a workload has touched it, so sampling at construction would
+report every lazy arm at its compressed size and erase the axis.
+
+### Block-lazy arms
+
+`BlockLazyTarget` is the middle regime between holding a column compressed and
+holding it decoded, and it is the one a reader actually deploys: materialise at
+the granularity the format is addressable at, and let the workload decide how
+much ends up resident. It keeps the blocks it has decoded, indexed by block
+number in a vector rather than a hash map, so a hit is an array index and the
+bookkeeping stays out of the measured loop.
+
+It wraps the **block** arms rather than `openzl/auto`, and that is not
+incidental: with a whole-payload inner, decoding "one block" would decompress
+the entire column and the laziness would be fictitious. The arms are
+`zstd/block-65536+lazy` and `openzl/block-65536+lazy`, composed by
+`withBlockLazyMaterialization` exactly as `withMaterializedAccess` composes the
+full-materialise arms, so each lazy arm encodes to the same bytes as its bare
+twin and differs only in what a read leaves behind.
+
+It reports `ReadPath::kBlock` and `buildsAccessStructure() == false` with
+`build_ns` of zero, because its cost genuinely is not a one-time build: it is
+spread across whichever reads happen to miss, and depends on which rows a
+workload touches rather than on the column. The story is told by
+`resident_bytes` rising along the ops axis. `materializeAll` bypasses the cache
+so that a bulk scan cannot turn the arm into full materialisation by a side
+door.
+
+Keep all three regimes when reading a chart. Compressed-only, block-lazy and
+fully-materialised together are what make the frontier legible; any one of them
+alone reproduces the original error in a different direction.
+`tests/BlockLazyTargetTest.cpp` pins the behaviour rather than the timing: that
+k scattered probes decode `min(k, blocks)` blocks and never the column, that
+repeated probes in one block decode it once, that `resident_bytes` rises with
+the reads and returns on discard, and that `materializeAll` leaves nothing
+cached.
 
 ## Running
 
@@ -172,6 +352,7 @@ them from a scratch directory.
 |---|---|---|
 | `--mlidc_dtype` | int64 | Element type: `int32`, `uint32`, `int64`, `uint64`, `float`, `double` |
 | `--mlidc_rows` | 100000 | Rows per dataset |
+| `--mlidc_chunk_rows` | 0 | Encode each column as independently encoded chunks of this many rows, as a chunking Nimble writer flushes a long stream; reads keep the column's row numbering. 0 encodes one block. The writer's largest chunk, 20 MiB raw, is 2,621,440 rows of a 64-bit type |
 | `--mlidc_iters` | 5 | Iterations per (encoder, dataset) cell |
 | `--mlidc_seed` | 42 | Seed for the synthetic generators |
 | `--mlidc_file` | "" | Text file, one value per line, parsed as `--mlidc_dtype`, added as a dataset |
@@ -186,8 +367,13 @@ them from a scratch directory.
 
 ## Where the shared code lives
 
-`BenchCommon.h` holds the bench targets, the encoder and dataset suites, and
-outer compression. `ResultWriter.h` holds the CSV writer and the run manifest.
+`BenchCommon.h` holds the bench targets, the encoder and dataset suites, per-target
+memory pools (`makeTargetPool`) and outer compression. `BlockCodecTarget.h` holds
+the block-addressable codec target and its Zstd arms, plus `BlockLazyTarget` and
+the `withBlockLazyMaterialization` decorator, which live there rather than in a
+file of their own because they are meaningful only over a block-addressable
+inner; the OpenZL codec and arms sit in `OpenZLBenchTarget.h`
+alongside the graph they share with `openzl/auto`. `ResultWriter.h` holds the CSV writer and the run manifest.
 `SubstreamCompression.h` holds the encode path described above. `ElemType.h`
 holds the element-type vocabulary: parsing `--mlidc_dtype`, the name reported in
 the `dtype` column, and the dispatch that turns the runtime choice into the

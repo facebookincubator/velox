@@ -18,6 +18,10 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
+#endif
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
@@ -91,9 +95,12 @@ extractEncodingProperties(
   std::unordered_map<EncodingPropertyType, EncodingProperty> properties{};
   extractCompressionType(
       encodingType, dataType, stream, useVarintRowCount, properties);
+  // `data` carries the node's own encoded bytes: recomputing what a node's
+  // selection was quoted means decoding it, and the traversal is the only
+  // thing that knows where each node begins and ends.
   properties.insert(
       {EncodingPropertyType::EncodedSize,
-       {.value = folly::to<std::string>(stream.size())}});
+       {.value = folly::to<std::string>(stream.size()), .data = stream}});
   return properties;
 }
 
@@ -141,9 +148,11 @@ void traverseEncodings(
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    // SubIntSplit integration is disabled; treat it as having no nested
-    // encoding to traverse.
+#ifndef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // Treated as having no nested encoding to traverse in non-experimental
+    // builds.
     case EncodingType::SubIntSplit:
+#endif
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {
@@ -439,6 +448,24 @@ void traverseEncodings(
           visitor);
       break;
     }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered: {
+      // Walked by the parser the encoding and its view share, so an optional
+      // header block cannot desynchronise this walk from the stream.
+      const auto sections = subintsplit::parseSections(stream, dataOffset);
+      for (size_t s = 0; s < sections.size(); ++s) {
+        traverseEncodings(
+            sections[s].stream,
+            level + 1,
+            static_cast<uint32_t>(s),
+            folly::to<std::string>("Section", s),
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
+#endif
     case EncodingType::Sentinel: {
       const char* pos = stream.data() + dataOffset + 8;
       traverseEncodings(
@@ -450,9 +477,84 @@ void traverseEncodings(
           visitor);
       break;
     }
-    case EncodingType::FrequencyPartition:
-    case EncodingType::FOR:
+    case EncodingType::FOR: {
+      // Layout after the common prefix: compressionType, frameSize, numFrames
+      // and firstFrameRows, then three nested metadata sub-streams (bit
+      // widths, references, bit offsets), then the raw packed payload.
+      const char* pos = stream.data() + dataOffset;
+      encoding::readChar(pos); // compressionType
+      varint::readVarint32(&pos); // frameSize
+      varint::readVarint32(&pos); // numFrames
+      varint::readVarint32(&pos); // firstFrameRows
+      const uint32_t bitWidthsSize = varint::readVarint32(&pos);
+      if (bitWidthsSize > 0) {
+        traverseEncodings(
+            {pos, bitWidthsSize},
+            level + 1,
+            0,
+            "BitWidths",
+            useVarintRowCount,
+            visitor);
+      }
+      pos += bitWidthsSize;
+      const uint32_t referencesSize = varint::readVarint32(&pos);
+      if (referencesSize > 0) {
+        traverseEncodings(
+            {pos, referencesSize},
+            level + 1,
+            1,
+            "References",
+            useVarintRowCount,
+            visitor);
+      }
+      pos += referencesSize;
+      const uint32_t bitOffsetsSize = varint::readVarint32(&pos);
+      if (bitOffsetsSize > 0) {
+        traverseEncodings(
+            {pos, bitOffsetsSize},
+            level + 1,
+            2,
+            "BitOffsets",
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
+    case EncodingType::FrequencyPartition: {
+      // Only the leading partition-offsets and partition-sizes streams are
+      // traversed; the tier streams past them are deliberately not, since
+      // reaching them means decoding the partition sizes stream first, which
+      // needs a memory pool this traversal does not have, and their layout
+      // cannot otherwise be walked blind. Their bytes are still counted in
+      // this node's own total.
+      const char* pos = stream.data() + dataOffset;
+      encoding::readUint32(pos); // numPartitions
+      const uint32_t partitionOffsetsSize = encoding::readUint32(pos);
+      if (partitionOffsetsSize > 0) {
+        traverseEncodings(
+            {pos, partitionOffsetsSize},
+            level + 1,
+            0,
+            "PartitionOffsets",
+            useVarintRowCount,
+            visitor);
+      }
+      pos += partitionOffsetsSize;
+      const uint32_t partitionSizesSize = encoding::readUint32(pos);
+      if (partitionSizesSize > 0) {
+        traverseEncodings(
+            {pos, partitionSizesSize},
+            level + 1,
+            1,
+            "PartitionSizes",
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
     case EncodingType::Huffman:
+      // Written inline rather than as nested encodings, so there is nothing
+      // to traverse into.
       break;
   }
 }
@@ -497,6 +599,63 @@ std::string getStreamInputLabel(nimble::ChunkedStream& stream) {
       label += ";";
     }
   }
+  return label;
+}
+
+std::string getEncodingTreeLabel(std::string_view stream) {
+  std::string label =
+      "#depth\tpath\tindex\tencoding\tdataType\tbytes\tcompression\n";
+
+  // The path of the node currently being visited, one entry per level.
+  // Truncating to L before pushing this node's name leaves exactly its own
+  // ancestry behind, since the traversal is depth-first and pre-order.
+  std::vector<std::string> path;
+
+  traverseEncodings(
+      stream,
+      [&](EncodingType encodingType,
+          DataType dataType,
+          uint32_t level,
+          uint32_t index,
+          std::string nestedEncodingName,
+          std::unordered_map<EncodingPropertyType, EncodingProperty> properties)
+          -> bool {
+        path.resize(level);
+        path.push_back(std::move(nestedEncodingName));
+
+        std::string joined;
+        // Entry 0 is the root, whose name is empty, so the join starts at 1.
+        for (size_t i = 1; i < path.size(); ++i) {
+          joined += "/";
+          joined += path[i];
+        }
+        if (joined.empty()) {
+          joined = "/";
+        }
+
+        const auto property = [&](EncodingPropertyType type) -> std::string {
+          const auto it = properties.find(type);
+          return it == properties.end() ? std::string{} : it->second.value;
+        };
+
+        label += folly::to<std::string>(
+            level,
+            "\t",
+            joined,
+            "\t",
+            index,
+            "\t",
+            toString(encodingType),
+            "\t",
+            toString(dataType),
+            "\t",
+            property(EncodingPropertyType::EncodedSize),
+            "\t",
+            property(EncodingPropertyType::Compression),
+            "\n");
+        return true;
+      });
+
   return label;
 }
 

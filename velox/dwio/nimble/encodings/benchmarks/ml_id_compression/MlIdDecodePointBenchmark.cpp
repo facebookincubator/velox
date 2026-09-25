@@ -92,6 +92,9 @@ int runBenchmark() {
       "encoding",
       "family",
       "variant",
+      "inventory",
+      "transform",
+      "input_order",
       "is_sequential",
       "N",
       "seed",
@@ -112,6 +115,7 @@ int runBenchmark() {
       "clock_overhead_ns",
       "emulated_point_read",
       "skipped"};
+  appendAccessColumns(csvColumns);
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_point.csv"
       : FLAGS_mlidc_output_csv;
@@ -149,7 +153,7 @@ int runBenchmark() {
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
           spec,
-          enc.wholePayloadCodec,
+          target->readPath(),
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
@@ -181,10 +185,17 @@ int runBenchmark() {
           *target,
           std::span<std::byte>(reinterpret_cast<std::byte*>(&sink), kElemSize));
 
+      // What building the access structure costs, measured once and reported
+      // beside the per-probe time rather than folded into it, so a view arm
+      // reports both numbers from one run. Leaves the structure built for the
+      // probe measurement below.
+      const auto build = measureAccessStructureBuild<Elem>(
+          encSpec, cell.controller, cell.targets, *target);
+
       // Every probe against a whole-payload codec decompresses the entire
       // column, so the full probe count would take hours. Per-probe cost is
       // constant, so a prefix of the trace yields the same ns_per_probe.
-      const size_t encProbes = enc.wholePayloadCodec
+      const size_t encProbes = target->readPath() == ReadPath::kWholePayload
           ? std::min<size_t>(
                 probes,
                 static_cast<size_t>(
@@ -223,7 +234,14 @@ int runBenchmark() {
       csv.set("ns_per_probe", nsPerProbe);
       csv.set("Mprobes_ps", mProbesPerSec);
       csv.set("clock_overhead_ns", clockOverhead.median_ns);
-      csv.set("emulated_point_read", int64_t{1});
+      // True when the arm answers a one-row probe by decoding more than one
+      // row: a cursor replay from row zero, a whole block, or a whole payload.
+      csv.set(
+          "emulated_point_read",
+          servesPointReadDirectly(target->readPath()) ? int64_t{0}
+                                                      : int64_t{1});
+      setAccessColumns<Elem>(
+          csv, *target, build.time.median_ns, result.time.median_ns);
       csv.set("skipped", int64_t{0});
       csv.endRow();
       csv.flush();

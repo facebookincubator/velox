@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <span>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -31,65 +32,180 @@
 #include "openzl/cpp/Input.hpp"
 #include "openzl/cpp/Output.hpp"
 #include "openzl/zl_graphs.h"
+#include "openzl/zl_reflection.h"
 #include "openzl/zl_version.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BlockCodecTarget.h"
 
 namespace facebook::nimble::mlidc {
+
+/// Compresses `count` elements with OpenZL's select_numeric graph, appending
+/// the frame to `out`. Returns the frame's size. Shared by the whole-column
+/// arm and the block arms so openzl/block-K differs from openzl/auto only
+/// in block size, not in graph setup.
+template <typename T>
+size_t openzlCompressNumeric(const T* src, size_t count, std::string& out) {
+  openzl::Compressor compressor;
+  compressor.selectStartingGraph(
+      static_cast<openzl::GraphID>(ZL_StandardGraphID_select_numeric));
+
+  openzl::CCtx cctx;
+  cctx.setParameter(
+      openzl::CParam::FormatVersion,
+      static_cast<int>(ZL_getDefaultEncodingVersion()));
+  cctx.refCompressor(compressor);
+
+  openzl::Input input = openzl::Input::refNumeric(src, count);
+  const size_t offset = out.size();
+  out.resize(offset + openzl::compressBound(count * sizeof(T)));
+  const size_t compressedSize =
+      cctx.compressOne({out.data() + offset, out.size() - offset}, input);
+  out.resize(offset + compressedSize);
+  return compressedSize;
+}
+
+/// Decompresses one frame produced by openzlCompressNumeric into `dst`, which
+/// has room for `count` elements.
+template <typename T>
+void openzlDecompressNumeric(std::string_view frame, size_t count, T* dst) {
+  openzl::DCtx dctx;
+  openzl::Output output = openzl::Output::wrapNumeric(dst, sizeof(T), count);
+  dctx.decompressOne(output, {frame.data(), frame.size()});
+}
+
+/// BlockCodec applying the same OpenZL graph one block at a time.
+template <typename T>
+class OpenZLBlockCodec : public BlockCodec<T> {
+ public:
+  bool compressBlock(const T* src, uint32_t count, std::string& out) override {
+    openzlCompressNumeric<T>(src, count, out);
+    // OpenZL always produces a frame, so unlike Zstd there is no declined
+    // block and nothing is ever stored raw.
+    return true;
+  }
+
+  void decompressBlock(std::string_view block, uint32_t count, T* dst)
+      override {
+    openzlDecompressNumeric<T>(block, count, dst);
+  }
+};
+
+/// The OpenZL block arms, the addressable counterpart to openzl/auto.
+template <typename T>
+std::vector<EncoderEntry<T>> buildOpenZLBlockEncoders() {
+  std::vector<EncoderEntry<T>> entries;
+  entries.reserve(kBlockElementCounts.size());
+  for (const uint32_t blockSize : kBlockElementCounts) {
+    entries.push_back(
+        makeBlockCodecEntry<T>(
+            "openzl",
+            "OpenZL",
+            blockSize,
+            []() -> std::unique_ptr<BlockCodec<T>> {
+              return std::make_unique<OpenZLBlockCodec<T>>();
+            }));
+  }
+  return entries;
+}
 
 template <typename T>
 class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
  public:
   void encode(const Vector<T>& data, const Encoding::Options&) override {
     count_ = data.size();
-    const size_t srcBytes = count_ * sizeof(T);
-
-    openzl::Compressor compressor;
-    compressor.selectStartingGraph(
-        static_cast<openzl::GraphID>(ZL_StandardGraphID_select_numeric));
-
-    openzl::CCtx cctx;
-    cctx.setParameter(
-        openzl::CParam::FormatVersion,
-        static_cast<int>(ZL_getDefaultEncodingVersion()));
-    cctx.refCompressor(compressor);
-
-    openzl::Input input = openzl::Input::refNumeric(data.data(), count_);
-    compressed_.resize(openzl::compressBound(srcBytes));
-
-    size_t compressedSize =
-        cctx.compressOne({compressed_.data(), compressed_.size()}, input);
-    compressed_.resize(compressedSize);
+    compressed_.clear();
+    openzlCompressNumeric<T>(data.data(), count_, compressed_);
   }
 
   void materializeAll(T* dst, uint32_t n) override {
-    openzl::DCtx dctx;
-    openzl::Output output = openzl::Output::wrapNumeric(dst, sizeof(T), n);
-    dctx.decompressOne(output, {compressed_.data(), compressed_.size()});
+    openzlDecompressNumeric<T>(
+        std::string_view{compressed_.data(), compressed_.size()}, n, dst);
   }
 
-  // OpenZL has no addressable interior, so a partial read is served the only
-  // way a block codec can: decompress the whole column, then copy out the rows
-  // that were asked for. This is the cost a reader actually pays, and it is
-  // the comparison the decode drivers exist to make. It is not a limitation
-  // being worked around; reporting it as unsupported would simply leave the
-  // comparison unmeasured.
+  // OpenZL has no addressable interior, so a partial read decompresses the
+  // whole column, then copies out the rows that were asked for. This is the
+  // cost a reader actually pays, and the comparison the decode drivers exist
+  // to make.
   void materializeRange(uint32_t begin, uint32_t count, T* dst) override {
     decompressAll();
     std::copy_n(scratch_.data() + begin, count, dst);
   }
 
-  void skipThenMaterialize(
-      const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
-      T* dst) override {
+  void skipThenMaterialize(std::span<const nimble::RowRange> ranges, T* dst)
+      override {
     decompressAll();
-    for (const auto& [begin, count] : ranges) {
-      std::copy_n(scratch_.data() + begin, count, dst);
-      dst += count;
+    for (const auto& range : ranges) {
+      std::copy_n(scratch_.data() + range.startRow, range.numRows(), dst);
+      dst += range.numRows();
     }
   }
 
   size_t payloadSize() const override {
     return compressed_.size();
+  }
+
+  // The frame plus the scratch buffer a partial read decompresses into,
+  // which holds a whole decoded column kept between reads.
+  size_t residentBytes() const override {
+    return compressed_.size() + scratch_.capacity() * sizeof(T);
+  }
+
+  // No addressable interior at all, so every read decompresses the frame.
+  ReadPath readPath() const override {
+    return ReadPath::kWholePayload;
+  }
+
+  // Reports the codec graph OpenZL chose for this column, alongside
+  // SubIntSplit's section tree, so a study can see what the black box did
+  // rather than only that it won. Reflection decompresses the frame to
+  // rebuild the graph, so this is only ever called outside a timed region.
+  std::string describe() override {
+    if (compressed_.empty()) {
+      return {};
+    }
+
+    ReflectionContext reflection;
+    if (!reflection.valid()) {
+      return {};
+    }
+    const ZL_Report report = ZL_ReflectionCtx_setCompressedFrame(
+        reflection.get(), compressed_.data(), compressed_.size());
+    if (ZL_isError(report)) {
+      // Stay silent rather than print a half-built graph.
+      return {};
+    }
+
+    ZL_ReflectionCtx* rctx = reflection.get();
+    const size_t numCodecs = ZL_ReflectionCtx_getNumCodecs_lastChunk(rctx);
+
+    std::ostringstream out;
+    out << "OpenZLGraph codecs=" << numCodecs
+        << " frameHeaderBytes=" << ZL_ReflectionCtx_getFrameHeaderSize(rctx)
+        << " storedOutputs="
+        << ZL_ReflectionCtx_getNumStoredOutputs_lastChunk(rctx) << "\n";
+
+    for (size_t i = 0; i < numCodecs; ++i) {
+      const ZL_CodecInfo* codec = ZL_ReflectionCtx_getCodec_lastChunk(rctx, i);
+      if (codec == nullptr) {
+        continue;
+      }
+      const char* name = ZL_CodecInfo_getName(codec);
+      out << "  [" << i << "] " << (name != nullptr ? name : "<unnamed>")
+          << (ZL_CodecInfo_isStandardCodec(codec) ? " standard" : " custom")
+          << " id=" << ZL_CodecInfo_getCodecID(codec);
+
+      const size_t numOutputs = ZL_CodecInfo_getNumOutputs(codec);
+      size_t outputBytes = 0;
+      for (size_t output = 0; output < numOutputs; ++output) {
+        const ZL_DataInfo* stream = ZL_CodecInfo_getOutput(codec, output);
+        if (stream != nullptr) {
+          outputBytes += ZL_DataInfo_getContentSize(stream);
+        }
+      }
+      out << " outputs=" << numOutputs << " outputBytes=" << outputBytes
+          << "\n";
+    }
+    return out.str();
   }
 
   std::vector<std::span<const std::byte>> internalBuffers() const override {
@@ -99,18 +215,44 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
   }
 
  private:
+  // Owns a reflection context so a frame walk cannot leak on early return.
+  class ReflectionContext {
+   public:
+    ReflectionContext() : rctx_(ZL_ReflectionCtx_create()) {}
+
+    ~ReflectionContext() {
+      if (rctx_ != nullptr) {
+        ZL_ReflectionCtx_free(rctx_);
+      }
+    }
+
+    ReflectionContext(const ReflectionContext&) = delete;
+    ReflectionContext& operator=(const ReflectionContext&) = delete;
+
+    bool valid() const {
+      return rctx_ != nullptr;
+    }
+
+    ZL_ReflectionCtx* get() const {
+      return rctx_;
+    }
+
+   private:
+    ZL_ReflectionCtx* rctx_;
+  };
+
   // Charged on every partial read, never cached across calls: a reader holding
   // a compressed block pays this each time it needs rows.
   void decompressAll() {
     scratch_.resize(count_);
-    openzl::DCtx dctx;
-    openzl::Output output =
-        openzl::Output::wrapNumeric(scratch_.data(), sizeof(T), count_);
-    dctx.decompressOne(output, {compressed_.data(), compressed_.size()});
+    openzlDecompressNumeric<T>(
+        std::string_view{compressed_.data(), compressed_.size()},
+        count_,
+        scratch_.data());
   }
 
   uint32_t count_{0};
-  std::vector<char> compressed_;
+  std::string compressed_;
   std::vector<T> scratch_;
 };
 
@@ -123,9 +265,6 @@ EncoderEntry<T> buildOpenZLEncoder() {
   entry.isSequential = true;
   entry.fastSkip = false;
   entry.randomAccess = false;
-  // Every partial read decompresses the whole payload, so drivers bound the
-  // iteration count for this entry.
-  entry.wholePayloadCodec = true;
   entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
     auto target = std::make_unique<OpenZLBenchTarget<T>>();
     target->encode(data, opts);

@@ -624,11 +624,26 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
     //     estimated as FixedBitWidth over the original value range. String
     //     values are estimated as Dictionary over the run values.
     const uint64_t runCount = statistics.consecutiveRepeatCount();
-    // Run lengths are encoded as a FixedBitWidth child.
-    const uint64_t runLengthsEncodingSize =
+    return estimateSize(
+        rowCount,
+        statistics,
         FixedBitWidthEncoding<uint32_t>::estimateSize(
-            runCount, statistics.minRepeat(), statistics.maxRepeat(), options);
+            runCount, statistics.minRepeat(), statistics.maxRepeat(), options),
+        options);
+  }
 
+  /// Size estimate with the run-lengths stream priced by the caller.
+  ///
+  /// This header cannot see the nested encodings nested selection actually
+  /// picks for run lengths (MainlyConstantEncoding.h includes this one), so
+  /// the overload above falls back to a single FixedBitWidth. Callers that can
+  /// see those encodings should pass the better price here instead.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      uint64_t runLengthsEncodingSize,
+      const Encoding::Options& options) {
+    const uint64_t runCount = statistics.consecutiveRepeatCount();
     const uint64_t runValuesEncodingSize =
         estimateRunValuesSize(runCount, statistics, options);
     const uint64_t outerEncodingSize =
@@ -657,15 +672,61 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
       return DictionaryEncoding<std::string_view>::estimateSize(
           runCount, statistics, options);
     } else {
-      uint64_t bestSize = FixedBitWidthEncoding<physicalType>::estimateSize(
-          runCount, statistics, options);
+      // Priced from the input's own statistics rather than by rebuilding
+      // statistics over the collapsed run values: the parent's distinct count
+      // and min/max already bound Dictionary's price after collapsing, since
+      // collapsing runs never introduces a new distinct value. Trivial and
+      // Dictionary are considered in addition to FixedBitWidth because they
+      // are what wins when the collapsed cardinality is at either extreme;
+      // RLE and Constant cannot apply, since adjacent run values differ by
+      // construction.
+      //
+      // Dictionary's price only grows with distinct count, so pricing it at a
+      // lower bound on that count gives a lower bound on itself: where even
+      // that does not beat the plain encodings, the real distinct values never
+      // need to be counted.
+      if constexpr (!isFloatingPointType<T>()) {
+        const uint64_t plainSize = std::min(
+            TrivialEncoding<physicalType>::estimateSize(runCount),
+            FixedBitWidthEncoding<physicalType>::estimateSize(
+                runCount, statistics, options));
+        const uint64_t dictionaryFloor =
+            DictionaryEncoding<physicalType>::estimateIntegralSize(
+                runCount,
+                statistics.distinctLowerBound(),
+                statistics.min(),
+                statistics.max(),
+                options);
+        if (dictionaryFloor >= plainSize) {
+          return plainSize;
+        }
+        return std::min(
+            plainSize,
+            DictionaryEncoding<physicalType>::estimateSize(
+                runCount, statistics, options));
+      }
+      const auto& runValues = statistics.runValues();
+      const std::span<const physicalType> runValuesSpan{
+          runValues.data(), runValues.size()};
+      const auto runValuesStatistics =
+          Statistics<physicalType>::create(runValuesSpan);
+      uint64_t bestSize = std::min(
+          TrivialEncoding<physicalType>::estimateSize(runCount),
+          FixedBitWidthEncoding<physicalType>::estimateSize(
+              runCount, runValuesStatistics, options));
+      // Guarded because uniqueCounts is optional and DictionaryEncoding reads
+      // it unconditionally; absent means the alphabet is too large for
+      // Dictionary to win anyway.
+      if (runValuesStatistics.uniqueCounts().has_value()) {
+        bestSize = std::min(
+            bestSize,
+            DictionaryEncoding<physicalType>::estimateSize(
+                runCount, runValuesStatistics, options));
+      }
       if constexpr (isFloatingPointType<T>()) {
         if (options.allowNestedAlpSelection) {
-          const auto& runValues = statistics.runValues();
-          if (const auto alpEncodingSize = detail::nestedAlpSize<T>(
-                  std::span<const physicalType>{
-                      runValues.data(), runValues.size()},
-                  options)) {
+          if (const auto alpEncodingSize =
+                  detail::nestedAlpSize<T>(runValuesSpan, options)) {
             bestSize = std::min(bestSize, *alpEncodingSize);
           }
         }

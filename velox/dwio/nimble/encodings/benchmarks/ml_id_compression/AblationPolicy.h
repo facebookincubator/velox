@@ -125,56 +125,18 @@ inline std::vector<AblationRung> combinedLadder() {
 namespace detail_ablation {
 using namespace facebook::nimble::subintsplit;
 
-inline double bestCostBitsRestricted(
-    const SectionMetrics& m,
-    size_t numValues,
-    int bitWidth,
-    EncodingType& bestEncoding,
-    const std::unordered_set<EncodingType>& allowed) noexcept {
-  double best = std::numeric_limits<double>::infinity();
-  auto consider = [&](double cost, EncodingType type) noexcept {
-    if (allowed.count(type) && cost < best) {
-      best = cost;
-      bestEncoding = type;
-    }
-  };
-
-  consider(trivialCostBits(m, numValues, bitWidth), EncodingType::Trivial);
-  consider(
-      fixedBitWidthCostBits(m, numValues, bitWidth),
-      EncodingType::FixedBitWidth);
-  consider(constantCostBits(m, numValues, bitWidth), EncodingType::Constant);
-  consider(
-      mainlyConstantCostBits(m, numValues, bitWidth),
-      EncodingType::MainlyConstant);
-  consider(rleCostBits(m, numValues, bitWidth), EncodingType::RLE);
-  consider(varintCostBits(m, numValues, bitWidth), EncodingType::Varint);
-  if (allowed.count(EncodingType::Dictionary) && m.uniqueCount > 0 &&
-      (m.uniqueCountCapped || m.uniqueCount < numValues / 2)) {
-    consider(
-        dictionaryCostBits(m, numValues, bitWidth), EncodingType::Dictionary);
-  }
-  return best;
-}
-
+// The cost-model dispatch lives in subintsplit/CostModel.h and is shared with
+// the selector. An earlier version of this file kept its own copy, which went
+// stale twice over: it missed every encoding added since, and it did not follow
+// the cost function's signature when segment values were threaded through.
 inline SelectorResult selectSplitsRestricted(
     const std::vector<uint64_t>& samples,
     int kBits,
     size_t fullCount,
     const SelectorConfig& cfg,
     const std::unordered_set<EncodingType>& allowed) {
-  return selectSplits(
-      samples,
-      kBits,
-      fullCount,
-      cfg,
-      [&allowed](
-          const SectionMetrics& m,
-          size_t numValues,
-          int bitWidth,
-          EncodingType& bestEnc) noexcept {
-        return bestCostBitsRestricted(m, numValues, bitWidth, bestEnc, allowed);
-      });
+  return facebook::nimble::subintsplit::selectSplitsRestricted(
+      samples, kBits, fullCount, allowed, cfg);
 }
 
 } // namespace detail_ablation
