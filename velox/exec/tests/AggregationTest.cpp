@@ -1271,6 +1271,198 @@ TEST_F(AggregationTest, spillAll) {
   }
 }
 
+TEST_F(AggregationTest, spillWithCappedMergeFiles) {
+  // Every batch repeats the same grouping keys and spilling is forced after
+  // each batch, so each key ends up in every spill file. Capping the merge way
+  // makes SpillPartition::createOrderedReader pre-merge the files, and a
+  // pre-merged file does hold the same key twice within one stream, because
+  // merging concatenates without combining equal keys.
+  // The merge compares keys across streams only, so without the consumer
+  // checking the key itself the repeat ends a group early and one group is
+  // emitted as two.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kNumKeys = 50;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; }),
+         makeFlatVector<int64_t>(kNumKeys, [](auto) { return 1; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {"sum(c1)"})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(
+           kNumKeys, [kNumBatches](auto) { return kNumBatches; })});
+
+  // 'numMaxMergeFiles' 0 disables the cap and merges every file in one pass,
+  // which is the behaviour the capped path has to match. An output batch
+  // smaller than the group count makes a batch fill up mid-merge, which is
+  // where the merge returns leaving the current element unconsumed and then
+  // re-reads it without popping.
+  // The cap has to be kMaxOutputBatchRows: Operator::outputBatchRows() only
+  // consults kPreferredOutputBatchRows when the row size is unknown, and here
+  // it is not.
+  struct {
+    uint32_t numMaxMergeFiles;
+    std::string maxOutputBatchRows;
+    bool expectsMultipleBatches;
+  } testCases[] = {
+      {0, "10000", false},
+      {4, "10000", false},
+      {4, "10", true},
+  };
+
+  for (const auto& testCase : testCases) {
+    const auto numMaxMergeFiles = testCase.numMaxMergeFiles;
+    SCOPED_TRACE(
+        fmt::format(
+            "numMaxMergeFiles: {}, maxOutputBatchRows: {}",
+            numMaxMergeFiles,
+            testCase.maxOutputBatchRows));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, "0")
+            .config(
+                QueryConfig::kSpillNumMaxMergeFiles,
+                std::to_string(numMaxMergeFiles))
+            .config(
+                QueryConfig::kMaxOutputBatchRows, testCase.maxOutputBatchRows)
+            .maxDrivers(1)
+            .assertResults(expected);
+
+    // The pre-merge path is only taken when a partition holds more than
+    // 'numMaxMergeFiles' files, so guard against the test passing because
+    // nothing spilled.
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 1);
+    // A batch boundary mid-merge is what makes the merge return with the
+    // current element unconsumed, so confirm the cap actually split the
+    // output rather than silently doing nothing.
+    if (testCase.expectsMultipleBatches) {
+      ASSERT_GT(stats.outputVectors, 1);
+    } else {
+      ASSERT_EQ(stats.outputVectors, 1);
+    }
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, distinctSpillWithCappedMergeFiles) {
+  // Same setup as 'spillWithCappedMergeFiles' but for the distinct path, which
+  // reads the pre-merged files through nextWithEquals() as well.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kNumKeys = 50;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })});
+
+  for (const uint32_t numMaxMergeFiles : {0, 4}) {
+    SCOPED_TRACE(fmt::format("numMaxMergeFiles: {}", numMaxMergeFiles));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(plan)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, true)
+                    .config(QueryConfig::kAggregationSpillEnabled, true)
+                    .config(QueryConfig::kSpillNumPartitionBits, "0")
+                    .config(
+                        QueryConfig::kSpillNumMaxMergeFiles,
+                        std::to_string(numMaxMergeFiles))
+                    .maxDrivers(1)
+                    .assertResults(expected);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 1);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, distinctSpillWithCappedMergeFilesSparseKeys) {
+  // 'distinctSpillWithCappedMergeFiles' repeats every key in every batch, so
+  // every spill file holds every key and a key that a pre-merged file repeats
+  // is still reported equal against some other stream. Here each key spans only
+  // a few consecutive batches, so after pre-merging a key can sit twice inside
+  // one stream and appear in no other, which is what
+  // TreeOfLosers::nextWithEquals() cannot report.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kKeysPerBatch = 8;
+  constexpr int32_t kNumKeys = kNumBatches + kKeysPerBatch - 1;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector({makeFlatVector<int64_t>(
+        kKeysPerBatch, [batch](auto row) { return batch + row; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })});
+
+  for (const uint32_t numMaxMergeFiles : {0, 2, 3, 4}) {
+    SCOPED_TRACE(fmt::format("numMaxMergeFiles: {}", numMaxMergeFiles));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(plan)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, true)
+                    .config(QueryConfig::kAggregationSpillEnabled, true)
+                    .config(QueryConfig::kSpillNumPartitionBits, "0")
+                    .config(
+                        QueryConfig::kSpillNumMaxMergeFiles,
+                        std::to_string(numMaxMergeFiles))
+                    .maxDrivers(1)
+                    .assertResults(expected);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 1);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
 // Verify number of memory allocations in the HashAggregation operator.
 TEST_F(AggregationTest, memoryAllocations) {
   vector_size_t size = 1'024;
