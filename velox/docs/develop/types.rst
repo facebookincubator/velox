@@ -319,6 +319,10 @@ key differences are listed below.
       SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
 
 * Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
+  The Parquet reader supports widening DATE columns to TIMESTAMP_UTC, producing
+  midnight on the same calendar date without a session timezone adjustment.
+  This does not enable widening DATE to the session-timezone-adjusted TIMESTAMP
+  type.
 
 * In function comparisons, nested null values are handled as values.
   Example::

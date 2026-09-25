@@ -108,6 +108,14 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
               ->parquetType_;
       VELOX_CHECK(parquetType);
       switch (parquetType.value()) {
+        case thrift::Type::INT32:
+          VELOX_CHECK(
+              requestedType->equivalent(*TIMESTAMP_UTC()),
+              "Converted type DATE is not allowed for requested type {} for file column '{}'",
+              requestedType->toString(),
+              colName);
+          return std::make_unique<TimestampColumnReader<int32_t>>(
+              requestedType, fileType, params, scanSpec);
         case thrift::Type::INT64:
           return std::make_unique<TimestampColumnReader<int64_t>>(
               requestedType, fileType, params, scanSpec);
