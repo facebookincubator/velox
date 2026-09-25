@@ -1227,6 +1227,9 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
       std::lock_guard<std::timed_mutex> l(mutex_);
       LOG(WARNING) << "Task " << taskId_ << " was terminated while starting: "
                    << errorMessageLocked();
+      VELOX_CHECK_EQ(numRunningDrivers_, 0);
+      VELOX_CHECK_EQ(numFinishedDrivers_, 0);
+      numFinishedDrivers_ = numTotalDrivers_;
       return;
     }
     createAndStartDrivers(concurrentSplitGroups);
