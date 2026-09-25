@@ -446,7 +446,7 @@ inline T IntDecoder<isSigned>::readInt() {
     return readLittleEndianFromBigEndian<T>();
   } else {
     if constexpr (std::is_same_v<T, int128_t>) {
-      if (numBytes_ == 8) {
+      if (numBytes_ == 4 || numBytes_ == 8) {
         return readLongLE();
       }
       if (numBytes_ == 12) {

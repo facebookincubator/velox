@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -428,6 +431,395 @@ INSTANTIATE_TEST_SUITE_P(
 // Type widening tests: verify reading Parquet columns with a wider target
 // type than the physical type stored in the file.
 
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
+  const std::vector<int32_t> days{
+      -106'751'991,
+      -719'162,
+      -141'427,
+      -1,
+      0,
+      1,
+      18'329,
+      2'932'896,
+      106'751'991,
+  };
+  const auto dates = makeFlatVector<int32_t>(
+      2'000,
+      [&](auto row) { return days[row % days.size()]; },
+      nullEvery(7),
+      DATE());
+  const auto data = makeRowVector({"col"}, {dates});
+  const auto readSchema = ROW("col", TIMESTAMP_UTC());
+  const auto expected = makeRowVector(
+      {"col"},
+      {makeFlatVector<Timestamp>(
+          dates->size(),
+          [&](auto row) {
+            return Timestamp(int64_t{dates->valueAt(row)} * 86'400, 0);
+          },
+          [&](auto row) { return dates->isNullAt(row); },
+          TIMESTAMP_UTC())});
+
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
+    const bool enableDictionary =
+        encoding == parquet::arrow::Encoding::kRleDictionary;
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary = enableDictionary;
+    writerOptions.encoding =
+        enableDictionary ? parquet::arrow::Encoding::kPlain : encoding;
+    auto* sink = write(data, writerOptions);
+
+    auto readerOptions = makeWideningReaderOptions(readSchema);
+    readerOptions.setSessionTimezone(tz::locateZone("America/Los_Angeles"));
+    auto reader = createReaderInMemory(*sink, readerOptions);
+    EXPECT_TRUE(reader->rowType()->equivalent(*readSchema));
+    EXPECT_EQ(
+        reader->fileMetaData()
+            .rowGroup(0)
+            .columnChunk(0)
+            .hasDictionaryPageOffset(),
+        enableDictionary);
+
+    auto statistics =
+        reader->columnStatistics(reader->typeWithId()->childAt(0)->id());
+    auto* timestampStatistics =
+        dynamic_cast<TimestampColumnStatistics*>(statistics.get());
+    ASSERT_NE(timestampStatistics, nullptr);
+    EXPECT_EQ(
+        timestampStatistics->getMinimum(), Timestamp(-9'223'372'022'400, 0));
+    EXPECT_EQ(
+        timestampStatistics->getMaximum(), Timestamp(9'223'372'022'400, 0));
+
+    for (auto precision : {
+             TimestampPrecision::kMilliseconds,
+             TimestampPrecision::kMicroseconds,
+             TimestampPrecision::kNanoseconds,
+         }) {
+      SCOPED_TRACE(static_cast<int>(precision));
+      auto rowReaderOptions = makeRowReaderOpts(readSchema);
+      rowReaderOptions.setScanSpec(makeScanSpec(readSchema));
+      rowReaderOptions.setTimestampPrecision(precision);
+      auto precisionReader = createReaderInMemory(*sink, readerOptions);
+      auto rowReader = precisionReader->createRowReader(rowReaderOptions);
+      assertReadWithReaderAndExpected(
+          readSchema, *rowReader, expected, *leafPool_);
+    }
+
+    const auto timestampSchema = ROW("col", TIMESTAMP());
+    auto timestampOptions = makeRowReaderOpts(timestampSchema);
+    timestampOptions.setScanSpec(makeScanSpec(timestampSchema));
+    VELOX_ASSERT_THROW(
+        reader->createRowReader(timestampOptions),
+        "Converted type DATE is not allowed for requested type TIMESTAMP for file column 'col'");
+
+    auto dateReader = readerBuilder(*sink, data->rowType()).build();
+    assertReadWithReaderAndExpected(
+        data->rowType(), *dateReader.rowReader, data, *leafPool_);
+  }
+
+  const auto arrayData = makeRowVector(
+      {"col"},
+      {makeArrayVector(
+          {0, 3, 3},
+          makeNullableFlatVector<int32_t>({-1, std::nullopt, 0, 1}, DATE()),
+          {1})});
+  const auto expectedArrays = makeRowVector(
+      {"col"},
+      {makeArrayVector(
+          {0, 3, 3},
+          makeNullableFlatVector<Timestamp>(
+              {Timestamp(-86'400, 0),
+               std::nullopt,
+               Timestamp(0, 0),
+               Timestamp(86'400, 0)},
+              TIMESTAMP_UTC()),
+          {1})});
+  assertWideningReads(arrayData, expectedArrays->rowType(), expectedArrays);
+}
+
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
+  constexpr vector_size_t kRowsPerGroup = 128;
+  const std::vector<std::vector<std::optional<int32_t>>> days{
+      {-2, -1},
+      {0},
+      {1, 2},
+      {std::nullopt},
+      {-106'751'991},
+      {106'751'991},
+  };
+  std::vector<RowVectorPtr> batches;
+  for (const auto& group : days) {
+    batches.push_back(makeRowVector(
+        {"col"},
+        {makeFlatVector<int32_t>(
+            kRowsPerGroup,
+            [&](auto row) { return group[row % group.size()].value_or(0); },
+            [&](auto row) { return !group[row % group.size()].has_value(); },
+            DATE())}));
+  }
+  const auto readSchema = ROW("col", TIMESTAMP_UTC());
+  std::vector<std::pair<std::unique_ptr<Filter>, uint64_t>> filters;
+  filters.emplace_back(exec::isNull(), 5);
+  filters.emplace_back(exec::isNotNull(), 1);
+  for (bool nullAllowed : {false, true}) {
+    filters.emplace_back(
+        std::make_unique<TimestampRange>(
+            Timestamp(-86'400, 1), Timestamp(86'400, 0), nullAllowed),
+        nullAllowed ? 3 : 4);
+  }
+  filters.emplace_back(
+      std::make_unique<TimestampRange>(
+          Timestamp(-86'400, 1), Timestamp(-1, 999'999'999), false),
+      6);
+  for (auto seconds : {-9'223'372'022'400LL, 9'223'372'022'400LL}) {
+    filters.emplace_back(
+        std::make_unique<TimestampRange>(
+            Timestamp(seconds, 0), Timestamp(seconds, 0), false),
+        5);
+  }
+  filters.emplace_back(
+      exec::orFilter(
+          std::make_unique<TimestampRange>(
+              Timestamp(-86'400, 0), Timestamp(-86'400, 0), false),
+          std::make_unique<TimestampRange>(
+              Timestamp(172'800, 0), Timestamp(172'800, 0), false)),
+      4);
+
+  std::vector<uint64_t> deleted(bits::nwords(kRowsPerGroup), 0);
+  for (auto row = 0; row < kRowsPerGroup; row += 5) {
+    bits::setBit(deleted.data(), row);
+  }
+  dwio::common::Mutation mutation;
+  mutation.deletedRows = deleted.data();
+
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary =
+        encoding == parquet::arrow::Encoding::kRleDictionary;
+    writerOptions.encoding = *writerOptions.enableDictionary
+        ? parquet::arrow::Encoding::kPlain
+        : encoding;
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.flushPolicyFactory = [=]() {
+      return std::make_unique<parquet::LambdaFlushPolicy>(
+          kRowsPerGroup, 1'024 * 1'024, []() { return false; });
+    };
+    auto* sink = write(batches, options, writerOptions);
+
+    for (const auto& [filter, skippedGroups] : filters) {
+      SCOPED_TRACE(filter->toString());
+      for (bool sparse : {false, true}) {
+        SCOPED_TRACE(sparse);
+        std::vector<std::optional<Timestamp>> expectedValues;
+        for (const auto& group : days) {
+          for (auto row = 0; row < kRowsPerGroup; ++row) {
+            if (sparse && row % 5 == 0) {
+              continue;
+            }
+            const auto& date = group[row % group.size()];
+            if (!date) {
+              if (filter->testNull()) {
+                expectedValues.push_back(std::nullopt);
+              }
+            } else {
+              const Timestamp timestamp(int64_t{*date} * 86'400, 0);
+              if (filter->testTimestamp(timestamp)) {
+                expectedValues.push_back(timestamp);
+              }
+            }
+          }
+        }
+        const auto expected = makeRowVector(
+            {"col"},
+            {makeNullableFlatVector<Timestamp>(
+                expectedValues, TIMESTAMP_UTC())});
+        auto scanSpec = makeScanSpec(readSchema);
+        scanSpec->childByName("col")->setFilter(filter->clone());
+        auto rowReaderOptions = makeRowReaderOpts(readSchema);
+        rowReaderOptions.setScanSpec(scanSpec);
+        auto reader =
+            createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
+        ASSERT_EQ(reader->fileMetaData().numRowGroups(), days.size());
+        auto rowReader = reader->createRowReader(rowReaderOptions);
+        VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
+        vector_size_t total = 0;
+        while (rowReader->next(
+            kRowsPerGroup, result, sparse ? &mutation : nullptr)) {
+          ASSERT_TRUE(result->type()->equivalent(*readSchema));
+          assertEqualVectorPart(expected, result, total);
+          total += result->size();
+        }
+        EXPECT_EQ(total, expected->size());
+        dwio::common::RuntimeStats statistics;
+        rowReader->updateRuntimeStats(statistics);
+        EXPECT_EQ(statistics.skippedStrides, skippedGroups);
+      }
+    }
+  }
+}
+
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtcDeltaPageBoundaries) {
+  const auto readSchema = ROW({{"id", BIGINT()}, {"col", TIMESTAMP_UTC()}});
+  const auto data = makeRowVector(
+      {"id", "col"},
+      {makeFlatVector<int64_t>(4'096, [](auto row) { return row; }),
+       makeFlatVector<int32_t>(
+           4'096,
+           [](auto row) { return row < 1'000 ? row % 8 - 4 : row - 2'000; },
+           nullptr,
+           DATE())});
+  const auto expected = makeRowVector(
+      {"id", "col"},
+      {makeFlatVector<int64_t>({31, 127, 255, 2'047}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(259'200, 0),
+            Timestamp(259'200, 0),
+            Timestamp(259'200, 0),
+            Timestamp(4'060'800, 0)},
+           TIMESTAMP_UTC())});
+  for (bool useV2 : {false, true}) {
+    SCOPED_TRACE(useV2);
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary = false;
+    writerOptions.encoding = parquet::arrow::Encoding::kDeltaBinaryPacked;
+    writerOptions.useParquetDataPageV2 = useV2;
+    writerOptions.dataPageSize = 128;
+    writerOptions.batchSize = 64;
+    auto* sink = write(data, writerOptions);
+    for (auto batchSize : {127, 128, 1'024}) {
+      SCOPED_TRACE(batchSize);
+      auto reader =
+          createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
+      EXPECT_THAT(
+          reader->fileMetaData().rowGroup(0).columnChunk(1).encodings(),
+          testing::Contains(thrift::Encoding::DELTA_BINARY_PACKED));
+      auto scanSpec = makeScanSpec(readSchema);
+      scanSpec->childByName("id")->setFilter(
+          exec::in({3, 31, 32, 127, 128, 255, 1'001, 2'047, 4'095}));
+      scanSpec->childByName("col")->setFilter(
+          exec::between(Timestamp(-86'400, 1), Timestamp(4'320'000, 0)));
+      auto rowOptions = makeRowReaderOpts(readSchema);
+      rowOptions.setScanSpec(scanSpec);
+      auto rowReader = reader->createRowReader(rowOptions);
+      VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
+      vector_size_t total = 0;
+      while (rowReader->next(batchSize, result)) {
+        assertEqualVectorPart(expected, result, total);
+        total += result->size();
+      }
+      EXPECT_EQ(total, expected->size());
+    }
+  }
+}
+
+TEST_F(ParquetReaderWideningTest, dateToTimestampUtcOverflow) {
+  const auto readSchema = ROW({{"id", BIGINT()}, {"col", TIMESTAMP_UTC()}});
+  for (auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kRleDictionary,
+           parquet::arrow::Encoding::kDeltaBinaryPacked,
+       }) {
+    SCOPED_TRACE(static_cast<int>(encoding));
+    for (int32_t date : {
+             -106'751'992,
+             106'751'992,
+             std::numeric_limits<int32_t>::min(),
+             std::numeric_limits<int32_t>::max(),
+         }) {
+      SCOPED_TRACE(date);
+      const auto data = makeRowVector(
+          {"id", "col"},
+          {makeFlatVector<int64_t>(256, [](auto row) { return row; }),
+           makeFlatVector<int32_t>(
+               256,
+               [&](auto row) { return row % 2 == 0 ? date : 0; },
+               nullEvery(7),
+               DATE())});
+      ParquetWriterOptions writerOptions;
+      writerOptions.enableDictionary =
+          encoding == parquet::arrow::Encoding::kRleDictionary;
+      writerOptions.encoding = *writerOptions.enableDictionary
+          ? parquet::arrow::Encoding::kPlain
+          : encoding;
+      auto* sink = write(data, writerOptions);
+      const auto message = fmt::format(
+          "Could not convert Timestamp({}, 0) to microseconds",
+          int64_t{date} * Timestamp::kSecondsInDay);
+      std::vector<std::unique_ptr<Filter>> filters;
+      filters.push_back(nullptr);
+      filters.push_back(exec::greaterThanOrEqual(Timestamp(0, 0)));
+      filters.push_back(exec::between(Timestamp(-2, 0), Timestamp(-1, 0)));
+      filters.push_back(
+          exec::orFilter(
+              exec::between(Timestamp(1, 0), Timestamp(2, 0)),
+              exec::between(Timestamp(3, 0), Timestamp(4, 0))));
+
+      for (const auto& filter : filters) {
+        SCOPED_TRACE(filter ? filter->toString() : "no filter");
+        for (bool projectOut : {false, true}) {
+          if (!projectOut && !filter) {
+            continue;
+          }
+          SCOPED_TRACE(projectOut);
+          auto reader = createReaderInMemory(
+              *sink, makeWideningReaderOptions(readSchema));
+          auto statistics = reader->columnStatistics(
+              reader->typeWithId()->childByName("col")->id());
+          auto* timestampStatistics =
+              dynamic_cast<TimestampColumnStatistics*>(statistics.get());
+          ASSERT_NE(timestampStatistics, nullptr);
+          EXPECT_FALSE(timestampStatistics->getMinimum().has_value());
+          EXPECT_FALSE(timestampStatistics->getMaximum().has_value());
+          auto scanSpec = makeScanSpec(readSchema);
+          auto* column = scanSpec->childByName("col");
+          column->setProjectOut(projectOut);
+          if (filter) {
+            column->setFilter(filter->clone());
+            EXPECT_TRUE(
+                connector::hive::testFilters(
+                    scanSpec.get(),
+                    reader.get(),
+                    "dates.parquet",
+                    {},
+                    {},
+                    false));
+          }
+          auto rowOptions = makeRowReaderOpts(readSchema);
+          rowOptions.setScanSpec(scanSpec);
+          rowOptions.setTimestampPrecision(TimestampPrecision::kMicroseconds);
+          auto rowReader = reader->createRowReader(rowOptions);
+          VectorPtr result = BaseVector::create(
+              projectOut ? readSchema : ROW("id", BIGINT()),
+              0,
+              leafPool_.get());
+          const auto read = [&]() {
+            while (rowReader->next(256, result)) {
+              if (projectOut && result->size() > 0) {
+                result->as<RowVector>()->childAt(1)->loadedVector();
+              }
+            }
+          };
+          VELOX_ASSERT_THROW(read(), message);
+        }
+      }
+      auto dateReader = readerBuilder(*sink, data->rowType()).build();
+      assertReadWithReaderAndExpected(
+          data->rowType(), *dateReader.rowReader, data, *leafPool_);
+    }
+  }
+}
+
 TEST_F(ParquetReaderWideningTest, intToShortDecimalWidening) {
   auto writeData = makeRowVector({makeFlatVector<int32_t>(
       {0, 1, -1, 100, -100, 2'147'483'647, -2'147'483'648})});
@@ -807,6 +1199,18 @@ TEST_F(ParquetReaderWideningTest, decimalLongToLongWithScaleWidening) {
 }
 
 TEST_F(ParquetReaderWideningTest, typeWideningRejectionIncompatibleTypes) {
+  for (const auto& type :
+       std::vector<TypePtr>{TIMESTAMP(), BIGINT(), INTEGER(), VARCHAR()}) {
+    assertWideningThrows(
+        makeRowVector({makeFlatVector<int32_t>({-1, 0, 1}, DATE())}),
+        ROW("col", type),
+        "DATE");
+  }
+  assertWideningThrows(
+      makeRowVector({makeFlatVector<int32_t>({-1, 0, 1})}),
+      ROW("col", TIMESTAMP_UTC()),
+      "INTEGER");
+
   // INT32 -> FLOAT is not supported. FLOAT has only ~7 significant digits
   // vs INT32's 10, which would cause silent precision loss.
   assertWideningThrows(
