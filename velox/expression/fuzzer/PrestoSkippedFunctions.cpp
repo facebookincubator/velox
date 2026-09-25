@@ -383,6 +383,14 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "s2_cell_to_token",
       "ip_version", // New function, pending Presto Java implementation
       "ip_prefix_masklen", // New function, pending Presto Java implementation
+      // Skip every signature of both functions. The lambda and null-lambda
+      // signatures cannot be compared against Presto because Velox takes a
+      // transform lambda function(K,V,U) while Presto takes a comparator
+      // function(K,K,integer). The 2-argument signatures diverge separately:
+      // Presto rejects comparison of arrays with null elements while Velox
+      // orders them, and the fuzzer treats a reference-only failure as fatal.
+      "map_top_n_keys",
+      "map_top_n_values",
   };
   return kSkippedFunctionsSOT;
 }
