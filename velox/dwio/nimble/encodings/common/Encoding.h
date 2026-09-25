@@ -966,11 +966,16 @@ void readWithVisitorFast(
   // accelerate multi-chunk decoding.
   const auto numNonNullsSoFar =
       velox::bits::countNonNulls(nulls, 0, params.numScanned);
-  if constexpr (V::dense) {
-    if constexpr (kOutputNulls) {
-      NIMBLE_DCHECK(
-          !visitor.reader().hasNulls() || visitor.reader().returnReaderNulls());
-    }
+  // The dense path writes no result nulls: it is only correct when the reader
+  // returns its own nulls. setReturnNullsMode() declines that whenever the scan
+  // spec carries a filter, AlwaysTrue included, even though the visitor then
+  // has no filter to apply and still outputs nulls. Such a read takes the
+  // general path below, which builds the result nulls itself.
+  bool takeDensePath = V::dense;
+  if constexpr (V::dense && kOutputNulls) {
+    takeDensePath = visitor.reader().returnReaderNulls();
+  }
+  if (takeDensePath) {
     outerRows.resize(numRows);
     auto numNonNulls = velox::simd::indicesOfSetBits(
         nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());

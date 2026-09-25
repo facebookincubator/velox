@@ -1191,6 +1191,54 @@ TEST_P(ReadWithVisitorTest, denseNoFilterWithNulls) {
   EXPECT_TRUE(child->hasNulls());
 }
 
+// A nullable column read through the visitor with an AlwaysTrue filter has to
+// report its nulls and return its values, whichever encoding stores the
+// non-null values. The values child is pinned by layout so each encoding is
+// exercised whatever default selection would pick for this data: Trivial
+// takes the bulk fast path, FixedBitWidth the per-row path here.
+TEST_P(ReadWithVisitorTest, denseNoFilterWithNullsPerValuesEncoding) {
+  constexpr int kRows = 200;
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7))});
+  auto rowType = asRowType(input->type());
+  for (const auto encodingType :
+       {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+    SCOPED_TRACE(toString(encodingType));
+    auto ctx = makeFileContext(
+        input,
+        makeSingleColumnWriterOptions(
+            EncodingLayout{encodingType, {}, CompressionType::Uncompressed}));
+    const auto layout = captureFirstColumnEncoding(*ctx);
+    ASSERT_TRUE(layout.has_value());
+    ASSERT_EQ(layout->encodingType(), encodingType);
+
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::AlwaysTrue>());
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* child = readColumn(root.get(), kRows);
+
+    EXPECT_EQ(child->numValues(), kRows);
+    EXPECT_TRUE(child->hasNulls());
+    std::vector<vector_size_t> rowVec(kRows);
+    std::iota(rowVec.begin(), rowVec.end(), 0);
+    VectorPtr result;
+    child->getValues(RowSet(rowVec.data(), rowVec.size()), &result);
+    ASSERT_NE(result, nullptr);
+    auto* flat = result->asFlatVector<int64_t>();
+    ASSERT_NE(flat, nullptr);
+    for (int row = 0; row < kRows; ++row) {
+      SCOPED_TRACE(fmt::format("row={}", row));
+      const bool isNull = row % 7 == 0;
+      EXPECT_EQ(flat->isNullAt(row), isNull);
+      if (!isNull) {
+        EXPECT_EQ(flat->valueAt(row), row);
+      }
+    }
+  }
+}
+
 // ===========================================================================
 // Test: BigintRange filter, sequential data — sparse visitor output
 // ===========================================================================
