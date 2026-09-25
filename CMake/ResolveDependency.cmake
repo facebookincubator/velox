@@ -68,6 +68,18 @@ macro(velox_resolve_dependency dependency_name)
 
   set(find_package_args ${dependency_name} ${ARGN})
   list(REMOVE_ITEM find_package_args REQUIRED QUIET)
+
+  # find_package() consumes COMPONENTS itself, but a BUNDLED source build runs a
+  # plain add_subdirectory()/FetchContent module that never sees these
+  # arguments. Forward the request as ${dependency_name}_COMPONENTS so the module
+  # (e.g. resolve_dependency_modules/boost) can configure the matching libraries
+  # instead of keeping its own copy of the list. OPTIONAL_COMPONENTS is parsed
+  # only so it does not fall through into COMPONENTS; a bundled build has no
+  # notion of an optional component.
+  cmake_parse_arguments("${dependency_name}_ARG" "" ""
+                        "COMPONENTS;OPTIONAL_COMPONENTS" ${ARGN})
+  set(${dependency_name}_COMPONENTS ${${dependency_name}_ARG_COMPONENTS})
+
   if(${dependency_name}_SOURCE STREQUAL "AUTO")
     find_package(${find_package_args})
     if(${${dependency_name}_FOUND})
