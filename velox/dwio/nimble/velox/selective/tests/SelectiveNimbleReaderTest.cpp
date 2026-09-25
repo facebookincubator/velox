@@ -4179,7 +4179,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsInteger) {
   ASSERT_TRUE(stats->hasNull().has_value());
   EXPECT_FALSE(stats->hasNull().value());
   auto* intStats =
-      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+      dynamic_cast<dwio::common::IntegerColumnStatistics<>*>(stats.get());
   ASSERT_NE(intStats, nullptr);
   ASSERT_TRUE(intStats->getMinimum().has_value());
   EXPECT_EQ(intStats->getMinimum().value(), 0);
@@ -4323,7 +4323,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsAllNull) {
   ASSERT_TRUE(stats->hasNull().has_value());
   EXPECT_TRUE(stats->hasNull().value());
   auto* intStats =
-      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+      dynamic_cast<dwio::common::IntegerColumnStatistics<>*>(stats.get());
   ASSERT_NE(intStats, nullptr);
   EXPECT_EQ(intStats->getMinimum(), std::nullopt);
   EXPECT_EQ(intStats->getMaximum(), std::nullopt);
