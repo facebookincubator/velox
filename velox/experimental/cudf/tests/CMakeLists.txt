@@ -90,6 +90,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_plan_node_checker_test
+  SOURCES Main.cpp CudfPlanNodeCheckerTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark gmock
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_assign_unique_id_test
   SOURCES Main.cpp AssignUniqueIdTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
