@@ -157,6 +157,21 @@ class Encoding {
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
 
+    /// Rows a stream's costly candidates are first priced on, before
+    /// selection decides whether to price them on the whole stream. Zero,
+    /// the default, prices every candidate on every row. MainlyConstant,
+    /// Dictionary, RLE and Huffman price from distinct values or runs, which
+    /// is expensive on a long near-unique stream that loses to plain bit
+    /// packing anyway; with this set, a costly candidate is only priced on the
+    /// whole stream if its sample cost is within selectionScreenMargin of the
+    /// cheapest.
+    uint32_t selectionScreenRows{0};
+
+    /// How far a costly candidate's sample cost may exceed the cheapest before
+    /// the screen drops it, as a ratio. Only read when selectionScreenRows is
+    /// set.
+    double selectionScreenMargin{1.25};
+
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///
