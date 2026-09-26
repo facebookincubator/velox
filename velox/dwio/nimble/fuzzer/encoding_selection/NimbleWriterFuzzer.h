@@ -133,6 +133,12 @@ enum class WriteOutcome {
 /// nimble.encoding_selection_config.
 std::vector<EncodingType> allCandidateEncodings();
 
+/// Builds one compact JSON object shaped like a capping/exposure payload: a
+/// stable `t1` array plus sparsely present numeric-ID array fields. `rowIndex`
+/// deliberately controls empty and long arrays so a fixed seed covers those
+/// boundary shapes instead of depending on probability alone.
+std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex);
+
 /// Number of unfiltered random-policy files written before coverage repair.
 inline constexpr uint32_t kNumUnfilteredRounds = 10;
 
