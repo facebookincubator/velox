@@ -28,63 +28,6 @@ namespace {
 
 const int32_t kDefaultSeed = 42;
 
-// Computes the hash value of input using the hash function in HashClass.
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int32_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashInt32(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int64_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashInt64(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    float input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashFloat(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    double input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashDouble(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int128_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashLongDecimal(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    Timestamp input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashTimestamp(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    StringView input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashBytes(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    UnknownValue /*input*/,
-    typename HashClass::SeedType seed) {
-  return seed;
-}
-
 template <typename HashClass, TypeKind kind>
 class PrimitiveVectorHasher;
 

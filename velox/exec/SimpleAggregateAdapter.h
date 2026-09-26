@@ -437,6 +437,13 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
  protected:
+  /// Returns the simple aggregate function wrapped by this adapter. Subclasses
+  /// that override the Aggregate entry points (e.g. to validate constant
+  /// arguments per input batch) use it to reach the function.
+  FUNC& function() {
+    return *fn_;
+  }
+
   void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
