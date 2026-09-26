@@ -24,4 +24,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-velox_add_library(velox_functions_benchmark_util INTERFACE HEADERS FunctionBenchmarkBase.h)
+velox_add_library(
+  velox_functions_benchmark_util
+  INTERFACE
+  HEADERS
+  FunctionBenchmarkBase.h
+  TrimBenchmark.h
+)

@@ -16,7 +16,7 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include "velox/common/fuzzer/Utils.h"
-#include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
+#include "velox/functions/lib/benchmarks/TrimBenchmark.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -175,6 +175,7 @@ BENCHMARK_RELATIVE(aciiRPad) {
   StringAsciiUTFFunctionBenchmark benchmark;
   benchmark.runLPadRPad("rpad", false);
 }
+
 } // namespace
 
 // Preliminary release run, before ascii optimization.
@@ -189,7 +190,10 @@ BENCHMARK_RELATIVE(aciiRPad) {
 //============================================================================
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
 
+  StringAsciiUTFFunctionBenchmark benchmark;
+  functions::test::addTrimBenchmarks(__FILE__, benchmark, "presto");
   folly::runBenchmarks();
   return 0;
 }
