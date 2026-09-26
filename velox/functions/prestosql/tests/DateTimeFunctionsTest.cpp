@@ -5665,15 +5665,21 @@ TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
   // difference between the two comparison values is at most one day.
   auto emptyRowVector = makeRowVector(ROW({}), 1);
   auto tz = "America/Los_Angeles";
-  setQueryTimeZone(tz);
-  auto dateBefore = getCurrentDate(tz);
-  auto result = evaluateOnce<int32_t>("current_date()", emptyRowVector);
-  auto dateAfter = getCurrentDate(tz);
 
-  EXPECT_TRUE(result.has_value());
-  EXPECT_LE(dateBefore, result);
-  EXPECT_LE(result, dateAfter);
-  EXPECT_LE(dateAfter - dateBefore, 1);
+  for (const auto adjustTimestamp : {"true", "false"}) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, tz},
+        {core::QueryConfig::kAdjustTimestampToTimezone, adjustTimestamp},
+    });
+    auto dateBefore = getCurrentDate(tz);
+    auto result = evaluateOnce<int32_t>("current_date()", emptyRowVector);
+    auto dateAfter = getCurrentDate(tz);
+
+    EXPECT_TRUE(result.has_value());
+    EXPECT_LE(dateBefore, result);
+    EXPECT_LE(result, dateAfter);
+    EXPECT_LE(dateAfter - dateBefore, 1);
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, currentDateWithoutTimezone) {
@@ -6750,12 +6756,18 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
 TEST_F(DateTimeFunctionsTest, currentTimestamp) {
   const auto callCurrentTimestamp =
       [&](int64_t sessionStartTime,
-          const std::optional<std::string>& timeZone) {
+          const std::optional<std::string>& timeZone,
+          bool adjustTimestamp) {
+        std::unordered_map<std::string, std::string> configs = {
+            {core::QueryConfig::kSessionStartTime,
+             std::to_string(sessionStartTime)},
+            {core::QueryConfig::kAdjustTimestampToTimezone,
+             adjustTimestamp ? "true" : "false"},
+        };
         if (timeZone.has_value()) {
-          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
-        } else {
-          setQuerySessionStartTime(sessionStartTime);
+          configs[core::QueryConfig::kSessionTimezone] = timeZone.value();
         }
+        queryCtx_->testingOverrideConfigUnsafe(std::move(configs));
 
         auto rowVector = makeRowVector({});
         rowVector->resize(1);
@@ -6765,51 +6777,20 @@ TEST_F(DateTimeFunctionsTest, currentTimestamp) {
         return decoded.valueAt<int64_t>(0);
       };
 
-  // Test without timezone
-  EXPECT_THROW(
-      {
-        try {
-          callCurrentTimestamp(0, std::nullopt);
-        } catch (const VeloxException& e) {
-          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
-          throw;
-        }
-      },
-      VeloxException);
+  for (const bool adjustTimestamp : {true, false}) {
+    // Missing session timezone must throw regardless of the flag.
+    VELOX_ASSERT_USER_THROW(
+        callCurrentTimestamp(1758499200000, std::nullopt, adjustTimestamp),
+        "Timezone cannot be null");
 
-  // Test with timezone America/Los_Angeles
-  auto laPacked = callCurrentTimestamp(1758499200000, "America/Los_Angeles");
-  auto la = TimestampWithTimezone::unpack(laPacked);
-  ASSERT_TRUE(la.has_value());
+    auto laPacked = callCurrentTimestamp(
+        1758499200000, "America/Los_Angeles", adjustTimestamp);
+    auto la = TimestampWithTimezone::unpack(laPacked);
+    ASSERT_TRUE(la.has_value());
 
-  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
-  EXPECT_EQ(la->milliSeconds_, 1758499200000);
-}
-
-TEST_F(DateTimeFunctionsTest, currentTimestampWithAdjustDisabled) {
-  // America/Los_Angeles with adjustTimestampToTimezone disabled.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionStartTime, "1758499200000"},
-      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-  });
-  auto rowVector = makeRowVector({});
-  rowVector->resize(1);
-  auto result = evaluate("current_timestamp()", rowVector);
-  DecodedVector decoded(*result);
-  auto la = TimestampWithTimezone::unpack(decoded.valueAt<int64_t>(0));
-  ASSERT_TRUE(la.has_value());
-  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
-  EXPECT_EQ(la->milliSeconds_, 1758499200000);
-
-  // No timezone set at all: must throw a user error regardless of the flag.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionStartTime, "1758499200000"},
-      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-  });
-  VELOX_ASSERT_USER_THROW(
-      evaluate("current_timestamp()", rowVector),
-      "Session timezone must be set for current_timestamp.");
+    EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+    EXPECT_EQ(la->milliSeconds_, 1758499200000);
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, localtime) {
@@ -7254,72 +7235,20 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTime) {
-  auto testCurrentTime = [&](int64_t sessionStartTime,
-                             const std::string& zone,
-                             int64_t expectedMillis,
-                             int16_t expectedOffset) {
-    setSessionStartTimeAndTimeZone(sessionStartTime, zone);
-
-    auto packed = evaluateOnce<int64_t>(
-        "current_time()",
-        makeRowVector(ROW({}), 1),
-        std::nullopt,
-        TIME_WITH_TIME_ZONE());
-
-    ASSERT_TRUE(packed.has_value());
-
-    EXPECT_EQ(util::unpackMillisUtc(packed.value()), expectedMillis);
-    EXPECT_EQ(util::unpackZoneOffset(packed.value()), expectedOffset);
-  };
-
-  testCurrentTime(1710064800000, "UTC", 36000000, 0);
-  testCurrentTime(1710064800000, "Asia/Kolkata", 55800000, 1170);
-  testCurrentTime(1705312800000, "America/Los_Angeles", 7200000, 361);
-  testCurrentTime(1717243200000, "America/Los_Angeles", 18000000, 421);
-}
-
-TEST_F(DateTimeFunctionsTest, currentTimeWithAdjustDisabled) {
-  auto testCurrentTimeAdjustOff = [&](int64_t sessionStartTime,
-                                      const std::string& zone,
-                                      int64_t expectedMillis,
-                                      int16_t expectedOffset) {
-    queryCtx_->testingOverrideConfigUnsafe({
+  auto callCurrentTime = [&](int64_t sessionStartTime,
+                             const std::optional<std::string>& zone,
+                             bool adjustTimestamp) {
+    std::unordered_map<std::string, std::string> configs = {
         {core::QueryConfig::kSessionStartTime,
          std::to_string(sessionStartTime)},
-        {core::QueryConfig::kSessionTimezone, zone},
-        {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-    });
-    auto packed = evaluateOnce<int64_t>(
-        "current_time()",
-        makeRowVector(ROW({}), 1),
-        std::nullopt,
-        TIME_WITH_TIME_ZONE());
-    ASSERT_TRUE(packed.has_value());
-    EXPECT_EQ(util::unpackMillisUtc(packed.value()), expectedMillis);
-    EXPECT_EQ(util::unpackZoneOffset(packed.value()), expectedOffset);
-  };
+        {core::QueryConfig::kAdjustTimestampToTimezone,
+         adjustTimestamp ? "true" : "false"},
+    };
+    if (zone.has_value()) {
+      configs[core::QueryConfig::kSessionTimezone] = zone.value();
+    }
+    queryCtx_->testingOverrideConfigUnsafe(std::move(configs));
 
-  testCurrentTimeAdjustOff(1710064800000, "UTC", 36000000, 0);
-  testCurrentTimeAdjustOff(1710064800000, "Asia/Kolkata", 55800000, 1170);
-  testCurrentTimeAdjustOff(1705312800000, "America/Los_Angeles", 7200000, 361);
-  testCurrentTimeAdjustOff(1717243200000, "America/Los_Angeles", 18000000, 421);
-
-  // No timezone set at all: must throw a user error regardless of the flag.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionStartTime, "1710064800000"},
-      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-  });
-  VELOX_ASSERT_USER_THROW(
-      evaluateOnce<int64_t>(
-          "current_time()",
-          makeRowVector(ROW({}), 1),
-          std::nullopt,
-          TIME_WITH_TIME_ZONE()),
-      "Session timezone must be set for current_time.");
-}
-
-TEST_F(DateTimeFunctionsTest, currentTimeMissingTimeZone) {
-  const auto currentTime = [&]() {
     return evaluateOnce<int64_t>(
         "current_time()",
         makeRowVector(ROW({}), 1),
@@ -7327,18 +7256,28 @@ TEST_F(DateTimeFunctionsTest, currentTimeMissingTimeZone) {
         TIME_WITH_TIME_ZONE());
   };
 
-  {
-    queryCtx_->testingOverrideConfigUnsafe({});
-    VELOX_ASSERT_USER_THROW(currentTime(), "Timezone cannot be null");
+  auto testCurrentTime = [&](int64_t sessionStartTime,
+                             const std::string& zone,
+                             int64_t expectedMillis,
+                             int16_t expectedOffset) {
+    for (const bool adjustTimestamp : {true, false}) {
+      auto packed = callCurrentTime(sessionStartTime, zone, adjustTimestamp);
+      ASSERT_TRUE(packed.has_value());
+      EXPECT_EQ(util::unpackMillisUtc(packed.value()), expectedMillis);
+      EXPECT_EQ(util::unpackZoneOffset(packed.value()), expectedOffset);
+    }
+  };
+
+  for (const bool adjustTimestamp : {true, false}) {
+    VELOX_ASSERT_USER_THROW(
+        callCurrentTime(1710064800000, std::nullopt, adjustTimestamp),
+        "Timezone cannot be null");
   }
 
-  {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-        {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-    });
-    VELOX_ASSERT_USER_THROW(currentTime(), "Timezone cannot be null");
-  }
+  testCurrentTime(1710064800000, "UTC", 36000000, 0);
+  testCurrentTime(1710064800000, "Asia/Kolkata", 55800000, 1170);
+  testCurrentTime(1705312800000, "America/Los_Angeles", 7200000, 361);
+  testCurrentTime(1717243200000, "America/Los_Angeles", 18000000, 421);
 
   {
     queryCtx_->testingOverrideConfigUnsafe({});

@@ -1566,9 +1566,9 @@ struct FromIso8601Timestamp {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTimeZone_ = tz::locateZone(sessionTzName);
+    const auto* sessionTimeZone = getSessionTimeZone(config);
+    if (sessionTimeZone != nullptr) {
+      sessionTimeZone_ = sessionTimeZone;
     }
   }
 
@@ -1622,9 +1622,9 @@ struct DateParseFunction {
       isConstFormat_ = true;
     }
 
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTimeZone_ = tz::locateZone(sessionTzName);
+    const auto* sessionTimeZone = getSessionTimeZone(config);
+    if (sessionTimeZone != nullptr) {
+      sessionTimeZone_ = sessionTimeZone;
     }
   }
 
@@ -1746,9 +1746,9 @@ struct ParseDateTimeFunction {
       isConstFormat_ = true;
     }
 
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTimeZone_ = tz::locateZone(sessionTzName);
+    const auto* sessionTimeZone = getSessionTimeZone(config);
+    if (sessionTimeZone != nullptr) {
+      sessionTimeZone_ = sessionTimeZone;
     }
   }
 
@@ -1788,7 +1788,7 @@ struct CurrentDateFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = getSessionTimeZone(config);
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<Date>& result) {
@@ -1830,11 +1830,8 @@ struct CurrentTimestampFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
-    const auto& sessionTzName = config.sessionTimezone();
-    VELOX_USER_CHECK(
-        !sessionTzName.empty(),
-        "Session timezone must be set for current_timestamp.");
-    timeZone_ = tz::locateZone(sessionTzName);
+    timeZone_ = getSessionTimeZone(config);
+    VELOX_USER_CHECK_NOT_NULL(timeZone_, "Timezone cannot be null");
     result_ = pack(ts, timeZone_->id());
   }
 
@@ -2170,11 +2167,8 @@ struct CurrentTimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
-    const auto& sessionTzName = config.sessionTimezone();
-    VELOX_USER_CHECK(
-        !sessionTzName.empty(),
-        "Session timezone must be set for current_time.");
-    const tz::TimeZone* timeZone = tz::locateZone(sessionTzName);
+    const tz::TimeZone* timeZone = getSessionTimeZone(config);
+    VELOX_USER_CHECK_NOT_NULL(timeZone, "Timezone cannot be null");
 
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 
