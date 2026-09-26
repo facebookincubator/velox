@@ -307,6 +307,37 @@ TYPED_TEST(ALPRDEncodingTest, dictionarySizesAndExceptionRates) {
   this->check(encoded, expected);
 }
 
+TYPED_TEST(ALPRDEncodingTest, parametersAccountForByteRounding) {
+  using Physical = typename TestFixture::Physical;
+  constexpr auto kRightBits = sizeof(Physical) * 8 - 16;
+  const auto mask = (Physical{1} << kRightBits) - 1;
+  std::mt19937_64 random{73};
+  std::vector<Physical> values(1'024);
+  for (auto& value : values) {
+    const Physical high = (random() & 1) ? 0x3f00 : 0x3f80;
+    value = (high << kRightBits) | (random() & mask);
+  }
+  for (auto exactBits : {false, true}) {
+    SCOPED_TRACE(exactBits);
+    this->options_.fixedBitWidthUseExactBits = exactBits;
+    const EncodingLayout leaf{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+    const auto encoded = this->encode(
+        values,
+        EncodingLayout{
+            EncodingType::ALPRD,
+            {},
+            CompressionType::Uncompressed,
+            {std::nullopt, leaf, leaf, leaf}});
+    const auto metadata =
+        ALPRDEncodingBase::readMetadata(encoded, this->options_);
+    // A constant code stream uses Constant. With two prefixes, byte-rounded
+    // FBW codes cost a whole byte and do not save low-part payload bytes.
+    EXPECT_EQ(metadata.parameters.dictionarySize, exactBits ? 2 : 1);
+    this->check(encoded, values);
+  }
+}
+
 TYPED_TEST(ALPRDEncodingTest, shortAndConstantInputs) {
   using Physical = typename TestFixture::Physical;
   for (uint32_t count :
@@ -323,18 +354,15 @@ TYPED_TEST(ALPRDEncodingTest, shortAndConstantInputs) {
 
 TYPED_TEST(ALPRDEncodingTest, splitCostTiePrefersNarrowerRightPart) {
   using Physical = typename TestFixture::Physical;
-  constexpr auto kShift = sizeof(Physical) * 8 - 16;
-  std::vector<Physical> values;
-  for (uint16_t high : {0x1000, 0x1001, 0x2000, 0x4000}) {
-    for (uint32_t low = 0; low < 4; ++low) {
-      values.push_back((Physical{high} << kShift) | low);
-    }
-  }
-  // Splitting at 15 or 16 high bits has the same minimum estimated cost:
-  // the extra dictionary entry costs exactly the 16 saved low bits.
-  const auto parameters = ALPRDEncodingBase::selectParameters<Physical>(values);
-  EXPECT_EQ(parameters.rightBitWidth, kShift);
-  EXPECT_EQ(parameters.dictionarySize, 4);
+  const std::vector<Physical> values(
+      32, std::bit_cast<Physical>(typename TestFixture::T{1.25}));
+  auto policy = makePolicy<typename TestFixture::T>(makeLayout());
+  // Every split produces one dictionary entry and constant FBW children of
+  // identical serialized sizes. Resolve the tie independently of loop order.
+  const auto parameters = ALPRDEncodingBase::selectParameters<Physical>(
+      values, this->options_, policy.get());
+  EXPECT_EQ(parameters.rightBitWidth, sizeof(Physical) * 8 - 16);
+  EXPECT_EQ(parameters.dictionarySize, 1);
   this->check(this->encode(values), values);
 }
 
