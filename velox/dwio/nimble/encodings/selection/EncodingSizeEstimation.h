@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -148,6 +149,18 @@ struct EncodingSizeEstimation {
         return BlockBitPackingEncoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::FrequencyPartition: {
+        if constexpr (isIntegralType<physicalType>()) {
+          // Options carry the index type, which is a large part of what a
+          // FrequencyPartition encode costs and is not visible from statistics.
+          return FrequencyPartitionEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return std::nullopt;
       }
