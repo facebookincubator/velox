@@ -31,6 +31,13 @@ set(
   ${BENCHMARK_DEPENDENCIES_NO_FUNC}
 )
 
+add_executable(velox_functions_prestosql_benchmarks_sequence SequenceBenchmark.cpp)
+target_link_libraries(
+  velox_functions_prestosql_benchmarks_sequence
+  ${BENCHMARK_DEPENDENCIES}
+  velox_sequence_benchmark
+)
+
 add_executable(velox_functions_prestosql_benchmarks_array_contains ArrayContainsBenchmark.cpp)
 velox_add_test_headers(velox_functions_prestosql_benchmarks_array_contains ArrayPositionBasic.h)
 target_link_libraries(velox_functions_prestosql_benchmarks_array_contains ${BENCHMARK_DEPENDENCIES})
