@@ -15,6 +15,9 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
+
+#include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -921,4 +924,33 @@ TEST_F(DecimalArithmeticTest, negate) {
            DecimalUtil::kLongDecimalMax,
            DecimalUtil::kLongDecimalMin},
           DECIMAL(38, 19))});
+}
+
+// Instantiating the structs is the only way to notice that their calls to
+// velox::checkedMultiply and velox::detail::mulOverflow are qualified.
+// Unqualified they bind elsewhere: the structs sit in velox::functions::detail,
+// so a bare detail::mulOverflow names that namespace rather than velox::detail,
+// and a two-argument velox::functions::checkedMultiply leaves the
+// three-argument call in DecimalModulusFunction with no overload. Registration
+// alone does not instantiate the bodies, and this is the only unit that
+// includes both headers, so it is the only place the qualification can be
+// caught.
+TEST_F(DecimalArithmeticTest, structsInstantiateAlongsideCheckedArithmetic) {
+  const core::QueryConfig config{
+      std::unordered_map<std::string, std::string>{}};
+  const std::vector<TypePtr> inputTypes{DECIMAL(20, 2), DECIMAL(20, 2)};
+  int128_t out = 0;
+
+  functions::detail::DecimalModulusFunction<exec::VectorExec> modulus;
+  modulus.initialize(
+      inputTypes,
+      config,
+      static_cast<const int128_t*>(nullptr),
+      static_cast<const int128_t*>(nullptr));
+  modulus.call<int128_t, int128_t, int128_t>(out, 700, 300);
+  EXPECT_EQ(out, 100); // 7.00 % 3.00
+
+  functions::detail::DecimalMultiplyFunction<exec::VectorExec> multiply;
+  multiply.call<int128_t, int128_t, int128_t>(out, 700, 300);
+  EXPECT_EQ(out, 210000); // 7.00 * 3.00, at the result scale of 4
 }
