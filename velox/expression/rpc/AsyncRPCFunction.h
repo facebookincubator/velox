@@ -72,6 +72,10 @@ struct TextPayload {
   std::string text;
 
   explicit TextPayload(std::string value) : text(std::move(value)) {}
+
+  int64_t retainedBytes() const noexcept {
+    return static_cast<int64_t>(text.capacity());
+  }
 };
 
 /// Wraps text as a response payload. Returns the payload by value: it is

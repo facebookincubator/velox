@@ -166,10 +166,12 @@ default-constructed response contains the defensive ``kUnset`` error, so
 ``RpcPayload`` is a move-only, type-erased value whose object representation is
 stored inline in the response, avoiding a wrapper allocation. The framework
 moves it from the function's dispatch to the function's ``buildOutput`` and
-never inspects it. Payload objects must fit the 32-byte inline storage and be
-nothrow move-constructible. Their contents, such as a ``std::string`` buffer,
-may allocate separately; object representations larger than 32 bytes use a
-handle.
+never inspects it. Payload objects must fit the 32-byte inline storage, be
+nothrow move-constructible, and may implement ``int64_t retainedBytes() const
+noexcept``. The method returns a non-negative estimate of uniquely owned memory
+retained outside the inline storage so the execution framework can charge it to
+the query's memory pool. A payload that stores all data inline reports zero by
+default. Object representations larger than 32 bytes use a handle.
 
 Each function defines its own payload type and casts back on the way out:
 
@@ -177,6 +179,10 @@ Each function defines its own payload type and casts back on the way out:
 
   struct TextPayload {
     std::string text;
+
+    int64_t retainedBytes() const noexcept {
+      return static_cast<int64_t>(text.capacity());
+    }
   };
 
   // In buildOutput():
