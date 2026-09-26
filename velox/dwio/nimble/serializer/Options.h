@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 #include <set>
@@ -168,6 +169,12 @@ struct SerializerOptions {
   /// identical schemas regardless of data arrival order. Unknown keys not in
   /// the set will cause an error during serialization.
   folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns{};
+
+  /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
+  /// group keys are stored in schema metadata; Default has no schema keys.
+  /// Every block carries its observed typed keys, key-major in-map bits, and
+  /// values in one complete value subtree per group.
+  folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
 
   /// Factory for creating encoding selection policies.
   /// Used by encoded serializer writes.
