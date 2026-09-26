@@ -172,64 +172,6 @@ class Encoding {
     /// until restatement points are added.
     bool subIntSplitDeltaPreTransform{false};
 
-    /// Output elements SubIntSplit combines per pass when decoding.
-    ///
-    /// Measured flat across 4096/2048/1024/512 on 20 data patterns, so there is
-    /// no tuning win here on current hardware; the knob exists for unusual
-    /// cache geometries. 0 selects the default.
-    uint32_t subIntSplitDecodeChunkSize{0};
-
-    /// EXPERIMENTATION: Decode cost SubIntSplit's split planner charges per
-    /// additional section, in bits per value.
-    ///
-    /// The planner otherwise optimises storage alone and will buy a section for
-    /// a fraction of a percent of size while costing a full extra pass over the
-    /// output at decode. This term lets a caller trade a little storage back
-    /// for decode throughput. It changes the chosen split, so encoded output
-    /// differs from the default.
-    ///
-    /// 0.0 keeps the storage-only plan.
-    double subIntSplitDecodeCostBitsPerValue{0.0};
-
-    /// Samples SubIntSplit's split planner draws from the stream.
-    ///
-    /// The planner's cost grid is O(candidateBoundaries^2) cells and each cell
-    /// walks the whole sample, so this is the dominant term in encode time and
-    /// the reason SubIntSplit encodes slower than an encoding that is handed
-    /// its split. Fewer samples buy encode throughput at the risk of a
-    /// worse-informed split. 0 selects the default.
-    uint32_t subIntSplitPlannerMaxSamples{0};
-
-    /// Relative change in a bit plane's set-rate required before SubIntSplit's
-    /// planner will consider that position as a split boundary.
-    ///
-    /// Raising it prunes candidate boundaries, which shrinks the cost grid
-    /// quadratically -- the cheapest way to speed up planning, paid for in
-    /// split quality. Negative selects the default.
-    double subIntSplitBoundaryPruneThreshold{-1.0};
-
-    /// Hard ceiling on SubIntSplit's candidate split boundaries.
-    ///
-    /// The planner's cost grid is quadratic in boundaries, and a threshold
-    /// bounds them only indirectly -- a stream with many real field edges still
-    /// produces many. A cap makes planning O(cap^2) whatever the data, which is
-    /// what a writer with a latency budget needs. 0 is unlimited.
-    uint32_t subIntSplitMaxCandidateBoundaries{0};
-
-    /// Widest section SubIntSplit's planner scores, beyond the full active
-    /// range which is always scored. Trims the grid's upper triangle.
-    /// 0 is unlimited.
-    uint32_t subIntSplitMaxSectionWidth{0};
-
-    /// Widest section for which SubIntSplit collects unique and dominant-value
-    /// counts.
-    ///
-    /// That frequency pass is the expensive half of the planner's per-cell
-    /// metrics and only feeds the Dictionary and MainlyConstant cost models,
-    /// which need low cardinality to win. Above this width both are treated as
-    /// unusable and the pass is skipped. 0 is unlimited.
-    uint32_t subIntSplitFrequencyMetricsMaxWidth{0};
-
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 

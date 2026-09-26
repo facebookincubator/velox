@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -470,9 +471,10 @@ TEST(SubIntSplitEncodingTests, heterogeneousSectionEncodingsRoundTrip) {
       captured.child(2)->encodingType(), nimble::EncodingType::Dictionary);
   EXPECT_EQ(captured.child(3)->encodingType(), nimble::EncodingType::Constant);
 
-  nimble::Encoding::Options options;
-  options.subIntSplitDecodeChunkSize = 7;
-  auto decoder = decodeEncoding<uint64_t>(encoded, *pool, options);
+  auto tuning = nimble::subintsplit::kDefaultTuningConfig;
+  tuning.decodeChunkSize = 7;
+  auto decoder = std::make_unique<nimble::SubIntSplitEncoding<uint64_t>>(
+      *pool, encoded, nullptr, nimble::Encoding::Options{}, tuning);
   std::vector<uint64_t> decoded(values.size());
   size_t offset{0};
   for (const uint32_t count : {1, 6, 8, 63, 128, 307}) {
@@ -608,9 +610,10 @@ TEST(SubIntSplitEncodingTests, largeDecodeChunkSizePreservesCorrectness) {
   nimble::Buffer buffer{*pool};
   const auto encoded = encodeWithReplayLayout<uint64_t>(
       makePreserveLayout<uint64_t>(segments), values, buffer);
-  nimble::Encoding::Options options;
-  options.subIntSplitDecodeChunkSize = (uint32_t{1} << 29) + 1;
-  auto decoder = decodeEncoding<uint64_t>(encoded, *pool, options);
+  auto tuning = nimble::subintsplit::kDefaultTuningConfig;
+  tuning.decodeChunkSize = (uint32_t{1} << 29) + 1;
+  auto decoder = std::make_unique<nimble::SubIntSplitEncoding<uint64_t>>(
+      *pool, encoded, nullptr, nimble::Encoding::Options{}, tuning);
 
   std::vector<uint64_t> actual(values.size());
   decoder->materialize(actual.size(), actual.data());

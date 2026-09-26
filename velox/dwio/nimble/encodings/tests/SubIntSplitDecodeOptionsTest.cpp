@@ -48,7 +48,7 @@ class SubIntSplitDecodeOptionsTest : public ::testing::Test {
 
   std::string encode(
       const std::vector<uint64_t>& values,
-      const Encoding::Options& options) {
+      const subintsplit::TuningConfig& tuning) {
     const std::span<const uint64_t> input{values.data(), values.size()};
     ManualEncodingSelectionPolicyFactory factory;
     EncodingSelection<uint64_t> selection{
@@ -57,15 +57,15 @@ class SubIntSplitDecodeOptionsTest : public ::testing::Test {
         factory.createPolicy(DataType::Uint64)};
 
     const auto encoded = SubIntSplitEncoding<uint64_t>::encode(
-        selection, input, *buffer_, options);
+        selection, input, *buffer_, {}, tuning);
     return std::string{encoded};
   }
 
   std::vector<uint64_t> decode(
       const std::string& encoded,
       uint32_t numValues,
-      const Encoding::Options& options) {
-    SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, options};
+      const subintsplit::TuningConfig& tuning) {
+    SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, {}, tuning};
     std::vector<uint64_t> output(numValues);
     decoder.materialize(numValues, output.data());
     return output;
@@ -106,10 +106,10 @@ TEST_F(SubIntSplitDecodeOptionsTest, decodeChunkSizeDoesNotChangeValues) {
   const auto values = makeMultiFieldValues(10'000);
   const auto encoded = encode(values, {});
 
-  for (const uint32_t chunkSize : {0u, 1u, 7u, 512u, 4096u, 65'536u}) {
-    Encoding::Options options;
-    options.subIntSplitDecodeChunkSize = chunkSize;
-    EXPECT_EQ(decode(encoded, values.size(), options), values)
+  for (const uint32_t chunkSize : {1u, 7u, 512u, 4096u, 65'536u}) {
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.decodeChunkSize = chunkSize;
+    EXPECT_EQ(decode(encoded, values.size(), tuning), values)
         << "chunk size " << chunkSize;
   }
 }
@@ -119,8 +119,8 @@ TEST_F(SubIntSplitDecodeOptionsTest, decodeChunkSizeDoesNotChangeValues) {
 TEST_F(SubIntSplitDecodeOptionsTest, zeroDecodeCostKeepsTheStorageOnlyPlan) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options explicitZero;
-  explicitZero.subIntSplitDecodeCostBitsPerValue = 0.0;
+  auto explicitZero = subintsplit::kDefaultTuningConfig;
+  explicitZero.selector.decodeCostBitsPerValue = 0.0;
 
   EXPECT_EQ(encode(values, {}), encode(values, explicitZero));
 }
@@ -136,9 +136,9 @@ TEST_F(SubIntSplitDecodeOptionsTest, decodeCostReducesSectionCount) {
 
   uint32_t previous = baselineSections;
   for (const double bitsPerValue : {1.0, 4.0, 16.0, 64.0}) {
-    Encoding::Options options;
-    options.subIntSplitDecodeCostBitsPerValue = bitsPerValue;
-    const auto encoded = encode(values, options);
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.selector.decodeCostBitsPerValue = bitsPerValue;
+    const auto encoded = encode(values, tuning);
 
     const auto sections = sectionCount(encoded);
     EXPECT_LE(sections, previous) << "bits per value " << bitsPerValue;
@@ -158,8 +158,8 @@ TEST_F(SubIntSplitDecodeOptionsTest, decodeCostReducesSectionCount) {
 TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options prohibitive;
-  prohibitive.subIntSplitDecodeCostBitsPerValue = 1'000.0;
+  auto prohibitive = subintsplit::kDefaultTuningConfig;
+  prohibitive.selector.decodeCostBitsPerValue = 1'000.0;
   const auto encoded = encode(values, prohibitive);
 
   EXPECT_EQ(sectionCount(encoded), 2u);
@@ -171,8 +171,8 @@ TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
 TEST_F(SubIntSplitDecodeOptionsTest, decodeCostCostsStorage) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options prohibitive;
-  prohibitive.subIntSplitDecodeCostBitsPerValue = 1'000.0;
+  auto prohibitive = subintsplit::kDefaultTuningConfig;
+  prohibitive.selector.decodeCostBitsPerValue = 1'000.0;
 
   EXPECT_GT(encode(values, prohibitive).size(), encode(values, {}).size());
 }
