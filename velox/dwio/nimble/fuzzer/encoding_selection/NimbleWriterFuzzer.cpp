@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -245,13 +246,15 @@ EncodingSelectionPolicyCreator gateFloatingPointStreams(
 }
 
 CompressionType randomCompressionType(FuzzerGenerator& rng) {
-  static constexpr std::array<CompressionType, 5> kCompressionTypes = {
+  static constexpr auto kCompressionTypes = std::to_array({
       CompressionType::Uncompressed,
       CompressionType::Zstd,
+#ifndef DISABLE_META_INTERNAL_COMPRESSOR
       CompressionType::MetaInternal,
+#endif
       CompressionType::Lz4,
       CompressionType::OpenZL,
-  };
+  });
   return kCompressionTypes[folly::Random::rand32(
       kCompressionTypes.size(), rng)];
 }
@@ -558,6 +561,25 @@ void makeDecimalLike(velox::FlatVector<T>* vector, FuzzerGenerator& rng) {
   }
 }
 
+// Exercises ALPRD's dictionary codes and exceptions while preserving NULLs
+// and a tail of the original special floating-point values.
+template <typename T>
+void makeSharedPrefixes(velox::FlatVector<T>* vector, FuzzerGenerator& rng) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  constexpr auto kShift = sizeof(T) * 8 - 16;
+  constexpr auto kMask = (PhysicalType{1} << kShift) - 1;
+  for (velox::vector_size_t i = 0; i < vector->size() * 9 / 10; ++i) {
+    if (vector->isNullAt(i)) {
+      continue;
+    }
+    const PhysicalType high = folly::Random::oneIn(16, rng)
+        ? folly::Random::rand32(65'536, rng)
+        : (folly::Random::oneIn(2, rng) ? 0x3f00 : 0xbf00);
+    const auto bits = (high << kShift) | (folly::Random::rand64(rng) & kMask);
+    vector->set(i, std::bit_cast<T>(static_cast<PhysicalType>(bits)));
+  }
+}
+
 // Rewrites a string column to values built from a small token alphabet, so
 // substrings repeat across rows. FsstEncoding::estimateSize cannot decline --
 // it returns a plain size -- so selection is never the obstacle. The obstacle
@@ -702,6 +724,7 @@ enum class ColumnShape {
   kDefault,
   kConstant,
   kNonDecreasing,
+  kSharedPrefixes,
 };
 
 // Draws one shape per top-level column. Drawn once per iteration rather than
@@ -720,6 +743,11 @@ std::vector<ColumnShape> drawColumnShapes(
         isIntegerKind(schema->childAt(i)->kind()) &&
         folly::Random::oneIn(4, rng)) {
       shapes.push_back(ColumnShape::kNonDecreasing);
+    } else if (
+        (schema->childAt(i)->kind() == velox::TypeKind::REAL ||
+         schema->childAt(i)->kind() == velox::TypeKind::DOUBLE) &&
+        folly::Random::oneIn(2, rng)) {
+      shapes.push_back(ColumnShape::kSharedPrefixes);
     } else {
       shapes.push_back(ColumnShape::kDefault);
     }
@@ -799,6 +827,8 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::REAL:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<float>());
+        } else if (shapes.at(childIndex) == ColumnShape::kSharedPrefixes) {
+          makeSharedPrefixes(child->asFlatVector<float>(), rng);
         } else {
           makeDecimalLike(child->asFlatVector<float>(), rng);
         }
@@ -806,6 +836,8 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::DOUBLE:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<double>());
+        } else if (shapes.at(childIndex) == ColumnShape::kSharedPrefixes) {
+          makeSharedPrefixes(child->asFlatVector<double>(), rng);
         } else {
           makeDecimalLike(child->asFlatVector<double>(), rng);
         }
@@ -912,7 +944,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
   // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which test the
   // logical type, so these two split cleanly.
-  if (encodingType == EncodingType::ALP) {
+  if (encodingType == EncodingType::ALP ||
+      encodingType == EncodingType::ALPRD) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
@@ -2094,8 +2127,8 @@ void NimbleWriterFuzzer::run() {
   velox::VectorFuzzer vectorFuzzer(
       fuzzerOptions, leafPool_.get(), folly::Random::rand32(rng));
 
-  // Two thirds of iterations bias the scalar columns toward the shapes ALP and
-  // FSST are built for; the rest stay purely random so the generic encodings
+  // Two thirds of iterations bias scalar columns toward ALP, ALPRD and FSST
+  // shapes; the rest stay purely random so the generic encodings
   // keep seeing adversarial input.
   const bool shapeForEncodings = !folly::Random::oneIn(3, rng);
   const auto columnShapes = drawColumnShapes(schema, rng);

@@ -20,7 +20,6 @@
 #include <bit>
 #include <limits>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -87,51 +86,26 @@ class ALPRDEncodingBase {
       std::string_view data,
       const Encoding::Options& options);
 
-  /// Trains a bounded sample using the initial packed-bit cost approximation.
+  /// Maximum number of input values inspected by split training.
+  static constexpr uint32_t kSampleSize = 1'024;
+
+  /// Trains the split and dictionary using estimated serialized child sizes.
+  /// A null policy uses the existing default child candidates.
   template <typename PhysicalType>
-  static Parameters selectParameters(std::span<const PhysicalType> values) {
-    constexpr uint32_t kSampleSize = 1'024;
-    const auto sampleSize = std::min<size_t>(values.size(), kSampleSize);
-    Parameters best;
-    uint64_t bestCost = std::numeric_limits<uint64_t>::max();
-    for (uint8_t highBitWidth = 1; highBitWidth <= kMaxHighBitWidth;
-         ++highBitWidth) {
-      const uint8_t rightBitWidth = sizeof(PhysicalType) * 8 - highBitWidth;
-      std::unordered_map<uint16_t, uint32_t> frequencies;
-      for (uint32_t i = 0; i < sampleSize; ++i) {
-        const auto sampleIndex = uint64_t{i} * values.size() / sampleSize;
-        ++frequencies[values[sampleIndex] >> rightBitWidth];
-      }
-      std::vector<std::pair<uint16_t, uint32_t>> entries(
-          frequencies.begin(), frequencies.end());
-      std::sort(
-          entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.second != rhs.second ? lhs.second > rhs.second
-                                            : lhs.first < rhs.first;
-          });
-      const auto dictionarySize =
-          std::min<size_t>(entries.size(), kMaxDictionarySize);
-      uint32_t exceptions = sampleSize;
-      for (uint8_t i = 0; i < dictionarySize; ++i) {
-        exceptions -= entries[i].second;
-      }
-      // Estimate the split using packed integers. Exceptions carry a 32-bit
-      // position and a 16-bit high part; child codecs choose their own layout.
-      const auto codeBitWidth = std::bit_width(dictionarySize - 1);
-      const uint64_t cost = sampleSize * (rightBitWidth + codeBitWidth) +
-          uint64_t{exceptions} * 48 + dictionarySize * 16;
-      // Prefer the narrower right part when minimum estimated costs tie.
-      if (cost <= bestCost) {
-        bestCost = cost;
-        best.rightBitWidth = rightBitWidth;
-        best.dictionarySize = dictionarySize;
-        for (uint8_t i = 0; i < dictionarySize; ++i) {
-          best.dictionary[i] = entries[i].first;
-        }
-      }
-    }
-    return best;
-  }
+  static Parameters selectParameters(
+      std::span<const PhysicalType> values,
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase* policy);
+
+  /// Estimates a numRows payload from all values or a representative sample.
+  /// Uses the same bounded training as encode(), including child policies,
+  /// prefix sizes, byte rounding, padding and exception metadata.
+  template <typename PhysicalType>
+  static std::optional<uint64_t> estimateSize(
+      std::span<const PhysicalType> values,
+      uint32_t numRows,
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase* policy);
 
  protected:
   /// Creates a child decoder and rejects NULL wrappers within ALPRD streams.
@@ -261,6 +235,15 @@ class ALPRDEncoding final
         metadata_.exceptionCount);
   }
 
+  /// Estimates the default uncompressed layout without encoding candidates.
+  static std::optional<uint64_t> estimateSize(
+      std::span<const physicalType> values,
+      const Encoding::Options& options) {
+    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+    return ALPRDEncodingBase::estimateSize(
+        values, values.size(), options, nullptr);
+  }
+
   static std::string_view encode(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
@@ -270,7 +253,8 @@ class ALPRDEncoding final
     if (values.empty()) {
       NIMBLE_INCOMPATIBLE_ENCODING("ALPRD cannot encode empty data.");
     }
-    const auto parameters = selectParameters(values);
+    const auto parameters =
+        selectParameters(values, options, &selection.policy());
     const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
     ScopedVector<uint16_t> codes(rowCount, pool, options.bufferPool);

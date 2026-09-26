@@ -31,12 +31,17 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
+#include "velox/dwio/nimble/encodings/selection/SampledEncodingSizeEstimation.h"
 
 namespace facebook::nimble {
 
 using EncodingSelectionPolicyCreator =
     std::function<std::unique_ptr<EncodingSelectionPolicyBase>(DataType)>;
+
+namespace detail {
+/// Checks whether a replayed tree needs logical floating-point child types.
+bool layoutUsesAlprd(const EncodingLayout& layout);
+} // namespace detail
 
 // The following enables encoding selection debug messages. By default, these
 // logs are turned off (with zero overhead). In tests (or in debug sessions), we
@@ -123,6 +128,96 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
+    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+    return selectImpl(values, values.size(), statistics, options, true);
+  }
+
+  EncodingSelectionResult selectFromSample(
+      std::span<const physicalType> values,
+      uint32_t numRows,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) override {
+    return selectImpl(values, numRows, statistics, options, false);
+  }
+
+  EncodingSelectionResult selectNullable(
+      std::span<const physicalType> /* values */,
+      std::span<const bool> /* nulls */,
+      const Statistics<physicalType>& /* statistics */,
+      const Encoding::Options& /* options */) override {
+    return {
+        .encodingType = EncodingType::Nullable,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
+    };
+  }
+
+  bool useLogicalTypeForNullable() const override {
+    const auto containsAlprd = [](const auto& factors) {
+      return std::any_of(factors.begin(), factors.end(), [](const auto& entry) {
+        return entry.first == EncodingType::ALPRD;
+      });
+    };
+    return containsAlprd(candidateEncodingReadFactors_) ||
+        (nestedEncodingReadFactorsOverride_ &&
+         containsAlprd(*nestedEncodingReadFactorsOverride_));
+  }
+
+  const std::vector<std::pair<EncodingType, float>>&
+  candidateEncodingReadFactors() const {
+    return candidateEncodingReadFactors_;
+  }
+
+ protected:
+  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
+      EncodingType parentEncodingType,
+      NestedEncodingIdentifier nestedEncodingIdentifier,
+      DataType nestedDataType) override {
+    // In each sub-level of the encoding selection, we exclude the encodings
+    // selected in parent levels. Although this is not required (as hopefully,
+    // the model will not pick a nested encoding of the same type as the
+    // parent), it provides an additional safety net, making sure the encoding
+    // selection will eventually converge, and also slightly speeds up nested
+    // encoding selection.
+    // TODO: validate the assumptions here compared to brute forcing, to see if
+    // the same encoding is selected multiple times in the tree (for example,
+    // should we allow trivial string lengths to be encoded using trivial
+    // encoding?)
+    std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors;
+    const auto& sourceEncodingReadFactors =
+        nestedEncodingReadFactorsOverride_.has_value()
+        ? nestedEncodingReadFactorsOverride_.value()
+        : candidateEncodingReadFactors_;
+    nestedEncodingReadFactors.reserve(sourceEncodingReadFactors.size());
+    for (const auto& entry : sourceEncodingReadFactors) {
+      const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
+          ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
+                entry.first)
+          : entry.first != parentEncodingType;
+      if (isCandidate) {
+        nestedEncodingReadFactors.emplace_back(entry);
+      }
+    }
+    UNIQUE_PTR_FACTORY(
+        nestedDataType,
+        ManualEncodingSelectionPolicy,
+        std::move(nestedEncodingReadFactors),
+        compressionOptions_,
+        nestedEncodingIdentifier,
+        std::nullopt);
+  }
+
+ private:
+  // Uses one level of child-policy lookahead for a full input. Sampled child
+  // selection keeps existing container heuristics, bounding repeated training
+  // across candidate trees. Actual child writes select again on their input.
+  EncodingSelectionResult selectImpl(
+      std::span<const physicalType> values,
+      uint32_t numRows,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      bool refineNestedCandidates) {
+    NIMBLE_CHECK_LE(values.size(), numRows);
     if (values.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
@@ -165,9 +260,12 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
-      const auto estimatedSize =
-          detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
+      auto* nestedPolicy = encodingType == EncodingType::ALPRD ||
+              (refineNestedCandidates && useLogicalTypeForNullable())
+          ? this
+          : nullptr;
+      const auto estimatedSize = detail::estimateSampledEncodingSize<T>(
+          encodingType, values, numRows, statistics, options, nestedPolicy);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
@@ -225,63 +323,6 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         }};
   }
 
-  EncodingSelectionResult selectNullable(
-      std::span<const physicalType> /* values */,
-      std::span<const bool> /* nulls */,
-      const Statistics<physicalType>& /* statistics */,
-      const Encoding::Options& /* options */) override {
-    return {
-        .encodingType = EncodingType::Nullable,
-        .encodingConfig = {},
-        .estimatedSize = std::nullopt,
-    };
-  }
-
-  const std::vector<std::pair<EncodingType, float>>&
-  candidateEncodingReadFactors() const {
-    return candidateEncodingReadFactors_;
-  }
-
- protected:
-  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
-      EncodingType parentEncodingType,
-      NestedEncodingIdentifier nestedEncodingIdentifier,
-      DataType nestedDataType) override {
-    // In each sub-level of the encoding selection, we exclude the encodings
-    // selected in parent levels. Although this is not required (as hopefully,
-    // the model will not pick a nested encoding of the same type as the
-    // parent), it provides an additional safety net, making sure the encoding
-    // selection will eventually converge, and also slightly speeds up nested
-    // encoding selection.
-    // TODO: validate the assumptions here compared to brute forcing, to see if
-    // the same encoding is selected multiple times in the tree (for example,
-    // should we allow trivial string lengths to be encoded using trivial
-    // encoding?)
-    std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors;
-    const auto& sourceEncodingReadFactors =
-        nestedEncodingReadFactorsOverride_.has_value()
-        ? nestedEncodingReadFactorsOverride_.value()
-        : candidateEncodingReadFactors_;
-    nestedEncodingReadFactors.reserve(sourceEncodingReadFactors.size());
-    for (const auto& entry : sourceEncodingReadFactors) {
-      const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
-          ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
-                entry.first)
-          : entry.first != parentEncodingType;
-      if (isCandidate) {
-        nestedEncodingReadFactors.emplace_back(entry);
-      }
-    }
-    UNIQUE_PTR_FACTORY(
-        nestedDataType,
-        ManualEncodingSelectionPolicy,
-        std::move(nestedEncodingReadFactors),
-        compressionOptions_,
-        nestedEncodingIdentifier,
-        std::nullopt);
-  }
-
- private:
   // Candidate encodings and their read-cost factors. Encoding selection uses
   // estimatedSize * readFactor as the cost, so a lower factor makes an
   // encoding more likely to be picked. Right now, these represent mostly the
@@ -541,6 +582,12 @@ class ReplayedEncodingSelectionPolicy
         .encodingConfig = {},
         .estimatedSize = std::nullopt,
     };
+  }
+
+  bool useLogicalTypeForNullable() const override {
+    return detail::layoutUsesAlprd(encodingLayout_) ||
+        encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
+            ->useLogicalTypeForNullable();
   }
 
  protected:

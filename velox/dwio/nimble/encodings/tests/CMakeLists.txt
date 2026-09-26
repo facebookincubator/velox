@@ -31,6 +31,7 @@ target_link_libraries(nimble_encoding_layout_test_helper nimble_encodings)
 add_executable(
   nimble_encodings_tests
   ALPRDEncodingTest.cpp
+  ALPRDSelectionTest.cpp
   ALPEncodingTest.cpp
   ALPEncodingViewTest.cpp
   BufferedEncodingTest.cpp

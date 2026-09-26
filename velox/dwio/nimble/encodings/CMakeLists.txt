@@ -65,6 +65,8 @@ add_library(
   common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
+  selection/SampledEncodingSizeEstimation.cpp
+  selection/SampledEncodingSizeEstimation.h
   selection/Statistics.cpp
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h

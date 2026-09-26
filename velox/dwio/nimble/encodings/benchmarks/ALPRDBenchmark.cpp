@@ -42,6 +42,17 @@ DEFINE_bool(
     profile,
     false,
     "Report ALP_RD size and repeated wall/CPU timings.");
+DEFINE_bool(
+    selection_profile,
+    false,
+    "Compare the configured candidates with and without ALPRD.");
+DEFINE_string(
+    selection_read_factors,
+    "Constant=1;Trivial=1;FixedBitWidth=1;MainlyConstant=1;SparseBool=1;"
+    "Dictionary=1;RLE=1;Varint=1;ALP=1",
+    "Baseline candidates and weights for selection_profile; excludes ALPRD. "
+    "The default uses equal weights to compare estimated sizes.");
+DEFINE_double(alprd_read_factor, 1.0, "ALPRD weight in selection_profile.");
 DEFINE_uint32(
     rows,
     65'536,
@@ -65,7 +76,7 @@ using namespace facebook::nimble::benchmarks;
 namespace {
 
 constexpr uint64_t kSeed = 0xA1F0;
-constexpr std::array<std::string_view, 8> kDatasets{
+constexpr std::array<std::string_view, 12> kDatasets{
     "shared_prefix",
     "eight_prefixes",
     "mixed_sign",
@@ -73,7 +84,12 @@ constexpr std::array<std::string_view, 8> kDatasets{
     "exceptions_10pct",
     "duckdb_best_case",
     "wide_exponents",
-    "random_bits"};
+    "random_bits",
+    "decimals",
+    "dictionary",
+    "runs",
+    "mostly_constant",
+};
 
 Encoding::Options encodingOptions() {
   Encoding::Options options;
@@ -99,7 +115,10 @@ Vector<T> makeInput(std::string_view dataset) {
   values.resize(FLAGS_rows);
   for (auto& value : values) {
     P bits;
-    if (dataset == "random_bits") {
+    if (dataset == "decimals") {
+      value = static_cast<T>(random() % 10'000) / 100;
+      continue;
+    } else if (dataset == "random_bits") {
       bits = static_cast<P>(random());
     } else if (dataset == "wide_exponents") {
       const P exponent = random() % 201 + kExponentBias - 100;
@@ -116,7 +135,10 @@ Vector<T> makeInput(std::string_view dataset) {
       P high = kCommonHigh;
       if (dataset == "eight_prefixes") {
         high += random() % 8;
-      } else if (dataset == "mixed_sign" && (random() & 1)) {
+      } else if (
+          (dataset == "mixed_sign" || dataset == "dictionary" ||
+           dataset == "runs" || dataset == "mostly_constant") &&
+          (random() & 1)) {
         high |= 0x8000;
       } else if (exceptionThreshold && random() % 10'000 < exceptionThreshold) {
         // Random positions avoid aliasing evenly spaced training samples.
@@ -125,6 +147,21 @@ Vector<T> makeInput(std::string_view dataset) {
       bits = (high << kRightBits) | (random() & kLowMask);
     }
     value = std::bit_cast<T>(bits);
+  }
+  if (dataset == "dictionary") {
+    for (size_t i = 512; i < values.size(); ++i) {
+      values[i] = values[i % 512];
+    }
+  } else if (dataset == "runs") {
+    for (size_t i = values.size(); i > 0; --i) {
+      values[i - 1] = values[(i - 1) / 8];
+    }
+  } else if (dataset == "mostly_constant") {
+    for (size_t i = 0; i < values.size(); ++i) {
+      if (i % 8 != 0) {
+        values[i] = T{0};
+      }
+    }
   }
   if (dataset == "random_bits") {
     const P infinity = std::bit_cast<P>(std::numeric_limits<T>::infinity());
@@ -218,8 +255,167 @@ double median(std::vector<double> samples) {
                             : (samples[middle - 1] + samples[middle]) / 2;
 }
 
+// Calibrates and interleaves every comparison so ordering does not favor one
+// candidate set. All input generation, validation and reporting stay untimed.
+template <typename Report>
+void measureOperations(std::span<Operation> operations, Report report) {
+  for (auto& operation : operations) {
+    while (operation.time().cpuNs < FLAGS_profile_min_ms * 1'000'000.0) {
+      NIMBLE_CHECK_LE(
+          operation.iterations, std::numeric_limits<uint32_t>::max() / 2);
+      operation.iterations *= 2;
+    }
+  }
+  std::vector<size_t> order(operations.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::mt19937_64 random(kSeed);
+  for (uint32_t trial = 0; trial < FLAGS_profile_trials; ++trial) {
+    std::shuffle(order.begin(), order.end(), random);
+    for (const auto index : order) {
+      auto& operation = operations[index];
+      auto timings = operation.time();
+      timings.wallNs /= operation.iterations;
+      timings.cpuNs /= operation.iterations;
+      operation.wallSamples.push_back(timings.wallNs);
+      operation.cpuSamples.push_back(timings.cpuNs);
+      report(index, trial, timings);
+    }
+  }
+  for (size_t i = 0; i < operations.size(); ++i) {
+    report(
+        i,
+        -1,
+        Timings{
+            median(operations[i].wallSamples),
+            median(operations[i].cpuSamples)});
+  }
+  std::fflush(stdout);
+}
+
+std::string formatLayout(const EncodingLayout& layout) {
+  auto result = toString(layout.encodingType());
+  if (layout.childrenCount() != 0) {
+    result += "[";
+    for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+      if (i != 0) {
+        result += ";";
+      }
+      result += layout.child(i) ? formatLayout(*layout.child(i)) : "-";
+    }
+    result += "]";
+  }
+  return result;
+}
+
+template <typename T>
+void profileSelection(std::string_view dataset) {
+  using P = typename TypeTraits<T>::physicalType;
+  const auto values =
+      dataset == "input" ? readInput<T>() : makeInput<T>(dataset);
+  const auto physicals = EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
+      std::span<const T>{values.data(), values.size()});
+  const auto options = encodingOptions();
+  auto factors = ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+      FLAGS_selection_read_factors);
+  NIMBLE_USER_CHECK(
+      std::none_of(
+          factors.begin(),
+          factors.end(),
+          [](const auto& entry) { return entry.first == EncodingType::ALPRD; }),
+      "selection_read_factors must exclude ALPRD.");
+  const ManualEncodingSelectionPolicyFactory baseline(factors, std::nullopt);
+  factors.emplace_back(EncodingType::ALPRD, FLAGS_alprd_read_factor);
+  const ManualEncodingSelectionPolicyFactory candidate(factors, std::nullopt);
+  const std::array<const ManualEncodingSelectionPolicyFactory*, 2> factories{
+      &baseline, &candidate};
+  const auto makePolicy = [&](size_t variant) {
+    return std::unique_ptr<
+        EncodingSelectionPolicy<T>>(static_cast<EncodingSelectionPolicy<T>*>(
+        factories[variant]->createPolicy(TypeTraits<T>::dataType).release()));
+  };
+  std::array<std::string, 2> encoded;
+  std::array<std::string, 2> layouts;
+  std::array<uint64_t, 2> estimates{};
+  std::vector<P> output(values.size());
+  const EncodingFactory factory(options);
+  std::vector<Operation> operations;
+  for (size_t variant = 0; variant < factories.size(); ++variant) {
+    Buffer buffer{*benchmarkPool()};
+    encoded[variant] = EncodingFactory::encode<T>(
+        makePolicy(variant), {values.data(), values.size()}, buffer, options);
+    layouts[variant] =
+        formatLayout(EncodingLayoutCapture::capture(encoded[variant], options));
+    estimates[variant] =
+        makePolicy(variant)
+            ->select(physicals, Statistics<P>::create(physicals), options)
+            .estimatedSize.value_or(0);
+    auto decoder =
+        factory.create(*benchmarkPool(), encoded[variant], nullFactory());
+    decoder->materialize(output.size(), output.data());
+    validate(values, output);
+    operations.push_back(
+        {"select", [&, variant](uint32_t iterations) {
+           while (iterations--) {
+             // Rebuild lazy statistics as encode() does; do not reuse warmed
+             // stats.
+             const auto result = makePolicy(variant)->select(
+                 physicals, Statistics<P>::create(physicals), options);
+             folly::doNotOptimizeAway(result);
+           }
+         }});
+    operations.push_back({"encode", [&, variant](uint32_t iterations) {
+                            Buffer scratch{*benchmarkPool()};
+                            while (iterations--) {
+                              scratch.reset();
+                              const auto result = EncodingFactory::encode<T>(
+                                  makePolicy(variant),
+                                  {values.data(), values.size()},
+                                  scratch,
+                                  options);
+                              folly::doNotOptimizeAway(result);
+                            }
+                          }});
+    operations.push_back(
+        {"construct_decode", [&, variant](uint32_t iterations) {
+           while (iterations--) {
+             auto reader = factory.create(
+                 *benchmarkPool(), encoded[variant], nullFactory());
+             reader->materialize(output.size(), output.data());
+             folly::doNotOptimizeAway(output.data());
+           }
+         }});
+  }
+  measureOperations(
+      operations, [&](size_t index, int32_t trial, Timings timings) {
+        const auto variant = index / 3;
+        const auto& operation = operations[index];
+        fmt::print(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{:.2f},{:.2f}\n",
+            trial < 0 ? "median" : "trial",
+            sizeof(T) == 4 ? "float" : "double",
+            dataset,
+            values.size(),
+            variant == 0 ? "baseline" : "with_alprd",
+            operation.name,
+            trial,
+            operation.iterations,
+            encoded[variant].size(),
+            estimates[variant],
+            layouts[variant],
+            FLAGS_exact_bits ? 1 : 0,
+            timings.wallNs,
+            timings.cpuNs);
+      });
+  validate(values, output);
+}
+
 template <typename T>
 void profileDataset(std::string_view dataset) {
+  if (FLAGS_selection_profile) {
+    profileSelection<T>(dataset);
+    return;
+  }
+
   using P = typename TypeTraits<T>::physicalType;
   const auto values =
       dataset == "input" ? readInput<T>() : makeInput<T>(dataset);
@@ -255,8 +451,8 @@ void profileDataset(std::string_view dataset) {
       {{"train",
         [&](uint32_t iterations) {
           while (iterations--) {
-            const auto parameters =
-                ALPRDEncodingBase::selectParameters(physicals);
+            const auto parameters = ALPRDEncodingBase::selectParameters(
+                physicals, options, nullptr);
             folly::doNotOptimizeAway(parameters);
           }
         }},
@@ -269,13 +465,6 @@ void profileDataset(std::string_view dataset) {
         }},
        {"construct_decode", constructDecode},
        {"reset_decode", resetDecode}}};
-  for (auto& operation : operations) {
-    while (operation.time().cpuNs < FLAGS_profile_min_ms * 1'000'000.0) {
-      NIMBLE_CHECK_LE(
-          operation.iterations, std::numeric_limits<uint32_t>::max() / 2);
-      operation.iterations *= 2;
-    }
-  }
   const auto print = [&](std::string_view record,
                          const Operation& operation,
                          int32_t trial,
@@ -298,31 +487,12 @@ void profileDataset(std::string_view dataset) {
         timings.wallNs,
         timings.cpuNs);
   };
-  std::array<size_t, 4> order;
-  std::iota(order.begin(), order.end(), 0);
-  std::mt19937_64 random(kSeed);
-  // Interleave operations; setup, validation and reporting are untimed.
-  for (uint32_t trial = 0; trial < FLAGS_profile_trials; ++trial) {
-    std::shuffle(order.begin(), order.end(), random);
-    for (const auto index : order) {
-      auto& operation = operations[index];
-      auto timings = operation.time();
-      timings.wallNs /= operation.iterations;
-      timings.cpuNs /= operation.iterations;
-      operation.wallSamples.push_back(timings.wallNs);
-      operation.cpuSamples.push_back(timings.cpuNs);
-      print("trial", operation, trial, timings);
-    }
-  }
+  measureOperations(
+      operations, [&](size_t index, int32_t trial, Timings timings) {
+        print(
+            trial < 0 ? "median" : "trial", operations[index], trial, timings);
+      });
   validate(values, output);
-  for (const auto& operation : operations) {
-    print(
-        "median",
-        operation,
-        -1,
-        {median(operation.wallSamples), median(operation.cpuSamples)});
-  }
-  std::fflush(stdout);
 }
 
 void runProfile() {
@@ -342,9 +512,15 @@ void runProfile() {
       FLAGS_input_file.empty() ||
           (FLAGS_profile_type != "all" && FLAGS_profile_dataset.empty()),
       "input_file requires one profile_type and no synthetic dataset filter.");
-  fmt::print(
-      "record,type,dataset,rows,operation,trial,iterations,encoded_bytes,"
-      "bits_per_value,exceptions,right_bit_width,dictionary_size,exact_bits,wall_ns,cpu_ns\n");
+  if (FLAGS_selection_profile) {
+    fmt::print(
+        "record,type,dataset,rows,variant,operation,trial,iterations,"
+        "encoded_bytes,estimated_bytes,layout,exact_bits,wall_ns,cpu_ns\n");
+  } else {
+    fmt::print(
+        "record,type,dataset,rows,operation,trial,iterations,encoded_bytes,"
+        "bits_per_value,exceptions,right_bit_width,dictionary_size,exact_bits,wall_ns,cpu_ns\n");
+  }
   if (!FLAGS_input_file.empty()) {
     if (FLAGS_profile_type == "float") {
       profileDataset<float>("input");
@@ -440,9 +616,9 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize({});
   NIMBLE_USER_CHECK_GT(FLAGS_rows, 0);
   NIMBLE_USER_CHECK(
-      FLAGS_profile || FLAGS_input_file.empty(),
+      FLAGS_profile || FLAGS_selection_profile || FLAGS_input_file.empty(),
       "input_file requires --profile.");
-  if (FLAGS_profile) {
+  if (FLAGS_profile || FLAGS_selection_profile) {
     runProfile();
   } else {
     folly::runBenchmarks();
