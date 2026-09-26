@@ -387,8 +387,7 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
   return {startRow, static_cast<std::size_t>(endRow - startRow + 1)};
 }
 
-std::optional<std::unique_ptr<cudf::table>>
-CudfIcebergSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::Chunk> CudfIcebergSplitReader::readNextChunk() {
   if (skipSplit_) {
     return std::nullopt;
   }
@@ -407,7 +406,7 @@ CudfIcebergSplitReader::readNextChunk() {
     if (not chunkOpt.has_value()) {
       return std::nullopt;
     }
-    cudfTable = std::move(chunkOpt.value());
+    cudfTable = std::move(chunkOpt.value().table);
   }
 
   // Number of table rows before deletes.
@@ -533,7 +532,14 @@ CudfIcebergSplitReader::readNextChunk() {
   // Update the base read offset
   baseReadOffset_ += numRows;
 
-  return cudfTable;
+  // A table with no columns reports zero rows, so a projection that reads and
+  // injects no columns carries its row count alongside the table. The override
+  // is always set for such a table because it was set for the columnless input.
+  const auto outputNumRows = cudfTable->num_columns() > 0
+      ? cudfTable->num_rows()
+      : rowCountOverride.value();
+
+  return Chunk{std::move(cudfTable), outputNumRows};
 }
 
 void CudfIcebergSplitReader::classifyDeleteFiles() {
@@ -837,36 +843,6 @@ void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
         "Parquet schema child index out of range");
     fileColumnNames_.insert(meta.schema[childIdx].name);
   }
-}
-
-std::pair<std::size_t, std::size_t>
-CudfIcebergSplitReader::computeSplitRowRange() const {
-  // Note: This function implements the same logic as cuDF's hybrid scan
-  // reader's `filter_row_groups_with_byte_range()` API
-  const auto rowGroupOffset = [](const auto& rowGroup) {
-    if (rowGroup.file_offset.has_value()) {
-      return rowGroup.file_offset.value();
-    }
-    if (rowGroup.columns.front().file_offset != 0) {
-      return rowGroup.columns.front().file_offset;
-    }
-    const auto& column = rowGroup.columns.front().meta_data;
-    return column.dictionary_page_offset != 0
-        ? std::min(column.dictionary_page_offset, column.data_page_offset)
-        : column.data_page_offset;
-  };
-
-  std::size_t startRow{0};
-  std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
-    const auto offset = rowGroupOffset(rowGroup);
-    if (offset < split_->start) {
-      startRow += rowGroup.num_rows;
-    } else if (offset - split_->start < split_->size()) {
-      numRows += rowGroup.num_rows;
-    }
-  }
-  return {startRow, numRows};
 }
 
 void CudfIcebergSplitReader::adaptColumns() {

@@ -80,7 +80,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   rmm::device_async_resource_ref determineCudfMemoryResource() const override;
 
   // Override to apply Iceberg deletes after reading a cudf table chunk.
-  std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
+  std::optional<Chunk> readNextChunk() override;
 
   // Clear delete readers, column injection, and the base reader state.
   void resetSplit() override;
@@ -150,9 +150,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   // Read metadata and cache `splitRowCount_` and `fileColumnNames_`
   void cacheSchemaFromMetadata();
-
-  // Returns the row range covered by the split.
-  std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
 
   // Adapts the data file schema to match the table schema expected by the
   // query. Classifies each output and filter-only column into one of:

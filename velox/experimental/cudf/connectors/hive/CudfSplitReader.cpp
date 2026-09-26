@@ -47,10 +47,13 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -247,7 +250,82 @@ CudfSplitReader::~CudfSplitReader() {
 
 void CudfSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
+  // cuDF's column projection is a `std::optional`: leaving it unset reads every
+  // column rather than none, so a projection that reads no columns cannot be
+  // expressed through a reader at all. Such a scan is a `count(*)`, whose row
+  // count the Parquet footer already carries, so skip the reader entirely and
+  // decode nothing.
+  if (readColumnNames_.empty() and not prependRowIndex_) {
+    setupFooterRowCount();
+    return;
+  }
+
   createCudfReader();
+}
+
+void CudfSplitReader::setupFooterRowCount() {
+  fileMetaDatas();
+  VELOX_CHECK_EQ(
+      fileMetaData_.size(),
+      1,
+      "A footer-derived row count requires exactly one parquet metadata");
+  // A pushed-down filter selects a subset of the rows the footer counts.
+  // `CudfHiveDataSource` adds every filter column to the projection, so an
+  // empty projection implies no filter; fail loudly if that ever changes.
+  VELOX_CHECK_NULL(
+      pushdownFilter(),
+      "A footer-derived row count cannot honor a pushed-down filter");
+  footerRowsRemaining_ = computeSplitRowRange().second;
+  footerRowCountOnly_ = true;
+  fileMetaData_.clear();
+}
+
+std::optional<CudfSplitReader::Chunk>
+CudfSplitReader::nextFooterRowCountChunk() {
+  if (footerRowsRemaining_ == 0) {
+    return std::nullopt;
+  }
+  const auto numRows = std::min<std::size_t>(
+      footerRowsRemaining_,
+      static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max()));
+  footerRowsRemaining_ -= numRows;
+  return Chunk{
+      std::make_unique<cudf::table>(
+          std::vector<std::unique_ptr<cudf::column>>{}),
+      static_cast<vector_size_t>(numRows)};
+}
+
+std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
+    const {
+  // Note: This function implements the same logic as cuDF's hybrid scan
+  // reader's `filter_row_groups_with_byte_range()` API
+  const auto rowGroupOffset = [](const auto& rowGroup) {
+    if (rowGroup.file_offset.has_value()) {
+      return rowGroup.file_offset.value();
+    }
+    if (rowGroup.columns.front().file_offset != 0) {
+      return rowGroup.columns.front().file_offset;
+    }
+    const auto& column = rowGroup.columns.front().meta_data;
+    return column.dictionary_page_offset != 0
+        ? std::min(column.dictionary_page_offset, column.data_page_offset)
+        : column.data_page_offset;
+  };
+
+  std::size_t startRow{0};
+  std::size_t numRows{0};
+  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+    VELOX_CHECK(
+        not rowGroup.columns.empty(),
+        "Parquet footer reports a row group with no column chunks");
+    const auto offset = rowGroupOffset(rowGroup);
+    if (std::cmp_less(offset, split_->start)) {
+      startRow += rowGroup.num_rows;
+    } else if (offset - split_->start < split_->size()) {
+      numRows += rowGroup.num_rows;
+    }
+  }
+  return {startRow, numRows};
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
@@ -273,8 +351,7 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   }
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
-    uint64_t /*size*/) {
+std::optional<CudfSplitReader::Chunk> CudfSplitReader::next(uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   // Record start time before reading chunk
@@ -304,7 +381,11 @@ void CudfSplitReader::setConnectorQueryCtx(
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::Chunk> CudfSplitReader::readNextChunk() {
+  if (footerRowCountOnly_) {
+    return nextFooterRowCountChunk();
+  }
+
   VELOX_CHECK_NOT_NULL(splitReader_, "cuDF parquet reader not present");
   VELOX_CHECK_NOT_NULL(passState_, "Row group pass state not present");
 
@@ -336,12 +417,14 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return castDecimalColumnsToVeloxTypes(
+  auto table = castDecimalColumnsToVeloxTypes(
       std::move(tableWithMetadata.tbl),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
       stream_,
       outputMr);
+  const auto numRows = table->num_rows();
+  return Chunk{std::move(table), numRows};
 }
 
 void CudfSplitReader::startColumnChunkFetch() {
@@ -408,6 +491,8 @@ void CudfSplitReader::resetSplit() {
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  footerRowCountOnly_ = false;
+  footerRowsRemaining_ = 0;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -547,10 +632,10 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_filter(*filter);
   }
 
-  // Set column projection if needed
-  if (readColumnNames_.size()) {
-    readerOptions_.set_column_names(readColumnNames_);
-  }
+  // Set the column projection. Always engage the option: an unset projection
+  // reads every column in the file, so skipping this call for an empty
+  // projection would read the whole file instead of nothing.
+  readerOptions_.set_column_names(readColumnNames_);
 
   if (prependRowIndex_) {
     readerOptions_.enable_prepend_row_index_column(true);

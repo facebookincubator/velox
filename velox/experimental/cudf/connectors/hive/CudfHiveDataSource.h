@@ -132,8 +132,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
   // Optimized remaining-filter expression, or null when there is no remaining
-  // filter. Gates remaining-filter evaluation in next().
+  // filter or it folded to a constant. Gates remaining-filter evaluation in
+  // next().
   core::TypedExprPtr optimizedRemainingFilter_;
+
+  // Whether the remaining filter folded to a constant that no row satisfies,
+  // in which case splits are skipped without opening them.
+  bool remainingFilterRejectsAllRows_{false};
 
   // Compiled cuDF evaluator for the remaining filter, applied post-read in
   // next(). Null when there is no remaining filter.
