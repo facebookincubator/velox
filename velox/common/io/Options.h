@@ -132,6 +132,14 @@ class ReaderOptions {
     return *this;
   }
 
+  /// If true, columns the reader produces as LazyVectors are not enqueued
+  /// with their row group until the scan shows they are needed (a row passed
+  /// the filters or the column was read).
+  ReaderOptions& setDeferLazyColumnPrefetch(bool defer) {
+    deferLazyColumnPrefetch_ = defer;
+    return *this;
+  }
+
   /// Gets the memory allocator.
   velox::memory::MemoryPool& memoryPool() const {
     return *pool_;
@@ -163,6 +171,10 @@ class ReaderOptions {
 
   int64_t prefetchRowGroups() const {
     return prefetchRowGroups_;
+  }
+
+  bool deferLazyColumnPrefetch() const {
+    return deferLazyColumnPrefetch_;
   }
 
   bool cacheable() const {
@@ -212,6 +224,7 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   int32_t prefetchRowGroups_{kDefaultPrefetchRowGroups};
+  bool deferLazyColumnPrefetch_{false};
   bool cacheable_{true};
 };
 } // namespace facebook::velox::io

@@ -121,6 +121,60 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   std::vector<std::shared_ptr<exec::test::TempFilePath>> tempPaths_;
 };
 
+TEST_F(FileConnectorUtilTest, deferLazyColumnPrefetchPerScan) {
+  using exec::test::HiveConnectorTestBase;
+  const auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
+  auto subfieldFilter = []() {
+    common::SubfieldFilters filters;
+    filters[common::Subfield("a")] =
+        std::make_unique<common::BigintRange>(0, 10, false);
+    return filters;
+  };
+  auto remaining =
+      std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), variant(true));
+  const std::string kParam{
+      dwio::common::TableParameter::kDeferLazyColumnPrefetch};
+  const std::unordered_map<std::string, std::string> deferOn{{kParam, "true"}};
+  const std::unordered_map<std::string, std::string> deferOff{
+      {kParam, "false"}};
+
+  // Absent parameter: eager, whatever the filters.
+  auto withFilter = HiveConnectorTestBase::makeTableHandle(
+      subfieldFilter(), nullptr, "t", rowType);
+  EXPECT_FALSE(hive::deferLazyColumnPrefetch(*withFilter));
+  // Requested and the scan has a subfield or a remaining filter: deferred.
+  auto subfieldOn = HiveConnectorTestBase::makeTableHandle(
+      subfieldFilter(), nullptr, "t", rowType, {}, deferOn);
+  EXPECT_TRUE(hive::deferLazyColumnPrefetch(*subfieldOn));
+  auto remainingOn = HiveConnectorTestBase::makeTableHandle(
+      {}, remaining, "t", rowType, {}, deferOn);
+  EXPECT_TRUE(hive::deferLazyColumnPrefetch(*remainingOn));
+  // Requested but no filter: every row survives, never deferred.
+  auto noFilterOn = HiveConnectorTestBase::makeTableHandle(
+      {}, nullptr, "t", rowType, {}, deferOn);
+  EXPECT_FALSE(hive::deferLazyColumnPrefetch(*noFilterOn));
+  // Explicitly off.
+  auto remainingOff = HiveConnectorTestBase::makeTableHandle(
+      {}, remaining, "t", rowType, {}, deferOff);
+  EXPECT_FALSE(hive::deferLazyColumnPrefetch(*remainingOff));
+
+  // configureReaderOptions carries the per-scan decision into the reader.
+  auto holder = makeConnectorQueryCtx();
+  auto config =
+      std::make_shared<hive::FileConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{}));
+  auto split = std::make_shared<hive::FileConnectorSplit>(
+      "test-hive", "file:///tmp/x", dwio::common::FileFormat::PARQUET);
+  dwio::common::ReaderOptions onOptions(pool_.get());
+  hive::configureReaderOptions(
+      config, holder.ctx.get(), subfieldOn, split, onOptions);
+  EXPECT_TRUE(onOptions.deferLazyColumnPrefetch());
+  dwio::common::ReaderOptions offOptions(pool_.get());
+  hive::configureReaderOptions(
+      config, holder.ctx.get(), noFilterOn, split, offOptions);
+  EXPECT_FALSE(offOptions.deferLazyColumnPrefetch());
+}
+
 TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   auto fileConfig = makeFileConfig();
 

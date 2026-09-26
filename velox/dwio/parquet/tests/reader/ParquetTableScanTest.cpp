@@ -2441,6 +2441,80 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
 }
 
+// With the defer.lazy.column.prefetch table parameter, columns the reader
+// produces as LazyVectors (projected, no filter) are not prefetched with their
+// row group until a row passes the filters. Checks that results do not depend
+// on the setting through the connector (DirectBufferedInput, remaining filter,
+// scan hint).
+TEST_F(ParquetTableScanTest, deferLazyColumnPrefetch) {
+  // The file must exceed the connector's file preload threshold (8 MB by
+  // default), otherwise it is read whole and nothing is deferred.
+  static constexpr int32_t kRowsPerGroup = 20'000;
+  static constexpr int32_t kGroups = 4;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t g = 0; g < kGroups; ++g) {
+    batches.push_back(makeRowVector(
+        {"a", "b"},
+        {makeFlatVector<int64_t>(
+             kRowsPerGroup, [&](auto row) { return g * kRowsPerGroup + row; }),
+         // Incompressible values, so the lazy column's chunks are large
+         // (larger than the coalesce distance and the file larger than the
+         // preload threshold).
+         makeFlatVector<std::string>(kRowsPerGroup, [&](auto row) {
+           std::string value(160, ' ');
+           uint32_t x = (g * kRowsPerGroup + row) * 2654435761u + 12345;
+           for (auto& c : value) {
+             x = x * 1664525u + 1013904223u;
+             c = 'a' + (x >> 24) % 26;
+           }
+           return value;
+         })}));
+  }
+  auto file = TempFilePath::create();
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.flushPolicyFactory =
+      []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+    return std::make_unique<DefaultFlushPolicy>(kRowsPerGroup, 1LL << 30);
+  };
+  writeToParquetFile(
+      file->getPath(),
+      batches,
+      std::move(writerOptions),
+      ParquetWriterOptions{});
+  createDuckDbTable(batches);
+
+  auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
+  auto run = [&](const std::string& filter, bool defer) {
+    // The setting is a per-scan table parameter, so build the handle here.
+    auto tableHandle = makeTableHandle(
+        {},
+        parseExpr(filter, rowType),
+        "hive_table",
+        rowType,
+        {},
+        {{dwio::common::TableParameter::kDeferLazyColumnPrefetch,
+          defer ? "true" : "false"}});
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(rowType)
+                    .tableHandle(tableHandle)
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .split(makeSplit(file->getPath()))
+        .assertResults(fmt::format("SELECT a, b FROM tmp WHERE {}", filter));
+  };
+
+  // The filters are not convertible to subfield filters, so no row group is
+  // skipped by statistics. Results must not depend on the setting whether 'b'
+  // is never read (no row passes), read in every row group, or in some.
+  for (bool defer : {false, true}) {
+    run("a % 7 = 100", defer);
+    run("a % 1000 = 0", defer);
+    run("a >= 50000 AND a % 3 = 0", defer);
+  }
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};

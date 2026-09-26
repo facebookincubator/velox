@@ -588,6 +588,10 @@ void configureReaderOptions(
       tableHandle->tableParameters(),
       serdeParameters,
       readerOptions);
+  // Decided per scan from the table handle's parameters and filters; keep in
+  // step with the file-connector overload.
+  readerOptions.setDeferLazyColumnPrefetch(
+      deferLazyColumnPrefetch(*tableHandle));
 }
 
 void configureReaderOptions(

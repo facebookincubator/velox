@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+
 #include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
@@ -2672,4 +2674,310 @@ TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
     EXPECT_FALSE(floatColumn->isNullAt(index));
     EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
   }
+}
+
+namespace {
+
+// BufferedInput that records every enqueued region with its stream id (the
+// Parquet column index) and serves the bytes straight from the in-memory
+// file, so the test can ask which column chunks the reader planned to read.
+class RecordingBufferedInput : public dwio::common::BufferedInput {
+ public:
+  using Log = std::vector<std::pair<int32_t, facebook::velox::common::Region>>;
+
+  RecordingBufferedInput(
+      std::shared_ptr<std::string> data,
+      memory::MemoryPool& pool,
+      std::shared_ptr<Log> log)
+      : BufferedInput(std::make_shared<InMemoryReadFile>(*data), pool),
+        data_(std::move(data)),
+        log_(std::move(log)) {}
+
+  std::unique_ptr<SeekableInputStream> enqueue(
+      facebook::velox::common::Region region,
+      const StreamIdentifier* sid) override {
+    log_->emplace_back(sid ? sid->getId() : -1, region);
+    VELOX_CHECK_LE(region.offset + region.length, data_->size());
+    return std::make_unique<SeekableArrayInputStream>(
+        data_->data() + region.offset, region.length);
+  }
+
+  void load(const LogType) override {}
+
+  std::unique_ptr<BufferedInput> clone() const override {
+    return std::make_unique<RecordingBufferedInput>(data_, *pool_, log_);
+  }
+
+ private:
+  const std::shared_ptr<std::string> data_;
+  const std::shared_ptr<Log> log_;
+};
+
+} // namespace
+
+// Tests for ReaderOptions::deferLazyColumnPrefetch(). The file has kGroups row
+// groups of kRowsPerGroup rows and three columns: 'a' (even numbers) carries
+// the filter; 'b' and 'c' are projected without a filter, so the reader
+// produces them as LazyVectors and, with the option on, does not enqueue their
+// chunks until they are needed.
+class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
+ protected:
+  static constexpr int32_t kRowsPerGroup = 1000;
+  static constexpr int32_t kGroups = 4;
+  static constexpr int32_t kA = 0;
+  static constexpr int32_t kB = 1;
+  static constexpr int32_t kC = 2;
+  // Row within a row group that filters match.
+  static constexpr int32_t kMatchRow = 7;
+
+  static int64_t valueA(int64_t globalRow) {
+    return 2 * globalRow;
+  }
+  static std::string valueB(int64_t globalRow) {
+    return fmt::format("b_{}", globalRow);
+  }
+  static int64_t valueC(int64_t globalRow) {
+    return 10 * globalRow;
+  }
+
+  void SetUp() override {
+    ParquetReaderTest::SetUp();
+    rowType_ = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), BIGINT()});
+    std::vector<RowVectorPtr> batches;
+    for (int32_t g = 0; g < kGroups; ++g) {
+      const int64_t base = g * kRowsPerGroup;
+      batches.push_back(makeRowVector(
+          {"a", "b", "c"},
+          {makeFlatVector<int64_t>(
+               kRowsPerGroup, [&](auto row) { return valueA(base + row); }),
+           makeFlatVector<std::string>(
+               kRowsPerGroup, [&](auto row) { return valueB(base + row); }),
+           makeFlatVector<int64_t>(
+               kRowsPerGroup, [&](auto row) { return valueC(base + row); })}));
+    }
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.flushPolicyFactory =
+        []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+      return std::make_unique<DefaultFlushPolicy>(kRowsPerGroup, 1LL << 30);
+    };
+    auto* sink = write(batches, options, ParquetWriterOptions{});
+    fileData_ = std::make_shared<std::string>(sink->data(), sink->size());
+  }
+
+  // Filter on 'a' matching kMatchRow in each of 'groups'. Every other row
+  // group gets an odd value inside its range, so statistics cannot skip it and
+  // it is read with no row passing.
+  std::unique_ptr<common::Filter> filterMatching(
+      const std::vector<int32_t>& groups) {
+    std::vector<int64_t> values;
+    for (int32_t g = 0; g < kGroups; ++g) {
+      const bool matches =
+          std::find(groups.begin(), groups.end(), g) != groups.end();
+      values.push_back(
+          matches ? valueA(g * kRowsPerGroup + kMatchRow)
+                  : valueA(g * kRowsPerGroup) + 1);
+    }
+    return common::createBigintValues(values, false);
+  }
+
+  dwio::common::ReaderOptions makeReaderOptions(bool defer) {
+    auto options = makeDefaultReaderOptions();
+    // Read chunks individually: a file smaller than either threshold would be
+    // read whole up front and nothing would be deferred.
+    options.setFilePreloadThreshold(0);
+    options.setFooterSpeculativeIoSize(1024);
+    VELOX_CHECK_GT(fileData_->size(), 1024);
+    options.setPrefetchRowGroups(1);
+    options.setDeferLazyColumnPrefetch(defer);
+    return options;
+  }
+
+  // Reader over a RecordingBufferedInput; the log fills chunkLog_.
+  std::unique_ptr<ParquetReader> makeRecordingReader(bool defer) {
+    auto options = makeReaderOptions(defer);
+    chunkLog_ = std::make_shared<RecordingBufferedInput::Log>();
+    return std::make_unique<ParquetReader>(
+        std::make_unique<RecordingBufferedInput>(
+            fileData_, options.memoryPool(), chunkLog_),
+        options);
+  }
+
+  ParquetRowReader* makeRowReader(
+      ParquetReader& reader,
+      std::unique_ptr<common::Filter> filterOnA) {
+    auto scanSpec = makeScanSpec(rowType_);
+    scanSpec->childByName("a")->setFilter(std::move(filterOnA));
+    auto options = makeRowReaderOpts(rowType_);
+    options.setScanSpec(scanSpec);
+    rowReader_ = reader.createRowReader(options);
+    auto* parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader_.get());
+    VELOX_CHECK_NOT_NULL(parquetRowReader);
+    return parquetRowReader;
+  }
+
+  // Reads the next row group. Returns the rows that passed the filter.
+  RowVector* nextRowGroup(ParquetRowReader& rowReader) {
+    if (!result_) {
+      result_ = BaseVector::create(rowType_, 0, pool_.get());
+    }
+    EXPECT_EQ(rowReader.next(kRowsPerGroup, result_), kRowsPerGroup);
+    return result_->as<RowVector>();
+  }
+
+  // True if the chunk of 'column' in 'rowGroup' was enqueued into any input.
+  bool enqueued(const ParquetReader& reader, int32_t rowGroup, int32_t column)
+      const {
+    auto chunk = reader.fileMetaData().rowGroup(rowGroup).columnChunk(column);
+    const uint64_t start = chunk.hasDictionaryPageOffset()
+        ? std::min(chunk.dictionaryPageOffset(), chunk.dataPageOffset())
+        : chunk.dataPageOffset();
+    const uint64_t end = chunk.dataPageOffset() + chunk.totalCompressedSize();
+    for (const auto& [id, region] : *chunkLog_) {
+      if (id == column && region.offset >= start && region.offset < end) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void expectMatch(RowVector* rows, int64_t globalRow) {
+    ASSERT_EQ(rows->size(), 1);
+    EXPECT_EQ(
+        rows->childAt(kA)->as<SimpleVector<int64_t>>()->valueAt(0),
+        valueA(globalRow));
+  }
+
+  // Loads the LazyVector of 'b' and checks its value.
+  static void loadAndCheckB(RowVector* rows, int64_t globalRow) {
+    auto* b = rows->childAt(kB)->loadedVector();
+    EXPECT_EQ(
+        b->as<SimpleVector<StringView>>()->valueAt(0).str(), valueB(globalRow));
+  }
+
+  static void loadAndCheckC(RowVector* rows, int64_t globalRow) {
+    auto* c = rows->childAt(kC)->loadedVector();
+    EXPECT_EQ(c->as<SimpleVector<int64_t>>()->valueAt(0), valueC(globalRow));
+  }
+
+  RowTypePtr rowType_;
+  std::shared_ptr<std::string> fileData_;
+  std::shared_ptr<RecordingBufferedInput::Log> chunkLog_;
+  std::unique_ptr<dwio::common::RowReader> rowReader_;
+  VectorPtr result_;
+};
+
+// Option off: every column is enqueued with its row group, as before.
+TEST_F(ParquetDeferLazyColumnPrefetchTest, offEnqueuesAllColumns) {
+  auto reader = makeRecordingReader(/*defer=*/false);
+  auto* rowReader = makeRowReader(*reader, filterMatching({1}));
+
+  // Row group 0 and the prefetched row group 1 are scheduled at creation.
+  for (int32_t g = 0; g < 2; ++g) {
+    for (auto column : {kA, kB, kC}) {
+      EXPECT_TRUE(enqueued(*reader, g, column)) << g << " " << column;
+    }
+  }
+  for (int32_t g = 0; g < kGroups; ++g) {
+    auto* rows = nextRowGroup(*rowReader);
+    for (auto column : {kA, kB, kC}) {
+      EXPECT_TRUE(enqueued(*reader, g, column)) << g << " " << column;
+    }
+    if (g == 1) {
+      const int64_t globalRow = g * kRowsPerGroup + kMatchRow;
+      expectMatch(rows, globalRow);
+      loadAndCheckB(rows, globalRow);
+    } else {
+      EXPECT_EQ(rows->size(), 0);
+    }
+  }
+}
+
+// Option on, no hint: a lazy column is enqueued only once it is read. Reading
+// 'b' enqueues 'b' for the current and the already scheduled row group and
+// makes 'b' eager for the following ones; 'c' is never read, never enqueued.
+TEST_F(ParquetDeferLazyColumnPrefetchTest, onDemandReadEnqueuesOnlyThatColumn) {
+  constexpr int32_t kMatchGroup = 1;
+  auto reader = makeRecordingReader(/*defer=*/true);
+  auto* rowReader = makeRowReader(*reader, filterMatching({kMatchGroup}));
+
+  for (int32_t g = 0; g < 2; ++g) {
+    EXPECT_TRUE(enqueued(*reader, g, kA));
+    EXPECT_FALSE(enqueued(*reader, g, kB));
+    EXPECT_FALSE(enqueued(*reader, g, kC));
+  }
+  for (int32_t g = 0; g < kGroups; ++g) {
+    SCOPED_TRACE(fmt::format("row group {}", g));
+    auto* rows = nextRowGroup(*rowReader);
+    EXPECT_TRUE(enqueued(*reader, g, kA));
+    EXPECT_FALSE(enqueued(*reader, g, kC));
+    if (g < kMatchGroup) {
+      EXPECT_EQ(rows->size(), 0);
+      EXPECT_FALSE(enqueued(*reader, g, kB));
+    } else if (g == kMatchGroup) {
+      const int64_t globalRow = g * kRowsPerGroup + kMatchRow;
+      expectMatch(rows, globalRow);
+      EXPECT_FALSE(enqueued(*reader, g, kB));
+      loadAndCheckB(rows, globalRow);
+      EXPECT_TRUE(enqueued(*reader, g, kB));
+      EXPECT_TRUE(enqueued(*reader, g + 1, kB));
+    } else {
+      // 'b' is needed from now on: enqueued with the row group.
+      EXPECT_EQ(rows->size(), 0);
+      EXPECT_TRUE(enqueued(*reader, g, kB));
+    }
+  }
+}
+
+// Option on, the scan hints that rows passed: all lazy columns are enqueued
+// for the scheduled row groups at once and with every later one.
+TEST_F(ParquetDeferLazyColumnPrefetchTest, hintEnqueuesAllLazyColumns) {
+  auto reader = makeRecordingReader(/*defer=*/true);
+  auto* rowReader = makeRowReader(*reader, filterMatching({1}));
+
+  EXPECT_FALSE(enqueued(*reader, 0, kB));
+  EXPECT_FALSE(enqueued(*reader, 0, kC));
+  rowReader->hintLazyColumnsNeeded();
+  for (int32_t g = 0; g < 2; ++g) {
+    EXPECT_TRUE(enqueued(*reader, g, kB));
+    EXPECT_TRUE(enqueued(*reader, g, kC));
+  }
+  for (int32_t g = 0; g < kGroups; ++g) {
+    auto* rows = nextRowGroup(*rowReader);
+    EXPECT_TRUE(enqueued(*reader, g, kB)) << g;
+    EXPECT_TRUE(enqueued(*reader, g, kC)) << g;
+    if (g == 1) {
+      const int64_t globalRow = g * kRowsPerGroup + kMatchRow;
+      expectMatch(rows, globalRow);
+      loadAndCheckB(rows, globalRow);
+      loadAndCheckC(rows, globalRow);
+    }
+  }
+}
+
+// On-demand read of 'b', then the hint marking 'c' needed too, then reading
+// across the row groups already prefetched. Uses the real in-memory
+// BufferedInput, whose load() replaces its buffers: a second load() on an
+// input would leave earlier streams pointing at freed memory, so this checks
+// that each deferred load uses a new input.
+TEST_F(ParquetDeferLazyColumnPrefetchTest, onDemandThenHintWithRealInput) {
+  auto options = makeReaderOptions(/*defer=*/true);
+  auto reader = std::make_unique<ParquetReader>(
+      std::make_unique<dwio::common::BufferedInput>(
+          std::make_shared<InMemoryReadFile>(*fileData_), options.memoryPool()),
+      options);
+  auto* rowReader = makeRowReader(*reader, filterMatching({0, 1, 2, 3}));
+
+  for (int32_t g = 0; g < kGroups; ++g) {
+    SCOPED_TRACE(fmt::format("row group {}", g));
+    auto* rows = nextRowGroup(*rowReader);
+    const int64_t globalRow = g * kRowsPerGroup + kMatchRow;
+    expectMatch(rows, globalRow);
+    loadAndCheckB(rows, globalRow);
+    if (g == 0) {
+      rowReader->hintLazyColumnsNeeded();
+    }
+    loadAndCheckC(rows, globalRow);
+  }
+  EXPECT_EQ(rowReader->next(kRowsPerGroup, result_), 0);
 }
