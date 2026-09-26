@@ -406,15 +406,29 @@ TEST_P(ChunkStatsReaderVersionTest, readerContract) {
   EXPECT_EQ(finalLocation.chunkSize, firstLocation.chunkSize);
   EXPECT_EQ(finalLocation.rowOffset, firstLocation.rowOffset);
   NIMBLE_ASSERT_THROW(firstStream->lookupChunk(30), "beyond the last chunk");
+  if (GetParam() == ChunkStatsVersion::kV2) {
+    EXPECT_EQ(firstStream->chunkRange(), std::make_pair(0U, 2U));
+    EXPECT_EQ(firstStream->chunkEndRow(0), 10);
+    EXPECT_EQ(firstStream->chunkEndRow(1), 30);
+  }
 
-  EXPECT_EQ(
-      chunkStats->createStreamIndex(
-          /*stripe=*/5, /*streamId=*/1, /*streamSize=*/5),
-      nullptr);
-  EXPECT_EQ(
-      chunkStats->createStreamIndex(
-          /*stripe=*/6, /*streamId=*/0, /*streamSize=*/7),
-      nullptr);
+  auto firstStripeSecondStream = chunkStats->createStreamIndex(
+      /*stripe=*/5, /*streamId=*/1, /*streamSize=*/5);
+  auto secondStripeFirstStream = chunkStats->createStreamIndex(
+      /*stripe=*/6, /*streamId=*/0, /*streamSize=*/7);
+  if (GetParam() == ChunkStatsVersion::kV1) {
+    EXPECT_EQ(firstStripeSecondStream, nullptr);
+    EXPECT_EQ(secondStripeFirstStream, nullptr);
+  } else {
+    ASSERT_NE(firstStripeSecondStream, nullptr);
+    EXPECT_EQ(firstStripeSecondStream->chunkRange(), std::make_pair(3U, 4U));
+    EXPECT_EQ(firstStripeSecondStream->chunkEndRow(3), 30);
+    EXPECT_EQ(firstStripeSecondStream->chunkNullCount(3), 3);
+    ASSERT_NE(secondStripeFirstStream, nullptr);
+    EXPECT_EQ(secondStripeFirstStream->chunkRange(), std::make_pair(2U, 3U));
+    EXPECT_EQ(secondStripeFirstStream->chunkEndRow(2), 40);
+    EXPECT_EQ(secondStripeFirstStream->chunkNullCount(2), 4);
+  }
   EXPECT_EQ(
       chunkStats->createStreamIndex(
           /*stripe=*/5, /*streamId=*/2, /*streamSize=*/0),
@@ -446,6 +460,12 @@ TEST_P(ChunkStatsReaderVersionTest, readerContract) {
   EXPECT_EQ(secondStream->chunkNullCount(secondLocation.chunkIndex), 1);
   EXPECT_EQ(secondStream->rowCount(), 40);
   NIMBLE_ASSERT_THROW(secondStream->lookupChunk(40), "beyond the last chunk");
+  if (GetParam() == ChunkStatsVersion::kV2) {
+    EXPECT_EQ(secondStream->chunkRange(), std::make_pair(4U, 7U));
+    EXPECT_EQ(secondStream->chunkEndRow(4), 10);
+    EXPECT_EQ(secondStream->chunkEndRow(5), 25);
+    EXPECT_EQ(secondStream->chunkEndRow(6), 40);
+  }
 }
 
 TEST_P(ChunkStatsReaderVersionTest, multipleGroupsRoundTrip) {
@@ -1088,7 +1108,12 @@ TEST_F(ChunkStatsWriterTest, v2PreservesBoundsAcrossStripes) {
   ASSERT_NE(first, nullptr);
   EXPECT_EQ(std::get<int64_t>(*first->chunkMinValue(0)), 2);
   EXPECT_EQ(std::get<int64_t>(*first->chunkMaxValue(0)), 8);
-  EXPECT_EQ(chunkStats->createStreamIndex(6, 0, 4), nullptr);
+  auto second = chunkStats->createStreamIndex(6, 0, 4);
+  ASSERT_NE(second, nullptr);
+  const auto [startChunk, endChunk] = second->chunkRange();
+  ASSERT_EQ(endChunk - startChunk, 1);
+  EXPECT_EQ(second->chunkMinValue(startChunk), std::nullopt);
+  EXPECT_EQ(second->chunkMaxValue(startChunk), std::nullopt);
 }
 
 TEST_F(ChunkStatsWriterTest, v2PreservesPackedLayoutWithAbsentStreams) {
@@ -1503,9 +1528,11 @@ TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkBoundsMetadata) {
     const auto groupData = createV2BoundsData({}, {}, presence);
     auto chunkStats = index::ChunkStatsGroup::create(
         ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+    auto stream = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1);
+    ASSERT_NE(stream, nullptr);
     NIMBLE_ASSERT_THROW(
-        chunkStats->createStreamIndex(
-            /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1),
+        stream->chunkBounds(/*chunkIndex=*/0),
         "marked present but stream 0 has no bounds data");
   }
 
