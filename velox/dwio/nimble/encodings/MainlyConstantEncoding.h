@@ -114,8 +114,20 @@ class MainlyConstantEncodingBase
     const uint64_t uncommonCount = rowCount - maxUniqueCount.second;
     // Uncommon values (sparse bool) bitmap will have index per value,
     // stored bit packed.
-    const uint64_t isCommonEncodingSize =
+    //
+    // Under sectionEstimatorRefinements a plain bitmap is also priced, as
+    // nested selection offers Trivial<bool> for the mask and picks it once
+    // exceptions are denser than about one row per index bit. Only while the
+    // common value holds most rows, though: below that MainlyConstant is a
+    // Dictionary plus a one-bit mask, and its estimate beats Dictionary's
+    // only by the error in pricing the common value's index.
+    const uint64_t sparseIsCommonSize =
         SparseBoolEncoding::estimateSize(rowCount, uncommonCount, options);
+    const uint64_t isCommonEncodingSize =
+        options.sectionEstimatorRefinements && 2 * uncommonCount <= rowCount
+        ? std::min(
+              sparseIsCommonSize, TrivialEncoding<bool>::estimateSize(rowCount))
+        : sparseIsCommonSize;
 
     if constexpr (isStringType<physicalType>()) {
       const uint64_t commonValueSize = maxUniqueCount.first.size();
@@ -152,13 +164,16 @@ class MainlyConstantEncodingBase
       return outerEncodingSize + otherValuesSize + isCommonEncodingSize;
     } else {
       const uint64_t commonValueSize = sizeof(physicalType);
-      // Other values are encoded as a FixedBitWidth child.
+      // Other values are encoded as a FixedBitWidth child, priced over the
+      // whole stream's range unless sectionEstimatorRefinements is set.
       // TODO(nimble): restore precise other-values estimation (materialize the
       // non-common values and compare Dictionary / Constant / nested-ALP
       // candidates), bounded so it stays cheap on dense columns.
-      const uint64_t otherValuesSize =
-          FixedBitWidthEncoding<physicalType>::estimateSize(
-              uncommonCount, statistics.min(), statistics.max(), options);
+      const uint64_t otherValuesSize = options.sectionEstimatorRefinements
+          ? estimateOtherValuesSize(
+                uniqueCounts, maxUniqueCount.first, uncommonCount, options)
+          : FixedBitWidthEncoding<physicalType>::estimateSize(
+                uncommonCount, statistics.min(), statistics.max(), options);
       const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
           2 * sizeof(uint32_t) + commonValueSize;
       return outerEncodingSize + otherValuesSize + isCommonEncodingSize;
@@ -555,6 +570,64 @@ class MainlyConstantEncodingBase
   }
 
  protected:
+  // Other-values price under Encoding::Options::sectionEstimatorRefinements.
+  //
+  // The other-values child holds every value except the common one, so it is
+  // priced over the range of those values rather than over the whole
+  // stream's: the common value is often an out-of-band sentinel at one end of
+  // the range, and including it would inflate the bit width charged to every
+  // uncommon row.
+  //
+  // Trivial is considered alongside FixedBitWidth because a child whose
+  // values span the full width of the type gains nothing from bit packing.
+  // Dictionary is considered for integers, priced from the uncommon values'
+  // exact distinct count (every distinct value but the common one), because
+  // nested selection offers it and it is what wins when the uncommon values
+  // are few but wide; leaving it out overprices MainlyConstant against RLE,
+  // whose run values are priced with Dictionary. Nested ALP would need a
+  // Statistics over the uncommon values, which isn't available here.
+  template <typename UniqueCounts>
+  static uint64_t estimateOtherValuesSize(
+      const UniqueCounts& uniqueCounts,
+      physicalType commonValue,
+      uint64_t uncommonCount,
+      const Encoding::Options& options) {
+    physicalType uncommonMin{};
+    physicalType uncommonMax{};
+    bool hasUncommonValue{false};
+    for (const auto& uniqueCount : uniqueCounts) {
+      if (uniqueCount.first == commonValue) {
+        continue;
+      }
+      if (!hasUncommonValue) {
+        uncommonMin = uniqueCount.first;
+        uncommonMax = uniqueCount.first;
+        hasUncommonValue = true;
+        continue;
+      }
+      uncommonMin = std::min(uncommonMin, uniqueCount.first);
+      uncommonMax = std::max(uncommonMax, uniqueCount.first);
+    }
+    if (!hasUncommonValue) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    const uint64_t plainSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(uncommonCount),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            uncommonCount, uncommonMin, uncommonMax, options));
+    if constexpr (!isFloatingPointType<physicalType>()) {
+      return std::min(
+          plainSize,
+          DictionaryEncoding<physicalType>::estimateIntegralSize(
+              uncommonCount,
+              uniqueCounts.size() - 1,
+              uncommonMin,
+              uncommonMax,
+              options));
+    }
+    return plainSize;
+  }
+
   // Encode-time child streams: isCommon spans all input rows, while
   // otherValues contains only rows that differ from the common value.
   struct ChildStreams {

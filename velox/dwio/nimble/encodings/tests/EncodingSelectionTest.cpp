@@ -196,6 +196,36 @@ TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {
   EXPECT_FALSE(selection.estimatedSize.has_value());
 }
 
+// Values spanning 31 bits pack slightly smaller than Trivial's 32, but
+// Trivial's 0.7 read factor still wins the weighted comparison against
+// FixedBitWidth's 0.9. Section estimator refinements withhold that discount
+// where Trivial is the larger encoding, so there FixedBitWidth wins.
+TEST(EncodingSelectionTest, sectionRefinementsWithholdTrivialDiscount) {
+  std::vector<uint32_t> values(4'096);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = (i * 2'654'435'761u) & 0x7FFF'FFFF;
+  }
+  const auto valueSpan =
+      std::span<const uint32_t>{values.data(), values.size()};
+  const auto statistics = nimble::Statistics<uint32_t>::create(valueSpan);
+  nimble::ManualEncodingSelectionPolicy<uint32_t> policy{
+      {{nimble::EncodingType::Trivial, 0.7},
+       {nimble::EncodingType::FixedBitWidth, 0.9}},
+      std::nullopt,
+      std::nullopt};
+
+  nimble::Encoding::Options options;
+  options.fixedBitWidthUseExactBits = true;
+  EXPECT_EQ(
+      policy.select(valueSpan, statistics, options).encodingType,
+      nimble::EncodingType::Trivial);
+
+  options.sectionEstimatorRefinements = true;
+  EXPECT_EQ(
+      policy.select(valueSpan, statistics, options).encodingType,
+      nimble::EncodingType::FixedBitWidth);
+}
+
 // EncodingFactory reads Huffman back through RETURN_ENCODING_BY_INTEGER_TYPE,
 // which rejects floating-point data types. Selection must therefore refuse
 // Huffman for float and double, even though their physical types (uint32_t and

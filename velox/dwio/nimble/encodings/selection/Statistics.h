@@ -261,6 +261,25 @@ class Statistics {
     return uniqueCounts_.value();
   }
 
+  /// A lower bound on the number of distinct values: the number of distinct
+  /// offsets from min in their low kDistinctBoundBits bits. Exact where the
+  /// unique counts are already built or every offset fits in those bits;
+  /// otherwise costs one pass and an L2-sized bitmap, far cheaper than
+  /// counting the distinct values outright.
+  uint64_t distinctLowerBound() const {
+    static_assert(nimble::isIntegralType<T>());
+    if (uniqueCounts_.has_value() && uniqueCounts_->has_value()) {
+      return uniqueCounts_->value().size();
+    }
+    if (!distinctLowerBound_.has_value()) {
+      populateDistinctLowerBound();
+    }
+    return distinctLowerBound_.value();
+  }
+
+  /// Low bits of the offsets from min that distinctLowerBound() tells apart.
+  static constexpr int kDistinctBoundBits{20};
+
   /// Returns one value per consecutive run in input order. The sequence is
   /// computed lazily and cached independently from aggregate repeat metrics.
   const std::vector<T>& runValues() const {
@@ -287,11 +306,56 @@ class Statistics {
     return runValues_.emplace(std::move(values));
   }
 
+  /// Returns the length of each consecutive run in input order, aligned with
+  /// runValues(). Computed lazily and cached.
+  const std::vector<uint32_t>& runLengths() const {
+    if (runLengths_.has_value()) {
+      return runLengths_.value();
+    }
+    std::vector<uint32_t> lengths;
+    if (!data_.empty()) {
+      lengths.reserve(consecutiveRepeatCount());
+      uint32_t length{1};
+      for (size_t i = 1; i < data_.size(); ++i) {
+        if (data_[i] == data_[i - 1]) {
+          ++length;
+        } else {
+          lengths.push_back(length);
+          length = 1;
+        }
+      }
+      lengths.push_back(length);
+    }
+    return runLengths_.emplace(std::move(lengths));
+  }
+
   struct BlockStats {
     uint64_t count;
     uint64_t min;
     uint64_t max;
   };
+
+  /// Aggregates over adjacent value pairs, in input order. Grouped because
+  /// they all come from one pass over consecutive pairs.
+  struct AdjacentPairStats {
+    /// Pairs where the later value is not below the earlier one, i.e. steps an
+    /// encoding storing non-negative deltas can represent without restating.
+    uint64_t nonDecreasingCount{0};
+    /// Largest step over a non-decreasing pair; sizes a fixed-width delta
+    /// array, which must cover the widest delta it stores.
+    uint64_t maxIncrease{0};
+    /// Sum of |v[i] - v[i-1]| over every pair.
+    uint64_t sumAbsoluteDelta{0};
+  };
+
+  /// See AdjacentPairStats. Empty for a stream of fewer than two values.
+  const AdjacentPairStats& adjacentPairStats() const noexcept {
+    static_assert(nimble::isIntegralType<T>());
+    if (!adjacentPairStats_.has_value()) {
+      populateAdjacentPairStats();
+    }
+    return adjacentPairStats_.value();
+  }
 
   const std::vector<BlockStats>& minMaxBlocks(
       uint16_t blockSize = kBlockBitPackingBlockSize) const noexcept {
@@ -312,6 +376,7 @@ class Statistics {
   // Compares against the first value and stops at the first mismatch.
   void populateIsConstant() const noexcept;
   void populateUniques() const;
+  void populateAdjacentPairStats() const;
   void populateMinMax() const;
   void populateBucketCounts() const;
   void populateMinMaxBlocks(uint16_t blockSize) const;
@@ -321,6 +386,7 @@ class Statistics {
   // Checks signed logical order over unsigned physical input values.
   void populateSignedOrderNonDecreasing() const noexcept;
   void populateStringLength() const;
+  void populateDistinctLowerBound() const;
 
   mutable std::optional<uint64_t> consecutiveRepeatCount_;
   mutable std::optional<uint64_t> minRepeat_;
@@ -339,9 +405,12 @@ class Statistics {
   mutable std::optional<std::vector<uint64_t>> bucketCounts_;
   mutable std::optional<std::vector<BlockStats>> minMaxBlocks_;
   mutable uint16_t minMaxBlockSize_{0};
+  mutable std::optional<std::vector<uint32_t>> runLengths_;
+  mutable std::optional<AdjacentPairStats> adjacentPairStats_;
   mutable std::optional<std::optional<UniqueValueCounts<T, InputType>>>
       uniqueCounts_;
   mutable std::optional<std::vector<T>> runValues_;
+  mutable std::optional<uint64_t> distinctLowerBound_;
 };
 
 } // namespace facebook::nimble

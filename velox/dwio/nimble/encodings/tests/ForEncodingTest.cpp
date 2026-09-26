@@ -311,6 +311,260 @@ TEST_F(ForEncodingTest, constantValue) {
 }
 
 // Test with values requiring different bit widths
+TEST_F(ForEncodingTest, constantFramesCostNoPayloadBits) {
+  // A frame whose values are all equal has a zero residual range, so it needs
+  // no payload bits: the reference alone reconstructs it. Encoding such a
+  // frame at one bit per value is pure waste.
+  constexpr uint32_t kRowCount = 8192;
+
+  nimble::Vector<uint32_t> constantData(pool_.get());
+  nimble::Vector<uint32_t> oneBitData(pool_.get());
+  constantData.reserve(kRowCount);
+  oneBitData.reserve(kRowCount);
+  for (uint32_t i = 0; i < kRowCount; ++i) {
+    constantData.push_back(7);
+    oneBitData.push_back(7 + (i & 1U));
+  }
+
+  nimble::Buffer constantBuffer{*pool_};
+  nimble::Buffer oneBitBuffer{*pool_};
+  const auto constantEncoded =
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          constantBuffer, constantData);
+  const auto oneBitEncoded =
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          oneBitBuffer, oneBitData);
+
+  // Both columns have the same row count and frame count, and their metadata
+  // streams are the same fixed-size layout, so the difference between them is
+  // the packed payload the constant frames no longer write: one bit per value,
+  // plus the one byte the header's varint payload length gives back when that
+  // length drops from 1024 to zero.
+  EXPECT_EQ(oneBitEncoded.size() - constantEncoded.size(), kRowCount / 8 + 1);
+
+  nimble::ForEncoding<uint32_t> encoding{
+      *pool_, constantEncoded, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      }};
+  EXPECT_NE(
+      encoding.debugString(/*offset=*/0).find("0b:64"), std::string::npos);
+
+  nimble::Vector<uint32_t> result(pool_.get(), kRowCount);
+  encoding.materialize(kRowCount, result.data());
+  for (uint32_t i = 0; i < kRowCount; ++i) {
+    ASSERT_EQ(result[i], 7U) << "row " << i;
+  }
+}
+
+TEST_F(ForEncodingTest, estimateSizeHoldsConstantFramesAtOneBit) {
+  // The encoder writes a constant frame at width 0, but the size estimators
+  // price it at one bit so the rung cannot move selection. A constant column
+  // and a one-bit column with the same references must therefore be quoted
+  // identically, by both estimators, even though they encode differently.
+  constexpr uint32_t kRowCount = 8192;
+
+  std::vector<uint32_t> constantData(kRowCount, 7);
+  std::vector<uint32_t> oneBitData;
+  oneBitData.reserve(kRowCount);
+  for (uint32_t i = 0; i < kRowCount; ++i) {
+    oneBitData.push_back(7 + (i & 1U));
+  }
+  const std::span<const uint32_t> constantValues{constantData};
+  const std::span<const uint32_t> oneBitValues{oneBitData};
+
+  const auto oneBitEstimate =
+      nimble::ForEncoding<uint32_t>::estimateSize(oneBitValues);
+  EXPECT_EQ(
+      nimble::ForEncoding<uint32_t>::estimateSize(constantValues),
+      oneBitEstimate);
+
+  // The statistics estimator sees min == max for the constant column, which
+  // is the same metadata layout the values estimator derives for the one-bit
+  // column: every frame's reference is 7 and every frame is one bit wide.
+  EXPECT_EQ(
+      nimble::ForEncoding<uint32_t>::estimateSize(
+          kRowCount, nimble::Statistics<uint32_t>::create(constantValues)),
+      oneBitEstimate);
+}
+
+// Builds a column whose first, middle and last frames are constant, with
+// varying frames between them, so constant frames are exercised at every
+// position and on both sides of a frame boundary.
+namespace {
+nimble::Vector<uint32_t> makeMixedConstantFrames(
+    velox::memory::MemoryPool* pool) {
+  nimble::Vector<uint32_t> data(pool);
+  data.reserve(640);
+  for (uint32_t i = 0; i < 640; ++i) {
+    const uint32_t frame = i / 128;
+    switch (frame) {
+      case 0:
+        data.push_back(500);
+        break;
+      case 1:
+        data.push_back(700 + (i & 1U));
+        break;
+      case 2:
+        data.push_back(900);
+        break;
+      case 3:
+        data.push_back(1000 + (i % 200));
+        break;
+      default:
+        data.push_back(1234);
+        break;
+    }
+  }
+  return data;
+}
+} // namespace
+
+TEST_F(ForEncodingTest, constantFramesAtEveryPositionRoundTrip) {
+  const auto data = makeMixedConstantFrames(pool_.get());
+
+  auto encoding = createEncoding(data);
+  ASSERT_EQ(encoding->rowCount(), data.size());
+
+  nimble::Vector<uint32_t> result(pool_.get(), data.size());
+  encoding->materialize(data.size(), result.data());
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    ASSERT_EQ(result[i], data[i]) << "materialize row " << i;
+  }
+
+  // Random access must reconstruct a constant frame from its reference.
+  nimble::ForEncoding<uint32_t> randomAccess{
+      *pool_,
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          *buffer_, data),
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; }};
+  for (const uint32_t row : {0U, 127U, 128U, 255U, 256U, 383U, 512U, 639U}) {
+    nimble::Vector<uint32_t> single(pool_.get(), 1);
+    randomAccess.reset();
+    randomAccess.skip(row);
+    randomAccess.materialize(1, single.data());
+    ASSERT_EQ(single[0], data[row]) << "random access row " << row;
+  }
+}
+
+TEST_F(ForEncodingTest, slicesAcrossConstantFrames) {
+  const auto data = makeMixedConstantFrames(pool_.get());
+  const auto encoded =
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          *buffer_, data);
+
+  struct Range {
+    std::string_view name;
+    uint32_t offset;
+    uint32_t length;
+  };
+
+  for (const auto range :
+       {Range{"insideLeadingConstantFrame", /*offset=*/64, /*length=*/32},
+        Range{"constantIntoVarying", /*offset=*/64, /*length=*/192},
+        Range{"straddleConstantToVarying", /*offset=*/127, /*length=*/2},
+        Range{"straddleVaryingToConstant", /*offset=*/255, /*length=*/2},
+        Range{"exactlyOneConstantFrame", /*offset=*/256, /*length=*/128},
+        Range{"constantIntoWideVarying", /*offset=*/300, /*length=*/200},
+        Range{"trailingConstantFrame", /*offset=*/512, /*length=*/128},
+        Range{"wholeColumn", /*offset=*/0, /*length=*/640}}) {
+    SCOPED_TRACE(
+        testing::Message() << "name=" << range.name << ", offset="
+                           << range.offset << ", length=" << range.length);
+    nimble::Buffer sliceBuffer{*pool_};
+    const auto sliced = nimble::ForEncoding<uint32_t>::slice(
+        encoded,
+        range.offset,
+        range.length,
+        sliceBuffer,
+        nimble::Encoding::Options{});
+
+    nimble::ForEncoding<uint32_t> encoding{
+        *pool_, sliced, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        }};
+    nimble::Vector<uint32_t> output(pool_.get(), range.length);
+    encoding.materialize(range.length, output.data());
+
+    auto view = nimble::detail::createTypedEncodingView<uint32_t>(
+        sliced, pool_.get(), nimble::Encoding::Options{});
+    ASSERT_NE(view, nullptr);
+    nimble::Vector<uint32_t> viewOutput(pool_.get(), range.length);
+    view->read(/*offset=*/0, range.length, viewOutput.data());
+
+    for (uint32_t i = 0; i < range.length; ++i) {
+      ASSERT_EQ(output[i], data[range.offset + i]) << "encoding row " << i;
+      ASSERT_EQ(viewOutput[i], data[range.offset + i]) << "view row " << i;
+    }
+  }
+}
+
+TEST_F(ForEncodingTest, sliceKeepsResidualsForConstantSubranges) {
+  // A sub-range of a varying frame can itself hold a single repeated value
+  // that is not the frame's reference. slice() inherits the source frame's
+  // width and reference rather than re-deriving them from the sub-range, so
+  // the residuals must survive. Deriving width 0 from the sub-range's
+  // constancy instead would decode every row as the reference, silently.
+  nimble::Vector<uint32_t> data(pool_.get());
+  data.reserve(256);
+  for (uint32_t i = 0; i < 256; ++i) {
+    if (i < 128) {
+      // Frame 0 varies, so its reference is 1000 and its width is non-zero.
+      data.push_back(i < 64 ? 1000 : 2000);
+    } else {
+      // Frame 1 is constant, so it is the width-0 case.
+      data.push_back(3000);
+    }
+  }
+
+  const auto encoded =
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          *buffer_, data);
+
+  struct Range {
+    std::string_view name;
+    uint32_t offset;
+    uint32_t length;
+  };
+
+  for (const auto range :
+       {Range{"subrangeEqualToReference", /*offset=*/0, /*length=*/64},
+        Range{"subrangeAboveReference", /*offset=*/64, /*length=*/64},
+        Range{
+            "aboveReferenceIntoConstantFrame",
+            /*offset=*/64,
+            /*length=*/128},
+        Range{"constantFrameOnly", /*offset=*/128, /*length=*/128}}) {
+    SCOPED_TRACE(
+        testing::Message() << "name=" << range.name << ", offset="
+                           << range.offset << ", length=" << range.length);
+    nimble::Buffer sliceBuffer{*pool_};
+    const auto sliced = nimble::ForEncoding<uint32_t>::slice(
+        encoded,
+        range.offset,
+        range.length,
+        sliceBuffer,
+        nimble::Encoding::Options{});
+
+    nimble::ForEncoding<uint32_t> encoding{
+        *pool_, sliced, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        }};
+    nimble::Vector<uint32_t> output(pool_.get(), range.length);
+    encoding.materialize(range.length, output.data());
+
+    auto view = nimble::detail::createTypedEncodingView<uint32_t>(
+        sliced, pool_.get(), nimble::Encoding::Options{});
+    ASSERT_NE(view, nullptr);
+    nimble::Vector<uint32_t> viewOutput(pool_.get(), range.length);
+    view->read(/*offset=*/0, range.length, viewOutput.data());
+
+    for (uint32_t i = 0; i < range.length; ++i) {
+      ASSERT_EQ(output[i], data[range.offset + i]) << "encoding row " << i;
+      ASSERT_EQ(viewOutput[i], data[range.offset + i]) << "view row " << i;
+    }
+  }
+}
+
 TEST_F(ForEncodingTest, mixedBitWidths) {
   nimble::Vector<int32_t> data(pool_.get());
 
