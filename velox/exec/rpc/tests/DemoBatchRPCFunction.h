@@ -92,7 +92,7 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   int32_t pendingBatchSize() const override;
 
-  /// Treats rate limits and timeouts as overload, other errors as non-overload
+  /// Treats overload-category errors as overload, other errors as non-overload
   /// failures, an empty batch as neutral, and every other batch as successful.
   /// Lets tests drive the operator's AIMD paths in BATCH mode; inert unless the
   /// backend is configured adaptive, which is off by default.

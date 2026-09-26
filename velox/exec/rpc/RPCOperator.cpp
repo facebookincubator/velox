@@ -40,7 +40,8 @@ RPCOperator::RPCOperator(
           rpcNode->id(),
           "RPC"),
       rpcNode_(std::move(rpcNode)),
-      state_(std::make_shared<RPCState>()),
+      state_(
+          std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
   // Configure RPCState with the streaming mode and the congestion-window
   // tunables. The two knobs are registered QueryConfig properties
@@ -462,18 +463,22 @@ void checkNoFrameworkFailures(
     const std::string& functionName,
     const std::vector<RPCResponse>& responses) {
   for (const auto& response : responses) {
-    VELOX_CHECK(
-        response.errorKind() != velox::rpc::RPCErrorKind::kUnset,
-        "RPC function '{}' returned an unset response for row {}",
-        functionName,
-        response.rowId);
-    if (response.errorKind() == velox::rpc::RPCErrorKind::kInternalError) {
-      VELOX_FAIL(
-          "RPC function failed internally: function '{}', row {}, error: {}",
-          functionName,
-          response.rowId,
-          response.error().message);
+    const auto kind = response.errorKind();
+    if (velox::rpc::errorCategory(kind) !=
+        velox::rpc::RPCErrorCategory::kFramework) {
+      continue;
     }
+    if (kind == velox::rpc::RPCErrorKind::kUnset) {
+      VELOX_FAIL(
+          "RPC function '{}' returned an unset response for row {}",
+          functionName,
+          response.rowId);
+    }
+    VELOX_FAIL(
+        "RPC function failed internally: function '{}', row {}, error: {}",
+        functionName,
+        response.rowId,
+        response.error().message);
   }
 }
 
@@ -505,13 +510,16 @@ void RPCOperator::resolveLocalOnlyInput(
       const auto rowId = globalRowIdCounter_++;
       auto response = std::move(future).get();
       response.rowId = rowId;
-      claimedRows_.push_back(
-          RPCState::ReadyRow{
-              .rowId = rowId,
-              .location = {batchIndex, originalRowIndex},
-              .response = std::move(response),
-              .rttNs = 0,
-          });
+      RPCState::ReadyRow readyRow{
+          .rowId = rowId,
+          .location = {batchIndex, originalRowIndex},
+          .charge = {},
+          .response = std::move(response),
+          .rttNs = 0,
+      };
+      readyRow.charge =
+          state_->chargePayloadBytes(readyRow.response.retainedBytes());
+      claimedRows_.push_back(std::move(readyRow));
     }
     return;
   }
@@ -546,14 +554,19 @@ void RPCOperator::resolveLocalOnlyInput(
       0,
       "RPC function '{}' retained rows after flushing local-only input",
       function_->name());
-  claimedBatch_ = RPCState::ReadyBatch{
+  auto responses = scatterIntoBatchOrder(std::move(future).get(), rowIds);
+  RPCState::ReadyBatch readyBatch{
       .batchId = 0,
-      .responses = scatterIntoBatchOrder(std::move(future).get(), rowIds),
+      .charge = {},
+      .responses = std::move(responses),
       .error = std::nullopt,
       .admissionUnits = 0,
       .rowLocations = std::move(rowLocations),
       .rttNs = 0,
   };
+  readyBatch.charge = state_->chargePayloadBytes(
+      velox::rpc::totalResponseRetainedBytes(readyBatch.responses));
+  claimedBatch_ = std::move(readyBatch);
 }
 
 bool RPCOperator::flushBatchRequests(int32_t maxRows) {
@@ -840,6 +853,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   auto output = buildOutputVector(responses, locations);
   numResponsesReceived_ += numRows;
+  responses.clear();
   claimedRows_.clear();
   claimedRowsAreLocalOnly_ = false;
   return output;
@@ -1127,20 +1141,20 @@ void RPCOperator::close() {
   // callbacks (via shared_ptr capture), so dropping our reference is not enough
   // to free the input vectors: those belong to upstream operators' memory pools
   // and must be released here, on the driver thread, while those pools are
-  // still alive. Otherwise the retained reservation makes the arbitrator's
+  // still alive. Otherwise the retained external-memory charge makes the
   // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
   // worker, or a late callback frees into pools that are already gone.
   // Stop publishing to stats() first: the write blocks until any in-progress
   // sample has finished reading RPCState, so the reset below cannot free it
   // underneath the collector thread.
   *liveStatsSources_.wlock() = LiveStatsSources{};
+  claimedRows_.clear();
+  claimedBatch_.reset();
   if (state_ != nullptr) {
-    state_->releaseAllInputBatches();
+    state_->close();
   }
   state_.reset();
   function_.reset();
-  claimedRows_.clear();
-  claimedBatch_.reset();
   batchRowLocations_.clear();
   batchRowIds_.clear();
   reusableIndices_.reset();
