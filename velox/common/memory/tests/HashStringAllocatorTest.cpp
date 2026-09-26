@@ -815,5 +815,27 @@ TEST_F(HashStringAllocatorTest, inputStream) {
   ASSERT_EQ(in.tellp(), in.size());
 }
 
+TEST_F(HashStringAllocatorTest, inputStreamNegativeSize) {
+  ByteOutputStream out(allocator_.get());
+  auto start = allocator_->newWrite(out, 10);
+  out.appendStringView(std::string_view("0123456789"));
+  allocator_->finishWrite(out, 0);
+
+  HSA::InputStream in(start.header);
+  char buf[10];
+  VELOX_ASSERT_THROW(
+      in.readBytes(reinterpret_cast<uint8_t*>(buf), -1),
+      "(-1 vs. 0) Attempting to read negative number of bytes");
+  VELOX_ASSERT_THROW(
+      in.skip(-1),
+      "(-1 vs. 0) Attempting to skip negative number of bytes");
+  VELOX_ASSERT_THROW(
+      in.nextView(-1),
+      "(-1 vs. 0) Attempting to view negative number of bytes");
+  VELOX_ASSERT_THROW(
+      in.seekp(-1),
+      "(-1 vs. 0) Seeking past start of stream");
+}
+
 } // namespace
 } // namespace facebook::velox
