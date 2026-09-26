@@ -58,6 +58,7 @@ add_library(
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
   subintsplit/SplitSelector.h
+  subintsplit/TuningConfig.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp

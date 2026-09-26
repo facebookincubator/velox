@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TuningConfig.h"
 
 /// Read context:
 ///
@@ -52,23 +53,8 @@ namespace facebook::nimble::subintsplit {
 template <typename PhysicalType>
 class SectionTable {
  public:
-  /// Output elements combined per call to decodeChunk() when the caller does
-  /// not choose one.
-  ///
-  /// decodeChunk() makes one read-modify-write pass over the chunk per section,
-  /// which suggests a chunk small enough to stay in L1 across every pass. A
-  /// sweep of 4096/2048/1024/512 over 20 data patterns says otherwise: mean
-  /// decode was 4416/4430/4447/4411 MB/s, flat within noise even on the 7-
-  /// section streams. The output is cache-resident either way, and the cost of
-  /// an extra section is its child materialize(), not the combine pass. The
-  /// value is left configurable for unusual cache geometries, but there is no
-  /// tuning win here on current hardware.
-  static constexpr uint32_t kDefaultDecodeChunkSize = 4096;
-
   SectionTable(velox::memory::MemoryPool& pool, uint32_t decodeChunkSize)
-      : decodeChunkSize_{decodeChunkSize > 0 ? decodeChunkSize : kDefaultDecodeChunkSize},
-        pool_{pool},
-        scratch_{&pool} {}
+      : decodeChunkSize_{decodeChunkSize}, pool_{pool}, scratch_{&pool} {}
 
   uint32_t decodeChunkSize() const noexcept {
     return decodeChunkSize_;
