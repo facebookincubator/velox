@@ -737,7 +737,7 @@ TEST_P(SerializationTest, flatMapRejectsTopLevelNullRows) {
 
   NIMBLE_ASSERT_THROW(
       serializer.serialize(input, OrderedRanges::of(0, kRows)),
-      "Top-level row nulls are not supported when serializing FlatMap columns.");
+      "Top-level row nulls are not supported when serializing FlatMap/Hybrid FlatMap columns.");
 }
 
 TEST_P(SerializationTest, flatMapWithNestedNullsRoundTrips) {

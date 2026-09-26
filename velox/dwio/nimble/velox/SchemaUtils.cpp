@@ -1390,9 +1390,6 @@ NimbleTypeProjection buildProjectedNimbleType(
       projectedSubfields,
       encodings,
       projectedHybridFlatMaps);
-  const auto& projectedRoot = projection.nimbleType->asRow();
-  std::vector<std::shared_ptr<const Type>> projectedChildren(
-      projectedRoot.children());
 
   // Walk the source nimble in the same DFS pre-order + FlatMap-alphabetical
   // traversal the velox-source builder uses, emitting one source stream offset
@@ -1427,11 +1424,6 @@ NimbleTypeProjection buildProjectedNimbleType(
           projection.rowOrFlatMapNullStreams);
     }
   }
-  projection.nimbleType = std::make_shared<RowType>(
-      projectedRoot.nullsDescriptor(),
-      std::vector<std::string>(projectedRoot.names()),
-      std::move(projectedChildren),
-      rootRow.attributes());
   validateProjectedHybridFlatMapSchema(*projection.nimbleType);
   // schemaNodes() materializes the projected schema, so keep this debug-only.
   NIMBLE_DCHECK_EQ(
