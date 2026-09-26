@@ -595,6 +595,24 @@ void makeSymbolRich(
   }
 }
 
+// Rewrites string columns to representative capping JSON payloads. Generic
+// VectorFuzzer strings do not cover the numeric-key and array-cardinality
+// patterns that drive encoding behavior for these production JSON columns.
+void makeCappingJson(
+    velox::FlatVector<velox::StringView>* vector,
+    uint64_t rowOffset,
+    FuzzerGenerator& rng) {
+  for (velox::vector_size_t i = 0; i < vector->size(); ++i) {
+    if (vector->isNullAt(i)) {
+      continue;
+    }
+
+    const auto value = makeCappingJsonValue(
+        folly::Random::rand64(rng), rowOffset + static_cast<uint64_t>(i));
+    vector->set(i, velox::StringView(value));
+  }
+}
+
 // Collapses the non-null rows of a column to a single repeated value.
 // ConstantEncoding requires exactly one distinct value, which fuzzed data never
 // produces, so without this the encoding would report zero coverage on every
@@ -702,6 +720,7 @@ enum class ColumnShape {
   kDefault,
   kConstant,
   kNonDecreasing,
+  kCappingJson,
 };
 
 // Draws one shape per top-level column. Drawn once per iteration rather than
@@ -720,6 +739,10 @@ std::vector<ColumnShape> drawColumnShapes(
         isIntegerKind(schema->childAt(i)->kind()) &&
         folly::Random::oneIn(4, rng)) {
       shapes.push_back(ColumnShape::kNonDecreasing);
+    } else if (
+        schema->childAt(i)->kind() == velox::TypeKind::VARCHAR &&
+        folly::Random::oneIn(2, rng)) {
+      shapes.push_back(ColumnShape::kCappingJson);
     } else {
       shapes.push_back(ColumnShape::kDefault);
     }
@@ -739,6 +762,7 @@ void applyEncodingFriendlyShapes(
     const std::vector<ColumnShape>& shapes,
     std::vector<int64_t>& cursors,
     uint64_t totalRows,
+    uint64_t rowOffset,
     FuzzerGenerator& rng) {
   NIMBLE_CHECK_EQ(
       batch->childrenSize(),
@@ -757,6 +781,7 @@ void applyEncodingFriendlyShapes(
         shapes.at(childIndex) == ColumnShape::kConstant;
     const bool makeMonotonic =
         shapes.at(childIndex) == ColumnShape::kNonDecreasing;
+    const bool makeJson = shapes.at(childIndex) == ColumnShape::kCappingJson;
     auto& cursor = cursors.at(childIndex);
     switch (child->typeKind()) {
       case velox::TypeKind::BOOLEAN:
@@ -811,6 +836,15 @@ void applyEncodingFriendlyShapes(
         }
         break;
       case velox::TypeKind::VARCHAR:
+        if (collapseToConstant) {
+          makeConstant(child->asFlatVector<velox::StringView>());
+        } else if (makeJson) {
+          makeCappingJson(
+              child->asFlatVector<velox::StringView>(), rowOffset, rng);
+        } else {
+          makeSymbolRich(child->asFlatVector<velox::StringView>(), rng);
+        }
+        break;
       case velox::TypeKind::VARBINARY:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<velox::StringView>());
@@ -871,6 +905,68 @@ void compareDecodedChunk(
 }
 
 } // namespace
+
+std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex) {
+  std::seed_seq seedSequence{
+      static_cast<uint32_t>(seed), static_cast<uint32_t>(seed >> 32)};
+  velox::fuzzer::FuzzerGenerator rng(seedSequence);
+
+  auto makeIntegerArray = [&](uint32_t size) {
+    std::string array{"["};
+    for (uint32_t i = 0; i < size; ++i) {
+      if (i != 0) {
+        array += ',';
+      }
+      array += std::to_string(folly::Random::rand32(1'000'000, rng));
+    }
+    array += ']';
+    return array;
+  };
+
+  struct Field {
+    std::string_view name;
+    std::string value;
+  };
+  std::vector<Field> fields;
+  fields.reserve(5);
+
+  // The capping payload always carries t1, but deliberately varies cardinality
+  // from empty through occasional long arrays. Numeric keys mirror the JSON
+  // paths used by capping readers, while presence and field order vary.
+  const auto t1Size = rowIndex % 64 == 0 ? 64 + folly::Random::rand32(65, rng)
+      : rowIndex % 17 == 0               ? 0
+                                         : 1 + folly::Random::rand32(8, rng);
+  fields.push_back({"t1", makeIntegerArray(t1Size)});
+  if (rowIndex % 3 != 0) {
+    fields.push_back({"795", makeIntegerArray(folly::Random::rand32(7, rng))});
+  }
+  if (rowIndex % 5 != 0) {
+    fields.push_back({"855", makeIntegerArray(folly::Random::rand32(7, rng))});
+  }
+
+  static constexpr auto kExtraKeys =
+      std::to_array<std::string_view>({"101", "235", "402", "921"});
+  constexpr auto kNumExtraKeys = static_cast<uint32_t>(kExtraKeys.size());
+  const auto numExtraKeys = folly::Random::rand32(kNumExtraKeys + 1, rng);
+  for (uint32_t i = 0; i < numExtraKeys; ++i) {
+    fields.push_back(
+        {kExtraKeys.at(i), makeIntegerArray(folly::Random::rand32(5, rng))});
+  }
+  std::shuffle(fields.begin(), fields.end(), rng);
+
+  std::string result{"{"};
+  for (size_t i = 0; i < fields.size(); ++i) {
+    if (i != 0) {
+      result += ',';
+    }
+    result += '"';
+    result += fields[i].name;
+    result += "\":";
+    result += fields[i].value;
+  }
+  result += '}';
+  return result;
+}
 
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
@@ -2119,6 +2215,7 @@ void NimbleWriterFuzzer::run() {
           columnShapes,
           monotonicCursors,
           uint64_t{options_.batchSize} * options_.numBatches,
+          uint64_t{batch} * options_.batchSize,
           rng);
     }
     batches.push_back(std::move(vector));
