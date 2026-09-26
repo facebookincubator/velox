@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -170,6 +171,13 @@ struct EncodingSizeEstimation {
         // read dispatch accepts it.
         if constexpr (isIntegralType<T>()) {
           return HuffmanEncoding<T>::estimateSize(values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::ALPRD: {
+        if constexpr (isFloatingPointType<T>()) {
+          return ALPRDEncoding<T>::estimateSize(values, options);
         } else {
           return std::nullopt;
         }

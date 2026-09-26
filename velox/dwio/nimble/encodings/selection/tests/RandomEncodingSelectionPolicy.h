@@ -135,6 +135,13 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
+  bool useLogicalTypeForNullable() const override {
+    return std::find(
+               candidateEncodingTypes_.begin(),
+               candidateEncodingTypes_.end(),
+               EncodingType::ALPRD) != candidateEncodingTypes_.end();
+  }
+
  protected:
   std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
       EncodingType parentEncodingType,
