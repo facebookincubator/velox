@@ -191,6 +191,7 @@ void estimateWrapperSerializedSize(
     numInner =
         simd::indicesOfSetBits(usedIndices, 0, wrapped->size(), innerRows);
     innerSizes = innerSizesHolder.get(numInner);
+    // In range overload all rows of a range share the same size accumulator.
     for (int32_t i = 0; i < numInner; ++i) {
       innerSizes[i] = sizes[0];
     }
@@ -262,7 +263,6 @@ int32_t rowsToElementRows(
     vector_size_t** sizePtrs,
     ScratchPtr<vector_size_t>& elementRowsHolder,
     ScratchPtr<vector_size_t*>& elementSizesHolder,
-    ScratchPtr<IndexRange>& elementRangesHolder,
     Scratch& scratch) {
   const vector_size_t* nonNullPositions = rows.data();
   auto numNonNull = rows.size();
@@ -281,15 +281,11 @@ int32_t rowsToElementRows(
   }
 
   vector_size_t numElements = 0;
-  int32_t numRanges = 0;
   for (auto i = 0; i < numNonNull; ++i) {
     const auto parentPosition = rawNulls ? nonNullPositions[i] : i;
     *sizePtrs[parentPosition] += sizeof(int32_t);
     const auto numParentElements = sizes[rows[parentPosition]];
     numElements += numParentElements;
-    if (numParentElements != 0) {
-      ++numRanges;
-    }
   }
   if (numElements == 0) {
     return 0;
@@ -297,9 +293,7 @@ int32_t rowsToElementRows(
 
   auto* elementRows = elementRowsHolder.get(numElements);
   auto* elementSizes = elementSizesHolder.get(numElements);
-  auto* elementRanges = elementRangesHolder.get(numRanges);
   auto fill = 0;
-  auto range = 0;
   for (auto i = 0; i < numNonNull; ++i) {
     const auto parentPosition = rawNulls ? nonNullPositions[i] : i;
     const auto parentRow = rows[parentPosition];
@@ -307,16 +301,13 @@ int32_t rowsToElementRows(
     if (offsets[parentRow] == end) {
       continue;
     }
-    elementRanges[range].begin = fill;
-    elementRanges[range].size = sizes[parentRow];
-    ++range;
     for (auto elementRow = offsets[parentRow]; elementRow < end; ++elementRow) {
       elementRows[fill] = elementRow;
       elementSizes[fill] = sizePtrs[parentPosition];
       ++fill;
     }
   }
-  return numRanges;
+  return numElements;
 }
 } // namespace
 
@@ -451,8 +442,7 @@ void estimateSerializedSizeByRows(
       auto* mapVector = vector->asUnchecked<MapVector>();
       ScratchPtr<vector_size_t> elementRowsHolder(scratch);
       ScratchPtr<vector_size_t*> elementSizesHolder(scratch);
-      ScratchPtr<IndexRange> elementRangesHolder(scratch);
-      const auto numElementRanges = rowsToElementRows(
+      const auto numElements = rowsToElementRows(
           rows,
           mapVector->rawNulls(),
           mapVector->rawOffsets(),
@@ -460,22 +450,20 @@ void estimateSerializedSizeByRows(
           sizes,
           elementRowsHolder,
           elementSizesHolder,
-          elementRangesHolder,
           scratch);
-      if (numElementRanges == 0) {
+      if (numElements == 0) {
         return;
       }
       for (const auto& child : {mapVector->mapKeys(), mapVector->mapValues()}) {
-        for (auto i = 0; i < numElementRanges; ++i) {
-          const auto& range = elementRangesHolder.get()[i];
-          estimateSerializedSizeByRows(
-              child.get(),
-              folly::Range<const vector_size_t*>(
-                  elementRowsHolder.get() + range.begin, range.size),
-              elementSizesHolder.get() + range.begin,
-              scratch,
-              true);
-        }
+        // Map children are serialized as flattened streams because VectorStream
+        // only descends into ROW.
+        estimateSerializedSizeByRows(
+            child.get(),
+            folly::Range<const vector_size_t*>(
+                elementRowsHolder.get(), numElements),
+            elementSizesHolder.get(),
+            scratch,
+            true);
       }
       break;
     }
@@ -483,8 +471,7 @@ void estimateSerializedSizeByRows(
       auto* arrayVector = vector->as<ArrayVector>();
       ScratchPtr<vector_size_t> elementRowsHolder(scratch);
       ScratchPtr<vector_size_t*> elementSizesHolder(scratch);
-      ScratchPtr<IndexRange> elementRangesHolder(scratch);
-      const auto numElementRanges = rowsToElementRows(
+      const auto numElements = rowsToElementRows(
           rows,
           arrayVector->rawNulls(),
           arrayVector->rawOffsets(),
@@ -492,21 +479,19 @@ void estimateSerializedSizeByRows(
           sizes,
           elementRowsHolder,
           elementSizesHolder,
-          elementRangesHolder,
           scratch);
-      if (numElementRanges == 0) {
+      if (numElements == 0) {
         return;
       }
-      for (auto i = 0; i < numElementRanges; ++i) {
-        const auto& range = elementRangesHolder.get()[i];
-        estimateSerializedSizeByRows(
-            arrayVector->elements().get(),
-            folly::Range<const vector_size_t*>(
-                elementRowsHolder.get() + range.begin, range.size),
-            elementSizesHolder.get() + range.begin,
-            scratch,
-            true);
-      }
+      // ARRAY elements are serialized as flattened stream because VectorStream
+      // only descends into ROW.
+      estimateSerializedSizeByRows(
+          arrayVector->elements().get(),
+          folly::Range<const vector_size_t*>(
+              elementRowsHolder.get(), numElements),
+          elementSizesHolder.get(),
+          scratch,
+          true);
       break;
     }
     case VectorEncoding::Simple::LAZY:

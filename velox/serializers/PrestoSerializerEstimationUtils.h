@@ -19,14 +19,16 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto::detail {
-/// Estimates the serialized size using encoding when present.
+/// Estimates sizes for the Presto batch serializer, which preserves supported
+/// encodings in each range.
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
     Scratch& scratch);
 
-/// Estimates the serialized size after flattening encoding.
+/// Estimates sizes for the Presto iterative serializer, which flattens
+/// encodings for selected rows.
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
