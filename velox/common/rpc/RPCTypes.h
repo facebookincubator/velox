@@ -109,6 +109,49 @@ enum class RPCErrorKind {
   kInternalError,
 };
 
+/// Stable semantic grouping shared by congestion, metrics, and output policy.
+///
+/// RPCErrorKind preserves the specific cause for diagnostics. This category
+/// states how that cause participates in shared policies so consumers do not
+/// independently reconstruct the same grouping.
+enum class RPCErrorCategory {
+  /// No failure.
+  kNone,
+  /// A null primary input; no remote call was attempted.
+  kNullInput,
+  /// The backend is overloaded or failed to answer before its deadline.
+  kOverload,
+  /// The backend failed or returned no usable result without evidence of
+  /// overload.
+  kNonOverloadBackend,
+  /// The request is invalid and retrying it unchanged cannot succeed.
+  kInvalidRequest,
+  /// The local framework violated its contract or ran out of memory.
+  kFramework,
+};
+
+/// Returns the shared semantic category for a typed RPC error cause.
+inline RPCErrorCategory errorCategory(RPCErrorKind kind) {
+  switch (kind) {
+    case RPCErrorKind::kNone:
+      return RPCErrorCategory::kNone;
+    case RPCErrorKind::kNullInput:
+      return RPCErrorCategory::kNullInput;
+    case RPCErrorKind::kRateLimited:
+    case RPCErrorKind::kTimeout:
+      return RPCErrorCategory::kOverload;
+    case RPCErrorKind::kBackendError:
+    case RPCErrorKind::kEmptyResponse:
+      return RPCErrorCategory::kNonOverloadBackend;
+    case RPCErrorKind::kInvalidRequest:
+      return RPCErrorCategory::kInvalidRequest;
+    case RPCErrorKind::kUnset:
+    case RPCErrorKind::kInternalError:
+      return RPCErrorCategory::kFramework;
+  }
+  VELOX_UNREACHABLE("Unknown RPCErrorKind: {}", static_cast<int>(kind));
+}
+
 /// Stores a function-owned response payload inline behind a checked,
 /// type-erased interface.
 ///

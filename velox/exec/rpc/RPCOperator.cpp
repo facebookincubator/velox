@@ -463,18 +463,22 @@ void checkNoFrameworkFailures(
     const std::string& functionName,
     const std::vector<RPCResponse>& responses) {
   for (const auto& response : responses) {
-    VELOX_CHECK(
-        response.errorKind() != velox::rpc::RPCErrorKind::kUnset,
-        "RPC function '{}' returned an unset response for row {}",
-        functionName,
-        response.rowId);
-    if (response.errorKind() == velox::rpc::RPCErrorKind::kInternalError) {
-      VELOX_FAIL(
-          "RPC function failed internally: function '{}', row {}, error: {}",
-          functionName,
-          response.rowId,
-          response.error().message);
+    const auto kind = response.errorKind();
+    if (velox::rpc::errorCategory(kind) !=
+        velox::rpc::RPCErrorCategory::kFramework) {
+      continue;
     }
+    if (kind == velox::rpc::RPCErrorKind::kUnset) {
+      VELOX_FAIL(
+          "RPC function '{}' returned an unset response for row {}",
+          functionName,
+          response.rowId);
+    }
+    VELOX_FAIL(
+        "RPC function failed internally: function '{}', row {}, error: {}",
+        functionName,
+        response.rowId,
+        response.error().message);
   }
 }
 
