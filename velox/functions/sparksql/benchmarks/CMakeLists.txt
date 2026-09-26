@@ -59,6 +59,13 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_sparksql_benchmarks_sequence SequenceBenchmark.cpp)
+target_link_libraries(
+  velox_sparksql_benchmarks_sequence
+  velox_functions_spark
+  velox_sequence_benchmark
+)
+
 add_executable(velox_sparksql_benchmarks_split SplitBenchmark.cpp)
 target_link_libraries(
   velox_sparksql_benchmarks_split

@@ -25,3 +25,14 @@ target_link_libraries(
 )
 
 velox_add_library(velox_functions_benchmark_util INTERFACE HEADERS FunctionBenchmarkBase.h)
+
+add_library(velox_sequence_benchmark STATIC SequenceBenchmark.cpp)
+velox_add_test_headers(velox_sequence_benchmark SequenceBenchmark.h)
+target_link_libraries(
+  velox_sequence_benchmark
+  velox_functions_benchmark_util
+  velox_exec_test_lib
+  velox_parse_utils
+  Folly::folly
+  Folly::follybenchmark
+)
