@@ -64,7 +64,7 @@ std::unordered_set<std::string> FunctionBaseTest::getSignatureStrings(
   return signatureStrings;
 }
 
-std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
 FunctionBaseTest::evaluateWithStats(
     const std::string& expression,
     const RowVectorPtr& data,
