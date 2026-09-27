@@ -269,28 +269,56 @@ void DecodedVector::applyDictionaryWrapper(
       copyNulls(end(rows));
     }
   }
-  auto copiedNulls = copiedNulls_.data();
   auto currentIndices = indices_;
   if (indicesNotCopied()) {
     copiedIndices_.resize(size_);
     indices_ = copiedIndices_.data();
   }
+  auto copiedIndices = copiedIndices_.data();
 
-  applyToRows(rows, [&](vector_size_t row) {
-    if (!nulls_ || !bits::isBitNull(nulls_, row)) {
-      auto wrappedIndex = currentIndices[row];
-      if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
-        bits::setNull(copiedNulls, row);
-      } else {
-        copiedIndices_[row] = newIndices[wrappedIndex];
+  if (!nulls_ && !newNulls) {
+    // Fast path: no parent nulls and no new wrapper nulls, so every row is
+    // a plain index remap with no null checks.
+    applyToRows(rows, [&](vector_size_t row) {
+      copiedIndices[row] = newIndices[currentIndices[row]];
+    });
+  } else {
+    auto copiedNulls = copiedNulls_.data();
+    applyToRows(rows, [&](vector_size_t row) {
+      if (!nulls_ || !bits::isBitNull(nulls_, row)) {
+        auto wrappedIndex = currentIndices[row];
+        if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
+          bits::setNull(copiedNulls, row);
+        } else {
+          copiedIndices[row] = newIndices[wrappedIndex];
+        }
       }
-    }
-  });
+    });
+  }
+}
+
+bool DecodedVector::ownsNulls(const SelectivityVector* rows) {
+  const auto* bits = nulls(rows);
+  return bits != nullptr && !copiedNulls_.empty() &&
+      bits == copiedNulls_.data();
+}
+
+bool DecodedVector::ownsIndices() const {
+  // Before indices() has run there is no pointer yet, so answer for the one it
+  // would produce rather than for the absence of one.
+  return indices_ == nullptr ? wouldCopyIndices() : !indicesNotCopied();
+}
+
+bool DecodedVector::wouldCopyIndices() const {
+  if (isConstantMapping_) {
+    return size_ > zeroIndices().size() || constantIndex_ != 0;
+  }
+  return isIdentityMapping_ && size_ > consecutiveIndices().size();
 }
 
 void DecodedVector::fillInIndices() const {
   if (isConstantMapping_) {
-    if (size_ > zeroIndices().size() || constantIndex_ != 0) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::fill(copiedIndices_.begin(), copiedIndices_.end(), constantIndex_);
       indices_ = copiedIndices_.data();
@@ -300,7 +328,7 @@ void DecodedVector::fillInIndices() const {
     return;
   }
   if (isIdentityMapping_) {
-    if (size_ > consecutiveIndices().size()) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::iota(copiedIndices_.begin(), copiedIndices_.end(), 0);
       indices_ = &copiedIndices_[0];
@@ -332,14 +360,18 @@ void DecodedVector::setFlatNulls(
       copyNulls(end(rows));
     }
     auto leafNulls = vector.rawNulls();
-    auto copiedNulls = &copiedNulls_[0];
-    applyToRows(rows, [&](vector_size_t row) {
-      if (!bits::isBitNull(nulls_, row) &&
-          (leafNulls && bits::isBitNull(leafNulls, indices_[row]))) {
-        bits::setNull(copiedNulls, row);
-      }
-    });
-    nulls_ = &copiedNulls_[0];
+    // When the leaf vector has no nulls, the loop below can never set a
+    // null, so the entire per-row pass is skipped.
+    if (leafNulls) {
+      auto copiedNulls = copiedNulls_.data();
+      applyToRows(rows, [&](vector_size_t row) {
+        if (!bits::isBitNull(nulls_, row) &&
+            bits::isBitNull(leafNulls, indices_[row])) {
+          bits::setNull(copiedNulls, row);
+        }
+      });
+    }
+    nulls_ = copiedNulls_.data();
   } else {
     nulls_ = vector.rawNulls();
     mayHaveNulls_ = nulls_ != nullptr;

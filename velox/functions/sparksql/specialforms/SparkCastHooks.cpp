@@ -29,6 +29,14 @@
 
 namespace facebook::velox::functions::sparksql {
 
+namespace {
+
+// Max DATE magnitude before TIMESTAMP_NTZ's microseconds-since-epoch range
+// overflows. Spark throws here unconditionally, ANSI or not.
+constexpr int64_t kMaxTimestampUtcDays = 106'751'991;
+
+} // namespace
+
 SparkCastHooks::SparkCastHooks(
     const velox::core::QueryConfig& config,
     bool allowOverflow)
@@ -195,6 +203,10 @@ void SparkCastHooks::castDateTimestampToGMT(
     Timestamp& timestamp,
     const tz::TimeZone& timeZone) const {
   toGMTWithGapCorrection(timestamp, timeZone);
+}
+
+bool SparkCastHooks::isDateOverflowForTimestampUtc(int64_t days) const {
+  return days > kMaxTimestampUtcDays || days < -kMaxTimestampUtcDays;
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {

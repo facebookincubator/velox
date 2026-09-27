@@ -20,6 +20,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleCompare.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -327,49 +328,66 @@ TYPED_TEST(RleEncodingTest, slice) {
           nimble::CompressionType::Uncompressed,
           options);
 
+  // Runs are [0,3) [3,5) [5,8) [8,10). A range that starts or ends inside a
+  // run keeps the boundary runs whole and comes back wrapped in a
+  // SliceEncoding; only run-aligned ranges stay a plain RLE.
   struct Range {
     const char* name;
     uint32_t offset;
     uint32_t length;
+    nimble::EncodingType expectedType;
   };
   for (const auto range :
        {Range{/*name=*/"allRunsNoPartial",
               /*offset=*/0,
-              /*length=*/10},
+              /*length=*/10,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"singleRunNoPartial",
               /*offset=*/0,
-              /*length=*/3},
+              /*length=*/3,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"middleRunsNoPartial",
               /*offset=*/3,
-              /*length=*/5},
-        Range{/*name=*/"lastRunNoPartial", /*offset=*/8, /*length=*/2},
+              /*length=*/5,
+              nimble::EncodingType::RLE},
+        Range{/*name=*/"lastRunNoPartial",
+              /*offset=*/8,
+              /*length=*/2,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"firstRunPartialLastExact",
               /*offset=*/1,
-              /*length=*/7},
+              /*length=*/7,
+              nimble::EncodingType::Slice},
         Range{/*name=*/"firstExactLastRunPartial",
               /*offset=*/3,
-              /*length=*/4},
-        Range{/*name=*/"bothPartialSameRun", /*offset=*/1, /*length=*/1},
+              /*length=*/4,
+              nimble::EncodingType::Slice},
+        Range{/*name=*/"bothPartialSameRun",
+              /*offset=*/1,
+              /*length=*/1,
+              nimble::EncodingType::Slice},
         Range{/*name=*/"bothPartialWithInteriorRun",
               /*offset=*/1,
-              /*length=*/5}}) {
+              /*length=*/5,
+              nimble::EncodingType::Slice}}) {
     SCOPED_TRACE(
         testing::Message() << "case=" << range.name << ", offset="
                            << range.offset << ", length=" << range.length);
     nimble::Buffer sliceBuffer{*this->pool_};
     const auto sliced = nimble::RLEEncoding<DataType>::slice(
         encoded, range.offset, range.length, sliceBuffer, options);
-    nimble::RLEEncoding<DataType> encoding{
-        *this->pool_,
-        sliced,
-        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
-        options};
+    // Built through the factory rather than as an RLEEncoding directly: a
+    // deferred slice comes back as a SliceEncoding wrapping the RLE.
+    auto encoding = nimble::EncodingFactory{options}.create(
+        *this->pool_, sliced, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        });
 
-    EXPECT_EQ(encoding.encodingType(), nimble::EncodingType::RLE);
-    EXPECT_EQ(encoding.dataType(), nimble::TypeTraits<DataType>::dataType);
-    EXPECT_EQ(encoding.rowCount(), range.length);
+    EXPECT_EQ(encoding->encodingType(), range.expectedType);
+    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<DataType>::dataType);
+    EXPECT_EQ(encoding->rowCount(), range.length);
     nimble::Vector<DataType> result(this->pool_.get(), range.length);
-    encoding.materialize(range.length, result.data());
+    encoding->materialize(range.length, result.data());
     for (uint32_t i = 0; i < range.length; ++i) {
       EXPECT_TRUE(
           nimble::NimbleCompare<DataType>::equals(
@@ -419,4 +437,125 @@ TYPED_TEST(RleEncodingTest, invalidSliceRange) {
           invalidSliceBuffer,
           options),
       "");
+}
+
+TEST(RleEncodingBoolTest, countTrue) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+
+  struct Range {
+    uint32_t offset;
+    uint32_t length;
+  };
+  const auto verify = [&](std::initializer_list<bool> input, bool useVarint) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    nimble::Buffer buffer{*pool};
+    nimble::Vector<bool> values{pool.get()};
+    for (const bool value : input) {
+      values.push_back(value);
+    }
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+            buffer, values, nimble::CompressionType::Uncompressed, options);
+
+    for (const auto range :
+         {Range{/*offset=*/0, /*length=*/3},
+          Range{/*offset=*/2, /*length=*/5},
+          Range{/*offset=*/4, /*length=*/4},
+          Range{/*offset=*/7, /*length=*/5}}) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "offset=" << range.offset << ", length=" << range.length);
+      nimble::Buffer scratch{*pool};
+      const auto expected = static_cast<uint32_t>(std::count(
+          values.begin() + range.offset,
+          values.begin() + range.offset + range.length,
+          true));
+      EXPECT_EQ(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded, range.offset, range.length, scratch, options),
+          expected);
+      nimble::RLEEncoding<bool>::RangeCounts counts;
+      nimble::RLEEncoding<bool>::countTrue(
+          encoded, range.offset, range.length, scratch, counts, options);
+
+      EXPECT_EQ(
+          counts.numTrueBeforeRange,
+          std::count(values.begin(), values.begin() + range.offset, true));
+      EXPECT_EQ(counts.numTrueInRange, expected);
+    }
+  };
+
+  for (const bool useVarint : {false, true}) {
+    verify(
+        {true,
+         true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         true,
+         true,
+         true,
+         false},
+        useVarint);
+    verify(
+        {true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         false},
+        useVarint);
+  }
+}
+
+TEST(RleEncodingBoolTest, invalidCountTrueRange) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    nimble::Buffer buffer{*pool};
+    nimble::Vector<bool> values{pool.get()};
+    for (const bool value :
+         {false, false, true, false, true, false, false, true, false, false}) {
+      values.push_back(value);
+    }
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+            buffer, values, nimble::CompressionType::Uncompressed, options);
+
+    auto expectZeroLengthRange = [&](uint32_t offset) {
+      SCOPED_TRACE(testing::Message() << "offset=" << offset);
+      nimble::Buffer scratch{*pool};
+      NIMBLE_ASSERT_THROW(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded,
+              offset,
+              /*length=*/0,
+              scratch,
+              options),
+          "Cannot count zero rows.");
+      nimble::RLEEncoding<bool>::RangeCounts counts;
+      NIMBLE_ASSERT_THROW(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded,
+              offset,
+              /*length=*/0,
+              scratch,
+              counts,
+              options),
+          "Cannot count zero rows.");
+    };
+    expectZeroLengthRange(/*offset=*/0);
+    expectZeroLengthRange(/*offset=*/4);
+  }
 }

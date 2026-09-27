@@ -42,7 +42,7 @@ class UpdateMapRow {
   }
 
   template <typename F>
-  void forEachEntry(F&& func) {
+  void forEachEntry(F&& func) const {
     for (auto& [_, source] : values_) {
       func(source);
     }
@@ -78,7 +78,7 @@ class UpdateMapRow<void> {
   }
 
   template <typename F>
-  void forEachEntry(F&& func) {
+  void forEachEntry(F&& func) const {
     for (auto& [_, source] : references_) {
       func(source);
     }

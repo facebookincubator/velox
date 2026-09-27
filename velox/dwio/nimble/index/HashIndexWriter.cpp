@@ -91,18 +91,19 @@ flatbuffers::Offset<serialization::BloomFilter>
 HashIndexWriter::buildBloomFilter(
     flatbuffers::FlatBufferBuilder& builder,
     const IndexAccumulator& accumulator) const {
-  if (!accumulator.options.bloomFilterBitsPerKey.has_value()) {
+  if (accumulator.options.bloomFilter == nullptr) {
     return 0;
   }
-  const auto bitsPerKey = accumulator.options.bloomFilterBitsPerKey.value();
-  BloomFilter bloomFilter(accumulator.entries.size(), bitsPerKey, pool_);
+  const auto& config = *accumulator.options.bloomFilter;
+  auto bloomFilter =
+      createBloomFilterBuilder(config, accumulator.entries.size(), pool_);
   for (const auto& entry : accumulator.entries) {
-    bloomFilter.insert(entry.key);
+    bloomFilter->insert(entry.key);
   }
-  auto dataVec =
-      builder.CreateVector(bloomFilter.data(), bloomFilter.dataSize());
-  return serialization::CreateBloomFilter(
-      builder, bloomFilter.numBlocks(), bitsPerKey, dataVec);
+  const auto serialized = bloomFilter->finish();
+  auto dataVec = builder.CreateVector(
+      reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
+  return serialization::CreateBloomFilter(builder, config.bitsPerKey, dataVec);
 }
 
 void HashIndexWriter::buildIndexFlatBuffer(
@@ -252,9 +253,7 @@ HashIndexWriter::Options HashIndexWriter::makeOptions(
   auto options = Options{
       .columns = hashIndexConfig.columns,
       .loadFactor = hashIndexConfig.loadFactor,
-      .bloomFilterBitsPerKey = hashIndexConfig.bloomFilter.has_value()
-          ? std::optional<float>{hashIndexConfig.bloomFilter->bitsPerKey}
-          : std::nullopt,
+      .bloomFilter = hashIndexConfig.bloomFilter,
       .maxPartitionSizeBytes = hashIndexConfig.maxPartitionSizeBytes,
   };
   NIMBLE_USER_CHECK(
@@ -265,11 +264,11 @@ HashIndexWriter::Options HashIndexWriter::makeOptions(
   NIMBLE_USER_CHECK(
       !options.columns.empty(), "Hash index must have at least one column");
   NIMBLE_USER_CHECK(
-      !options.bloomFilterBitsPerKey.has_value() ||
-          (std::isfinite(options.bloomFilterBitsPerKey.value()) &&
-           options.bloomFilterBitsPerKey.value() > 0),
+      options.bloomFilter == nullptr ||
+          (std::isfinite(options.bloomFilter->bitsPerKey) &&
+           options.bloomFilter->bitsPerKey > 0),
       "Bloom filter bits per key must be finite and positive, but got: {}",
-      options.bloomFilterBitsPerKey.value_or(0));
+      options.bloomFilter == nullptr ? 0 : options.bloomFilter->bitsPerKey);
   return options;
 }
 

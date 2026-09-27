@@ -38,7 +38,7 @@ class DebugUtil {
  public:
   std::string toString(
       const cudf::table_view& table,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       vector_size_t from,
       vector_size_t to);
 

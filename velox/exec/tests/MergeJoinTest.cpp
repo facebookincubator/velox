@@ -1548,6 +1548,309 @@ TEST_F(MergeJoinTest, matchRatioStats) {
   }
 }
 
+TEST_F(MergeJoinTest, planNodeStats) {
+  // A MergeJoin node is implemented by two operators sharing its plan node id:
+  // the MergeJoin operator (left input) and a CallbackSink feeding the right.
+  auto left =
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "u0"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .assertResults("SELECT t0, u0 FROM t, u WHERE t0 = u0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(mergeJoinNodeId);
+
+  // Two operators implement this one plan node.
+  ASSERT_EQ(stats.operatorStats.size(), 2);
+  // Node input = left (5) + right (5).
+  EXPECT_EQ(stats.inputRows, 10);
+  EXPECT_EQ(stats.outputRows, 5);
+}
+
+// The streaming path emits a left equal-key group in installments: it drops the
+// batches it has consumed and picks the group up again when the next ones
+// arrive. What that can get wrong is a row duplicated or dropped where an
+// installment ends, so each case below puts a group boundary somewhere
+// different relative to the input batches and the output vector. Every case
+// runs with streaming off and on, so the two paths have to agree with the
+// reference and with each other.
+TEST_F(MergeJoinTest, streamLeftSideInstallmentBoundaries) {
+  struct {
+    const char* name;
+    std::vector<int32_t> leftKeys;
+    std::vector<int32_t> rightKeys;
+    int32_t leftBatchSize;
+    int32_t rightBatchSize;
+    int32_t outputBatchRows;
+  } testCases[] = {
+      // Wider than a batch, so the group is released and resumed twice.
+      {"group spans three left batches", {0, 0, 0, 0, 0, 0}, {0}, 2, 1, 4},
+      // The group ends exactly where a batch does, so the next batch opens a
+      // new group instead of continuing this one.
+      {"group ends on a batch boundary", {0, 0, 0, 0, 1, 1}, {0, 1}, 2, 1, 4},
+      // The group ends mid batch, so one batch holds the tail of one group and
+      // the head of the next.
+      {"group ends mid batch", {0, 0, 0, 1, 1, 1}, {0, 1}, 2, 1, 4},
+      // Release and resume repeatedly within one query.
+      {"consecutive spanning groups",
+       {0, 0, 0, 1, 1, 1, 2, 2, 2},
+       {0, 1, 2},
+       2,
+       2,
+       4},
+      // Several right rows per key, so each left row replays the whole right
+      // group and the output can fill part way through one left row.
+      {"right group wider than one row", {0, 0, 0, 0}, {0, 0, 0}, 2, 2, 5},
+      // An output boundary on every row, coinciding with installment
+      // boundaries as often as possible.
+      {"output batch of one row", {0, 0, 0, 0}, {0, 0}, 2, 1, 1},
+      // A left key with nothing on the right, taking the no-match path through
+      // the same group machinery. Only the left join emits these.
+      {"left key with no right match", {0, 0, 0, 1, 1, 1}, {0}, 2, 1, 4},
+  };
+
+  // Values are globally unique so a duplicated or dropped row is visible, not
+  // masked by an identical row elsewhere in the group.
+  const auto makeBatches = [&](const std::vector<int32_t>& keys,
+                               int32_t batchSize,
+                               const std::string& keyName,
+                               const std::string& valueName) {
+    const auto numRows = static_cast<int32_t>(keys.size());
+    std::vector<RowVectorPtr> batches;
+    for (int32_t row = 0; row < numRows; row += batchSize) {
+      const int32_t size = std::min<int32_t>(batchSize, numRows - row);
+      const std::vector<int32_t> batchKeys(
+          keys.begin() + row, keys.begin() + row + size);
+      batches.push_back(makeRowVector(
+          {keyName, valueName},
+          {makeFlatVector<int32_t>(batchKeys),
+           makeFlatVector<int32_t>(
+               size, [&](vector_size_t i) { return row + i; })}));
+    }
+    return batches;
+  };
+
+  for (const auto& testCase : testCases) {
+    auto leftInput =
+        makeBatches(testCase.leftKeys, testCase.leftBatchSize, "t0", "t1");
+    auto rightInput =
+        makeBatches(testCase.rightKeys, testCase.rightBatchSize, "u0", "u1");
+
+    createDuckDbTable("t", leftInput);
+    createDuckDbTable("u", rightInput);
+
+    for (auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+      for (const auto* streamLeft : {"false", "true"}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "{} joinType={} streamLeft={}",
+                testCase.name,
+                core::JoinTypeName::toName(joinType),
+                streamLeft));
+        auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values(leftInput)
+                        .mergeJoin(
+                            {"t0"},
+                            {"u0"},
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(rightInput)
+                                .planNode(),
+                            "",
+                            {"t0", "t1", "u1"},
+                            joinType)
+                        .planNode();
+
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kMergeJoinStreamLeftSide, streamLeft)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testCase.outputBatchRows))
+            .assertResults(
+                fmt::format(
+                    "SELECT t0, t1, u1 FROM t {} JOIN u ON t.t0 = u.u0",
+                    core::JoinTypeName::toName(joinType)));
+      }
+    }
+  }
+}
+
+// The config only applies to unfiltered inner and left joins. Everywhere else
+// it has to be inert rather than merely harmless: these shapes revisit the left
+// group, so releasing a batch would drop rows still needed.
+TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
+  // One key spanning four left batches, so streaming would have plenty to
+  // release if it wrongly engaged.
+  std::vector<RowVectorPtr> leftInput;
+  leftInput.reserve(4);
+  for (int32_t batch = 0; batch < 4; ++batch) {
+    leftInput.push_back(makeRowVector(
+        {"t0", "t1"},
+        {makeFlatVector<int32_t>(4, [](auto) { return 1; }),
+         makeFlatVector<int32_t>(
+             4, [batch](auto row) { return batch * 4 + row; })}));
+  }
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int32_t>({1}), makeFlatVector<int32_t>({100})});
+
+  createDuckDbTable("t", leftInput);
+  createDuckDbTable("u", {right});
+
+  struct {
+    const char* name;
+    core::JoinType joinType;
+    std::string filter;
+    std::string duckDbSql;
+  } testCases[] = {
+      // The filter rejects most of the group, so it has to be applied across a
+      // group that spans batches rather than being a no-op.
+      {"filtered inner join",
+       core::JoinType::kInner,
+       "t1 < 5",
+       "SELECT t0, t1, u1 FROM t, u WHERE t0 = u0 AND t1 < 5"},
+      {"right join",
+       core::JoinType::kRight,
+       "",
+       "SELECT t0, t1, u1 FROM t RIGHT JOIN u ON t.t0 = u.u0"},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    core::PlanNodeId mergeJoinNodeId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values(leftInput)
+            .mergeJoin(
+                {"t0"},
+                {"u0"},
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                testCase.filter,
+                {"t0", "t1", "u1"},
+                testCase.joinType)
+            .capturePlanNodeId(mergeJoinNodeId)
+            .planNode();
+
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .config(core::QueryConfig::kMergeJoinStreamLeftSide, "true")
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, "3")
+                    .assertResults(testCase.duckDbSql);
+
+    const auto runtimeStats =
+        toPlanStats(task->taskStats()).at(mergeJoinNodeId).customStats;
+    ASSERT_EQ(runtimeStats.at("streamedLeftBatches").sum, 0);
+  }
+}
+
+TEST_F(MergeJoinTest, streamLeftSideMultiBatchKeyGroup) {
+  // Key 1 fills three whole batches and spills into a fourth, so the group is
+  // complete only after five batches. Keys either side of it catch an
+  // off-by-one at the group boundaries.
+  std::vector<RowVectorPtr> leftInput;
+  leftInput.push_back(makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int32_t>({0, 0, 1, 1, 1, 1, 1, 1, 1, 1}),
+       makeFlatVector<int32_t>(10, [](auto row) { return row; })}));
+  for (int batch = 0; batch < 3; ++batch) {
+    leftInput.push_back(makeRowVector(
+        {"t0", "t1"},
+        {makeFlatVector<int32_t>(10, [](auto) { return 1; }),
+         makeFlatVector<int32_t>(
+             10, [batch](auto row) { return 100 + batch * 10 + row; })}));
+  }
+  leftInput.push_back(makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 2, 3, 4, 5, 6, 7}),
+       makeFlatVector<int32_t>(10, [](auto row) { return 200 + row; })}));
+
+  // Several right rows per key so each left row expands, plus key 8 with no
+  // left match and keys 3/5/7 with no right match to cover null-filling.
+  std::vector<RowVectorPtr> rightInput;
+  rightInput.push_back(makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int32_t>({0, 1, 1, 1, 2}),
+       makeFlatVector<int32_t>({10, 11, 12, 13, 14})}));
+  rightInput.push_back(makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int32_t>({2, 4, 6, 8, 8}),
+       makeFlatVector<int32_t>({15, 16, 17, 18, 19})}));
+
+  createDuckDbTable("t", leftInput);
+  createDuckDbTable("u", rightInput);
+
+  for (auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    for (const auto* streamLeft : {"false", "true"}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "joinType={} streamLeft={}",
+              core::JoinTypeName::toName(joinType),
+              streamLeft));
+      core::PlanNodeId mergeJoinNodeId;
+      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+      auto plan = PlanBuilder(planNodeIdGenerator)
+                      .values(leftInput)
+                      .mergeJoin(
+                          {"t0"},
+                          {"u0"},
+                          PlanBuilder(planNodeIdGenerator)
+                              .values(rightInput)
+                              .planNode(),
+                          "",
+                          {"t0", "t1", "u1"},
+                          joinType)
+                      .capturePlanNodeId(mergeJoinNodeId)
+                      .planNode();
+
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(core::QueryConfig::kMergeJoinStreamLeftSide, streamLeft)
+              // Small output batches force the cursor path, so a group is
+              // emitted across several getOutput() calls as well as several
+              // input batches.
+              .config(core::QueryConfig::kPreferredOutputBatchRows, "7")
+              .assertResults(
+                  fmt::format(
+                      "SELECT t0, t1, u1 FROM t {} JOIN u ON t.t0 = u.u0",
+                      core::JoinTypeName::toName(joinType)));
+
+      // Output is identical with the config on and off, so this stat is the
+      // only sign that streaming engaged at all. Key 1 spans five batches, so
+      // a streamed run has to drop some; without it the config could quietly
+      // become inert and every result assertion above would still pass.
+      const auto runtimeStats =
+          toPlanStats(task->taskStats()).at(mergeJoinNodeId).customStats;
+      const auto streamedBatches = runtimeStats.at("streamedLeftBatches").sum;
+      if (streamLeft == std::string_view("true")) {
+        ASSERT_GT(streamedBatches, 0);
+      } else {
+        ASSERT_EQ(streamedBatches, 0);
+      }
+    }
+  }
+}
+
 TEST_F(MergeJoinTest, antiJoinWithUniqueJoinKeys) {
   auto left = makeRowVector(
       {"a", "b"},

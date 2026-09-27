@@ -21,6 +21,7 @@
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -69,16 +70,16 @@ class FileDataSource : public DataSource {
   /// keys directly (e.g., "storageReadBytes"). Metadata IO stats use the
   /// kMetadataPrefix (e.g., "metadata.storageReadBytes").
   static constexpr std::string_view kMetadataPrefix{"metadata"};
-  static constexpr std::string_view kNumPrefetch{"numPrefetch"};
-  static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
-  static constexpr std::string_view kTotalScanTime{"totalScanTime"};
-  static constexpr std::string_view kOverreadBytes{"overreadBytes"};
-  static constexpr std::string_view kStorageReadBytes{"storageReadBytes"};
-  static constexpr std::string_view kNumLocalRead{"numLocalRead"};
-  static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
-  static constexpr std::string_view kNumRamRead{"numRamRead"};
-  static constexpr std::string_view kRamReadBytes{"ramReadBytes"};
-  static constexpr std::string_view kReadGapBytes{"readGapBytes"};
+  static constexpr std::string_view kNumPrefetch{io::kNumPrefetch};
+  static constexpr std::string_view kPrefetchBytes{io::kPrefetchBytes};
+  static constexpr std::string_view kTotalScanTime{io::kTotalScanTime};
+  static constexpr std::string_view kOverreadBytes{io::kOverreadBytes};
+  static constexpr std::string_view kStorageReadBytes{io::kStorageReadBytes};
+  static constexpr std::string_view kNumLocalRead{io::kNumLocalRead};
+  static constexpr std::string_view kLocalReadBytes{io::kLocalReadBytes};
+  static constexpr std::string_view kNumRamRead{io::kNumRamRead};
+  static constexpr std::string_view kRamReadBytes{io::kRamReadBytes};
+  static constexpr std::string_view kReadGapBytes{io::kReadGapBytes};
 
   FileDataSource(
       const RowTypePtr& outputType,

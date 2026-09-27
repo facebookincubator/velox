@@ -39,12 +39,20 @@ namespace facebook::velox::parquet {
 /// continuous stream accessible via readWithVisitor().
 class PageReader {
  public:
-  /// Trailing readable bytes past readBytes()'s returned size. Sized
-  /// for bits::detail::loadBits<uint64_t>, which touches bytes
-  /// [offset, offset + 9) when the bit field straddles the 8-byte word
-  /// boundary. For any value within a miniblock 'offset < size', so the
-  /// furthest byte is at most 'size + 7' — 8 trailing bytes suffice.
-  static constexpr int kPageReadPadding = 8;
+  /// Trailing readable bytes past readBytes()'s returned size. Sized for
+  /// the widest over-read any decoder performs:
+  ///
+  /// - DeltaBpDecoder's bitWidth > 16 SIMD path forms a 128-bit decode window
+  ///   from two unaligned 8-byte loads. At the end of a miniblock the second
+  ///   load can touch up to 11 bytes past the packed miniblock data.
+  /// - bits::detail::loadBits<uint64_t> touches bytes [offset, offset + 9)
+  ///   when the bit field straddles the 8-byte word boundary, so the furthest
+  ///   byte is at most 'size + 7' — 8 trailing bytes. This is the binding
+  ///   requirement for the paths the SIMD kernel does not cover, notably
+  ///   deltaBitWidth > 32.
+  ///
+  /// Do not lower this below 8 even if the SIMD path goes away.
+  static constexpr int kPageReadPadding = 11;
 
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,

@@ -196,6 +196,44 @@ TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {
   EXPECT_FALSE(selection.estimatedSize.has_value());
 }
 
+// EncodingFactory reads Huffman back through RETURN_ENCODING_BY_INTEGER_TYPE,
+// which rejects floating-point data types. Selection must therefore refuse
+// Huffman for float and double, even though their physical types (uint32_t and
+// uint64_t) are integral. Offering it produces a blob that encodes but cannot
+// be deserialized.
+template <typename T>
+void verifyHuffmanRejectedForFloatingPoint() {
+  // Selection operates on the physical type throughout, which is exactly why
+  // gating on it rather than on T lets floating-point data through.
+  using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+  const std::vector<T> logicalValues{1.5, 2.5, 1.5, 2.5, 1.5, 2.5};
+  std::vector<PhysicalType> values(logicalValues.size());
+  std::memcpy(
+      values.data(), logicalValues.data(), logicalValues.size() * sizeof(T));
+  const auto valueSpan =
+      std::span<const PhysicalType>{values.data(), values.size()};
+  const auto statistics = nimble::Statistics<PhysicalType>::create(valueSpan);
+  const nimble::Encoding::Options options;
+
+  EXPECT_FALSE(
+      nimble::detail::EncodingSizeEstimation<T>::estimateSize(
+          nimble::EncodingType::Huffman, valueSpan, statistics, options)
+          .has_value());
+
+  // With Huffman as the only candidate, selection must fall back rather than
+  // pick it.
+  nimble::ManualEncodingSelectionPolicy<T> policy{
+      {{nimble::EncodingType::Huffman, 1.0}}, std::nullopt, std::nullopt};
+  const auto selection = policy.select(valueSpan, statistics, options);
+  EXPECT_EQ(selection.encodingType, nimble::EncodingType::Trivial);
+  EXPECT_FALSE(selection.estimatedSize.has_value());
+}
+
+TEST(EncodingSelectionTest, huffmanRejectedForFloatingPoint) {
+  verifyHuffmanRejectedForFloatingPoint<float>();
+  verifyHuffmanRejectedForFloatingPoint<double>();
+}
+
 template <typename T>
 void test(std::span<const T> values, std::vector<EncodingDetails> expected) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
@@ -360,6 +398,39 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, nestedReadFactorsInheritRoot) {
       nested->candidateEncodingReadFactors(),
       (std::vector<std::pair<nimble::EncodingType, float>>{
           {nimble::EncodingType::FixedBitWidth, 1.0}}));
+}
+
+TEST(
+    ManualEncodingSelectionPolicyFactoryTest,
+    bitRangeSplitExcludesSequentialChildEncodings) {
+  nimble::ManualEncodingSelectionPolicyFactory factory{
+      {
+          {nimble::EncodingType::Constant, 1.0},
+          {nimble::EncodingType::Trivial, 1.0},
+          {nimble::EncodingType::FixedBitWidth, 1.0},
+          {nimble::EncodingType::BlockBitPacking, 1.0},
+          {nimble::EncodingType::RLE, 1.0},
+          {nimble::EncodingType::MainlyConstant, 1.0},
+          {nimble::EncodingType::BitRangeSplit, 1.0},
+      },
+      /*compressionOptions=*/std::nullopt};
+
+  auto root = factory.createPolicy(nimble::DataType::Uint64);
+  auto childBase = root->create<uint32_t>(
+      nimble::EncodingType::BitRangeSplit, /*nestedEncodingIdentifier=*/0);
+  auto* child = dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint32_t>*>(
+      childBase.get());
+  ASSERT_NE(child, nullptr);
+  // Section point lookups exclude recursive and sequential child encodings
+  // from automatic selection, while retaining random-access encodings.
+  EXPECT_EQ(
+      child->candidateEncodingReadFactors(),
+      (std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::Constant, 1.0},
+          {nimble::EncodingType::Trivial, 1.0},
+          {nimble::EncodingType::FixedBitWidth, 1.0},
+          {nimble::EncodingType::BlockBitPacking, 1.0},
+      }));
 }
 
 TEST(ManualEncodingSelectionPolicyFactoryTest, nestedReadFactorsOverrideRoot) {

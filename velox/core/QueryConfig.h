@@ -118,14 +118,31 @@ class QueryConfig {
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
-  /// provided session timezone (if any).
+  /// provided session timezone (if any). Casts from TIMESTAMP WITH TIME ZONE to
+  /// TIMESTAMP return the UTC instant when this property is true.
   VELOX_QUERY_CONFIG(
       kAdjustTimestampToTimezone,
       adjustTimestampToTimezone,
       "adjust_timestamp_to_session_timezone",
       bool,
       false,
-      "Adjust timezone-less timestamp conversions to session timezone.")
+      "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
+
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE use each
+  /// value's embedded time zone (legacy behavior). If false, they render the
+  /// UTC instant in the session time zone, so values that compare equal produce
+  /// equal results. The timezone_hour and timezone_minute functions always
+  /// report the offset stored in the value. When
+  /// adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the
+  /// embedded zone when this property is true and the session zone when this
+  /// property is false.
+  VELOX_QUERY_CONFIG(
+      kLegacyTimestampWithTimezone,
+      legacyTimestampWithTimezone,
+      "legacy_timestamp_with_timezone",
+      bool,
+      true,
+      "Render TIMESTAMP WITH TIME ZONE values in each value's embedded zone (true) or the session timezone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the embedded zone (true) or session timezone (false).")
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
@@ -508,6 +525,22 @@ class QueryConfig {
       uint32_t,
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
+
+  /// MergeJoin normally buffers both sides of an equal-key group before
+  /// emitting, so its memory is proportional to the sum of the two groups. For
+  /// inner and left joins the left group does not need to be resident: each
+  /// left row is joined against the whole right group and can then be
+  /// discarded. With this set, such joins retain only the left batch currently
+  /// being consumed and the one before it, kept to extend the group, bounding
+  /// left-side retention to two batches instead of the whole key group. Set to
+  /// false to restore buffering of the whole group.
+  VELOX_QUERY_CONFIG(
+      kMergeJoinStreamLeftSide,
+      mergeJoinStreamLeftSide,
+      "merge_join_stream_left_side",
+      bool,
+      true,
+      "Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group.")
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
@@ -1460,46 +1493,46 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
-  /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
+  /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
       rpcRateLimiterAdaptiveEnabled,
       "rpc.ratelimiter.adaptive_enabled",
       bool,
       true,
-      "When true (default), the process-global per-tier RPC rate limiter adapts "
-      "its max-pending cap via AIMD driven by the backend overload signal "
+      "When true (default), each backend's rate limiter adapts its capacity "
+      "via AIMD driven by the backend overload signal "
       "(rate-limit/timeout): multiplicative-decrease on an overload-classified "
       "drain, additive-increase on a clean drain. On by default because it is "
       "the protective behavior for shared, rate-limited inference backends; set "
       "false to keep a static cap. Unlike the per-driver congestion window, this "
       "coordinates all drivers on the worker and reacts to the rate-limit signal "
-      "directly, not to RTT.")
+      "directly, not to RTT. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Floor for the adaptive per-tier RPC rate limiter's max-pending cap.
+  /// Floor the adaptive rate-limit capacity may shrink to.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMinLimit,
       rpcRateLimiterMinLimit,
       "rpc.ratelimiter.min_limit",
       int64_t,
       50,
-      "Floor the adaptive RPC rate limiter's per-tier max-pending cap may "
+      "Floor that a backend's adaptive rate-limit capacity may "
       "shrink to under sustained overload. Default 50 (a floor of 1 can stall a "
       "workload under sustained throttling). Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true.")
+      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Multiplicative-decrease factor for the adaptive RPC rate limiter.
+  /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterDecreaseFactor,
       rpcRateLimiterDecreaseFactor,
       "rpc.ratelimiter.decrease_factor",
       double,
       0.5,
-      "Factor applied to the adaptive RPC rate limiter's per-tier max-pending "
-      "cap on each overload-classified drain. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true.")
+      "Factor applied to a backend's adaptive rate-limit capacity "
+      "on each overload-classified drain. Default 0.5 (halve). Clamped to "
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Ceiling for the per-tier RPC rate-limiter max-pending cap.
+  /// Ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMaxLimit,
       rpcRateLimiterMaxLimit,
@@ -1507,11 +1540,16 @@ class QueryConfig {
       int64_t,
       200,
       "Ceiling (and, with adaptive enabled, the starting value) for the "
-      "process-global per-tier RPC rate-limiter max-pending cap. Default 200 "
+      "per-backend rate-limit capacity, shared across drivers. Default 200 "
       "(validated for LLM-inference backends); 0 falls back to the built-in 20. "
-      "With admission-controlled dispatch this cap actually bounds process-wide "
-      "in-flight rows per tier; the adaptive limiter shrinks from here toward "
-      "rpc.ratelimiter.min_limit under overload.")
+      "With admission-controlled dispatch this cap bounds in-flight work "
+      "against that backend across every driver on the worker; the adaptive "
+      "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
+      "overload. Any positive value here overrides a ceiling the function "
+      "asked for through its own options; set 0 to defer to that. The first "
+      "query to reach a backend fixes its policy for the life of the worker "
+      "process; later queries contribute their outcomes to the adaptation but "
+      "cannot change the setting.")
 
   // --- Hand-written accessors for properties that need custom logic ---
 

@@ -45,30 +45,6 @@
 namespace facebook::nimble::serde {
 namespace detail {
 
-/// Get total size of a string field
-uint32_t getStringsTotalSize(std::string_view input);
-
-/// Encode a string field with supplied total size
-void encodeStrings(std::string_view input, uint32_t size, char* output);
-
-/// Encode non-string field
-uint32_t
-encode(const SerializerOptions& options, std::string_view input, char* output);
-
-/// Write zeros for missing streams in kLegacy format.
-/// Each missing stream is a zero-length stream (size=0, u32 = 4 bytes).
-template <typename T>
-void writeMissingStreams(T& buffer, uint32_t lastStream, uint32_t nextStream) {
-  NIMBLE_CHECK_LE(lastStream + 1, nextStream, "unexpected stream offset");
-  const auto missingStreamCount = nextStream - lastStream - 1;
-  if (missingStreamCount > 0) {
-    const auto oldByteSize = buffer.size();
-    buffer.resize(oldByteSize + missingStreamCount * sizeof(uint32_t));
-    auto begin = reinterpret_cast<uint32_t*>(buffer.data() + oldByteSize);
-    std::fill(begin, begin + missingStreamCount, 0);
-  }
-}
-
 /// Encode typed values using a given encoding selection policy factory.
 /// When encodingLayout is provided, replays the captured encoding with
 /// compressionOptions. policyFactory is used as fallback for nested encodings
@@ -555,8 +531,7 @@ std::string_view encodeNullableScalar(
 template <typename T>
 class StreamDataWriter {
  public:
-  /// Constructor. For kLegacy, writes the header immediately. For
-  /// kSerialization, writes the compact header prefix (version, row count,
+  /// Constructor. Writes the compact header prefix (version, row count,
   /// flags).
   ///
   /// @param pool Memory pool for encoding buffer allocation.
@@ -574,9 +549,8 @@ class StreamDataWriter {
   /// Write data for a single stream.
   void writeData(const nimble::StreamData& streamData);
 
-  /// Close the writer. For kLegacy, fills trailing zeros up to nodeCount. For
-  /// kSerialization, writes the stream-sizes trailer.
-  void close(uint32_t nodeCount = 0);
+  /// Close the writer, appending the stream-sizes trailer.
+  void close();
 
  private:
   void encodeStream(
@@ -600,14 +574,11 @@ class StreamDataWriter {
   // Final serialized output. Encoded stream bytes and stream metadata are
   // appended here after each stream encode completes.
   T& outputBuffer_;
-  // Track last stream offset for kLegacy format zero-filling.
-  uint32_t lastStream_{0xffffffff};
   // Dense stream sizes. streamSizes_[i] = byte size of stream i (0 for
   // missing/empty).
   std::vector<uint32_t> streamSizes_;
   // Byte offset of the serialization header flags byte, patched in close().
   size_t headerFlagsOffset_{0};
-  bool writesHeaderFlags_{false};
   bool requiresNullBarrier_{false};
 };
 
@@ -621,36 +592,26 @@ StreamDataWriter<T>::StreamDataWriter(
         streamEncodingLayouts)
     : options_{options},
       pool_{pool},
-      streamEncodingBuffer_{
-          options.enableEncoding() ? std::make_unique<nimble::Buffer>(*pool)
-                                   : nullptr},
+      streamEncodingBuffer_{std::make_unique<nimble::Buffer>(*pool)},
       streamEncodingLayouts_{streamEncodingLayouts},
       outputBuffer_{buffer} {
-  NIMBLE_CHECK(
-      streamEncodingLayouts_ == nullptr || options_.enableEncoding(),
-      "streamEncodingLayouts can only be set when encoding is enabled");
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
 
-  std::optional<SerializationVersion> version;
-  if (options_.hasVersionHeader()) {
-    version = options_.serializationVersion();
-  }
-
-  writesHeaderFlags_ = usesCompactHeaderFlags(version);
-  if (writesHeaderFlags_) {
-    headerFlagsOffset_ =
-        writeSerializationHeader(outputBuffer_, version.value(), rowCount);
-    NIMBLE_CHECK_LT(
-        headerFlagsOffset_,
-        outputBuffer_.size(),
-        "Invalid null barrier flag offset");
-    NIMBLE_CHECK_EQ(
-        static_cast<uint8_t>(outputBuffer_.data()[headerFlagsOffset_]),
-        SerializationHeader::kStreamVarintRowCountFlag,
-        "Non-tablet header should initialize the varint row-count flag");
-  } else {
-    writeLegacySerializationHeader(outputBuffer_, version, rowCount);
-  }
+  const auto version = options_.version;
+  NIMBLE_CHECK(
+      usesCompactHeaderFlags(version),
+      "StreamDataWriter writes require kSerialization or kProjection. Got: {}",
+      version);
+  headerFlagsOffset_ =
+      writeSerializationHeader(outputBuffer_, version, rowCount);
+  NIMBLE_CHECK_LT(
+      headerFlagsOffset_,
+      outputBuffer_.size(),
+      "Invalid null barrier flag offset");
+  NIMBLE_CHECK_EQ(
+      static_cast<uint8_t>(outputBuffer_.data()[headerFlagsOffset_]),
+      SerializationHeader::kStreamVarintRowCountFlag,
+      "Non-tablet header should initialize the varint row-count flag");
 }
 
 template <typename T>
@@ -663,23 +624,6 @@ void StreamDataWriter<T>::writeData(const nimble::StreamData& streamData) {
   // Streams with no physical payload are omitted. All-true Row/FlatMap null
   // streams normally remain unmaterialized and are reconstructed on read.
   if (data.empty() && nonNulls.empty()) {
-    return;
-  }
-
-  if (!options_.enableEncoding()) {
-    NIMBLE_CHECK(
-        nonNulls.empty() ||
-            std::all_of(
-                nonNulls.begin(),
-                nonNulls.end(),
-                [](bool notNull) { return notNull; }),
-        "Null values are not supported in legacy serialization formats. "
-        "Use kSerialization for nullable support.");
-
-    NIMBLE_CHECK_LE(lastStream_ + 1, streamOffset, "unexpected stream offset");
-    detail::writeMissingStreams(outputBuffer_, lastStream_, streamOffset);
-    lastStream_ = streamOffset;
-    encodeStream(scalarKind, streamOffset, data);
     return;
   }
 
@@ -707,27 +651,6 @@ void StreamDataWriter<T>::encodeStream(
     uint32_t streamOffset,
     std::string_view data,
     std::span<const bool> nonNulls) {
-  if (!options_.enableEncoding()) {
-    if (scalarKind == ScalarKind::String || scalarKind == ScalarKind::Binary) {
-      // Legacy string encoding: [total_size:u32][len_0:u32][data_0]...
-      const auto size = detail::getStringsTotalSize(data);
-      auto* pos = detail::extend(outputBuffer_, size + sizeof(uint32_t));
-      detail::encodeStrings(data, size, pos);
-    } else {
-      // Legacy scalar encoding:
-      //   Zstd: [size:u32][compType:i8][data...]
-      //   LZ4:  [size:u32][compType:i8][origSize:u32][data...]
-      const auto bufferStart = outputBuffer_.size();
-      const uint32_t maxSize = data.size() + 2 * sizeof(uint32_t) + 1;
-      auto* pos = detail::extend(outputBuffer_, maxSize);
-      const auto encodedSize = detail::encode(options_, data, pos);
-      if (encodedSize < maxSize) {
-        outputBuffer_.resize(bufferStart + encodedSize);
-      }
-    }
-    return;
-  }
-
   const EncodingLayout* encodingLayout = nullptr;
   if (streamEncodingLayouts_ != nullptr) {
     auto it = streamEncodingLayouts_->find(streamOffset);
@@ -769,26 +692,19 @@ void StreamDataWriter<T>::encodeStream(
 }
 
 template <typename T>
-void StreamDataWriter<T>::close(uint32_t nodeCount) {
-  if (!options_.enableEncoding()) {
-    detail::writeMissingStreams(outputBuffer_, lastStream_, nodeCount);
-    return;
-  }
-
-  if (writesHeaderFlags_) {
-    NIMBLE_CHECK_LT(
-        headerFlagsOffset_,
-        outputBuffer_.size(),
-        "Invalid null barrier flag offset");
-    NIMBLE_CHECK(
-        options_.encodingOptions.useVarintRowCount,
-        "Non-tablet writers must use varint stream row counts");
-    outputBuffer_.data()[headerFlagsOffset_] =
-        static_cast<char>(detail::makeFlagsByte(
-            requiresNullBarrier_,
-            /*streamEncodingUsesVarintRowCount=*/true,
-            /*streamHasChunkHeader=*/false));
-  }
+void StreamDataWriter<T>::close() {
+  NIMBLE_CHECK_LT(
+      headerFlagsOffset_,
+      outputBuffer_.size(),
+      "Invalid null barrier flag offset");
+  NIMBLE_CHECK(
+      options_.encodingOptions.useVarintRowCount,
+      "Non-tablet writers must use varint stream row counts");
+  outputBuffer_.data()[headerFlagsOffset_] =
+      static_cast<char>(detail::makeFlagsByte(
+          requiresNullBarrier_,
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*streamHasChunkHeader=*/false));
 
   detail::writeTrailer(
       streamSizes_,

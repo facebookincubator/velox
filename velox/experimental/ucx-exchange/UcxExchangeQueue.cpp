@@ -63,6 +63,7 @@ void UcxExchangeQueue::enqueueLocked(
   receivedBytes_ += dataSize;
 
   queue_.push_back(std::move(data));
+  publishSizeLocked();
 
   // High-water-mark alerts: log when queue size crosses thresholds.
   auto newSize = static_cast<int64_t>(queue_.size());
@@ -145,6 +146,7 @@ PackedTableWithStreamPtr UcxExchangeQueue::dequeueLocked(
 
   data = std::move(queue_.front());
   queue_.pop_front();
+  publishSizeLocked();
   totalBytes_ -= data->gpuDataSize();
 
   return data;
@@ -162,6 +164,7 @@ void UcxExchangeQueue::setError(std::string_view error) {
     // NOTE: clear the serialized page queue as we won't consume from an
     // errored queue.
     queue_.clear();
+    publishSizeLocked();
     promises = clearAllPromisesLocked();
   }
   clearPromises(promises);

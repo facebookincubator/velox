@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/exec/OperatorType.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -320,16 +322,29 @@ TEST_F(MixedUnionTest, stats) {
   });
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId unionNodeId;
   auto unionNode = std::make_shared<core::MixedUnionNode>(
       planNodeIdGenerator->next(),
       std::vector<core::PlanNodePtr>{
           PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
           PlanBuilder(planNodeIdGenerator).values({data2}).planNode()});
-  unionNodeId = unionNode->id();
 
-  auto task = AssertQueryBuilder(unionNode).copyResults(pool());
-  ASSERT_EQ(task->size(), kRowsPerSource * 2);
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(unionNode).copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRowsPerSource * 2);
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(unionNode->id());
+
+  // The MixedUnion operator and a CallbackSink per source share this plan node
+  // id: the sinks bound the node's input, MixedUnion bounds its output.
+  ASSERT_EQ(stats.operatorStats.size(), 2);
+  EXPECT_EQ(
+      stats.inputRows,
+      stats.operatorStatsFor(OperatorType::kCallbackSink).inputRows);
+  EXPECT_EQ(stats.inputRows, kRowsPerSource * 2);
+  EXPECT_EQ(
+      stats.outputRows,
+      stats.operatorStatsFor(OperatorType::kMixedUnion).outputRows);
 }
 
 TEST_F(MixedUnionTest, withFilter) {

@@ -96,8 +96,8 @@ class DeserializerSkipTest : public ::testing::Test {
   }
 
   std::string makeTabletBatch(std::string_view serialized, RowRange rowRange) {
-    const DeserializerOptions parserOptions{.hasHeader = true};
-    serde::StreamDataParser parser{pool_.get(), parserOptions};
+    const DeserializerOptions parserOptions{};
+    serde::StreamDataParser parser{pool_.get()};
     const auto rowCount = parser.initialize(serialized);
     auto header = serde::createTabletChunkHeader({
         .rowCount = rowCount,
@@ -274,7 +274,7 @@ class DeserializerSkipTest : public ::testing::Test {
       views.push_back(s);
     }
 
-    DeserializerOptions dsOpts{.hasHeader = true};
+    DeserializerOptions dsOpts{};
     Deserializer fullDs{schema, pool_.get(), dsOpts};
     velox::VectorPtr full;
     fullDs.deserialize(views, full);
@@ -379,8 +379,7 @@ TEST_F(DeserializerSkipTest, reportsOutputRowsPerInputBatch) {
       views.emplace_back(batch);
     }
 
-    Deserializer deserializer{
-        schema, pool_.get(), DeserializerOptions{.hasHeader = true}};
+    Deserializer deserializer{schema, pool_.get(), DeserializerOptions{}};
     velox::VectorPtr output;
     std::vector<uint32_t> outputRows;
     deserializer.deserialize(views, output, outputRows);
@@ -515,7 +514,7 @@ TEST_F(DeserializerSkipTest, concurrentSkipStringNoSharedBuffers) {
   auto schema = serializedPair.second;
   const std::vector<std::string_view> views{serialized[0]};
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer refDs{schema, pool_.get(), dsOpts};
   velox::VectorPtr fullRef;
   refDs.deserialize(views, fullRef);
@@ -745,7 +744,7 @@ TEST_F(DeserializerSkipTest, skipHandlesInMapWithEmptyStreamSegments) {
       {"m", {"1", "2", "3"}}};
   auto [serialized, schema] = serialize(type, {batch}, flatMaps);
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer d{schema, pool_.get(), dsOpts};
   std::vector<std::string_view> views{serialized[0]};
   velox::VectorPtr out;
@@ -878,7 +877,7 @@ TEST_F(DeserializerSkipTest, manyBatchesDisjointRowRanges) {
     views.push_back(s);
   }
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer ds{schema, pool_.get(), dsOpts};
   velox::VectorPtr out;
   ds.deserialize(views, rowRanges, out);
@@ -958,8 +957,8 @@ TEST_F(DeserializerSkipTest, mapIntIntSingleBatch) {
 // batches and still pass.
 TEST_F(DeserializerSkipTest, barrierFlagSetOnlyWhenNestedRowHasNulls) {
   auto readBarrierFlag = [&](const std::string& blob) {
-    DeserializerOptions dsOpts{.hasHeader = true};
-    serde::StreamDataParser parser{pool_.get(), dsOpts};
+    DeserializerOptions dsOpts{};
+    serde::StreamDataParser parser{pool_.get()};
     parser.initialize(blob);
     return parser.requiresNullBarrier();
   };
@@ -1073,7 +1072,7 @@ TEST_F(DeserializerSkipTest, rejectRowRangeStartRowAfterEndRow) {
       })});
   auto [serialized, schema] = serialize(type, {batch});
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer ds{schema, pool_.get(), dsOpts};
   std::vector<std::string_view> views{serialized[0]};
   velox::VectorPtr out;
@@ -1090,7 +1089,7 @@ TEST_F(DeserializerSkipTest, rejectRowRangeEndRowPastBatchRowCount) {
       })});
   auto [serialized, schema] = serialize(type, {batch});
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer ds{schema, pool_.get(), dsOpts};
   std::vector<std::string_view> views{serialized[0]};
   velox::VectorPtr out;
@@ -1116,7 +1115,7 @@ TEST_F(DeserializerSkipTest, singleBatchMultipleRanges) {
       nimble::RowRange{500, 550},
       nimble::RowRange{999, 1000}};
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer singleBatch{schema, pool_.get(), dsOpts};
   velox::VectorPtr out;
   singleBatch.deserialize(serialized[0], ranges, out);
@@ -1151,7 +1150,7 @@ TEST_F(DeserializerSkipTest, rejectUnsortedOrOverlappingSingleBatchRanges) {
       })});
   auto [serialized, schema] = serialize(type, {batch});
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   velox::VectorPtr out;
 
   Deserializer unsorted{schema, pool_.get(), dsOpts};
@@ -1185,7 +1184,7 @@ TEST_F(DeserializerSkipTest, rejectMismatchedRowRangesSize) {
       })});
   auto [serialized, schema] = serialize(type, {batch});
 
-  DeserializerOptions dsOpts{.hasHeader = true};
+  DeserializerOptions dsOpts{};
   Deserializer ds{schema, pool_.get(), dsOpts};
   std::vector<std::string_view> views{serialized[0]};
   velox::VectorPtr out;

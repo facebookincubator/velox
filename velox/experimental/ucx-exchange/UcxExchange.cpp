@@ -44,24 +44,14 @@ UcxExchange::UcxExchange(
           fmt::format("[{}]", planNode->id())),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
-      closeExchangeClientOnClose_{ucxExchangeClient == nullptr},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
       driverId_{driverCtx->driverId} {
-  if (ucxExchangeClient) {
-    // UcxExchangeClient is provided externally when this is a "plain"
-    // UcxExchange.
-    exchangeClient_ = std::move(ucxExchangeClient);
-  } else {
-    // UcxExchangeClient is nullptr when this UcxExchange is used to
-    // implement a MergeExchange. Create a new UCX exchange client.
-    auto task = operatorCtx_->task();
-    exchangeClient_ = std::make_shared<UcxExchangeClient>(
-        task->taskId(),
-        task->destination(),
-        1 // number of consumers, is always 1.
-    );
-  }
+  VELOX_CHECK_NOT_NULL(
+      ucxExchangeClient,
+      "UCX exchange client is null, plan node: {}",
+      planNode->id());
+  exchangeClient_ = std::move(ucxExchangeClient);
 }
 
 UcxExchange::~UcxExchange() {
@@ -180,8 +170,26 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
 
   // Get the packed_table and stream from the PackedTableWithStream
   PackedTableWithStream& data = *currentData_;
-  auto numRows = data.packedTable->table.num_rows();
+  // The producer's count, not table.num_rows(): a packed table with no columns
+  // reports zero rows however many it holds, which is what an exchange
+  // fragment with an empty output layout sends.
+  const auto numRows = data.numRows;
+  const auto& tableView = data.packedTable->table;
+  VELOX_CHECK(
+      tableView.num_columns() == 0 || tableView.num_rows() == numRows,
+      "Row count from the exchange disagrees with the received table: {} vs. {}",
+      numRows,
+      tableView.num_rows());
   auto gpuDataSize = data.gpuDataSize();
+
+  if (numRows == 0) {
+    // An empty page carries no rows to hand on, and Operator::getOutput() must
+    // never return an empty vector. Drop it and let the next isBlocked() fetch
+    // the following page or reach the end of the stream. Producers do not
+    // enqueue empty pages, so this is a defence rather than a live path.
+    currentData_.reset();
+    return nullptr;
+  }
 
   // Use the stream that was allocated in UcxExchangeSource::onMetadata
   // and the packed_table constructor of CudfVector to avoid copying data.
@@ -218,10 +226,9 @@ void UcxExchange::close() {
   currentData_.reset();
   if (exchangeClient_) {
     recordExchangeClientStats();
-    if (closeExchangeClientOnClose_) {
-      exchangeClient_->close();
-    }
   }
+  // The client is shared by all consumers of this pipeline and owned by the
+  // Task, which closes it on termination. Only drop this operator's reference.
   exchangeClient_ = nullptr;
 }
 

@@ -29,11 +29,15 @@ using exec::DriverCtx;
 using exec::SourceOperator;
 
 /// @brief The UCX exchange operator receives data from upstream tasks via
-/// UcxExchangeClient. It is used as a replacement for the Velox Exchange
-/// operator when the plan node's transport type is UCX. The operator receives
+/// UcxExchangeClient. exec::ExchangeTransportRegistry builds it for plan nodes
+/// whose transportKind is core::TransportKind::kUcx. The operator receives
 /// cudf::packed_columns from remote tasks and wraps them as CudfVectors.
 class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
  public:
+  /// @param ucxExchangeClient Client this operator reads from. Must not be
+  /// null: it is created by the same exec::ExchangeTransportEntry that builds
+  /// this operator and is shared by all consumers of the pipeline, so the Task
+  /// that owns it -- not this operator -- closes it.
   UcxExchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -77,13 +81,10 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
   std::shared_ptr<UcxExchangeClient> exchangeClient_;
 
   const uint64_t preferredOutputBatchBytes_;
-  // True only when this operator created the client itself. An externally
-  // shared client is left for its owner or final shared_ptr release to close.
-  const bool closeExchangeClientOnClose_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to ExchangeClient. When running with multile drivers,
-  /// this is done by the exchange running on driver 0.
+  // True if this operator is responsible for fetching splits from the Task
+  // and passing these to the exchange client. When running with multiple
+  // drivers, this is done by the exchange running on driver 0.
   const bool processSplits_;
   const int pipelineId_;
   const int driverId_;

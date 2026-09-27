@@ -119,6 +119,10 @@ class GroupingSet {
     return numInputRows_;
   }
 
+  uint64_t numToIntermediateFastPathCalls() const {
+    return numToIntermediateFastPathCalls_;
+  }
+
   /// Returns the number of global grouping sets.
   vector_size_t numGlobalGroupingSets() const {
     return static_cast<vector_size_t>(globalGroupingSets_.size());
@@ -374,6 +378,8 @@ class GroupingSet {
   bool hasCompactableAggregates_{false};
 
   uint64_t numInputRows_ = 0;
+
+  uint64_t numToIntermediateFastPathCalls_ = 0;
 
   // Column for groupId for a GROUPING SET.
   std::optional<column_index_t> groupIdChannel_;

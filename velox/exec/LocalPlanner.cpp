@@ -148,7 +148,11 @@ OperatorSupplier makeOutputSinkSupplier(ConsumerSupplier consumerSupplier) {
     return [consumerSupplier = std::move(consumerSupplier)](
                int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<CallbackSink>(
-          operatorId, ctx, consumerSupplier());
+          operatorId,
+          ctx,
+          consumerSupplier(),
+          /*startedCb=*/nullptr,
+          /*planNodeId=*/"N/A");
     };
   }
   return nullptr;
@@ -195,7 +199,12 @@ OperatorSupplier makeMergeSinkSupplier(
     };
 
     return std::make_unique<CallbackSink>(
-        operatorId, ctx, std::move(consumerCb), std::move(startCb), planNodeId);
+        operatorId,
+        ctx,
+        std::move(consumerCb),
+        std::move(startCb),
+        planNodeId,
+        core::PlanNode::Boundary::kInput);
   };
 }
 
@@ -275,7 +284,12 @@ OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
       // node; give it the node id so its stats aggregate into that node and
       // tracing can associate it.
       return std::make_unique<CallbackSink>(
-          operatorId, ctx, consumer, /*startedCb=*/nullptr, planNodeId);
+          operatorId,
+          ctx,
+          consumer,
+          /*startedCb=*/nullptr,
+          planNodeId,
+          core::PlanNode::Boundary::kInput);
     };
   }
 

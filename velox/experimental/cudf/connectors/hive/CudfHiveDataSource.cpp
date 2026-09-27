@@ -26,11 +26,12 @@
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/Casts.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
@@ -144,7 +145,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // and doesn't depend on split-specific state.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
-    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+    subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
 
@@ -153,11 +154,6 @@ CudfHiveDataSource::CudfHiveDataSource(
   // Create empty IOStats and FsStats for later use
   ioStatistics_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<facebook::velox::IoStats>();
-
-  // Whether to use the experimental cuDF reader
-  useExperimentalCudfReader_ =
-      cudfHiveConfig_->useExperimentalCudfReaderSession(
-          connectorQueryCtx_->sessionProperties());
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
@@ -172,8 +168,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       cudfHiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -222,6 +217,15 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
+  // Check if preloaded splits should start pre-fetching the first pass of
+  // column chunks.
+  const bool isPreloadedSplit = split->dataSource != nullptr;
+  if (isPreloadedSplit &&
+      cudfHiveConfig_->preloadColumnChunksSession(
+          connectorQueryCtx_->sessionProperties())) {
+    cudfSplitReader_->startColumnChunkFetch();
+  }
+
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
   try {
@@ -241,6 +245,48 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 }
 
+void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
+  auto* preparedSource = checkedPointerCast<CudfHiveDataSource>(source.get());
+
+  split_ = std::move(preparedSource->split_);
+  runtimeStats_.skippedSplits += preparedSource->runtimeStats_.skippedSplits;
+  runtimeStats_.processedSplits +=
+      preparedSource->runtimeStats_.processedSplits;
+  runtimeStats_.skippedSplitBytes +=
+      preparedSource->runtimeStats_.skippedSplitBytes;
+  completedBytes_ += preparedSource->completedBytes_;
+  completedRows_ += preparedSource->completedRows_;
+
+  // Drop the reader of the previous split before replacing the AST storage it
+  // references below.
+  cudfSplitReader_.reset();
+
+  // The reader's Parquet filter references the AST expressions and literal
+  // scalars owned by 'source', which is freed right after this call. Adopt that
+  // storage so the reader keeps pointing at live expressions; the nodes are
+  // heap-allocated, so moving the owners does not move the expressions.
+  subfieldScalars_ = std::move(preparedSource->subfieldScalars_);
+  subfieldTree_ = std::move(preparedSource->subfieldTree_);
+  subfieldFilterAst_ = preparedSource->subfieldFilterAst_;
+
+  cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
+  VELOX_CHECK_NOT_NULL(cudfSplitReader_);
+
+  // 'source' owns the query context the reader was prepared with and is
+  // freed right after this call.
+  cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+
+  // Start column chunk fetch if it is not already started
+  cudfSplitReader_->startColumnChunkFetch();
+
+  // The adopted reader keeps writing I/O statistics to the objects of
+  // 'source', so carry the balance accumulated here over to those.
+  preparedSource->ioStatistics_->merge(*ioStatistics_);
+  ioStatistics_ = std::move(preparedSource->ioStatistics_);
+  preparedSource->ioStats_->merge(*ioStats_);
+  ioStats_ = std::move(preparedSource->ioStats_);
+}
+
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /* future */) {
@@ -248,6 +294,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
+    cudfSplitReader_->resetSplit();
     return nullptr;
   }
   auto cudfTable = std::move(chunkOpt.value());
@@ -266,7 +313,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
-    cudfTable = cudf::apply_boolean_mask(
+    cudfTable = cudf::apply_retention_mask(
         *originalTable, asView(filterResult), stream, get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
@@ -293,7 +340,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
             pool_, outputType_, nRows, std::move(cudfTable), stream)
       : with_arrow::toVeloxColumn(
             cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
-  stream.synchronize();
+  stream.sync();
 
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
 
@@ -307,8 +354,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
+  io::addIoStatsToRuntimeStats(*ioStatistics_, "", result);
+  if (const auto it = result.find(std::string(io::kStorageReadBytes));
+      it != result.end()) {
+    // Preserve the DWIO value before a ReadFile-layer value overrides it.
+    // Overread bytes are defined relative to this counter.
+    result.emplace(kDwioStorageReadBytes, it->second);
+  }
+  // Preserve a zero-valued totalScanTime before scan timing is recorded.
   result.insert({
-      {std::string(connector::hive::HiveDataSource::kTotalScanTime),
+      {std::string(io::kTotalScanTime),
        RuntimeMetric(
            ioStatistics_->totalScanTimeNs(), RuntimeCounter::Unit::kNanos)},
       {std::string(Connector::kTotalRemainingFilterTime),
@@ -317,8 +372,13 @@ CudfHiveDataSource::getRuntimeStats() {
            RuntimeCounter::Unit::kNanos)},
   });
   const auto& ioStats = ioStats_->stats();
-  for (const auto& storageStats : ioStats) {
-    result.emplace(storageStats.first, storageStats.second);
+  for (const auto& [key, value] : ioStats) {
+    // Keep the ReadFile-layer value under the established key.
+    if (key == io::kStorageReadBytes) {
+      result[std::string(key)] = value;
+    } else {
+      result.emplace(key, value);
+    }
   }
   return result;
 }

@@ -2145,10 +2145,16 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
           dwio::common::FileFormat::PARQUET,
           parquet::ParquetConfig::kWriterBatchSizeSession),
       "97");
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::PARQUET,
+          parquet::ParquetConfig::kWriterRowGroupSizeSession),
+      "2MB");
 
   auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
   auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
   parquetOptions->batchSize = 11;
+  parquetOptions->rowGroupSizeBytes = 1 << 20;
   parquetOptions->bufferGrowRatio = 1.7;
   writerOptions->formatSpecificOptions = parquetOptions;
 
@@ -2164,6 +2170,7 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
   dataSink->appendData(createVectors(10, 1).front());
 
   EXPECT_EQ(parquetOptions->batchSize, 97);
+  EXPECT_EQ(parquetOptions->rowGroupSizeBytes, 2 << 20);
   EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
 }
 #endif

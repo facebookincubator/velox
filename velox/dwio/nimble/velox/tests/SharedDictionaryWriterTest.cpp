@@ -48,6 +48,8 @@ namespace facebook::nimble {
 namespace {
 
 using TestSharedDictionaryWriter = TypedSharedDictionaryWriter<int32_t>;
+using TestStringSharedDictionaryWriter =
+    TypedSharedDictionaryWriter<std::string_view>;
 using EncodingReadFactors = std::vector<std::pair<EncodingType, float>>;
 
 EncodingReadFactors dictionaryValueEncoding() {
@@ -107,9 +109,13 @@ EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator(
   return
       [valueEncodingReadFactors = std::move(valueEncodingReadFactors)](
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        // TODO: Only Int32, Uint32 and String are given tailored read
+        // factors; the remaining fixed-width types fall through to the shared
+        // default. Extend the pool so they are exercised distinctly too.
         EncodingReadFactors encodingReadFactors;
         switch (dataType) {
           case DataType::Int32:
+          case DataType::String:
             encodingReadFactors = valueEncodingReadFactors;
             break;
           case DataType::Uint32:
@@ -125,7 +131,6 @@ EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator(
           case DataType::Float:
           case DataType::Double:
           case DataType::Bool:
-          case DataType::String:
             encodingReadFactors = {{EncodingType::Trivial, 1.0}};
             break;
         }
@@ -188,15 +193,55 @@ class TestDictionaryResolver final : public ExternalDictionaryResolver {
   const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
 };
 
+class TestStringDictionaryResolver final : public ExternalDictionaryResolver {
+ public:
+  TestStringDictionaryResolver(
+      uint32_t dictionaryId,
+      std::span<const std::string_view> values,
+      velox::memory::MemoryPool* pool,
+      std::span<const EncodingType> candidateEncodings = {})
+      : dictionaryId_{dictionaryId},
+        alphabet_{test::createSharedDictionaryAlphabet<std::string_view>(
+            values,
+            candidateEncodings,
+            pool)} {}
+
+  std::shared_ptr<const SharedDictionaryAlphabet> resolve(
+      uint32_t dictionaryId,
+      DataType dataType) const final {
+    if (dictionaryId != dictionaryId_ || dataType != DataType::String) {
+      return nullptr;
+    }
+    return alphabet_;
+  }
+
+ private:
+  const uint32_t dictionaryId_;
+  const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
+};
+
 std::string_view bytesOf(std::span<const int32_t> values) {
   return {
       reinterpret_cast<const char*>(values.data()),
       values.size() * sizeof(int32_t)};
 }
 
+std::string_view bytesOf(std::span<const std::string_view> values) {
+  return {
+      reinterpret_cast<const char*>(values.data()),
+      values.size() * sizeof(std::string_view)};
+}
+
 StreamDataView streamView(
     const StreamDescriptorBuilder& descriptor,
     std::span<const int32_t> values) {
+  return StreamDataView{
+      descriptor, bytesOf(values), static_cast<uint32_t>(values.size())};
+}
+
+StreamDataView streamView(
+    const StreamDescriptorBuilder& descriptor,
+    std::span<const std::string_view> values) {
   return StreamDataView{
       descriptor, bytesOf(values), static_cast<uint32_t>(values.size())};
 }
@@ -225,13 +270,13 @@ std::vector<int32_t> repeatedValues(
   return values;
 }
 
-std::vector<TypeTraits<int32_t>::physicalType> physicalValues(
-    std::span<const int32_t> values) {
-  std::vector<TypeTraits<int32_t>::physicalType> physical;
+template <typename T>
+std::vector<typename TypeTraits<T>::physicalType> physicalValues(
+    std::span<const T> values) {
+  std::vector<typename TypeTraits<T>::physicalType> physical;
   physical.reserve(values.size());
   for (const auto value : values) {
-    physical.push_back(
-        EncodingPhysicalType<int32_t>::asEncodingPhysicalType(value));
+    physical.push_back(EncodingPhysicalType<T>::asEncodingPhysicalType(value));
   }
   return physical;
 }
@@ -335,13 +380,14 @@ std::vector<uint32_t> sharedDictionaryIndices(
     std::string_view encoded,
     uint32_t rowCount,
     velox::memory::MemoryPool* pool,
-    bool useVarintRowCount = false) {
+    bool useVarintRowCount = false,
+    DataType dataType = DataType::Int32) {
   const auto encodingType = EncodingPrefix::encodingType(encoded);
   EXPECT_EQ(encodingType, EncodingType::SharedDictionary);
   if (encodingType != EncodingType::SharedDictionary) {
     return {};
   }
-  EXPECT_EQ(EncodingPrefix::dataType(encoded), DataType::Int32);
+  EXPECT_EQ(EncodingPrefix::dataType(encoded), dataType);
   EXPECT_EQ(EncodingPrefix::readRowCount(encoded, useVarintRowCount), rowCount);
 
   const char* pos =
@@ -390,6 +436,24 @@ std::string_view encodeValues(
         std::move(policy), values, streamData.nonNulls(), buffer, options);
   }
   return EncodingFactory::encode<int32_t>(
+      std::move(policy), values, buffer, options);
+}
+
+std::string_view encodeValues(
+    TestStringSharedDictionaryWriter& writer,
+    size_t stripeIndex,
+    const StreamData& streamData,
+    Buffer& buffer,
+    const Encoding::Options& options = {}) {
+  NIMBLE_CHECK_EQ(
+      streamData.data().size() % sizeof(std::string_view),
+      0,
+      "Test stream has incomplete string values.");
+  const std::span<const std::string_view> values{
+      reinterpret_cast<const std::string_view*>(streamData.data().data()),
+      streamData.data().size() / sizeof(std::string_view)};
+  auto policy = writer.createEncodingPolicy(stripeIndex);
+  return EncodingFactory::encode<std::string_view>(
       std::move(policy), values, buffer, options);
 }
 
@@ -447,12 +511,16 @@ std::vector<uint32_t> nullableSharedDictionaryIndices(
       encodedNonNullValues, nonNullRowCount, pool, useVarintRowCount);
 }
 
+template <typename Values>
 void expectAlphabetEntries(
     const Chunk& alphabetChunk,
-    std::span<const int32_t> expectedValues,
+    const Values& expectedValues,
     velox::memory::MemoryPool* pool) {
+  using T = typename Values::value_type;
+  const std::span<const T> expectedValuesSpan{
+      expectedValues.data(), expectedValues.size()};
   EXPECT_EQ(
-      alphabetChunk.rowCount, static_cast<uint32_t>(expectedValues.size()));
+      alphabetChunk.rowCount, static_cast<uint32_t>(expectedValuesSpan.size()));
   ASSERT_EQ(alphabetChunk.content.size(), 1);
 
   auto encodedAlphabetOwner =
@@ -460,12 +528,12 @@ void expectAlphabetEntries(
   const std::string_view encodedAlphabet{*encodedAlphabetOwner};
   const auto alphabet = SharedDictionaryAlphabet::create(
       encodedAlphabet, std::move(encodedAlphabetOwner), pool);
-  std::vector<uint32_t> alphabetIndices(expectedValues.size());
+  std::vector<uint32_t> alphabetIndices(expectedValuesSpan.size());
   std::iota(alphabetIndices.begin(), alphabetIndices.end(), 0);
-  std::vector<TypeTraits<int32_t>::physicalType> entries(
+  std::vector<typename TypeTraits<T>::physicalType> entries(
       alphabetIndices.size());
-  alphabet->materialize<int32_t>(alphabetIndices, entries.data());
-  EXPECT_EQ(entries, physicalValues(expectedValues));
+  alphabet->materialize<T>(alphabetIndices, entries.data());
+  EXPECT_EQ(entries, physicalValues<T>(expectedValuesSpan));
 }
 
 class SharedDictionaryWriterTest : public testing::Test {
@@ -477,6 +545,16 @@ class SharedDictionaryWriterTest : public testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   StreamDescriptorBuilder descriptor_{11, ScalarKind::Int32};
 };
+
+struct StringScopeTestParam {
+  SharedDictionaryScope scope;
+  uint32_t dictionaryId;
+  bool usesResolver;
+};
+
+class StringSharedDictionaryWriterTest
+    : public SharedDictionaryWriterTest,
+      public testing::WithParamInterface<StringScopeTestParam> {};
 
 TEST_F(SharedDictionaryWriterTest, stripeScope) {
   struct StripeInput {
@@ -558,15 +636,96 @@ TEST_F(SharedDictionaryWriterTest, stripeScope) {
       ASSERT_TRUE(alphabetChunk.has_value());
       expectAlphabetEntries(
           *alphabetChunk, stripe.expectedAlphabet, pool_.get());
-      NIMBLE_ASSERT_THROW(
-          writer.encodeAlphabet(buffer),
-          fmt::format(
-              "Stripe shared dictionary 7 already finalized its alphabet for "
-              "stripe {}.",
-              i));
+      // Closing released the stripe, so a repeated close finds nothing to
+      // store rather than reporting a repeated finalize.
+      EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
     }
   }
 }
+
+TEST_P(StringSharedDictionaryWriterTest, roundTrip) {
+  const auto testParam = GetParam();
+  StreamDescriptorBuilder descriptor{12, ScalarKind::String};
+  const std::array<std::string_view, 3> expectedAlphabet{
+      "bravo", "alpha", "charlie"};
+  std::shared_ptr<const ExternalDictionaryResolver> resolver;
+  if (testParam.usesResolver) {
+    resolver = std::make_shared<TestStringDictionaryResolver>(
+        testParam.dictionaryId, expectedAlphabet, pool_.get());
+  }
+  auto writer = TestStringSharedDictionaryWriter{
+      pool_.get(),
+      writerOptions(testParam.scope, testParam.dictionaryId, resolver)};
+  Buffer buffer{*pool_};
+
+  const std::vector<std::string_view> values{
+      "bravo", "alpha", "bravo", "charlie", "alpha"};
+  const auto encoded = encodeValues(
+      writer, /*stripeIndex=*/0, streamView(descriptor, values), buffer);
+
+  EXPECT_FALSE(encoded.empty());
+  EXPECT_EQ(
+      sharedDictionaryIndices(
+          encoded,
+          static_cast<uint32_t>(values.size()),
+          pool_.get(),
+          /*useVarintRowCount=*/false,
+          DataType::String),
+      (std::vector<uint32_t>{0, 1, 0, 2, 1}));
+
+  Encoding::Options options;
+  if (testParam.scope == SharedDictionaryScope::External) {
+    NIMBLE_ASSERT_THROW(
+        writer.encodeAlphabet(buffer),
+        "External shared dictionary 29 cannot encode an alphabet; its "
+        "resolver owns the alphabet.");
+    options.sharedDictionaryAlphabet =
+        resolver->resolve(testParam.dictionaryId, DataType::String);
+  } else {
+    const auto alphabetChunk = writer.encodeAlphabet(buffer);
+    ASSERT_TRUE(alphabetChunk.has_value());
+    expectAlphabetEntries(*alphabetChunk, expectedAlphabet, pool_.get());
+    auto encodedAlphabetOwner =
+        std::make_shared<const std::string>(alphabetChunk->content.front());
+    const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+    options.sharedDictionaryAlphabet = SharedDictionaryAlphabet::create(
+        encodedAlphabet, std::move(encodedAlphabetOwner), pool_.get());
+  }
+  ASSERT_NE(options.sharedDictionaryAlphabet, nullptr);
+
+  std::vector<velox::BufferPtr> stringBuffers;
+  auto encoding = EncodingFactory{options}.create(
+      *pool_, encoded, [&](uint32_t totalLength) -> void* {
+        auto& stringBuffer = stringBuffers.emplace_back(
+            velox::AlignedBuffer::allocate<char>(totalLength, pool_.get()));
+        return stringBuffer->asMutable<void>();
+      });
+
+  std::vector<std::string_view> materialized(encoding->rowCount());
+  encoding->materialize(encoding->rowCount(), materialized.data());
+  EXPECT_EQ(materialized, values);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Scopes,
+    StringSharedDictionaryWriterTest,
+    testing::Values(
+        StringScopeTestParam{
+            .scope = SharedDictionaryScope::Stripe,
+            .dictionaryId = 7,
+            .usesResolver = false},
+        StringScopeTestParam{
+            .scope = SharedDictionaryScope::File,
+            .dictionaryId = 17,
+            .usesResolver = false},
+        StringScopeTestParam{
+            .scope = SharedDictionaryScope::External,
+            .dictionaryId = 29,
+            .usesResolver = true}),
+    [](const testing::TestParamInfo<StringScopeTestParam>& testInfo) {
+      return std::string{
+          SharedDictionaryScopeName::toName(testInfo.param.scope)};
+    });
 
 TEST_F(SharedDictionaryWriterTest, nullableStripeScope) {
   auto writer = createTestWriter(
@@ -687,10 +846,8 @@ TEST_F(
   const auto alphabet = writer.encodeAlphabet(buffer);
   ASSERT_TRUE(alphabet.has_value());
   expectAlphabetEntries(*alphabet, std::array<int32_t, 2>{10, 20}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "0.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 
   NIMBLE_ASSERT_THROW(
       encodeValues(
@@ -717,10 +874,8 @@ TEST_F(
   ASSERT_TRUE(nextStripeAlphabet.has_value());
   expectAlphabetEntries(
       *nextStripeAlphabet, std::array<int32_t, 1>{30}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "1.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 }
 
 TEST_F(
@@ -948,12 +1103,7 @@ TEST_F(
       const auto encodedAlphabet = writer.encodeAlphabet(buffer);
       ASSERT_TRUE(encodedAlphabet.has_value());
       expectAlphabetEntries(*encodedAlphabet, expected.alphabet, pool_.get());
-      NIMBLE_ASSERT_THROW(
-          writer.encodeAlphabet(buffer),
-          fmt::format(
-              "Stripe shared dictionary 7 already finalized its alphabet for "
-              "stripe {}.",
-              stripeIndex));
+      EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
     }
   }
 }
@@ -1001,10 +1151,8 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeAbandon) {
   }
   EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   EXPECT_FALSE(writer.hasUsedDictionary());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "0.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 
   const auto repeated = repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
   const auto nextStripeEncoded = encodeValues(
@@ -1234,9 +1382,7 @@ TEST_F(SharedDictionaryWriterTest, fileScope) {
   ASSERT_TRUE(alphabet.has_value());
   expectAlphabetEntries(
       *alphabet, std::array<int32_t, 5>{10, 20, 30, 40, 50}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "File shared dictionary 17 already finalized its alphabet.");
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   NIMBLE_ASSERT_THROW(
       encodeValues(
           writer,
@@ -1401,9 +1547,7 @@ TEST_F(SharedDictionaryWriterTest, fileScopeWithExternalAlphabet) {
       EncodingPrefix::encodingType(alphabet->content.front()),
       EncodingType::Trivial);
   expectAlphabetEntries(*alphabet, externalAlphabet, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "File shared dictionary 23 already finalized its alphabet.");
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   NIMBLE_ASSERT_THROW(
       encodeValues(
           writer,

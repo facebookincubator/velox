@@ -319,6 +319,7 @@ OperatorStats Operator::stats(bool clear) {
   }
 
   stats.memoryStats = MemoryStats::memStatsFromPool(pool());
+  stats.planNodeBoundary = planNodeBoundary();
   return stats;
 }
 

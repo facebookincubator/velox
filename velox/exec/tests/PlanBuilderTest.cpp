@@ -428,36 +428,6 @@ TEST_F(PlanBuilderTest, insertTableHandleParameter) {
   auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
   auto directory = "/some/test/directory";
 
-  // Lambda to create a plan with given insertableHandle and verify it
-  auto testInsertTableHandle =
-      [&](std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
-        // Create a plan with insertTableHandle
-        auto planBuilder = PlanBuilder().values({data}).tableWrite(
-            directory,
-            {},
-            0,
-            {},
-            {},
-            dwio::common::FileFormat::DWRF,
-            {},
-            PlanBuilder::kHiveDefaultConnectorId,
-            {},
-            nullptr,
-            "",
-            common::CompressionKind_NONE,
-            nullptr,
-            false,
-            connector::CommitStrategy::kNoCommit,
-            insertTableHandle);
-
-        // Verify the plan node has the correct insert Table Handle.
-        auto tableWriteNode =
-            std::dynamic_pointer_cast<const core::TableWriteNode>(
-                planBuilder.planNode());
-        ASSERT_NE(tableWriteNode, nullptr);
-        ASSERT_EQ(tableWriteNode->insertTableHandle(), insertTableHandle);
-      };
-
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), SMALLINT()});
   auto hiveHandle = HiveConnectorTestBase::makeHiveInsertTableHandle(
       rowType->names(),
@@ -469,9 +439,30 @@ TEST_F(PlanBuilderTest, insertTableHandleParameter) {
           std::nullopt,
           connector::hive::LocationHandle::TableType::kNew));
 
-  auto insertHandle = std::make_shared<core::InsertTableHandle>(
-      std::string(PlanBuilder::kHiveDefaultConnectorId), hiveHandle);
-  testInsertTableHandle(insertHandle);
+  auto planBuilder = PlanBuilder().values({data}).tableWrite(
+      directory,
+      {},
+      0,
+      {},
+      {},
+      dwio::common::FileFormat::DWRF,
+      {},
+      PlanBuilder::kHiveDefaultConnectorId,
+      {},
+      nullptr,
+      "",
+      common::CompressionKind_NONE,
+      nullptr,
+      false,
+      connector::CommitStrategy::kNoCommit,
+      hiveHandle);
+
+  auto tableWriteNode = std::dynamic_pointer_cast<const core::TableWriteNode>(
+      planBuilder.planNode());
+  ASSERT_NE(tableWriteNode, nullptr);
+  ASSERT_EQ(
+      tableWriteNode->insertTableHandle()->connectorInsertTableHandle(),
+      hiveHandle);
 }
 
 } // namespace facebook::velox::exec::test

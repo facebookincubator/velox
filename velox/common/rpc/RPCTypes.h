@@ -16,31 +16,24 @@
 
 #pragma once
 
-#include <map>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <typeinfo>
+#include <utility>
 
+#include <folly/Expected.h>
+
+#include "velox/common/base/Exceptions.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
-
-/// Well-known option key constants for RPCRequest.options.
-/// Use these instead of raw string literals to prevent typo bugs.
-namespace keys {
-inline constexpr std::string_view kModel = "model";
-inline constexpr std::string_view kTemperature = "temperature";
-inline constexpr std::string_view kMaxTokens = "max_tokens";
-inline constexpr std::string_view kSystemPrompt = "systemPrompt";
-inline constexpr std::string_view kJsonSchema = "json_schema";
-inline constexpr std::string_view kMetagenKey = "metagen_key";
-inline constexpr std::string_view kTierOverride = "tier_override";
-inline constexpr std::string_view kCatToken = "cat_token";
-inline constexpr std::string_view kPollIntervalMs = "poll_interval_ms";
-inline constexpr std::string_view kOwnerUnixname = "owner_unixname";
-inline constexpr std::string_view kIsQuery = "is_query";
-inline constexpr std::string_view kPrefixDim = "prefix_dim";
-} // namespace keys
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -62,37 +55,6 @@ inline RPCStreamingMode parseStreamingMode(const std::string& value) {
   }
   return RPCStreamingMode::kPerRow;
 }
-
-/// Generic request structure for RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
-/// Domain-specific formatting (e.g., LLM prompts, embedding inputs) is handled
-/// by the plan node's buildRequests() method.
-struct RPCRequest {
-  /// Row ID for tracking which row this request belongs to.
-  /// This is a globally unique ID assigned by the operator.
-  int64_t rowId{0};
-
-  /// Original row index in the input batch.
-  /// This is used to slice the correct row from input columns when storing
-  /// passthrough data. Unlike rowId (which is globally unique across batches),
-  /// this is the index within the current input batch and is set by
-  /// prepareRequests() based on the SelectivityVector iteration.
-  /// CRITICAL: When prepareRequests() skips null rows, originalRowIndex
-  /// tracks the actual input position to avoid slicing mismatch.
-  vector_size_t originalRowIndex{0};
-
-  /// Whether this row has a null primary input.
-  /// When true, the transport should short-circuit and return an error
-  /// response so that buildOutput() produces SQL NULL for this row.
-  /// Replaces the former "__null_input" magic string in options.
-  bool isNull{false};
-
-  /// The request payload (opaque to the framework).
-  std::string payload;
-
-  /// Type-safe options for backend-specific parameters.
-  std::map<std::string, std::string> options;
-};
 
 /// Typed cause of an RPC failure, carried alongside the human-readable error
 /// string so consumers can classify failures without parsing message text.
@@ -120,10 +82,139 @@ enum class RPCErrorKind {
   /// Non-retryable: the same request will fail again, so the transport fails
   /// fast rather than spending its retry budget.
   kInvalidRequest,
+  /// A producer returned a response without setting an outcome. This is a
+  /// construction sentinel, not a backend condition. The operator rejects it
+  /// if it reaches congestion evaluation or output construction.
+  kUnset,
+  /// A framework invariant tripped, or the process ran out of memory, while
+  /// handling this row. The operator fails the query rather than applying a
+  /// row-error policy because the backend is not the thing that is broken.
+  kInternalError,
 };
 
-/// Generic response structure from RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
+/// Stores a function-owned response payload inline behind a checked,
+/// type-erased interface.
+///
+/// Keeps transport and operator code independent of function-specific payload
+/// types. Requires the producer and consumer to use the same concrete type;
+/// get<T>() fails on a mismatch. Accepts only types that fit kMaxSize and
+/// kMaxAlign and are nothrow move-constructible. Moving transfers the stored
+/// value and leaves the source empty; copying is unsupported.
+class RpcPayload {
+ public:
+  /// Fits std::string (32 on libstdc++) and std::vector<float> (24). A payload
+  /// that does not fit should hold a handle to its data rather than widen
+  /// this: the whole point is that a response costs no allocation of its own.
+  static constexpr size_t kMaxSize = 32;
+  static constexpr size_t kMaxAlign = alignof(std::max_align_t);
+
+  RpcPayload() = default;
+
+  /// Stores a value inline after verifying that it fits and moves safely.
+  template <typename T, typename Decayed = std::decay_t<T>>
+    requires(!std::is_same_v<Decayed, RpcPayload>)
+  explicit RpcPayload(T&& value) {
+    static_assert(
+        sizeof(Decayed) <= kMaxSize,
+        "RPC payload must fit inline; hold a handle to larger data instead");
+    static_assert(
+        alignof(Decayed) <= kMaxAlign, "RPC payload over-aligned for storage");
+    static_assert(
+        std::is_nothrow_move_constructible_v<Decayed>,
+        "RPC payload must move without throwing: it is moved on completion "
+        "paths that cannot report a failure");
+    ::new (static_cast<void*>(storage_)) Decayed(std::forward<T>(value));
+    vtable_ = &vtableFor<Decayed>();
+  }
+
+  /// Moves the stored value and leaves the source empty.
+  RpcPayload(RpcPayload&& other) noexcept;
+
+  /// Replaces the stored value and leaves the source empty.
+  RpcPayload& operator=(RpcPayload&& other) noexcept;
+
+  RpcPayload(const RpcPayload&) = delete;
+  RpcPayload& operator=(const RpcPayload&) = delete;
+
+  /// Destroys the stored value when present.
+  ~RpcPayload();
+
+  /// Returns true when nothing has been stored, or the value was moved out.
+  bool empty() const {
+    return vtable_ == nullptr;
+  }
+
+  /// Returns true when the stored value has type T.
+  template <typename T>
+  bool holds() const {
+    return vtable_ != nullptr && *vtable_->type == typeid(T);
+  }
+
+  /// Returns the stored value. Throws if the payload holds a different type.
+  template <typename T>
+  const T& get() const {
+    VELOX_CHECK(
+        vtable_ != nullptr, "RPC response payload is empty, nothing to read");
+    VELOX_CHECK(
+        *vtable_->type == typeid(T),
+        "RPC response payload is not of the type this function produces: "
+        "stored {}, requested {}",
+        vtable_->type->name(),
+        typeid(T).name());
+    return *reinterpret_cast<const T*>(storage_);
+  }
+
+ private:
+  // Provides type-specific operations for the erased inline value.
+  struct VTable {
+    // Identifies the stored concrete type.
+    const std::type_info* type;
+    // Destroys the stored value.
+    void (*destroy)(void*) noexcept;
+    // Move-constructs into destination and destroys source.
+    void (*moveTo)(void* destination, void* source) noexcept;
+  };
+
+  // Returns the process-wide operations table for T.
+  template <typename T>
+  static const VTable& vtableFor() {
+    static const VTable kVTable{
+        &typeid(T),
+        [](void* payload) noexcept { static_cast<T*>(payload)->~T(); },
+        [](void* destination, void* source) noexcept {
+          ::new (destination) T(std::move(*static_cast<T*>(source)));
+          static_cast<T*>(source)->~T();
+        }};
+    return kVTable;
+  }
+
+  // Destroys the stored value and marks this payload empty.
+  void reset() noexcept;
+
+  // Moves the stored value from other and leaves other empty.
+  void moveFrom(RpcPayload& other) noexcept;
+
+  // Holds the concrete payload value without a per-response allocation.
+  alignas(kMaxAlign) std::byte storage_[kMaxSize]{};
+  // Selects the operations for the concrete type stored in storage_.
+  const VTable* vtable_{nullptr};
+};
+
+/// Why a request failed: the typed cause a congestion policy reads, and the
+/// message a failed row carries when the on-error policy asks for one.
+struct RpcError {
+  /// Classifies the failure for metrics and congestion control.
+  RPCErrorKind kind{RPCErrorKind::kNone};
+  /// Describes the failure for diagnostics and optional SQL output.
+  std::string message;
+};
+
+/// Carries the framework-visible correlation and outcome of a response.
+///
+/// A response is a payload or an error, never both and never neither. The
+/// outcome is only reachable through setPayload()/setError(), so the state
+/// where a producer set neither cannot be built -- a response that nothing has
+/// filled in yet already reads as an error.
 struct RPCResponse {
   /// Row ID for correlating response with the original request.
   ///
@@ -136,23 +227,64 @@ struct RPCResponse {
   ///     operator for downstream result tracking.
   int64_t rowId{0};
 
-  /// The response result (opaque to the framework).
-  std::string result;
+  /// Returns a successful response containing the function-owned payload.
+  template <typename T>
+  static RPCResponse ok(int64_t rowId, T&& payload) {
+    RPCResponse response;
+    response.rowId = rowId;
+    response.setPayload(std::forward<T>(payload));
+    return response;
+  }
 
-  /// Type-safe metadata from the backend.
-  std::map<std::string, std::string> metadata;
+  /// Returns a failed response with a typed cause and diagnostic message.
+  static RPCResponse
+  failed(int64_t rowId, RPCErrorKind kind, std::string message);
 
-  /// Error message if the request failed.
-  std::optional<std::string> error;
+  /// Stores the function's own value. A success with no payload is the third
+  /// state this type exists to rule out: it reads as succeeded, feeds the
+  /// congestion signal, and only fails later when a function tries to read it
+  /// -- so there is no overload that sets an empty one.
+  template <typename T, typename Decayed = std::decay_t<T>>
+  void setPayload(T&& payload) {
+    if constexpr (std::is_same_v<Decayed, RpcPayload>) {
+      VELOX_CHECK(!payload.empty(), "RPC response payload must not be empty");
+      result_ = std::forward<T>(payload);
+    } else {
+      result_ = RpcPayload{std::forward<T>(payload)};
+    }
+  }
 
-  /// Typed cause of the failure, set by the transport when 'error' is set.
-  /// Defaults to kNone so existing aggregate initializers need not list it.
-  RPCErrorKind errorKind{RPCErrorKind::kNone};
+  /// Stores a typed failure and rejects the non-error sentinel.
+  void setError(RPCErrorKind kind, std::string errorMessage);
 
   /// Returns true if this response represents an error.
   bool hasError() const {
-    return error.has_value();
+    return result_.hasError();
   }
+
+  /// Returns the failure. Only valid when hasError().
+  const RpcError& error() const {
+    return result_.error();
+  }
+
+  /// Returns the typed cause, or kNone on a successful response.
+  RPCErrorKind errorKind() const {
+    return result_.hasError() ? result_.error().kind : RPCErrorKind::kNone;
+  }
+
+  /// Returns the function-owned payload. Only valid when !hasError().
+  const RpcPayload& payload() const {
+    return result_.value();
+  }
+
+ private:
+  // Unfilled reads as an error so that "neither payload nor error" is not a
+  // representable state, under a kind no backend can produce. The operator
+  // rejects kUnset if it reaches output. The message is kept short enough for
+  // the small-string buffer -- every response is default-constructed before it
+  // is filled, so a longer one would put a heap allocation on the per-row path.
+  folly::Expected<RpcPayload, RpcError> result_{
+      folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
 };
 
 } // namespace facebook::velox::rpc

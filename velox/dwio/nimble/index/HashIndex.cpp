@@ -72,19 +72,18 @@ std::string_view getMaxKey(const MetadataBuffer& metadata) {
   return maxKey->string_view();
 }
 
-std::unique_ptr<BloomFilter> buildBloomFilter(
+std::unique_ptr<BloomFilterReader> buildBloomFilter(
     const MetadataBuffer& metadata,
     velox::memory::MemoryPool* pool) {
   const auto* bloomFilter = getHashIndexRoot(metadata)->bloom_filter();
   if (bloomFilter == nullptr) {
     return nullptr;
   }
-  NIMBLE_CHECK_NOT_NULL(bloomFilter->data());
-  NIMBLE_CHECK_GT(bloomFilter->data()->size(), 0u);
-  const auto numBlocks = bloomFilter->num_blocks();
   const auto* rawData = bloomFilter->data();
-  return std::make_unique<BloomFilter>(
-      numBlocks, rawData->data(), rawData->size(), pool);
+  NIMBLE_CHECK_NOT_NULL(rawData);
+  NIMBLE_CHECK_GT(rawData->size(), 0u);
+  return createBloomFilterReader(
+      {reinterpret_cast<const char*>(rawData->data()), rawData->size()}, pool);
 }
 
 // Sorts row numbers and merges consecutive rows into contiguous RowRanges.
@@ -237,7 +236,7 @@ IndexLookup::LookupResult HashIndex::lookup(
     }
 
     // Check bloom filter for fast negative.
-    if (bloomFilter_ != nullptr && !bloomFilter_->testKey(key)) {
+    if (bloomFilter_ != nullptr && !bloomFilter_->maybeContains(key)) {
       ++numBloomFilterSkips_;
       resultOffsets.push_back(rowRanges.size());
       continue;

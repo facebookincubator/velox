@@ -74,6 +74,36 @@ static inline SchemaElement newGroup(
   return result;
 }
 
+static std::shared_ptr<PrimitiveNode> makePrimitiveNode(
+    const std::string& name,
+    Repetition::type repetition,
+    Type::type type,
+    ConvertedType::type convertedType = ConvertedType::kNone,
+    int length = -1,
+    int precision = -1,
+    int scale = -1,
+    int fieldId = -1) {
+  return std::static_pointer_cast<PrimitiveNode>(PrimitiveNode::make(
+      name,
+      repetition,
+      type,
+      convertedType,
+      length,
+      precision,
+      scale,
+      fieldId));
+}
+
+static std::shared_ptr<GroupNode> makeGroupNode(
+    const std::string& name,
+    Repetition::type repetition,
+    const NodeVector& fields,
+    ConvertedType::type convertedType = ConvertedType::kNone,
+    int fieldId = -1) {
+  return std::static_pointer_cast<GroupNode>(
+      GroupNode::make(name, repetition, fields, convertedType, fieldId));
+}
+
 template <typename NodeType>
 static void checkNodeRoundtrip(const Node& node) {
   facebook::velox::parquet::thrift::SchemaElement serialized;
@@ -149,41 +179,40 @@ class TestPrimitiveNode : public ::testing::Test {
   std::unique_ptr<Node> node_;
 };
 
-TEST_F(TestPrimitiveNode, Attrs) {
-  PrimitiveNode node1("foo", Repetition::kRepeated, Type::kInt32);
-
-  PrimitiveNode node2(
+TEST_F(TestPrimitiveNode, attrs) {
+  auto node1 = makePrimitiveNode("foo", Repetition::kRepeated, Type::kInt32);
+  auto node2 = makePrimitiveNode(
       "bar", Repetition::kOptional, Type::kByteArray, ConvertedType::kUtf8);
 
-  ASSERT_EQ("foo", node1.name());
+  ASSERT_EQ("foo", node1->name());
 
-  ASSERT_TRUE(node1.isPrimitive());
-  ASSERT_FALSE(node1.isGroup());
+  ASSERT_TRUE(node1->isPrimitive());
+  ASSERT_FALSE(node1->isGroup());
 
-  ASSERT_EQ(Repetition::kRepeated, node1.repetition());
-  ASSERT_EQ(Repetition::kOptional, node2.repetition());
+  ASSERT_EQ(Repetition::kRepeated, node1->repetition());
+  ASSERT_EQ(Repetition::kOptional, node2->repetition());
 
-  ASSERT_EQ(Node::kPrimitive, node1.nodeType());
+  ASSERT_EQ(Node::kPrimitive, node1->nodeType());
 
-  ASSERT_EQ(Type::kInt32, node1.physicalType());
-  ASSERT_EQ(Type::kByteArray, node2.physicalType());
+  ASSERT_EQ(Type::kInt32, node1->physicalType());
+  ASSERT_EQ(Type::kByteArray, node2->physicalType());
 
   // Logical types.
-  ASSERT_EQ(ConvertedType::kNone, node1.convertedType());
-  ASSERT_EQ(ConvertedType::kUtf8, node2.convertedType());
+  ASSERT_EQ(ConvertedType::kNone, node1->convertedType());
+  ASSERT_EQ(ConvertedType::kUtf8, node2->convertedType());
 
   // Repetition.
-  PrimitiveNode node3("foo", Repetition::kRepeated, Type::kInt32);
-  PrimitiveNode node4("foo", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node5("foo", Repetition::kOptional, Type::kInt32);
+  auto node3 = makePrimitiveNode("foo", Repetition::kRepeated, Type::kInt32);
+  auto node4 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
+  auto node5 = makePrimitiveNode("foo", Repetition::kOptional, Type::kInt32);
 
-  ASSERT_TRUE(node3.isRepeated());
-  ASSERT_FALSE(node3.isOptional());
+  ASSERT_TRUE(node3->isRepeated());
+  ASSERT_FALSE(node3->isOptional());
 
-  ASSERT_TRUE(node4.isRequired());
+  ASSERT_TRUE(node4->isRequired());
 
-  ASSERT_TRUE(node5.isOptional());
-  ASSERT_FALSE(node5.isRequired());
+  ASSERT_TRUE(node5->isOptional());
+  ASSERT_FALSE(node5->isRequired());
 }
 
 TEST_F(TestPrimitiveNode, fromParquet) {
@@ -236,19 +265,19 @@ TEST_F(TestPrimitiveNode, fromParquet) {
 }
 
 TEST_F(TestPrimitiveNode, equals) {
-  PrimitiveNode node1("foo", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node2("foo", Repetition::kRequired, Type::kInt64);
-  PrimitiveNode node3("bar", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node4("foo", Repetition::kOptional, Type::kInt32);
-  PrimitiveNode node5("foo", Repetition::kRequired, Type::kInt32);
+  auto node1 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
+  auto node2 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt64);
+  auto node3 = makePrimitiveNode("bar", Repetition::kRequired, Type::kInt32);
+  auto node4 = makePrimitiveNode("foo", Repetition::kOptional, Type::kInt32);
+  auto node5 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
 
-  ASSERT_TRUE(node1.equals(&node1));
-  ASSERT_FALSE(node1.equals(&node2));
-  ASSERT_FALSE(node1.equals(&node3));
-  ASSERT_FALSE(node1.equals(&node4));
-  ASSERT_TRUE(node1.equals(&node5));
+  ASSERT_TRUE(node1->equals(node1.get()));
+  ASSERT_FALSE(node1->equals(node2.get()));
+  ASSERT_FALSE(node1->equals(node3.get()));
+  ASSERT_FALSE(node1->equals(node4.get()));
+  ASSERT_TRUE(node1->equals(node5.get()));
 
-  PrimitiveNode flba1(
+  auto flba1 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -257,27 +286,23 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       2);
 
-  PrimitiveNode flba2(
+  auto flba2 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
       ConvertedType::kDecimal,
-      1,
+      12,
       4,
       2);
-  flba2.setTypeLength(12);
-
-  PrimitiveNode flba3(
+  auto flba3 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
       ConvertedType::kDecimal,
-      1,
+      16,
       4,
       2);
-  flba3.setTypeLength(16);
-
-  PrimitiveNode flba4(
+  auto flba4 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -286,7 +311,7 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       0);
 
-  PrimitiveNode flba5(
+  auto flba5 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -295,13 +320,13 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       0);
 
-  ASSERT_TRUE(flba1.equals(&flba2));
-  ASSERT_FALSE(flba1.equals(&flba3));
-  ASSERT_FALSE(flba1.equals(&flba4));
-  ASSERT_FALSE(flba1.equals(&flba5));
+  ASSERT_TRUE(flba1->equals(flba2.get()));
+  ASSERT_FALSE(flba1->equals(flba3.get()));
+  ASSERT_FALSE(flba1->equals(flba4.get()));
+  ASSERT_FALSE(flba1->equals(flba5.get()));
 }
 
-TEST_F(TestPrimitiveNode, PhysicalLogicalMapping) {
+TEST_F(TestPrimitiveNode, physicalLogicalMapping) {
   ASSERT_NO_THROW(
       PrimitiveNode::make(
           "foo", Repetition::kRequired, Type::kInt32, ConvertedType::kInt32));
@@ -462,74 +487,75 @@ class TestGroupNode : public ::testing::Test {
   }
 };
 
-TEST_F(TestGroupNode, Attrs) {
+TEST_F(TestGroupNode, attrs) {
   NodeVector fields = fields1();
 
-  GroupNode node1("foo", Repetition::kRepeated, fields);
-  GroupNode node2("bar", Repetition::kOptional, fields, ConvertedType::kList);
+  auto node1 = makeGroupNode("foo", Repetition::kRepeated, fields);
+  auto node2 =
+      makeGroupNode("bar", Repetition::kOptional, fields, ConvertedType::kList);
 
-  ASSERT_EQ("foo", node1.name());
+  ASSERT_EQ("foo", node1->name());
 
-  ASSERT_TRUE(node1.isGroup());
-  ASSERT_FALSE(node1.isPrimitive());
+  ASSERT_TRUE(node1->isGroup());
+  ASSERT_FALSE(node1->isPrimitive());
 
-  ASSERT_EQ(fields.size(), node1.fieldCount());
+  ASSERT_EQ(fields.size(), node1->fieldCount());
 
-  ASSERT_TRUE(node1.isRepeated());
-  ASSERT_TRUE(node2.isOptional());
+  ASSERT_TRUE(node1->isRepeated());
+  ASSERT_TRUE(node2->isOptional());
 
-  ASSERT_EQ(Repetition::kRepeated, node1.repetition());
-  ASSERT_EQ(Repetition::kOptional, node2.repetition());
+  ASSERT_EQ(Repetition::kRepeated, node1->repetition());
+  ASSERT_EQ(Repetition::kOptional, node2->repetition());
 
-  ASSERT_EQ(Node::kGroup, node1.nodeType());
+  ASSERT_EQ(Node::kGroup, node1->nodeType());
 
   // Logical types.
-  ASSERT_EQ(ConvertedType::kNone, node1.convertedType());
-  ASSERT_EQ(ConvertedType::kList, node2.convertedType());
+  ASSERT_EQ(ConvertedType::kNone, node1->convertedType());
+  ASSERT_EQ(ConvertedType::kList, node2->convertedType());
 }
 
 TEST_F(TestGroupNode, equals) {
   NodeVector f1 = fields1();
   NodeVector f2 = fields1();
 
-  GroupNode group1("group", Repetition::kRepeated, f1);
-  GroupNode group2("group", Repetition::kRepeated, f2);
-  GroupNode group3("group2", Repetition::kRepeated, f2);
+  auto group1 = makeGroupNode("group", Repetition::kRepeated, f1);
+  auto group2 = makeGroupNode("group", Repetition::kRepeated, f2);
+  auto group3 = makeGroupNode("group2", Repetition::kRepeated, f2);
 
   // This is copied in the GroupNode ctor, so this is okay.
   f2.push_back(floatType("four", Repetition::kOptional));
-  GroupNode group4("group", Repetition::kRepeated, f2);
-  GroupNode group5("group", Repetition::kRepeated, fields1());
+  auto group4 = makeGroupNode("group", Repetition::kRepeated, f2);
+  auto group5 = makeGroupNode("group", Repetition::kRepeated, fields1());
 
-  ASSERT_TRUE(group1.equals(&group1));
-  ASSERT_TRUE(group1.equals(&group2));
-  ASSERT_FALSE(group1.equals(&group3));
+  ASSERT_TRUE(group1->equals(group1.get()));
+  ASSERT_TRUE(group1->equals(group2.get()));
+  ASSERT_FALSE(group1->equals(group3.get()));
 
-  ASSERT_FALSE(group1.equals(&group4));
-  ASSERT_FALSE(group5.equals(&group4));
+  ASSERT_FALSE(group1->equals(group4.get()));
+  ASSERT_FALSE(group5->equals(group4.get()));
 }
 
 TEST_F(TestGroupNode, fieldIndex) {
   NodeVector fields = fields1();
-  GroupNode group("group", Repetition::kRequired, fields);
+  auto group = makeGroupNode("group", Repetition::kRequired, fields);
   for (size_t i = 0; i < fields.size(); i++) {
-    auto field = group.field(static_cast<int>(i));
-    ASSERT_EQ(i, group.fieldIndex(*field));
+    auto field = group->field(static_cast<int>(i));
+    ASSERT_EQ(i, group->fieldIndex(*field));
   }
 
   // Test a non field node.
   auto nonFieldAlien = int32("alien", Repetition::kRequired); // other name
   auto nonFieldFamiliar = int32("one", Repetition::kRepeated); // other node
-  ASSERT_LT(group.fieldIndex(*nonFieldAlien), 0);
-  ASSERT_LT(group.fieldIndex(*nonFieldFamiliar), 0);
+  ASSERT_LT(group->fieldIndex(*nonFieldAlien), 0);
+  ASSERT_LT(group->fieldIndex(*nonFieldFamiliar), 0);
 }
 
-TEST_F(TestGroupNode, FieldIndexDuplicateName) {
+TEST_F(TestGroupNode, fieldIndexDuplicateName) {
   NodeVector fields = fields2();
-  GroupNode group("group", Repetition::kRequired, fields);
+  auto group = makeGroupNode("group", Repetition::kRequired, fields);
   for (size_t i = 0; i < fields.size(); i++) {
-    auto field = group.field(static_cast<int>(i));
-    ASSERT_EQ(i, group.fieldIndex(*field));
+    auto field = group->field(static_cast<int>(i));
+    ASSERT_EQ(i, group->fieldIndex(*field));
   }
 }
 

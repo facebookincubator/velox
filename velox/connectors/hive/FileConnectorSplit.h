@@ -29,7 +29,14 @@ namespace facebook::velox::connector::hive {
 /// HiveIcebergSplit) extend this to add synthesized columns, serde parameters,
 /// and other format-specific fields.
 struct FileConnectorSplit : public ConnectorSplit {
+  /// Identity of the file this split covers. Use it to name the file; use
+  /// readPath() to open it.
   const std::string filePath;
+
+  /// Alternate location holding the same content as 'filePath', opened in its
+  /// place. Empty when there is none. The split builders set it.
+  std::string physicalFilePath;
+
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;
@@ -73,6 +80,11 @@ struct FileConnectorSplit : public ConnectorSplit {
 
   uint64_t size() const override {
     return length;
+  }
+
+  /// Location to open to read this split's bytes.
+  const std::string& readPath() const {
+    return physicalFilePath.empty() ? filePath : physicalFilePath;
   }
 
   std::string getFileName() const {

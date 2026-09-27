@@ -58,55 +58,7 @@ TEST_F(TestStringDictionaryEncoder, addKey) {
   }
 }
 
-TEST_F(TestStringDictionaryEncoder, GetIndex) {
-  struct TestCase {
-    explicit TestCase(
-        const std::vector<std::string_view>& addKeySequence,
-        const std::vector<std::string_view>& getIndexSequence,
-        const std::vector<size_t>& encodedSequence)
-        : addKeySequence{addKeySequence},
-          getIndexSequence{getIndexSequence},
-          encodedSequence{encodedSequence} {}
-    std::vector<std::string_view> addKeySequence;
-    std::vector<std::string_view> getIndexSequence;
-    std::vector<size_t> encodedSequence;
-  };
-
-  std::vector<TestCase> testCases{
-      TestCase{{"lol"}, {"lol", "lol", "lol"}, {0, 0, 0}},
-      TestCase{
-          {"Have", "yourself", "a", "nice", "day"},
-          {"Have",
-           "nice",
-           "day",
-           "a",
-           "yourself",
-           "nice",
-           "a",
-           "day",
-           "a",
-           "Have",
-           "yourself",
-           "Have",
-           "nice"},
-          {0, 3, 4, 2, 1, 3, 2, 4, 2, 0, 1, 0, 3}}};
-
-  for (const auto& testCase : testCases) {
-    auto pool = memory::memoryManager()->addLeafPool();
-    StringDictionaryEncoder stringDictEncoder{*pool, *pool};
-    for (const auto& key : testCase.addKeySequence) {
-      stringDictEncoder.addKey(key, 0);
-    }
-
-    std::vector<size_t> actualEncodedSequence{};
-    for (const auto& key : testCase.getIndexSequence) {
-      actualEncodedSequence.push_back(stringDictEncoder.getIndex(key));
-    }
-    EXPECT_EQ(testCase.encodedSequence, actualEncodedSequence);
-  }
-}
-
-TEST_F(TestStringDictionaryEncoder, GetCount) {
+TEST_F(TestStringDictionaryEncoder, getCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::string_view>& addKeySequence,
@@ -143,20 +95,21 @@ TEST_F(TestStringDictionaryEncoder, GetCount) {
   for (const auto& testCase : testCases) {
     auto pool = memory::memoryManager()->addLeafPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
+    std::unordered_map<std::string_view, uint32_t> keyIndices;
     for (const auto& key : testCase.addKeySequence) {
-      stringDictEncoder.addKey(key, 0);
+      keyIndices[key] = stringDictEncoder.addKey(key, 0);
     }
 
     std::vector<size_t> actualCountSequence{};
     for (const auto& key : testCase.getCountSequence) {
       actualCountSequence.push_back(
-          stringDictEncoder.getCount(stringDictEncoder.getIndex(key)));
+          stringDictEncoder.getCount(keyIndices.at(key)));
     }
     EXPECT_EQ(testCase.countSequence, actualCountSequence);
   }
 }
 
-TEST_F(TestStringDictionaryEncoder, GetStride) {
+TEST_F(TestStringDictionaryEncoder, getStride) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::pair<std::string_view, size_t>>& addKeySequence,
@@ -196,14 +149,15 @@ TEST_F(TestStringDictionaryEncoder, GetStride) {
   for (const auto& testCase : testCases) {
     auto pool = memory::memoryManager()->addLeafPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
+    std::unordered_map<std::string_view, uint32_t> keyIndices;
     for (const auto& kv : testCase.addKeySequence) {
-      stringDictEncoder.addKey(kv.first, kv.second);
+      keyIndices[kv.first] = stringDictEncoder.addKey(kv.first, kv.second);
     }
 
     std::vector<size_t> actualStrideSequence{};
     for (const auto& key : testCase.getStrideSequence) {
       actualStrideSequence.push_back(
-          stringDictEncoder.getStride(stringDictEncoder.getIndex(key)));
+          stringDictEncoder.getStride(keyIndices.at(key)));
     }
     EXPECT_EQ(testCase.strideSequence, actualStrideSequence);
   }
@@ -216,7 +170,7 @@ std::string genPaddedIntegerString(size_t integer, size_t length) {
   return padding + origString;
 }
 
-TEST_F(TestStringDictionaryEncoder, Clear) {
+TEST_F(TestStringDictionaryEncoder, clear) {
   auto pool = memory::memoryManager()->addLeafPool();
   StringDictionaryEncoder stringDictEncoder{*pool, *pool};
   std::string baseString{"jjkkll"};
@@ -226,16 +180,13 @@ TEST_F(TestStringDictionaryEncoder, Clear) {
   auto peakMemory = pool->usedBytes();
   stringDictEncoder.clear();
   EXPECT_EQ(0, stringDictEncoder.size());
-  EXPECT_EQ(0, stringDictEncoder.keyIndex_.size());
-  EXPECT_EQ(0, stringDictEncoder.keyBytes_.size());
-  EXPECT_EQ(0, stringDictEncoder.keyBytes_.capacity());
-  EXPECT_EQ(1, stringDictEncoder.keyOffsets_.size());
-  EXPECT_EQ(1, stringDictEncoder.keyOffsets_.capacity());
-  EXPECT_EQ(0, stringDictEncoder.counts_.size());
-  EXPECT_EQ(0, stringDictEncoder.counts_.capacity());
-  EXPECT_EQ(0, stringDictEncoder.firstSeenStrideIndex_.size());
-  EXPECT_EQ(0, stringDictEncoder.firstSeenStrideIndex_.capacity());
   EXPECT_LT(pool->usedBytes(), peakMemory);
+  // Verify that clear resets the dictionary and allows it to be rebuilt.
+  const auto index = stringDictEncoder.addKey("new key", 1);
+  EXPECT_EQ(0, index);
+  EXPECT_EQ(1, stringDictEncoder.size());
+  EXPECT_EQ(1, stringDictEncoder.getCount(index));
+  EXPECT_EQ(1, stringDictEncoder.getStride(index));
 }
 
 TEST_F(TestStringDictionaryEncoder, memBenchmark) {

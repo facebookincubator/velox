@@ -1451,6 +1451,15 @@ void HashBuild::close() {
     spiller_.reset();
     table_.reset();
   }
+
+  // Release the entry here rather than at operator destruction:
+  // Driver::closeOperators() closes every operator but never destroys
+  // 'operators_', so a failed build's leaf pool would otherwise stay attached
+  // to the shared query pool until the Driver goes away. Keep this after
+  // 'table_' is reset, whose allocations live in that pool, and outside
+  // 'mutex_' -- dropping the last reference destroys the pool, which takes the
+  // parent's lock via MemoryPool::dropChild().
+  cacheEntry_.reset();
 }
 
 HashBuildSpiller::HashBuildSpiller(

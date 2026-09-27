@@ -54,9 +54,9 @@
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
@@ -74,9 +74,11 @@ using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
 
 // Writable encodings that this fuzzer target intentionally does not force.
-// This is not a global unsupported-encoding list.
+// The unfiltered random policy also omits these; this list keeps the repair
+// phase and coverage gate from adding them back. This is not a global
+// unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::SubIntSplit});
+    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -210,6 +212,7 @@ constexpr uint64_t kMinPairFiles = 10;
 bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -395,6 +398,9 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Nimble writer fuzzer does not support hybrid FlatMap.");
   }
   NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
 }
@@ -869,9 +875,9 @@ void compareDecodedChunk(
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
     case ReaderPath::kLegacyFactory:
-      return "VeloxReader/legacyFactory";
+      return "BatchReader/legacyFactory";
     case ReaderPath::kDefaultFactory:
-      return "VeloxReader/defaultFactory";
+      return "BatchReader/defaultFactory";
     case ReaderPath::kSelectiveLegacyDispatch:
       return "selective/legacyDispatch";
     case ReaderPath::kSelectiveDefaultDispatch:
@@ -909,7 +915,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   if (encodingType == EncodingType::ALP) {
     return isFloatingPointDataType(dataType);
   }
-  if (encodingType == EncodingType::DeltaBlock) {
+  if (encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -923,6 +930,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
@@ -1573,7 +1581,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
 
   // Schema roundtrip: the Velox type reconstructed from the file must match
   // the type that was written.
-  VeloxReader reader(
+  BatchReader reader(
       std::make_shared<velox::InMemoryReadFile>(file), *leafPool_);
   NIMBLE_CHECK(
       schema->equivalent(*reader.type()),
@@ -1591,7 +1599,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
       continue;
     }
 
-    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    std::vector<TabletReader::StreamMetadata> locations(streamCount);
     tablet->streamLocations(stripeIdentifier, locations);
     const uint64_t stripeOffset = tablet->stripeOffset(stripe);
     const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()
@@ -1722,7 +1730,7 @@ void NimbleWriterFuzzer::readAndVerify(
 
   if (readerPath == ReaderPath::kLegacyFactory ||
       readerPath == ReaderPath::kDefaultFactory) {
-    VeloxReadParams params;
+    BatchReadParams params;
     if (readerPath == ReaderPath::kDefaultFactory) {
       params.encodingFactory =
           [](velox::memory::MemoryPool& pool,
@@ -1731,7 +1739,7 @@ void NimbleWriterFuzzer::readAndVerify(
             return EncodingFactory().create(pool, data, stringBufferFactory);
           };
     }
-    VeloxReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
+    BatchReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
     checkSchema(*reader.type());
 
     VectorPtr result;
@@ -2155,7 +2163,7 @@ void NimbleWriterFuzzer::run() {
       missingEncodings.size(),
       fmt::join(missingEncodingNames, ", "));
 
-  // The default random policy omits the integral-only four because its
+  // The default random policy omits the integral-only candidates because its
   // write-side and read-side floating-point gates disagree (T283330065), so
   // they always reach this repair phase. gateFloatingPointStreams holds them
   // off float streams alone while still exercising integer streams in a mixed

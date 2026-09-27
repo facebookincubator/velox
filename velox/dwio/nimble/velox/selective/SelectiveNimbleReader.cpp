@@ -25,6 +25,7 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/common/Statistics.h"
+#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/selective/ColumnReader.h"
 #include "velox/dwio/nimble/velox/selective/ReaderBase.h"
@@ -128,6 +129,9 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
       : lazyIoColumns_{computeLazyIoColumns(options)},
         readerBase_{readerBase},
         options_{options},
+        enableStripeStats_{featureGate()->enabled(
+            FeatureGate::FeatureSet::kStripeStatsPruning,
+            /*defaultValue=*/false)},
         encodingFactory_(
             options.stringDecoderZeroCopy()
                 ? std::make_unique<const EncodingFactory>(
@@ -213,6 +217,8 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   // if stats are available.
   void computeStatsBasedRowSize() const;
 
+  bool skipStripe(uint32_t stripe) const;
+
   // Computes which top-level columns should use lazy I/O based on the scan
   // spec and remaining filter columns. Returns a const set used for the
   // lifetime of this reader.
@@ -225,6 +231,10 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
 
   const std::shared_ptr<ReaderBase> readerBase_;
   const dwio::common::RowReaderOptions options_;
+  // Reader-side killswitch, evaluated once at construction (not per stripe):
+  // FeatureGate maps to JK dwio/nimble:enable_stripe_stats_pruning. When false,
+  // skipStripe does no pruning and every stripe is read.
+  const bool enableStripeStats_;
   const std::unique_ptr<const EncodingFactory> encodingFactory_;
   StripeStreams streams_;
   std::vector<int64_t> stripeRowOffsets_;
@@ -281,7 +291,14 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
           readerBase_->randomSkip()->nextSkip() >= numStripeRows) {
         readerBase_->randomSkip()->consume(numStripeRows);
         ++skippedStripes_;
-        goto advanceToNextStripe;
+        advanceToNextStripe();
+        continue;
+      }
+      if (skipStripe(currentStripe_)) {
+        maybeUpdateRandomSkip(numStripeRows);
+        ++skippedStripes_;
+        advanceToNextStripe();
+        continue;
       }
       loadCurrentStripe();
     }
@@ -293,7 +310,6 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
       nextRowNumber_ = stripeRowOffsets_[currentStripe_] + rowInCurrentStripe_;
       return *nextRowNumber_;
     }
-  advanceToNextStripe:
     advanceToNextStripe();
   }
   // Update random skip tracker for trailing rows that were skipped due to upper
@@ -382,6 +398,96 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
   }
 }
 
+bool SelectiveNimbleRowReader::skipStripe(uint32_t stripe) const {
+  // Reader-side killswitch: when disabled, read every stripe (no pruning).
+  if (!enableStripeStats_) {
+    return false;
+  }
+  const auto& stripeStats = readerBase_->stripeColumnStats();
+  if (stripe >= stripeStats.size() || stripeStats[stripe].empty()) {
+    return false;
+  }
+  const auto& rootType = *readerBase_->fileSchemaWithId();
+  const auto& rowType = rootType.type()->asRow();
+  const auto stableChildren = options_.scanSpec()->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
+    if (!childSpec->hasFilter() || childSpec->filter() == nullptr ||
+        childSpec->isConstant() || !childSpec->readFromFile()) {
+      continue;
+    }
+    const auto columnIndex =
+        rowType.getChildIdxIfExists(childSpec->fieldName());
+    if (!columnIndex.has_value()) {
+      continue;
+    }
+    const auto& childType = rootType.childAt(columnIndex.value());
+    if (childType == nullptr) {
+      continue;
+    }
+    // Prune top-level scalar columns whose per-stripe min/max prove the filter
+    // cannot match. Integral (incl. DATE, which is represented as INTEGER),
+    // floating-point, and string/bytes columns are supported; the writer emits
+    // min/max for all three in the stripe-stats section. Other kinds (map,
+    // array, row, timestamp) are handled by other pruning paths or not at all.
+    // Explicit comparisons are used instead of a switch over TypeKind to avoid
+    // -Wswitch-enum requiring every enumerator to be listed.
+    const auto kind = childType->type()->kind();
+
+    // Per-stripe stats are laid out by schema type id: the writer snapshots
+    // statsCollectors_ (indexed by TypeWithId::id()) in order, so
+    // stripeStats[stripe][id] matches childType->id() just like the file-level
+    // column stats. The bound check below guards against a stats section that
+    // covers fewer columns than the current schema.
+    const auto columnId = childType->id();
+    if (columnId >= stripeStats[stripe].size() ||
+        !stripeStats[stripe][columnId]) {
+      continue;
+    }
+    const auto& stripeStat = stripeStats[stripe][columnId];
+    const auto* filter = childSpec->filter();
+
+    if (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
+      const auto* stats = stripeStat->as<IntegralStatistics>();
+      if (stats == nullptr || !stats->getMin().has_value() ||
+          !stats->getMax().has_value()) {
+        continue;
+      }
+      if (!filter->testInt64Range(
+              *stats->getMin(), *stats->getMax(), stats->getNullCount() > 0)) {
+        return true;
+      }
+    } else if (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
+      const auto* stats = stripeStat->as<FloatingPointStatistics>();
+      if (stats == nullptr || !stats->getMin().has_value() ||
+          !stats->getMax().has_value()) {
+        continue;
+      }
+      if (!filter->testDoubleRange(
+              *stats->getMin(), *stats->getMax(), stats->getNullCount() > 0)) {
+        return true;
+      }
+    } else if (kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY) {
+      const auto* stats = stripeStat->as<StringStatistics>();
+      if (stats == nullptr) {
+        continue;
+      }
+      const auto min = stats->getMin();
+      const auto max = stats->getMax();
+      if (!min.has_value() || !max.has_value()) {
+        continue;
+      }
+      if (!filter->testBytesRange(
+              std::string_view(*min),
+              std::string_view(*max),
+              stats->getNullCount() > 0)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::optional<size_t> SelectiveNimbleRowReader::estimatedRowSize() const {
   if (const_cast<SelectiveNimbleRowReader*>(this)->nextRowNumber() == kAtEnd) {
     return std::nullopt;
@@ -438,7 +544,8 @@ folly::F14FastSet<std::string> SelectiveNimbleRowReader::computeLazyIoColumns(
   auto* scanSpec = options.scanSpec().get();
   VELOX_CHECK_NOT_NULL(scanSpec);
   const auto& remainingFilterColumns = options.remainingFilterColumns();
-  for (auto* childSpec : scanSpec->stableChildren()) {
+  const auto stableChildren = scanSpec->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
     if (childSpec->isConstant() || !childSpec->readFromFile()) {
       continue;
     }

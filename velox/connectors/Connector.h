@@ -16,6 +16,7 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
+#include "velox/common/Casts.h"
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
@@ -26,6 +27,7 @@
 #include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/ScanBatchEvent.h"
@@ -104,6 +106,26 @@ struct ConnectorSplit : public ISerializable {
         splitWeight,
         cacheable ? "true" : "false");
   }
+
+  /// Returns true if this split is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this split as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this split as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
 };
 
 class ColumnHandle : public ISerializable {
@@ -114,6 +136,26 @@ class ColumnHandle : public ISerializable {
 
   virtual std::string toString() const {
     return name();
+  }
+
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
   }
 
   folly::dynamic serialize() const override;
@@ -163,6 +205,26 @@ class ConnectorTableHandle : public ISerializable {
     return name();
   }
 
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
+
   virtual folly::dynamic serialize() const override;
 
  protected:
@@ -184,6 +246,26 @@ class ConnectorInsertTableHandle : public ISerializable {
   }
 
   virtual std::string toString() const = 0;
+
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
 
   folly::dynamic serialize() const override {
     VELOX_NYI();
@@ -761,27 +843,28 @@ class Connector {
 
   /// Total time spent waiting for synchronously issued IO or for an in-progress
   /// read-ahead to finish.
-  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
+  static constexpr std::string_view kIoWaitWallNanos{io::kIoWaitWallNanos};
 
   /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
   static constexpr std::string_view kStorageReadWallNanos{
-      "storageReadWallNanos"};
+      io::kStorageReadWallNanos};
 
   /// Time spent waiting for SSD cache reads.
   static constexpr std::string_view kSsdCacheReadWallNanos{
-      "ssdCacheReadWallNanos"};
+      io::kSsdCacheReadWallNanos};
 
   /// Time spent waiting for EXCLUSIVE cache entries (another thread is
   /// loading).
-  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
+  static constexpr std::string_view kCacheWaitWallNanos{
+      io::kCacheWaitWallNanos};
 
   /// Time spent waiting for coalesced loads from SSD cache.
   static constexpr std::string_view kCoalescedSsdLoadWallNanos{
-      "coalescedSsdLoadWallNanos"};
+      io::kCoalescedSsdLoadWallNanos};
 
   /// Time spent waiting for coalesced loads from remote storage.
   static constexpr std::string_view kCoalescedStorageLoadWallNanos{
-      "coalescedStorageLoadWallNanos"};
+      io::kCoalescedStorageLoadWallNanos};
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

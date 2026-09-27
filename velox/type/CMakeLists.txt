@@ -24,7 +24,6 @@ velox_add_library(
   Conversions.cpp
   DecimalUtil.cpp
   Filter.cpp
-  FloatingPointUtil.cpp
   HugeInt.cpp
   StringView.cpp
   StringView.h
@@ -44,6 +43,7 @@ velox_add_library(
   CastRule.h
   Conversions.h
   CppToType.h
+  DecimalArithmetic.h
   DecimalUtil.h
   FastDate.h
   Filter.h
@@ -51,6 +51,7 @@ velox_add_library(
   HugeInt.h
   OpaqueCustomTypes.h
   SimpleFunctionApi.h
+  SimpleFunctionTags.h
   Subfield.h
   Time.h
   Timestamp.h

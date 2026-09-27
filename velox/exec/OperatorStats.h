@@ -128,6 +128,10 @@ struct OperatorStats {
   /// construction of the Operator where applicable.
   std::string operatorType;
 
+  /// Stamped by Operator::stats() from Operator::planNodeBoundary(); never
+  /// written into an operator's live stats.
+  core::PlanNode::Boundary planNodeBoundary{core::PlanNode::Boundary::kBoth};
+
   /// Number of splits (or chunks of work). Split can be a part of data file to
   /// read.
   int64_t numSplits{0};

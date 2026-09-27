@@ -36,6 +36,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/common/tests/ScopedFeatureGate.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -46,10 +47,10 @@
 #include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -128,6 +129,20 @@ enum class ExternalDictionaryFailure {
 enum class FileDictionaryAlphabetOrder {
   Sorted,
   Unsorted,
+};
+
+enum class ScalarValueType {
+  Tinyint,
+  Smallint,
+  Integer,
+  Bigint,
+  Varchar,
+  Varbinary,
+};
+
+struct ScalarValueRoundTripTestCase {
+  ScalarValueType valueType;
+  SharedDictionaryScope scope;
 };
 
 struct TabletReaderDictionaryApiTestCase {
@@ -210,6 +225,24 @@ std::string_view fileDictionaryAlphabetOrderName(
   NIMBLE_UNREACHABLE("Unsupported file dictionary alphabet order.");
 }
 
+std::string_view scalarValueTypeName(ScalarValueType valueType) {
+  switch (valueType) {
+    case ScalarValueType::Tinyint:
+      return "Tinyint";
+    case ScalarValueType::Smallint:
+      return "Smallint";
+    case ScalarValueType::Integer:
+      return "Integer";
+    case ScalarValueType::Bigint:
+      return "Bigint";
+    case ScalarValueType::Varchar:
+      return "Varchar";
+    case ScalarValueType::Varbinary:
+      return "Varbinary";
+  }
+  NIMBLE_UNREACHABLE("Unsupported scalar value type.");
+}
+
 class FixedFileResolver final : public ExternalDictionaryResolver {
  public:
   FixedFileResolver(
@@ -255,7 +288,7 @@ class SharedDictionaryE2ETest : public testing::Test {
 
   static void useSharedDictionarySelectionPolicy(WriterOptions& options) {
     test::configureSharedDictionarySelectionPolicy(
-        options, {.forceDictionaryForInt32 = false});
+        options, {.forceDictionaryForEligibleTypes = false});
   }
 
   std::shared_ptr<const ExternalDictionaryResolver> makeExternalResolver(
@@ -314,6 +347,74 @@ class SharedDictionaryE2ETest : public testing::Test {
       return directStripeValue(position);
     }
     return dictionaryStripeValue(position);
+  }
+
+  static std::string stringStripeValue(
+      StripeValueType stripeValueType,
+      velox::vector_size_t position) {
+    if (stripeValueType == StripeValueType::Direct) {
+      return fmt::format("direct-string-{}", position);
+    }
+    return position % 2 == 0 ? "alpha" : "bravo";
+  }
+
+  template <typename T>
+  static T scalarStripeValue(
+      StripeValueType stripeValueType,
+      velox::vector_size_t position) {
+    if (stripeValueType == StripeValueType::Direct) {
+      return static_cast<T>(position % 97 + 30);
+    }
+    return static_cast<T>(position % 2 == 0 ? 1 : 2);
+  }
+
+  template <typename T>
+  velox::RowVectorPtr makeNumericScalarStripe(StripeValueType stripeValueType) {
+    velox::test::VectorMaker maker{leafPool_.get()};
+    return maker.rowVector(
+        {"nested"},
+        {maker.rowVector(
+            {"value"},
+            {maker.flatVector<T>(kStripeRows, [stripeValueType](auto row) {
+              return scalarStripeValue<T>(stripeValueType, row);
+            })})});
+  }
+
+  velox::RowVectorPtr makeStringStripe(
+      StripeValueType stripeValueType,
+      const velox::TypePtr& type) {
+    velox::test::VectorMaker maker{leafPool_.get()};
+    return maker.rowVector(
+        {"nested"},
+        {maker.rowVector(
+            {"value"},
+            {maker.flatVector<std::string>(
+                kStripeRows,
+                [stripeValueType](auto row) {
+                  return stringStripeValue(stripeValueType, row);
+                },
+                nullptr,
+                type)})});
+  }
+
+  velox::RowVectorPtr makeScalarStripe(
+      ScalarValueType valueType,
+      StripeValueType stripeValueType) {
+    switch (valueType) {
+      case ScalarValueType::Tinyint:
+        return makeNumericScalarStripe<int8_t>(stripeValueType);
+      case ScalarValueType::Smallint:
+        return makeNumericScalarStripe<int16_t>(stripeValueType);
+      case ScalarValueType::Integer:
+        return makeNumericScalarStripe<int32_t>(stripeValueType);
+      case ScalarValueType::Bigint:
+        return makeNumericScalarStripe<int64_t>(stripeValueType);
+      case ScalarValueType::Varchar:
+        return makeStringStripe(stripeValueType, velox::VARCHAR());
+      case ScalarValueType::Varbinary:
+        return makeStringStripe(stripeValueType, velox::VARBINARY());
+    }
+    NIMBLE_UNREACHABLE("Unsupported scalar value type.");
   }
 
   velox::RowVectorPtr makeStripe(
@@ -647,6 +748,55 @@ class SharedDictionaryE2ETest : public testing::Test {
     options.minStreamChunkRawSize = 1;
     useSharedDictionarySelectionPolicy(options);
     return options;
+  }
+
+  // Writes one stripe carrying a stripe-scoped shared dictionary and checks
+  // that the root column's rolled-up physical size covers every byte the
+  // tablet wrote. Callers install a FeatureGate first to exercise the
+  // stripe-stats write path, which reconstructs file stats from per-stripe
+  // snapshots rather than reading the live collectors.
+  void verifyStripeDictionaryPhysicalStatsCovered() {
+    auto options = makeSharedDictionaryWriterOptions();
+    addDictionary(
+        options,
+        InputType::FlatMapScalar,
+        sharedDictionaryConfig(
+            SharedDictionaryScope::Stripe, /*dictionaryId=*/0));
+
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    auto input =
+        makeStripe(InputType::FlatMapScalar, StripeValueType::Dictionary);
+    Writer writer{input->type(), std::move(writeFile), *rootPool_, options};
+    writer.write(input);
+    writer.close();
+
+    uint64_t reportedPhysicalSize{0};
+    for (const auto* stat : writer.columnStats()) {
+      reportedPhysicalSize =
+          std::max(reportedPhysicalSize, stat->getPhysicalSize());
+    }
+    ASSERT_GT(reportedPhysicalSize, 0);
+
+    // Total bytes actually written across every stream of every stripe.
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
+    auto tablet =
+        TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+    uint64_t writtenStreamBytes{0};
+    for (uint32_t stripe{0}; stripe < tablet->stripeCount(); ++stripe) {
+      const auto identifier = tablet->stripeIdentifier(stripe);
+      const auto streamCount = tablet->streamCount(identifier);
+      for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
+        writtenStreamBytes += tablet->streamSize(identifier, streamId);
+      }
+    }
+    ASSERT_GT(writtenStreamBytes, 0);
+
+    EXPECT_GE(reportedPhysicalSize, writtenStreamBytes)
+        << "root physical size " << reportedPhysicalSize
+        << " does not cover the " << writtenStreamBytes
+        << " bytes written; the shared dictionary alphabet is likely unaccounted";
   }
 
   std::string writeInput(
@@ -1147,13 +1297,31 @@ class SharedDictionaryE2ETest : public testing::Test {
       std::shared_ptr<const ExternalDictionaryResolver> externalResolver =
           nullptr) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-    VeloxReadParams params;
+    BatchReadParams params;
     params.externalDictionaryResolver = std::move(externalResolver);
-    VeloxReader reader{readFile, *leafPool_, nullptr, params};
+    BatchReader reader{readFile, *leafPool_, nullptr, params};
     velox::VectorPtr output;
     for (const auto stripeValueType : stripeValueTypes) {
       ASSERT_TRUE(reader.next(kStripeRows, output));
       auto expected = makeStripe(inputType, stripeValueType);
+      ASSERT_EQ(output->size(), expected->size());
+      for (velox::vector_size_t i = 0; i < output->size(); ++i) {
+        ASSERT_TRUE(output->equalValueAt(expected.get(), i, i));
+      }
+    }
+    EXPECT_FALSE(reader.next(kStripeRows, output));
+  }
+
+  void verifyScalarRoundTrip(
+      const std::string& file,
+      ScalarValueType valueType,
+      const std::vector<StripeValueType>& stripeValueTypes) {
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    BatchReader reader{readFile, *leafPool_};
+    velox::VectorPtr output;
+    for (const auto stripeValueType : stripeValueTypes) {
+      ASSERT_TRUE(reader.next(kStripeRows, output));
+      auto expected = makeScalarStripe(valueType, stripeValueType);
       ASSERT_EQ(output->size(), expected->size());
       for (velox::vector_size_t i = 0; i < output->size(); ++i) {
         ASSERT_TRUE(output->equalValueAt(expected.get(), i, i));
@@ -1167,7 +1335,7 @@ class SharedDictionaryE2ETest : public testing::Test {
       FileDictionaryAlphabetOrder alphabetOrder,
       size_t stripeCount = 1) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-    VeloxReader reader{readFile, *leafPool_};
+    BatchReader reader{readFile, *leafPool_};
     velox::VectorPtr output;
     auto expected = makeFileDictionaryStripe(alphabetOrder);
     for (size_t stripeIndex{0}; stripeIndex < stripeCount; ++stripeIndex) {
@@ -1197,6 +1365,22 @@ class SharedDictionaryE2EFlatMapDefaultValueSubfieldTest
     : public SharedDictionaryE2ETest,
       public testing::WithParamInterface<InputType> {};
 
+class SharedDictionaryE2EScalarValueTypeTest
+    : public SharedDictionaryE2ETest,
+      public testing::WithParamInterface<ScalarValueRoundTripTestCase> {};
+
+class SharedDictionaryE2EInvalidDictionaryTargetTest
+    : public SharedDictionaryE2ETest,
+      public testing::WithParamInterface<InvalidDictionaryTarget> {};
+
+class SharedDictionaryE2EFileDictionaryAlphabetOrderTest
+    : public SharedDictionaryE2ETest,
+      public testing::WithParamInterface<FileDictionaryAlphabetOrder> {};
+
+class SharedDictionaryE2EExternalDictionaryFailureTest
+    : public SharedDictionaryE2ETest,
+      public testing::WithParamInterface<ExternalDictionaryFailure> {};
+
 class SharedDictionaryE2ETabletReaderApiTest
     : public SharedDictionaryE2ETest,
       public testing::WithParamInterface<TabletReaderDictionaryApiTestCase> {};
@@ -1220,6 +1404,35 @@ TEST_P(SharedDictionaryE2EInputTypeTest, stripeScopeRoundTrip) {
         stripeValueTypes);
   }
   verifyRoundTrip(file, inputType);
+}
+
+TEST_F(SharedDictionaryE2ETest, predefinedFlatMapKeyUsesSharedDictionary) {
+  const std::vector<StripeValueType> stripeValueTypes{
+      StripeValueType::Dictionary, StripeValueType::Direct};
+  auto options = makeSharedDictionaryWriterOptions();
+  options.flatMapColumns.emplace("features", std::set<std::string>{"10"});
+  addFlatmapDictionary(
+      options,
+      sharedDictionaryConfig(SharedDictionaryScope::File, /*dictionaryId=*/7));
+
+  std::vector<velox::RowVectorPtr> stripeInputs;
+  stripeInputs.reserve(stripeValueTypes.size());
+  for (const auto stripeValueType : stripeValueTypes) {
+    stripeInputs.push_back(
+        makeStripe(InputType::FlatMapScalar, stripeValueType));
+  }
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto tablet = openTablet(file);
+  const auto valueStreamIds =
+      sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
+  ASSERT_EQ(valueStreamIds.size(), 1);
+  expectDictionaryValueEncodingTypes(
+      *tablet,
+      valueStreamIds.front(),
+      SharedDictionaryScope::File,
+      stripeValueTypes);
+  verifyRoundTrip(file, InputType::FlatMapScalar, stripeValueTypes);
 }
 
 TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
@@ -1247,6 +1460,65 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   verifyRoundTrip(file, inputType, stripeValueTypes);
 }
 
+// The stripe-scope alphabet stream has no StreamData, so it is written by a
+// separate pass that historically skipped the per-column size accounting. With
+// shared dictionary encoding most of a column's bytes live in that alphabet, so
+// the omission understated the column badly. Pin the invariant that the root
+// column's rolled-up physical size covers every byte the stripe wrote.
+TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
+  verifyStripeDictionaryPhysicalStatsCovered();
+}
+
+// Same invariant with the stripe-stats write path on. File statistics are then
+// rebuilt by merging per-stripe snapshots, so the snapshot must be taken after
+// the stripe dictionary streams are written: snapshotting earlier shifts the
+// alphabet bytes into the next stripe and loses them outright for the last one.
+TEST_F(
+    SharedDictionaryE2ETest,
+    sharedStripeDictionaryColumnPhysicalStatsWithStripeStats) {
+  test::ScopedFeatureGate stripeStatsGate{
+      FeatureGate::FeatureSet::kStripeStatsWrite};
+  verifyStripeDictionaryPhysicalStatsCovered();
+}
+
+// A stripe whose values are all null never reaches encoding selection, so the
+// dictionary sits the stripe out. The stripe boundary visits every configured
+// dictionary regardless, so it must tolerate one that has nothing to encode.
+TEST_F(SharedDictionaryE2ETest, stripeScopeIdleStripe) {
+  auto options = makeSharedDictionaryWriterOptions();
+  addColumnDictionary(
+      options,
+      sharedDictionaryConfig(SharedDictionaryScope::Stripe, /*dictionaryId=*/0),
+      "value");
+
+  velox::test::VectorMaker maker{leafPool_.get()};
+  const auto valued = maker.rowVector(
+      {"value"}, {maker.flatVector<int32_t>(kStripeRows, [](auto row) {
+        return dictionaryStripeValue(row);
+      })});
+  const auto allNull = maker.rowVector(
+      {"value"},
+      {maker.flatVector<int32_t>(
+          kStripeRows,
+          [](auto row) { return dictionaryStripeValue(row); },
+          [](auto /*row*/) { return true; })});
+
+  const std::vector<velox::RowVectorPtr> stripeInputs{valued, valued, allNull};
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  BatchReader reader{readFile, *leafPool_, nullptr, BatchReadParams{}};
+  velox::VectorPtr output;
+  for (const auto& expected : stripeInputs) {
+    ASSERT_TRUE(reader.next(kStripeRows, output));
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t i{0}; i < output->size(); ++i) {
+      ASSERT_TRUE(output->equalValueAt(expected.get(), i, i)) << "row " << i;
+    }
+  }
+  EXPECT_FALSE(reader.next(kStripeRows, output));
+}
+
 TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
@@ -1271,7 +1543,7 @@ TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
       sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
   ASSERT_EQ(valueStreamIds.size(), 1);
 
-  VeloxReadParams params;
+  BatchReadParams params;
   const Encoding::Options encodingOptions{.useVarintRowCount = true};
   params.encodingFactory =
       [encodingOptions](
@@ -1283,7 +1555,7 @@ TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
         pool, data, std::move(stringBufferFactory));
   };
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-  VeloxReader reader{readFile, *leafPool_, nullptr, std::move(params)};
+  BatchReader reader{readFile, *leafPool_, nullptr, std::move(params)};
   velox::VectorPtr output;
   for (const auto stripeValueType : stripeValueTypes) {
     ASSERT_TRUE(reader.next(kStripeRows, output));
@@ -1294,6 +1566,35 @@ TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
     }
   }
   EXPECT_FALSE(reader.next(kStripeRows, output));
+}
+
+TEST_P(SharedDictionaryE2EScalarValueTypeTest, columnRoundTrip) {
+  const auto testCase = GetParam();
+  const std::vector<StripeValueType> stripeValueTypes{
+      StripeValueType::Dictionary};
+  auto options = makeSharedDictionaryWriterOptions();
+  test::configureSharedDictionarySelectionPolicy(options);
+  addColumnDictionary(
+      options,
+      sharedDictionaryConfig(testCase.scope, /*dictionaryId=*/7),
+      "nested.value");
+
+  std::vector<velox::RowVectorPtr> stripeInputs;
+  stripeInputs.reserve(stripeValueTypes.size());
+  for (const auto stripeValueType : stripeValueTypes) {
+    stripeInputs.push_back(
+        makeScalarStripe(testCase.valueType, stripeValueType));
+  }
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto tablet = openTablet(file);
+  const auto schema = readSchema(*tablet);
+  const auto valueStreamId =
+      scalarStreamId(*schema->asRow().childAt(0)->asRow().childAt(0));
+  ASSERT_TRUE(hasSharedDictionary(*tablet, valueStreamId));
+  expectDictionaryValueEncodingTypes(
+      *tablet, valueStreamId, testCase.scope, stripeValueTypes);
+  verifyScalarRoundTrip(file, testCase.valueType, stripeValueTypes);
 }
 
 TEST_P(SharedDictionaryE2EFlatMapRowValueSubfieldsTest, roundTrip) {
@@ -1461,6 +1762,53 @@ INSTANTIATE_TEST_SUITE_P(
       return std::string{SharedDictionaryScopeName::toName(testInfo.param)};
     });
 
+INSTANTIATE_TEST_SUITE_P(
+    ValueTypesAndScopes,
+    SharedDictionaryE2EScalarValueTypeTest,
+    testing::Values(
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Tinyint,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Tinyint,
+            SharedDictionaryScope::File},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Smallint,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Smallint,
+            SharedDictionaryScope::File},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Integer,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Integer,
+            SharedDictionaryScope::File},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Bigint,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Bigint,
+            SharedDictionaryScope::File},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Varchar,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Varchar,
+            SharedDictionaryScope::File},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Varbinary,
+            SharedDictionaryScope::Stripe},
+        ScalarValueRoundTripTestCase{
+            ScalarValueType::Varbinary,
+            SharedDictionaryScope::File}),
+    [](const testing::TestParamInfo<ScalarValueRoundTripTestCase>& testInfo) {
+      return fmt::format(
+          "{}_{}",
+          scalarValueTypeName(testInfo.param.valueType),
+          SharedDictionaryScopeName::toName(testInfo.param.scope));
+    });
+
 TEST_F(SharedDictionaryE2ETest, stripeScopeRejectsConfiguredDictionaryId) {
   auto input = makeDictionaryStripe(InputType::FlatMapScalar);
   WriterOptions options;
@@ -1576,61 +1924,69 @@ INSTANTIATE_TEST_SUITE_P(
           SharedDictionaryScopeName::toName(testInfo.param.scope)};
     });
 
-TEST_F(SharedDictionaryE2ETest, dictionaryConfigRejected) {
-  for (const auto target :
-       {InvalidDictionaryTarget::FlatMapWholeRowValue,
-        InvalidDictionaryTarget::RegularRowColumnValue}) {
-    SCOPED_TRACE(fmt::format("target={}", invalidDictionaryTargetName(target)));
-    velox::test::VectorMaker maker{leafPool_.get()};
-    velox::RowVectorPtr input;
-    WriterOptions options;
-    switch (target) {
-      case InvalidDictionaryTarget::FlatMapWholeRowValue:
-        input = maker.rowVector(
-            {"features"},
-            {maker.mapVector(
-                std::vector<velox::vector_size_t>{0},
-                std::vector<velox::vector_size_t>{1},
-                maker.flatVector<int64_t>({10}),
-                maker.rowVector(
-                    {"a", "b"},
-                    {maker.flatVector<int64_t>({1}),
-                     maker.flatVector<int64_t>({2})}))});
-        options.flatMapColumns.emplace("features", std::set<std::string>{});
-        addFlatmapDictionary(
-            options,
-            sharedDictionaryConfig(
-                SharedDictionaryScope::File, /*dictionaryId=*/17));
-        break;
-      case InvalidDictionaryTarget::RegularRowColumnValue:
-        input = maker.rowVector(
-            {"nested"},
-            {maker.rowVector(
-                {"a", "b"},
-                {maker.flatVector<int32_t>({1}),
-                 maker.flatVector<int32_t>({2})})});
-        useSharedDictionarySelectionPolicy(options);
-        options.experimentalSharedDictionaryEncoding =
-            SharedDictionaryEncodingConfig::builder()
-                .addColumnDictionary(
-                    "nested",
-                    sharedDictionaryConfig(
-                        SharedDictionaryScope::File, /*dictionaryId=*/17))
-                .build();
-        break;
-    }
-    ASSERT_NE(input, nullptr);
-    auto writeInvalidTarget = [&]() {
-      std::string file;
-      auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-      Writer writer{
-          input->type(), std::move(writeFile), *rootPool_, std::move(options)};
-      writer.write(input);
-    };
-    NIMBLE_ASSERT_USER_THROW(
-        writeInvalidTarget(), "must resolve to an integer scalar");
+TEST_P(
+    SharedDictionaryE2EInvalidDictionaryTargetTest,
+    dictionaryConfigRejected) {
+  const auto target = GetParam();
+  velox::test::VectorMaker maker{leafPool_.get()};
+  velox::RowVectorPtr input;
+  WriterOptions options;
+  switch (target) {
+    case InvalidDictionaryTarget::FlatMapWholeRowValue:
+      input = maker.rowVector(
+          {"features"},
+          {maker.mapVector(
+              std::vector<velox::vector_size_t>{0},
+              std::vector<velox::vector_size_t>{1},
+              maker.flatVector<int64_t>({10}),
+              maker.rowVector(
+                  {"a", "b"},
+                  {maker.flatVector<int64_t>({1}),
+                   maker.flatVector<int64_t>({2})}))});
+      options.flatMapColumns.emplace("features", std::set<std::string>{});
+      addFlatmapDictionary(
+          options,
+          sharedDictionaryConfig(
+              SharedDictionaryScope::File, /*dictionaryId=*/17));
+      break;
+    case InvalidDictionaryTarget::RegularRowColumnValue:
+      input = maker.rowVector(
+          {"nested"},
+          {maker.rowVector(
+              {"a", "b"},
+              {maker.flatVector<int32_t>({1}),
+               maker.flatVector<int32_t>({2})})});
+      useSharedDictionarySelectionPolicy(options);
+      options.experimentalSharedDictionaryEncoding =
+          SharedDictionaryEncodingConfig::builder()
+              .addColumnDictionary(
+                  "nested",
+                  sharedDictionaryConfig(
+                      SharedDictionaryScope::File, /*dictionaryId=*/17))
+              .build();
+      break;
   }
+  ASSERT_NE(input, nullptr);
+  auto writeInvalidTarget = [&]() {
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    Writer writer{
+        input->type(), std::move(writeFile), *rootPool_, std::move(options)};
+    writer.write(input);
+  };
+  NIMBLE_ASSERT_USER_THROW(
+      writeInvalidTarget(), "must resolve to an integer or string scalar");
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Targets,
+    SharedDictionaryE2EInvalidDictionaryTargetTest,
+    testing::Values(
+        InvalidDictionaryTarget::FlatMapWholeRowValue,
+        InvalidDictionaryTarget::RegularRowColumnValue),
+    [](const testing::TestParamInfo<InvalidDictionaryTarget>& testInfo) {
+      return std::string{invalidDictionaryTargetName(testInfo.param)};
+    });
 
 TEST_F(
     SharedDictionaryE2ETest,
@@ -1659,31 +2015,36 @@ TEST_F(
       std::vector<StripeValueType>(kStripeCount, StripeValueType::Dictionary));
 }
 
-TEST_F(SharedDictionaryE2ETest, fileScopePrebuiltAlphabetPreservesEncoding) {
+TEST_P(
+    SharedDictionaryE2EFileDictionaryAlphabetOrderTest,
+    fileScopePrebuiltAlphabetPreservesEncoding) {
   constexpr size_t kStripeCount{2};
-  for (const auto alphabetOrder :
-       {FileDictionaryAlphabetOrder::Sorted,
-        FileDictionaryAlphabetOrder::Unsorted}) {
-    SCOPED_TRACE(
-        fmt::format(
-            "alphabetOrder={}",
-            fileDictionaryAlphabetOrderName(alphabetOrder)));
-    const auto file = writeWithFileDictionary(kStripeCount, alphabetOrder);
-    auto tablet = openTablet(file);
-    const auto valueStreamIds =
-        sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
-    ASSERT_EQ(valueStreamIds.size(), 1);
-    const auto valueStreamId = valueStreamIds.front();
-    const auto encodingTypes =
-        streamEncodingTypesByStripe(*tablet, valueStreamId);
-    ASSERT_EQ(encodingTypes.size(), kStripeCount);
-    expectAllStripeEncodingTypes(encodingTypes, EncodingType::SharedDictionary);
-    EXPECT_EQ(fileDictionaryValues(file), fileDictionaryValues(alphabetOrder));
-    EXPECT_EQ(
-        fileDictionaryAlphabetEncodingType(file), EncodingType::FixedBitWidth);
-    verifyFileDictionaryRoundTrip(file, alphabetOrder, kStripeCount);
-  }
+  const auto alphabetOrder = GetParam();
+  const auto file = writeWithFileDictionary(kStripeCount, alphabetOrder);
+  auto tablet = openTablet(file);
+  const auto valueStreamIds =
+      sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
+  ASSERT_EQ(valueStreamIds.size(), 1);
+  const auto valueStreamId = valueStreamIds.front();
+  const auto encodingTypes =
+      streamEncodingTypesByStripe(*tablet, valueStreamId);
+  ASSERT_EQ(encodingTypes.size(), kStripeCount);
+  expectAllStripeEncodingTypes(encodingTypes, EncodingType::SharedDictionary);
+  EXPECT_EQ(fileDictionaryValues(file), fileDictionaryValues(alphabetOrder));
+  EXPECT_EQ(
+      fileDictionaryAlphabetEncodingType(file), EncodingType::FixedBitWidth);
+  verifyFileDictionaryRoundTrip(file, alphabetOrder, kStripeCount);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AlphabetOrders,
+    SharedDictionaryE2EFileDictionaryAlphabetOrderTest,
+    testing::Values(
+        FileDictionaryAlphabetOrder::Sorted,
+        FileDictionaryAlphabetOrder::Unsorted),
+    [](const testing::TestParamInfo<FileDictionaryAlphabetOrder>& testInfo) {
+      return std::string{fileDictionaryAlphabetOrderName(testInfo.param)};
+    });
 
 TEST_P(SharedDictionaryE2EInputTypeTest, externalScopeRoundTrip) {
   const auto inputType = GetParam();
@@ -1708,43 +2069,48 @@ TEST_P(SharedDictionaryE2EInputTypeTest, externalScopeRoundTrip) {
   verifyRoundTrip(file, inputType, stripeValueTypes, resolver);
 }
 
-TEST_F(SharedDictionaryE2ETest, externalDictionaryFailures) {
-  for (const auto failure :
-       {ExternalDictionaryFailure::MissingResolver,
-        ExternalDictionaryFailure::MissingValue}) {
-    SCOPED_TRACE(
-        fmt::format("failure={}", externalDictionaryFailureName(failure)));
-    switch (failure) {
-      case ExternalDictionaryFailure::MissingResolver: {
-        auto resolver = makeExternalResolver(externalDictionaryValues());
-        const auto file = write(
-            InputType::FlatMapScalar,
-            SharedDictionaryScope::External,
-            {StripeValueType::Dictionary, StripeValueType::Direct},
-            resolver);
-        auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-        VeloxReader reader{readFile, *leafPool_};
-        velox::VectorPtr output;
-        NIMBLE_ASSERT_USER_THROW(
-            reader.next(kStripeRows, output),
-            "External shared dictionary 17 requires an "
-            "ExternalDictionaryResolver.");
-        break;
-      }
-      case ExternalDictionaryFailure::MissingValue: {
-        auto resolver = makeExternalResolver(kDictionaryStripeAlphabetValues);
-        NIMBLE_ASSERT_USER_THROW(
-            write(
-                InputType::FlatMapScalar,
-                SharedDictionaryScope::External,
-                {StripeValueType::Dictionary, StripeValueType::Direct},
-                resolver),
-            "External shared dictionary 17 does not contain value 10000.");
-        break;
-      }
+TEST_P(SharedDictionaryE2EExternalDictionaryFailureTest, fails) {
+  const auto failure = GetParam();
+  switch (failure) {
+    case ExternalDictionaryFailure::MissingResolver: {
+      auto resolver = makeExternalResolver(externalDictionaryValues());
+      const auto file = write(
+          InputType::FlatMapScalar,
+          SharedDictionaryScope::External,
+          {StripeValueType::Dictionary, StripeValueType::Direct},
+          resolver);
+      auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+      BatchReader reader{readFile, *leafPool_};
+      velox::VectorPtr output;
+      NIMBLE_ASSERT_USER_THROW(
+          reader.next(kStripeRows, output),
+          "External shared dictionary 17 requires an "
+          "ExternalDictionaryResolver.");
+      break;
+    }
+    case ExternalDictionaryFailure::MissingValue: {
+      auto resolver = makeExternalResolver(kDictionaryStripeAlphabetValues);
+      NIMBLE_ASSERT_USER_THROW(
+          write(
+              InputType::FlatMapScalar,
+              SharedDictionaryScope::External,
+              {StripeValueType::Dictionary, StripeValueType::Direct},
+              resolver),
+          "External shared dictionary 17 does not contain value 10000.");
+      break;
     }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Failures,
+    SharedDictionaryE2EExternalDictionaryFailureTest,
+    testing::Values(
+        ExternalDictionaryFailure::MissingResolver,
+        ExternalDictionaryFailure::MissingValue),
+    [](const testing::TestParamInfo<ExternalDictionaryFailure>& testInfo) {
+      return std::string{externalDictionaryFailureName(testInfo.param)};
+    });
 
 TEST_F(
     SharedDictionaryE2ETest,

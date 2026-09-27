@@ -46,10 +46,15 @@ Map Functions
 
 .. spark:function:: map_from_arrays(array(K), array(V)) -> map(K,V)
 
-    Creates a map with a pair of the given key/value arrays. All elements in keys should not be null.
-    If key size != value size will throw exception that key and value must have the same length.::
+    Creates a map by pairing up the given key and value arrays. Returns NULL if either array is
+    NULL. Throws if a top-level key is NULL, or if the two arrays have different lengths. Array and
+    row keys may contain nested NULL values. When a key is repeated, the behavior depends on the
+    ``throw_exception_on_duplicate_map_keys`` configuration
+    property: if true, throws; otherwise the last value wins and the key keeps the position of its
+    first occurrence. ::
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
+        SELECT map_from_arrays(array(2, 1, 2), array('a', 'b', 'c')); -- {2 -> 'c', 1 -> 'b'}
 
 .. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
 
@@ -84,15 +89,19 @@ Map Functions
                             MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
                             (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
 
-.. spark:function:: size(map(K,V), legacySizeOfNull) -> integer
+.. spark:function:: size(map(K,V), legacySizeOfNull) -> integer (ANSI compliant)
     :noindex:
 
     Returns the size of the input map. Returns null for null input if ``legacySizeOfNull``
-    is set to false. Otherwise, returns -1 for null input. ::
+    is false. Otherwise, returns -1 for null input. The ``legacySizeOfNull`` argument
+    reflects Spark's ``spark.sql.legacy.sizeOfNull`` configuration combined with ANSI
+    mode (``spark.sql.legacy.sizeOfNull`` AND NOT ``spark.sql.ansi.enabled``): it is
+    true only when Spark ANSI mode is disabled and ``spark.sql.legacy.sizeOfNull`` is
+    true, so under Spark ANSI mode null input always returns null. ::
 
         SELECT size(map(array(1, 2), array(3, 4)), true); -- 2
-        SELECT size(NULL, true); -- -1
-        SELECT size(NULL, false); -- NULL
+        SELECT size(NULL, true); -- -1 (Spark ANSI mode disabled)
+        SELECT size(NULL, false); -- NULL (e.g. Spark ANSI mode enabled)
 
 .. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
 

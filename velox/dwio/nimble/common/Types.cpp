@@ -38,6 +38,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::MainlyConstant, "MainlyConstant"},
         {EncodingType::Prefix, "Prefix"},
         {EncodingType::ALP, "ALP"},
+        {EncodingType::ALPRD, "ALPRD"},
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},
@@ -48,6 +49,9 @@ constexpr auto kEncodingTypes =
         {EncodingType::Huffman, "Huffman"},
         {EncodingType::DeltaBlock, "DeltaBlock"},
         {EncodingType::SharedDictionary, "SharedDictionary"},
+        {EncodingType::Slice, "Slice"},
+        {EncodingType::EliasFano, "EliasFano"},
+        {EncodingType::BitRangeSplit, "BitRangeSplit"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

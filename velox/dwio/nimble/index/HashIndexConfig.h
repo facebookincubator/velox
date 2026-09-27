@@ -16,21 +16,15 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
+#include "velox/dwio/nimble/index/BlockedBloomFilter.h"
+#include "velox/dwio/nimble/index/BloomFilter.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 
 namespace facebook::nimble::index {
-
-/// Bloom filter configuration shared by dense index implementations.
-struct BloomFilterConfig {
-  /// Higher values reduce false positives at the cost of additional memory.
-  /// 10 bits per key yields approximately a 1% false-positive rate.
-  float bitsPerKey{10.0f};
-};
 
 /// Configuration for generating a hash index for point lookups.
 ///
@@ -41,7 +35,7 @@ struct HashIndexConfig final : IndexConfig {
       std::string indexName,
       std::vector<std::string> columns,
       float loadFactor,
-      std::optional<BloomFilterConfig> bloomFilter,
+      std::shared_ptr<const BloomFilterConfig> bloomFilter,
       uint64_t maxPartitionSizeBytes)
       : IndexConfig{IndexFamily::Dense, std::move(indexName)},
         columns{std::move(columns)},
@@ -54,8 +48,8 @@ struct HashIndexConfig final : IndexConfig {
   /// Target hash-table load factor. Lower values reduce collisions at the
   /// cost of additional buckets.
   float loadFactor;
-  /// Optional bloom filter for fast negative lookups.
-  std::optional<BloomFilterConfig> bloomFilter;
+  /// Bloom filter for fast negative lookups, or null to write none.
+  std::shared_ptr<const BloomFilterConfig> bloomFilter;
   /// Maximum independently loadable partition size. Zero disables
   /// partitioning.
   uint64_t maxPartitionSizeBytes;
@@ -77,8 +71,17 @@ class HashIndexConfigBuilder {
     return *this;
   }
 
+  /// Enables the default split-block bloom filter at 'bitsPerKey'.
   HashIndexConfigBuilder& withBloomFilter(float bitsPerKey) {
-    bloomFilterBitsPerKey_ = bitsPerKey;
+    bloomFilter_ = std::make_shared<const BlockedBloomFilterConfig>(bitsPerKey);
+    return *this;
+  }
+
+  /// Enables a bloom filter built by whichever factory 'bloomFilter' selects,
+  /// including layouts registered outside this library.
+  HashIndexConfigBuilder& withBloomFilter(
+      std::shared_ptr<const BloomFilterConfig> bloomFilter) {
+    bloomFilter_ = std::move(bloomFilter);
     return *this;
   }
 
@@ -90,23 +93,18 @@ class HashIndexConfigBuilder {
 
   /// Builds an immutable configuration consumed by the index factory.
   std::shared_ptr<const IndexConfig> build() const {
-    std::optional<BloomFilterConfig> bloomFilter;
-    if (bloomFilterBitsPerKey_.has_value()) {
-      bloomFilter =
-          BloomFilterConfig{.bitsPerKey = bloomFilterBitsPerKey_.value()};
-    }
     return std::make_shared<const HashIndexConfig>(
         std::string{kDenseHashIndexName},
         columns_,
         loadFactor_,
-        bloomFilter,
+        bloomFilter_,
         maxPartitionSizeBytes_);
   }
 
  private:
   std::vector<std::string> columns_;
   float loadFactor_{0.7f};
-  std::optional<float> bloomFilterBitsPerKey_;
+  std::shared_ptr<const BloomFilterConfig> bloomFilter_;
   uint64_t maxPartitionSizeBytes_{0};
 };
 

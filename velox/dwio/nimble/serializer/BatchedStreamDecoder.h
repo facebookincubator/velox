@@ -50,9 +50,23 @@ class BatchedStreamDecoder : public Decoder {
   uint32_t next(
       uint32_t count,
       void* output,
+      std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
-      std::function<void*()> getOutputNulls = nullptr,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
+
+  uint32_t read(
+      std::span<const uint32_t> rows,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
+
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
 
   void skip(uint32_t count) override;
 
@@ -70,7 +84,8 @@ class BatchedStreamDecoder : public Decoder {
   // top-level row where the batch begins in the concatenated run; it's
   // read back by FlatMap in-map reads to detect and fill gaps when
   // earlier batches omitted the stream. Other streams just concatenate
-  // in payload order.
+  // in payload order. `legacyHeaderless` is true for raw streams of the
+  // removed legacy headerless format.
   //
   // The segment is stored as raw bytes. The encoding is constructed
   // lazily by `ensureStreamData` the first time this segment is decoded.
@@ -81,14 +96,14 @@ class BatchedStreamDecoder : public Decoder {
   void addBatch(
       uint32_t startRow,
       std::string_view data,
-      SerializationVersion version,
+      bool legacyHeaderless,
       bool streamEncodingUsesVarintRowCount) {
     NIMBLE_CHECK(!data.empty(), "Physical stream segment must be non-empty");
     streamSegments_.emplace_back(
         StreamSegment{
             .startRow = startRow,
             .data = data,
-            .version = version,
+            .legacyHeaderless = legacyHeaderless,
             .streamEncodingUsesVarintRowCount =
                 streamEncodingUsesVarintRowCount});
   }
@@ -138,7 +153,8 @@ class BatchedStreamDecoder : public Decoder {
     // streams to detect gaps when decoding across multiple chunks.
     uint32_t startRow;
     std::string_view data;
-    SerializationVersion version;
+    // True for raw streams of the removed legacy headerless format.
+    bool legacyHeaderless;
     bool streamEncodingUsesVarintRowCount;
   };
 
@@ -205,7 +221,8 @@ class BatchedStreamDecoder : public Decoder {
       uint32_t outputOffset,
       void* output);
 
-  serde::StreamData::DecodeResult readLegacyStreamSegment(
+  // Copies raw values of a legacy headerless stream segment to dense output.
+  serde::StreamData::DecodeResult readLegacyHeaderlessSegment(
       serde::StreamData& streamData,
       void* output,
       uint32_t offset,

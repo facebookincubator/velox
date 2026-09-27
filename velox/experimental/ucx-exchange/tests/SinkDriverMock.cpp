@@ -60,7 +60,7 @@ void SinkDriverMock::updateDataValidity(const cudf::table_view& tab) {
     return; // No reference data to check against
   }
 
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
 
   // Use the polymorphic verifyTable method
   // Note: For chunk-based verification, we use startRow=0 since each chunk

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/CPortability.h>
+#include <xsimd/xsimd.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -22,6 +24,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <vector>
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -127,6 +130,8 @@ class ALPEncoding final
     const char* pos = data.data() + this->dataOffset();
 
     const auto header = detail::alp::readHeader(pos);
+    NIMBLE_CHECK_LE(header.exponent, kMaxExponent, "Invalid ALP exponent.");
+    NIMBLE_CHECK_LE(header.factor, kMaxFactor, "Invalid ALP factor.");
     exponent_ = header.exponent;
     factor_ = header.factor;
     exceptionCount_ = header.hasExceptions ? varint::readVarint32(&pos) : 0;
@@ -200,6 +205,24 @@ class ALPEncoding final
 
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params) {
+    if constexpr (
+        DecoderVisitor::dense && DecoderVisitor::kHasBulkPath &&
+        std::is_same_v<typename DecoderVisitor::DataType, cppDataType> &&
+        std::is_same_v<
+            typename DecoderVisitor::Extract,
+            velox::dwio::common::ExtractToReader>) {
+      constexpr vector_size_t kMinBulkRows = 128;
+      // Use a conservative cutoff based on the number of rows left to read.
+      // This is a trade-off that avoids bulk setup costs for short reads but
+      // may give up potential speedups on some smaller batches.
+      if (visitor.numRows() - visitor.rowIndex() >= kMinBulkRows) {
+        const auto* nulls = visitor.reader().rawNullsInReadRange();
+        if (velox::dwio::common::useFastPath(visitor, nulls)) {
+          detail::readWithVisitorFast(*this, visitor, params, nulls);
+          return;
+        }
+      }
+    }
     auto skipFn = [&](auto toSkip) { pos_ += toSkip; };
     auto decodeFn = [&] {
       physicalType value = detail::alp::toPhysical<cppDataType>(decodeValue(
@@ -211,6 +234,64 @@ class ALPEncoding final
       return value;
     };
     detail::readWithVisitorSlow(visitor, params, skipFn, decodeFn);
+  }
+
+  template <bool kScatter, typename Visitor>
+  void bulkScan(
+      Visitor& visitor,
+      vector_size_t currentRow,
+      const vector_size_t* selectedRows,
+      vector_size_t numSelected,
+      const vector_size_t* scatterRows) {
+    static_assert(Visitor::dense);
+    static_assert(std::is_same_v<typename Visitor::DataType, cppDataType>);
+    NIMBLE_CHECK_GT(numSelected, 0);
+    const auto numRows = visitor.numRows() - visitor.rowIndex();
+    auto* values = detail::mutableValues<cppDataType>(visitor, numRows);
+    auto* physicalValues = reinterpret_cast<physicalType*>(values);
+    const auto sourceStart =
+        pos_ + static_cast<uint32_t>(selectedRows[0] - currentRow);
+    const auto* encodedValues = encodedBuffer_.data() + sourceStart;
+    decodeBulkValues(encodedValues, numSelected, exponent_, factor_, values);
+    patchExceptions(sourceStart, numSelected, physicalValues);
+
+    if constexpr (!Visitor::kHasHook) {
+      // For non-hook visitors, mutableValues() returns rawValues() + numValues.
+      // processFixedWidthRun() applies numValues as its offset, so rebase to
+      // the beginning of the output buffer to avoid applying the offset twice.
+      // Hook visitors must retain the scratch-buffer pointer returned by
+      // mutableValues().
+      values = reinterpret_cast<cppDataType*>(visitor.reader().rawValues());
+    }
+    auto numValues = visitor.reader().numValues();
+    int32_t* filterHits = nullptr;
+    if constexpr (Visitor::kHasFilter) {
+      filterHits = visitor.outputRows(numSelected) - numValues;
+    }
+    velox::dwio::common::processFixedWidthRun<
+        cppDataType,
+        Visitor::kFilterOnly,
+        kScatter,
+        Visitor::dense>(
+        velox::RowSet(selectedRows, numSelected),
+        0,
+        numSelected,
+        scatterRows,
+        values,
+        filterHits,
+        numValues,
+        visitor.filter(),
+        visitor.hook());
+    pos_ += selectedRows[numSelected - 1] - currentRow + 1;
+    if constexpr (!Visitor::kHasHook) {
+      // processFixedWidthRun updates the local output count. Commit only rows
+      // that passed the filter; without a filter, all requested rows contribute
+      // output.
+      visitor.addNumValues(
+          Visitor::kHasFilter ? numValues - visitor.reader().numValues()
+                              : numRows);
+    }
+    visitor.setRowIndex(visitor.numRows());
   }
 
   std::string debugString(int offset) const final {
@@ -247,21 +328,49 @@ class ALPEncoding final
         /*size=*/0, pool, options.bufferPool};
     ScopedVector<physicalType> exceptionValues{
         /*size=*/0, pool, options.bufferPool};
-    const auto [exponent, factor] = findBestExponentFactor(
+    const auto [exponent, factor] = findBestExponentFactorByCount(
         std::span<const cppDataType>{
             logicalValues.data(), logicalValues.size()});
 
-    for (uint32_t i = 0; i < rowCount; ++i) {
-      if (!canRepresentExactly(logicalValues[i], values[i], exponent, factor)) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint32_t i = 0;
+    for (; i + kBatchSize <= rowCount; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          values.data() + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        const uint32_t position = i + static_cast<uint32_t>(k);
+        if (!okLanes[k]) {
+          encodedValues[position] = 0;
+          exceptionPositions.push_back(position);
+          exceptionValues.push_back(values[position]);
+          continue;
+        }
+        encodedValues[position] = zigZagLanes[k];
+      }
+    }
+    for (; i < rowCount; ++i) {
+      uint64_t zigZag = 0;
+      if (!scalarTransformOne(
+              logicalValues[i],
+              values[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zigZag)) {
         encodedValues[i] = 0;
         exceptionPositions.push_back(i);
         exceptionValues.push_back(values[i]);
         continue;
       }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues[i] = velox::ZigZag::encode(encoded);
+      encodedValues[i] = zigZag;
     }
 
     const uint32_t exceptionCount = exceptionPositions.size();
@@ -462,7 +571,7 @@ class ALPEncoding final
       logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
     }
 
-    const auto [exponent, factor] = findBestExponentFactor(
+    const auto [exponent, factor] = findBestExponentFactorByCount(
         std::span<const cppDataType>{
             logicalValues.data(), logicalValues.size()});
 
@@ -546,6 +655,8 @@ class ALPEncoding final
   }
 
  private:
+  friend struct ALPEncodingTestAccessor;
+
   struct SlicedExceptionStreams {
     uint32_t count{0};
     std::string_view positions;
@@ -649,10 +760,36 @@ class ALPEncoding final
   // Largest exponent and factor values backed by kPow10Double.
   static constexpr int kMaxExponent{23};
   static constexpr int kMaxFactor{23};
+  // int64_t bounds represented in double. The positive bound is exclusive:
+  // INT64_MAX itself rounds to 2^63 when converted to double.
+  static constexpr double kInt64MinAsDouble{-0x1p63};
+  static constexpr double kInt64MaxExclusiveAsDouble{0x1p63};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
   // Sample up to this many values to find the best (exponent, factor) pair.
   static constexpr uint32_t kSampleSize{1024};
+
+  static bool
+  tryRoundToInt64(double scaled, double factorMultiplier, int64_t& result) {
+    if (!(scaled >= kInt64MinAsDouble &&
+          scaled <= kInt64MaxExclusiveAsDouble)) {
+      return false;
+    }
+
+    const double factored = scaled / factorMultiplier;
+    // ALP factors are powers of ten and therefore >= 1. In that hot path the
+    // inclusive scaled bound already proves that division cannot exceed the
+    // int64 domain, except for +2^63 / 1. Keep a defensive range check for
+    // non-ALP callers of the public transform helper.
+    if ((factorMultiplier == 1.0 && scaled == kInt64MaxExclusiveAsDouble) ||
+        (!(factorMultiplier >= 1.0) &&
+         !(factored >= kInt64MinAsDouble &&
+           factored < kInt64MaxExclusiveAsDouble))) {
+      return false;
+    }
+    result = std::llround(factored);
+    return true;
+  }
 
   // Checks whether the selected ALP transform can encode the value without an
   // exception.
@@ -664,15 +801,10 @@ class ALPEncoding final
     const double exponentMultiplier = kPow10Double[exponent];
     const double factorMultiplier = kPow10Double[factor];
     const double scaled = static_cast<double>(value) * exponentMultiplier;
-    if (!std::isfinite(scaled)) {
+    int64_t factored;
+    if (!tryRoundToInt64(scaled, factorMultiplier, factored)) {
       return false;
     }
-    if (scaled < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
-        scaled > static_cast<double>(std::numeric_limits<int64_t>::max())) {
-      return false;
-    }
-    const int64_t factored =
-        static_cast<int64_t>(std::llround(scaled / factorMultiplier));
     const double restored =
         static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
 
@@ -680,27 +812,181 @@ class ALPEncoding final
                static_cast<cppDataType>(restored)) == physicalValue;
   }
 
+ public:
+  // Number of doubles processed per vectorized step.
+  static constexpr std::size_t kBatchSize = xsimd::batch<double>::size;
+
+  /// Applies the ALP transform to a single value, merging the representability
+  /// check and the integer encoding into one pass so scaled/factored/restored
+  /// are each computed once. Writes the ZigZag-encoded result to `zigZagOut`
+  /// and returns true iff the value is exactly representable under
+  /// (exponent, factor). Byte-identical to canRepresentExactly() followed by
+  /// encodeValue() and ZigZag::encode() whenever it returns true.
+  static bool scalarTransformOne(
+      cppDataType logical,
+      physicalType physical,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t& zigZagOut) {
+    const double scaled = static_cast<double>(logical) * exponentMultiplier;
+    int64_t factored;
+    if (!tryRoundToInt64(scaled, factorMultiplier, factored)) {
+      return false;
+    }
+    const double restored =
+        static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+    if (detail::alp::toPhysical<cppDataType>(
+            static_cast<cppDataType>(restored)) != physical) {
+      return false;
+    }
+    zigZagOut = velox::ZigZag::encode(factored);
+    return true;
+  }
+
+  /// Applies scalarTransformOne() to exactly kBatchSize consecutive values,
+  /// computing the multiply, divide, round, and range mask in xsimd and
+  /// falling back to per-lane scalar code for the int64 conversion, inverse
+  /// transform, physical-byte equality check, and ZigZag encoding.
+  ///
+  /// Writes kBatchSize lanes starting at `outZigZag` and sets outMask[i] to
+  /// true iff lane i is exactly representable; lanes whose mask is false hold
+  /// an undefined value in `outZigZag`. Callers handle trailing values that do
+  /// not fill a batch via scalarTransformOne().
+  static void batchTransform(
+      const cppDataType* logicals,
+      const physicalType* physicals,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t* outZigZag,
+      bool* outMask) {
+    using BatchD = xsimd::batch<double>;
+
+    // Widen to double for float inputs so all lanes share the same rounding
+    // domain as std::round(double).
+    alignas(64) double lanes[kBatchSize];
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      lanes[i] = static_cast<double>(logicals[i]);
+    }
+    const auto x = BatchD::load_aligned(lanes);
+    const auto scaled = x * BatchD(exponentMultiplier);
+
+    // xsimd::round() implements round-half-away-from-zero, matching
+    // std::llround() for finite in-range values. The trunc(x + copysign(0.5,
+    // x)) emulation is deliberately avoided: near 2^52..2^53 a double's ULP
+    // reaches 1.0, so adding 0.5 rounds in floating point and diverges from
+    // std::llround(). batchTransformMatchesScalar locks this in.
+    const auto factored = scaled / BatchD(factorMultiplier);
+    const auto rounded = xsimd::round(factored);
+
+    // Comparisons reject NaN and infinities as well. ALP factors are >= 1, so
+    // an inclusive scaled bound proves that the quotient is in range except
+    // for +2^63 / 1. Select '<' for that one case without adding two quotient
+    // comparisons to every hot batch. Retain a defensive fallback for callers
+    // that pass a non-ALP factor.
+    const auto lowBound = BatchD(kInt64MinAsDouble);
+    const auto highBound = BatchD(kInt64MaxExclusiveAsDouble);
+    auto safeMask = (scaled >= lowBound) &
+        (factorMultiplier == 1.0 ? scaled < highBound : scaled <= highBound);
+    if (!(factorMultiplier >= 1.0)) {
+      safeMask = safeMask & ((factored >= lowBound) & (factored < highBound));
+    }
+
+    alignas(64) double roundedLanes[kBatchSize];
+    rounded.store_aligned(roundedLanes);
+
+    // Materialize the mask as per-lane 1.0/0.0 doubles so it can be read back
+    // lane by lane. Storing an xsimd::batch_bool directly varies by
+    // architecture; going through select keeps this portable across AVX-2,
+    // AVX-512, and NEON.
+    alignas(64) double safeLanes[kBatchSize];
+    xsimd::select(safeMask, BatchD(1.0), BatchD(0.0)).store_aligned(safeLanes);
+
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      if (safeLanes[i] == 0.0) {
+        outMask[i] = false;
+        continue;
+      }
+      // Restore through int64 rather than staying in the floating-point
+      // domain, mirroring the scalar path: an FP-only restore would preserve
+      // -0.0 and near-boundary rounding artifacts that the int64 cast
+      // collapses.
+      const int64_t factored = static_cast<int64_t>(roundedLanes[i]);
+      const double restored =
+          static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+      if (detail::alp::toPhysical<cppDataType>(
+              static_cast<cppDataType>(restored)) != physicals[i]) {
+        outMask[i] = false;
+        continue;
+      }
+      outMask[i] = true;
+      outZigZag[i] = velox::ZigZag::encode(factored);
+    }
+  }
+
+ private:
+  // Counts the values exactly representable under (exponent, factor), routing
+  // through the vectorized transform with a scalar tail. Kept out of line
+  // because the candidate grid calls it a few hundred times, so a single
+  // shared body keeps the caller small.
+  FOLLY_NOINLINE static uint32_t countRepresentable(
+      std::span<const cppDataType> logicalValues,
+      const physicalType* physicals,
+      int exponent,
+      int factor) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    const uint64_t sampleSize = logicalValues.size();
+    uint32_t representableCount = 0;
+
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint64_t i = 0;
+    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          physicals + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        representableCount += okLanes[k] ? 1 : 0;
+      }
+    }
+    for (; i < sampleSize; ++i) {
+      uint64_t zigZag = 0;
+      if (scalarTransformOne(
+              logicalValues[i],
+              physicals[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zigZag)) {
+        ++representableCount;
+      }
+    }
+    return representableCount;
+  }
+
   // Selects the sampled (exponent, factor) pair that preserves the most values.
-  static std::pair<uint8_t, uint8_t> findBestExponentFactor(
+  static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
     const uint32_t sampleSize =
         std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+    const auto sample = values.subspan(0, sampleSize);
+    // Free: physicalType has the same width as cppDataType, and the cast is
+    // exactly what toPhysical does per value.
+    const physicalType* physicals =
+        EncodingPhysicalType<cppDataType>::asEncodingPhysicalTypeSpan(sample)
+            .data();
 
     uint8_t bestExponent = 0;
     uint8_t bestFactor = 0;
     uint32_t bestRepresentableCount = 0;
 
     for (int e = 0; e <= kMaxExponent; ++e) {
-      uint32_t countNoFactor = 0;
-      for (uint32_t i = 0; i < sampleSize; ++i) {
-        if (canRepresentExactly(
-                values[i],
-                detail::alp::toPhysical<cppDataType>(values[i]),
-                e,
-                /*factor=*/0)) {
-          ++countNoFactor;
-        }
-      }
+      const uint32_t countNoFactor =
+          countRepresentable(sample, physicals, e, /*factor=*/0);
       if (countNoFactor > bestRepresentableCount) {
         bestRepresentableCount = countNoFactor;
         bestExponent = static_cast<uint8_t>(e);
@@ -711,16 +997,8 @@ class ALPEncoding final
       }
 
       for (int f = 1; f <= std::min(e, kMaxFactor); ++f) {
-        uint32_t countWithFactor = 0;
-        for (uint32_t i = 0; i < sampleSize; ++i) {
-          if (canRepresentExactly(
-                  values[i],
-                  detail::alp::toPhysical<cppDataType>(values[i]),
-                  e,
-                  f)) {
-            ++countWithFactor;
-          }
-        }
+        const uint32_t countWithFactor =
+            countRepresentable(sample, physicals, e, f);
         if (countWithFactor > bestRepresentableCount) {
           bestRepresentableCount = countWithFactor;
           bestExponent = static_cast<uint8_t>(e);
@@ -742,6 +1020,15 @@ class ALPEncoding final
     const double scaled = value * kPow10Double[exponent];
     return static_cast<int64_t>(std::llround(scaled / kPow10Double[factor]));
   }
+
+  // Restores a contiguous run with SIMD and a scalar tail. The caller patches
+  // exception values after decoding.
+  static void decodeBulkValues(
+      const uint64_t* encodedValues,
+      vector_size_t numValues,
+      int exponent,
+      int factor,
+      cppDataType* output);
 
   // Reconstructs a floating-point value from an ALP integer.
   static cppDataType decodeValue(int64_t encoded, int exponent, int factor) {

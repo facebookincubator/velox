@@ -156,6 +156,29 @@ TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
+  // The LIKE value comes from the probe side and the pattern comes from the
+  // build side, so this cross-side, non-AST-supported filter should exercise
+  // the same filteredOutput() fallback as the CASE expression test above,
+  // rather than crashing when the AST tree builder tries to precompute a
+  // single-sided "like" instruction for an expression that spans both sides.
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_k", "u_pattern"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe, build, core::JoinType::kInner, "t_val LIKE u_pattern");
+
+  // Matches: (k=2,t_val=banana) x (u_k=2,pattern=ban%) -> true.
+  auto expected = makeRowVector({makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
   auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
   auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
@@ -307,7 +330,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   std::atomic_size_t sourceDriversWithRetainedInputs{0};
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+      "facebook::velox::cudf_velox::CudfJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
       std::function<void(size_t*)>([&](size_t* retainedInputBatches) {
         ++sourceDriversChecked;
         if (*retainedInputBatches != 0) {
@@ -334,6 +357,40 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   EXPECT_EQ(sourceDriversChecked.load(), 1);
   EXPECT_EQ(sourceDriversWithRetainedInputs.load(), 0)
       << "Source build drivers retained input batches after transfer";
+}
+
+DEBUG_ONLY_TEST_F(HashJoinTest, releasesBatchedBuildInputsIncrementally) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
+
+  std::vector<size_t> retainedInputBatches;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
+      std::function<void(size_t*)>([&](size_t* retained) {
+        retainedInputBatches.push_back(*retained);
+      }));
+
+  // Each 10-row build vector forms its own output batch. The source references
+  // must be released after each batch rather than all at function exit.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(1)
+      .keyTypes({BIGINT()})
+      .probeVectors(10, 1)
+      .buildVectors(10, 3)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+
+  EXPECT_EQ(retainedInputBatches, std::vector<size_t>({2, 1, 0}));
 }
 
 TEST_P(MultiThreadedHashJoinTest, normalizedKey) {

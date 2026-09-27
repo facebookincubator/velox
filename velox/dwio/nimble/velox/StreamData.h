@@ -511,4 +511,12 @@ inline bool isConstantBoolStream(std::string_view data) {
   return ::memchr(data.data(), 1, data.size()) == nullptr;
 }
 
+/// Returns true if the boolean stream data is non-empty and every byte is
+/// true. Distinguished from isConstantBoolStream because an omitted all-true
+/// in-map stream and an omitted all-false one mean opposite things to the
+/// reader, so the two constants cannot share a code path.
+inline bool isAllTrueBoolStream(std::string_view data) {
+  return !data.empty() && ::memchr(data.data(), 0, data.size()) == nullptr;
+}
+
 } // namespace facebook::nimble

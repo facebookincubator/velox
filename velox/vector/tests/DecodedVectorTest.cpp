@@ -651,6 +651,106 @@ TEST_F(DecodedVectorTest, dictionary) {
       1000, [](vector_size_t i) { return std::make_shared<int>(i % 5); });
 }
 
+TEST_F(DecodedVectorTest, ownsIndices) {
+  auto base = makeFlatVector<int64_t>({10, 20, 30});
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+
+  // A single wrapping is adopted by pointer, so the caller may borrow it.
+  auto oneLevel = BaseVector::wrapInDictionary(nullptr, reversed, 3, base);
+  DecodedVector decoded(*oneLevel);
+  EXPECT_EQ(decoded.indices(), reversed->as<vector_size_t>());
+  EXPECT_FALSE(decoded.ownsIndices());
+
+  // Composing a second wrapping materializes indices here instead.
+  auto identity = makeIndices(3, [](auto row) { return row; });
+  auto twoLevels = BaseVector::wrapInDictionary(nullptr, identity, 3, oneLevel);
+  decoded.decode(*twoLevels);
+  EXPECT_NE(decoded.indices(), identity->as<vector_size_t>());
+  EXPECT_TRUE(decoded.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsIndicesSingleRow) {
+  // One row is where a range-based ownership check goes wrong, because the
+  // buffer's first and last element share an address. indices_ only ever
+  // points at the start of copiedIndices_ or somewhere else entirely, so the
+  // check is an equality and the size cannot matter. This pins that.
+  auto base = makeFlatVector<int64_t>({10});
+  auto indices = makeIndices(1, [](auto) { return 0; });
+  auto oneLevel = BaseVector::wrapInDictionary(nullptr, indices, 1, base);
+  auto twoLevels = BaseVector::wrapInDictionary(nullptr, indices, 1, oneLevel);
+
+  DecodedVector decoded(*twoLevels);
+  ASSERT_EQ(decoded.indices()[0], 0);
+  EXPECT_TRUE(decoded.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsIndicesBeforeIndicesIsCalled) {
+  // A caller deciding whether it may borrow should not have to allocate to
+  // find out, and for a flat input indices() allocates. The answer must
+  // therefore be available before it runs, and agree with it afterwards.
+  auto small = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  DecodedVector decoded(*small);
+  EXPECT_FALSE(decoded.ownsIndices());
+  EXPECT_EQ(decoded.indices()[7], 7);
+  EXPECT_FALSE(decoded.ownsIndices());
+
+  // Past the shared array's 10'000 entries there is nothing to hand back, so
+  // indices() has to materialize and the answer flips.
+  auto large = makeFlatVector<int64_t>(20'000, [](auto row) { return row; });
+  DecodedVector decodedLarge(*large);
+  EXPECT_TRUE(decodedLarge.ownsIndices());
+  EXPECT_EQ(decodedLarge.indices()[19'999], 19'999);
+  EXPECT_TRUE(decodedLarge.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsNullsDoesNotDependOnCallOrder) {
+  // Asking first must give the same answer as asking after, or a caller that
+  // checks before fetching gets told a decoder-owned bitmap is borrowable.
+  auto base = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, reversed, 3, base);
+
+  DecodedVector asked(*dictionary);
+  EXPECT_TRUE(asked.ownsNulls());
+  EXPECT_TRUE(asked.ownsNulls());
+
+  DecodedVector fetched(*dictionary);
+  ASSERT_NE(fetched.nulls(), nullptr);
+  EXPECT_TRUE(fetched.ownsNulls());
+
+  // And the null-free case answers without materializing anything, which is
+  // what lets a caller ask unconditionally.
+  auto noNulls = makeFlatVector<int64_t>({1, 2, 3});
+  DecodedVector clean(*noNulls);
+  EXPECT_FALSE(clean.ownsNulls());
+  EXPECT_EQ(clean.nulls(), nullptr);
+}
+
+TEST_F(DecodedVectorTest, ownsNulls) {
+  // Flat nulls are the vector's own bitmap, so they can be borrowed.
+  auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  DecodedVector decoded(*flat);
+  ASSERT_NE(decoded.nulls(), nullptr);
+  EXPECT_FALSE(decoded.ownsNulls());
+  EXPECT_EQ(decoded.nulls(), flat->rawNulls());
+
+  // Reading a null-bearing base through a dictionary gathers the bits into
+  // top-level row order, which is storage this DecodedVector owns -- even
+  // though the wrapping added no nulls of its own.
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, reversed, 3, flat);
+  decoded.decode(*dictionary);
+  ASSERT_NE(decoded.nulls(), nullptr);
+  EXPECT_TRUE(decoded.ownsNulls());
+  EXPECT_NE(decoded.nulls(), flat->rawNulls());
+
+  // No nulls at all is neither owned nor borrowed.
+  auto noNulls = makeFlatVector<int64_t>({1, 2, 3});
+  decoded.decode(*noNulls);
+  ASSERT_EQ(decoded.nulls(), nullptr);
+  EXPECT_FALSE(decoded.ownsNulls());
+}
+
 TEST_F(DecodedVectorTest, valueAtOpaqueDoesNotCopy) {
   using TOpaque = std::shared_ptr<void>;
   constexpr vector_size_t size = 100;

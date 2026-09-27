@@ -15,6 +15,11 @@
  */
 
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
+#include "velox/exec/rpc/tests/TextOutput.h"
+
+#include <thread>
+
+#include <folly/futures/Future.h>
 
 #include <algorithm>
 
@@ -25,12 +30,14 @@ DemoBatchRPCFunction::DemoBatchRPCFunction(
     std::unordered_set<int32_t> failingRowIndices,
     bool failWholeBatch,
     bool failOnError,
-    bool dropOneResponse)
+    bool dropOneResponse,
+    bool failWholeBatchFatal)
     : responseOrder_(order),
       failingRowIndices_(std::move(failingRowIndices)),
       failWholeBatch_(failWholeBatch),
       failOnError_(failOnError),
-      dropOneResponse_(dropOneResponse) {}
+      dropOneResponse_(dropOneResponse),
+      failWholeBatchFatal_(failWholeBatchFatal) {}
 
 VectorPtr DemoBatchRPCFunction::buildOutput(
     const std::vector<RPCResponse>& responses,
@@ -42,13 +49,14 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
       }
     }
   }
-  return AsyncRPCFunction::buildOutput(responses, pool);
+  return buildTextOutput(responses, pool);
 }
 
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode /*instruction*/) {}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(
@@ -105,6 +113,21 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
         std::runtime_error("simulated batch timeout"));
   }
 
+  // A framework invariant failing, not the backend refusing. Degrading this to
+  // per-row errors would turn a programming fault into a column of NULLs.
+  if (failWholeBatchFatal_) {
+    return folly::makeSemiFuture<std::vector<RPCResponse>>(
+        folly::make_exception_wrapper<VeloxRuntimeError>(
+            __FILE__,
+            __LINE__,
+            __FUNCTION__,
+            "",
+            "simulated invariant failure",
+            error_source::kErrorSourceRuntime,
+            error_code::kInvalidState,
+            /*isRetriable=*/false));
+  }
+
   std::vector<RPCResponse> responses;
   responses.reserve(toFlush.size());
 
@@ -119,11 +142,13 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     response.rowId = i;
 
     if (toFlush[i].isNull) {
-      response.error = "null_input";
+      response.setError(velox::rpc::RPCErrorKind::kNullInput, "null_input");
     } else if (failingRowIndices_.count(startOffset + i)) {
-      response.error = "simulated_failure";
+      response.setError(
+          velox::rpc::RPCErrorKind::kBackendError, "simulated_failure");
     } else {
-      response.result = "Batch response for: " + toFlush[i].prompt;
+      response.setPayload(
+          makeTextPayload("Batch response for: " + toFlush[i].prompt));
     }
     responses.push_back(std::move(response));
   }
@@ -132,17 +157,59 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     std::reverse(responses.begin(), responses.end());
   }
 
-  // Simulate a function-contract violation: return fewer responses than rows.
-  // The operator's scatter must hard-fail on the count mismatch (not degrade).
+  // Simulates a function-contract violation by returning fewer responses than
+  // rows. The operator fails the query because it cannot correlate the missing
+  // response with an input row.
   if (dropOneResponse_ && !responses.empty()) {
     responses.pop_back();
   }
 
-  return folly::makeSemiFuture(std::move(responses));
+  if (!holdFlushes_) {
+    return folly::makeSemiFuture(std::move(responses));
+  }
+
+  // Hold the flush open so it is genuinely outstanding while the operator
+  // decides whether to dispatch the next one. Completing inline releases the
+  // token first, so nothing ever overlaps and admission gating is invisible.
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  holdExecutor_->add([hold = holdMs_,
+                      p = std::move(promise),
+                      r = std::move(responses)]() mutable {
+    std::this_thread::sleep_for(std::chrono::milliseconds(hold));
+    p.setValue(std::move(r));
+  });
+  return std::move(future);
+}
+
+void DemoBatchRPCFunction::testingHoldFlushes(int32_t holdMs, int32_t threads) {
+  holdExecutor_ = std::make_shared<folly::CPUThreadPoolExecutor>(threads);
+  holdMs_ = holdMs;
+  holdFlushes_ = true;
 }
 
 int32_t DemoBatchRPCFunction::pendingBatchSize() const {
   return static_cast<int32_t>(pendingRows_.size());
+}
+
+AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
+    const std::vector<RPCResponse>& responses) const {
+  if (responses.empty()) {
+    return CongestionSignal::kNone;
+  }
+  bool hasNonOverloadError{false};
+  for (const auto& response : responses) {
+    if (!response.hasError()) {
+      continue;
+    }
+    if (response.errorKind() == velox::rpc::RPCErrorKind::kRateLimited ||
+        response.errorKind() == velox::rpc::RPCErrorKind::kTimeout) {
+      return CongestionSignal::kOverloaded;
+    }
+    hasNonOverloadError = true;
+  }
+  return hasNonOverloadError ? CongestionSignal::kNonOverloadError
+                             : CongestionSignal::kSuccess;
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>

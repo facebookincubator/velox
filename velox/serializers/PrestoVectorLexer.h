@@ -96,7 +96,7 @@ class PrestoVectorLexer {
   }
 
   void assertCommitted() const {
-    assert(committedPtr_ == source_.begin());
+    assert(committedPtr_ == source_.data());
   }
 
   void commit(TokenType tokenType);

@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/VeloxException.h"
@@ -176,6 +177,21 @@ TEST_F(SetThreadLocalRuntimeStatTest, noWriter) {
   RuntimeMetric metric(RuntimeCounter::Unit::kNanos);
   metric.addValue(42);
   setThreadLocalRuntimeStat("test.nowriter", metric);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, noopWriter) {
+  ConcurrentRuntimeStatWriter collector;
+  RuntimeStatWriterScopeGuard collecting(&collector);
+
+  {
+    NoopRuntimeStatWriter noop;
+    RuntimeStatWriterScopeGuard discarding(&noop);
+    addThreadLocalRuntimeStat("test.noop", RuntimeCounter(1));
+  }
+  EXPECT_THAT(collector.runtimeStats(), testing::IsEmpty());
+
+  addThreadLocalRuntimeStat("test.after", RuntimeCounter(1));
+  EXPECT_EQ(collector.runtimeStats().count("test.after"), 1);
 }
 
 } // namespace facebook::velox

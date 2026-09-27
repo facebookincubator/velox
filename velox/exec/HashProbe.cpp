@@ -141,6 +141,8 @@ HashProbe::HashProbe(
               ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
@@ -423,6 +425,19 @@ void HashProbe::pushdownDynamicFilters() {
         if (hasher.typeKind() == TypeKind::VARCHAR ||
             hasher.typeKind() == TypeKind::VARBINARY) {
           if (!hashProbeStringDynamicFilterPushdownEnabled) {
+            return false;
+          }
+          // A custom logical type may have a connector-specific physical
+          // representation that differs from its in-memory representation, so
+          // generic code here cannot assume the two are byte-equivalent. A
+          // pushed-down filter is evaluated by the scan against the physical
+          // bytes, so producing one from in-memory values could drop matching
+          // rows. Skip the filter and let the hash join do the matching; this
+          // costs an optimization, not correctness.
+          // TODO: Restore pushdown for VARCHAR/VARBINARY-backed custom types
+          // whose connector physical representation is known to match the
+          // in-memory one, rather than skipping every custom type.
+          if (customTypeExists(hasher.type()->name())) {
             return false;
           }
         }
@@ -1373,7 +1388,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          preferredOutputBatchBytes_);
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -2062,10 +2077,7 @@ void HashProbe::ensureOutputFits() {
   }
 
   const uint64_t bytesToReserve = static_cast<uint64_t>(
-      static_cast<double>(operatorCtx_->driverCtx()
-                              ->queryConfig()
-                              .preferredOutputBatchBytes()) *
-      1.2);
+      static_cast<double>(preferredOutputBatchBytes_) * 1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }

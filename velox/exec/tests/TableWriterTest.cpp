@@ -2115,7 +2115,8 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
                               rowType_->children(),
                               partitionedBy_,
                               nullptr,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
                       false,
                       CommitStrategy::kNoCommit))
                   .planNode();
@@ -2199,7 +2200,8 @@ TEST_P(AllTableWriterTest, columnStats) {
                               rowType_->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
                       false,
                       commitStrategy_))
                   .planNode();
@@ -2293,7 +2295,8 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
               rowType_->children(),
               partitionedBy_,
               bucketProperty_,
-              makeLocationHandle(outputDirectory->getPath()))),
+              makeLocationHandle(outputDirectory->getPath())),
+          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
       false,
       commitStrategy_));
 

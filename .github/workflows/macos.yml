@@ -15,7 +15,17 @@
 name: macOS Build
 
 on:
+  schedule:
+    # Nightly, so the release build keeps running without costing a macOS
+    # runner on every pull request.
+    - cron: 0 4 * * *
+
+  workflow_dispatch: {}
+
   push:
+    # Only main. A branch pushed to this repository and opened as a pull
+    # request otherwise triggers this workflow twice, once per event.
+    branches: [main]
     paths:
       - velox/**
       - '!velox/docs/**'
@@ -53,8 +63,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM
-        type: [debug, release]
+        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM.
+        # Pull requests build debug only; release is covered by the nightly
+        # schedule and by pushes to main. macOS runners are the most expensive
+        # in the fleet, and a release failure that a debug build does not also
+        # catch is rare.
+        type: ${{ (github.event_name == 'pull_request' && fromJSON('["debug"]')) || fromJSON('["debug", "release"]') }}
     runs-on: macos-15
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache

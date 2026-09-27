@@ -40,6 +40,7 @@ add_library(
   ReaderBase.h
   NullColumnReader.h
   NimbleData.h
+  NimbleReaderFuzzerStats.h
   IntegerColumnReader.h
   FloatingPointColumnReader.h
   FlatMapColumnReader.h
@@ -52,7 +53,7 @@ target_link_libraries(
   nimble_velox_selective
   nimble_tablet_reader_cache
   nimble_compression
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   nimble_velox_common
 )
