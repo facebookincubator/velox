@@ -134,6 +134,128 @@ TEST_P(MultiThreadedHashJoinTest, testJoinWithSpillenabledCancellation) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
+  if (parallelBuildSideRowsEnabled_) {
+    GTEST_SKIP();
+  }
+
+  auto probeVector = makeRowVector(
+      {"t_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  auto buildVector = makeRowVector(
+      {"u_key"}, {makeFlatVector<int64_t>(999, [](auto row) { return row; })});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .localPartition({"t_key"})
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"t_key", "match"},
+              core::JoinType::kLeftSemiProject,
+              true)
+          .filter("not(match)")
+          .project({"t_key"})
+          .limit(0, 1, true)
+          .planNode();
+
+  for (const auto injectSpill : {false, true}) {
+    SCOPED_TRACE(fmt::format("injectSpill: {}", injectSpill));
+    TestScopedSpillInjection scopedSpillInjection(injectSpill ? 100 : 0);
+    auto spillDirectory = TempDirectoryPath::create();
+    auto task = AssertQueryBuilder(plan)
+                    .maxDrivers(numDrivers_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(core::QueryConfig::kSpillEnabled, "true")
+                    .config(core::QueryConfig::kJoinSpillEnabled, "true")
+                    .config(core::QueryConfig::kMaxSpillLevel, "2")
+                    .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                    .assertResults(makeRowVector(
+                        {"t_key"}, {makeFlatVector<int64_t>({999})}));
+    if (injectSpill) {
+      ASSERT_GT(taskSpilledStats(*task).first.spilledPartitions, 0);
+    }
+  }
+}
+
+TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
+  auto probeVector = makeRowVector({"t_key"}, {makeFlatVector<int64_t>({-1})});
+  auto buildVector = makeRowVector(
+      {"u_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"u_key"},
+              core::JoinType::kRight)
+          .limit(0, 1, true)
+          .planNode();
+
+  AssertQueryBuilder queryBuilder(plan);
+  queryBuilder.maxDrivers(numDrivers_);
+  auto spillDirectory = TempDirectoryPath::create();
+  if (parallelBuildSideRowsEnabled_) {
+    queryBuilder.config(
+        core::QueryConfig::kParallelOutputJoinBuildRowsEnabled, "true");
+  } else {
+    queryBuilder.spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kJoinSpillEnabled, "true");
+  }
+  queryBuilder.assertTypeAndNumRows(ROW("u_key", BIGINT()), 1);
+}
+
+TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
+  auto probeVector =
+      makeRowVector({"t_key"}, {makeFlatVector<int64_t>(1'000, [](auto row) {
+                      return row == 0 ? 0 : row + 1'000;
+                    })});
+  auto buildVector = makeRowVector(
+      {"u_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .localPartition({"t_key"})
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"t_key"},
+              core::JoinType::kRight)
+          .limit(0, 1, true)
+          .planNode();
+
+  AssertQueryBuilder queryBuilder(plan);
+  queryBuilder.maxDrivers(numDrivers_);
+  auto spillDirectory = TempDirectoryPath::create();
+  if (parallelBuildSideRowsEnabled_) {
+    queryBuilder.config(
+        core::QueryConfig::kParallelOutputJoinBuildRowsEnabled, "true");
+  } else {
+    queryBuilder.spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, "true")
+        .config(core::QueryConfig::kJoinSpillEnabled, "true");
+  }
+  const auto numResults = queryBuilder.countResults();
+  EXPECT_GT(numResults, 0);
+  EXPECT_LE(numResults, numDrivers_);
+}
+
 TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
