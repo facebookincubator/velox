@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -75,79 +76,25 @@ TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
   EXPECT_TRUE(projStats.operatorStats.count("CudfToVelox"));
 }
 
-TEST_F(AdapterOperatorTest, fromVeloxPassesThroughDeviceInput) {
-  auto batch = makeRowVector(
-      {"c0", "c1"},
-      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-       makeFlatVector<StringView>({"a", "bb", "ccc", "dd", "e"})});
-
-  // The same batch is emitted twice: it forces CudfFromVelox to merge its
-  // queued inputs, and it must survive being consumed on the first round.
-  auto deviceBatch = uploadToDevice(batch);
-  auto plan = PlanBuilder()
-                  .values({deviceBatch, deviceBatch})
-                  .project({"c0 * 2 as x", "c1"})
-                  .planNode();
-
-  auto expected = makeRowVector(
-      {"x", "c1"},
-      {makeFlatVector<int64_t>({2, 4, 6, 8, 10}),
-       makeFlatVector<StringView>({"a", "bb", "ccc", "dd", "e"})});
-  AssertQueryBuilder(plan).assertResults(
-      std::vector<RowVectorPtr>{expected, expected});
-
-  // CudfVector::release() zeroes the flat size, so a non-zero size here means
-  // the operator left the producer's table alone.
-  EXPECT_GT(deviceBatch->estimateFlatSize(), 0);
-}
-
-TEST_F(AdapterOperatorTest, fromVeloxKeepsDeviceBatchesDistinct) {
-  auto first = uploadToDevice(
+TEST_F(AdapterOperatorTest, fromVeloxRejectsDeviceInput) {
+  // Values is classified as a CPU operator, so compile() places CudfFromVelox
+  // after it. A device-resident batch arriving there means the upstream
+  // operator was misclassified.
+  auto deviceBatch = uploadToDevice(
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
-  auto second = uploadToDevice(
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}));
-
-  // Distinct data per batch, so corrupting either one shows up in the result
-  // even though the comparison is order-insensitive.
   auto plan =
-      PlanBuilder().values({first, second}).project({"c0 + 1 as x"}).planNode();
+      PlanBuilder().values({deviceBatch}).project({"c0 + 1 as x"}).planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "CudfFromVelox received a device-resident CudfVector");
 
-  auto expected =
-      makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 3, 4, 5, 6, 7})});
-  AssertQueryBuilder(plan).assertResults(expected);
-}
-
-TEST_F(AdapterOperatorTest, fromVeloxMergesHostInputsAheadOfDeviceInput) {
-  auto hostBatch = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto deviceBatch = uploadToDevice(
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}));
-
-  // A host batch queued ahead of a device-resident batch must be converted
-  // on its own; the device batch passes through unconverted.
-  auto plan = PlanBuilder()
-                  .values({hostBatch, deviceBatch})
-                  .project({"c0 + 10 as x"})
-                  .planNode();
-
-  auto expected =
-      makeRowVector({"x"}, {makeFlatVector<int64_t>({11, 12, 13, 14, 15, 16})});
-  AssertQueryBuilder(plan).assertResults(expected);
-}
-
-TEST_F(AdapterOperatorTest, fromVeloxResumesHostMergeAfterDeviceInput) {
-  auto hostHead = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto deviceBatch = uploadToDevice(
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}));
-  auto hostTail = makeRowVector({"c0"}, {makeFlatVector<int64_t>({7, 8, 9})});
-
-  // The trailing host batch is only reachable once the device batch has been
-  // emitted, so it covers the merge loop resuming past a device input.
-  auto plan = PlanBuilder()
-                  .values({hostHead, deviceBatch, hostTail})
-                  .project({"c0 + 10 as x"})
-                  .planNode();
-
-  auto expected = makeRowVector(
-      {"x"}, {makeFlatVector<int64_t>({11, 12, 13, 14, 15, 16, 17, 18, 19})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  // The check applies to every input, not only the first one.
+  auto hostBatch = makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})});
+  plan = PlanBuilder()
+             .values({hostBatch, deviceBatch})
+             .project({"c0 + 1 as x"})
+             .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "CudfFromVelox received a device-resident CudfVector");
 }
