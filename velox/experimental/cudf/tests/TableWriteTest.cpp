@@ -665,7 +665,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
 
 TEST_F(BasicTableWriteTest, targetFileName) {
   constexpr const char* kFileName = "test.parquet";
-  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = TempDirectoryPath::create();
   auto plan = PlanBuilder()
                   .values({data})

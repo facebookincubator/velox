@@ -591,9 +591,9 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
-      makeFlatVector<int64_t>(kSize, folly::identity),
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
+      makeFlatIdentityVector<int64_t>(kSize),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto filePath = TempFilePath::create();
   createDuckDbTable({vector});
