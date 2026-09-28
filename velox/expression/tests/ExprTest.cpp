@@ -4014,7 +4014,7 @@ TEST_P(ParameterizedExprTest, addNulls) {
   // so it is valid.  We need to handle this situation when propagating nulls
   // from parent to child.
   {
-    auto a = makeFlatVector<int64_t>(kSize - 1, folly::identity);
+    auto a = makeFlatIdentityVector<int64_t>(kSize - 1);
     auto b = makeArrayVector<int64_t>(
         kSize - 1, [](auto) { return 1; }, [](auto i) { return i; });
     auto row = std::make_shared<RowVector>(
@@ -4206,7 +4206,7 @@ TEST_P(ParameterizedExprTest, mapKeysAndValues) {
       vectorSize,
       makeIndices(vectorSize, folly::identity),
       makeIndices(vectorSize, [](auto /* row */) { return 1; }),
-      makeFlatVector<int64_t>(vectorSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(vectorSize),
       makeFlatVector<int64_t>(vectorSize, [](auto i) { return 10 * i; }));
   auto input = makeRowVector({mapVector});
   auto exprSet = compileMultiple(
@@ -5344,7 +5344,7 @@ TEST_P(ParameterizedExprTest, evaluatesArgumentsOnNonIncreasingSelection) {
         }));
   };
   constexpr int kSize = 300;
-  auto c0 = makeFlatVector<int64_t>(kSize, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(kSize);
 
   {
     SCOPED_TRACE("No eager loading for AND clauses");

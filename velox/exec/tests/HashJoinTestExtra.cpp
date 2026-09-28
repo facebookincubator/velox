@@ -2026,7 +2026,7 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
   // Create probe data
   std::vector<RowVectorPtr> probeVectors{makeRowVector({
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
-      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -2095,7 +2095,7 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
   // clustered on the grouping key required by StreamingAggregation.
   std::vector<RowVectorPtr> probeVectors{makeRowVector({
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
-      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -2181,8 +2181,8 @@ TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> rightProbe = {makeRowVector(
       {"aa", "bb"},
       {
-          makeFlatVector<int64_t>(10, folly::identity),
-          makeFlatVector<int64_t>(10, folly::identity),
+          makeFlatIdentityVector<int64_t>(10),
+          makeFlatIdentityVector<int64_t>(10),
       })};
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), rightProbe);
