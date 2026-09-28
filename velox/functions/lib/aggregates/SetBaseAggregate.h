@@ -229,7 +229,7 @@ class SetAggAggregate
 
   explicit SetAggAggregate(const TypePtr& resultType) : Base(resultType) {}
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

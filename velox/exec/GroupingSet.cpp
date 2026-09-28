@@ -404,7 +404,8 @@ void initializeAggregates(
   for (auto& aggregate : aggregates) {
     auto& function = aggregate.function;
     function->setAllocator(&rows.stringAllocator());
-    if (excludeToIntermediate && function->supportsToIntermediate()) {
+    if (excludeToIntermediate &&
+        function->supportsToIntermediate(aggregate.mask.has_value())) {
       continue;
     }
 
@@ -426,7 +427,8 @@ std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
   accumulators.reserve(aggregates_.size() + extraAccumulators_.size());
   for (auto& aggregate : aggregates_) {
     if (!excludeToIntermediate ||
-        !aggregate.function->supportsToIntermediate()) {
+        !aggregate.function->supportsToIntermediate(
+            aggregate.mask.has_value())) {
       accumulators.push_back(
           Accumulator{aggregate.function.get(), aggregate.intermediateType});
     }
@@ -1589,7 +1591,8 @@ void GroupingSet::abandonPartialAggregation() {
   abandonedPartialAggregation_ = true;
   allSupportToIntermediate_ = true;
   for (auto& aggregate : aggregates_) {
-    if (!aggregate.function->supportsToIntermediate()) {
+    if (!aggregate.function->supportsToIntermediate(
+            aggregate.mask.has_value())) {
       allSupportToIntermediate_ = false;
     }
   }
@@ -1663,7 +1666,7 @@ void GroupingSet::toIntermediate(
     recursiveResizeChildren(aggregateVector, input->size());
     const auto& rows = getSelectivityVector(i);
 
-    if (function->supportsToIntermediate()) {
+    if (function->supportsToIntermediate(aggregates_[i].mask.has_value())) {
       populateTempVectors(i, input);
       VELOX_DCHECK(aggregateVector);
       function->toIntermediate(rows, tempVectors_, aggregateVector);

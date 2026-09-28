@@ -45,7 +45,7 @@ class SumAggregateBase
     return 1;
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 
