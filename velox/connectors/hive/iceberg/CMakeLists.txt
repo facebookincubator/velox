@@ -39,9 +39,7 @@ set(
   WriterOptionsAdapter.cpp
 )
 
-if(VELOX_ENABLE_PARQUET)
-  list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
-endif()
+list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
 
 # Iceberg geometry reads need GEOS and the geospatial serde. They are confined to this
 # table-format-specific target and gated on VELOX_ENABLE_GEO so that a VELOX_ENABLE_GEO=OFF build
@@ -98,9 +96,7 @@ velox_link_libraries(
   Folly::folly
 )
 
-if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
-endif()
+velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
 
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_hive_iceberg_splitreader PRIVATE VELOX_ENABLE_GEO)

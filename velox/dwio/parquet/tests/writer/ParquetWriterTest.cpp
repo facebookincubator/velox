@@ -1304,7 +1304,6 @@ TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
       verifyStoredAsFixedLenByteArray);
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",
@@ -1345,7 +1344,6 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
       .config(core::QueryConfig::kSessionTimezone, "America/New_York")
       .copyResults(pool_.get());
 }
-#endif
 
 TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
   const auto randomIndices = [this](vector_size_t size) {

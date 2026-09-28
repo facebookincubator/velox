@@ -137,19 +137,17 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-if(${VELOX_ENABLE_PARQUET})
-  add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
+add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
 
-  target_link_libraries(
-    velox_sort_benchmark
-    velox_exec
-    velox_exec_test_lib
-    velox_dwio_parquet_reader
-    velox_vector_test_lib
-    Folly::follybenchmark
-    arrow
-  )
-endif()
+target_link_libraries(
+  velox_sort_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_dwio_parquet_reader
+  velox_vector_test_lib
+  Folly::follybenchmark
+  arrow
+)
 
 add_library(velox_orderby_benchmark_util OrderByBenchmarkUtil.cpp)
 velox_add_test_headers(velox_orderby_benchmark_util OrderByBenchmarkUtil.h)

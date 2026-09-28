@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/common/file/LocalFile.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -32,15 +33,12 @@
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/common/file/LocalFile.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#endif
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
@@ -117,14 +115,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& data,
       const std::vector<int32_t>& icebergFieldIds);
 
-#ifdef VELOX_ENABLE_PARQUET
   /// Writes a Parquet file. 'icebergFieldIds[i]' is stamped as the Parquet
   /// field ID for column i so the reader resolves columns by field ID under
   /// kParquetFieldId mode. Pass an empty vector to omit field IDs.
   std::shared_ptr<common::testutil::TempFilePath> writeParquetFile(
       const std::vector<RowVectorPtr>& data,
       const std::vector<int32_t>& icebergFieldIds = {});
-#endif
 
   /// Builds an Iceberg table scan plan.
   /// Field IDs are derived from each output column's 1-based position in

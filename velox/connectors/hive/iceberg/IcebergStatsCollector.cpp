@@ -17,9 +17,7 @@
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
 #include "velox/connectors/hive/iceberg/IcebergDwrfStatsCollector.h"
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
-#endif
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -33,10 +31,8 @@ std::shared_ptr<IcebergStatsCollector> IcebergStatsCollector::create(
       // DWRF/ORC statistics are read from the writer footer; the collector maps
       // footer node ids to Iceberg field ids using the written row type.
       return std::make_shared<IcebergDwrfStatsCollector>(inputColumns, schema);
-#ifdef VELOX_ENABLE_PARQUET
     case dwio::common::FileFormat::PARQUET:
       return std::make_shared<IcebergParquetStatsCollector>(inputColumns);
-#endif
     default:
       return nullptr;
   }

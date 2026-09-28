@@ -28,9 +28,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/common/ParquetConfig.h"
-#endif
 
 namespace facebook::velox::connector::hive {
 

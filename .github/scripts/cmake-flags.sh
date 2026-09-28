@@ -57,7 +57,6 @@ adapters | dep-graph)
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_ARROW=ON
     -DVELOX_ENABLE_GEO=ON
-    -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_ENABLE_HDFS=ON
     -DVELOX_ENABLE_S3=ON
     -DVELOX_ENABLE_GCS=ON
@@ -91,7 +90,6 @@ ubuntu-debug | ubuntu-bundled-deps)
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_ARROW=ON
     -DVELOX_ENABLE_GEO=ON
-    -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_MONO_LIBRARY=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
@@ -121,7 +119,6 @@ ubuntu-debug | ubuntu-bundled-deps)
 fedora-debug)
   # fedora-debug is always GCC; no USE_CLANG branch needed.
   CMAKE_FLAGS=(
-    -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_FAISS=ON
     # libnuma is baked into the velox-dev:fedora image.
@@ -134,7 +131,6 @@ macos)
   CMAKE_FLAGS=(
     -DTREAT_WARNINGS_AS_ERRORS=1
     -DENABLE_ALL_WARNINGS=1
-    -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_MONO_LIBRARY=ON
     -DVELOX_BUILD_SHARED=ON
     -DVELOX_ENABLE_FAISS=ON

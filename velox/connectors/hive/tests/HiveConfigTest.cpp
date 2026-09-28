@@ -20,9 +20,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
 
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/common/ParquetConfig.h"
-#endif
 
 #include <algorithm>
 #include <unordered_set>
@@ -282,7 +280,6 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       56UL << 20);
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
   const auto parquetSessionPrefix =
@@ -306,7 +303,6 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
       parquetSessionPrefix + std::string(HiveConfig::kUseColumnNamesSession)));
   EXPECT_FALSE(hasProperty(properties, "footer_speculative_io_size"));
 }
-#endif
 
 TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();

@@ -22,7 +22,7 @@ docker compose -f docker-compose.yml run -e NUM_THREADS=8 --rm -v "$(pwd):/velox
 ```
 2. Once inside the image, build cuDF with the following flags:
 ```shell
-CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make cudf
+CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make cudf
 ```
 3. After cuDF is built, verify the build by running the unit tests.
 ```shell

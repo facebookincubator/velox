@@ -14,10 +14,7 @@
 
 velox_add_library(velox_hive_config OBJECT FileConfig.cpp HiveConfig.cpp)
 velox_link_libraries(velox_hive_config velox_core velox_exception)
-
-if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_config velox_dwio_parquet_common)
-endif()
+velox_link_libraries(velox_hive_config velox_dwio_parquet_common)
 
 add_subdirectory(iceberg)
 add_subdirectory(paimon)
@@ -93,9 +90,7 @@ velox_link_libraries(
     velox_key_encoder
 )
 
-if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_connector PRIVATE velox_dwio_parquet_common)
-endif()
+velox_link_libraries(velox_hive_connector PRIVATE velox_dwio_parquet_common)
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 

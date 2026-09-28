@@ -41,8 +41,7 @@ endif()
 if(NOT VELOX_DISABLE_GOOGLETEST)
   # IcebergGeometryBuildGateTest.cpp lives here rather than in a target of its own: it pins the
   # runtime behavior of a geometry read as a function of VELOX_ENABLE_GEO, and this target is
-  # already built in both GEO configurations and already links the libraries it needs. Its body is
-  # guarded by VELOX_ENABLE_PARQUET, so a Parquet-free build compiles it away.
+  # already built in both GEO configurations and already links the libraries it needs.
   add_executable(
     velox_hive_iceberg_test
     IcebergGeometryBuildGateTest.cpp
@@ -107,7 +106,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   # Iceberg geometry reads exist only in a geospatial-enabled build, so the test target follows the
   # same flag. This keeps a VELOX_ENABLE_GEO=OFF build free of any reference to GEOS targets.
-  if(VELOX_ENABLE_GEO AND VELOX_ENABLE_PARQUET)
+  if(VELOX_ENABLE_GEO)
     add_executable(
       velox_hive_iceberg_geometry_test
       IcebergGeometryCrossRuntimeEncodingTest.cpp
@@ -192,27 +191,21 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
-  if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(
-      velox_hive_iceberg_merge_sink_test
-      velox_dwio_parquet_reader
-      velox_dwio_parquet_writer
-    )
+  target_link_libraries(
+    velox_hive_iceberg_merge_sink_test
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+  )
 
-    target_link_libraries(
-      velox_hive_iceberg_test
-      velox_dwio_parquet_reader
-      velox_dwio_parquet_writer
-    )
+  target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader velox_dwio_parquet_writer)
 
-    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+  file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
-    target_link_libraries(
-      velox_hive_iceberg_insert_test
-      velox_dwio_parquet_reader
-      velox_dwio_parquet_writer
-    )
-  endif()
+  target_link_libraries(
+    velox_hive_iceberg_insert_test
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+  )
 
   add_executable(
     velox_hive_iceberg_equality_delete_test
@@ -234,13 +227,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
-  if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(
-      velox_hive_iceberg_equality_delete_test
-      velox_dwio_parquet_reader
-      velox_dwio_parquet_writer
-    )
-  endif()
+  target_link_libraries(
+    velox_hive_iceberg_equality_delete_test
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+  )
 
   add_executable(velox_hive_iceberg_deletion_vector_writer_test DeletionVectorWriterTest.cpp)
   add_test(

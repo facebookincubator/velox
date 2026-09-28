@@ -985,8 +985,6 @@ TEST_F(IcebergGeometryReadTest, rowWithNullsInsideArray) {
 // End-to-end tests through the Iceberg connector and the Parquet reader.
 // ---------------------------------------------------------------------------
 
-#ifdef VELOX_ENABLE_PARQUET
-
 TEST_F(IcebergGeometryReadTest, parquetGeometryColumn) {
   std::vector<std::optional<std::string>> wkb;
   std::vector<std::optional<std::string>> expected;
@@ -1246,8 +1244,6 @@ TEST_F(IcebergGeometryReadTest, writingGeometryIsRejected) {
   EXPECT_NO_THROW(createDataSink(
       ROW({"id", "b"}, {BIGINT(), VARBINARY()}), outputDirectory->getPath()));
 }
-
-#endif // VELOX_ENABLE_PARQUET
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg

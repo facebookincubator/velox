@@ -168,7 +168,6 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_NIMBLE "Enable Nimble support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
@@ -384,12 +383,9 @@ if(VELOX_ENABLE_HDFS)
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
-if(VELOX_ENABLE_PARQUET)
-  add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Arrow Parquet writer, which are
-  # included in Arrow.
-  set(VELOX_ENABLE_ARROW ON)
-endif()
+# Parquet support is always enabled. The native Parquet reader and writer
+# require Arrow.
+set(VELOX_ENABLE_ARROW ON)
 
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
 # overflow
@@ -716,43 +712,40 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-# FBThrift is required by remote functions and LocalRunnerService.
-if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
-  set(VELOX_NEEDS_FBTHRIFT ON)
-endif()
+# FBThrift is required by Parquet, remote functions, and
+# LocalRunnerService. Parquet is always built, so FBThrift is an
+# unconditional dependency.
 
 # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
 # requires clients to explicitly install fizz and wangle.
-if(VELOX_NEEDS_FBTHRIFT)
-  find_package(fizz CONFIG REQUIRED)
-  find_package(wangle CONFIG REQUIRED)
-  find_package(FBThrift CONFIG REQUIRED)
+find_package(fizz CONFIG REQUIRED)
+find_package(wangle CONFIG REQUIRED)
+find_package(FBThrift CONFIG REQUIRED)
 
-  # Workaround for a missing edge in the system-installed FBThrift's
-  # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
-  # `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
-  # declare an xxhash dep on `thriftmetadata` — the conditional
-  # `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
-  # ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
-  # Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
-  # so the binary needs xxhash but the exported FBThriftTargets.cmake
-  # doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
-  # VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
-  # incidentally): `undefined reference to symbol 'XXH3_64bits'` on
-  # any test executable that links FBThrift through velox.
-  # Tracking: https://github.com/facebook/fbthrift/issues/651,
-  # https://github.com/facebookincubator/velox/issues/13153.
-  # Remove once FB_OS_VERSION is bumped past the commit that adds the
-  # `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
-  # against that fixed fbthrift release.
-  if(TARGET FBThrift::thriftmetadata)
-    find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
-    set_property(
-      TARGET FBThrift::thriftmetadata
-      APPEND
-      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
-    )
-  endif()
+# Workaround for a missing edge in the system-installed FBThrift's
+# exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
+# `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
+# declare an xxhash dep on `thriftmetadata` — the conditional
+# `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
+# ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
+# Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
+# so the binary needs xxhash but the exported FBThriftTargets.cmake
+# doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
+# VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
+# incidentally): `undefined reference to symbol 'XXH3_64bits'` on
+# any test executable that links FBThrift through velox.
+# Tracking: https://github.com/facebook/fbthrift/issues/651,
+# https://github.com/facebookincubator/velox/issues/13153.
+# Remove once FB_OS_VERSION is bumped past the commit that adds the
+# `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
+# against that fixed fbthrift release.
+if(TARGET FBThrift::thriftmetadata)
+  find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
+  set_property(
+    TARGET FBThrift::thriftmetadata
+    APPEND
+    PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
+  )
 endif()
 
 if(VELOX_ENABLE_GCS)

@@ -63,8 +63,6 @@ class IcebergGeometryBuildGateTest : public test::IcebergTestBase {
   }
 };
 
-#ifdef VELOX_ENABLE_PARQUET
-
 TEST_F(IcebergGeometryBuildGateTest, geometryReadDependsOnBuildFlag) {
   const auto outputDirectory = test::TempDirectoryPath::create();
   const auto dataPath = outputDirectory->getPath();
@@ -120,8 +118,6 @@ TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
   DecodedVector decoded(*result->as<RowVector>()->childAt(0));
   EXPECT_EQ(decoded.valueAt<StringView>(0).str(), kPointWkb);
 }
-
-#endif // VELOX_ENABLE_PARQUET
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg

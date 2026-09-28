@@ -242,7 +242,6 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
         dataSequenceNumber);
   }
 
-#ifdef VELOX_ENABLE_PARQUET
   std::vector<std::shared_ptr<ConnectorSplit>> createParquetDeleteFileAndSplits(
       const std::string& path,
       const std::vector<int64_t>& deletePositions,
@@ -275,7 +274,6 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
                 .deleteFiles({icebergDeleteFile})
                 .build()};
   }
-#endif
 
   void assertDeleteSequenceScenario(
       int64_t dataSequenceNumber,
@@ -572,7 +570,6 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
   exec::test::AssertQueryBuilder(plan).splits({split}).assertResults(
       {expected});
 }
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(IcebergPositionalDeleteTest, positionalDeleteFileWithRowGroupFilter) {
   // This file contains three row groups. The remaining filter prunes the
   // middle row group, which verifies that position deletes still align with
@@ -596,7 +593,6 @@ TEST_F(IcebergPositionalDeleteTest, positionalDeleteFileWithRowGroupFilter) {
       "SELECT i AS id FROM range(100, 300) AS t(i)",
       0);
 }
-#endif
 
 TEST_F(IcebergPositionalDeleteTest, positionalDeleteSequenceNumberApplied) {
   // Sequence number filtering tests for positional deletes (Diff 2).

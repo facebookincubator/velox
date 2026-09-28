@@ -58,8 +58,7 @@ class IcebergStatsCollector {
       std::unique_ptr<dwio::common::FileMetadata>& closeMetadata) const = 0;
 
   /// Creates the statistics collector for 'format', or nullptr when the format
-  /// has no Iceberg statistics support compiled in (e.g. Parquet without
-  /// VELOX_ENABLE_PARQUET).
+  /// has no Iceberg statistics support compiled in.
   /// @param inputColumns The Iceberg input column handles (carry the field-id
   /// trees).
   /// @param schema The written row type.

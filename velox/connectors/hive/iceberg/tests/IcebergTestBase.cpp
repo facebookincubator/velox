@@ -33,10 +33,8 @@ const std::string kIcebergConnectorId{"test-iceberg"};
 
 void IcebergTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
-#ifdef VELOX_ENABLE_PARQUET
   parquet::registerParquetReaderFactory();
   parquet::registerParquetWriterFactory();
-#endif
   Type::registerSerDe();
 
   // Register IcebergConnector.
@@ -418,7 +416,6 @@ IcebergTestBase::writeDwrfFileWithFieldIds(
   return file;
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 std::shared_ptr<common::testutil::TempFilePath>
 IcebergTestBase::writeParquetFile(
     const std::vector<RowVectorPtr>& data,
@@ -450,7 +447,6 @@ IcebergTestBase::writeParquetFile(
   writer->close();
   return file;
 }
-#endif // VELOX_ENABLE_PARQUET
 
 core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
     const RowTypePtr& outputType,

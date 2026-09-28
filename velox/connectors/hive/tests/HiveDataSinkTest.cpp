@@ -37,12 +37,10 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Operator.h"
 
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#endif
 
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -60,10 +58,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-#ifdef VELOX_ENABLE_PARQUET
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
-#endif
     Type::registerSerDe();
     HiveSortingColumn::registerSerDe();
     HiveBucketProperty::registerSerDe();
@@ -1156,7 +1152,6 @@ TEST_F(HiveDataSinkTest, insertTableHandleToString) {
       "HiveInsertTableHandle [dwrf zstd], [inputColumns: [ HiveColumnHandle [name: c0, columnType: Regular, dataType: BIGINT, requiredSubfields: [ ]] HiveColumnHandle [name: c1, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]] HiveColumnHandle [name: c2, columnType: Regular, dataType: SMALLINT, requiredSubfields: [ ]] HiveColumnHandle [name: c3, columnType: Regular, dataType: REAL, requiredSubfields: [ ]] HiveColumnHandle [name: c4, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]] HiveColumnHandle [name: c5, columnType: PartitionKey, dataType: VARCHAR, requiredSubfields: [ ]] HiveColumnHandle [name: c6, columnType: PartitionKey, dataType: BOOLEAN, requiredSubfields: [ ]] ], locationHandle: LocationHandle [targetPath: /path/to/test, writePath: /path/to/test, tableType: kNew, tableFileName: ], bucketProperty: \nHiveBucketProperty[<HIVE_COMPATIBLE 4>\n\tBucket Columns:\n\t\tc5\n\tBucket Types:\n\t\tVARCHAR\n\tSortedBy Columns:\n\t\t[COLUMN[c5] ORDER[DESC NULLS LAST]]\n]\n, fileNameGenerator: HiveInsertFileNameGenerator]");
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto flushPolicyFactory = []() {
@@ -1254,7 +1249,6 @@ TEST_F(
   EXPECT_EQ(1, fileMeta.numRowGroups());
   EXPECT_EQ(kNumRows * kNumBatches, fileMeta.rowGroup(0).numRows());
 }
-#endif
 
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   const auto outputDirectory = TempDirectoryPath::create();
@@ -2037,7 +2031,6 @@ TEST_F(HiveDataSinkTest, raceWithCacheEviction) {
   cacheCleaner.get();
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveDataSinkTest, lazyVectorForParquet) {
   // This test ensures that lazy vector is handled correctly in HiveDataSink.
   VectorFuzzer::Options options{.vectorSize = 100};
@@ -2062,7 +2055,6 @@ TEST_F(HiveDataSinkTest, lazyVectorForParquet) {
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
 }
-#endif
 
 // Test to verify that each writer has its own nonReclaimableSection
 // pointer when writerOptions is shared.
@@ -2138,7 +2130,6 @@ TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
           {"existing", "attribute"}}));
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
   connectorSessionProperties_->set(
       dwio::common::formatSessionProperty(
@@ -2173,7 +2164,6 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
   EXPECT_EQ(parquetOptions->rowGroupSizeBytes, 2 << 20);
   EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
 }
-#endif
 
 DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
   const auto outputDirectory = TempDirectoryPath::create();

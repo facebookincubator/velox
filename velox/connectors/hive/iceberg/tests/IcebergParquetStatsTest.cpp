@@ -31,8 +31,6 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-#ifdef VELOX_ENABLE_PARQUET
-
 class IcebergParquetStatsTest : public test::IcebergTestBase {
  protected:
   static IcebergDataFileStatisticsPtr statsFromMetrics(
@@ -905,8 +903,6 @@ TEST_F(IcebergParquetStatsTest, structType) {
           stats[0]->columnStats.at(secondLevelNameColId).upperBound.value()),
       "nested_9900");
 }
-
-#endif
 
 } // namespace
 

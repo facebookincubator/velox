@@ -25,8 +25,6 @@ using namespace facebook::velox::common::testutil;
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
-#ifdef VELOX_ENABLE_PARQUET
-
 class IcebergInsertTest : public test::IcebergTestBase {
  protected:
   void test(const RowTypePtr& rowType, double nullRatio = 0.0) {
@@ -303,8 +301,6 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
 }
-
-#endif
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg

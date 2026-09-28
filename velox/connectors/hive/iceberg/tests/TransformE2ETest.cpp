@@ -35,8 +35,6 @@ using namespace facebook::velox::exec::test;
 
 namespace {
 
-#ifdef VELOX_ENABLE_PARQUET
-
 class TransformE2ETest : public test::IcebergTestBase {
  protected:
   static constexpr int32_t kDefaultNumBatches = 2;
@@ -783,7 +781,6 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
 
   ASSERT_EQ(filteredRowCount, kDefaultRowsPerBatch);
 }
-#endif
 
 } // namespace
 

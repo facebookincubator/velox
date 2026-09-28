@@ -58,10 +58,8 @@
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
-#endif
 
 DEFINE_string(
     root_dir,
@@ -295,10 +293,8 @@ void TraceReplayRunner::init() {
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
 
-#ifdef VELOX_ENABLE_PARQUET
   parquet::registerParquetReaderFactory();
   parquet::registerParquetWriterFactory();
-#endif
 
   core::PlanNode::registerSerDe();
   velox::exec::trace::registerDummySourceSerDe();

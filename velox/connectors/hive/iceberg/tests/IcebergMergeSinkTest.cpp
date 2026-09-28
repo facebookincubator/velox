@@ -49,13 +49,6 @@ class IcebergMergeSinkTest : public IcebergTestBase {
  protected:
   void SetUp() override {
     IcebergTestBase::SetUp();
-    // IcebergTestBase only registers the Parquet writer factory when its
-    // own translation unit was compiled with VELOX_ENABLE_PARQUET. The
-    // composite sink relies on the Parquet writer (via the inner
-    // IcebergDataSink), so register the factory unconditionally here.
-    // Idempotent: registerWriterFactory tolerates already-registered
-    // formats.
-    parquet::registerParquetWriterFactory();
   }
 
   IcebergInsertTableHandlePtr makeMergeHandle(const std::string& outputDir) {
@@ -466,8 +459,6 @@ TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
   EXPECT_EQ(countContent(messages, "DATA"), 1u);
 }
 
-// VELOX_ENABLE_PARQUET guard removed: rely on the iceberg_connector
-// target's unconditional Parquet writer dependency.
 TEST_F(IcebergMergeSinkTest, appendDataIgnoresNullAndEmptyPages) {
   auto tempDir = TempDirectoryPath::create();
   auto sink = makeSink(tempDir->getPath());

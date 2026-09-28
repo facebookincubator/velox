@@ -34,10 +34,8 @@
 
 #include "velox/dwio/dwrf/writer/Writer.h"
 
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#endif
 
 namespace facebook::velox::connector {
 
@@ -96,18 +94,14 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
     orc::registerOrcReaderFactory();
-#ifdef VELOX_ENABLE_PARQUET
     parquet::registerParquetReaderFactory();
-#endif
     dwio::common::registerReaderFactory(
         std::make_shared<DummyNimbleReaderFactory>(FileFormat::NIMBLE));
   }
 
   void TearDown() override {
     dwio::common::unregisterReaderFactory(FileFormat::NIMBLE);
-#ifdef VELOX_ENABLE_PARQUET
     parquet::unregisterParquetReaderFactory();
-#endif
     orc::unregisterOrcReaderFactory();
     HiveConnectorTestBase::TearDown();
   }
@@ -385,14 +379,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kOrcFooterSpeculativeIoSize] = "1111";
-#ifdef VELOX_ENABLE_PARQUET
   customHiveConfigProps["parquet.footer-speculative-io-size"] = "9999";
   customHiveConfigProps["parquet.footer-memory-tracking-threshold"] = "9999";
   customHiveConfigProps["hive.parquet.footer-speculative-io-size"] = "2222";
   customHiveConfigProps["hive.parquet.footer-memory-tracking-threshold"] =
       "5555";
   customHiveConfigProps["iceberg.parquet.footer-speculative-io-size"] = "4444";
-#endif
   customHiveConfigProps[hive::HiveConfig::kNimbleFooterSpeculativeIoSize] =
       "3333";
   auto hiveConfig = std::make_shared<hive::HiveConfig>(

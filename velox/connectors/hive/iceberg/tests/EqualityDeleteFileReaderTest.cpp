@@ -69,14 +69,10 @@ class EqualityDeleteFileReaderTest : public IcebergTestBase {
       const std::vector<int32_t>& fieldIds,
       const FileWriteMode& mode) {
     if (mode.format == dwio::common::FileFormat::PARQUET) {
-#ifdef VELOX_ENABLE_PARQUET
       // Pass fieldIds only when the mode wants them stamped; empty vector means
       // no field_id metadata in the Parquet schema -> kPosition mode.
       return writeParquetFile(
           data, mode.withFieldIds ? fieldIds : std::vector<int32_t>{});
-#else
-      VELOX_FAIL("Parquet support is not enabled");
-#endif
     }
     return mode.withFieldIds ? writeDwrfFileWithFieldIds(data, fieldIds)
                              : writeDataFile(data);
@@ -137,11 +133,6 @@ class EqualityDeleteFileReaderTestP
       public ::testing::WithParamInterface<FileWriteMode> {
  protected:
   void SetUp() override {
-#ifndef VELOX_ENABLE_PARQUET
-    if (GetParam().format == dwio::common::FileFormat::PARQUET) {
-      GTEST_SKIP() << "Parquet support not enabled";
-    }
-#endif
     EqualityDeleteFileReaderTest::SetUp();
     fileFormat_ = GetParam().format;
   }

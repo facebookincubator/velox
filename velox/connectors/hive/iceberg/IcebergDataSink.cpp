@@ -35,10 +35,8 @@
 #include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#endif
 
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"

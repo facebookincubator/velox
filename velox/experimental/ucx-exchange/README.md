@@ -20,7 +20,7 @@ CMake Error at _build/release/_deps/geos-src/CMakeLists.txt:396 (add_custom_targ
 Edit the file _build/release/_deps/geos-src/CMakeLists.txt, line 396 and change the target name from `uninstall` to `uninstall_geos`.
 
 ```
-CUDA_ARCHITECTURES="80" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_BENCHMARKS_BASIC=OFF" make cudf
+CUDA_ARCHITECTURES="80" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_BENCHMARKS_BASIC=OFF" make cudf
 ```
 
 In order to build the UCX exchange tests, add `-DVELOX_BUILD_TESTING=ON` to EXTRA_CMAKE_FLAGS above. To build only the exchange and exchange tests, run:

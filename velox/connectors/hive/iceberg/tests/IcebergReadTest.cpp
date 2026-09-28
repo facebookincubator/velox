@@ -88,7 +88,6 @@ class IcebergReadTest : public test::IcebergTestBase {
         name, type, parquet::ParquetFieldId{fieldId, {}}, defaultValue);
   }
 
-#ifdef VELOX_ENABLE_PARQUET
   parquet::ParquetFieldId makeFieldId(int32_t fieldId) {
     return parquet::ParquetFieldId{fieldId, {}};
   }
@@ -174,7 +173,6 @@ class IcebergReadTest : public test::IcebergTestBase {
          makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
     return {writeType, writeParquetData(data)};
   }
-#endif
 
   void assertDefaultValues(
       const RowTypePtr& outputType,
@@ -374,7 +372,6 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
       .assertResults(expectedVectors);
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
   const auto testData = writeFlatParquetFieldIdData();
   struct ReadCase {
@@ -719,7 +716,6 @@ TEST_F(IcebergReadTest, readParquetMapByFieldId) {
         {mapProjectedExpected});
   }
 }
-#endif
 
 TEST_F(IcebergReadTest, addColumnWithDefault) {
   // Test Iceberg V3 initial-default: a column added after data files were
