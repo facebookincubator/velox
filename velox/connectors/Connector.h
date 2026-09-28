@@ -530,40 +530,106 @@ class IndexSource {
 /// responsibility of the caller.
 class ConnectorQueryCtx {
  public:
-  ConnectorQueryCtx(
-      memory::MemoryPool* operatorPool,
-      memory::MemoryPool* connectorPool,
-      const config::ConfigBase* sessionProperties,
-      const common::SpillConfig* spillConfig,
-      common::PrefixSortConfig prefixSortConfig,
-      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
-      cache::AsyncDataCache* cache,
-      const std::string& queryId,
-      const std::string& taskId,
-      const std::string& planNodeId,
-      int driverId,
-      const std::string& sessionTimezone,
-      bool adjustTimestampToTimezone = false,
-      folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {})
-      : operatorPool_(operatorPool),
-        connectorPool_(connectorPool),
-        sessionProperties_(sessionProperties),
-        spillConfig_(spillConfig),
-        prefixSortConfig_(prefixSortConfig),
-        expressionEvaluator_(std::move(expressionEvaluator)),
-        cache_(cache),
-        scanId_(fmt::format("{}.{}", taskId, planNodeId)),
-        queryId_(queryId),
-        taskId_(taskId),
-        driverId_(driverId),
-        planNodeId_(planNodeId),
-        sessionTimezone_(sessionTimezone),
-        adjustTimestampToTimezone_(adjustTimestampToTimezone),
-        cancellationToken_(std::move(cancellationToken)),
-        fsTokenProvider_(std::move(tokenProvider)) {
-    VELOX_CHECK_NOT_NULL(sessionProperties);
-  }
+  class Builder {
+   public:
+    Builder& operatorPool(memory::MemoryPool* operatorPool) {
+      operatorPool_ = operatorPool;
+      return *this;
+    }
+
+    Builder& connectorPool(memory::MemoryPool* connectorPool) {
+      connectorPool_ = connectorPool;
+      return *this;
+    }
+
+    Builder& sessionProperties(const config::ConfigBase* sessionProperties) {
+      sessionProperties_ = sessionProperties;
+      return *this;
+    }
+
+    Builder& spillConfig(const common::SpillConfig* spillConfig) {
+      spillConfig_ = spillConfig;
+      return *this;
+    }
+
+    Builder& prefixSortConfig(common::PrefixSortConfig prefixSortConfig) {
+      prefixSortConfig_ = std::move(prefixSortConfig);
+      return *this;
+    }
+
+    Builder& expressionEvaluator(
+        std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator) {
+      expressionEvaluator_ = std::move(expressionEvaluator);
+      return *this;
+    }
+
+    Builder& asyncDataCache(cache::AsyncDataCache* cache) {
+      cache_ = cache;
+      return *this;
+    }
+
+    Builder& queryId(std::string queryId) {
+      queryId_ = std::move(queryId);
+      return *this;
+    }
+
+    Builder& taskId(std::string taskId) {
+      taskId_ = std::move(taskId);
+      return *this;
+    }
+
+    Builder& planNodeId(std::string planNodeId) {
+      planNodeId_ = std::move(planNodeId);
+      return *this;
+    }
+
+    Builder& driverId(int driverId) {
+      driverId_ = driverId;
+      return *this;
+    }
+
+    Builder& sessionTimezone(std::string sessionTimezone) {
+      sessionTimezone_ = std::move(sessionTimezone);
+      return *this;
+    }
+
+    Builder& adjustTimestampToTimezone(bool adjustTimestampToTimezone) {
+      adjustTimestampToTimezone_ = adjustTimestampToTimezone;
+      return *this;
+    }
+
+    Builder& cancellationToken(folly::CancellationToken cancellationToken) {
+      cancellationToken_ = std::move(cancellationToken);
+      return *this;
+    }
+
+    Builder& tokenProvider(
+        std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
+      tokenProvider_ = std::move(tokenProvider);
+      return *this;
+    }
+
+    /// Constructs a ConnectorQueryCtx with the configured parameters.
+    /// The builder object cannot be re-used after build() is called.
+    std::unique_ptr<ConnectorQueryCtx> build();
+
+   private:
+    memory::MemoryPool* operatorPool_{nullptr};
+    memory::MemoryPool* connectorPool_{nullptr};
+    const config::ConfigBase* sessionProperties_{nullptr};
+    const common::SpillConfig* spillConfig_{nullptr};
+    common::PrefixSortConfig prefixSortConfig_;
+    std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
+    cache::AsyncDataCache* cache_{nullptr};
+    std::string queryId_;
+    std::string taskId_;
+    std::string planNodeId_;
+    int driverId_{0};
+    std::string sessionTimezone_;
+    bool adjustTimestampToTimezone_{false};
+    folly::CancellationToken cancellationToken_;
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+  };
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -664,6 +730,23 @@ class ConnectorQueryCtx {
   }
 
  private:
+  ConnectorQueryCtx(
+      memory::MemoryPool* operatorPool,
+      memory::MemoryPool* connectorPool,
+      const config::ConfigBase* sessionProperties,
+      const common::SpillConfig* spillConfig,
+      common::PrefixSortConfig prefixSortConfig,
+      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
+      cache::AsyncDataCache* cache,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId,
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone = false,
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
   const config::ConfigBase* const sessionProperties_;

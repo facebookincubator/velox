@@ -73,6 +73,30 @@ TEST(ConnectorTest, registryOperations) {
   EXPECT_EQ(ConnectorRegistry::findAll<TestConnector>().size(), 0);
 }
 
+TEST(ConnectorTest, connectorQueryCtxBuilder) {
+  config::ConfigBase sessionProperties({});
+  auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                               .sessionProperties(&sessionProperties)
+                               .queryId("query")
+                               .taskId("task")
+                               .planNodeId("plan")
+                               .driverId(7)
+                               .sessionTimezone("America/Los_Angeles")
+                               .adjustTimestampToTimezone(true)
+                               .build();
+
+  EXPECT_EQ(connectorQueryCtx->memoryPool(), nullptr);
+  EXPECT_EQ(connectorQueryCtx->connectorMemoryPool(), nullptr);
+  EXPECT_EQ(connectorQueryCtx->sessionProperties(), &sessionProperties);
+  EXPECT_EQ(connectorQueryCtx->queryId(), "query");
+  EXPECT_EQ(connectorQueryCtx->taskId(), "task");
+  EXPECT_EQ(connectorQueryCtx->planNodeId(), "plan");
+  EXPECT_EQ(connectorQueryCtx->scanId(), "task.plan");
+  EXPECT_EQ(connectorQueryCtx->driverId(), 7);
+  EXPECT_EQ(connectorQueryCtx->sessionTimezone(), "America/Los_Angeles");
+  EXPECT_TRUE(connectorQueryCtx->adjustTimestampToTimezone());
+}
+
 class ConnectorRegistryTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
