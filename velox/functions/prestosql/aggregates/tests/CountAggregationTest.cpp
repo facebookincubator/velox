@@ -203,7 +203,7 @@ TEST_F(CountAggregationTest, distinct) {
              .values({makeRowVector(ROW({"c0"}, {BIGINT()}), 0)})
              .singleAggregation({}, {"count(distinct c0)"})
              .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults("SELECT 0");
+  AssertQueryBuilder(plan).assertSingleResult<int64_t>(0);
 
   // Group by.
   auto testGroupBy = [&](const std::string& input) {
