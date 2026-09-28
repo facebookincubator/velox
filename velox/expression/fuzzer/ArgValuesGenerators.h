@@ -205,6 +205,8 @@ class SetDigestArgValuesGenerator : public ArgValuesGenerator {
  private:
   std::string functionName_;
 };
+
+#ifdef VELOX_ENABLE_GEO
 /// Generates valid S2 cell ID arguments for s2_cell_* functions.
 /// Picks random face, position, and level to construct valid cell IDs via
 /// S2CellOp::cellIdFromFacePositionLevel. Also constrains the level
@@ -232,6 +234,7 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
 };
+#endif // VELOX_ENABLE_GEO
 
 /// Generates arguments for inverse_f_cdf. Reads each argument from an input
 /// column, with degrees of freedom in [0, 1e6] and p in [0, 1]. Boost's F
