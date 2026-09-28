@@ -28,8 +28,6 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
-Driver::Driver() : trackOperatorCpuUsage_{false} {}
-
 Driver::~Driver() = default;
 
 namespace {
