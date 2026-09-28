@@ -1002,6 +1002,58 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   EXPECT_TRUE(transportStateReference.expired());
 }
 
+DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
+  auto task = Task::create(
+      "task-aborted-during-startup",
+      PlanBuilder().tableScan(ROW({"c0"}, {BIGINT()})).planFragment(),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  folly::Baton<> initializationStarted;
+  folly::Baton<> continueInitialization;
+  Task* initializingTask{nullptr};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::initializePartitionOutput",
+      std::function<void(Task*)>([&](Task* task) {
+        initializingTask = task;
+        initializationStarted.post();
+        continueInitialization.wait();
+      }));
+
+  std::exception_ptr startError;
+  std::thread startThread([&] {
+    try {
+      task->start(4, 1);
+    } catch (...) {
+      startError = std::current_exception();
+    }
+  });
+  bool initializationReleased{false};
+  SCOPE_EXIT {
+    if (!initializationReleased) {
+      continueInitialization.post();
+    }
+    if (startThread.joinable()) {
+      startThread.join();
+    }
+  };
+
+  ASSERT_TRUE(initializationStarted.try_wait_for(std::chrono::seconds(5)));
+  task->requestAbort().wait();
+  initializationReleased = true;
+  continueInitialization.post();
+  startThread.join();
+
+  EXPECT_EQ(initializingTask, task.get());
+  EXPECT_EQ(startError, nullptr);
+  EXPECT_EQ(task->numRunningDrivers(), 0);
+  ASSERT_GT(task->numTotalDrivers(), 0);
+  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  EXPECT_TRUE(waitForTaskDriversToFinish(task.get(), 0));
+}
+
 TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
   // A transport may register no merge exchange builder. A MergeExchangeNode
   // naming it must fail rather than fall back to another transport's operator.

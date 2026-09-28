@@ -1363,6 +1363,8 @@ void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
 }
 
 bool Task::initializePartitionOutput() {
+  TestValue::adjust(
+      "facebook::velox::exec::Task::initializePartitionOutput", this);
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
