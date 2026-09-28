@@ -229,7 +229,8 @@ TEST_F(SubIntSplitDeltaTest, interleavedReadsCrossTinyChunkBoundaries) {
   Buffer buffer{*pool_};
   Encoding::Options options;
   options.subIntSplitDeltaPreTransform = true;
-  options.subIntSplitDecodeChunkSize = 7;
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.decodeChunkSize = 7;
   const std::span<const uint64_t> input{values.data(), values.size()};
   ManualEncodingSelectionPolicyFactory factory;
   EncodingSelection<uint64_t> selection{
@@ -243,7 +244,8 @@ TEST_F(SubIntSplitDeltaTest, interleavedReadsCrossTinyChunkBoundaries) {
       static_cast<uint8_t>(encoded[EncodingPrefix::kFixedPrefixSize + 1]);
   ASSERT_NE(flags & subintsplit::kFlagDelta, 0);
 
-  SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, options};
+  SubIntSplitEncoding<uint64_t> decoder{
+      *pool_, encoded, nullptr, options, tuning};
   size_t cursor{0};
   const auto materializeAndExpect = [&](uint32_t count) {
     std::vector<uint64_t> actual(count);

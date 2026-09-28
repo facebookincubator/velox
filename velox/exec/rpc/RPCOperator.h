@@ -80,6 +80,16 @@ class RPCOperator : public exec::Operator {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::RPCNode> rpcNode);
 
+  /// Releases the retained input vectors. Driver::~Driver() is defaulted, so
+  /// an operator destroyed outside closeOperators() never runs close().
+  ~RPCOperator() override;
+
+  // Disable copy and move
+  RPCOperator(const RPCOperator&) = delete;
+  RPCOperator& operator=(const RPCOperator&) = delete;
+  RPCOperator(RPCOperator&&) = delete;
+  RPCOperator& operator=(RPCOperator&&) = delete;
+
   void initialize() override;
 
   void close() override;
@@ -151,6 +161,11 @@ class RPCOperator : public exec::Operator {
   /// for as long as the ladder runs. Advances from the transport executor
   /// threads, so it moves even while the driver is blocked.
   static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
+
+  /// Null once close() has run.
+  const std::shared_ptr<RPCState>& testingState() const {
+    return state_;
+  }
 
  private:
   // How much of the accumulator a dispatch is willing to send.

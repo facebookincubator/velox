@@ -209,7 +209,9 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
     const std::vector<T>& data,
     Buffer& buffer,
     velox::memory::MemoryPool& memPool,
-    const Encoding::Options& options = {}) {
+    const Encoding::Options& options = {},
+    const subintsplit::TuningConfig& tuning =
+        subintsplit::kDefaultTuningConfig) {
   using PhysicalType = typename TypeTraits<T>::physicalType;
   auto span = std::span<const PhysicalType>(
       reinterpret_cast<const PhysicalType*>(data.data()), data.size());
@@ -218,9 +220,9 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
       Statistics<PhysicalType>::create(span),
       std::make_unique<NonRecursiveSubIntSplitPolicy<T>>()};
   auto encoded =
-      SubIntSplitEncoding<T>::encode(selection, span, buffer, options);
+      SubIntSplitEncoding<T>::encode(selection, span, buffer, options, tuning);
   return std::make_unique<SubIntSplitEncoding<T>>(
-      memPool, encoded, [](uint32_t) { return nullptr; }, options);
+      memPool, encoded, [](uint32_t) { return nullptr; }, options, tuning);
 }
 
 EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
@@ -5951,10 +5953,10 @@ TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitDoubleSlowPath) {
   reader->doPrepareRead(0, rows, nullptr);
 
   Buffer buffer(*pool());
-  Encoding::Options options;
-  options.subIntSplitDecodeChunkSize = 1;
-  auto encoding =
-      makeSubIntSplitEncoding<double>(data, buffer, *pool(), options);
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.decodeChunkSize = 1;
+  auto encoding = makeSubIntSplitEncoding<double>(
+      data, buffer, *pool(), Encoding::Options{}, tuning);
   common::AlwaysTrue filter;
   dwio::common::ExtractToReader extractValues(reader.get());
   DecoderVisitor<

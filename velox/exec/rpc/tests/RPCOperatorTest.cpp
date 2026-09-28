@@ -1116,6 +1116,103 @@ TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
       "Unknown RPC function");
 }
 
+// A standalone operator on a live DriverCtx reproduces the teardown that
+// skips close() without the race: the second RPCState reference stands in
+// for an in-flight callback, and the input vector's use count is what the
+// operator would otherwise still be holding at ~Task.
+TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-release",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto retained = BaseVector::create(VARCHAR(), 3, pool());
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{retained}, /*rowCount=*/3);
+  ASSERT_GT(retained.use_count(), 1);
+  auto callbackRef = rpcOperator->testingState();
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(retained.use_count(), 1)
+      << "the operator was destroyed without close() and kept its input "
+         "vectors, which upstream pools would still be reserving at ~Task";
+  EXPECT_TRUE(callbackRef->getInputBatchColumns(0).empty());
+}
+
+// The reservation the arbitrator actually checks. The test above retains a
+// vector from VectorTestBase::pool(), which is rooted outside the Task, so
+// the Task's pools read zero whether or not the operator released -- it can
+// only observe a use count. The driver allocates input from an upstream
+// operator's pool, a leaf of the Task's tree, and those bytes reach the query
+// root: left there, ~Task drops the root with a live reservation and
+// SharedArbitrator::removePool fails pool->reservedBytes() == 0, taking the
+// worker down with SIGABRT.
+TEST_F(RPCOperatorTest, retainedInputReleasesTheTaskPoolReservation) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-reservation",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto* upstreamPool = driverCtx.addOperatorPool("values-0", "Values");
+  constexpr vector_size_t kRetainedRows{1 << 16};
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{
+          BaseVector::create(VARCHAR(), kRetainedRows, upstreamPool)},
+      kRetainedRows);
+  auto callbackRef = rpcOperator->testingState();
+  ASSERT_GT(task->pool()->reservedBytes(), 0)
+      << "the retained vector must reserve on the Task's tree, otherwise this "
+         "test cannot see the invariant it is about";
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(task->pool()->reservedBytes(), 0)
+      << "the operator was destroyed without close() and left its input "
+         "vectors reserving on the Task's pools; ~Task would abort in "
+         "SharedArbitrator::removePool";
+  // Keep a regression from taking the whole binary down in ~Task.
+  callbackRef->releaseAllInputBatches();
+}
+
 // Claims VARCHAR at the plan level -- so RPCNode's own checks pass -- while
 // the function actually returns BIGINT. This is the disagreement the plan node
 // cannot see: it compares the CALL expression against the declared column, not
