@@ -24,11 +24,19 @@
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionMetrics.h"
 
-// DP-based bit-range split selector for SubIntSplitEncoding.
-//
-// Scores a grid of bit ranges on a sample of uint64_t values, runs dynamic
-// programming over bit positions to find the minimum-cost partition, and
-// returns the sections that partition implies.
+/// DP-based bit-range split selector for SubIntSplitEncoding.
+///
+/// Scores a grid of bit ranges on a sample of uint64_t values, runs dynamic
+/// programming over bit positions to find the minimum-cost partition, and
+/// returns the sections that partition implies.
+///
+/// Planner context:
+///
+///   sampled bit patterns + SelectorConfig -> [selectSplits] -> SelectorResult
+///
+/// `SelectorResult` is the only boundary between planning and full-data encode.
+/// Its sections must cover the physical width and its cost must use full-stream
+/// units so split penalties remain comparable.
 
 namespace facebook::nimble::subintsplit {
 
@@ -53,6 +61,46 @@ struct SelectorConfig {
   /// Relative change in a bit plane's set-rate required for the position to be
   /// considered as a split boundary. 0.0 considers every position.
   double boundaryPruneThreshold{kBoundaryPruneThreshold};
+
+  /// Decode cost charged per additional section, in bits per value of the full
+  /// stream.
+  ///
+  /// Decoding makes one pass over the output per section, so throughput falls
+  /// roughly as 1/sections -- measured at ~8000 MB/s for two sections, ~1900
+  /// for four and ~950 for seven. `splitPenalty` alone cannot express that: it
+  /// is a flat handful of bits against a stream cost in the millions, so the DP
+  /// will buy a fourth section for a 0.1% storage win and pay 30% of decode for
+  /// it. Charging per value instead makes the DP add a section only when it
+  /// saves more than this many bits per value.
+  ///
+  /// 0.0 disables the term and reproduces the storage-only plan byte for byte.
+  double decodeCostBitsPerValue{0.0};
+
+  /// Ceiling on candidate boundaries, the strongest by set-rate change kept.
+  ///
+  /// `boundaryPruneThreshold` bounds planning cost only indirectly: a stream
+  /// with many genuine field edges still produces many boundaries, and the grid
+  /// is quadratic in them. A hard cap makes planning cost O(cap^2) whatever the
+  /// data, which is what a writer with a latency budget needs. 0 is unlimited.
+  size_t maxCandidateBoundaries{0};
+
+  /// Widest section the grid scores, beyond the full active range which is
+  /// always scored so the DP keeps a fallback.
+  ///
+  /// Trims the grid's upper triangle. Sections this wide are rarely chosen when
+  /// the data has structure, and when it does not, the full-range cell is the
+  /// answer anyway. 0 is unlimited.
+  int maxSectionWidth{0};
+
+  /// Widest section for which unique and dominant-value counts are collected.
+  ///
+  /// That frequency pass is the expensive half of the per-cell metrics -- on a
+  /// production ctr_mbl stream the hash map behind it was 41% of encode. It
+  /// only feeds the Dictionary and MainlyConstant cost models, which need low
+  /// cardinality to win and so almost never do on a wide section. Above this
+  /// width both models score as unusable and the pass is skipped. 0 is
+  /// unlimited.
+  int frequencyMetricsMaxWidth{0};
 };
 
 inline SelectorConfig defaultSelectorConfig() noexcept {
@@ -102,11 +150,15 @@ ActiveBitRange findActiveBitRange(
 /// rate jumps. Keeping only the jumps leaves the boundaries a real layout has,
 /// for one O(numSamples * width) popcount pass against O(width^2) metrics
 /// passes saved.
+/// `maxCount` caps how many are returned, keeping the positions with the
+/// largest set-rate change; the stream's own edges are always kept and do not
+/// count against it. 0 is unlimited.
 std::vector<int> candidateBoundaries(
     const std::vector<uint64_t>& samples,
     int lo,
     int hi,
-    double threshold);
+    double threshold,
+    size_t maxCount = 0);
 
 /// A constant bit-plane run, stored as a single Constant section (costs
 /// ~nothing to encode or decode).

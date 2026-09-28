@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 
 #include "flatbuffers/flatbuffers.h"
+#include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
@@ -25,7 +26,9 @@
 
 #include <algorithm>
 #include <limits>
+#include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -181,6 +184,16 @@ ChunkStatsGroupV1::StreamIndex::StreamIndex(
 
 StreamIndex::~StreamIndex() = default;
 
+std::optional<ChunkStatValue> StreamIndex::chunkMinValue(
+    uint32_t /*chunkIndex*/) const {
+  return std::nullopt;
+}
+
+std::optional<ChunkStatValue> StreamIndex::chunkMaxValue(
+    uint32_t /*chunkIndex*/) const {
+  return std::nullopt;
+}
+
 ChunkLocation ChunkStatsGroupV1::StreamIndex::lookupChunk(
     uint32_t rowId) const {
   const auto* root = asFlatBuffersRoot<serialization::StripeChunkStats>(
@@ -249,8 +262,9 @@ uint32_t ChunkStatsGroupV1::StreamIndex::rowCount() const {
 
 namespace {
 
-// Creates a uint32 view after validating the chunk-stats stream contract.
-std::unique_ptr<TypedEncodingView<uint32_t>> createEncodedStreamView(
+// Creates a typed view after validating the chunk-stats stream contract.
+template <typename T>
+std::unique_ptr<TypedEncodingView<T>> createEncodedStreamView(
     const serialization::EncodedStream* encoded,
     uint32_t expectedRowCount,
     std::string_view fieldName,
@@ -258,7 +272,6 @@ std::unique_ptr<TypedEncodingView<uint32_t>> createEncodedStreamView(
   NIMBLE_CHECK_FILE_NOT_NULL(encoded, "Missing encoded {} array.", fieldName);
   const auto* data = encoded->data();
   NIMBLE_CHECK_FILE_NOT_NULL(data, "Missing encoded {} data.", fieldName);
-
   const std::string_view encodedView{
       reinterpret_cast<const char*>(data->data()), data->size()};
   NIMBLE_CHECK_FILE_GE(
@@ -268,7 +281,7 @@ std::unique_ptr<TypedEncodingView<uint32_t>> createEncodedStreamView(
       fieldName);
   NIMBLE_CHECK_FILE_EQ(
       EncodingPrefix::dataType(encodedView),
-      DataType::Uint32,
+      TypeTraits<T>::dataType,
       "Encoded {} array has an invalid data type.",
       fieldName);
   const auto actualRowCount =
@@ -280,8 +293,43 @@ std::unique_ptr<TypedEncodingView<uint32_t>> createEncodedStreamView(
       fieldName,
       actualRowCount,
       expectedRowCount);
-  return detail::createTypedEncodingView<uint32_t>(
+  return detail::createTypedEncodingView<T>(
       encodedView, &pool, Encoding::Options{});
+}
+
+using ChunkBoundViews =
+    std::pair<std::unique_ptr<EncodingView>, std::unique_ptr<EncodingView>>;
+
+template <typename T>
+ChunkBoundViews createTypedChunkBoundViews(
+    const serialization::EncodedStream* encodedMin,
+    const serialization::EncodedStream* encodedMax,
+    uint32_t streamChunkCount,
+    velox::memory::MemoryPool& pool) {
+  return {
+      createEncodedStreamView<T>(
+          encodedMin, streamChunkCount, "chunk min values", pool),
+      createEncodedStreamView<T>(
+          encodedMax, streamChunkCount, "chunk max values", pool),
+  };
+}
+
+ChunkBoundViews createChunkBoundViews(
+    DataType dataType,
+    const serialization::EncodedStream* encodedMin,
+    const serialization::EncodedStream* encodedMax,
+    uint32_t streamChunkCount,
+    velox::memory::MemoryPool& pool) {
+  NIMBLE_RETURN_BY_DATA_TYPE_OR(
+      // The macro's default case handles Undefined and unsupported types.
+      // @lint-ignore CLANGTIDY clang-diagnostic-switch-enum
+      dataType,
+      T,
+      createTypedChunkBoundViews<T>(
+          encodedMin, encodedMax, streamChunkCount, pool),
+      NIMBLE_FILE_FAIL(
+          "Unsupported V2 chunk bounds data type: {}.",
+          static_cast<int>(dataType)));
 }
 
 struct StreamLayout {
@@ -318,6 +366,14 @@ StreamLayout createStreamLayout(
   return {std::move(baseOffsets), static_cast<uint32_t>(totalChunkCount)};
 }
 
+bool hasEncodedData(const serialization::EncodedStream* encoded) {
+  if (encoded == nullptr) {
+    return false;
+  }
+  const auto* data = encoded->data();
+  return data != nullptr && data->size() > 0;
+}
+
 // Reads V2 chunk statistics directly from their Nimble-encoded arrays. Relies
 // on the writer to preserve row and offset ordering to keep index creation
 // O(1).
@@ -335,6 +391,13 @@ class ChunkStatsGroupV2 final : public ChunkStatsGroup {
       uint32_t streamSize) const final;
 
  private:
+  // Owns lazy per-chunk bounds for one stream.
+  struct StreamChunkBounds {
+    DataType dataType{DataType::Undefined};
+    std::unique_ptr<EncodingView> min;
+    std::unique_ptr<EncodingView> max;
+  };
+
   class StreamIndex;
 
   ChunkStatsGroupV2(
@@ -346,7 +409,12 @@ class ChunkStatsGroupV2 final : public ChunkStatsGroup {
       std::vector<uint32_t> streamBaseOffsets,
       std::unique_ptr<TypedEncodingView<uint32_t>> chunkRows,
       std::unique_ptr<TypedEncodingView<uint32_t>> chunkOffsets,
-      std::unique_ptr<TypedEncodingView<uint32_t>> chunkNullCounts);
+      std::unique_ptr<TypedEncodingView<uint32_t>> chunkNullCounts,
+      std::unique_ptr<TypedEncodingView<bool>> chunkMinMaxPresent,
+      std::vector<StreamChunkBounds> streamChunkBounds);
+
+  // Returns whether a chunk has usable bounds.
+  bool hasChunkBounds(uint32_t streamId, uint32_t chunkIndex) const;
 
   // Keeps the encoded data referenced by the views alive.
   const std::unique_ptr<MetadataBuffer> metadata_;
@@ -361,6 +429,12 @@ class ChunkStatsGroupV2 final : public ChunkStatsGroup {
   const std::unique_ptr<TypedEncodingView<uint32_t>> chunkRows_;
   const std::unique_ptr<TypedEncodingView<uint32_t>> chunkOffsets_;
   const std::unique_ptr<TypedEncodingView<uint32_t>> chunkNullCounts_;
+
+  // Identifies which stream-major chunk positions have valid bounds.
+  const std::unique_ptr<TypedEncodingView<bool>> chunkMinMaxPresent_;
+
+  // Stores lazy typed bounds by stream because scalar types can differ.
+  const std::vector<StreamChunkBounds> streamChunkBounds_;
 };
 
 } // namespace
@@ -389,8 +463,15 @@ class ChunkStatsGroupV2::StreamIndex final : public index::StreamIndex {
   std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const override;
 
   uint32_t rowCount() const override;
+  std::optional<ChunkStatValue> chunkMinValue(
+      uint32_t chunkIndex) const override;
+  std::optional<ChunkStatValue> chunkMaxValue(
+      uint32_t chunkIndex) const override;
 
  private:
+  // Converts an absolute chunk index to this stream's bounds index.
+  uint32_t streamChunkIndex(uint32_t chunkIndex) const;
+
   // Keeps the owning group and its encoded arrays alive.
   const std::shared_ptr<const ChunkStatsGroupV2> owner_;
   // Delimit this stream's absolute range in the shared chunk arrays.
@@ -437,6 +518,7 @@ std::shared_ptr<ChunkStatsGroupV2> ChunkStatsGroupV2::create(
   std::vector<uint32_t> streamChunkCountValues(
       streamChunkCounts->begin(), streamChunkCounts->end());
 
+  // Create EncodingViews over the encoded arrays (O(1), no materialization).
   const auto* encodedRows = root->stream_chunk_rows();
   const auto* encodedOffsets = root->stream_chunk_offsets();
   const auto* encodedNullCounts = root->stream_chunk_null_counts();
@@ -448,23 +530,84 @@ std::shared_ptr<ChunkStatsGroupV2> ChunkStatsGroupV2::create(
   auto streamLayout =
       createStreamLayout(streamChunkCountValues, streamCount, stripeCount);
 
-  auto chunkRows = createEncodedStreamView(
+  auto chunkRows = createEncodedStreamView<uint32_t>(
       encodedRows, streamLayout.chunkCount, "chunk rows", pool);
-  auto chunkOffsets = createEncodedStreamView(
+  auto chunkOffsets = createEncodedStreamView<uint32_t>(
       encodedOffsets, streamLayout.chunkCount, "chunk offsets", pool);
-  auto chunkNullCounts = createEncodedStreamView(
+  auto chunkNullCounts = createEncodedStreamView<uint32_t>(
       encodedNullCounts, streamLayout.chunkCount, "chunk null counts", pool);
 
-  return std::shared_ptr<ChunkStatsGroupV2>(new ChunkStatsGroupV2(
-      firstStripe,
-      stripeCount,
-      streamCount,
-      std::move(metadata),
-      std::move(streamChunkCountValues),
-      std::move(streamLayout.baseOffsets),
-      std::move(chunkRows),
-      std::move(chunkOffsets),
-      std::move(chunkNullCounts)));
+  const auto createGroup =
+      [&](std::unique_ptr<TypedEncodingView<bool>> minMaxPresent,
+          std::vector<StreamChunkBounds> streamChunkBounds) {
+        return std::shared_ptr<ChunkStatsGroupV2>(new ChunkStatsGroupV2(
+            firstStripe,
+            stripeCount,
+            streamCount,
+            std::move(metadata),
+            std::move(streamChunkCountValues),
+            std::move(streamLayout.baseOffsets),
+            std::move(chunkRows),
+            std::move(chunkOffsets),
+            std::move(chunkNullCounts),
+            std::move(minMaxPresent),
+            std::move(streamChunkBounds)));
+      };
+
+  // Create lazy views over per-stream min/max values.
+  const auto* encodedMins = root->chunk_min_values();
+  const auto* encodedMaxs = root->chunk_max_values();
+  const auto* encodedMinMaxPresent = root->chunk_min_max_present();
+  if (encodedMins == nullptr && encodedMaxs == nullptr &&
+      encodedMinMaxPresent == nullptr) {
+    return createGroup(nullptr, std::vector<StreamChunkBounds>(streamCount));
+  }
+
+  NIMBLE_CHECK_FILE(
+      encodedMins != nullptr && encodedMaxs != nullptr &&
+          encodedMinMaxPresent != nullptr &&
+          encodedMins->size() == streamCount &&
+          encodedMaxs->size() == streamCount,
+      "V2 chunk bounds metadata is incomplete or has an invalid stream count.");
+  auto minMaxPresent = createEncodedStreamView<bool>(
+      encodedMinMaxPresent,
+      streamLayout.chunkCount,
+      "chunk min/max presence",
+      pool);
+  std::vector<StreamChunkBounds> streamChunkBounds(streamCount);
+  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+    const auto* encodedMin = encodedMins->Get(streamId);
+    const auto* encodedMax = encodedMaxs->Get(streamId);
+    const bool hasMin = hasEncodedData(encodedMin);
+    const bool hasMax = hasEncodedData(encodedMax);
+    NIMBLE_CHECK_FILE_EQ(
+        hasMin,
+        hasMax,
+        "V2 chunk min and max data must both be present or absent.");
+    if (!hasMin) {
+      continue;
+    }
+
+    NIMBLE_CHECK_FILE_NOT_NULL(encodedMin, "Missing encoded chunk min values.");
+    NIMBLE_CHECK_FILE_NOT_NULL(
+        encodedMin->data(), "Missing encoded chunk min values data.");
+    const auto streamChunkCount =
+        streamChunkCountValues.at(streamId * stripeCount + stripeCount - 1);
+    const std::string_view minView{
+        reinterpret_cast<const char*>(encodedMin->data()->data()),
+        encodedMin->data()->size()};
+    NIMBLE_CHECK_FILE_GE(
+        minView.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Encoded chunk min values array is too small.");
+    const auto dataType = EncodingPrefix::dataType(minView);
+    streamChunkBounds[streamId].dataType = dataType;
+    auto [min, max] = createChunkBoundViews(
+        dataType, encodedMin, encodedMax, streamChunkCount, pool);
+    streamChunkBounds[streamId].min = std::move(min);
+    streamChunkBounds[streamId].max = std::move(max);
+  }
+  return createGroup(std::move(minMaxPresent), std::move(streamChunkBounds));
 }
 
 ChunkStatsGroupV2::ChunkStatsGroupV2(
@@ -476,14 +619,18 @@ ChunkStatsGroupV2::ChunkStatsGroupV2(
     std::vector<uint32_t> streamBaseOffsets,
     std::unique_ptr<TypedEncodingView<uint32_t>> chunkRows,
     std::unique_ptr<TypedEncodingView<uint32_t>> chunkOffsets,
-    std::unique_ptr<TypedEncodingView<uint32_t>> chunkNullCounts)
+    std::unique_ptr<TypedEncodingView<uint32_t>> chunkNullCounts,
+    std::unique_ptr<TypedEncodingView<bool>> chunkMinMaxPresent,
+    std::vector<StreamChunkBounds> streamChunkBounds)
     : ChunkStatsGroup(firstStripe, stripeCount, streamCount),
       metadata_{std::move(metadata)},
       streamChunkCounts_{std::move(streamChunkCounts)},
       streamBaseOffsets_{std::move(streamBaseOffsets)},
       chunkRows_{std::move(chunkRows)},
       chunkOffsets_{std::move(chunkOffsets)},
-      chunkNullCounts_{std::move(chunkNullCounts)} {
+      chunkNullCounts_{std::move(chunkNullCounts)},
+      chunkMinMaxPresent_{std::move(chunkMinMaxPresent)},
+      streamChunkBounds_{std::move(streamChunkBounds)} {
   NIMBLE_CHECK_NOT_NULL(metadata_);
   NIMBLE_CHECK_NOT_NULL(chunkRows_);
   NIMBLE_CHECK_NOT_NULL(chunkOffsets_);
@@ -498,13 +645,7 @@ std::shared_ptr<index::StreamIndex> ChunkStatsGroupV2::createStreamIndex(
     return nullptr;
   }
 
-  NIMBLE_CHECK_GE(
-      stripe, firstStripe(), "Stripe index is before this group's range");
-  const uint32_t stripeOffset = stripe - firstStripe();
-  NIMBLE_CHECK_LT(
-      stripeOffset,
-      numStripes(),
-      "Stripe offset is out of range for this chunk stats group");
+  const uint32_t stripeOffset = this->stripeOffset(stripe);
 
   // V2 stream_chunk_counts: stream-major per-stream prefix sum.
   // index = streamId * stripeCount + stripeOffset
@@ -512,17 +653,42 @@ std::shared_ptr<index::StreamIndex> ChunkStatsGroupV2::createStreamIndex(
   const uint32_t endChunkOffset = streamChunkCounts_[chunkCountIndex];
   const uint32_t startChunkOffset =
       (stripeOffset > 0) ? streamChunkCounts_[chunkCountIndex - 1] : 0;
+  const uint32_t absoluteStartChunkOffset =
+      streamBaseOffsets_[streamId] + startChunkOffset;
 
-  if (endChunkOffset - startChunkOffset <= 1) {
+  const auto chunkCount = endChunkOffset - startChunkOffset;
+  if (chunkCount == 0 ||
+      (chunkCount == 1 &&
+       !hasChunkBounds(streamId, absoluteStartChunkOffset))) {
     return nullptr;
   }
 
+  const uint32_t absoluteEndChunkOffset =
+      streamBaseOffsets_[streamId] + endChunkOffset;
   return std::make_shared<StreamIndex>(
       std::static_pointer_cast<const ChunkStatsGroupV2>(shared_from_this()),
       streamId,
-      streamBaseOffsets_[streamId] + startChunkOffset,
-      streamBaseOffsets_[streamId] + endChunkOffset,
+      absoluteStartChunkOffset,
+      absoluteEndChunkOffset,
       streamSize);
+}
+
+bool ChunkStatsGroupV2::hasChunkBounds(uint32_t streamId, uint32_t chunkIndex)
+    const {
+  if (chunkMinMaxPresent_ == nullptr) {
+    return false;
+  }
+  bool present;
+  chunkMinMaxPresent_->readAt(chunkIndex, &present);
+  if (!present) {
+    return false;
+  }
+  const auto& bounds = streamChunkBounds_[streamId];
+  NIMBLE_CHECK_FILE(
+      bounds.min != nullptr && bounds.max != nullptr,
+      "V2 chunk bounds are marked present but stream {} has no bounds data.",
+      streamId);
+  return true;
 }
 
 ChunkLocation ChunkStatsGroupV2::StreamIndex::lookupChunk(
@@ -569,6 +735,89 @@ uint32_t ChunkStatsGroupV2::StreamIndex::rowCount() const {
     return 0;
   }
   return owner_->chunkRows_->readAt(endOffset_ - 1);
+}
+
+uint32_t ChunkStatsGroupV2::StreamIndex::streamChunkIndex(
+    uint32_t chunkIndex) const {
+  NIMBLE_CHECK_GE(chunkIndex, startOffset_);
+  NIMBLE_CHECK_LT(chunkIndex, endOffset_);
+  return chunkIndex - owner_->streamBaseOffsets_[streamId()];
+}
+
+namespace {
+
+struct ChunkBounds {
+  ChunkStatValue min;
+  ChunkStatValue max;
+};
+
+template <typename T>
+ChunkBounds readTypedChunkBounds(
+    const EncodingView& minView,
+    const EncodingView& maxView,
+    uint32_t index) {
+  T min;
+  T max;
+  minView.readAt(index, &min);
+  maxView.readAt(index, &max);
+  if constexpr (std::is_floating_point_v<T>) {
+    NIMBLE_CHECK_FILE(
+        !std::isnan(min) && !std::isnan(max),
+        "V2 chunk bounds must not be NaN.");
+  }
+  NIMBLE_CHECK_FILE_LE(min, max, "V2 chunk minimum must not exceed maximum.");
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    return {std::string{min}, std::string{max}};
+  } else {
+    return {min, max};
+  }
+}
+
+ChunkBounds readChunkBounds(
+    DataType dataType,
+    const EncodingView* minView,
+    const EncodingView* maxView,
+    uint32_t index) {
+  NIMBLE_CHECK_FILE_NOT_NULL(minView, "Missing V2 chunk minimum values.");
+  NIMBLE_CHECK_FILE_NOT_NULL(maxView, "Missing V2 chunk maximum values.");
+  NIMBLE_RETURN_BY_DATA_TYPE(
+      // The macro's default case handles Undefined.
+      // @lint-ignore CLANGTIDY clang-diagnostic-switch-enum
+      dataType,
+      T,
+      readTypedChunkBounds<T>(*minView, *maxView, index));
+}
+
+} // namespace
+
+std::optional<ChunkStatValue> ChunkStatsGroupV2::StreamIndex::chunkMinValue(
+    uint32_t chunkIndex) const {
+  const auto index = streamChunkIndex(chunkIndex);
+  if (!owner_->hasChunkBounds(streamId(), chunkIndex)) {
+    return std::nullopt;
+  }
+  const auto& streamBounds = owner_->streamChunkBounds_[streamId()];
+  return readChunkBounds(
+             streamBounds.dataType,
+             streamBounds.min.get(),
+             streamBounds.max.get(),
+             index)
+      .min;
+}
+
+std::optional<ChunkStatValue> ChunkStatsGroupV2::StreamIndex::chunkMaxValue(
+    uint32_t chunkIndex) const {
+  const auto index = streamChunkIndex(chunkIndex);
+  if (!owner_->hasChunkBounds(streamId(), chunkIndex)) {
+    return std::nullopt;
+  }
+  const auto& streamBounds = owner_->streamChunkBounds_[streamId()];
+  return readChunkBounds(
+             streamBounds.dataType,
+             streamBounds.min.get(),
+             streamBounds.max.get(),
+             index)
+      .max;
 }
 
 namespace {

@@ -544,8 +544,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
         nullValues.insert(i);
       }
     }
-    auto batch = makeRowVector(
-        {keys, makeFlatVector<int64_t>(keys->size(), folly::identity)});
+    auto batch =
+        makeRowVector({keys, makeFlatIdentityVector<int64_t>(keys->size())});
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
     auto table = HashTable<false>::createForJoin(
@@ -1189,7 +1189,7 @@ TEST_P(HashTableTest, checkSizeValidation) {
 }
 
 TEST_P(HashTableTest, listNullKeyRows) {
-  VectorPtr keys = makeFlatVector<int64_t>(500, folly::identity);
+  VectorPtr keys = makeFlatIdentityVector<int64_t>(500);
   testListNullKeyRows(keys, BaseHashTable::HashMode::kArray);
   {
     auto flat =
@@ -1320,7 +1320,7 @@ DEBUG_ONLY_TEST_P(HashTableTest, failureInCreateRowPartitions) {
   std::unique_ptr<HashTable<false>> topTable;
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
   for (int i = 0; i < 4; i++) {
-    auto batch = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+    auto batch = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
     // Set minTableSizeForParallelJoinBuild to be really small so we can trigger

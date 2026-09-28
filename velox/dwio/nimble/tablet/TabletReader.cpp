@@ -693,6 +693,7 @@ void TabletReader::initStripes(
       stripes->group_indices()->size(),
       "Unexpected stripe count");
   stripeOffsets_ = stripes->offsets()->data();
+  stripeSizes_ = stripes->sizes()->data();
 
   // Build prefix sum for O(log n) rowToStripe lookup.
   const auto* rowCounts = stripes->row_counts()->data();
@@ -1182,6 +1183,14 @@ std::vector<MetadataSection> TabletReader::stripeGroupsMetadata() const {
 bool TabletReader::hasOptionalSection(const std::string& name) const {
   const auto it = optionalSections_.find(name);
   return it != optionalSections_.end();
+}
+
+std::optional<Checkpoint> TabletReader::checkpoint() const {
+  auto section = loadOptionalSection(std::string{kCheckpointSection});
+  if (!section.has_value()) {
+    return std::nullopt;
+  }
+  return Checkpoint::deserialize(section->content());
 }
 
 std::optional<Section> TabletReader::loadOptionalSection(

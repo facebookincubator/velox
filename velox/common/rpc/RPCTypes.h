@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -27,6 +29,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
+#include <vector>
 
 #include <folly/Expected.h>
 
@@ -34,6 +37,20 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
+
+/// Recognizes payloads that report memory retained outside inline storage.
+/// The estimate must be non-negative, and computing it must not throw.
+template <typename T>
+concept SizedRpcPayload = requires(const T& payload) {
+  { payload.retainedBytes() } noexcept -> std::same_as<int64_t>;
+};
+
+namespace detail {
+// Detects a size reporter whose signature must satisfy SizedRpcPayload.
+template <typename T>
+concept DeclaresRetainedBytes =
+    requires(T& payload) { payload.retainedBytes(); };
+} // namespace detail
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -98,8 +115,13 @@ enum class RPCErrorKind {
 /// Keeps transport and operator code independent of function-specific payload
 /// types. Requires the producer and consumer to use the same concrete type;
 /// get<T>() fails on a mismatch. Accepts only types that fit kMaxSize and
-/// kMaxAlign and are nothrow move-constructible. Moving transfers the stored
-/// value and leaves the source empty; copying is unsupported.
+/// kMaxAlign and are nothrow move-constructible. Payloads that own external
+/// storage may report its retained capacity with
+/// `int64_t retainedBytes() const noexcept`; legacy payloads without this
+/// method report zero. The estimate must be non-negative and normally counts
+/// uniquely owned storage so shared buffers are not charged more than once.
+/// Moving transfers the stored value and leaves the source empty; copying is
+/// unsupported.
 class RpcPayload {
  public:
   /// Fits std::string (32 on libstdc++) and std::vector<float> (24). A payload
@@ -112,7 +134,9 @@ class RpcPayload {
 
   /// Stores a value inline after verifying that it fits and moves safely.
   template <typename T, typename Decayed = std::decay_t<T>>
-    requires(!std::is_same_v<Decayed, RpcPayload>)
+    requires(
+        !std::is_same_v<Decayed, RpcPayload> &&
+        (!detail::DeclaresRetainedBytes<Decayed> || SizedRpcPayload<Decayed>))
   explicit RpcPayload(T&& value) {
     static_assert(
         sizeof(Decayed) <= kMaxSize,
@@ -144,6 +168,13 @@ class RpcPayload {
     return vtable_ == nullptr;
   }
 
+  /// Returns the non-negative estimate of uniquely owned bytes retained
+  /// outside the inline payload storage, or zero when the payload does not
+  /// provide one.
+  int64_t retainedBytes() const noexcept {
+    return vtable_ == nullptr ? 0 : vtable_->retainedBytes(storage_);
+  }
+
   /// Returns true when the stored value has type T.
   template <typename T>
   bool holds() const {
@@ -173,6 +204,8 @@ class RpcPayload {
     void (*destroy)(void*) noexcept;
     // Move-constructs into destination and destroys source.
     void (*moveTo)(void* destination, void* source) noexcept;
+    // Returns estimated bytes retained outside the inline payload storage.
+    int64_t (*retainedBytes)(const void*) noexcept;
   };
 
   // Returns the process-wide operations table for T.
@@ -184,6 +217,12 @@ class RpcPayload {
         [](void* destination, void* source) noexcept {
           ::new (destination) T(std::move(*static_cast<T*>(source)));
           static_cast<T*>(source)->~T();
+        },
+        [](const void* payload) noexcept {
+          if constexpr (SizedRpcPayload<T>) {
+            return static_cast<const T*>(payload)->retainedBytes();
+          }
+          return int64_t{0};
         }};
     return kVTable;
   }
@@ -277,6 +316,12 @@ struct RPCResponse {
     return result_.value();
   }
 
+  /// Returns bytes retained by the payload or diagnostic error message.
+  int64_t retainedBytes() const noexcept {
+    return hasError() ? static_cast<int64_t>(result_.error().message.capacity())
+                      : result_.value().retainedBytes();
+  }
+
  private:
   // Unfilled reads as an error so that "neither payload nor error" is not a
   // representable state, under a kind no backend can produce. The operator
@@ -286,5 +331,22 @@ struct RPCResponse {
   folly::Expected<RpcPayload, RpcError> result_{
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
 };
+
+/// Returns the checked sum of bytes retained by a response collection.
+inline int64_t totalResponseRetainedBytes(
+    const std::vector<RPCResponse>& responses) {
+  int64_t total = 0;
+  for (const auto& response : responses) {
+    const auto bytes = response.retainedBytes();
+    VELOX_CHECK_GE(
+        bytes, 0, "RPC response retained bytes must be non-negative");
+    VELOX_CHECK_LE(
+        bytes,
+        std::numeric_limits<int64_t>::max() - total,
+        "RPC response retained-byte total overflow");
+    total += bytes;
+  }
+  return total;
+}
 
 } // namespace facebook::velox::rpc

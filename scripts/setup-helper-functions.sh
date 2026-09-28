@@ -144,12 +144,15 @@ function get_cxx_flags {
     # https://developer.arm.com/documentation/100616/0301/register-descriptions/aarch64-system-registers/midr-el1--main-id-register--el1
     ARM_CPU_FILE="/sys/devices/system/cpu/cpu0/regs/identification/midr_el1"
 
-    # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/neoverse/neoverse-n1.json#L13
-    # N1:d0c; N2:d49; V1:d40; V2:d4f;
+    # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/specifications/neoverse/neoverse_n1_r4p1_pmu.json#L14
+    # N1:d0c; N2:d49; N3:d8e; V1:d40; V2:d4f; V3:d84; V3AE:d83
     Neoverse_N1="d0c"
     Neoverse_N2="d49"
+    Neoverse_N3="d8e"
     Neoverse_V1="d40"
     Neoverse_V2="d4f"
+    Neoverse_V3="d84"
+    Neoverse_V3AE="d83"
     Nvidia_Implementer="4e"
     Nvidia_Olympus="010"
     if [ -f "$ARM_CPU_FILE" ] && [ "$ARM_BUILD_TARGET" = "local" ]; then
@@ -165,6 +168,8 @@ function get_cxx_flags {
         echo -n "-mcpu=neoverse-n1 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
         echo -n "-mcpu=neoverse-n2 "
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N3" ]; then
+        echo -n "-mcpu=neoverse-n3 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
         echo -n "-mcpu=neoverse-v1 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
@@ -178,6 +183,10 @@ function get_cxx_flags {
         else
           echo -n "-mcpu=neoverse-v2 "
         fi
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V3" ]; then
+        echo -n "-mcpu=neoverse-v3 "
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V3AE" ]; then
+        echo -n "-mcpu=neoverse-v3ae "
       else
         echo -n "-march=armv8-a+crc+crypto "
       fi

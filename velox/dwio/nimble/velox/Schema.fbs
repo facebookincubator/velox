@@ -48,13 +48,38 @@ enum Kind:uint8 {
   FlatMapBool,
   FlatMapString,
   FlatMapBinary,
+  HybridFlatMapInt8 = 150,
+  HybridFlatMapUInt8,
+  HybridFlatMapInt16,
+  HybridFlatMapUInt16,
+  HybridFlatMapInt32,
+  HybridFlatMapUInt32,
+  HybridFlatMapInt64,
+  HybridFlatMapUInt64,
+  HybridFlatMapFloat,
+  HybridFlatMapDouble,
+  HybridFlatMapBool,
+  HybridFlatMapString,
+  HybridFlatMapBinary,
 }
 
 // A generic string-keyed attribute pair attached to a schema node.
 // Carries cross-format per-column metadata.
+// TODO: Rename to `Attribute` with `name` and `value` fields.
 table StringPair {
   key:string;
   value:string;
+}
+
+// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
+// are represented by the group's child schema nodes, following FlatMap. The
+// parallel ID and count vectors describe consecutive slices in group_keys.
+// Default has a zero key count; its key identities are carried by its data
+// stream.
+table HybridFlatMap {
+  group_ids:[uint32];
+  group_key_counts:[uint32];
+  group_keys:[string];
 }
 
 table SchemaNode {

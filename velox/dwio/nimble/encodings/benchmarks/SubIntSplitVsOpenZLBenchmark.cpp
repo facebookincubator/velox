@@ -69,6 +69,37 @@ DEFINE_int64(
     only_size,
     0,
     "If >0, run the CSV sweep for only this element count (e.g. 100000000).");
+DEFINE_int32(
+    decode_chunk,
+    0,
+    "SubIntSplit decode chunk size in elements; 0 keeps the built-in default.");
+DEFINE_double(
+    decode_cost_bits,
+    0.0,
+    "SubIntSplit planner decode cost per extra section, in bits per value; "
+    "0 keeps the storage-only split.");
+DEFINE_int32(
+    planner_samples,
+    0,
+    "SubIntSplit planner sample count; 0 keeps the built-in default (2048).");
+DEFINE_double(
+    prune_threshold,
+    -1.0,
+    "SubIntSplit planner boundary prune threshold; negative keeps the default "
+    "(0.001).");
+DEFINE_int32(
+    max_boundaries,
+    0,
+    "SubIntSplit planner candidate boundary cap; 0 is unlimited.");
+DEFINE_int32(
+    max_section_width,
+    0,
+    "SubIntSplit planner widest scored section; 0 is unlimited.");
+DEFINE_int32(
+    freq_max_width,
+    0,
+    "SubIntSplit planner widest section given frequency metrics; 0 is "
+    "unlimited.");
 DEFINE_bool(
     layout,
     false,
@@ -401,28 +432,47 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.selector.decodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  if (FLAGS_planner_samples > 0) {
+    tuning.sampler.maxSamples = static_cast<uint32_t>(FLAGS_planner_samples);
+  }
+  if (FLAGS_prune_threshold >= 0.0) {
+    tuning.selector.boundaryPruneThreshold = FLAGS_prune_threshold;
+  }
+  tuning.selector.maxCandidateBoundaries =
+      static_cast<uint32_t>(FLAGS_max_boundaries);
+  tuning.selector.maxSectionWidth = FLAGS_max_section_width;
+  tuning.selector.frequencyMetricsMaxWidth = FLAGS_freq_max_width;
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions, tuning);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 void decodeNimble(const std::string& encoded, uint32_t n) {
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
-  auto enc = EncodingFactory{}.create(*pool, encoded, nullFactory());
+  Encoding::Options options;
+  auto enc =
+      EncodingFactory{options}.create(*pool, encoded, nullFactory(), options);
   enc->materialize(n, out.data());
   folly::doNotOptimizeAway(out);
 }
 
-// SubIntSplit is not wired into EncodingFactory dispatch, so decode it by
-// constructing the encoding directly. This is driver-only: the production
-// EncodingFactory is unchanged. Nested (possibly Zstd/OpenZL-compressed)
-// sections are still built through the constructor's internal factory.
 void decodeSubIntSplit(const std::string& encoded, uint32_t n) {
+  if (FLAGS_decode_chunk <= 0) {
+    decodeNimble(encoded, n);
+    return;
+  }
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
-  SubIntSplitEncoding<T> enc{*pool, encoded, nullFactory()};
-  enc.materialize(n, out.data());
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  if (FLAGS_decode_chunk > 0) {
+    tuning.decodeChunkSize = static_cast<uint32_t>(FLAGS_decode_chunk);
+  }
+  SubIntSplitEncoding<T> encoding{*pool, encoded, nullFactory(), {}, tuning};
+  encoding.materialize(n, out.data());
   folly::doNotOptimizeAway(out);
 }
 

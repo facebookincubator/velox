@@ -688,7 +688,7 @@ TEST_F(DecodedVectorTest, ownsIndicesBeforeIndicesIsCalled) {
   // A caller deciding whether it may borrow should not have to allocate to
   // find out, and for a flat input indices() allocates. The answer must
   // therefore be available before it runs, and agree with it afterwards.
-  auto small = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  auto small = makeFlatIdentityVector<int64_t>(100);
   DecodedVector decoded(*small);
   EXPECT_FALSE(decoded.ownsIndices());
   EXPECT_EQ(decoded.indices()[7], 7);
@@ -696,7 +696,7 @@ TEST_F(DecodedVectorTest, ownsIndicesBeforeIndicesIsCalled) {
 
   // Past the shared array's 10'000 entries there is nothing to hand back, so
   // indices() has to materialize and the answer flips.
-  auto large = makeFlatVector<int64_t>(20'000, [](auto row) { return row; });
+  auto large = makeFlatIdentityVector<int64_t>(20'000);
   DecodedVector decodedLarge(*large);
   EXPECT_TRUE(decodedLarge.ownsIndices());
   EXPECT_EQ(decodedLarge.indices()[19'999], 19'999);
@@ -945,8 +945,7 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   // children. The input vector here is a dictionary wrapped over a
   // rowVector.
   const int kSize = 12;
-  auto intChildVector =
-      makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+  auto intChildVector = makeFlatIdentityVector<int32_t>(kSize);
   auto rowVector = makeRowVector({intChildVector});
   SelectivityVector allRows(kSize);
   DecodedVector decoded;
@@ -1040,7 +1039,7 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
   SelectivityVector allRows(kSize);
 
   // non-null
-  auto intVector = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(kSize);
   auto rowVector = makeRowVector({intVector});
   auto constantVector = BaseVector::wrapInConstant(kSize, 1, rowVector);
 
@@ -1067,8 +1066,7 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
   }
   {
     // null with empty size children
-    intVector =
-        makeFlatVector<int32_t>(0 /*size*/, [](auto row) { return row; });
+    intVector = makeFlatIdentityVector<int32_t>(0 /*size*/);
     rowVector = std::make_shared<RowVector>(
         pool_.get(),
         rowVector->type(),
@@ -1107,7 +1105,7 @@ TEST_F(DecodedVectorTest, dictionaryWrapOnConstantVector) {
   auto constantVector =
       BaseVector::createConstant(VARCHAR(), variant("abc"), size, pool_.get());
   // int Vector
-  auto intVector = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(size);
   // Row (int, const)
   auto rowVector = makeRowVector({intVector, constantVector});
   // Dictionary encoded row
@@ -1151,8 +1149,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // This test exercises various cases that wrap() can encounter and verifies
   // the expected behavior.
   size_t vectorSize = 5;
-  auto intVector =
-      makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(vectorSize);
   auto arrayVector = makeArrayVector<int32_t>(
       100,
       [](auto /* row */) { return 2; },
@@ -1293,8 +1290,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // would not contain the nulls from the base.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     // Dict null at indices = 0, 2, 4
     auto dict = BaseVector::wrapInDictionary(
@@ -1316,8 +1312,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // the wrap.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     // Dict null at indices = 0, 2, 4
     auto dict = BaseVector::wrapInDictionary(
@@ -1345,8 +1340,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // TODO to ensure it is updated with the right behavior once its fixed.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     auto dict = BaseVector::wrapInDictionary(
         noNulls, indices, vectorSize, intNullableVector);
@@ -1426,10 +1420,7 @@ TEST_F(DecodedVectorTest, emptyRowsMultiDict) {
   auto dict = wrapInDictionary(
       indices,
       size,
-      wrapInDictionary(
-          indices, size, makeFlatVector<int64_t>(size, [](auto row) {
-            return row;
-          })));
+      wrapInDictionary(indices, size, makeFlatIdentityVector<int64_t>(size)));
 
   {
     SelectivityVector emptyRows(100, false);
@@ -1448,7 +1439,7 @@ TEST_F(DecodedVectorTest, emptyRowsMultiDict) {
 
 TEST_F(DecodedVectorTest, flatNulls) {
   // Flat vector with no nulls.
-  auto flatNoNulls = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  auto flatNoNulls = makeFlatIdentityVector<int64_t>(100);
   {
     SelectivityVector rows(100);
     DecodedVector d(*flatNoNulls, rows);
@@ -1487,7 +1478,7 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   SelectivityVector rows(100);
   DecodedVector d;
 
-  auto flatNoNulls = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  auto flatNoNulls = makeFlatIdentityVector<int64_t>(100);
   auto flatWithNulls =
       makeFlatVector<int64_t>(100, [](auto row) { return row; }, nullEvery(7));
 
@@ -1839,7 +1830,7 @@ TEST_F(DecodedVectorTest, dictionaryWrapping) {
 }
 
 TEST_F(DecodedVectorTest, dictionaryWrappingForFlat) {
-  auto vector = makeFlatVector<int64_t>(10, folly::identity);
+  auto vector = makeFlatIdentityVector<int64_t>(10);
   DecodedVector decoded;
   auto base = decoded.decodeAndGetBase(vector);
   ASSERT_EQ(base.get(), vector.get());
@@ -1874,7 +1865,7 @@ TEST_F(DecodedVectorTest, previousIndicesInReUsedDecodedVector) {
   // 2-layers are created to ensure copiedIndices_ is used.
   auto indices = makeIndices(3, [](auto /* row */) { return 2; });
   auto innerindices = makeIndices(3, [](auto /* row */) { return 998; });
-  auto flat = makeFlatVector<int64_t>(1000, [](auto row) { return row; });
+  auto flat = makeFlatIdentityVector<int64_t>(1000);
   auto dict = BaseVector::wrapInDictionary(nullptr, innerindices, 3, flat);
   dict = BaseVector::wrapInDictionary(nullptr, indices, 3, dict);
 

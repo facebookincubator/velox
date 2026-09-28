@@ -2170,8 +2170,7 @@ struct CurrentTimeFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
-    // Java/Presto session always provides a timezone (TimeZoneKey is required).
-    VELOX_CHECK_NOT_NULL(timeZone);
+    VELOX_USER_CHECK_NOT_NULL(timeZone, "Timezone cannot be null");
 
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 

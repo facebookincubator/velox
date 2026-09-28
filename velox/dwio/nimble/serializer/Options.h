@@ -221,6 +221,13 @@ struct SerializerOptions {
 };
 
 struct DeserializerOptions {
+  /// Read-only compatibility knob for the removed legacy headerless format:
+  ///   [rowCount:u32][size_0:u32][stream_0]...[size_N:u32][stream_N]. Streams
+  ///   hold raw values, optionally compressed. Every other format starts with
+  ///   a version byte, so the caller must set this true only for blobs known
+  ///   to predate the header.
+  bool legacyHeaderless{false};
+
   /// Output type for deserializing flatmap columns as struct (ROW).
   /// When provided, each top-level flatmap column whose corresponding field in
   /// outputType is ROW will be deserialized as a struct instead of a map. The

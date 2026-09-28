@@ -39,6 +39,7 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/tablet/Checkpoint.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
@@ -293,6 +294,16 @@ class TabletReader {
     return properties_;
   }
 
+  /// Returns true when the file carries a checkpoint marker. Reads only the
+  /// optional-section directory; the checkpoint payload remains unloaded.
+  bool suspended() const {
+    return hasOptionalSection(std::string{kCheckpointSection});
+  }
+
+  /// Loads and parses the checkpoint on demand. Returns std::nullopt for a
+  /// finalized file and retains no parsed checkpoint between calls.
+  std::optional<Checkpoint> checkpoint() const;
+
   /// Finds the dense index matching the given columns, or nullptr if none.
   const index::IndexLookup* denseIndex(
       const std::vector<std::string>& columns) const;
@@ -388,6 +399,15 @@ class TabletReader {
 
   uint64_t stripeOffset(uint32_t stripe) const {
     return stripeOffsets_[stripe];
+  }
+
+  /// Returns the physical byte span of `stripe`, covering every stream it
+  /// holds. The writer records it as the bytes appended while writing the
+  /// stripe, so it stays correct for the last stripe, where no following
+  /// stripe offset bounds it.
+  uint32_t stripeSize(uint32_t stripe) const {
+    NIMBLE_CHECK_LT(stripe, stripeCount_, "Stripe index out of bounds");
+    return stripeSizes_[stripe];
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
@@ -648,6 +668,7 @@ class TabletReader {
   uint64_t tabletRowCount_{0};
   uint32_t stripeCount_{0};
   const uint64_t* stripeOffsets_{nullptr};
+  const uint32_t* stripeSizes_{nullptr};
   // Prefix sum of stripe row counts for O(log n) rowToStripe lookup.
   // stripeRows_[i] = total rows in stripes [0, i).
   // Size is stripeCount_ + 1, with stripeRows_[0] = 0.

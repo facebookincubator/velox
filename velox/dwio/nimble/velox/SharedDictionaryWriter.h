@@ -213,8 +213,11 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
     if (options_.useExternalAlphabet) {
       NIMBLE_CHECK_EQ(options_.scope, SharedDictionaryScope::File);
       NIMBLE_CHECK_NOT_NULL(externalAlphabet_);
+      // TODO: Populate bounds from the external shared dictionary alphabet.
       return Chunk{
           .rowCount = externalAlphabet_->entryCount(),
+          .minValue = {},
+          .maxValue = {},
           .content = {externalAlphabet_->encodedAlphabet()}};
     }
     NIMBLE_CHECK_NOT_NULL(builder_);
@@ -234,7 +237,12 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         options_.alphabetEncodings,
         buffer,
         alphabetEncodingOptions());
-    return Chunk{.rowCount = rowCount, .content = {encoded}};
+    // TODO: Populate bounds from the encoded shared dictionary alphabet.
+    return Chunk{
+        .rowCount = rowCount,
+        .minValue = {},
+        .maxValue = {},
+        .content = {encoded}};
   }
 
  private:

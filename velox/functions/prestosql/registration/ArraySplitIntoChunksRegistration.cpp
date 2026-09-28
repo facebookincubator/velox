@@ -20,28 +20,32 @@
 namespace facebook::velox::functions {
 namespace {
 template <typename T>
-inline void registerArraySplitIntoChunksFunctions(const std::string& prefix) {
+inline void registerArraySplitIntoChunksFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<ArraySplitIntoChunksFunction, T>,
       Array<Array<T>>,
       Array<T>,
-      int32_t>({prefix + "array_split_into_chunks"});
+      int32_t>({prefix + "array_split_into_chunks"}, true, defaultOwner);
 }
 
 } // namespace
-void registerArraySplitIntoChunksFunctions(const std::string& prefix) {
-  registerArraySplitIntoChunksFunctions<int8_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int16_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int32_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int64_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int128_t>(prefix);
-  registerArraySplitIntoChunksFunctions<float>(prefix);
-  registerArraySplitIntoChunksFunctions<double>(prefix);
-  registerArraySplitIntoChunksFunctions<bool>(prefix);
-  registerArraySplitIntoChunksFunctions<Timestamp>(prefix);
-  registerArraySplitIntoChunksFunctions<Date>(prefix);
-  registerArraySplitIntoChunksFunctions<Varchar>(prefix);
-  registerArraySplitIntoChunksFunctions<Varbinary>(prefix);
-  registerArraySplitIntoChunksFunctions<Generic<T1>>(prefix);
+void registerArraySplitIntoChunksFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerArraySplitIntoChunksFunctions<int8_t>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<int16_t>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<int32_t>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<int64_t>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<int128_t>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<float>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<double>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<bool>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<Timestamp>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<Date>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<Varchar>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<Varbinary>(prefix, defaultOwner);
+  registerArraySplitIntoChunksFunctions<Generic<T1>>(prefix, defaultOwner);
 }
 } // namespace facebook::velox::functions

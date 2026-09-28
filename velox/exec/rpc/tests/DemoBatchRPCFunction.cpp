@@ -55,7 +55,8 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode /*instruction*/) {}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(
@@ -196,12 +197,19 @@ AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
   if (responses.empty()) {
     return CongestionSignal::kNone;
   }
+  bool hasNonOverloadError{false};
   for (const auto& response : responses) {
-    if (response.hasError()) {
-      return CongestionSignal::kError;
+    if (!response.hasError()) {
+      continue;
     }
+    if (response.errorKind() == velox::rpc::RPCErrorKind::kRateLimited ||
+        response.errorKind() == velox::rpc::RPCErrorKind::kTimeout) {
+      return CongestionSignal::kOverloaded;
+    }
+    hasNonOverloadError = true;
   }
-  return CongestionSignal::kSuccess;
+  return hasNonOverloadError ? CongestionSignal::kNonOverloadError
+                             : CongestionSignal::kSuccess;
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>

@@ -21,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 
 #include "velox/dwio/nimble/common/Constants.h"
@@ -142,7 +143,9 @@ class EncodingSelection {
   /// triggering a new encoding selection operation for the nested data and
   /// recursively encoding internal nested stream (if further nested encodings
   /// are selected).
-  template <typename NestedT>
+  /// LogicalT preserves a floating-point type when the selected child is ALP
+  /// or ALPRD. Selection and all other child encodings continue to use NestedT.
+  template <typename NestedT, typename LogicalT = NestedT>
   std::string_view encodeNested(
       NestedEncodingIdentifier nestedEncodingIdentifier,
       std::span<const NestedT> values,
@@ -234,7 +237,7 @@ std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
 } // namespace
 
 template <typename T>
-template <typename NestedT>
+template <typename NestedT, typename LogicalT>
 std::string_view EncodingSelection<T>::encodeNested(
     NestedEncodingIdentifier nestedEncodingIdentifier,
     std::span<const NestedT> values,
@@ -251,14 +254,21 @@ std::string_view EncodingSelection<T>::encodeNested(
   auto statistics = Statistics<NestedT>::create(values);
   auto selectionResult = nestedPolicy->select(values, statistics, options);
 
+  EncodingSelection<NestedT> nestedSelection{
+      std::move(selectionResult),
+      std::move(statistics),
+      std::move(nestedPolicy)};
+  if constexpr (isFloatingPointType<LogicalT>()) {
+    static_assert(
+        std::is_same_v<NestedT, typename TypeTraits<LogicalT>::physicalType>);
+    if (nestedSelection.encodingType() == EncodingType::ALP ||
+        nestedSelection.encodingType() == EncodingType::ALPRD) {
+      return EncodingFactory::encode<LogicalT>(
+          std::move(nestedSelection), values, buffer, options);
+    }
+  }
   return EncodingFactory::encode<NestedT>(
-      EncodingSelection<NestedT>{
-          std::move(selectionResult),
-          std::move(statistics),
-          std::move(nestedPolicy)},
-      values,
-      buffer,
-      options);
+      std::move(nestedSelection), values, buffer, options);
 }
 
 } // namespace facebook::nimble

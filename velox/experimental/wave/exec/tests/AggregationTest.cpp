@@ -62,7 +62,7 @@ TEST_F(AggregationTest, DISABLED_singleKeySingleAggregate) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(kSize, [](int i) { return i % 3; }),
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto plan = PlanBuilder()
                   .values({vector})
@@ -79,7 +79,7 @@ TEST_F(AggregationTest, DISABLED_singleKeyMultiAggregate) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(kSize, [](int i) { return i % 3; }),
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto plan =
       PlanBuilder()
@@ -103,7 +103,7 @@ TEST_F(AggregationTest, DISABLED_multiKeySingleAggregate) {
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(kSize, [](int i) { return i % 2; }),
       makeFlatVector<int64_t>(kSize, [](int i) { return i % 3; }),
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto plan = PlanBuilder()
                   .values({vector})
