@@ -18,8 +18,8 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
@@ -128,7 +128,7 @@ namespace facebook::velox::dwrf {
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
 
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
 

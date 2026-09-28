@@ -27,8 +27,8 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -49,7 +49,6 @@
 #include "velox/common/io/IoStatistics.h"
 
 namespace facebook::velox::dwrf {
-using facebook::velox::test::makeAllFieldsScanSpec;
 
 namespace {
 
@@ -178,7 +177,7 @@ TEST_F(TestReader, currentStripe) {
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch = BaseVector::create(getFlatmapSchema(), 0, pool());
   ASSERT_GT(rowReader->next(1000, batch), 0);
@@ -316,7 +315,7 @@ void verifyFlatMapReading(
 
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(std::make_shared<ColumnSelector>(getFlatmapSchema()));
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto reader = DwrfReader::create(
       createFileBufferedInput(file, readerOpts.memoryPool()), readerOpts);
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
@@ -440,7 +439,7 @@ TEST_F(TestFlatMapReader, testReadFlatMapEmptyMap) {
          id:int,\
      mapcol:map<int,int>>"));
   rowReaderOpts.select(std::make_shared<ColumnSelector>(emptyFileType));
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*emptyFileType));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*emptyFileType));
   auto reader = DwrfReader::create(
       createFileBufferedInput(emptyFile, readerOpts.memoryPool()), readerOpts);
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
@@ -469,7 +468,7 @@ TEST_F(TestFlatMapReader, testStringKeyLifeCycle) {
   FlatVectorPtr<StringView> rowFieldString;
   {
     RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+    rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
 
     auto reader = DwrfReader::create(
         createFileBufferedInput(getFMSmallFile(), readerOptions.memoryPool()),
@@ -591,7 +590,7 @@ TEST_P(TestFlatMapReaderFlatLayout, testCompare) {
       readerOptions);
   RowReaderOptions rowReaderOptions;
   auto param = GetParam();
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   rowReaderOptions.setReturnFlatVector(false);
   auto rowReader = reader->createRowReader(rowReaderOptions);
   rowReaderOptions.setReturnFlatVector(true);
@@ -631,7 +630,7 @@ TEST_F(TestReader, testReadFlatMapWithKeyFilters) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
-  auto scanSpec = makeAllFieldsScanSpec(*getFlatmapSchema());
+  auto scanSpec = ScanSpec::allFieldsRoot(*getFlatmapSchema());
   scanSpec->childByName("map1")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1}, false));
@@ -694,7 +693,7 @@ TEST_F(TestReader, testReadFlatMapWithKeyRejectList) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
-  auto scanSpec = makeAllFieldsScanSpec(*getFlatmapSchema());
+  auto scanSpec = ScanSpec::allFieldsRoot(*getFlatmapSchema());
   scanSpec->childByName("map1")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(std::make_unique<common::NegatedBigintRange>(2, 3, false));
@@ -803,7 +802,7 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
       readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   // We didn't preload first stripe, so we expect metric to not be populated yet
   EXPECT_EQ(metricToIncrement, std::nullopt);
@@ -850,7 +849,7 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredNonBlocking) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
       readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   EXPECT_EQ(metricToIncrement, std::nullopt);
   VectorPtr batch = BaseVector::create(getFlatmapSchema(), 0, pool());
@@ -903,7 +902,7 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
       readerOpts);
   EXPECT_EQ(metricToIncrement, std::nullopt);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*getFlatmapSchema()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   // Expect metric has now been populated, due to the initial blocking IO of
   // loadCurrentStripe()
@@ -1509,7 +1508,7 @@ std::pair<std::unique_ptr<DwrfReader>, RowVectorPtr> readWithColumnMapping(
 
   // Read all columns using the reader's (possibly renamed) schema.
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr result = BaseVector::create(reader->rowType(), 0, &pool);
   rowReader->next(fileData->size(), result);
@@ -1671,7 +1670,7 @@ TEST_F(TestReader, testStripeSizeCallback) {
           getExampleFilePath("dict_encoded_strings.orc"),
           readerOpts.memoryPool()),
       readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*requestedType));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*requestedType));
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
   EXPECT_EQ(stripeCount, 3);
   EXPECT_EQ(numCalls, 1);
@@ -1703,7 +1702,7 @@ TEST_F(TestReader, testStripeSizeCallbackLimitsOneStripe) {
           getExampleFilePath("dict_encoded_strings.orc"),
           readerOpts.memoryPool()),
       readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*requestedType));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*requestedType));
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
   EXPECT_EQ(stripeCount, 1);
   EXPECT_EQ(numCalls, 1);
@@ -1735,7 +1734,7 @@ TEST_F(TestReader, testStripeSizeCallbackLimitsTwoStripe) {
           getExampleFilePath("dict_encoded_strings.orc"),
           readerOpts.memoryPool()),
       readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*requestedType));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*requestedType));
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
   EXPECT_EQ(stripeCount, 2);
   EXPECT_EQ(numCalls, 1);
@@ -2127,7 +2126,7 @@ FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
   auto [writer, reader] =
       createWriterReader(inputs, pool, dataIoStats, metadataIoStats, config);
   auto schema = asRowType(inputs.front()->type());
-  auto scanSpec = makeAllFieldsScanSpec(*schema);
+  auto scanSpec = ScanSpec::allFieldsRoot(*schema);
   scanSpec->childByName("c0")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(std::move(keyFilter));
@@ -2160,7 +2159,7 @@ TEST_F(TestReader, setRowNumberColumnInfo) {
   auto [writer, reader] =
       createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   RowNumberColumnInfo rowNumberColumnInfo;
@@ -2190,7 +2189,7 @@ TEST_F(TestReader, reuseRowNumberColumn) {
       createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*schema));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*schema));
   RowNumberColumnInfo rowNumberColumnInfo;
   rowNumberColumnInfo.insertPosition = 1;
   rowNumberColumnInfo.name = "";
@@ -2291,7 +2290,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
   auto schema = asRowType(data->type());
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("c0")->childByName("a")->setFilter(
       std::make_unique<common::BigintRange>(
           0, std::numeric_limits<int64_t>::max(), false));
@@ -2344,7 +2343,7 @@ TEST_F(TestReader, readFlatMapsSomeEmpty) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
 
   auto schema = asRowType(row->type());
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("a")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1, 2, 3}, false));
@@ -2410,7 +2409,7 @@ TEST_F(TestReader, readFlatMapsWithNullMaps) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
 
   auto schema = asRowType(row->type());
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("a")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1, 2, 3}, false));
@@ -2469,7 +2468,7 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
     auto schema = asRowType(input->type());
 
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*schema));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*schema));
     rowReaderOpts.setPreserveFlatMapsInMemory(true);
 
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -2725,7 +2724,7 @@ TEST_F(TestReader, readFlatMapMultiStripeDifferentKeys) {
   auto schema = asRowType(stripe1->type());
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*schema));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*schema));
   rowReaderOpts.setPreserveFlatMapsInMemory(true);
 
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -2772,7 +2771,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
 
   auto schema = asRowType(row->type());
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   // Create a filter that will filter out all rows in the first batch.
   spec->childByName("c0")->setFilter(std::make_unique<common::IsNotNull>());
   RowReaderOptions rowReaderOpts;
@@ -2830,7 +2829,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
       // for first batch.
       E2EWriterTestUtil::simpleFlushPolicyFactory(false));
   auto rowType = reader->rowType();
-  auto spec = makeAllFieldsScanSpec(*rowType);
+  auto spec = ScanSpec::allFieldsRoot(*rowType);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -2881,7 +2880,7 @@ TEST_F(TestReader, missingSubfieldsNoResultReusing) {
       createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = ROW({{"c0", ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}})}});
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*schema));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*schema));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto actual = BaseVector::create(schema, 0, pool());
   // Hold a second reference to result so it cannot be reused.
@@ -2908,7 +2907,7 @@ TEST_F(TestReader, selectiveStringDirectFastPath) {
   auto [writer, reader] =
       createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = asRowType(batch->type());
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   spec->childByName("c0")->setFilter(common::createBigintValues({1}, false));
@@ -2934,7 +2933,7 @@ TEST_F(TestReader, selectiveStringDirect) {
   auto [writer, reader] =
       createWriterReader({batch}, pool(), dataIoStats_, metadataIoStats_);
   auto schema = asRowType(batch->type());
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   spec->childByName("c0")->setFilter(common::createBigintValues({1}, false));
@@ -2959,7 +2958,7 @@ TEST_F(TestReader, selectiveFlatMapFastPathAllInlinedStringKeys) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_, config);
   auto schema = asRowType(row->type());
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*schema));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*schema));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch = BaseVector::create(schema, 0, pool());
   ASSERT_EQ(rowReader->next(10, batch), 2);
@@ -3019,7 +3018,7 @@ TEST_F(TestReader, mapAsStruct) {
   auto [writer, reader] =
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
-  auto spec = makeAllFieldsScanSpec(*outType);
+  auto spec = ScanSpec::allFieldsRoot(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
@@ -3047,7 +3046,7 @@ TEST_F(TestReader, mapAsStructFilterAfterRead) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType =
       ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
-  auto spec = makeAllFieldsScanSpec(*outType);
+  auto spec = ScanSpec::allFieldsRoot(*outType);
   auto* c0Spec = spec->childByName("c0");
   c0Spec->setFlatMapAsStruct(true);
   c0Spec->setFilter(std::make_shared<common::IsNotNull>());
@@ -3090,7 +3089,7 @@ TEST_F(TestReader, mapAsStructNullChildrenWithReuse) {
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType =
       ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
-  auto spec = makeAllFieldsScanSpec(*outType);
+  auto spec = ScanSpec::allFieldsRoot(*outType);
   auto* c0Spec = spec->childByName("c0");
   c0Spec->setFlatMapAsStruct(true);
   c0Spec->setFilter(std::make_shared<common::IsNotNull>());
@@ -3121,7 +3120,7 @@ TEST_F(TestReader, mapAsStructAllEmpty) {
   auto [writer, reader] =
       createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
   auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
-  auto spec = makeAllFieldsScanSpec(*outType);
+  auto spec = ScanSpec::allFieldsRoot(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
@@ -3156,7 +3155,7 @@ TEST_F(TestReader, mapAsStructKeySubsetExtraction) {
   // Project only keys "3" and "1"; keys 2, 4, 5 are unprojected and must be
   // filtered out of the element decode.
   auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
-  auto spec = makeAllFieldsScanSpec(*outType);
+  auto spec = ScanSpec::allFieldsRoot(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
@@ -3252,7 +3251,7 @@ DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setParallelUnitLoadCount(2);
     rowReaderOpts.setIOExecutor(ioExecutor.get());
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
@@ -3300,7 +3299,7 @@ TEST_F(TestReader, extractionTransformMapKeys) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
 
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kKeys);
@@ -3335,7 +3334,7 @@ TEST_F(TestReader, extractionTransformAfterScanSpecReorder) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*asRowType(data->type()));
+  auto spec = ScanSpec::allFieldsRoot(*asRowType(data->type()));
   spec->childByName("constant")
       ->setConstantValue(BaseVector::createNullConstant(BIGINT(), 1, pool()));
   spec->childByName("id")->setFilter(
@@ -3431,7 +3430,7 @@ TEST_F(TestReader, extractionTransformSize) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
 
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
@@ -3473,7 +3472,7 @@ TEST_F(TestReader, extractionMapKeySizeWithSeek) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
@@ -3509,7 +3508,7 @@ TEST_F(TestReader, extractionTransformMapValuesStructField) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
 
   using connector::hive::applyExtractionChain;
   using connector::hive::configureExtractionScanSpec;
@@ -3578,7 +3577,7 @@ TEST_F(TestReader, extractionSizeResultVectorReuse) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
@@ -3630,7 +3629,7 @@ TEST_F(TestReader, extractionMapKeysMultipleBatches) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kKeys);
 
@@ -3685,7 +3684,7 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
   spec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kKeys);
 
@@ -3747,10 +3746,10 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
     return ioStats->rawBytesRead();
   };
 
-  auto fullSpec = makeAllFieldsScanSpec(*schema);
+  auto fullSpec = ScanSpec::allFieldsRoot(*schema);
   auto fullBytes = runWithSpec(fullSpec);
 
-  auto extSpec = makeAllFieldsScanSpec(*schema);
+  auto extSpec = ScanSpec::allFieldsRoot(*schema);
   extSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kKeys);
   auto extBytes = runWithSpec(extSpec);
@@ -3778,7 +3777,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   auto schema = ROW({{"a", mapType}, {"b", INTEGER()}});
 
   // Build the ScanSpec.
-  auto spec = makeAllFieldsScanSpec(*schema);
+  auto spec = ScanSpec::allFieldsRoot(*schema);
 
   // Build extraction.
   using connector::hive::configureExtractionScanSpec;
@@ -3869,7 +3868,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   // applied to the column's spec (not the root), so we configure "a"'s
   // spec directly with the sub-chain after StructField("a").
   using connector::hive::applyExtractionChain;
-  auto readSpec = makeAllFieldsScanSpec(*schema);
+  auto readSpec = ScanSpec::allFieldsRoot(*schema);
   auto* readASpec = readSpec->childByName("a");
 
   // Sub-chain starting from the MAP type: [MapValues, AE, SF("y"), Size].
@@ -3991,11 +3990,11 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   };
 
   // Full scan: read all columns.
-  auto fullSpec2 = makeAllFieldsScanSpec(*schema);
+  auto fullSpec2 = ScanSpec::allFieldsRoot(*schema);
   auto fullBytes = runLargeWithSpec(fullSpec2);
 
   // Extraction scan with nested pushdown.
-  auto extSpec2 = makeAllFieldsScanSpec(*schema);
+  auto extSpec2 = ScanSpec::allFieldsRoot(*schema);
   configureExtractionScanSpec(schema, extractions, *extSpec2, pool());
   extSpec2->childByName("b")->setConstantValue(
       BaseVector::createNullConstant(INTEGER(), 1, pool()));

@@ -19,8 +19,8 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -203,7 +203,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
     return reader->createRowReader(rowReaderOpts);
   }
 

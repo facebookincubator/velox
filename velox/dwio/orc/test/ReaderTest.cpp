@@ -17,7 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/io/IoStatistics.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -62,7 +62,7 @@ TEST_F(OrcReaderTest, testOrcReaderSimple) {
       createFileBufferedInput(simpleTest, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
@@ -104,7 +104,7 @@ TEST_F(OrcReaderTest, testOrcReaderComplexTypes) {
   EXPECT_TRUE(rowType->equivalent(*expectedType));
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
   VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
 
@@ -124,7 +124,7 @@ TEST_F(OrcReaderTest, testOrcReaderVarchar) {
       createFileBufferedInput(varcharOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
@@ -160,7 +160,7 @@ TEST_F(OrcReaderTest, testOrcReaderDate) {
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
@@ -209,7 +209,7 @@ TEST_F(OrcReaderTest, testOrcReadAllType) {
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch = BaseVector::create(reader->rowType(), 0, pool());
@@ -434,7 +434,7 @@ TEST_P(
   EXPECT_EQ(GetParam().userMeta.size(), reader->getMetadataKeys().size());
 
   RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOptions.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   for (std::map<std::string, std::string>::const_iterator itr =

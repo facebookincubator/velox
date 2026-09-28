@@ -29,7 +29,6 @@ velox_add_test_headers(
   E2EFilterTestBase.h
   FilterGenerator.h
   RuntimeStatsInjectingWriter.h
-  ScanSpecUtils.h
   UnitLoaderTestTools.h
 )
 

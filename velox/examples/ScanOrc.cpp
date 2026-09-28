@@ -65,8 +65,7 @@ int main(int argc, char** argv) {
                             readerOpts.memoryPool()),
                         readerOpts);
 
-  auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("<root>");
-  scanSpec->addAllChildFields(*reader->rowType());
+  auto scanSpec = ScanSpec::allFieldsRoot(*reader->rowType());
   RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOptions);

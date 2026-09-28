@@ -22,11 +22,11 @@
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/MapBuilder.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -46,7 +46,6 @@ using namespace facebook::velox::dwrf::encryption;
 using namespace facebook::velox::type::fbhive;
 using namespace facebook::velox;
 using facebook::velox::memory::MemoryPool;
-using facebook::velox::test::makeAllFieldsScanSpec;
 using folly::Random;
 
 constexpr uint64_t kSizeMB = 1024UL * 1024UL;
@@ -117,7 +116,7 @@ class E2EWriterTest : public testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
     bool preload = true;
@@ -183,7 +182,7 @@ class E2EWriterTest : public testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
@@ -707,7 +706,7 @@ TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
   bool preload = true;
@@ -1297,7 +1296,7 @@ class E2EEncryptionTest : public E2EWriterTest {
   void validateFileContent(
       const ::facebook::velox::dwrf::DwrfReader& reader) const {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader.rowType()));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader.rowType()));
     auto rowReader = reader.createRowReader(rowReaderOpts);
     // make sure size estimate works
     ASSERT_GT(rowReader->estimatedRowSize(), 0);
@@ -1366,7 +1365,7 @@ TEST_F(E2EEncryptionTest, encryptRoot) {
   }
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
@@ -1449,7 +1448,7 @@ TEST_F(E2EEncryptionTest, encryptSelectedFields) {
   }
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(makeAllFieldsScanSpec(*reader->rowType()));
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding

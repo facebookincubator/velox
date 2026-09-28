@@ -23,8 +23,8 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
@@ -210,7 +210,7 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
     }
     outputType = ROW(schemaRow.names(), outputChildren);
   }
-  auto scanSpec = makeAllFieldsScanSpec(*outputType);
+  auto scanSpec = ScanSpec::allFieldsRoot(*outputType);
   if (asStruct) {
     for (const auto& name : outputType->names()) {
       scanSpec->childByName(name)->setFlatMapAsStruct(true);
