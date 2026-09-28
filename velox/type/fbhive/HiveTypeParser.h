@@ -59,6 +59,8 @@ enum class TokenType {
   Time,
   LeftRoundBracket,
   RightRoundBracket,
+  // "void" is the Hive/Presto serialization of the Iceberg V3 unknown type.
+  Void,
   MaxTokenType
 };
 

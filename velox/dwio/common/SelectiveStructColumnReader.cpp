@@ -354,6 +354,18 @@ void SelectiveStructColumnReaderBase::next(
       break;
     }
   }
+  if (!result) {
+    // requestedType_ is always a ROW type for a struct reader; verified by
+    // the VELOX_CHECK in getValues.  For zero-column row groups the type is
+    // ROW({}, {}) and children is empty.
+    VELOX_DCHECK(requestedType_->isRow());
+    result = std::make_shared<RowVector>(
+        pool_,
+        requestedType_,
+        nullptr,
+        0,
+        std::vector<VectorPtr>(requestedType_->asRow().size()));
+  }
   prepareResult(result);
   auto* resultRowVector = result->asChecked<RowVector>();
   resultRowVector->unsafeResize(numValues);
