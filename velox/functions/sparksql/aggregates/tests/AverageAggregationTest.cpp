@@ -376,8 +376,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize,
              folly::identity,
              [](auto row) { return row % 7 == 0; }),
-         makeFlatVector<int64_t>(kBatchSize, folly::identity),
-         makeFlatVector<double>(kBatchSize, folly::identity),
+         makeFlatIdentityVector<int64_t>(kBatchSize),
+         makeFlatIdentityVector<double>(kBatchSize),
          makeFlatVector<bool>(
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }

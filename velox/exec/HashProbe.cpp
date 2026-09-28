@@ -661,8 +661,7 @@ std::vector<HashProbe*> HashProbe::findPeerOperators() {
   std::vector<HashProbe*> probeOps;
   probeOps.reserve(operators.size());
   for (auto* op : operators) {
-    auto* probeOp = dynamic_cast<HashProbe*>(op);
-    probeOps.push_back(probeOp);
+    probeOps.push_back(op->as<HashProbe>());
   }
   return probeOps;
 }
@@ -1981,7 +1980,7 @@ void HashProbe::noMoreInputInternal() {
   }
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
 
   // Reset flags about outputting build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
@@ -1997,12 +1996,10 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
+  if (!operatorCtx_->allPeersFinished(
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peerOperators)) {
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
