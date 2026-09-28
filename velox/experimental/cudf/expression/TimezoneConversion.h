@@ -40,8 +40,8 @@ namespace facebook::velox::cudf_velox {
 /// The offset comes from a per-zone transition table built from Velox's own
 /// time zone database (the same source the CPU path uses) and cached for the
 /// process lifetime; a sorted search (cudf::upper_bound) + cudf::gather selects
-/// each row's offset and cudf::binary_operation adds it. Instants after the
-/// last codified transition reuse its offset.
+/// each row's offset and cudf::binary_operation adds it. Named-zone instants
+/// beyond the materialized transition window use the host time zone database.
 ///
 /// Null rows propagate. This is the inverse of toUtcTimestamp.
 std::unique_ptr<cudf::column> toLocalTimestamp(

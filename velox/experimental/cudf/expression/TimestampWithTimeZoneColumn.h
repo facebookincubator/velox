@@ -81,11 +81,9 @@ std::unique_ptr<cudf::column> tswtzLocalWallClock(
 /// Converts a per-row local wall-clock column back to UTC instants
 /// (TIMESTAMP_MILLISECONDS), applying each row's own zone. localMillisTs is a
 /// TIMESTAMP_MILLISECONDS local column; perRowZoneKey/distinctKeys identify
-/// each row's zone (from tswtzZoneKey/tswtzDistinctZoneKeys). When
-/// correctForward is false a spring-forward-gap local time throws (matches
-/// Timestamp::toGMT); when true it snaps forward to the post-transition instant
-/// (matches addToTimestampWithTimezone). Overlaps always resolve to the
-/// earliest instant.
+/// each row's zone (from tswtzZoneKey/tswtzDistinctZoneKeys). correctForward
+/// must be false. A spring-forward-gap local time throws, matching
+/// Timestamp::toGMT, and overlaps resolve to the earliest instant.
 std::unique_ptr<cudf::column> tswtzLocalToUtc(
     const cudf::column_view& localMillisTs,
     const cudf::column_view& perRowZoneKey,

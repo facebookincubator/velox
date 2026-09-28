@@ -245,8 +245,8 @@ std::unique_ptr<cudf::column> tswtzLocalToUtc(
         stream,
         get_temp_mr());
     const auto zoneName = tz::getTimeZoneName(zoneKey);
-    // correctForward is wired to toUtcTimestampCorrecting in Phase 4
-    // (date_add(TSWTZ)); Phase 2 (date_trunc) only uses the throwing path.
+    // This implementation supports only Timestamp::toGMT's throwing gap
+    // policy.
     VELOX_CHECK(
         !correctForward, "gap-correcting local-to-UTC is not yet implemented");
     auto utc =

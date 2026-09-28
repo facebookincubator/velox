@@ -294,16 +294,9 @@ TEST_F(TimezoneFunctionTest, timezoneHourYear2401Winter) {
   assertMatchesCpu("timezone_hour(c0)", input);
 }
 
-// Widening the materialized window moves its edges; it does not remove them. An
-// instant outside the window in either direction must still get the offset CPU
-// gives, since a 52-bit millis field reaches roughly year 71,000 and tzdb
-// answers from recurring rules with no horizon.
-//
-// Above the end, the lookup used to fold onto the final interval and lose
-// daylight saving. Below the start it is worse than wrong: the index is
-// `upper_bound - 1`, so an instant before the first transition yields -1 and
-// the gather runs with out_of_bounds_policy::DONT_CHECK. The existing pre-1970
-// case uses 1938, which is inside the window, so nothing covered this.
+// The materialized transition table has finite edges, while a 52-bit millis
+// field reaches roughly year 71,000. Instants outside the table window must use
+// tzdb's recurring rules and still return the same offset as CPU.
 TEST_F(TimezoneFunctionTest, timezoneHourBeyondWindowEndSummer) {
   // 12000-07-15T12:00:00Z.
   auto input =
@@ -406,14 +399,9 @@ TEST_F(TimezoneFunctionTest, timezoneMinute) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
-// Reproducers: timezone_hour/timezone_minute must return NULL for a NULL row,
-// matching CPU (a plain call() -> NULL for NULL). The GPU offset primitive
-// (utcOffsetSeconds) builds an all-valid column via make_column_from_scalar /
-// gather and never re-applies the input mask (TimezoneConversion.h documents
-// the all-valid contract), so the field functions' scalar DIV/MOD yield 0
-// instead of NULL. Red until the input validity is carried onto the offset
-// column. The single-row tests above use non-null inputs and so never exercise
-// this.
+// timezone_hour/timezone_minute must return NULL for a NULL row, matching CPU.
+// This verifies that the input validity is carried onto the per-row offset
+// column before the field functions apply scalar DIV/MOD.
 TEST_F(TimezoneFunctionTest, timezoneHourPropagatesNull) {
   auto input =
       timestampWithTimeZoneAndNullInput(1'609'466'400'000, "Asia/Kolkata");
@@ -426,10 +414,8 @@ TEST_F(TimezoneFunctionTest, timezoneMinutePropagatesNull) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
-// Reproducers: a TSWTZ column mixing zone keys must be handled per row (CPU
-// unpacks each row's own key). The GPU's uniformZoneKey VELOX_USER_CHECK-fails
-// on mixed zones (the "one zone per column" limitation). Red until the per-row
-// offset path lands.
+// A TSWTZ column mixing zone keys must be handled per row, matching CPU's use
+// of each row's own key.
 TEST_F(TimezoneFunctionTest, timezoneHourMixedZones) {
   auto input = twoZoneTimestampWithTimeZoneInput(
       1'609'466'400'000,
@@ -481,18 +467,15 @@ TEST_F(TimezoneFunctionTest, toIso8601FromTimestampWithTimeZone) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
-// Reproducer for the zero-offset divergence: to_iso8601 of a UTC/GMT instant
-// must render a trailing 'Z', matching CPU (ToISO8601Function passes
-// zeroOffsetText="Z"). The GPU's formatOffsetStrings has no zero-offset branch
-// and emits '+00:00'. Red until the 'Z' branch is added. (The only other
-// to_iso8601 test uses a non-zero offset, so it does not exercise this.)
+// to_iso8601 of a UTC/GMT instant must render a trailing 'Z', matching CPU's
+// zeroOffsetText="Z" behavior.
 TEST_F(TimezoneFunctionTest, toIso8601RendersZForZeroOffset) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "UTC");
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
 // to_iso8601 over mixed zones: each row renders its own offset (LA -08:00 vs
-// Kolkata +05:30 on the same UTC instant). Red until the per-row offset lands.
+// Kolkata +05:30 on the same UTC instant).
 TEST_F(TimezoneFunctionTest, toIso8601MixedZones) {
   auto input = twoZoneTimestampWithTimeZoneInput(
       1'609'466'400'000,
@@ -502,15 +485,9 @@ TEST_F(TimezoneFunctionTest, toIso8601MixedZones) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
-// Contract/regression test: an entirely-NULL TIMESTAMP WITH TIME ZONE column
-// must yield an all-NULL result like CPU. uniformZoneKey reduces min/max over
-// the (all-null) zone-key column; reduce excludes nulls, so its scalars come
-// back invalid and value() would be a meaningless device read (UB) before
-// VELOX_USER_CHECK_EQ(lo, hi). uniformZoneKey guards null_count() == size() and
-// defaults to GMT (key 0), as the empty-column path does. This is not a
-// differential RED for the UB -- the bad read happens to yield 0/GMT in this
-// environment, so the output is already correct -- so it instead pins the
-// all-null -> all-null contract and guards against the guard's removal.
+// An entirely-NULL TIMESTAMP WITH TIME ZONE column must yield an all-NULL
+// result like CPU. uniformZoneKey must handle this before reading the invalid
+// min/max reduction scalars and use the same GMT default as an empty column.
 TEST_F(TimezoneFunctionTest, toIso8601AllNullColumn) {
   assertMatchesCpu("to_iso8601(c0)", allNullTimestampWithTimeZoneInput());
 }
@@ -535,20 +512,16 @@ TEST_F(TimezoneFunctionTest, formatDatetimeMixedZones) {
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ')", input);
 }
 
-// Reproducers for the Joda zone-token divergences. CPU (DateTimeFormatter)
-// distinguishes the run length and letter; the GPU collapses Z/z into one flag
-// and always emits '+HH:MM'. Only the (correct) ZZ case is covered above. Each
-// is red until jodaToStrftime threads the run length and letter.
+// Joda DateTimeFormatter distinguishes timezone tokens by run length and
+// letter. These cases pin the forms not covered by the ZZ test above.
 
-// Single 'Z' renders the offset WITHOUT a colon (e.g. +0530) on CPU
-// (appendTimezoneOffset, includeColon=false); the GPU emits +05:30.
+// Single 'Z' renders the offset without a colon (e.g. +0530).
 TEST_F(TimezoneFunctionTest, formatDatetimeSingleZNoColon) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z')", input);
 }
 
-// 'ZZZ' (3+ repeats) renders the zone id (Asia/Kolkata) on CPU; the GPU emits
-// the numeric offset.
+// 'ZZZ' (3+ repeats) renders the zone id (Asia/Kolkata).
 TEST_F(TimezoneFunctionTest, formatDatetimeZoneIdToken) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZZ')", input);
@@ -557,8 +530,7 @@ TEST_F(TimezoneFunctionTest, formatDatetimeZoneIdToken) {
 // format_datetime zone-id token ('ZZZ' -> zone name) over mixed zones: each row
 // renders its own zone name (America/Los_Angeles vs Asia/Kolkata) via
 // perRowZoneName. formatDatetimeZoneIdToken above covers only a single zone;
-// this pins the per-row name path the owner scoped into this PR. Red until
-// perRowZoneName replaces the uniformZoneKey single-name render.
+// this pins the per-row name path.
 TEST_F(TimezoneFunctionTest, formatDatetimeZoneIdMixedZones) {
   auto input = twoZoneTimestampWithTimeZoneInput(
       1'609'466'400'000,
@@ -579,18 +551,15 @@ TEST_F(TimezoneFunctionTest, formatDatetimeZoneNameTokenUnsupportedOnGpu) {
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
-// Reproducers for the Joda fractional-second run length. CPU
-// (formatFractionOfSecond) renders exactly <run length> digits: a single 'S'
-// is 1 digit, 'SSSSSS' is 6. The GPU's jodaToStrftime maps any 'S' run to
-// "%3f" (3 digits), so single-'S' and 6-'S' diverge while 'SSS' happens to
-// match. Red until the run length feeds the "%<n>f" width. The 123 ms
-// sub-second instant makes the fractional digits observable.
+// Joda formatFractionOfSecond renders exactly <run length> digits: a single
+// 'S' is 1 digit and 'SSSSSS' is 6. The 123 ms sub-second instant makes the
+// fractional digits observable.
 TEST_F(TimezoneFunctionTest, formatDatetimeFractionSingleDigit) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'123, "Asia/Kolkata");
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.S')", input);
 }
 
-// 'SSS' -> 3 digits; matches the GPU's current %3f (control case, stays green).
+// 'SSS' -> 3 digits.
 TEST_F(TimezoneFunctionTest, formatDatetimeFractionMillis) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'123, "Asia/Kolkata");
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.SSS')", input);
@@ -619,18 +588,11 @@ std::string jodaLiteral(const std::string& jodaFormat) {
 }
 
 // Joda quotes a literal run with single quotes and escapes a literal quote by
-// doubling it, and CPU implements that in numLiteralChars plus the literal
-// branch of buildJodaDateTimeFormatter. The GPU's quote loop ends the literal
-// at the first quote it sees, so a doubled quote terminates the run instead of
-// producing one, and "''" alone produces nothing. Literal bytes also reach cuDF
-// unescaped, where '%' starts a specifier: "'%d'" renders the day of month
-// instead of the text, and a bare '%' escapes as a raw std::invalid_argument
-// rather than a Velox user error. Red until literals follow CPU's rule and
-// every literal byte is emitted through one escaping step.
+// doubling it. Literal '%' bytes must also be escaped before the format reaches
+// cuDF, where '%' introduces a format specifier.
 //
 // The formats use yyyy rather than y: Joda prints a single 'y' as the full year
-// while the GPU maps a short run to "%y", which is T18's field-width gap and
-// would make these red for an unrelated reason.
+// while a short run maps to "%y", which has different field-width semantics.
 TEST_F(TimezoneFunctionTest, formatDatetimeQuotedLiteralsMatchCpu) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
   for (const auto& jodaFormat : std::vector<std::string>{
@@ -695,11 +657,9 @@ TEST_F(TimezoneFunctionTest, parseDatetimeQuotedLiteralWithOffsetMatchesCpu) {
 // (appendTimezoneOffset in functions/lib/DateTimeFormatter.cpp), and the colon
 // before them is unconditional -- it sits outside the includeColon guard, which
 // the buffer sizing corroborates by reserving 8 bytes for Joda 'Z' and 9 for
-// 'ZZ'. So 'Z' renders "-0456:02", with a colon it would not otherwise have.
-//
-// The GPU computes hours and minutes but never the remaining seconds, so each
-// of these renders a truncated offset. The instants are the ones CPU's own
-// to_iso8601 tests use, at local 10:00 on 0022-11-01.
+// 'ZZ'. Thus 'Z' renders "-0456:02", with a colon it would not otherwise have.
+// The instants are the ones CPU's own to_iso8601 tests use, at local 10:00 on
+// 0022-11-01.
 TEST_F(TimezoneFunctionTest, toIso8601SubMinuteOffsetKeepsSeconds) {
   assertMatchesCpu(
       "to_iso8601(c0)",
@@ -793,10 +753,8 @@ TEST_F(TimezoneFunctionTest, mixedZonesWithNullThroughBothProjections) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
-// A null constant zone or format makes the whole expression null on CPU. The
-// GPU read such a constant as the text "null", which for the integer arguments
-// then reached std::stoll and threw while the expression was being built --
-// before evaluation, so a try() could not catch it either.
+// A null constant zone or format makes the whole expression null. It must be
+// handled before parsing constant text or integer arguments.
 TEST_F(TimezoneFunctionTest, nullConstantArgumentYieldsNullLikeCpu) {
   auto zoned = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
   assertMatchesCpu("at_timezone(c0, cast(null as varchar))", zoned);
@@ -811,9 +769,8 @@ TEST_F(TimezoneFunctionTest, nullConstantArgumentYieldsNullLikeCpu) {
 }
 
 // CPU picks the zone the format parsed and falls back to the session zone only
-// when the format carried none (ParseDateTimeFunction::call). The GPU instead
-// rejected any non-UTC session outright, so a format stating its own offset --
-// where the session cannot matter -- failed for a reason that did not apply.
+// when the format carries none (ParseDateTimeFunction::call). An explicit
+// offset is therefore independent of the session timezone.
 //
 // Asserted through projections that read the zone key, since comparing
 // TIMESTAMP WITH TIME ZONE values ignores it.
@@ -872,14 +829,10 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeWithHoursMinutes) {
   assertMatchesCpu("from_unixtime(c0, 7, 30)", doubleInput(1'609'466'400.0));
 }
 
-// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset
-// as hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
-// (FromUnixtimeFunction) uses checkedMultiply/checkedPlus and throws; the GPU
-// registration multiplies unchecked, then casts to int32 -- on this platform
-// the UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts.
-// Red until the GPU mirrors CPU's checked arithmetic. compileExpression
-// succeeds on both (the CPU arithmetic error is a user error captured in
-// initialize() and re-thrown at eval); both throws carry "overflow".
+// from_unixtime(double, bigint, bigint) computes the fixed offset as hours*60 +
+// minutes with checked arithmetic. INT64_MAX hours must raise the same overflow
+// error as CPU. compileExpression succeeds on both because the CPU user error
+// is captured in initialize() and re-thrown at eval.
 TEST_F(TimezoneFunctionTest, fromUnixtimeHoursMinutesOverflowRejectedLikeCpu) {
   auto input = doubleInput(0.0);
   auto exprSet = compileExpression(
@@ -889,11 +842,8 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeHoursMinutesOverflowRejectedLikeCpu) {
   VELOX_ASSERT_THROW(evaluate(*exprSet, input), "overflow");
 }
 
-// Reproducer: from_unixtime of an out-of-range instant must throw to match CPU.
-// CPU pack() VELOX_USER_CHECKs the millis range and throws an overflow error;
-// the CPU suite asserts from_unixtime(2251799813685.248, 'GMT') throws. The GPU
-// shifts millis << 12 with no guard and silently overflows into the zone-key
-// bits. Red until the range/NaN check is added.
+// from_unixtime of an out-of-range instant must throw to match CPU's pack()
+// range check rather than overflow into the packed zone-key bits.
 TEST_F(TimezoneFunctionTest, fromUnixtimeOverflowRejectedLikeCpu) {
   auto input = doubleInput(2'251'799'813'685.248);
   auto exprSet =
@@ -901,9 +851,8 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeOverflowRejectedLikeCpu) {
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
-// Reproducer: from_unixtime(NaN) must map to the epoch like CPU, which returns
-// pack(0, zone) for a NaN unixtime, rather than reading a meaningless value out
-// of a float->int cast of NaN. Red until NaN is mapped to 0 before packing.
+// from_unixtime(NaN) must map to the epoch like CPU, which returns pack(0,
+// zone) rather than relying on a float-to-integer cast of NaN.
 TEST_F(TimezoneFunctionTest, fromUnixtimeNanMapsToEpochLikeCpu) {
   auto input = doubleInput(std::numeric_limits<double>::quiet_NaN());
   assertMatchesCpu("from_unixtime(c0, 'GMT')", input);
@@ -921,12 +870,12 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeInfinityRejectedLikeCpu) {
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
-// Reproducer for the two-overload rounding split. The (double, hours, minutes)
+// The two overloads intentionally use different rounding. The (double, hours,
+// minutes)
 // overload rounds via floor-seconds + a separate fractional llround (CPU's
 // no-zone fromUnixtime), differing from the varchar overload's llround(x*1000)
 // by up to 1 ms on negative-fractional input. For -0.0005 s the hours/minutes
-// overload yields 0 ms while the varchar overload yields -1 ms. The GPU uses
-// the varchar rounding for both, so the hours/minutes case is red.
+// overload yields 0 ms while the varchar overload yields -1 ms.
 TEST_F(
     TimezoneFunctionTest,
     fromUnixtimeHoursMinutesNegativeFractionalRounding) {
@@ -934,8 +883,7 @@ TEST_F(
   assertMatchesCpu("from_unixtime(c0, 0, 0)", input);
 }
 
-// Control: the varchar overload's llround(x*1000) already matches CPU for the
-// same negative-fractional input (-0.0005 -> -1 ms), so this stays green.
+// The varchar overload uses llround(x*1000), so -0.0005 maps to -1 ms.
 TEST_F(TimezoneFunctionTest, fromUnixtimeVarcharNegativeFractionalRounding) {
   auto input = doubleInput(-0.0005);
   assertMatchesCpu("from_unixtime(c0, 'GMT')", input);
@@ -950,10 +898,9 @@ TEST_F(TimezoneFunctionTest, parseDatetime) {
 
 // When the Joda format carries a colon offset token (ZZ), CPU folds the offset
 // into the UTC instant AND packs the parsed fixed-offset zone key, so
-// timezone_hour reports -9 and to_iso8601 prints -09:00. GPU currently packs
-// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that
-// read the zone key, since assertMatchesCpu on the TSWTZ value alone ignores
-// it.
+// timezone_hour reports -9 and to_iso8601 prints -09:00. Compare through
+// projections that read the zone key, since assertMatchesCpu on the TSWTZ
+// value alone ignores it.
 TEST_F(TimezoneFunctionTest, parseDatetimePreservesParsedOffset) {
   auto input = varcharInput("2021-01-01 02:00:00 -09:00");
   assertMatchesCpu(
@@ -971,15 +918,10 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
-// A colon offset used to lose its minutes. cuDF's "%z" is fixed-width
-// "+/-HHMM": it reads the two hour digits, then the two minute digits at a
-// fixed position, so a colon (Joda ZZ, "+05:30") landed where a minute digit
-// was expected and only "+05:00" reached the UTC instant, leaving it 30 minutes
-// off while the trailing-offset regex still recovered "+05:30" for the zone
-// key. The wall clock is now parsed without "%z" and the recovered offset
-// subtracted instead, which also reads the hours-only form "+05" that a
-// fixed-width specifier cannot. The -09:00 and -0900 tests above miss this
-// because their minute component is zero.
+// cuDF's "%z" is fixed-width "+/-HHMM" and cannot parse Joda's colon form
+// directly. The wall clock is parsed without "%z" and the recovered offset is
+// subtracted separately. A non-zero minute component makes this behavior
+// observable.
 TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
   auto input = varcharInput("2026-01-02 00:45:00 +05:30");
   assertMatchesCpu(
@@ -988,10 +930,8 @@ TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ'))", input);
 }
 
-// Control for the fix above: the no-colon form "+/-HHMM" with a non-zero minute
-// component is what cuDF's "%z" parses correctly, so this should stay green.
-// Pairs the offset with the single-Z token; both -09:00 (ZZ) and -0900 (Z) are
-// accepted by CPU regardless of the token's Z-count.
+// The no-colon form "+/-HHMM" with a non-zero minute component is accepted with
+// the single-Z token. CPU accepts both -09:00 (ZZ) and -0900 (Z).
 TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffsetWithMinutes) {
   auto input = varcharInput("2026-01-02 00:45:00 -0930");
   assertMatchesCpu(
@@ -1000,10 +940,8 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffsetWithMinutes) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
-// CPU's parseTimezoneOffset expands an hours-only offset "+05" to "+05:00".
-// cuDF's fixed-width "%z" expects five characters ("+/-HHMM") and the recovery
-// regex requires two minute digits, so the GPU cannot parse a three-character
-// offset. Red until the offset parsing accepts the hours-only form.
+// CPU's parseTimezoneOffset expands an hours-only offset "+05" to "+05:00";
+// the GPU path must accept the same three-character form.
 TEST_F(TimezoneFunctionTest, parseDatetimeHoursOnlyOffset) {
   auto input = varcharInput("2026-01-02 00:45:00 +05");
   assertMatchesCpu(
@@ -1034,12 +972,9 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNamedUtcAlias) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
-// parse_datetime hands its input straight to cudf::strings::to_timestamps,
-// which cuDF documents as undefined for a string that does not match the
-// format: it reads whatever digits sit at each field position and computes a
-// timestamp from them, so "2026-01-02 25:00:00" rolls into the next day rather
-// than failing. CPU raises a user error for every form below. Red until eval
-// validates its input.
+// cuDF documents to_timestamps behavior as undefined for strings that do not
+// match the format. Validate inputs first so malformed values raise the same
+// user error as CPU instead of being normalized or misread.
 TEST_F(TimezoneFunctionTest, parseDatetimeInvalidInputThrowsLikeCpu) {
   for (const auto& invalid : std::vector<std::string>{
            "not-a-date", // no timestamp at all
@@ -1071,14 +1006,9 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNullRowStaysNull) {
 // When the format carries a zone token, CPU accepts exactly six forms for it --
 // "+HH", "+HH:MM", "+HHMM", "Z", "UTC"/"UCT" and "GMT"/"GMT0" -- and resolves
 // each through tz::locateZone, where a failed lookup is a parse error
-// (DateTimeFormatter.cpp parseTimezoneOffset). The GPU recovered the offset
-// with a regex whose minute group was [0-9]{2} and treated a non-match as
-// offset 0, so "+05:99" became "+06:39" (399 minutes, inside the +/-840 the
-// magnitude check allows) and a garbled or absent offset silently became GMT.
-// Red until the trailing zone is required to be one of CPU's forms.
-// The shape regex covers the trailing zone, so a zone outside the forms CPU
-// accepts and a missing one are both reported as a format error rather than
-// each tripping a separate check.
+// (DateTimeFormatter.cpp parseTimezoneOffset). The shape regex covers the
+// trailing zone, so a zone outside the forms CPU accepts and a missing one are
+// both reported as a format error rather than treated as GMT.
 TEST_F(TimezoneFunctionTest, parseDatetimeInvalidOffsetThrowsLikeCpu) {
   for (const auto& invalid : std::vector<std::string>{
            "2021-01-01 02:00:00 +05:99", // offset minutes past 59
@@ -1131,52 +1061,43 @@ TEST_F(TimezoneFunctionTest, fromIso8601Timestamp) {
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00+05:30"));
 }
 
-// Reproducers: from_iso8601_timestamp must accept the ISO8601 shapes CPU does
-// (see DateTimeFunctionsTest.fromIso8601Timestamp). The GPU's rigid regex
-// requires a full yyyy-MM-ddTHH:mm:ss with a colon offset, so it rejects short
-// forms (-> NULL), discards sub-second digits, rejects hours-only offsets, and
-// loses the sign of offsets in (-1h, 0). Inputs without an embedded offset are
-// interpreted as GMT under the default session, matching CPU. Each is red until
-// the GPU parser matches CPU.
+// from_iso8601_timestamp accepts the same ISO8601 shapes as CPU (see
+// DateTimeFunctionsTest.fromIso8601Timestamp), including partial forms,
+// sub-second digits, hours-only offsets and sub-hour negative offsets. Inputs
+// without an embedded offset use the session timezone, which defaults to GMT.
 
-// Date-only: CPU -> midnight GMT; GPU regex needs a time component -> NULL.
+// Date-only input resolves to midnight GMT.
 TEST_F(TimezoneFunctionTest, fromIso8601DateOnly) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-01-01"));
 }
 
-// Minute precision (no seconds): CPU accepts; GPU regex needs seconds -> NULL.
+// Minute precision does not require a seconds field.
 TEST_F(TimezoneFunctionTest, fromIso8601MinutePrecision) {
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-02T11:38"));
 }
 
-// Sub-second digits: CPU preserves .123; GPU discards them (parses to seconds).
+// Sub-second digits are preserved.
 TEST_F(TimezoneFunctionTest, fromIso8601FractionalSeconds) {
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)",
       varcharInput("2021-01-01T02:00:00.123+05:30"));
 }
 
-// Hours-only offset: CPU expands +05 -> +05:00; GPU requires minutes -> NULL.
+// An hours-only offset expands from +05 to +05:00.
 TEST_F(TimezoneFunctionTest, fromIso8601HoursOnlyOffset) {
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00+05"));
 }
 
-// Offset in (-1h, 0): CPU keeps the sign (-00:30); GPU reads -00 as 0 and
-// yields +30 -- wrong instant and wrong zone key.
+// An offset in (-1h, 0) keeps its sign (-00:30).
 TEST_F(TimezoneFunctionTest, fromIso8601NegativeHalfHourOffset) {
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00-00:30"));
 }
 
-// Reproducer: an offset outside +/-14h must be rejected like CPU rather than
-// silently corrupt the packed value. CPU normalizes "+99:00" to an unknown zone
-// name and throws ("Unknown timezone value"); the +/-840-minute bound is the
-// same one tz::getTimeZoneID enforces. The GPU parser has no bound -- +99:00 ->
-// 5940 minutes -> zone key 6780, which overflows the 12-bit zone field and
-// corrupts the packed millis (the key is not masked with kTimezoneMask). Red
-// until the parsed offset magnitude is bounded with a user error.
+// An offset outside +/-14h must be rejected like CPU rather than overflow the
+// 12-bit zone-key field. The +/-840-minute bound matches getTimeZoneID.
 TEST_F(TimezoneFunctionTest, fromIso8601OffsetOutOfRangeRejectedLikeCpu) {
   auto input = varcharInput("2021-01-01T02:00:00+99:00");
   auto exprSet =
@@ -1187,12 +1108,9 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetOutOfRangeRejectedLikeCpu) {
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
-// Reproducer: an offset-less ISO string is interpreted in the session timezone
-// on CPU (the wall clock is that zone's local time, and the packed zone key is
-// the session zone), not GMT. Asia/Kolkata has a fixed +05:30 offset (no DST),
-// so the conversion is exact. The GPU treats offset-less input as GMT
-// regardless of the session, so it produces both a wrong instant and a wrong
-// zone key. Red until the session offset is applied.
+// An offset-less ISO string is interpreted in the session timezone: the wall
+// clock is that zone's local time and the packed zone key is the session zone.
+// Asia/Kolkata has a fixed +05:30 offset, making the expected conversion exact.
 TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessUsesSessionZone) {
   setSessionTimezone("Asia/Kolkata");
   assertMatchesCpu(
@@ -1203,13 +1121,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessUsesSessionZone) {
 // DST zone whose offset depends on the instant. America/Los_Angeles springs
 // forward on 2021-03-14 at 02:00 PST (-08:00) to 03:00 PDT (-07:00), i.e. at
 // 10:00:00 UTC. The wall clock 2021-03-14T03:30:00 is a valid post-gap local
-// time (PDT), so CPU resolves it to 2021-03-14T10:30:00 UTC (to_unixtime
-// 1615717800). The GPU uses the local->UTC approximation, which keys the wall
-// clock as if it were UTC: 03:30 UTC precedes the 10:00 UTC transition, so it
-// reads the pre-gap offset (-08:00) and yields 2021-03-14T11:30:00 UTC
-// (to_unixtime 1615721400) -- one hour late. Red until an inverse (local-keyed)
-// transition lookup replaces the approximation. The fixed-offset Kolkata case
-// above stays green because its offset does not vary with the instant.
+// time (PDT), so it resolves to 2021-03-14T10:30:00 UTC. This verifies that the
+// inverse lookup is keyed by local time and selects the post-transition offset.
 TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneDstTransition) {
   setSessionTimezone("America/Los_Angeles");
   assertMatchesCpu(
@@ -1219,10 +1132,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneDstTransition) {
 // Reproducer: a wall clock inside the spring-forward gap is a nonexistent local
 // time, so CPU's toGMT throws and from_iso8601_timestamp fails. America/
 // Los_Angeles springs forward on 2021-03-14 from 02:00 PST to 03:00 PDT, so
-// local times in [02:00, 03:00) never occur; 02:30:00 is one of them. The GPU
-// local->UTC approximation does plain arithmetic and never throws, so it
-// silently returns an instant. Asserting both paths throw is red until the
-// inverse (local-keyed) transition lookup flags the gap and fails like CPU.
+// local times in [02:00, 03:00) never occur; 02:30:00 is one of them. The
+// inverse local-time lookup must flag the gap so both paths throw.
 TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneGapThrows) {
   setSessionTimezone("America/Los_Angeles");
   auto input = varcharInput("2021-03-14T02:30:00");
@@ -1237,14 +1148,10 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneGapThrows) {
 // resolves it to the earliest instant (TChoose::kEarliest). Australia/Sydney
 // falls back on 2021-04-04 from 03:00 AEDT (+11:00) to 02:00 AEST (+10:00), so
 // local times in [02:00, 03:00) occur twice; 02:30:00 is one. CPU keeps the
-// earlier AEDT reading -- 2021-04-03T15:30:00 UTC. The GPU approximation keys
-// the wall clock as UTC, which lands after the 2021-04-03T16:00 UTC transition
-// and reads the later AEST offset, yielding 2021-04-03T16:30:00 UTC -- one hour
-// late. Red until the inverse transition lookup keeps the pre-transition offset
-// over the overlap, matching kEarliest. A western-hemisphere zone like
-// Los_Angeles cannot exercise this: its negative offsets place the overlap
-// window before the UTC transition, where the approximation already reads the
-// earlier offset.
+// earlier AEDT reading -- 2021-04-03T15:30:00 UTC. The inverse transition
+// lookup must keep the pre-transition offset over the overlap, matching
+// kEarliest. A western-hemisphere zone like Los_Angeles cannot exercise this:
+// its negative offsets place the overlap window before the UTC transition.
 TEST_F(
     TimezoneFunctionTest,
     fromIso8601OffsetlessSessionZoneAmbiguousPicksEarliest) {
@@ -1253,27 +1160,22 @@ TEST_F(
       "from_iso8601_timestamp(c0)", varcharInput("2021-04-04T02:30:00"));
 }
 
-// Control: an explicit numeric offset wins over the session zone on both paths,
-// so this stays green and guards that the session change does not hijack rows
-// that carry their own offset.
+// An explicit numeric offset wins over the session zone.
 TEST_F(TimezoneFunctionTest, fromIso8601ExplicitOffsetIgnoresSessionZone) {
   setSessionTimezone("Asia/Kolkata");
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00+09:00"));
 }
 
-// Control: an explicit "Z" designator is GMT on both paths (distinct from an
-// absent zone), so this stays green and guards that "Z" is not mistaken for an
-// offset-less input and rerouted through the session zone.
+// An explicit "Z" designator is GMT and must not be treated as an absent zone
+// that uses the session timezone.
 TEST_F(TimezoneFunctionTest, fromIso8601ZuluIgnoresSessionZone) {
   setSessionTimezone("Asia/Kolkata");
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00Z"));
 }
 
-// Trailing 'T' with no time component: CPU treats it as the date at midnight;
-// the current regex needs 2 digits after T -> NULL. (Oracle: DateTimeFunctions
-// fromIso8601Timestamp accepts "1970-01-01T"/"1970-01T"/"1970T".)
+// A trailing 'T' with no time component resolves to the date at midnight.
 TEST_F(TimezoneFunctionTest, fromIso8601TrailingT) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-01-01T"));
 }
@@ -1283,13 +1185,10 @@ TEST_F(TimezoneFunctionTest, fromIso8601TrailingT) {
 // AST-supported because both operands are the BIGINT-backed TIMESTAMP WITH TIME
 // ZONE, so the GPU takes the pure-AST path and recurses into the cast. The cast
 // is not AST-representable (its input is TIMESTAMP, which the AST/JIT path
-// rejects), so it must instead be precomputed on device; before the fix
-// FunctionExpression::canEvaluate returned false for TIMESTAMP -> TIMESTAMP
-// WITH TIME ZONE and the AST builder aborted with "Unsupported expression:
-// cast" (AstExpressionUtils.h). The cast is now GPU-evaluable, so the
-// comparison runs entirely on device with no CPU fallback. With no session
-// timezone the cast packs the UTC millis with the GMT zone key (0), matching
-// CPU's castFromTimestamp.
+// rejects), so it must instead be precomputed on device. The comparison then
+// runs entirely on device with no CPU fallback. With no session timezone the
+// cast packs the UTC millis with the GMT zone key (0), matching CPU's
+// castFromTimestamp.
 TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZone) {
   auto input = makeRowVector(
       {"c0", "c1"},
@@ -1416,8 +1315,7 @@ TEST_F(TimezoneFunctionTest, fromIso8601DateThenOffset) {
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T+01:00"));
 }
 
-// Time-only ("Thh[:mm[:ss[.fff]]]" [offset]): CPU defaults the date to
-// 1970-01-01; the date-anchored regex needs a leading year -> NULL today.
+// Time-only ("Thh[:mm[:ss[.fff]]]" [offset]) defaults the date to 1970-01-01.
 TEST_F(TimezoneFunctionTest, fromIso8601TimeOnly) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("T11:38:56"));
 }
@@ -1429,8 +1327,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601TimeOnlyWithOffset) {
       "from_iso8601_timestamp(c0)", varcharInput("T11:38:56.123-14:00"));
 }
 
-// Malformed input: CPU (util::fromTimestampWithTimezoneString) throws; the GPU
-// must not silently return NULL. Red until the throw block lands.
+// Malformed input must throw like CPU's
+// util::fromTimestampWithTimezoneString rather than return NULL.
 // Out-of-range date, time and offset fields must be rejected, as CPU rejects
 // them. The regex used [0-9]{2} for the hour, minute, second and offset
 // minutes, so each form below parsed to a wrong value instead of failing:
@@ -1469,10 +1367,9 @@ TEST_F(TimezoneFunctionTest, fromIso8601OutOfRangeFieldsThrowLikeCpu) {
   }
 }
 
-// The extreme-year check has TWO regex alternations -- "[+-][0-9]{4,}" for a
-// signed year and "[0-9]{5,}" for an unsigned long one -- and until 2026-08-25
-// only the second was exercised, by "+12021". A SIGNED FOUR-DIGIT year matches
-// the first and only the first, so this is what distinguishes them: tightening
+// The extreme-year check has two regex alternatives: "[+-][0-9]{4,}" for a
+// signed year and "[0-9]{5,}" for an unsigned long one. A signed four-digit
+// year matches only the first, so it distinguishes the alternatives: tightening
 // that branch to
 // "[+-][0-9]{5,}", or dropping the sign class, would leave "-0500" falling
 // through to the ordinary parse, where cudf::strings::to_timestamps would
@@ -2579,11 +2476,9 @@ TEST_F(
     TimezoneFunctionTest,
     comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard) {
   // The guard must cover the arithmetic operators only. Widened to every binary
-  // operator over the type, every TSWTZ comparison would fall back to CPU --
-  // and the parity suite would stay GREEN on values while quietly losing the
-  // GPU path 6b0c57b75 exists to make correct. Asserting that the expression
-  // still COMPILES for the GPU is what separates those two outcomes; matching
-  // CPU does not.
+  // operator over the type, every TSWTZ comparison would fall back to CPU.
+  // Asserting that the expression still compiles for the GPU distinguishes
+  // that regression from a value-parity result reached through CPU fallback.
   const int64_t millis = 1'623'758'400'000;
   const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
   const auto midway = tz::getTimeZoneID("Pacific/Midway");

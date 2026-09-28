@@ -175,9 +175,8 @@ std::vector<Transition> enumerateTransitions(
   // Keying it at the epoch instead left the lookup depending on undefined
   // behaviour. activeIntervalIndices computes upper_bound - 1, so any pre-1970
   // instant produced -1, which then indexed a gather running with
-  // out_of_bounds_policy::DONT_CHECK. It happens to return the right answer
-  // today only because the table has exactly one row, so an out-of-range index
-  // cannot reach a different one. A second row would make it read some other
+  // out_of_bounds_policy::DONT_CHECK. A one-row table can hide the invalid
+  // index by returning the only offset; a larger table could return a different
   // interval's offset.
   if (auto fixed = timeZone->offset(); fixed.has_value()) {
     return {Transition{
@@ -234,8 +233,9 @@ std::unique_ptr<cudf::column> makeDeviceColumn(
 // Builds the forward (UTC-keyed) table [instant (TIMESTAMP_SECONDS), offset
 // (DURATION_SECONDS)] from the zone's transitions. The first key is forced to
 // INT64_MIN so the active-interval index (upper_bound - 1) is never out of
-// range; instants after the last transition reuse its offset. Synchronizes the
-// stream before returning so the host vectors outlive the async uploads.
+// range. Callers route instants beyond the materialized window to the host time
+// zone database. Synchronizes the stream before returning so the host vectors
+// outlive the async uploads.
 std::unique_ptr<cudf::table> buildForwardTable(
     const std::vector<Transition>& transitions,
     cuda::stream_ref stream,
