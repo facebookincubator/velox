@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"

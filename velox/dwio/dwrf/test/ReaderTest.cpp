@@ -28,6 +28,7 @@
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -48,6 +49,8 @@
 #include "velox/common/io/IoStatistics.h"
 
 namespace facebook::velox::dwrf {
+using facebook::velox::test::makeAllFieldsScanSpec;
+
 namespace {
 
 using namespace ::testing;

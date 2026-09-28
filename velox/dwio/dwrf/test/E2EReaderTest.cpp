@@ -24,9 +24,9 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/ScanSpecUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 

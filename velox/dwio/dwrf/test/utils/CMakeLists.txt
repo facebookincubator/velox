@@ -29,5 +29,4 @@ target_link_libraries(
   velox_vector
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock
 )
