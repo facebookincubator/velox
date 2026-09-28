@@ -345,7 +345,7 @@ class SimpleAggregateAdapter : public Aggregate {
     addSingleGroupRawInputImpl(group, rows);
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return support_to_intermediate_;
   }
 

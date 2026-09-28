@@ -34,7 +34,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     return sizeof(int64_t);
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

@@ -52,7 +52,7 @@ class HyperLogLogAggregate : public exec::Aggregate {
     return false;
   }
 
-  bool supportsToIntermediate() const final {
+  bool supportsToIntermediate(bool /*hasMask*/) const final {
     return true;
   }
 
