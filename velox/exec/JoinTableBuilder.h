@@ -16,6 +16,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include "velox/exec/HashTable.h"
 #include "velox/exec/VectorHasher.h"
@@ -28,8 +29,9 @@ namespace facebook::velox::exec {
 /// operator and the users which build a join table outside of a Velox driver,
 /// e.g. Gluten builds the broadcast build side directly from a set of vectors.
 /// Hence it knows nothing about plan nodes, drivers, spilling, stats or the
-/// hash table cache: the owner drives it and plugs its own processing in
-/// between the 'addInput()' phases.
+/// hash table cache. An owner which needs to process the input before it is
+/// inserted, e.g. 'HashBuild' spilling part of it, does so through
+/// 'Options::beforeInsertRows'.
 ///
 /// Not thread safe. One instance accumulates the input of one build thread.
 /// Tables built by multiple instances are merged with
@@ -53,8 +55,16 @@ class JoinTableBuilder {
     /// build source type, which is not necessarily 'tableType()'.
     RowTypePtr inputType;
 
-    /// The build side join keys, resolved against 'inputType'.
-    std::vector<core::FieldAccessTypedExprPtr> joinKeys;
+    /// The channel in 'inputType' of each build side join key. A channel
+    /// appears more than once if the same column is used by more than one join
+    /// key.
+    std::vector<column_index_t> keyChannels;
+
+    /// The channel in 'inputType' of a boolean column holding the initial
+    /// probed flag of each row. The column is not stored as a table column.
+    /// Used to rebuild a table from rows which already carry the flag, e.g.
+    /// the spilled rows of a right or full join.
+    std::optional<column_index_t> probedFlagChannel;
 
     /// See the query config options of the same name.
     uint32_t minTableRowsForParallelJoinBuild{1'000};
@@ -68,6 +78,15 @@ class JoinTableBuilder {
     /// 'abandonHashBuildDedupMinPct' being zero. Used by 'HashBuild' to record
     /// a runtime stat.
     std::function<void()> onDedupAbandoned{nullptr};
+
+    /// Invoked by 'addInput()' right before inserting the rows of 'input' into
+    /// the table, if any is left. All the columns of 'input' are decoded at
+    /// this point, e.g. the hashers of 'table()' can hash the keys of 'rows'.
+    /// 'rows' are the rows about to be inserted. The callback may only
+    /// deselect rows, which are then not inserted. Used by 'HashBuild' to
+    /// spill part of the input instead of inserting it.
+    std::function<void(const RowVectorPtr& input, SelectivityVector& rows)>
+        beforeInsertRows{nullptr};
   };
 
   /// Describes the join filter of an anti join. Only used to skip the build
@@ -108,128 +127,42 @@ class JoinTableBuilder {
   /// Accumulates 'input' into the table. Returns false if the build can stop
   /// early, i.e. this is a null-aware anti join without a filter and 'input'
   /// has a null join key, in which case the join returns no rows.
-  ///
-  /// This is the composition of the four phases below and is meant for the
-  /// owners which have nothing to do in between.
   bool addInput(const RowVectorPtr& input);
 
-  /// The phases of 'addInput()'. Each one consumes the state the previous one
-  /// leaves behind, so they must be called once per input and in this order:
-  /// 'decodeKeys()', 'processNullKeys()', 'decodeDependents()',
-  /// 'insertRows()'. Skipping one, or calling one twice, throws.
-  /// 'decodeKeys()' starts a new input and is therefore accepted at any point,
-  /// which is what lets the owner abandon an input half way, e.g. after
-  /// 'processNullKeys()' returned false.
-  ///
-  /// Decodes the join keys of 'input' into the hashers and resets
-  /// 'activeRows()' to all the rows of 'input'.
-  void decodeKeys(const RowVectorPtr& input);
-
-  /// Deselects the rows of 'activeRows()' with a null join key unless the join
-  /// needs to retain them, and tracks whether the build side has null keys.
-  /// Returns false if the build can stop early, see 'addInput()'.
-  bool processNullKeys();
-
-  /// Decodes the non-key columns of 'input' and, for an anti join with a null
-  /// propagating filter, deselects the rows with a null in a filter column.
-  void decodeDependents(const RowVectorPtr& input);
-
-  /// Inserts the rows still selected in 'activeRows()' into the table, either
-  /// by deduplicating them into the hash table or by appending them to the row
-  /// container. 'spillProbedFlags', if set, carries the probed flag of each row
-  /// restored from a spilled table.
-  void insertRows(
-      const RowVectorPtr& input,
-      const FlatVector<bool>* spillProbedFlags = nullptr);
-
-  /// Clears the table and re-creates an empty one. Used when restoring
-  /// previously spilled data: the columns of the spilled input are already
-  /// ordered as 'tableType()', hence the key and dependent channels are reset
-  /// to their identity mapping.
-  void resetForSpillInput();
-
-  /// Frees the table. The builder can not be used afterwards unless
-  /// 'resetForSpillInput()' is called.
-  void clearTable() {
-    table_.reset();
-    lookup_.reset();
-  }
-
-  BaseHashTable* table() const {
-    return table_.get();
-  }
-
-  /// Transfers the ownership of the table out of the builder.
-  std::unique_ptr<BaseHashTable> takeTable() {
-    lookup_.reset();
-    return std::move(table_);
-  }
-
-  const std::vector<std::unique_ptr<VectorHasher>>& hashers() const {
-    return table_->hashers();
-  }
-
-  /// The rows of the last 'input' which are still being processed. Exposed as
-  /// the owner may deselect rows in between the 'addInput()' phases, e.g.
-  /// 'HashBuild' deselects the rows it spills.
-  SelectivityVector& activeRows() {
-    return activeRows_;
-  }
-
-  /// The row type of the hash table, which is also the type used to spill it.
-  const RowTypePtr& tableType() const {
-    return tableType_;
-  }
-
-  const std::vector<column_index_t>& keyChannels() const {
-    return keyChannels_;
-  }
-
-  const std::vector<column_index_t>& dependentChannels() const {
-    return dependentChannels_;
-  }
-
-  bool dropDuplicates() const {
-    return dropDuplicates_;
-  }
-
-  /// True if the build of the deduplicated hash table has been abandoned.
-  bool dedupAbandoned() const {
-    return abandonHashBuildDedup_;
-  }
-
   /// True if this is the build side of an anti or left semi project join and
-  /// has at least one entry with null join keys.
+  /// the input has had at least one row with a null join key.
   bool joinHasNullKeys() const {
     return joinHasNullKeys_;
   }
 
-  void setJoinHasNullKeys(bool joinHasNullKeys) {
-    joinHasNullKeys_ = joinHasNullKeys;
+  /// The number of input rows with a null in any join key, over all the
+  /// calls to 'addInput()'.
+  int64_t numNullKeyRows() const {
+    return numNullKeyRows_;
   }
 
-  core::JoinType joinType() const {
-    return joinType_;
+  /// The table being built. Null before 'initialize()' and after
+  /// 'takeTable()'.
+  BaseHashTable* table() const {
+    return table_.get();
   }
 
-  uint32_t vectorHasherMaxNumDistinct() const {
-    return options_.vectorHasherMaxNumDistinct;
+  /// Transfers the ownership of the table out of the builder. The builder can
+  /// not accumulate input afterwards.
+  std::unique_ptr<BaseHashTable> takeTable();
+
+  /// The row type of the hash table: the join keys followed by the dependent
+  /// columns.
+  const RowTypePtr& tableType() const {
+    return tableType_;
+  }
+
+  /// The channel in 'Options::inputType' of each column of 'tableType()'.
+  const std::vector<column_index_t>& tableInputChannels() const {
+    return tableInputChannels_;
   }
 
  private:
-  // How far the current input has moved through the phases of 'addInput()'.
-  enum class Phase {
-    // Before the first 'decodeKeys()' and after 'insertRows()'.
-    kIdle,
-    kKeysDecoded,
-    kNullKeysProcessed,
-    kDependentsDecoded,
-  };
-
-  // Checks that the current input has completed 'required' and records that it
-  // has now completed 'next'.
-  void advancePhase(Phase required, Phase next);
-
   // Invoked to set up the hash table to build.
   void setupTable();
 
@@ -237,6 +170,23 @@ class JoinTableBuilder {
   // the table. Set up for null-aware and regular anti join with a
   // null-propagating filter.
   void setupFilterChannels(const AntiJoinFilterInfo& filterInfo);
+
+  // Decodes the join keys of 'input' into the hashers and resets
+  // 'activeRows_' to all the rows of 'input'.
+  void decodeKeys(const RowVectorPtr& input);
+
+  // Counts the rows with a null key, deselects them from 'activeRows_' unless
+  // the join needs to retain them, and tracks whether the build side has null
+  // keys. Returns false if the build can stop early, see 'addInput()'.
+  bool processNullKeys();
+
+  // Decodes the non-key columns of 'input' and, for an anti join with a null
+  // propagating filter, deselects the rows with a null in a filter column.
+  void decodeDependents(const RowVectorPtr& input);
+
+  // Inserts the rows of 'activeRows_' into the table, either by deduplicating
+  // them into the hash table or by appending them to the row container.
+  void insertRows(const RowVectorPtr& input);
 
   // Invoked when preparing for null-aware and regular anti join with a
   // null-propagating filter. The function deselects the input rows which have
@@ -276,11 +226,11 @@ class JoinTableBuilder {
   // Used for building the hash table while adding input rows.
   std::unique_ptr<HashLookup> lookup_;
 
-  // Key channels in the input.
-  std::vector<column_index_t> keyChannels_;
-
   // Non-key channels in the input.
   std::vector<column_index_t> dependentChannels_;
+
+  // 'Options::keyChannels' followed by 'dependentChannels_'.
+  std::vector<column_index_t> tableInputChannels_;
 
   // Corresponds 1:1 to 'dependentChannels_'.
   std::vector<std::unique_ptr<DecodedVector>> decoders_;
@@ -304,7 +254,13 @@ class JoinTableBuilder {
   // Set of active rows during 'addInput()'.
   SelectivityVector activeRows_;
 
+  // Temporary space for counting the rows with a null key when the join
+  // retains them.
+  SelectivityVector nonNullKeyRows_;
+
   bool joinHasNullKeys_{false};
+
+  int64_t numNullKeyRows_{0};
 
   // Whether to abandon building a hash table without duplicates while adding
   // input for left semi/anti join.
@@ -313,9 +269,6 @@ class JoinTableBuilder {
   // Counts the number of hash table input rows for building the deduped hash
   // table. It is not updated after 'abandonHashBuildDedup_' is true.
   int64_t numHashInputRows_{0};
-
-  // Where the input being processed has got to. Reset by 'decodeKeys()'.
-  Phase phase_{Phase::kIdle};
 };
 
 } // namespace facebook::velox::exec

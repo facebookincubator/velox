@@ -17,10 +17,8 @@
 #include "velox/exec/JoinTableBuilder.h"
 
 #include <algorithm>
-#include <numeric>
 
 #include "velox/exec/HashJoinBridge.h"
-#include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
@@ -29,16 +27,28 @@ JoinTableBuilder::JoinTableBuilder(core::JoinType joinType, Options options)
     : joinType_(joinType),
       options_(std::move(options)),
       dropDuplicates_(core::canDropDuplicates(joinType_, options_.withFilter)),
-      keyChannelMap_(options_.joinKeys.size()) {
+      keyChannelMap_(options_.keyChannels.size()) {
   VELOX_CHECK_NOT_NULL(options_.inputType);
+  const auto& inputType = options_.inputType;
 
-  const auto numKeys = options_.joinKeys.size();
-  keyChannels_.reserve(numKeys);
+  const auto& keyChannels = options_.keyChannels;
+  const auto numKeys = keyChannels.size();
   for (auto i = 0; i < numKeys; ++i) {
-    const auto channel =
-        exprToChannel(options_.joinKeys[i].get(), options_.inputType);
-    keyChannelMap_[channel] = i;
-    keyChannels_.emplace_back(channel);
+    VELOX_CHECK_LT(keyChannels[i], inputType->size());
+    keyChannelMap_[keyChannels[i]] = i;
+  }
+
+  const auto probedFlagChannel = options_.probedFlagChannel;
+  if (probedFlagChannel.has_value()) {
+    VELOX_CHECK_LT(probedFlagChannel.value(), inputType->size());
+    VELOX_CHECK(
+        inputType->childAt(probedFlagChannel.value())->isBoolean(),
+        "The probed flag column must be boolean: {}",
+        inputType->childAt(probedFlagChannel.value())->toString());
+    VELOX_CHECK(
+        !keyChannelMap_.contains(probedFlagChannel.value()),
+        "The probed flag column can not be a join key: {}",
+        probedFlagChannel.value());
   }
 
   // Identify the non-key build side columns and make a decoder for each.
@@ -48,21 +58,35 @@ JoinTableBuilder::JoinTableBuilder(core::JoinType joinType, Options options)
     // and unusable for 'reserve'. This happens when we join different probe
     // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
     // t.k1 = u.k AND t.k2 = u.k.
-    const int32_t numDependents = options_.inputType->size() - numKeys;
+    const int32_t numDependents = inputType->size() - numKeys;
     if (numDependents > 0) {
       dependentChannels_.reserve(numDependents);
       decoders_.reserve(numDependents);
     }
-    for (auto i = 0; i < options_.inputType->size(); ++i) {
-      if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
+    for (auto i = 0; i < inputType->size(); ++i) {
+      if (keyChannelMap_.find(i) == keyChannelMap_.end() &&
+          i != probedFlagChannel) {
         dependentChannels_.emplace_back(i);
         decoders_.emplace_back(std::make_unique<DecodedVector>());
       }
     }
   }
 
-  tableType_ =
-      hashJoinTableType(options_.joinKeys, options_.inputType, dropDuplicates_);
+  // The same layout as 'hashJoinTableType()', less the probed flag column.
+  tableInputChannels_ = keyChannels;
+  tableInputChannels_.insert(
+      tableInputChannels_.end(),
+      dependentChannels_.begin(),
+      dependentChannels_.end());
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  names.reserve(tableInputChannels_.size());
+  types.reserve(tableInputChannels_.size());
+  for (const auto channel : tableInputChannels_) {
+    names.emplace_back(inputType->nameOf(channel));
+    types.emplace_back(inputType->childAt(channel));
+  }
+  tableType_ = ROW(std::move(names), std::move(types));
 }
 
 void JoinTableBuilder::initialize(
@@ -88,12 +112,13 @@ void JoinTableBuilder::setupTable() {
   VELOX_CHECK_NOT_NULL(tablePool_, "JoinTableBuilder is not initialized");
   VELOX_CHECK_NULL(table_);
 
-  const auto numKeys = keyChannels_.size();
+  const auto& keyChannels = options_.keyChannels;
+  const auto numKeys = keyChannels.size();
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.reserve(numKeys);
   for (auto i = 0; i < numKeys; ++i) {
     keyHashers.emplace_back(
-        VectorHasher::create(tableType_->childAt(i), keyChannels_[i]));
+        VectorHasher::create(tableType_->childAt(i), keyChannels[i]));
   }
 
   const auto numDependents = tableType_->size() - numKeys;
@@ -159,44 +184,9 @@ void JoinTableBuilder::setupTable() {
   lookup_ = std::make_unique<HashLookup>(table_->hashers(), auxiliaryPool_);
 }
 
-void JoinTableBuilder::resetForSpillInput() {
-  table_.reset();
+std::unique_ptr<BaseHashTable> JoinTableBuilder::takeTable() {
   lookup_.reset();
-
-  // Reset the key and dependent channels as the spilled data columns have
-  // already been ordered.
-  std::iota(keyChannels_.begin(), keyChannels_.end(), 0);
-  std::iota(
-      dependentChannels_.begin(),
-      dependentChannels_.end(),
-      keyChannels_.size());
-
-  setupTable();
-  numHashInputRows_ = 0;
-  phase_ = Phase::kIdle;
-}
-
-void JoinTableBuilder::advancePhase(Phase required, Phase next) {
-  const auto name = [](Phase phase) -> std::string_view {
-    switch (phase) {
-      case Phase::kIdle:
-        return "none";
-      case Phase::kKeysDecoded:
-        return "decodeKeys()";
-      case Phase::kNullKeysProcessed:
-        return "processNullKeys()";
-      case Phase::kDependentsDecoded:
-        return "decodeDependents()";
-    }
-    VELOX_UNREACHABLE();
-  };
-  VELOX_CHECK(
-      phase_ == required,
-      "The phases of JoinTableBuilder::addInput() must be called in order. "
-      "Last completed phase should be {}, but it is {}",
-      name(required),
-      name(phase_));
-  phase_ = next;
+  return std::move(table_);
 }
 
 void JoinTableBuilder::setupFilterChannels(
@@ -269,20 +259,24 @@ void JoinTableBuilder::abandonHashBuildDedup() {
 }
 
 bool JoinTableBuilder::addInput(const RowVectorPtr& input) {
+  VELOX_CHECK_NOT_NULL(table_, "JoinTableBuilder is not initialized");
+
   decodeKeys(input);
   if (!processNullKeys()) {
     return false;
   }
   decodeDependents(input);
+
+  if (options_.beforeInsertRows != nullptr && activeRows_.hasSelections()) {
+    options_.beforeInsertRows(input, activeRows_);
+    activeRows_.updateBounds();
+  }
+
   insertRows(input);
   return true;
 }
 
 void JoinTableBuilder::decodeKeys(const RowVectorPtr& input) {
-  VELOX_CHECK_NOT_NULL(table_, "JoinTableBuilder is not initialized");
-  // A new input starts the sequence over, whatever the previous one reached.
-  phase_ = Phase::kKeysDecoded;
-
   activeRows_.resize(input->size());
   activeRows_.setAll();
 
@@ -294,32 +288,26 @@ void JoinTableBuilder::decodeKeys(const RowVectorPtr& input) {
 }
 
 bool JoinTableBuilder::processNullKeys() {
-  advancePhase(Phase::kKeysDecoded, Phase::kNullKeysProcessed);
+  const auto& hashers = table_->hashers();
+  const auto numInput = activeRows_.size();
 
-  auto& hashers = table_->hashers();
-
+  vector_size_t numNullKeyRows{0};
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
       !isRightSemiProjectJoin(joinType_) && !isRightAntiJoin(joinType_) &&
       !options_.nullAsValue &&
       !isLeftNullAwareJoinWithFilter(
           joinType_, options_.nullAware, options_.withFilter)) {
-    const auto numInput = activeRows_.size();
     deselectRowsWithNulls(hashers, activeRows_);
-    if (options_.nullAware && !joinHasNullKeys_ &&
-        activeRows_.countSelected() < numInput) {
-      joinHasNullKeys_ = true;
-    }
-  } else if (options_.nullAware && !joinHasNullKeys_) {
-    for (auto& hasher : hashers) {
-      auto& decoded = hasher->decodedVector();
-      if (decoded.mayHaveNulls()) {
-        auto* nulls = decoded.nulls(&activeRows_);
-        if (nulls && bits::countNulls(nulls, 0, activeRows_.end()) > 0) {
-          joinHasNullKeys_ = true;
-          break;
-        }
-      }
-    }
+    numNullKeyRows = numInput - activeRows_.countSelected();
+  } else {
+    // The join retains the rows with a null key, so count them on a copy.
+    nonNullKeyRows_ = activeRows_;
+    deselectRowsWithNulls(hashers, nonNullKeyRows_);
+    numNullKeyRows = numInput - nonNullKeyRows_.countSelected();
+  }
+  numNullKeyRows_ += numNullKeyRows;
+  if (options_.nullAware && numNullKeyRows > 0) {
+    joinHasNullKeys_ = true;
   }
 
   // Null-aware anti join with no extra filter returns no rows if build side
@@ -330,8 +318,6 @@ bool JoinTableBuilder::processNullKeys() {
 }
 
 void JoinTableBuilder::decodeDependents(const RowVectorPtr& input) {
-  advancePhase(Phase::kNullKeysProcessed, Phase::kDependentsDecoded);
-
   for (auto i = 0; i < dependentChannels_.size(); ++i) {
     decoders_[i]->decode(
         *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
@@ -342,11 +328,7 @@ void JoinTableBuilder::decodeDependents(const RowVectorPtr& input) {
   }
 }
 
-void JoinTableBuilder::insertRows(
-    const RowVectorPtr& input,
-    const FlatVector<bool>* spillProbedFlags) {
-  advancePhase(Phase::kDependentsDecoded, Phase::kIdle);
-
+void JoinTableBuilder::insertRows(const RowVectorPtr& input) {
   if (!activeRows_.hasSelections()) {
     return;
   }
@@ -406,6 +388,13 @@ void JoinTableBuilder::insertRows(
     }
   }
 
+  const FlatVector<bool>* probedFlags{nullptr};
+  if (options_.probedFlagChannel.has_value()) {
+    probedFlags = input->childAt(options_.probedFlagChannel.value())
+                      ->asFlatVector<bool>();
+    VELOX_CHECK_NOT_NULL(probedFlags, "The probed flag column must be flat");
+  }
+
   auto* rows = table_->rows();
   const auto nextOffset = rows->nextOffset();
   activeRows_.applyToSelected([&](auto rowIndex) {
@@ -422,9 +411,9 @@ void JoinTableBuilder::insertRows(
     for (auto i = 0; i < dependentChannels_.size(); ++i) {
       rows->store(*decoders_[i], rowIndex, newRow, i + hashers.size());
     }
-    if (spillProbedFlags != nullptr) {
-      VELOX_CHECK(!spillProbedFlags->isNullAt(rowIndex));
-      if (spillProbedFlags->valueAt(rowIndex)) {
+    if (probedFlags != nullptr) {
+      VELOX_CHECK(!probedFlags->isNullAt(rowIndex));
+      if (probedFlags->valueAt(rowIndex)) {
         rows->setProbedFlag(&newRow, 1);
       }
     }

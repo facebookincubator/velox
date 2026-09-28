@@ -100,7 +100,7 @@ class HashBuild final : public Operator {
   }
 
   const std::vector<column_index_t>& dependentChannels() const {
-    return tableBuilder_->dependentChannels();
+    return dependentChannels_;
   }
 
   const std::shared_ptr<HashJoinBridge>& joinBridge() const {
@@ -122,9 +122,18 @@ class HashBuild final : public Operator {
     return cacheEntry_->builderTaskId == taskId();
   }
 
-  // Creates the join table builder. Called from the constructor as the key and
-  // the dependent channels it resolves are used before 'initialize()'.
-  void setupTableBuilder();
+  // Creates the join table builder. 'fromSpill' is true to build from the
+  // spilled rows, which are laid out as 'spillType_', false to build from the
+  // build source. Called from the constructor for the build source, as the
+  // dependent channels are used before 'initialize()', and then for each round
+  // restoring spilled data.
+  std::unique_ptr<JoinTableBuilder> createTableBuilder(bool fromSpill);
+
+  // True if the build side has a null join key in any round of the build, or
+  // in a peer build once merged.
+  bool joinHasNullKeys() const {
+    return joinHasNullKeys_ || tableBuilder_->joinHasNullKeys();
+  }
 
   // Sets up hash table caching if enabled. Returns true if the cached table
   // is already available or if this operator should wait for another task
@@ -189,11 +198,11 @@ class HashBuild final : public Operator {
   // function throws to fail the query if the memory reservation fails.
   void ensureTableFits(uint64_t numRows);
 
-  // Invoked to compute spill partitions numbers for each row 'input' and spill
-  // rows to spiller directly if the associated partition(s) is spilling. The
-  // function will skip processing if disk spilling is not enabled or there is
-  // no spilling partition.
-  void spillInput(const RowVectorPtr& input);
+  // Invoked to compute spill partitions numbers for 'rows' of 'input' and spill
+  // them to spiller directly if the associated partition(s) is spilling. The
+  // spilled rows are deselected from 'rows'. The function will skip processing
+  // if disk spilling is not enabled or there is no spilling partition.
+  void spillInput(const RowVectorPtr& input, SelectivityVector& rows);
 
   // Invoked to spill a number of rows from 'input' to a spill 'partition'.
   // 'size' is the number of rows. 'indices' is the row indices in 'input'.
@@ -203,9 +212,12 @@ class HashBuild final : public Operator {
       const BufferPtr& indices,
       const RowVectorPtr& input);
 
-  // Invoked to compute spill partition numbers for 'input' if disk spilling is
-  // enabled. The computed partition numbers are stored in 'spillPartitions_'.
-  void computeSpillPartitions(const RowVectorPtr& input);
+  // Invoked to compute spill partition numbers for 'rows' of 'input' if disk
+  // spilling is enabled. The computed partition numbers are stored in
+  // 'spillPartitions_'.
+  void computeSpillPartitions(
+      const RowVectorPtr& input,
+      const SelectivityVector& rows);
 
   // Invoked to set up 'spillChildVectors_' for spill if 'input' is from build
   // source.
@@ -227,13 +239,6 @@ class HashBuild final : public Operator {
   // Compiles the join filter of an anti join to find out if it is null
   // propagating and which build side columns it references.
   JoinTableBuilder::AntiJoinFilterInfo analyzeAntiJoinFilter();
-
-  // Updates the null keys stats from the keys decoded by the table builder.
-  void updateNullKeysStats();
-
-  // Sets the probed flag vector to restore when the input comes from a spilled
-  // table, nullptr otherwise.
-  const FlatVector<bool>* spillProbedFlags(const RowVectorPtr& input) const;
 
   void addRuntimeStats();
 
@@ -294,8 +299,17 @@ class HashBuild final : public Operator {
   std::shared_ptr<HashTableCacheEntry> cacheEntry_;
 
   // Accumulates the build input into the hash table. Holds the state and the
-  // logic shared with the non-operator build side users.
+  // logic shared with the non-operator build side users. Replaced for each
+  // round restoring spilled data.
   std::unique_ptr<JoinTableBuilder> tableBuilder_;
+
+  // Non-key channels in the build source.
+  std::vector<column_index_t> dependentChannels_;
+
+  // True if the build side had a null join key in a previous round of the
+  // build or in a merged peer build, i.e. which 'tableBuilder_' has not seen.
+  // See 'joinHasNullKeys()'.
+  bool joinHasNullKeys_{false};
 
   // Used to serialize access to internal state including the table of
   // 'tableBuilder_' and 'spiller_'. This is only required when variables are

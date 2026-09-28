@@ -75,20 +75,43 @@ HashBuild::HashBuild(
 
   joinBridge_->addBuilder();
 
-  setupTableBuilder();
+  tableBuilder_ = createTableBuilder(/*fromSpill=*/false);
+  const auto& tableInputChannels = tableBuilder_->tableInputChannels();
+  dependentChannels_.assign(
+      tableInputChannels.begin() + joinNode_->rightKeys().size(),
+      tableInputChannels.end());
 
   stateCleared_ = false;
 }
 
-void HashBuild::setupTableBuilder() {
+std::unique_ptr<JoinTableBuilder> HashBuild::createTableBuilder(
+    bool fromSpill) {
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
 
   JoinTableBuilder::Options options;
   options.nullAware = nullAware_;
   options.nullAsValue = nullAsValue_;
   options.withFilter = joinNode_->filter() != nullptr;
-  options.inputType = joinNode_->sources()[1]->outputType();
-  options.joinKeys = joinNode_->rightKeys();
+  const auto& joinKeys = joinNode_->rightKeys();
+  options.keyChannels.reserve(joinKeys.size());
+  if (fromSpill) {
+    // The spilled rows are laid out as the table, i.e. the keys followed by the
+    // dependents, followed by the probed flag if 'needProbedFlagSpill_'.
+    VELOX_CHECK_NOT_NULL(spillType_);
+    options.inputType = spillType_;
+    for (auto i = 0; i < joinKeys.size(); ++i) {
+      options.keyChannels.emplace_back(i);
+    }
+    if (needProbedFlagSpill_) {
+      options.probedFlagChannel = spillProbedFlagChannel_;
+    }
+  } else {
+    options.inputType = joinNode_->sources()[1]->outputType();
+    for (const auto& key : joinKeys) {
+      options.keyChannels.emplace_back(
+          exprToChannel(key.get(), options.inputType));
+    }
+  }
   options.minTableRowsForParallelJoinBuild =
       queryConfig.minTableRowsForParallelJoinBuild();
   options.vectorHasherMaxNumDistinct =
@@ -106,9 +129,12 @@ void HashBuild::setupTableBuilder() {
     addRuntimeStat(
         std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
   };
+  options.beforeInsertRows =
+      [this](const RowVectorPtr& input, SelectivityVector& rows) {
+        spillInput(input, rows);
+      };
 
-  tableBuilder_ =
-      std::make_unique<JoinTableBuilder>(joinType_, std::move(options));
+  return std::make_unique<JoinTableBuilder>(joinType_, std::move(options));
 }
 
 void HashBuild::initialize() {
@@ -195,7 +221,7 @@ void HashBuild::maybeSetHashTableInCache(
     return;
   }
   auto* cache = HashTableCache::instance();
-  cache->put(cacheKey(), table, tableBuilder_->joinHasNullKeys());
+  cache->put(cacheKey(), table, joinHasNullKeys());
 }
 
 bool HashBuild::receivedCachedHashTable() {
@@ -326,25 +352,6 @@ JoinTableBuilder::AntiJoinFilterInfo HashBuild::analyzeAntiJoinFilter() {
   return filterInfo;
 }
 
-void HashBuild::updateNullKeysStats() {
-  // Update statistics for null keys in join operator.
-  // We use the active rows to store which rows have some null keys,
-  // and reset it after using it.
-  auto& activeRows = tableBuilder_->activeRows();
-  auto lockedStats = stats_.wlock();
-  deselectRowsWithNulls(tableBuilder_->hashers(), activeRows);
-  lockedStats->numNullKeys += activeRows.size() - activeRows.countSelected();
-  activeRows.setAll();
-}
-
-const FlatVector<bool>* HashBuild::spillProbedFlags(
-    const RowVectorPtr& input) const {
-  if (!isInputFromSpill() || !needProbedFlagSpill_) {
-    return nullptr;
-  }
-  return input->childAt(spillProbedFlagChannel_)->asFlatVector<bool>();
-}
-
 void HashBuild::addInput(RowVectorPtr input) {
   checkRunning();
 
@@ -356,26 +363,21 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   TestValue::adjust("facebook::velox::exec::HashBuild::addInput", this);
 
-  tableBuilder_->decodeKeys(input);
+  const auto numNullKeyRows = tableBuilder_->numNullKeyRows();
+  const bool needsMoreInput = tableBuilder_->addInput(input);
 
   // Only update the null keys stats when input is not spilled, to avoid
   // overcounting.
   if (!isInputFromSpill()) {
-    updateNullKeysStats();
+    stats_.wlock()->numNullKeys +=
+        tableBuilder_->numNullKeyRows() - numNullKeyRows;
   }
 
-  if (!tableBuilder_->processNullKeys()) {
+  if (!needsMoreInput) {
     // Null-aware anti join with no extra filter returns no rows if build side
     // has nulls in join keys. Hence, we can stop processing on first null.
     noMoreInput();
-    return;
   }
-
-  tableBuilder_->decodeDependents(input);
-
-  spillInput(input);
-
-  tableBuilder_->insertRows(input, spillProbedFlags(input));
 }
 
 void HashBuild::ensureInputFits(RowVectorPtr& input) {
@@ -467,26 +469,25 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
                << succinctBytes(pool()->root()->reservedBytes());
 }
 
-void HashBuild::spillInput(const RowVectorPtr& input) {
-  auto& activeRows = tableBuilder_->activeRows();
-  VELOX_CHECK_EQ(input->size(), activeRows.size());
+void HashBuild::spillInput(const RowVectorPtr& input, SelectivityVector& rows) {
+  VELOX_CHECK_EQ(input->size(), rows.size());
 
   if (!canSpill() || spiller_ == nullptr || !spiller_->spillTriggered() ||
-      !activeRows.hasSelections()) {
+      !rows.hasSelections()) {
     return;
   }
 
   const auto numInput = input->size();
   prepareInputIndicesBuffers(numInput);
-  computeSpillPartitions(input);
+  computeSpillPartitions(input, rows);
 
   vector_size_t numSpillInputs = 0;
   for (auto row = 0; row < numInput; ++row) {
     const auto partition = spillPartitions_[row];
-    if (FOLLY_UNLIKELY(!activeRows.isValid(row))) {
+    if (FOLLY_UNLIKELY(!rows.isValid(row))) {
       continue;
     }
-    activeRows.setValid(row, false);
+    rows.setValid(row, false);
     ++numSpillInputs;
     rawSpillInputIndicesBuffers_[partition][numSpillInputs_[partition]++] = row;
   }
@@ -507,7 +508,6 @@ void HashBuild::spillInput(const RowVectorPtr& input) {
     VELOX_CHECK(
         spiller_->state().isPartitionSpilled(SpillPartitionId(partition)));
   }
-  activeRows.updateBounds();
 }
 
 void HashBuild::maybeSetupSpillChildVectors(const RowVectorPtr& input) {
@@ -515,10 +515,7 @@ void HashBuild::maybeSetupSpillChildVectors(const RowVectorPtr& input) {
     return;
   }
   int32_t spillChannel = 0;
-  for (const auto& channel : tableBuilder_->keyChannels()) {
-    spillChildVectors_[spillChannel++] = input->childAt(channel);
-  }
-  for (const auto& channel : tableBuilder_->dependentChannels()) {
+  for (const auto& channel : tableBuilder_->tableInputChannels()) {
     spillChildVectors_[spillChannel++] = input->childAt(channel);
   }
   if (needProbedFlagSpill_) {
@@ -543,23 +540,24 @@ void HashBuild::prepareInputIndicesBuffers(vector_size_t numInput) {
   std::fill(numSpillInputs_.begin(), numSpillInputs_.end(), 0);
 }
 
-void HashBuild::computeSpillPartitions(const RowVectorPtr& input) {
-  auto& activeRows = tableBuilder_->activeRows();
-  if (spillHashes_.size() < activeRows.end()) {
-    spillHashes_.resize(activeRows.end());
+void HashBuild::computeSpillPartitions(
+    const RowVectorPtr& input,
+    const SelectivityVector& rows) {
+  if (spillHashes_.size() < rows.end()) {
+    spillHashes_.resize(rows.end());
   }
-  const auto& hashers = tableBuilder_->hashers();
+  const auto& hashers = tableBuilder_->table()->hashers();
   for (auto i = 0; i < hashers.size(); ++i) {
     auto& hasher = hashers[i];
     if (hasher->channel() != kConstantChannel) {
-      hashers[i]->hash(activeRows, i > 0, spillHashes_);
+      hashers[i]->hash(rows, i > 0, spillHashes_);
     } else {
-      hashers[i]->hashPrecomputed(activeRows, i > 0, spillHashes_);
+      hashers[i]->hashPrecomputed(rows, i > 0, spillHashes_);
     }
   }
 
   spillPartitions_.resize(input->size());
-  activeRows.applyToSelected([&](int32_t row) {
+  rows.applyToSelected([&](int32_t row) {
     spillPartitions_[row] = spiller_->hashBits().partition(spillHashes_[row]);
   });
 }
@@ -648,7 +646,7 @@ bool HashBuild::finishHashBuild() {
     return true;
   }
 
-  if (tableBuilder_->joinHasNullKeys() && isAntiJoin(joinType_) && nullAware_ &&
+  if (joinHasNullKeys() && isAntiJoin(joinType_) && nullAware_ &&
       !joinNode_->filter()) {
     joinBridge_->setAntiJoinHasNullKeys();
     return true;
@@ -665,8 +663,8 @@ bool HashBuild::finishHashBuild() {
     auto op = peer->findOperator(planNodeId());
     HashBuild* build = dynamic_cast<HashBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    if (build->tableBuilder_->joinHasNullKeys()) {
-      tableBuilder_->setJoinHasNullKeys(true);
+    if (build->joinHasNullKeys()) {
+      joinHasNullKeys_ = true;
       if (isAntiJoin(joinType_) && nullAware_ && !joinNode_->filter()) {
         joinBridge_->setAntiJoinHasNullKeys();
         return true;
@@ -730,8 +728,10 @@ bool HashBuild::finishHashBuild() {
         std::move(otherTables),
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit,
-        tableBuilder_->vectorHasherMaxNumDistinct(),
-        tableBuilder_->dropDuplicates(),
+        operatorCtx_->driverCtx()
+            ->queryConfig()
+            .joinBuildVectorHasherMaxNumDistinct(),
+        joinNode_->canDropDuplicates(),
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
                                : nullptr);
   }
@@ -768,7 +768,7 @@ bool HashBuild::finishHashBuild() {
   joinBridge_->setHashTable(
       table,
       std::move(spillPartitions),
-      tableBuilder_->joinHasNullKeys(),
+      joinHasNullKeys(),
       std::move(tableSpillFunc));
 
   if (canSpill()) {
@@ -850,7 +850,22 @@ void HashBuild::setupSpillInput(HashJoinBridge::SpillInput spillInput) {
   spillInputReader_.reset();
   restoringPartitionId_.reset();
 
-  tableBuilder_->resetForSpillInput();
+  // Restores into a new builder so that no build state carries over from the
+  // previous round, but 'joinHasNullKeys()' which covers all the rounds.
+  joinHasNullKeys_ = joinHasNullKeys();
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    tableBuilder_ = createTableBuilder(/*fromSpill=*/true);
+  }
+  // The spilled rows have been checked against the anti join filter before
+  // being spilled, hence no filter.
+  tableBuilder_->initialize(tableMemoryPool(), pool());
+  VELOX_CHECK(
+      hashJoinTableSpillType(tableBuilder_->tableType(), joinType_)
+          ->equivalent(*spillType_),
+      "The restored table type does not match the spill type: {} vs. {}",
+      tableBuilder_->tableType()->toString(),
+      spillType_->toString());
   setupSpiller(spillInput.spillPartition.get());
   stateCleared_ = false;
 
@@ -1228,7 +1243,7 @@ void HashBuild::close() {
     stateCleared_ = true;
     joinBridge_.reset();
     spiller_.reset();
-    tableBuilder_->clearTable();
+    tableBuilder_->takeTable();
   }
 
   // Release the entry here rather than at operator destruction:
