@@ -241,6 +241,8 @@ class PlanBuilder {
    public:
     TableScanBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
 
+    virtual ~TableScanBuilder() = default;
+
     /// @param tableName The name of the table to scan.
     TableScanBuilder& tableName(std::string tableName) {
       tableName_ = std::move(tableName);
@@ -366,9 +368,28 @@ class PlanBuilder {
       return planBuilder_;
     }
 
-   private:
-    /// Build the plan node TableScanNode.
+   protected:
+    /// Build the plan node TableScanNode. Subclasses may override
+    /// buildConnectorTableHandle() to substitute a different handle type.
     core::PlanNodePtr build(core::PlanNodeId id);
+
+    /// Factory called by build() to create the connector table handle from
+    /// already-parsed filter state. Override in subclasses to produce a
+    /// connector-specific handle (e.g. IcebergTableHandle) without duplicating
+    /// any filter-parsing logic.
+    virtual connector::ConnectorTableHandlePtr buildConnectorTableHandle(
+        common::SubfieldFilters subfieldFilters,
+        const core::TypedExprPtr& remainingFilter);
+
+    /// Factory called by build() to create a default column handle for one
+    /// output column when no explicit assignments were provided. Override in
+    /// subclasses to produce connector-specific handles (e.g.
+    /// IcebergColumnHandle). 'outputIndex' is the 0-based position of this
+    /// column in outputType_.
+    virtual connector::ColumnHandlePtr buildDefaultColumnHandle(
+        const std::string& name,
+        const TypePtr& type,
+        uint32_t outputIndex);
 
     PlanBuilder& planBuilder_;
     std::string tableName_{"hive_table"};
@@ -395,7 +416,7 @@ class PlanBuilder {
   };
 
   /// Start a TableScanBuilder using the specified connector.
-  TableScanBuilder& startTableScan(
+  virtual TableScanBuilder& startTableScan(
       std::string connectorId = std::string(kHiveDefaultConnectorId)) {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
     tableScanBuilder_->connectorId(std::move(connectorId));
