@@ -64,18 +64,6 @@ class AdapterOperatorTest : public OperatorTestBase {
     cudf_velox::registerCudf();
   }
 
-  // Uploads a host batch into a device-resident CudfVector, matching what an
-  // upstream GPU operator emits when its output crosses an execution boundary
-  // without a CudfToVelox conversion.
-  RowVectorPtr uploadToDevice(const RowVectorPtr& input) {
-    auto stream = cudf::get_default_stream();
-    auto table = cudf_velox::with_arrow::toCudfTable(
-        input, pool(), stream, cudf::get_current_device_resource_ref());
-    const auto numRows = table->num_rows();
-    return std::make_shared<cudf_velox::CudfVector>(
-        pool(), asRowType(input->type()), numRows, std::move(table), stream);
-  }
-
   bool savedCpuFallback_{true};
 };
 
@@ -363,6 +351,14 @@ TEST_F(AdapterOperatorTest, fromVeloxRejectsDeviceInput) {
   // Values is classified as a CPU operator, so compile() places CudfFromVelox
   // after it. A device-resident batch arriving there means the upstream
   // operator was misclassified.
+  auto uploadToDevice = [this](const RowVectorPtr& input) -> RowVectorPtr {
+    auto stream = cudf::get_default_stream();
+    auto table = cudf_velox::with_arrow::toCudfTable(
+        input, pool(), stream, cudf::get_current_device_resource_ref());
+    const auto numRows = table->num_rows();
+    return std::make_shared<cudf_velox::CudfVector>(
+        pool(), asRowType(input->type()), numRows, std::move(table), stream);
+  };
   auto deviceBatch = uploadToDevice(
       makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
   auto plan =
