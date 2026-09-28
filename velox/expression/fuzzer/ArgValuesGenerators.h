@@ -205,6 +205,8 @@ class SetDigestArgValuesGenerator : public ArgValuesGenerator {
  private:
   std::string functionName_;
 };
+
+#ifdef VELOX_ENABLE_GEO
 /// Generates valid S2 cell ID arguments for s2_cell_* functions.
 /// Picks random face, position, and level to construct valid cell IDs via
 /// S2CellOp::cellIdFromFacePositionLevel. Also constrains the level
@@ -232,5 +234,6 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
 };
+#endif // VELOX_ENABLE_GEO
 
 } // namespace facebook::velox::fuzzer

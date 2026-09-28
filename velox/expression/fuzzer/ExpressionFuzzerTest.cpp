@@ -81,8 +81,10 @@ using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::prestoSkippedFunctions;
 using facebook::velox::fuzzer::prestoSkippedFunctionsSOT;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
+#ifdef VELOX_ENABLE_GEO
 using facebook::velox::fuzzer::S2CellIdArgValuesGenerator;
 using facebook::velox::fuzzer::S2CellTokenArgValuesGenerator;
+#endif
 using facebook::velox::fuzzer::SetDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
@@ -160,13 +162,16 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
         {"intersection_cardinality",
          std::make_shared<SetDigestArgValuesGenerator>(
              "intersection_cardinality")},
+#ifdef VELOX_ENABLE_GEO
         {"s2_cell_area_sq_km", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_contains", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_level", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_parent", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_to_token", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_from_token",
-         std::make_shared<S2CellTokenArgValuesGenerator>()}};
+         std::make_shared<S2CellTokenArgValuesGenerator>()},
+#endif
+};
 
 const std::unordered_set<std::string> skipFunctionsLocalRunner{};
 
