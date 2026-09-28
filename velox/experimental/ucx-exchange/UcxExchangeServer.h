@@ -144,6 +144,11 @@ class UcxExchangeServer
   std::shared_ptr<ucxx::Request> metaRequest_{nullptr};
   std::shared_ptr<ucxx::Request> dataRequest_{nullptr};
 
+  // Queue incarnation returned by getData(). Final cleanup must target this
+  // exact queue rather than looking up by task ID, because task IDs can be
+  // reused while an old server is still draining its terminal callback.
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
+
   // Completed UCXX requests are kept alive here to prevent use-after-free.
   // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-
   // completed requests; if the ucxx::Request has been freed, the callback

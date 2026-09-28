@@ -64,6 +64,7 @@ void UcxExchangeClient::close() {
     if (closed_) {
       return;
     }
+    stats_ = collectStatsLocked();
     closed_ = true;
     sources = std::move(sources_);
   }
@@ -76,8 +77,41 @@ void UcxExchangeClient::close() {
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() const {
-  // TODO: Implement stats collection.
+  std::lock_guard<std::mutex> l(queue_->mutex());
+  if (closed_) {
+    return stats_;
+  }
+  return collectStatsLocked();
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+UcxExchangeClient::collectStatsLocked() const {
   folly::F14FastMap<std::string, RuntimeMetric> stats;
+
+  for (const auto& source : sources_) {
+    if (source->supportsMetrics()) {
+      for (const auto& [name, value] : source->metrics()) {
+        auto [iter, inserted] = stats.try_emplace(name, value.unit);
+        iter->second.merge(value);
+      }
+    } else {
+      for (const auto& [name, value] : source->stats()) {
+        auto [iter, inserted] = stats.try_emplace(name);
+        iter->second.addValue(value);
+      }
+    }
+  }
+
+  stats.insert_or_assign(
+      "peakBytes",
+      RuntimeMetric(queue_->peakBytes(), RuntimeCounter::Unit::kBytes));
+  stats.insert_or_assign(
+      "numReceivedTables", RuntimeMetric(queue_->receivedTables()));
+  stats.insert_or_assign(
+      "averageReceivedTableBytes",
+      RuntimeMetric(
+          queue_->averageReceivedTablesBytes(), RuntimeCounter::Unit::kBytes));
+
   return stats;
 }
 
