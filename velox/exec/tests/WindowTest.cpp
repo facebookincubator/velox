@@ -2049,7 +2049,7 @@ DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([&](exec::Operator* op) {
-        auto* windowOp = dynamic_cast<exec::Window*>(op);
+        auto* windowOp = op->as<exec::Window>();
         if (windowOp == nullptr || windowPool != nullptr) {
           return;
         }
@@ -2060,8 +2060,7 @@ DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::noMoreInput",
       std::function<void(Operator*)>([&](exec::Operator* op) {
-        if (dynamic_cast<exec::OrderBy*>(op) == nullptr ||
-            checkOnce.exchange(true)) {
+        if (!op->is<exec::OrderBy>() || checkOnce.exchange(true)) {
           return;
         }
         ASSERT_LT(

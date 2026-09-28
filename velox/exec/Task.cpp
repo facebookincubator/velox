@@ -2149,7 +2149,7 @@ void Task::endBarrierLocked(std::vector<ContinuePromise>& promises) {
 
 namespace {
 bool isTableScan(const Operator* op) {
-  return dynamic_cast<const TableScan*>(op) != nullptr;
+  return op != nullptr && op->is<TableScan>();
 }
 } // namespace
 

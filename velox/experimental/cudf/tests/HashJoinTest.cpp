@@ -8523,7 +8523,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
         }
         injectedSpillOnce = true;
         EXPECT_EQ(
-            dynamic_cast<HashProbe*>(op)->testingState(),
+            op->as<HashProbe>()->testingState(),
             ProbeOperatorState::kWaitForPeers);
         testingRunArbitration(op->pool());
       }));
@@ -9643,7 +9643,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([&](Operator* op) {
         if (probeOp == nullptr && op->operatorType() == "HashProbe") {
-          probeOp = dynamic_cast<HashProbe*>(op);
+          probeOp = op->as<HashProbe>();
         }
       }));
 
