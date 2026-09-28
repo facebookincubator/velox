@@ -433,18 +433,20 @@ Encoded encodeSubIntSplitWith(
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
   Encoding::Options encodeOptions;
-  encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
-  encodeOptions.subIntSplitPlannerMaxSamples =
-      static_cast<uint32_t>(FLAGS_planner_samples);
-  encodeOptions.subIntSplitBoundaryPruneThreshold = FLAGS_prune_threshold;
-  encodeOptions.subIntSplitMaxCandidateBoundaries =
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.selector.decodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  if (FLAGS_planner_samples > 0) {
+    tuning.sampler.maxSamples = static_cast<uint32_t>(FLAGS_planner_samples);
+  }
+  if (FLAGS_prune_threshold >= 0.0) {
+    tuning.selector.boundaryPruneThreshold = FLAGS_prune_threshold;
+  }
+  tuning.selector.maxCandidateBoundaries =
       static_cast<uint32_t>(FLAGS_max_boundaries);
-  encodeOptions.subIntSplitMaxSectionWidth =
-      static_cast<uint32_t>(FLAGS_max_section_width);
-  encodeOptions.subIntSplitFrequencyMetricsMaxWidth =
-      static_cast<uint32_t>(FLAGS_freq_max_width);
+  tuning.selector.maxSectionWidth = FLAGS_max_section_width;
+  tuning.selector.frequencyMetricsMaxWidth = FLAGS_freq_max_width;
   auto encoded = SubIntSplitEncoding<uint64_t>::encode(
-      selection, values, buffer, encodeOptions);
+      selection, values, buffer, encodeOptions, tuning);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
@@ -452,8 +454,6 @@ void decodeNimble(const std::string& encoded, uint32_t n) {
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
   Encoding::Options options;
-  options.subIntSplitDecodeChunkSize =
-      static_cast<uint32_t>(FLAGS_decode_chunk);
   auto enc =
       EncodingFactory{options}.create(*pool, encoded, nullFactory(), options);
   enc->materialize(n, out.data());
@@ -461,7 +461,19 @@ void decodeNimble(const std::string& encoded, uint32_t n) {
 }
 
 void decodeSubIntSplit(const std::string& encoded, uint32_t n) {
-  decodeNimble(encoded, n);
+  if (FLAGS_decode_chunk <= 0) {
+    decodeNimble(encoded, n);
+    return;
+  }
+  auto& pool = benchmarkPool();
+  std::vector<T> out(n);
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  if (FLAGS_decode_chunk > 0) {
+    tuning.decodeChunkSize = static_cast<uint32_t>(FLAGS_decode_chunk);
+  }
+  SubIntSplitEncoding<T> encoding{*pool, encoded, nullFactory(), {}, tuning};
+  encoding.materialize(n, out.data());
+  folly::doNotOptimizeAway(out);
 }
 
 std::vector<Method> makeMethods() {

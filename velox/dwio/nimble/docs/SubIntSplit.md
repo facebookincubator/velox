@@ -305,26 +305,29 @@ Explicit routing may produce a one-section encoding when the configured stream
 has no profitable split. Benchmark each routed stream because the wrapper adds
 metadata without decomposing the value in that case.
 
-## Tuning options
+## Tuning defaults
 
-The public `Encoding::Options` fields expose experiments used to understand
-planner and decoder costs. Their sentinel defaults preserve standard behavior.
+`subintsplit::kDefaultTuningConfig` owns the algorithm's production defaults.
+They are internal to SubIntSplit instead of fields on the generic
+`Encoding::Options` shared by every encoding.
 
-| Option | Sentinel and effective default | Effect |
-|---|---|---|
-| `subIntSplitDeltaPreTransform` | `false` | Compare raw and zigzag-delta forms |
-| `subIntSplitDecodeChunkSize` | `0` → 4,096 | Values reconstructed per decode chunk |
-| `subIntSplitDecodeCostBitsPerValue` | `0.0` | Penalize each extra dynamic section |
-| `subIntSplitPlannerMaxSamples` | `0` → 2,048 | Bound values sampled by the planner |
-| `subIntSplitBoundaryPruneThreshold` | negative → `0.001` | Discard weak adjacent bit-plane changes |
-| `subIntSplitMaxCandidateBoundaries` | `0` | Cap retained interior boundaries; zero is unlimited |
-| `subIntSplitMaxSectionWidth` | `0` | Skip wide grid cells except the full-range fallback |
-| `subIntSplitFrequencyMetricsMaxWidth` | `0` | Skip frequency metrics above a width |
-| `subIntSplitSectionCandidateMargin` | negative → `1.25` | Retain sampled RLE/MainlyConstant candidates within the margin |
+| Setting | Default | Effect |
+|---|---:|---|
+| Planner samples | 2,048 | Bound values sampled by the planner |
+| Boundary prune threshold | `0.001` | Discard weak adjacent bit-plane changes |
+| Candidate boundary cap | Unlimited | Bound the split grid when configured by a benchmark |
+| Maximum section width | Unlimited | Skip wide grid cells except the full-range fallback |
+| Frequency-metrics width | Unlimited | Skip frequency metrics above a width |
+| Decode-cost penalty | `0.0` bits/value | Penalize each extra dynamic section |
+| Decode chunk | 4,096 values | Bound values reconstructed per decode pass |
 
-Treat these as benchmark controls rather than table-level contracts. Changing
-planner options can change section boundaries and encoded bytes. Reader-only
-chunk size changes do not alter the format.
+Benchmarks and focused tests can pass an alternate `TuningConfig` directly to
+`SubIntSplitEncoding`. Normal writer and reader paths always use the constant
+default. Planner changes can alter section boundaries and encoded bytes;
+decode chunk size does not alter the format.
+
+`Encoding::Options::subIntSplitDeltaPreTransform` remains separate because it
+is a runtime rollout gate that changes the stream representation.
 
 ## Correctness invariants
 

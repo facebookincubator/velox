@@ -55,6 +55,24 @@ RPCOperator::RPCOperator(
       queryConfig.rpcCongestionMaxWindow());
 }
 
+RPCOperator::~RPCOperator() {
+  if (state_ == nullptr) {
+    return;
+  }
+  // Runs before ~Task, so the pools the vectors came from are still alive.
+  // Nothing may escape: a throw out of a destructor terminates the worker,
+  // which is the crash this release exists to prevent.
+  try {
+    state_->releaseAllInputBatches();
+  } catch (...) {
+    try {
+      RPC_OP_LOG(ERROR) << "Failed to release input batches during teardown.";
+    } catch (...) {
+      // Logging allocates, and the throw above may have been bad_alloc.
+    }
+  }
+}
+
 void RPCOperator::initialize() {
   Operator::initialize();
 

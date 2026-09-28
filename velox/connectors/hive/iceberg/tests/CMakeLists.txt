@@ -39,8 +39,13 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  # IcebergGeometryBuildGateTest.cpp lives here rather than in a target of its own: it pins the
+  # runtime behavior of a geometry read as a function of VELOX_ENABLE_GEO, and this target is
+  # already built in both GEO configurations and already links the libraries it needs. Its body is
+  # guarded by VELOX_ENABLE_PARQUET, so a Parquet-free build compiles it away.
   add_executable(
     velox_hive_iceberg_test
+    IcebergGeometryBuildGateTest.cpp
     IcebergPositionalDeleteTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
@@ -48,6 +53,13 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergTestBase.cpp
   )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
+
+  # The gate test selects its expectation on this definition; without it a GEO=ON build would
+  # assert the geospatial-free behavior. No other source in this target reads the flag. GEOS itself
+  # is not linked here, so a GEO=OFF build stays free of any geospatial dependency.
+  if(VELOX_ENABLE_GEO)
+    target_compile_definitions(velox_hive_iceberg_test PRIVATE VELOX_ENABLE_GEO)
+  endif()
 
   target_link_libraries(
     velox_hive_iceberg_test
@@ -92,6 +104,36 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main
   )
+
+  # Iceberg geometry reads exist only in a geospatial-enabled build, so the test target follows the
+  # same flag. This keeps a VELOX_ENABLE_GEO=OFF build free of any reference to GEOS targets.
+  if(VELOX_ENABLE_GEO AND VELOX_ENABLE_PARQUET)
+    add_executable(
+      velox_hive_iceberg_geometry_test
+      IcebergGeometryCrossRuntimeEncodingTest.cpp
+      IcebergGeometryReadTest.cpp
+      IcebergTestBase.cpp
+      Main.cpp
+    )
+    velox_add_test_headers(velox_hive_iceberg_geometry_test IcebergTestBase.h)
+    add_test(velox_hive_iceberg_geometry_test velox_hive_iceberg_geometry_test)
+
+    target_link_libraries(
+      velox_hive_iceberg_geometry_test
+      velox_exec_test_lib
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      velox_common_geospatial_serde
+      velox_presto_types
+      velox_vector_test_lib
+      velox_vector_fuzzer
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+      GEOS::geos
+      GTest::gtest
+      OpenSSL::Crypto
+    )
+  endif()
 
   add_executable(velox_hive_iceberg_deletion_vector_test DeletionVectorReaderTest.cpp)
   add_test(velox_hive_iceberg_deletion_vector_test velox_hive_iceberg_deletion_vector_test)

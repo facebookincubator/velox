@@ -1757,6 +1757,172 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
   }
 }
 
+// A VARBINARY-backed registered custom logical type. Declared here rather than
+// in velox/type/tests/utils/CustomTypesForTesting.h because a CustomTypeFactory
+// returns an exec::CastOperatorPtr, which that header does not depend on.
+class TestCustomBinaryType final : public VarbinaryType {
+  TestCustomBinaryType() = default;
+
+ public:
+  static std::shared_ptr<const TestCustomBinaryType> get() {
+    VELOX_CONSTEXPR_SINGLETON TestCustomBinaryType kInstance;
+    return {std::shared_ptr<const TestCustomBinaryType>{}, &kInstance};
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
+    return "HASHPROBE_TEST_CUSTOM_BINARY";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = name();
+    return obj;
+  }
+};
+
+std::shared_ptr<const TestCustomBinaryType> TEST_CUSTOM_BINARY() {
+  return TestCustomBinaryType::get();
+}
+
+class TestCustomBinaryTypeFactory : public CustomTypeFactory {
+ public:
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
+    return TEST_CUSTOM_BINARY();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
+  }
+};
+
+// A pushed-down dynamic filter is evaluated by the scan against the column's
+// physical bytes, but a custom logical type may have a connector-specific
+// physical representation that differs from its in-memory one. HashProbe
+// therefore must not build a BytesValues filter from the in-memory values of a
+// registered custom type, even when string/binary pushdown is enabled. The
+// normal hash join still runs, so only the optimization is lost.
+TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
+  registerCustomType(
+      "hashprobe_test_custom_binary",
+      std::make_unique<const TestCustomBinaryTypeFactory>());
+  SCOPE_EXIT {
+    unregisterCustomType("hashprobe_test_custom_binary");
+  };
+  ASSERT_TRUE(customTypeExists(TEST_CUSTOM_BINARY()->name()));
+
+  constexpr vector_size_t kNumRows = 100;
+  auto keyAt = [](vector_size_t row) {
+    return StringView::makeInline(fmt::format("key_{:03}", row));
+  };
+
+  // The probe side is a table scan, which is the only operator that can accept
+  // a pushed-down filter; a values() source would never produce one and the
+  // test would pass vacuously. The file is written as plain VARBINARY, and the
+  // scan is asked for the custom type over the same bytes -- the same shape a
+  // connector that re-encodes on read produces.
+  auto probeVector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<StringView>(kNumRows, keyAt, nullptr, VARBINARY()),
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  auto probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), probeVector);
+
+  // Only three build keys, so a pushed-down filter would be highly selective
+  // and its absence is visible in the scan's input positions.
+  const std::vector<vector_size_t> buildRows = {7, 42, 91};
+
+  auto expected = makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>(buildRows.size(), [&](auto row) {
+        return buildRows[row];
+      })});
+
+  // 'keyType' is the type the scan is asked to produce for c0, and the type of
+  // the build key it is joined against.
+  auto runJoin = [&](const TypePtr& keyType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanId;
+    // The build key must carry the same type as the probe key, since the
+    // custom type is only equivalent to itself.
+    auto buildSide =
+        PlanBuilder(planNodeIdGenerator, pool_.get())
+            .values({makeRowVector(
+                {"u_c0"},
+                {makeFlatVector<StringView>(
+                    buildRows.size(),
+                    [&](auto row) { return keyAt(buildRows[row]); },
+                    nullptr,
+                    keyType)})})
+            .planNode();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator, pool_.get())
+            .tableScan(ROW({"c0", "c1"}, {keyType, BIGINT()}))
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
+            .planNode();
+
+    std::shared_ptr<Task> task;
+    auto result =
+        AssertQueryBuilder(plan)
+            .config(
+                core::QueryConfig::kHashProbeDynamicFilterPushdownEnabled,
+                "true")
+            .config(
+                core::QueryConfig::kHashProbeStringDynamicFilterPushdownEnabled,
+                "true")
+            .split(
+                probeScanId,
+                exec::Split(makeHiveConnectorSplit(probeFile->getPath())))
+            .copyResults(pool_.get(), task);
+    return std::make_pair(std::move(result), std::move(task));
+  };
+
+  {
+    SCOPED_TRACE("registered custom VARBINARY-backed type: no filter");
+    auto [result, task] = runJoin(TEST_CUSTOM_BINARY());
+
+    // The join still runs and matches correctly.
+    assertEqualResults({expected}, {result});
+
+    // Operator 0 is the table scan and operator 1 the hash probe, as in the
+    // other dynamic filter tests in this file.
+    ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+    ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+    ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+    // Without a pushed-down filter the scan hands every row to the probe.
+    ASSERT_EQ(kNumRows, getInputPositions(task, 1));
+  }
+
+  {
+    SCOPED_TRACE("plain VARBINARY: filter is still produced");
+    // Control: the guard must be specific to registered custom types and must
+    // not have disabled string/binary pushdown in general.
+    auto [result, task] = runJoin(VARBINARY());
+
+    assertEqualResults({expected}, {result});
+
+    ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+    ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+    ASSERT_LT(getInputPositions(task, 1), kNumRows);
+  }
+}
+
 TEST_P(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
   vector_size_t size = 1000;
   const int32_t numSplits = 5;
