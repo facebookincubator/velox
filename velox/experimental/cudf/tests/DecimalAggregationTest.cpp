@@ -264,17 +264,27 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
       {2'000, 2'000, largeDenominator, 2'000, 2'000}, 3, &longValid, stream);
   const std::vector<cudf::column_view> inputs{
       shortDecimal->view(), longDecimal->view()};
+  // short_decimal's zero is only reachable as a divisor when the other operand
+  // is a scalar: every column operand is null on that row. Value checks for
+  // that shape use a divisor column without the zero.
+  auto zeroFreeShortDecimal = makeDecimalColumn<int64_t>(
+      {1'000, -1'000, 1'000, 1'000, 500}, 2, &shortValid, stream);
+  auto zeroFreeLongDecimal = makeDecimalColumn<int128_t>(
+      {2'000, 2'000, largeDenominator, 2'000, 2'000}, 3, &longValid, stream);
+  const std::vector<cudf::column_view> zeroFreeInputs{
+      zeroFreeShortDecimal->view(), longDecimal->view()};
 
   auto assertDivision =
       [&](const std::string& sql,
           const TypePtr& expectedType,
-          const std::vector<std::optional<int128_t>>& expected) {
+          const std::vector<std::optional<int128_t>>& expected,
+          const std::vector<cudf::column_view>& evalInputs) {
         SCOPED_TRACE(sql);
         auto expression = test_utils::optimizeTypedExpr(
             sql, rowType, queryCtx.get(), &execCtx);
         ASSERT_TRUE(expression->type()->equivalent(*expectedType));
         auto evaluator = createCudfExpression(expression, rowType, pool());
-        auto result = evaluator->eval(inputs, stream, mr);
+        auto result = evaluator->eval(evalInputs, stream, mr);
         const auto view = asView(result);
         ASSERT_EQ(view.type(), veloxToCudfDataType(expectedType));
         ASSERT_EQ(view.size(), expected.size());
@@ -301,31 +311,51 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
   assertDivision(
       "short_decimal / long_decimal",
       DECIMAL(11, 3),
-      {5'000, -5'000, 0, std::nullopt, std::nullopt});
+      {5'000, -5'000, 0, std::nullopt, std::nullopt},
+      inputs);
+  // The last row divides by short_decimal's zero, but long_decimal is null
+  // so the row is discarded before the divisor is inspected.
   assertDivision(
       "long_decimal / short_decimal",
       DECIMAL(22, 3),
-      {200, -200, 1'844'674'407'370'955'162, std::nullopt, std::nullopt});
+      {200, -200, 1'844'674'407'370'955'162, std::nullopt, std::nullopt},
+      inputs);
   assertDivision(
       "short_decimal / CAST('2.000' AS DECIMAL(20, 3))",
       DECIMAL(11, 3),
-      {5'000, -5'000, 5'000, std::nullopt, 0});
+      {5'000, -5'000, 5'000, std::nullopt, 0},
+      inputs);
   assertDivision(
       "long_decimal / CAST('10.00' AS DECIMAL(7, 2))",
       DECIMAL(22, 3),
-      {200, 200, 1'844'674'407'370'955'162, 200, std::nullopt});
+      {200, 200, 1'844'674'407'370'955'162, 200, std::nullopt},
+      inputs);
   assertDivision(
       "CAST('10.00' AS DECIMAL(7, 2)) / long_decimal",
       DECIMAL(11, 3),
-      {5'000, 5'000, 0, 5'000, std::nullopt});
+      {5'000, 5'000, 0, 5'000, std::nullopt},
+      inputs);
   assertDivision(
       "CAST('2.000' AS DECIMAL(20, 3)) / short_decimal",
       DECIMAL(22, 3),
-      {200, -200, 200, std::nullopt, std::nullopt});
+      {200, -200, 200, std::nullopt, 400},
+      zeroFreeInputs);
   assertDivision(
       "short_decimal / CAST('18446744073709551.616' AS DECIMAL(20, 3))",
       DECIMAL(11, 3),
-      {0, 0, 0, std::nullopt, 0});
+      {0, 0, 0, std::nullopt, 0},
+      zeroFreeInputs);
+  // A zero divisor on a row that survives the null stencil fails the whole
+  // expression, as decimal divide does on the CPU.
+  {
+    const std::string sql = "CAST('2.000' AS DECIMAL(20, 3)) / short_decimal";
+    SCOPED_TRACE(sql);
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    VELOX_ASSERT_USER_THROW(
+        evaluator->eval(inputs, stream, mr), "Division by zero");
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {

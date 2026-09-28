@@ -55,6 +55,24 @@ RPCOperator::RPCOperator(
       queryConfig.rpcCongestionMaxWindow());
 }
 
+RPCOperator::~RPCOperator() {
+  if (state_ == nullptr) {
+    return;
+  }
+  // Runs before ~Task, so the pools the vectors came from are still alive.
+  // Nothing may escape: a throw out of a destructor terminates the worker,
+  // which is the crash this release exists to prevent.
+  try {
+    state_->releaseAllInputBatches();
+  } catch (...) {
+    try {
+      RPC_OP_LOG(ERROR) << "Failed to release input batches during teardown.";
+    } catch (...) {
+      // Logging allocates, and the throw above may have been bad_alloc.
+    }
+  }
+}
+
 void RPCOperator::initialize() {
   Operator::initialize();
 
@@ -125,8 +143,8 @@ void RPCOperator::initialize() {
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
-  *liveStatsSources_.wlock() =
-      LiveStatsSources{.state = state_, .limiter = limiter_};
+  *liveStatsSources_.wlock() = LiveStatsSources{
+      .state = state_, .limiter = limiter_, .function = function_};
 
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
@@ -155,8 +173,8 @@ void RPCOperator::initializeRateLimiter() {
 
   admissionKey_ = function_->admissionKey();
   limiter_ = &RPCRateLimiterRegistry::global().get(admissionKey_);
-  *liveStatsSources_.wlock() =
-      LiveStatsSources{.state = state_, .limiter = limiter_};
+  *liveStatsSources_.wlock() = LiveStatsSources{
+      .state = state_, .limiter = limiter_, .function = function_};
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   // The first query fixes this shared controller's configuration.
@@ -1209,6 +1227,15 @@ void RPCOperator::addLiveProgressStats(
   const auto snapshot = sources->state->operatorSnapshot();
   stats.runtimeStats[kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
+  // The transport's retry ladder, which the two counters above cannot see: a
+  // retried request is dispatched once and completes once, however many
+  // attempts it takes in between. Published alongside them so a caller
+  // watching for liveness can tell a transport working through a backoff
+  // schedule from a backend that has stopped answering.
+  if (sources->function != nullptr) {
+    stats.runtimeStats[kRpcRetriesAttempted] =
+        RuntimeMetric(sources->function->numRetriesAttempted());
+  }
   // The backend's admission capacity trajectory: the capacity this operator
   // shares with every other driver dispatching to the same backend, as
   // distinct from the per-driver rpcCongestion* window. Emitted for every

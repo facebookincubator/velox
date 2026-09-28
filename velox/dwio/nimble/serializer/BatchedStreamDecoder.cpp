@@ -70,6 +70,22 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
   NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
 }
 
+// Get the ScalarKind for a type based on its storage format. Types the legacy
+// headerless format never wrote map to Undefined, which StreamData rejects for
+// raw streams.
+inline ScalarKind getScalarKindForType(const Type& type) {
+  if (type.isScalar()) {
+    return type.asScalar().scalarDescriptor().scalarKind();
+  } else if (type.isRow() || type.isFlatMap()) {
+    // Row/FlatMap nulls streams are boolean.
+    return ScalarKind::Bool;
+  } else if (type.isArray() || type.isMap()) {
+    // Array/Map lengths streams are uint32_t.
+    return ScalarKind::UInt32;
+  }
+  return ScalarKind::Undefined;
+}
+
 // Empty scattered reads still need to mark every output row as absent.
 inline void markEmptyScatteredOutputNulls(
     const std::function<void*()>& getOutputNulls,
@@ -103,6 +119,7 @@ BatchedStreamDecoder::BatchedStreamDecoder(
     : type_{type},
       pool_{pool},
       isInMapStream_{isInMapStream},
+      scalarKind_{getScalarKindForType(*type)},
       typeStorageWidth_{getTypeStorageWidth(*type)},
       bufferPool_{
           bufferPoolCapacity > 0
@@ -228,12 +245,15 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData(
   const auto& segment = streamSegments_[streamSegmentIndex_];
   streamData_.emplace(
       segment.data,
+      scalarKind_,
       stringBuffers,
       pool_,
       serde::StreamData::Options{
+          .legacyHeaderless = segment.legacyHeaderless,
           .streamEncodingUsesVarintRowCount =
               segment.streamEncodingUsesVarintRowCount,
-          .bufferPool = bufferPool_.get()});
+          .bufferPool = bufferPool_.get(),
+          .decompressionBuffer = &decompressionBuffer_});
   return *streamData_;
 }
 
@@ -289,6 +309,21 @@ uint32_t BatchedStreamDecoder::fillInMapGap(
   return numGapRows;
 }
 
+serde::StreamData::DecodeResult
+BatchedStreamDecoder::readLegacyHeaderlessSegment(
+    serde::StreamData& streamData,
+    void* output,
+    uint32_t offset,
+    uint32_t count) {
+  const auto width = typeStorageWidth_;
+  if (width > 0) {
+    return streamData.decodeLegacyHeaderless(output, offset, count, width);
+  }
+
+  auto* dest = static_cast<std::string_view*>(output) + offset;
+  return streamData.decodeStrings(count, dest);
+}
+
 serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
     void* output,
     uint32_t offset,
@@ -302,6 +337,13 @@ serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
 
   NIMBLE_CHECK_LT(streamSegmentIndex_, streamSegments_.size());
   auto& streamData = ensureStreamData(stringBuffers);
+  if (!streamData.hasEncoding()) {
+    NIMBLE_CHECK_NULL(
+        scatterOutputBitmap,
+        "scatterOutputBitmap is only used for encoded streams");
+    return readLegacyHeaderlessSegment(streamData, output, offset, count);
+  }
+
   const auto width = typeStorageWidth_;
   return streamData.decode(
       output, offset, count, width, getOutputNulls, scatterOutputBitmap);

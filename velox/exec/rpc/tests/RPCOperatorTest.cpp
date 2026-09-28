@@ -38,7 +38,9 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 
+#include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -1114,6 +1116,103 @@ TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
       "Unknown RPC function");
 }
 
+// A standalone operator on a live DriverCtx reproduces the teardown that
+// skips close() without the race: the second RPCState reference stands in
+// for an in-flight callback, and the input vector's use count is what the
+// operator would otherwise still be holding at ~Task.
+TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-release",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto retained = BaseVector::create(VARCHAR(), 3, pool());
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{retained}, /*rowCount=*/3);
+  ASSERT_GT(retained.use_count(), 1);
+  auto callbackRef = rpcOperator->testingState();
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(retained.use_count(), 1)
+      << "the operator was destroyed without close() and kept its input "
+         "vectors, which upstream pools would still be reserving at ~Task";
+  EXPECT_TRUE(callbackRef->getInputBatchColumns(0).empty());
+}
+
+// The reservation the arbitrator actually checks. The test above retains a
+// vector from VectorTestBase::pool(), which is rooted outside the Task, so
+// the Task's pools read zero whether or not the operator released -- it can
+// only observe a use count. The driver allocates input from an upstream
+// operator's pool, a leaf of the Task's tree, and those bytes reach the query
+// root: left there, ~Task drops the root with a live reservation and
+// SharedArbitrator::removePool fails pool->reservedBytes() == 0, taking the
+// worker down with SIGABRT.
+TEST_F(RPCOperatorTest, retainedInputReleasesTheTaskPoolReservation) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-reservation",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto* upstreamPool = driverCtx.addOperatorPool("values-0", "Values");
+  constexpr vector_size_t kRetainedRows{1 << 16};
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{
+          BaseVector::create(VARCHAR(), kRetainedRows, upstreamPool)},
+      kRetainedRows);
+  auto callbackRef = rpcOperator->testingState();
+  ASSERT_GT(task->pool()->reservedBytes(), 0)
+      << "the retained vector must reserve on the Task's tree, otherwise this "
+         "test cannot see the invariant it is about";
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(task->pool()->reservedBytes(), 0)
+      << "the operator was destroyed without close() and left its input "
+         "vectors reserving on the Task's pools; ~Task would abort in "
+         "SharedArbitrator::removePool";
+  // Keep a regression from taking the whole binary down in ~Task.
+  callbackRef->releaseAllInputBatches();
+}
+
 // Claims VARCHAR at the plan level -- so RPCNode's own checks pass -- while
 // the function actually returns BIGINT. This is the disagreement the plan node
 // cannot see: it compares the CALL expression against the declared column, not
@@ -1801,6 +1900,54 @@ class ExecutionModeRecordingRPCFunction : public SlowBatchRPCFunction {
   RPCStreamingMode receivedExecutionMode_{RPCStreamingMode::kPerRow};
 };
 
+// Stands in for a transport climbing a retry ladder: while the base class's
+// batch is in flight the function reports a growing retry count, and only then
+// does the batch resolve. No dispatch and no completion happens in between, so
+// this is precisely the interval the operator's other live counters cannot
+// see.
+class RetryingBatchRPCFunction : public SlowBatchRPCFunction {
+ public:
+  static constexpr int32_t kNumRetries{3};
+
+  RetryingBatchRPCFunction(
+      std::chrono::milliseconds latency,
+      std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
+      : SlowBatchRPCFunction(latency, executor),
+        executor_(std::move(executor)),
+        // Held by shared_ptr rather than captured through 'this': the
+        // continuations below outlive an operator that closes early, and the
+        // operator drops the function at close().
+        numRetriesAttempted_(std::make_shared<std::atomic<int64_t>>(0)),
+        // Spaced so every bump lands inside the base class's latency window,
+        // i.e. strictly while the driver is parked on the batch.
+        retryInterval_(latency / (kNumRetries + 1)) {}
+
+  std::string name() const override {
+    return "retrying_batch_rpc";
+  }
+
+  int64_t numRetriesAttempted() const override {
+    return numRetriesAttempted_->load(std::memory_order_relaxed);
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    for (int32_t retry = 1; retry <= kNumRetries; ++retry) {
+      folly::futures::sleep(retryInterval_ * retry)
+          .via(executor_.get())
+          .thenValue([counter = numRetriesAttempted_](folly::Unit) {
+            counter->fetch_add(1, std::memory_order_relaxed);
+          });
+    }
+    return SlowBatchRPCFunction::flushBatch(maxRows);
+  }
+
+ private:
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
+  std::shared_ptr<std::atomic<int64_t>> numRetriesAttempted_;
+  const std::chrono::milliseconds retryInterval_;
+};
+
 } // namespace
 
 // Regression proof for the BATCH mid-stream back-pressure yield.
@@ -1967,6 +2114,124 @@ TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
           << "in-flight gauge was frozen into the finished task's stats";
       EXPECT_GT(
           op.runtimeStats.at(RPCOperator::kRpcCompletionsSignaled).sum, 0);
+    }
+  }
+}
+
+// A transport retrying a request keeps the row open without resolving it, so
+// rpcRequestsDispatched and rpcCompletionsSignaled both stand still for as long
+// as the ladder runs. rpcRetriesAttempted is what separates that from a backend
+// that has stopped answering.
+//
+// The plan parks the driver on one slow batch whose function reports a growing
+// retry count while it is in flight, then samples Task::taskStats() throughout.
+// Dispatches and completions are asserted to stand still across the same window
+// the retries move in — without them the operator looks identical to a wedge.
+TEST_F(RPCOperatorTest, rpcRetriesAttemptedAdvancesWhileDriverIsParked) {
+  constexpr std::chrono::milliseconds kLatency{500};
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  AsyncRPCFunctionRegistry::registerFunction(
+      "retrying_batch_rpc_liveness",
+      [kLatency, rpcExecutor]() {
+        return std::make_shared<RetryingBatchRPCFunction>(
+            kLatency, rpcExecutor);
+      },
+      DemoBatchRPCFunction::signatures());
+
+  constexpr int kRows = 2;
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    inputs.push_back(makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+  }
+
+  CursorParameters params;
+  params.planNode = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "retrying_batch_rpc_liveness",
+      /*dispatchBatchSize=*/1);
+  params.maxDrivers = 1;
+
+  auto cursor = TaskCursor::create(params);
+  const auto task = cursor->task();
+
+  // Highest rpcRetriesAttempted seen mid-run, i.e. strictly before the operator
+  // closes and publishes its final stats.
+  int64_t retriesWhileParked{0};
+  // Set once a sample shows the retry counter moving between two consecutive
+  // readings whose dispatch and completion counters are identical: the interval
+  // the progress signal was blind to before this counter existed.
+  bool sawRetriesWithoutProgress{false};
+
+  struct Sample {
+    int64_t retries{0};
+    int64_t dispatched{0};
+    int64_t completions{0};
+  };
+  std::optional<Sample> previous;
+
+  const auto readStat = [](const auto& op, const std::string& name) {
+    const auto it = op.runtimeStats.find(name);
+    return it == op.runtimeStats.end() ? 0 : it->second.sum;
+  };
+  const auto sampleLiveStats = [&]() {
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.operatorType != "RPC") {
+          continue;
+        }
+        const Sample sample{
+            .retries = readStat(op, RPCOperator::kRpcRetriesAttempted),
+            .dispatched = readStat(op, RPCOperator::kRpcRequestsDispatched),
+            .completions = readStat(op, RPCOperator::kRpcCompletionsSignaled),
+        };
+        if (previous.has_value() && sample.retries > previous->retries &&
+            sample.dispatched == previous->dispatched &&
+            sample.completions == previous->completions) {
+          sawRetriesWithoutProgress = true;
+        }
+        retriesWhileParked = std::max(retriesWhileParked, sample.retries);
+        previous = sample;
+      }
+    }
+  };
+
+  int32_t numOutputRows{0};
+  while (true) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (cursor->moveNext(&future)) {
+      numOutputRows += cursor->current()->size();
+      continue;
+    }
+    if (!future.valid()) {
+      break;
+    }
+    while (!future.isReady()) {
+      sampleLiveStats();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::move(future).wait();
+  }
+
+  EXPECT_EQ(numOutputRows, kRows);
+  EXPECT_GT(retriesWhileParked, 0)
+      << "rpcRetriesAttempted never advanced while the driver was blocked";
+  EXPECT_TRUE(sawRetriesWithoutProgress)
+      << "retries only ever moved together with a dispatch or a completion, "
+         "so the new counter adds nothing the old two did not already show";
+
+  // Monotonic, so unlike the in-flight gauge it stays meaningful after the
+  // fact and is still published at close().
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType != "RPC") {
+        continue;
+      }
+      EXPECT_GE(
+          op.runtimeStats.at(RPCOperator::kRpcRetriesAttempted).sum,
+          retriesWhileParked);
     }
   }
 }

@@ -20,6 +20,14 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
+/// Pipeline context:
+///
+///   SplitSelector -> [BitSection / SectionPlan] -> encoder, format, decoder
+///
+/// These types are the shared plan contract. Bit positions are inclusive and
+/// LSB-based; every consumer relies on a plan tiling the physical width in
+/// ascending order.
+
 namespace facebook::nimble::subintsplit {
 
 /// Half-open-free, inclusive range of bit positions within a value, shared by

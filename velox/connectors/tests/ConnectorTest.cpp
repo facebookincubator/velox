@@ -73,6 +73,30 @@ TEST(ConnectorTest, registryOperations) {
   EXPECT_EQ(ConnectorRegistry::findAll<TestConnector>().size(), 0);
 }
 
+TEST(ConnectorTest, connectorQueryCtxBuilder) {
+  config::ConfigBase sessionProperties({});
+  auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                               .sessionProperties(&sessionProperties)
+                               .queryId("query")
+                               .taskId("task")
+                               .planNodeId("plan")
+                               .driverId(7)
+                               .sessionTimezone("America/Los_Angeles")
+                               .adjustTimestampToTimezone(true)
+                               .build();
+
+  EXPECT_EQ(connectorQueryCtx->memoryPool(), nullptr);
+  EXPECT_EQ(connectorQueryCtx->connectorMemoryPool(), nullptr);
+  EXPECT_EQ(connectorQueryCtx->sessionProperties(), &sessionProperties);
+  EXPECT_EQ(connectorQueryCtx->queryId(), "query");
+  EXPECT_EQ(connectorQueryCtx->taskId(), "task");
+  EXPECT_EQ(connectorQueryCtx->planNodeId(), "plan");
+  EXPECT_EQ(connectorQueryCtx->scanId(), "task.plan");
+  EXPECT_EQ(connectorQueryCtx->driverId(), 7);
+  EXPECT_EQ(connectorQueryCtx->sessionTimezone(), "America/Los_Angeles");
+  EXPECT_TRUE(connectorQueryCtx->adjustTimestampToTimezone());
+}
+
 class ConnectorRegistryTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
@@ -90,23 +114,17 @@ class ConnectorQueryCtxTest : public testing::Test {
 TEST_F(ConnectorQueryCtxTest, noCustomMemoryPoolsByDefault) {
   auto pool = memory::memoryManager()->addLeafPool("operator");
   config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
-  ConnectorQueryCtx context(
-      pool.get(),
-      nullptr,
-      &config,
-      nullptr,
-      {},
-      nullptr,
-      nullptr,
-      "query",
-      "task",
-      "scan",
-      0,
-      "");
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .build();
 
-  EXPECT_EQ(context.memoryPool(), pool.get());
-  EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
-  EXPECT_EQ(context.customMemoryPool("cxl"), nullptr);
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), nullptr);
+  EXPECT_EQ(context->customMemoryPool("cxl"), nullptr);
 }
 
 TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
@@ -116,29 +134,20 @@ TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
   config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
   std::unordered_map<std::string, memory::MemoryPool*> customPools{
       {"gpu", gpu.get()}, {"cxl", cxl.get()}};
-  ConnectorQueryCtx context(
-      pool.get(),
-      nullptr,
-      &config,
-      nullptr,
-      {},
-      nullptr,
-      nullptr,
-      "query",
-      "task",
-      "scan",
-      0,
-      "",
-      false,
-      {},
-      nullptr,
-      customPools);
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .customPools(customPools)
+                     .build();
   customPools.clear();
 
-  EXPECT_EQ(context.memoryPool(), pool.get());
-  EXPECT_EQ(context.customMemoryPool("gpu"), gpu.get());
-  EXPECT_EQ(context.customMemoryPool("cxl"), cxl.get());
-  EXPECT_EQ(context.customMemoryPool("missing"), nullptr);
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), gpu.get());
+  EXPECT_EQ(context->customMemoryPool("cxl"), cxl.get());
+  EXPECT_EQ(context->customMemoryPool("missing"), nullptr);
 }
 
 TEST_F(ConnectorRegistryTest, queryScopedOverride) {

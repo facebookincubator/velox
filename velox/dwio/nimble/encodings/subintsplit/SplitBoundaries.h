@@ -24,12 +24,19 @@
 
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
-// Encoding-selection config that pins a SubIntSplit encoding to a previously
-// chosen split, so a captured encoding layout replays byte-identically instead
-// of re-running the planner over fresh data.
-//
-// Boundaries serialize as "start-end;start-end;…", LSB-first, covering every
-// bit of the physical type with no gaps.
+/// Encoding-selection config that pins a SubIntSplit encoding to a previously
+/// chosen split, so a captured encoding layout replays byte-identically instead
+/// of re-running the planner over fresh data.
+///
+/// Boundaries serialize as "start-end;start-end;…", LSB-first, covering every
+/// bit of the physical type with no gaps.
+///
+/// Configuration context:
+///
+///   SectionPlan <-> [stable text configuration] -> preserve-mode encoding
+///
+/// Boundaries, optional child encodings, and candidate exclusions are parallel
+/// lists. Their section counts and LSB-first ordering must remain aligned.
 
 namespace facebook::nimble::subintsplit {
 

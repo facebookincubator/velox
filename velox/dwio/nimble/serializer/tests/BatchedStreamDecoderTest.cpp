@@ -216,6 +216,7 @@ void addBatches(
       decoder.addBatch(
           startRow,
           batch.stream(streamOffset),
+          /*legacyHeaderless=*/false,
           batch.streamEncodingUsesVarintRowCount);
     }
     startRow += batch.rowCount;
@@ -305,7 +306,10 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
     BatchedStreamDecoder decoder{
         &type, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
     decoder.addBatch(
-        /*startRow=*/0, encoded, options.encodingOptions.useVarintRowCount);
+        /*startRow=*/0,
+        encoded,
+        /*legacyHeaderless=*/false,
+        options.encodingOptions.useVarintRowCount);
     std::vector<std::string_view> decodedViews(count);
     std::vector<facebook::velox::BufferPtr> stringBuffers;
     EXPECT_EQ(
@@ -347,7 +351,10 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
   BatchedStreamDecoder inMapDecoder{
       &inMapType, /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
   inMapDecoder.addBatch(
-      /*startRow=*/0, encodedInMap, options.encodingOptions.useVarintRowCount);
+      /*startRow=*/0,
+      encodedInMap,
+      /*legacyHeaderless=*/false,
+      options.encodingOptions.useVarintRowCount);
   std::vector<uint8_t> decodedInMap(expectedInMap.size());
   std::vector<facebook::velox::BufferPtr> stringBuffers;
   EXPECT_EQ(
@@ -497,7 +504,11 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
               .useVarintRowCount = useVarintRowCount[i],
           });
       encodedBuffers.push_back(std::move(buffer));
-      decoder.addBatch(startRow, encodedSegments[i], useVarintRowCount[i]);
+      decoder.addBatch(
+          startRow,
+          encodedSegments[i],
+          /*legacyHeaderless=*/false,
+          useVarintRowCount[i]);
       startRow += static_cast<uint32_t>(batches[i].size());
     }
 
@@ -711,6 +722,7 @@ TEST_F(BatchedStreamDecoderTest, addBatchRejectsEmptySegment) {
       decoder.addBatch(
           0,
           std::string_view{},
+          /*legacyHeaderless=*/false,
           /*streamEncodingUsesVarintRowCount=*/true),
       "Physical stream segment must be non-empty");
 }
@@ -825,6 +837,7 @@ TEST_F(
   decoder.addBatch(
       /*startRow=*/0,
       input.batches[0].stream(inMapOffsetB),
+      /*legacyHeaderless=*/false,
       input.batches[0].streamEncodingUsesVarintRowCount);
   decoder.addPresentInMapBatch(/*startRow=*/4, /*rowCount=*/3);
 

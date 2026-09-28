@@ -198,7 +198,7 @@ class RPCState {
 
   /// Drop every retained input vector, regardless of activeRowCount.
   ///
-  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// Called from RPCOperator::close() and ~RPCOperator(). In-flight RPC
   /// callbacks hold a shared_ptr to this object, so it can outlive the
   /// operator, the Task and the query's memory pools. The input vectors were
   /// allocated from upstream operators' pools, so holding them past teardown
