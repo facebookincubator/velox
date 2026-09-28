@@ -84,6 +84,13 @@ class Aggregate {
     return true;
   }
 
+  /// Returns true if the accumulator state is expected to be smaller than its
+  /// input. Aggregates whose state generally grows with input cardinality
+  /// should return false.
+  virtual bool isReducing() const {
+    return true;
+  }
+
   /// Returns true if toIntermediate() is supported.
   virtual bool supportsToIntermediate() const {
     return false;
