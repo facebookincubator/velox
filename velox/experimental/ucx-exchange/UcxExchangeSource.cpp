@@ -107,9 +107,23 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
 
 void UcxExchangeSource::process() {
   if (closed_) {
-    // Driver thread called closed
-    cleanUp();
-    return;
+    const auto state = getState();
+    if (state == ReceiverState::WaitingForHandshakeComplete ||
+        state == ReceiverState::WaitingForHandshakeResponse) {
+      // Wait for the handshake response before cancelling a destination;
+      // the producer has no server to receive cancellation until then.
+      if (endpointRef_ && endpointRef_->endpoint_->isAlive()) {
+        return;
+      }
+      setState(ReceiverState::Done);
+      cleanUp();
+      return;
+    }
+    if (state != ReceiverState::Created) {
+      sendDestinationCancellation();
+      cleanUp();
+      return;
+    }
   }
 
   switch (state_) {
@@ -215,6 +229,9 @@ void UcxExchangeSource::cleanUp() {
       communicator_->deferRequestCleanup(std::move(req));
     }
     completedRequests_.clear();
+    if (cancellationRequest_) {
+      communicator_->deferRequestCleanup(std::move(cancellationRequest_));
+    }
   }
 
   if (endpointRef_) {
@@ -224,6 +241,22 @@ void UcxExchangeSource::cleanUp() {
   if (communicator_) {
     communicator_->unregister(getSelfPtr());
   }
+}
+
+void UcxExchangeSource::onEndpointClosed() {
+  if (!closed_.exchange(true, std::memory_order_acq_rel) && !atEnd_) {
+    queue_->setError(
+        fmt::format(
+            "UCX endpoint closed before end of stream from {}:{} for {}",
+            host_,
+            port_,
+            partitionKey_.toString()));
+  }
+  // No receive may be pending when backpressure pauses this source.
+  // Endpoint loss must therefore be reported before delivering the end marker.
+  deliverEndMarker();
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
 }
 
 void UcxExchangeSource::close() {
@@ -237,7 +270,10 @@ void UcxExchangeSource::close() {
   bool desired = true;
   if (!closed_.compare_exchange_strong(
           expected, desired, std::memory_order_acq_rel)) {
-    return; // already closed.
+    // Revisit a pending handshake if the endpoint closes after a prior
+    // close(), so the progress thread can release the source.
+    communicator_->addToWorkQueue(getSelfPtr());
+    return;
   }
 
   VLOG(1) << toString() << " UcxExchangeSource::close called.";
@@ -245,9 +281,37 @@ void UcxExchangeSource::close() {
   // Guarantee the end marker is delivered before transitioning to Done.
   deliverEndMarker();
 
-  // Let the Communicator progress thread do the actual clean-up.
-  setState(ReceiverState::Done);
+  // Keep an early-closed source alive until the remote server can receive
+  // its cancellation.
+  const auto state = getState();
+  if (state != ReceiverState::Created &&
+      state != ReceiverState::WaitingForHandshakeComplete &&
+      state != ReceiverState::WaitingForHandshakeResponse) {
+    setState(ReceiverState::Done);
+  }
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::sendDestinationCancellation() {
+  if (atEnd_ || isIntraNodeTransfer_ || !endpointRef_ ||
+      !endpointRef_->endpoint_->isAlive() || cancellationRequest_) {
+    return;
+  }
+
+  auto cancellation = std::make_shared<uint8_t>(0);
+  cancellationRequest_ = endpointRef_->endpoint_->tagSend(
+      cancellation.get(),
+      sizeof(*cancellation),
+      ucxx::Tag{getDestinationCancellationTag(partitionKeyHash_)},
+      false,
+      [key = partitionKey_.toString()](
+          ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+        if (status != UCS_OK) {
+          VLOG(1) << "Failed to cancel UCX destination " << key << ": "
+                  << ucs_status_string(status);
+        }
+      },
+      cancellation);
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -388,12 +452,8 @@ void UcxExchangeSource::onHandshake(
   // transmitted). The parameter exists only because UCXX uses it as a lifetime
   // handle; letting it go out of scope releases the send buffer.
 
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString() << " onHandshake called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // Complete the handshake even after close() so the producer can receive
+  // the destination cancellation.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
@@ -408,7 +468,9 @@ void UcxExchangeSource::onHandshake(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
+    if (!closed_.load(std::memory_order_acquire)) {
+      queue_->setError(errorMsg);
+    }
     deliverEndMarker();
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
@@ -656,13 +718,8 @@ void UcxExchangeSource::receiveHandshakeResponse() {
 void UcxExchangeSource::onHandshakeResponse(
     ucs_status_t status,
     std::shared_ptr<void> arg) {
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString()
-            << " onHandshakeResponse called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // Wait for the response after close() to confirm the remote server is
+  // ready for destination cancellation.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeResponse) {
     VLOG(2) << toString() << " onHandshakeResponse called in state "
@@ -678,7 +735,9 @@ void UcxExchangeSource::onHandshakeResponse(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
+    if (!closed_.load(std::memory_order_acquire)) {
+      queue_->setError(errorMsg);
+    }
     deliverEndMarker();
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());

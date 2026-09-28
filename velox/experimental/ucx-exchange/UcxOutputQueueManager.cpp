@@ -40,14 +40,16 @@ void UcxOutputQueueManager::initializeTask(
     int numDestinations,
     int numDrivers,
     const std::string& /*transportOptions*/) {
-  const auto& taskId = task->taskId();
+  const auto taskId = task->taskId();
+  bool outputFinished = false;
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskId);
     if (it == queues.end()) {
       queues[taskId] = std::make_shared<UcxOutputQueue>(
           std::move(task), numDestinations, numDrivers, kind);
     } else {
-      if (!it->second->initialize(task, numDestinations, numDrivers, kind)) {
+      if (!it->second->initialize(
+              task, numDestinations, numDrivers, kind, outputFinished)) {
         VELOX_FAIL(
             "Registering a cudf output queue for pre-existing taskId {}",
             taskId);
@@ -60,6 +62,9 @@ void UcxOutputQueueManager::initializeTask(
   // Clear any stale "cancelled" state in the intra-node registry so
   // that the cancelledTasks_ set doesn't grow unboundedly across queries.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+  if (outputFinished) {
+    task->setAllOutputConsumed();
+  }
 }
 
 bool UcxOutputQueueManager::updateOutputBuffers(
@@ -103,12 +108,10 @@ void UcxOutputQueueManager::deleteResults(
   }
 }
 
-void UcxOutputQueueManager::getData(
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueForServer(
     std::string_view taskId,
-    int destination,
-    UcxDataAvailableCallback notify) {
+    int destination) {
   std::shared_ptr<UcxOutputQueue> outputQueue;
-  bool taskRemoved = false;
   std::string taskIdStr{taskId};
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskIdStr);
@@ -121,7 +124,6 @@ void UcxOutputQueueManager::getData(
               [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
                 << " getData ignored (task already removed)";
-        taskRemoved = true;
         return;
       }
       // create the queue structures such that the notify callback can be
@@ -136,7 +138,15 @@ void UcxOutputQueueManager::getData(
       outputQueue = it->second;
     }
   });
-  if (taskRemoved) {
+  return outputQueue;
+}
+
+void UcxOutputQueueManager::getData(
+    std::string_view taskId,
+    int destination,
+    UcxDataAvailableCallback notify) {
+  auto outputQueue = getQueueForServer(taskId, destination);
+  if (!outputQueue) {
     // Fire callback immediately with nullptr to signal end-of-stream.
     notify(nullptr, /*numRows=*/0, {});
     return;

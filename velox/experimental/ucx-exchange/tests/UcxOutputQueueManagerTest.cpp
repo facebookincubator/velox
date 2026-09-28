@@ -641,6 +641,23 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   EXPECT_TRUE(callback1Nullptr);
 }
 
+TEST_F(UcxOutputQueueManagerTest, queueHandleDoesNotFollowReusedTaskId) {
+  const std::string taskId = "reusedTaskId";
+  auto oldTask = initializeTask(taskId, 1, 1);
+  auto oldQueue = queueManager_->getQueueForServer(taskId, /*destination=*/0);
+
+  queueManager_->removeTask(taskId);
+  auto newTask = initializeTask(taskId, 1, 1);
+
+  oldQueue->deleteResults(0);
+
+  EXPECT_EQ(oldTask->state(), TaskState::kFinished);
+  EXPECT_EQ(newTask->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(taskId));
+  newTask->requestAbort();
+  queueManager_->removeTask(taskId);
+}
+
 // --- Broadcast tests ---
 
 // Basic broadcast: enqueue data, all destinations receive the same data.
