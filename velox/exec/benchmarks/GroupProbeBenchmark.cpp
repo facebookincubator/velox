@@ -35,7 +35,13 @@ enum class KeyShape {
   kTwoBigints,
   // One BIGINT key with random 64-bit values. Resolves to kHash.
   kRandomBigint,
-  // One BIGINT key and one 16-character VARCHAR key. Resolves to kHash.
+  // One BIGINT key and one 16-character VARCHAR key with at most 32K distinct
+  // strings. Both keys fit VectorHasher's value ID limits, so this resolves to
+  // kNormalizedKey.
+  kBigintVarcharValueIds,
+  // One BIGINT key and one unique 16-character VARCHAR key. The distinct
+  // strings overflow VectorHasher's value ID limits, so this resolves to kHash
+  // and probes compare non-inlined strings.
   kBigintVarchar,
 };
 
@@ -85,6 +91,7 @@ class GroupProbeBenchmark {
         return {BIGINT(), BIGINT()};
       case KeyShape::kRandomBigint:
         return {BIGINT()};
+      case KeyShape::kBigintVarcharValueIds:
       case KeyShape::kBigintVarchar:
         return {BIGINT(), VARCHAR()};
     }
@@ -141,9 +148,15 @@ class GroupProbeBenchmark {
         // A bijective mix spreads keys over the full 64-bit range.
         first->set(row, static_cast<int64_t>(folly::hash::twang_mix64(id)));
         return;
-      case KeyShape::kBigintVarchar: {
+      case KeyShape::kBigintVarcharValueIds: {
         first->set(row, id % 1'000);
         const auto name = fmt::format("item{:012d}", id / 1'000);
+        children[1]->asFlatVector<StringView>()->set(row, StringView(name));
+        return;
+      }
+      case KeyShape::kBigintVarchar: {
+        first->set(row, id % 1'000);
+        const auto name = fmt::format("item{:012d}", id);
         children[1]->asFlatVector<StringView>()->set(row, StringView(name));
         return;
       }
@@ -164,8 +177,23 @@ class GroupProbeBenchmark {
     }
   }
 
+  BaseHashTable::HashMode expectedHashMode() const {
+    switch (shape_) {
+      case KeyShape::kTwoBigints:
+      case KeyShape::kBigintVarcharValueIds:
+        return BaseHashTable::HashMode::kNormalizedKey;
+      case KeyShape::kRandomBigint:
+      case KeyShape::kBigintVarchar:
+        return BaseHashTable::HashMode::kHash;
+    }
+    VELOX_UNREACHABLE();
+  }
+
   void checkNumDistinct(BaseHashTable& table) const {
     VELOX_CHECK_EQ(table.numDistinct(), numGroups_, "{}", table.toString());
+    VELOX_CHECK_EQ(
+        BaseHashTable::modeString(table.hashMode()),
+        BaseHashTable::modeString(expectedHashMode()));
   }
 
   const KeyShape shape_;
@@ -192,6 +220,7 @@ int main(int argc, char** argv) {
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   addBenchmarks("normalizedKey", KeyShape::kTwoBigints);
   addBenchmarks("hashBigint", KeyShape::kRandomBigint);
+  addBenchmarks("normalizedKeyBigintVarchar", KeyShape::kBigintVarcharValueIds);
   addBenchmarks("hashBigintVarchar", KeyShape::kBigintVarchar);
   folly::runBenchmarks();
   return 0;
