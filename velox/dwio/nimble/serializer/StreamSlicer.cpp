@@ -689,8 +689,10 @@ void StreamSlicer::stripChunkHeaders(
       strippedStreams[i] = cached->second;
       continue;
     }
-    auto stripped =
-        facebook::nimble::serde::stripChunkHeaders(input, strippedStreamBuffer);
+    // TODO: Support multi-chunk streams by slicing each independently encoded
+    // chunk and preserving chunk boundaries in the output.
+    auto stripped = facebook::nimble::serde::stripSingleChunkHeader(
+        input, strippedStreamBuffer);
     strippedStreamCache.emplace(input, stripped);
     strippedStreams[i] = stripped;
   }
