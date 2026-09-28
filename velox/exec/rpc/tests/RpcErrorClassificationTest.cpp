@@ -19,12 +19,15 @@
 /// for the congestion policy) instead of the generic kBackendError.
 
 #include "velox/exec/rpc/RpcErrorClassification.h"
+#include "velox/expression/rpc/AsyncRPCFunction.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/rpc/RPCTypes.h"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <folly/ExceptionWrapper.h>
@@ -128,8 +131,52 @@ struct LifetimeProbe {
   ~LifetimeProbe() {
     --liveCount;
   }
+
+  int64_t retainedBytes() const noexcept {
+    return 37;
+  }
 };
 int LifetimeProbe::liveCount = 0;
+
+struct StringPayloadProbe {
+  std::string value;
+
+  int64_t retainedBytes() const noexcept {
+    return static_cast<int64_t>(value.capacity());
+  }
+};
+
+struct VectorPayloadProbe {
+  std::vector<float> values;
+
+  int64_t retainedBytes() const noexcept {
+    return static_cast<int64_t>(values.capacity() * sizeof(float));
+  }
+};
+
+struct FixedSizePayloadProbe {
+  int64_t bytes;
+
+  int64_t retainedBytes() const noexcept {
+    return bytes;
+  }
+};
+
+struct LegacyPayloadProbe {
+  int64_t value;
+};
+
+struct WrongTypeRetainedBytesPayload {
+  [[maybe_unused]] size_t retainedBytes() const noexcept;
+};
+
+struct ThrowingRetainedBytesPayload {
+  [[maybe_unused]] int64_t retainedBytes() const;
+};
+
+struct MutableRetainedBytesPayload {
+  [[maybe_unused]] int64_t retainedBytes() noexcept;
+};
 } // namespace
 
 // Reading a payload as the wrong type is caught, not reinterpreted. This is
@@ -137,12 +184,12 @@ int LifetimeProbe::liveCount = 0;
 // is compared rather than assumed.
 TEST(RpcErrorClassificationTest, payloadReadAsTheWrongTypeThrows) {
   velox::rpc::RPCResponse response;
-  response.setPayload(std::string("some text"));
+  response.setPayload(StringPayloadProbe{"some text"});
 
-  EXPECT_TRUE(response.payload().holds<std::string>());
-  EXPECT_FALSE(response.payload().holds<std::vector<float>>());
+  EXPECT_TRUE(response.payload().holds<StringPayloadProbe>());
+  EXPECT_FALSE(response.payload().holds<VectorPayloadProbe>());
   VELOX_ASSERT_THROW(
-      response.payload().get<std::vector<float>>(), "is not of the type");
+      response.payload().get<VectorPayloadProbe>(), "is not of the type");
 }
 
 // A response is handed along a chain of continuations, so the payload has to
@@ -168,6 +215,73 @@ TEST(RpcErrorClassificationTest, payloadSurvivesMovesAndDestroysExactlyOnce) {
   EXPECT_EQ(LifetimeProbe::liveCount, 0) << "payload leaked or double-freed";
 }
 
+TEST(RpcErrorClassificationTest, payloadReportsRetainedBytesAfterMove) {
+  velox::rpc::RPCResponse response;
+  response.setPayload(LifetimeProbe{7});
+  EXPECT_EQ(response.retainedBytes(), 37);
+
+  auto moved = std::move(response);
+  // RpcPayload's move contract leaves the source empty; inspecting that
+  // documented moved-from state is the behavior under test.
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_EQ(response.retainedBytes(), 0);
+  EXPECT_EQ(moved.retainedBytes(), 37);
+}
+
+TEST(RpcErrorClassificationTest, textPayloadReportsReservedCapacity) {
+  std::string text;
+  text.reserve(4096);
+  text.resize(17, 'x');
+  const auto capacity = text.capacity();
+
+  velox::rpc::RPCResponse response;
+  response.setPayload(makeTextPayload(std::move(text)));
+  EXPECT_EQ(response.retainedBytes(), capacity);
+}
+
+TEST(RpcErrorClassificationTest, errorReportsDiagnosticBytes) {
+  std::string message;
+  message.reserve(4096);
+  message.resize(101, 'e');
+  const auto capacity = message.capacity();
+  velox::rpc::RPCResponse response;
+  response.setError(
+      velox::rpc::RPCErrorKind::kBackendError, std::move(message));
+  EXPECT_EQ(response.retainedBytes(), capacity);
+}
+
+TEST(RpcErrorClassificationTest, legacyPayloadWithoutSizeReportsZero) {
+  velox::rpc::RPCResponse response;
+  response.setPayload(LegacyPayloadProbe{7});
+  EXPECT_EQ(response.retainedBytes(), 0);
+}
+
+TEST(RpcErrorClassificationTest, malformedSizeReportersAreRejected) {
+  EXPECT_FALSE((std::is_constructible_v<
+                velox::rpc::RpcPayload,
+                WrongTypeRetainedBytesPayload>));
+  EXPECT_FALSE((std::is_constructible_v<
+                velox::rpc::RpcPayload,
+                ThrowingRetainedBytesPayload>));
+  EXPECT_FALSE((std::is_constructible_v<
+                velox::rpc::RpcPayload,
+                MutableRetainedBytesPayload>));
+}
+
+TEST(RpcErrorClassificationTest, retainedByteTotalRejectsInvalidSizes) {
+  std::vector<velox::rpc::RPCResponse> responses(1);
+  responses[0].setPayload(FixedSizePayloadProbe{-1});
+  VELOX_ASSERT_THROW(
+      velox::rpc::totalResponseRetainedBytes(responses), "non-negative");
+
+  responses.resize(2);
+  responses[0].setPayload(
+      FixedSizePayloadProbe{std::numeric_limits<int64_t>::max()});
+  responses[1].setPayload(FixedSizePayloadProbe{1});
+  VELOX_ASSERT_THROW(
+      velox::rpc::totalResponseRetainedBytes(responses), "overflow");
+}
+
 // The point of storing inline: a successful response costs no allocation of
 // its own. Proven by buffer identity rather than by timing -- a prebuilt
 // string's heap buffer must still be at the same address after it is stored,
@@ -177,16 +291,16 @@ TEST(RpcErrorClassificationTest, storingAPayloadReusesTheCallersBuffer) {
   const auto* before = text.data();
 
   velox::rpc::RPCResponse response;
-  response.setPayload(std::move(text));
+  response.setPayload(StringPayloadProbe{std::move(text)});
 
-  EXPECT_EQ(response.payload().get<std::string>().data(), before)
+  EXPECT_EQ(response.payload().get<StringPayloadProbe>().value.data(), before)
       << "the payload was copied into fresh storage rather than moved in";
 
   // And again across the moves a response makes on its way to buildOutput().
   auto moved = std::move(response);
   std::vector<velox::rpc::RPCResponse> batch;
   batch.push_back(std::move(moved));
-  EXPECT_EQ(batch[0].payload().get<std::string>().data(), before)
+  EXPECT_EQ(batch[0].payload().get<StringPayloadProbe>().value.data(), before)
       << "a move of the response reallocated the payload's buffer";
 }
 
@@ -196,9 +310,9 @@ TEST(RpcErrorClassificationTest, storingAVectorPayloadReusesItsBuffer) {
   const auto* before = values.data();
 
   velox::rpc::RPCResponse response;
-  response.setPayload(std::move(values));
+  response.setPayload(VectorPayloadProbe{std::move(values)});
 
-  EXPECT_EQ(response.payload().get<std::vector<float>>().data(), before);
+  EXPECT_EQ(response.payload().get<VectorPayloadProbe>().values.data(), before);
 }
 
 // Storage is inline, so the response owns no pointer to separate payload

@@ -27,6 +27,7 @@
 #include <folly/futures/Future.h>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/exec/rpc/CongestionController.h"
 #include "velox/vector/BaseVector.h"
@@ -71,6 +72,33 @@ class RPCState {
  public:
   // ===== Data structures =====
 
+  /// Accounts response-retained bytes while the operator owns them.
+  class PayloadMemoryCharge {
+   public:
+    PayloadMemoryCharge() = default;
+    PayloadMemoryCharge(
+        std::shared_ptr<memory::MemoryPool> pool,
+        int64_t bytes);
+    PayloadMemoryCharge(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge& operator=(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge(const PayloadMemoryCharge&) = delete;
+    PayloadMemoryCharge& operator=(const PayloadMemoryCharge&) = delete;
+    ~PayloadMemoryCharge();
+
+    int64_t bytes() const noexcept {
+      return bytes_;
+    }
+
+   private:
+    // Releases the external-memory charge while retaining pool lifetime.
+    void release() noexcept;
+
+    // Keeps the accounting destination alive through charge release.
+    std::shared_ptr<memory::MemoryPool> pool_;
+    // Stores the amount paired with one external allocation report.
+    int64_t bytes_{0};
+  };
+
   /// Location of a row within an input batch.
   struct RowLocation {
     int32_t batchIndex{0};
@@ -81,16 +109,27 @@ class RPCState {
   struct ReadyRow {
     int64_t rowId{0};
     RowLocation location;
+    /// Accounts external memory retained by response.
+    PayloadMemoryCharge charge;
     RPCResponse response;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
   };
 
+  /// Pairs completed responses with their query-pool memory charge.
+  /// The charge remains alive while the responses retain accounted memory.
+  struct CompletedBatch {
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
+    /// Responses produced by one completed batch dispatch.
+    std::vector<RPCResponse> responses;
+  };
+
   /// A batch of rows waiting for RPC response.
   struct PendingBatch {
     int64_t batchId;
-    folly::SemiFuture<std::vector<RPCResponse>> future;
+    folly::SemiFuture<CompletedBatch> future;
     int64_t admissionUnits{1};
     /// Row locations for mapping responses back to input batch positions.
     /// Stored at batch level instead of per-row in a map. RPCOperator scatters
@@ -109,6 +148,8 @@ class RPCState {
   /// A batch with completed RPC responses.
   struct ReadyBatch {
     int64_t batchId{0};
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
     std::vector<RPCResponse> responses;
     std::optional<std::string> error;
     int64_t admissionUnits{1};
@@ -146,7 +187,10 @@ class RPCState {
     int64_t numCompletionsSignaled{0};
   };
 
-  RPCState() = default;
+  explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
+      : pool_(std::move(pool)) {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
 
   // ===== Configuration =====
   // These must be called before any dispatch (single-threaded init phase).
@@ -211,6 +255,13 @@ class RPCState {
   /// deposit RPCResponse values and never read flatColumns, which is read
   /// solely by the driver thread when building output.
   void releaseAllInputBatches();
+
+  /// Stops accepting completions and releases all retained resources.
+  /// Idempotent.
+  void close();
+
+  /// Charges externally allocated response bytes against the query pool.
+  [[nodiscard]] PayloadMemoryCharge chargePayloadBytes(int64_t bytes);
 
   // ===== PER_ROW mode API =====
 
@@ -384,6 +435,12 @@ class RPCState {
 
   // Input batch storage (shared across PER_ROW and BATCH modes)
   std::vector<InputBatchRef> inputBatches_;
+
+  // Reset by close(). Completion callbacks copy it only while reporting a
+  // charge, so memory arbitration runs without holding mutex_.
+  std::shared_ptr<memory::MemoryPool> pool_;
+  // Rejects completions after close() has detached the operator's resources.
+  bool closed_{false};
 
   // PER_ROW state
   std::deque<ReadyRow> readyRows_;
