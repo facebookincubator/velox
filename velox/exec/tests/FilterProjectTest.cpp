@@ -298,7 +298,7 @@ TEST_F(FilterProjectTest, projectAndIdentityOverLazy) {
 // Verify the optimization of avoiding copy in null propagation does not break
 // the case when the field is shared between multiple parents.
 TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
-  auto shared = makeFlatVector<int64_t>(10, folly::identity);
+  auto shared = makeFlatIdentityVector<int64_t>(10);
   auto vector = makeRowVector({
       makeRowVector({
           makeRowVector({shared}, nullEvery(2)),
@@ -318,7 +318,7 @@ TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
 }
 
 TEST_F(FilterProjectTest, numSilentThrow) {
-  auto row = makeRowVector({makeFlatVector<int32_t>(100, folly::identity)});
+  auto row = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
 
   core::PlanNodeId filterId;
   // Change the plan when /0 error is fixed not to throw.
@@ -335,7 +335,7 @@ TEST_F(FilterProjectTest, numSilentThrow) {
 
 TEST_F(FilterProjectTest, statsSplitter) {
   auto data = makeRowVector({
-      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatIdentityVector<int32_t>(100),
   });
 
   // Make 5 batches, 20 rows each: 0...19, 20...39, 40...59, 60...79, 80...99.

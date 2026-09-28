@@ -584,8 +584,8 @@ TEST_F(PrintPlanWithStatsTest, taskAPI) {
   };
 
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
 
   const auto plan = PlanBuilder()

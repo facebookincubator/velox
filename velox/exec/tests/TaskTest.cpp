@@ -2617,8 +2617,8 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
@@ -2762,8 +2762,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
 
 TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
