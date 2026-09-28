@@ -39,7 +39,7 @@ TEST_F(PmodTest, int8) {
   EXPECT_EQ(std::nullopt, pmod<int8_t>(std::nullopt, 3));
   EXPECT_EQ(INT8_MAX, pmod<int8_t>(INT8_MAX, INT8_MIN));
   EXPECT_EQ(INT8_MAX - 1, pmod<int8_t>(INT8_MIN, INT8_MAX));
-  EXPECT_EQ(0, pmod<int64_t>(INT8_MIN, -1));
+  EXPECT_EQ(0, pmod<int8_t>(INT8_MIN, -1));
 }
 
 TEST_F(PmodTest, int16) {
@@ -49,7 +49,7 @@ TEST_F(PmodTest, int16) {
   EXPECT_EQ(-8, pmod<int16_t>(-1052, -12));
   EXPECT_EQ(INT16_MAX, pmod<int16_t>(INT16_MAX, INT16_MIN));
   EXPECT_EQ(INT16_MAX - 1, pmod<int16_t>(INT16_MIN, INT16_MAX));
-  EXPECT_EQ(0, pmod<int64_t>(INT16_MIN, -1));
+  EXPECT_EQ(0, pmod<int16_t>(INT16_MIN, -1));
 }
 
 TEST_F(PmodTest, int32) {
@@ -59,7 +59,7 @@ TEST_F(PmodTest, int32) {
   EXPECT_EQ(-11, pmod<int32_t>(-15181535, -12));
   EXPECT_EQ(INT32_MAX, pmod<int32_t>(INT32_MAX, INT32_MIN));
   EXPECT_EQ(INT32_MAX - 1, pmod<int32_t>(INT32_MIN, INT32_MAX));
-  EXPECT_EQ(0, pmod<int64_t>(INT32_MIN, -1));
+  EXPECT_EQ(0, pmod<int32_t>(INT32_MIN, -1));
 }
 
 TEST_F(PmodTest, int64) {
@@ -76,7 +76,7 @@ TEST_F(PmodTest, float) {
   EXPECT_FLOAT_EQ(0.2, pmod<float>(0.5, 0.3).value());
   EXPECT_FLOAT_EQ(0.9, pmod<float>(-1.1, 2).value());
   EXPECT_EQ(std::nullopt, pmod<float>(2.14159, 0.0));
-  EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
+  EXPECT_FLOAT_EQ(0x1.99999p-4f, pmod<float>(0.7f, -0.3f).value());
 }
 
 TEST_F(PmodTest, double) {
@@ -84,6 +84,33 @@ TEST_F(PmodTest, double) {
   EXPECT_DOUBLE_EQ(0.9, pmod<double>(-1.1, 2).value());
   EXPECT_EQ(std::nullopt, pmod<double>(2.14159, 0.0));
   EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
+}
+
+TEST_F(PmodTest, divisionByZeroAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  VELOX_ASSERT_THROW(pmod<int8_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(pmod<int16_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(pmod<int32_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(pmod<int64_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(pmod<float>(1, -0.0f), "Division by zero");
+  VELOX_ASSERT_THROW(pmod<double>(1, -0.0), "Division by zero");
+}
+
+TEST_F(PmodTest, signedZeroAndInfinity) {
+  EXPECT_TRUE(std::signbit(pmod<float>(-0.0f, 3).value()));
+  EXPECT_TRUE(std::signbit(pmod<double>(-0.0, 3).value()));
+  EXPECT_TRUE(std::signbit(pmod<float>(-6, -3).value()));
+  EXPECT_TRUE(std::signbit(pmod<double>(-6, -3).value()));
+  EXPECT_EQ(0, pmod<float>(0, std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(0, pmod<double>(0, std::numeric_limits<double>::infinity()));
+}
+
+TEST_F(PmodTest, negativeDivisorWrapping) {
+  EXPECT_EQ(-1, pmod<int8_t>(-1, INT8_MIN));
+  EXPECT_EQ(-1, pmod<int16_t>(-1, INT16_MIN));
+  EXPECT_EQ(INT32_MAX, pmod<int32_t>(-1, INT32_MIN));
+  EXPECT_EQ(INT64_MAX, pmod<int64_t>(-1, INT64_MIN));
 }
 
 class RemainderTest : public SparkFunctionBaseTest {
