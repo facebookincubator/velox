@@ -50,8 +50,8 @@ class StreamReader {
 
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
-  /// `streams` must follow the projected schema's stream traversal order and
-  /// contain exactly one encoded chunk per present stream.
+  /// `streams` must follow the projected schema's serialization traversal
+  /// order and contain exactly one encoded chunk per present stream.
   /// String outputs retain backing buffers across calls so values written by
   /// earlier calls remain valid until the assembled output is released.
   void read(
@@ -93,8 +93,8 @@ class StreamReader {
   // Configures encoding creation and temporary buffer reuse.
   const Encoding::Options options_;
 
-  // Stream offsets in projected-schema traversal order.
-  std::vector<uint32_t> readerOffsets_;
+  // Descriptor offsets corresponding positionally to input projection streams.
+  std::vector<uint32_t> inputOffsets_;
 
   // Builds a FieldReader tree for each stream binding.
   std::unique_ptr<FieldReaderFactory> readerFactory_;

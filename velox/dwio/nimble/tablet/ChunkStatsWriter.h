@@ -41,16 +41,28 @@ struct Chunk;
 /// single thread.
 class ChunkStatsWriter {
  public:
-  /// Creates a writer for the requested on-disk version.
-  /// @param version Chunk stats representation to write.
+  /// Configures the chunk statistics representation and collection thresholds.
+  struct Options {
+    /// Default maximum string or binary value length retained in bounds.
+    static constexpr uint32_t kDefaultMaxChunkStringStatSize{64};
+
+    /// Selects the on-disk chunk statistics representation.
+    ChunkStatsVersion version{ChunkStatsVersion::kV2};
+
+    /// Skips a stripe group below this average chunks-per-stream threshold.
+    /// Zero disables this threshold.
+    float minAvgChunksPerStream{2};
+
+    /// Limits the string or binary value length retained in chunk bounds.
+    uint32_t maxStringStatSize{kDefaultMaxChunkStringStatSize};
+  };
+
+  /// Creates a writer with the specified options.
   /// @param pool Memory pool for allocations.
-  /// @param minAvgChunksPerStream Skip writing chunk stats for a stripe group
-  ///        if the average number of chunks per stream is below this threshold.
-  ///        0 disables chunk stats skipping.
+  /// @param options Chunk statistics format and collection settings.
   static std::unique_ptr<ChunkStatsWriter> create(
-      ChunkStatsVersion version,
       velox::memory::MemoryPool& pool,
-      float minAvgChunksPerStream = 2);
+      Options options);
 
   virtual ~ChunkStatsWriter() = default;
 

@@ -22,6 +22,14 @@
 
 #include "velox/dwio/nimble/encodings/subintsplit/CostModel.h"
 
+// Planner context:
+//
+//   samples -> active bits -> candidate boundaries -> cost grid -> DP -> plan
+//
+// The grid contains only retained boundary pairs. The dynamic program still
+// receives both active-range edges and a full-range fallback, so pruning can
+// bound work without producing an incomplete partition.
+
 namespace facebook::nimble::subintsplit {
 namespace {
 
@@ -101,8 +109,12 @@ class CostGrid {
       int lo,
       int hi,
       size_t fullCount,
+      const SelectorConfig& config,
       SectionCostFn costFn) {
-    const MetricFlags requiredFlags = allCostModelRequiredFlags();
+    const MetricFlags allFlags = allCostModelRequiredFlags();
+    const MetricFlags withoutFrequency = allFlags &
+        ~static_cast<MetricFlags>(MetricFlag::UniqueCount) &
+        ~static_cast<MetricFlags>(MetricFlag::DominantValue);
     const double scale =
         static_cast<double>(fullCount) / static_cast<double>(samples.size());
 
@@ -120,8 +132,21 @@ class CostGrid {
           continue;
         }
         const int bitWidth = bitEnd - bitStart + 1;
-        const SectionMetrics metrics =
-            collector.compute(extractor.values(), requiredFlags, bitWidth);
+
+        // The full active range is always scored: when no tiling of the
+        // narrower cells works out, it is the DP's only fallback.
+        const bool isFullRange = (bitStart == lo && bitEnd == hi);
+        if (config.maxSectionWidth > 0 && bitWidth > config.maxSectionWidth &&
+            !isFullRange) {
+          continue;
+        }
+
+        const bool wantFrequency = config.frequencyMetricsMaxWidth <= 0 ||
+            bitWidth <= config.frequencyMetricsMaxWidth;
+        const SectionMetrics metrics = collector.compute(
+            extractor.values(),
+            wantFrequency ? allFlags : withoutFrequency,
+            bitWidth);
 
         EncodingType bestEncoding = EncodingType::Trivial;
         const double sampleCost =
@@ -154,7 +179,8 @@ DpSolution solveDp(
     int numBits,
     int lo,
     int hi,
-    const SelectorConfig& config) {
+    const SelectorConfig& config,
+    double sectionPenalty) {
   // cost[i] is the minimum cost to cover bits [lo, i).
   std::vector<double> cost(numBits + 1, kInfinity);
   DpSolution solution{
@@ -178,8 +204,9 @@ DpSolution solveDp(
       if (!std::isfinite(cell.cost)) {
         continue;
       }
-      // The first section is free; every later one pays for its header.
-      const double splitCost = (start == lo) ? 0.0 : config.splitPenalty;
+      // The first section is free; every later one pays for its header and,
+      // when the decode term is enabled, for its extra pass over the output.
+      const double splitCost = (start == lo) ? 0.0 : sectionPenalty;
       const double candidate = cost[start] + cell.cost + splitCost;
       if (candidate < cost[end]) {
         cost[end] = candidate;
@@ -265,9 +292,10 @@ std::vector<int> candidateBoundaries(
     const std::vector<uint64_t>& samples,
     int lo,
     int hi,
-    double threshold) {
+    double threshold,
+    size_t maxCount) {
   std::vector<int> boundaries;
-  if (threshold <= 0.0) {
+  if (threshold <= 0.0 && maxCount == 0) {
     for (int bit = lo; bit <= hi + 1; ++bit) {
       boundaries.push_back(bit);
     }
@@ -288,12 +316,35 @@ std::vector<int> candidateBoundaries(
         samples.size();
   };
 
+  // Interior positions that clear the threshold, with the size of the jump so
+  // they can be ranked if there are too many.
+  std::vector<std::pair<double, int>> interior;
+  for (int bit = lo + 1; bit <= hi; ++bit) {
+    const double change = std::fabs(setRate(bit) - setRate(bit - 1));
+    if (change >= threshold) {
+      interior.emplace_back(change, bit);
+    }
+  }
+
+  // Keep the sharpest jumps: a bigger set-rate step is a more likely field
+  // edge, so dropping the smallest first loses the least real structure.
+  if (maxCount > 0 && interior.size() > maxCount) {
+    std::partial_sort(
+        interior.begin(),
+        interior.begin() + maxCount,
+        interior.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+    interior.resize(maxCount);
+  }
+  std::sort(
+      interior.begin(), interior.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.second < rhs.second;
+      });
+
   // lo and hi+1 are the stream's own edges and are always available.
   boundaries.push_back(lo);
-  for (int bit = lo + 1; bit <= hi; ++bit) {
-    if (std::fabs(setRate(bit) - setRate(bit - 1)) >= threshold) {
-      boundaries.push_back(bit);
-    }
+  for (const auto& [change, bit] : interior) {
+    boundaries.push_back(bit);
   }
   boundaries.push_back(hi + 1);
   return boundaries;
@@ -317,13 +368,19 @@ SelectorResult selectSplits(
   }
 
   const std::vector<int> boundaries = candidateBoundaries(
-      samples, active.lo, active.hi, config.boundaryPruneThreshold);
+      samples,
+      active.lo,
+      active.hi,
+      config.boundaryPruneThreshold,
+      config.maxCandidateBoundaries);
 
   CostGrid grid{numBits, boundaries};
-  grid.score(samples, active.lo, active.hi, fullCount, costFn);
+  grid.score(samples, active.lo, active.hi, fullCount, config, costFn);
 
-  const DpSolution solution =
-      solveDp(grid, boundaries, numBits, active.lo, active.hi, config);
+  const double sectionPenalty = config.splitPenalty +
+      config.decodeCostBitsPerValue * static_cast<double>(fullCount);
+  const DpSolution solution = solveDp(
+      grid, boundaries, numBits, active.lo, active.hi, config, sectionPenalty);
 
   SelectorResult result;
   if (std::isfinite(solution.totalCost)) {

@@ -51,6 +51,7 @@
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
@@ -442,6 +443,26 @@ TYPED_TEST(SubIntSplitFuzzerTest, correctness) {
   fuzzer.run();
 }
 
+TYPED_TEST(SubIntSplitFuzzerTest, compressionAndRowCountFormats) {
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(
+        ::testing::Message() << "useVarintRowCount=" << useVarintRowCount);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    EncodingFuzzer<TypeParam> fuzzer(
+        /*iterations=*/1,
+        /*maxRows=*/128,
+        /*seed=*/0x51'51,
+        /*testCompression=*/true,
+        options,
+        /*minDistinctValues=*/1,
+        /*maxDistinctValues=*/std::numeric_limits<uint32_t>::max(),
+        /*largeInputRows=*/0,
+        /*realNestedSelection=*/true);
+    fuzzer.run();
+  }
+}
+
 namespace {
 
 template <typename T>
@@ -468,7 +489,8 @@ EncodingSelectionPolicyCreator makeLeafPolicyCreator() {
 }
 
 // Builds an EncodingSelection from the policy and calls SubIntSplitEncoding
-// directly, mirroring EncodingFactory::encode (which has no SubIntSplit case).
+// directly. EncodingFactory::encode picks the encoding itself, which would not
+// force SubIntSplit; this mirrors the body of its SubIntSplit case.
 template <typename T>
 std::string_view encodeWithPolicy(
     std::unique_ptr<EncodingSelectionPolicy<T>> policy,
@@ -486,12 +508,16 @@ std::string_view encodeWithPolicy(
       selection, physicalValues, buffer, /*options=*/{});
 }
 
+// Goes through EncodingFactory rather than constructing the encoding directly,
+// so every fuzz case also covers the factory's SubIntSplit dispatch.
 template <typename T>
 std::unique_ptr<Encoding> decodeSubIntSplit(
     std::string_view encoded,
     velox::memory::MemoryPool& pool) {
-  return std::make_unique<SubIntSplitEncoding<T>>(
-      pool, encoded, [](uint32_t) { return nullptr; });
+  auto decoded =
+      EncodingFactory().create(pool, encoded, [](uint32_t) { return nullptr; });
+  EXPECT_EQ(decoded->encodingType(), EncodingType::SubIntSplit);
+  return decoded;
 }
 
 // Bit-exact comparison (float/double checked on their bit pattern, NaN-safe).
@@ -596,6 +622,8 @@ std::vector<Vector<T>> makeSubIntSplitDatasets(
   datasets.push_back(makeDominantValueData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeBitStructuredData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeSnowflakeData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeAdversarialBitPatternData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeMixedRegimeData<T>(pool, rng, rowCount, buffer));
   std::erase_if(datasets, [](const Vector<T>& d) { return d.empty(); });
   return datasets;

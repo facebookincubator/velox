@@ -343,8 +343,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
-  /// Returns the number of physical groups, including Default.
+  /// Returns the number of physical groups present in this schema.
   size_t groupCount() const;
+
+  /// Returns whether serialization requires the reserved Default group.
+  bool requiresDefaultGroup() const;
 
   /// Returns the group at zero-based schema-order `index`. The returned
   /// non-owning view is invalidated by a subsequent call to addGroup().
@@ -361,9 +364,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
 
   HybridFlatMapTypeBuilder(
       SchemaBuilder& schemaBuilder,
-      ScalarKind keyScalarKind);
+      ScalarKind keyScalarKind,
+      bool requiresDefaultGroup);
 
   const ScalarKind keyScalarKind_;
+  const bool requiresDefaultGroup_;
   StreamDescriptorBuilder nullsDescriptor_;
   std::vector<StoredGroup> groups_;
 
@@ -422,9 +427,11 @@ class SchemaBuilder {
       ScalarKind keyScalarKind);
 
   /// Creates a hybrid flat map builder. Every physical group owns a complete
-  /// value subtree, following FlatMap's child-type model.
+  /// value subtree, following FlatMap's child-type model. A projection may
+  /// omit the reserved Default group.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
-      ScalarKind keyScalarKind);
+      ScalarKind keyScalarKind,
+      bool projection = false);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.
   // If more nodes are added to the schema builder later on, following calls to

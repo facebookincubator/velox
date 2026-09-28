@@ -418,4 +418,53 @@ namespace facebook::nimble {
       expression,                                                           \
       NIMBLE_UNREACHABLE("Unsupported wide integer data type {}.", dataType))
 
+/// Dispatches 32- and 64-bit numeric types, float and double included, or
+/// evaluates the provided fallback.
+#define NIMBLE_RETURN_BY_WIDE_NUMERIC_DATA_TYPE_OR( \
+    dataType, Type, expression, ...)                \
+  switch (dataType) {                               \
+    case ::facebook::nimble::DataType::Int32: {     \
+      using Type = int32_t;                         \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Uint32: {    \
+      using Type = uint32_t;                        \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Int64: {     \
+      using Type = int64_t;                         \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Uint64: {    \
+      using Type = uint64_t;                        \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Float: {     \
+      using Type = float;                           \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Double: {    \
+      using Type = double;                          \
+      return (expression);                          \
+    }                                               \
+    case ::facebook::nimble::DataType::Undefined:   \
+    case ::facebook::nimble::DataType::Int8:        \
+    case ::facebook::nimble::DataType::Uint8:       \
+    case ::facebook::nimble::DataType::Int16:       \
+    case ::facebook::nimble::DataType::Uint16:      \
+    case ::facebook::nimble::DataType::Bool:        \
+    case ::facebook::nimble::DataType::String:      \
+    default: {                                      \
+      __VA_ARGS__;                                  \
+    }                                               \
+  }
+
+/// Dispatches 32- and 64-bit numeric types and rejects unsupported data types.
+#define NIMBLE_RETURN_BY_WIDE_NUMERIC_DATA_TYPE(dataType, Type, expression) \
+  NIMBLE_RETURN_BY_WIDE_NUMERIC_DATA_TYPE_OR(                               \
+      dataType,                                                             \
+      Type,                                                                 \
+      expression,                                                           \
+      NIMBLE_UNREACHABLE("Unsupported wide numeric data type {}.", dataType))
+
 } // namespace facebook::nimble

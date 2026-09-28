@@ -38,11 +38,14 @@ void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::unordered_map<std::string, RuntimeMetric>& res) {
   for (const auto& [operation, counters] : ioStats.operationStats()) {
+    // Capturing a structured binding is legal in C++20, but clang-15 predates
+    // P1091 and rejects it, and the OSS Ubuntu debug job builds with clang-15.
+    const auto& operationName = operation;
     const auto add = [&](std::string_view counter, uint64_t value) {
       if (value == 0) {
         return;
       }
-      res[fmt::format("storage.{}.{}", operation, counter)] =
+      res[fmt::format("storage.{}.{}", operationName, counter)] =
           RuntimeMetric(value, RuntimeCounter::Unit::kNone);
     };
     add("requestCount", counters.requestCount);
