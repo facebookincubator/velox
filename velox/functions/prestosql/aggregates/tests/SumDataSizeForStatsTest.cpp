@@ -229,7 +229,7 @@ TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
       }),
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
-          {{2, {{4, 5, std::nullopt}}}},
+          {{2, {{4, 5, std::nullopt, 6, 7, 8, 9, 10}}}},
           {{std::nullopt, {{7, 8, 9}}}},
       }),
   });
@@ -238,10 +238,13 @@ TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
   testAggregations(
-      vectors, {}, {"sum_data_size_for_stats(c1)"}, "VALUES (108)");
+      vectors, {}, {"sum_data_size_for_stats(c1)"}, "VALUES (228)");
 
   testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,72),(2,36)");
+      vectors,
+      {"c0"},
+      {"sum_data_size_for_stats(c1)"},
+      "VALUES (1,152),(2,76)");
 }
 
 TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {

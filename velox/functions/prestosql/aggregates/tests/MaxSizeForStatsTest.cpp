@@ -235,7 +235,7 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
       }),
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
-          {{2, {{4, 5, std::nullopt}}}},
+          {{2, {{4, 5, std::nullopt, 6, 7, 8, 9, 10}}}},
           {{std::nullopt, {{7, 8, 9}}}},
       }),
   });
@@ -243,10 +243,10 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
 
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 36");
+  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 76");
 
   testAggregations(
-      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,36),(2,36)");
+      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,76),(2,76)");
 }
 
 TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
