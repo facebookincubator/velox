@@ -604,7 +604,7 @@ At this point you have accumulatorFixedWidthSize() and initializeNewGroupsIntern
 * Logic for adding previously spilled data back to the accumulator:
     * addSingleGroupIntermediateResults() method.
 * Optional logic for converting raw inputs into intermediate results:
-    * supportsToIntermediate() and toIntermediate() methods.
+    * supportsToIntermediate(bool hasMask) and toIntermediate() methods.
 
 Some methods are only used in a subset of aggregation workflows. The following
 table shows which methods are used in which workflows.
@@ -744,13 +744,14 @@ groups, one per input row, initializes these groups by calling initializeNewGrou
 adds each row to its own group using addRawInput, then calls extractAccumulators. This works,
 but is not very efficient. Individual aggregate functions can provide a more efficient
 implementation by implementing toIntermediate() method. If they decide to do so, they should
-also override supportsToIntermediate() method. For example, min and max aggregate functions
+also override supportsToIntermediate(bool hasMask) method. For example, min and max aggregate functions
 implement toIntermediate() method which simply returns the input unmodified.
 
 .. code-block:: c++
 
-  /// Returns true if toIntermediate() is supported.
-  virtual bool supportsToIntermediate() const {
+  /// Returns true if toIntermediate() supports the aggregate's mask.
+  /// 'hasMask' means an input-row filter is configured for the aggregate.
+  virtual bool supportsToIntermediate(bool hasMask) const {
     return false;
   }
 

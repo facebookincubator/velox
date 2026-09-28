@@ -31,7 +31,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
   explicit MapAggAggregate(TypePtr resultType, bool throwOnNestedNulls = false)
       : Base(std::move(resultType)), throwOnNestedNulls_(throwOnNestedNulls) {}
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

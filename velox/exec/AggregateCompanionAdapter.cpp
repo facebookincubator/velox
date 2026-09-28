@@ -124,9 +124,9 @@ void AggregateCompanionFunctionBase::extractAccumulators(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
-bool AggregateCompanionAdapter::PartialFunction::supportsToIntermediate()
-    const {
-  return fn_->supportsToIntermediate();
+bool AggregateCompanionAdapter::PartialFunction::supportsToIntermediate(
+    bool hasMask) const {
+  return fn_->supportsToIntermediate(hasMask);
 }
 
 void AggregateCompanionAdapter::PartialFunction::toIntermediate(
@@ -141,6 +141,22 @@ void AggregateCompanionAdapter::PartialFunction::extractValues(
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+bool AggregateCompanionAdapter::MergeFunction::supportsToIntermediate(
+    bool hasMask) const {
+  // For masked-out rows, toIntermediate must produce the aggregate's empty
+  // intermediate value. Passing through the input would retain their values.
+  return !hasMask;
+}
+
+void AggregateCompanionAdapter::MergeFunction::toIntermediate(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    VectorPtr& result) const {
+  VELOX_CHECK(rows.isAllSelected());
+  VELOX_CHECK_EQ(args.size(), 1);
+  result = args[0];
 }
 
 void AggregateCompanionAdapter::MergeFunction::addRawInput(

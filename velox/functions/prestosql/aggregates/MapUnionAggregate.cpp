@@ -28,7 +28,7 @@ class MapUnionAggregate : public MapAggregateBase<K, AccumulatorType> {
 
   explicit MapUnionAggregate(TypePtr resultType) : Base(resultType) {}
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

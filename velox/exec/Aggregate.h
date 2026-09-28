@@ -84,8 +84,9 @@ class Aggregate {
     return true;
   }
 
-  /// Returns true if toIntermediate() is supported.
-  virtual bool supportsToIntermediate() const {
+  /// Returns true if toIntermediate() supports the aggregate's mask.
+  /// 'hasMask' means an input-row filter is configured for the aggregate.
+  virtual bool supportsToIntermediate(bool /*hasMask*/) const {
     return false;
   }
 

@@ -250,7 +250,7 @@ class ReduceAgg : public exec::Aggregate {
     addSingleGroup(combined, numRows, group);
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

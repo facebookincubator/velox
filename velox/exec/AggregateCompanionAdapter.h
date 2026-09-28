@@ -99,7 +99,7 @@ struct AggregateCompanionAdapter {
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
 
-    bool supportsToIntermediate() const override;
+    bool supportsToIntermediate(bool hasMask) const override;
 
     void toIntermediate(
         const SelectivityVector& rows,
@@ -116,6 +116,13 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    bool supportsToIntermediate(bool hasMask) const override;
+
+    void toIntermediate(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        VectorPtr& result) const override;
 
     void addRawInput(
         char** groups,

@@ -60,7 +60,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     return false;
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

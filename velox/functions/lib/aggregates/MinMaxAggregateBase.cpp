@@ -56,7 +56,7 @@ class SimpleNumericMinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
     }
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 
@@ -312,7 +312,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
     return sizeof(SingleValueAccumulator);
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 
