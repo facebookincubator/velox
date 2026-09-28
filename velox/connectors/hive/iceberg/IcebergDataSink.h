@@ -86,7 +86,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// Identifies which kind of file the sink should produce. Used by
   /// IcebergConnector::createDataSink to dispatch between:
   ///  - the data-file IcebergDataSink (kData, INSERT and UPDATE-insert
-  ///    halves),
+  ///    halves, and kEqualityDelete for equality-delete files),
   ///  - the V3 deletion-vector IcebergDeletionVectorSink (kDeletionVector,
   ///    Puffin blobs encoding deleted positions per data file),
   ///  - the V2 position-delete sink (kPositionDelete, position-delete
@@ -101,6 +101,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   ///    commits both file kinds together).
   enum class WriteKind {
     kData,
+    kEqualityDelete,
     kDeletionVector,
     kPositionDelete,
     kMerge,
@@ -122,16 +123,17 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param compressionKind Optional compression to apply to data files.
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
-  /// @param writeKind Selects between data-file emission (default) and V3
-  /// deletion-vector emission. The default preserves existing INSERT
-  /// semantics.
-  /// @param fileNameGenerator File name generator for generating unique file
-  /// names for data files. Defaults to IcebergFileNameGenerator.
+  /// @param writeKind Selects the kind of Iceberg file to emit. Defaults to
+  /// data files.
+  /// @param equalityFieldIds Iceberg field IDs used to match rows in an
+  /// equality-delete file.
   /// @param existingDeletionVectors Map from referenced data-file path to the
   /// descriptor of a deletion vector that already exists for it. Empty for
   /// INSERT and for first-time mutations; populated by the coordinator for a
   /// V3 repeated mutation so the deletion-vector sink seeds the new DV with
   /// the prior DV's positions.
+  /// @param fileNameGenerator File name generator for generating unique file
+  /// names for data files. Defaults to IcebergFileNameGenerator.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
@@ -140,6 +142,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       WriteKind writeKind = WriteKind::kData,
+      std::vector<int32_t> equalityFieldIds = {},
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
@@ -151,10 +154,16 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
-  /// Returns the requested write kind. kData routes to IcebergDataSink;
-  /// kDeletionVector routes to IcebergDeletionVectorSink.
+  /// Returns the requested write kind. kData and kEqualityDelete route to
+  /// IcebergDataSink; kDeletionVector routes to IcebergDeletionVectorSink.
   WriteKind writeKind() const {
     return writeKind_;
+  }
+
+  /// Returns the Iceberg field IDs that define equality for an equality-delete
+  /// file. Empty for all other write kinds.
+  const std::vector<int32_t>& equalityFieldIds() const {
+    return equalityFieldIds_;
   }
 
   /// Returns the map from referenced data-file path to the descriptor of the
@@ -168,6 +177,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
+  const std::vector<int32_t> equalityFieldIds_;
   const std::unordered_map<std::string, ExistingDeletionVector>
       existingDeletionVectors_;
 };
@@ -197,7 +207,10 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileFormat: storage format. Either "PARQUET" or "ORC". DWRF files
   ///   are reported as "ORC" because Iceberg's file-format vocabulary has
   ///   no DWRF enum.
-  /// - content: file content type ("DATA" for data files).
+  /// - content: file content type ("DATA" for data files or
+  ///   "EQUALITY_DELETES" for equality-delete files).
+  /// - equalityFieldIds: field IDs used for equality matching. Present only
+  ///   for equality-delete files.
   ///
   /// See
   /// https://github.com/prestodb/presto/blob/master/presto-iceberg/src/main/java/com/facebook/presto/iceberg/CommitTaskData.java
