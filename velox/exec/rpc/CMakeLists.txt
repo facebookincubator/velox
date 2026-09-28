@@ -44,6 +44,7 @@ velox_link_libraries(
   velox_rpc_types
   velox_common_base
   velox_future
+  velox_memory
   velox_vector
   Folly::folly
 )
