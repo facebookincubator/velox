@@ -15,19 +15,22 @@
 add_library(
   velox_cudf_hive_connector
   BufferedInputDataSource.cpp
+  CudfDynamicFilter.h
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
   CudfHiveDataSink.cpp
   CudfHiveDataSource.cpp
   CudfHiveTableHandle.cpp
+  CudfIntegerMembership.cu
+  CudfIntegerMembership.h
   CudfSplitReader.cpp
   CudfSplitReaderByteFetch.cpp
 )
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_common_io velox_dwio_common velox_hive_connector
+  PRIVATE velox_common_io velox_dwio_common velox_hive_connector cuco::cuco
   PUBLIC cudf::cudf nvtx3::nvtx3-cpp velox_cudf_expression
 )
 
@@ -36,3 +39,8 @@ if(VELOX_ENABLE_ABFS)
 endif()
 
 add_subdirectory(iceberg)
+
+target_compile_options(
+  velox_cudf_hive_connector
+  PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
+)

@@ -108,7 +108,8 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           cudfHiveConfig,
           ioStatistics,
           ioStats,
-          subfieldFilterAst),
+          subfieldFilterAst,
+          nullptr),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig),
       subfieldFilters_(subfieldFilters) {

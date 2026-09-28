@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/caching/FileHandle.h"
@@ -56,6 +57,101 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
                                 CudfHiveConnectorTestBase {};
+
+TEST_F(CudfSplitReaderTest, dynamicFilterChecksParsedIntegerSchema) {
+  auto properties = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  ::facebook::velox::connector::ConnectorQueryCtx context(
+      pool_.get(),
+      pool_.get(),
+      properties.get(),
+      nullptr,
+      common::PrefixSortConfig{},
+      nullptr,
+      nullptr,
+      "query",
+      "task",
+      "scan",
+      0,
+      "");
+  FileHandleFactory files(
+      std::make_unique<FileHandleCache>(1000),
+      std::make_unique<FileHandleGenerator>());
+  auto check = [&](const VectorPtr& values,
+                   const TypePtr& declaredType,
+                   bool matches,
+                   bool statistics = true) {
+    SCOPED_TRACE(
+        fmt::format(
+            "file: {}, declared: {}",
+            values->type()->toString(),
+            declaredType->toString()));
+    auto file = common::testutil::TempFilePath::create();
+    auto data = makeRowVector({"c0"}, {values});
+    if (statistics) {
+      writeToFile(file->getPath(), data);
+    } else {
+      auto stream = cudf::get_default_stream();
+      auto table = with_arrow::toCudfTable(
+          data, pool_.get(), stream, cudf::get_current_device_resource_ref());
+      cudf::io::table_input_metadata metadata(table->view());
+      metadata.column_metadata[0].set_name("c0");
+      auto options =
+          cudf::io::parquet_writer_options::builder(
+              cudf::io::sink_info(file->getPath()), table->view())
+              .metadata(metadata)
+              .stats_level(cudf::io::statistics_freq::STATISTICS_NONE)
+              .build();
+      cudf::io::write_parquet(options, stream);
+    }
+    auto rowType = ROW({"c0"}, {declaredType});
+    auto split =
+        CudfHiveConnectorSplitBuilder(file->getPath())
+            .connectorId(
+                ::facebook::velox::cudf_velox::exec::test::kCudfHiveConnectorId)
+            .build();
+    common::SubfieldFilters filters;
+    filters.emplace(
+        common::Subfield("c0"),
+        std::make_shared<common::BigintRange>(1, 3, false));
+    cudf::ast::column_reference staticFilter{0};
+    MetadataOnlySplitReader reader(
+        split,
+        ::facebook::velox::cudf_velox::exec::test::CudfHiveConnectorTestBase::
+            makeTableHandle("parquet_table", rowType),
+        rowType,
+        {"c0"},
+        &files,
+        ioExecutor_.get(),
+        &context,
+        std::make_shared<CudfHiveConfig>(properties),
+        std::make_shared<io::IoStatistics>(),
+        std::make_shared<IoStats>(),
+        &staticFilter,
+        &filters);
+    dwio::common::RuntimeStats stats;
+    reader.prepareSplit(stats);
+    EXPECT_EQ(reader.dynamicFiltersSatisfied(), matches);
+  };
+  std::vector<VectorPtr> values{
+      makeFlatVector<int8_t>({1, 2, 3}),
+      makeFlatVector<int16_t>({1, 2, 3}),
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeFlatVector<int64_t>({1, 2, 3})};
+  for (const auto& fileValues : values) {
+    for (const auto& declared : values) {
+      check(
+          fileValues, declared->type(), fileValues->type() == declared->type());
+    }
+  }
+  auto date = makeFlatVector<int32_t>({1, 2, 3});
+  date->setType(DATE());
+  check(date, INTEGER(), false);
+  auto decimal = makeFlatVector<int64_t>({1, 2, 3});
+  decimal->setType(DECIMAL(9, 2));
+  check(decimal, BIGINT(), false);
+  check(makeFlatVector<int64_t>({1, 2, 3}), BIGINT(), false, false);
+}
 
 TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -99,7 +195,8 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
       std::make_shared<CudfHiveConfig>(properties),
       std::make_shared<io::IoStatistics>(),
       std::make_shared<IoStats>(),
-      &logicalFilter);
+      &logicalFilter,
+      nullptr);
 
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
