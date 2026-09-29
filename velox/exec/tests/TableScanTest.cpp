@@ -4138,17 +4138,26 @@ TEST_F(TableScanTest, remainingFilterWithNoProjectedColumns) {
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), {data});
 
-  auto plan =
-      PlanBuilder(pool_.get())
-          .tableScan(ROW({}, {}), {}, "c0 % 2 = 0", asRowType(data->type()))
-          .planNode();
-  auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
-                    .copyResults(pool());
+  const auto outputType = ROW({}, {});
+  const auto assertOutput = [&](const std::string& remainingFilter,
+                                vector_size_t expectedSize) {
+    SCOPED_TRACE(remainingFilter);
+    auto plan =
+        PlanBuilder(pool_.get())
+            .tableScan(outputType, {}, remainingFilter, asRowType(data->type()))
+            .planNode();
+    auto result = AssertQueryBuilder(plan)
+                      .split(makeHiveConnectorSplit(file->getPath()))
+                      .copyResults(pool());
 
-  EXPECT_EQ(result->size(), 3);
-  EXPECT_EQ(result->childrenSize(), 0);
-  EXPECT_TRUE(result->type()->equivalent(*ROW({}, {})));
+    EXPECT_EQ(result->size(), expectedSize);
+    EXPECT_EQ(*result->type(), *outputType);
+    EXPECT_EQ(result->childrenSize(), 0);
+  };
+
+  assertOutput("c0 % 2 = 0", 3);
+  assertOutput("c0 % 1 = 0", 6);
+  assertOutput("c0 % 2 = 3", 0);
 }
 
 TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
