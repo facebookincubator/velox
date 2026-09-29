@@ -46,14 +46,17 @@ class S3FileSystemTest : public S3Test {
   std::unique_ptr<ReadFile> openTestFile() {
     const char* bucketName = "data";
     const char* file = "test.txt";
+    const auto s3File = s3URI(bucketName, file);
     addBucket(bucketName);
+    s3fs_ = std::make_unique<S3FileSystem>(bucketName, siloServer_->s3Config());
+    const auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
     {
-      LocalWriteFile writeFile(localPath(bucketName) + "/" + file);
-      writeData(&writeFile);
+      auto writeFile =
+          s3fs_->openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+      writeData(writeFile.get());
+      writeFile->close();
     }
-    s3fs_ =
-        std::make_unique<S3FileSystem>(bucketName, minioServer_->s3Config());
-    return s3fs_->openFileForRead(s3URI(bucketName, file));
+    return s3fs_->openFileForRead(s3File);
   }
 
   std::string_view kLogLocation_ = "/tmp/foobar/";
