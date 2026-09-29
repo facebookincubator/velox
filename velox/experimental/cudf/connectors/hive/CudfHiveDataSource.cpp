@@ -407,6 +407,7 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  ensureCudaContextForThread();
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
@@ -525,6 +526,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfSplitReader_->resetSplit();
     return nullptr;
   }
+  ensureCudaContextForThread();
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
     cudfSplitReader_->resetSplit();
