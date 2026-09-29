@@ -24,6 +24,7 @@
 #include <random>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Varint.h"
@@ -44,6 +45,7 @@ class FsstEncodingTest : public ::testing::Test {
  protected:
   struct FsstSections {
     std::string_view prefix;
+    CompressionType compressionType;
     std::string_view symbolTable;
     std::string_view lengths;
     std::string_view blob;
@@ -111,6 +113,12 @@ class FsstEncodingTest : public ::testing::Test {
         {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
   }
 
+  static CompressionType serializedCompressionType(std::string_view encoded) {
+    const auto offset = EncodingPrefix::prefixSize(encoded, false);
+    NIMBLE_CHECK_LT(offset, encoded.size());
+    return static_cast<CompressionType>(static_cast<uint8_t>(encoded[offset]));
+  }
+
   std::string encodeZeroTerminatedFsst(
       const std::vector<std::string_view>& values) {
     NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
@@ -167,8 +175,8 @@ class FsstEncodingTest : public ::testing::Test {
 
     const auto encodingSize =
         EncodingPrefix::serializedSize(valueCount, /*useVarint=*/false) +
-        varint::varintSize(symbolTableSize) + symbolTableSize +
-        varint::varintSize(serializedLengths.size()) +
+        sizeof(uint8_t) + varint::varintSize(symbolTableSize) +
+        symbolTableSize + varint::varintSize(serializedLengths.size()) +
         serializedLengths.size() + totalCompressedSize;
     std::string encoded(encodingSize, '\0');
     char* position = encoded.data();
@@ -178,6 +186,8 @@ class FsstEncodingTest : public ::testing::Test {
         valueCount,
         /*useVarint=*/false,
         position);
+    encoding::writeChar(
+        static_cast<char>(CompressionType::Uncompressed), position);
     encoding::writeVarintString(
         {reinterpret_cast<const char*>(symbolTable.data()), symbolTableSize},
         position);
@@ -197,6 +207,10 @@ class FsstEncodingTest : public ::testing::Test {
     auto remaining = encoded.substr(prefixSize);
     const char* cursor = remaining.data();
     NIMBLE_CHECK_NOT_NULL(cursor);
+    const auto compressionType =
+        static_cast<CompressionType>(encoding::readChar(cursor));
+    remaining.remove_prefix(cursor - remaining.data());
+    cursor = remaining.data();
     const auto symbolTableSize = varint::readVarint32(&cursor);
     remaining.remove_prefix(cursor - remaining.data());
     const auto symbolTable = remaining.substr(0, symbolTableSize);
@@ -208,6 +222,7 @@ class FsstEncodingTest : public ::testing::Test {
     remaining.remove_prefix(lengthsSize);
     return {
         .prefix = encoded.substr(0, prefixSize),
+        .compressionType = compressionType,
         .symbolTable = symbolTable,
         .lengths = lengths,
         .blob = remaining,
@@ -228,6 +243,7 @@ class FsstEncodingTest : public ::testing::Test {
       rebuilt.append(encodedSize, cursor);
       rebuilt.append(section);
     };
+    rebuilt.push_back(static_cast<char>(sections.compressionType));
     appendSection(symbolTable);
     appendSection(lengths);
     rebuilt.append(blob);
@@ -477,6 +493,7 @@ TEST_F(FsstEncodingTest, roundTripStrings) {
   std::string longString2(10'000, 'b');
 
   std::vector<TestCase> testCases{
+      {"empty input", {}, EncodingType::Trivial},
       {"basic strings", {"hello", "world", "hello world", "foo", "bar", "baz"}},
       {"all empty strings", {"", "", "", ""}, EncodingType::Trivial},
       {"mixed empty and non-empty", {"", "abc", "", "def", ""}},
@@ -493,6 +510,140 @@ TEST_F(FsstEncodingTest, roundTripStrings) {
   for (const auto& testCase : testCases) {
     roundTrip(testCase.values, testCase.name, testCase.expectedEncodingType);
   }
+}
+
+TEST_F(FsstEncodingTest, compressesAndSlicesFsstBlobWithConfiguredPolicy) {
+  std::vector<std::string> storage;
+  storage.reserve(4'096);
+  for (uint32_t i = 0; i < 4'096; ++i) {
+    storage.emplace_back(
+        fmt::format(
+            "common/prefix/with/repeated/fsst/data/{:04}/common/suffix",
+            i % 32));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+
+  CompressionOptions compressionOptions;
+  compressionOptions.compressionAcceptRatio = 1.0;
+  compressionOptions.zstdMinCompressionSize = 0;
+  compressionOptions.lz4MinCompressionSize = 0;
+
+  for (const auto compressionType :
+       {CompressionType::Zstd, CompressionType::Lz4}) {
+    SCOPED_TRACE(toString(compressionType));
+    compressionOptions.compressionType = compressionType;
+    Buffer buffer{*pool_};
+    const auto encoded = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(compressionOptions, compressionType),
+        values,
+        buffer,
+        {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+
+    ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+    EXPECT_EQ(serializedCompressionType(encoded), compressionType);
+    EXPECT_EQ(
+        EncodingLayoutCapture::capture(encoded, {}).compressionType(),
+        compressionType);
+
+    stringBuffers_.clear();
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+    std::vector<std::string_view> decoded(values.size());
+    encoding->materialize(static_cast<uint32_t>(values.size()), decoded.data());
+    EXPECT_EQ(decoded, values);
+
+    Buffer sliceBuffer{*pool_};
+    const auto sliced = EncodingFactory::slice(
+        encoded, /*offset=*/17, /*length=*/83, sliceBuffer);
+    EXPECT_EQ(serializedCompressionType(sliced), CompressionType::Uncompressed);
+    stringBuffers_.clear();
+    auto slicedEncoding = EncodingFactory().create(
+        *pool_, sliced, createStringBufferFactory(), Encoding::Options{});
+    std::vector<std::string_view> slicedValues(83);
+    slicedEncoding->materialize(
+        static_cast<uint32_t>(slicedValues.size()), slicedValues.data());
+    EXPECT_EQ(
+        slicedValues,
+        std::vector<std::string_view>(
+            values.begin() + 17, values.begin() + 100));
+  }
+}
+
+TEST_F(FsstEncodingTest, returnsDecompressedBlobToBufferPool) {
+  std::vector<std::string> storage;
+  storage.reserve(4'096);
+  for (uint32_t i = 0; i < 4'096; ++i) {
+    storage.emplace_back(
+        fmt::format("common/prefix/for/fsst/buffer/pool/{:04}", i % 32));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+
+  CompressionOptions compressionOptions;
+  compressionOptions.compressionType = CompressionType::Zstd;
+  compressionOptions.compressionAcceptRatio = 1.0;
+  compressionOptions.zstdMinCompressionSize = 0;
+  Buffer encodeBuffer{*pool_};
+  const auto encoded = EncodingFactory::encode<std::string_view>(
+      createSelectionPolicy(compressionOptions, CompressionType::Zstd),
+      values,
+      encodeBuffer,
+      {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+  ASSERT_EQ(serializedCompressionType(encoded), CompressionType::Zstd);
+
+  auto decodePool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  const Encoding::Options options{.bufferPool = &bufferPool};
+  const auto decodeAndRelease = [&] {
+    auto encoding = EncodingFactory().create(
+        *decodePool,
+        encoded,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options);
+    EXPECT_EQ(encoding->encodingType(), EncodingType::Fsst);
+  };
+
+  decodeAndRelease();
+  const auto numAllocsAfterFirstDecode = decodePool->stats().numAllocs;
+  EXPECT_GT(bufferPool.size(), 0);
+
+  decodeAndRelease();
+  EXPECT_EQ(decodePool->stats().numAllocs, numAllocsAfterFirstDecode);
+}
+
+TEST_F(FsstEncodingTest, writesCompressionTypeWhenCompressionIsRejected) {
+  std::vector<std::string> storage;
+  storage.reserve(512);
+  for (uint32_t i = 0; i < 512; ++i) {
+    storage.emplace_back(fmt::format("fsst/value/with/random/suffix/{:04}", i));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+
+  CompressionOptions compressionOptions;
+  compressionOptions.compressionType = CompressionType::Zstd;
+  compressionOptions.compressionAcceptRatio = 0;
+  compressionOptions.zstdMinCompressionSize = 0;
+
+  Buffer buffer{*pool_};
+  const auto encoded = EncodingFactory::encode<std::string_view>(
+      createSelectionPolicy(compressionOptions, CompressionType::Zstd),
+      values,
+      buffer,
+      {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  EXPECT_EQ(serializedCompressionType(encoded), CompressionType::Uncompressed);
+  const char* header =
+      encoded.data() + EncodingPrefix::prefixSize(encoded, false);
+  EXPECT_EQ(
+      static_cast<CompressionType>(encoding::readChar(header)),
+      CompressionType::Uncompressed);
+  EXPECT_GT(varint::readVarint32(&header), 0);
+
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(values.size()), decoded.data());
+  EXPECT_EQ(decoded, values);
 }
 
 TEST_F(FsstEncodingTest, slice) {
@@ -555,6 +706,9 @@ TEST_F(FsstEncodingTest, capturesLengthsLayoutWithVarintHeaderSizes) {
 
   const char* pos =
       encoded.data() + EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
+  EXPECT_EQ(
+      static_cast<CompressionType>(encoding::readChar(pos)),
+      CompressionType::Uncompressed);
   const auto symbolTableSize = varint::readVarint32(&pos);
   ASSERT_GT(symbolTableSize, 0);
   pos += symbolTableSize;
@@ -592,6 +746,9 @@ TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
 
   const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
   const char* cursor = encoded.data() + headerOffset;
+  EXPECT_EQ(
+      static_cast<CompressionType>(encoding::readChar(cursor)),
+      CompressionType::Uncompressed);
   const auto symbolTableSize = varint::readVarint32(&cursor);
   const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
   const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
@@ -608,13 +765,16 @@ TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
     const char* message;
   };
   std::vector<Case> cases{
-      {headerOffset, "Truncated FSST header varint."},
+      {headerOffset, "Truncated FSST compression type."},
+      {headerOffset + sizeof(uint8_t), "Truncated FSST header varint."},
       {symbolTableEnd - 1, "FSST symbol table exceeds encoding bounds."},
       {symbolTableEnd, "Truncated FSST header varint."},
       {blobOffset - 1, "FSST lengths encoding exceeds encoding bounds."},
   };
-  if (symbolTableOffset - headerOffset > 1) {
-    cases.push_back({headerOffset + 1, "Truncated FSST header varint."});
+  const auto symbolTableSizeOffset = headerOffset + sizeof(uint8_t);
+  if (symbolTableOffset - symbolTableSizeOffset > 1) {
+    cases.push_back(
+        {symbolTableSizeOffset + 1, "Truncated FSST header varint."});
   }
   if (lengthsOffset - lengthsSizeOffset > 1) {
     cases.push_back({lengthsSizeOffset + 1, "Truncated FSST header varint."});
@@ -625,6 +785,23 @@ TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
     expectMalformedHeaderFromAllApis(
         {encoded.data(), testCase.size}, testCase.message);
   }
+}
+
+TEST_F(FsstEncodingTest, rejectsUnsupportedCompressionType) {
+  const std::vector<std::string_view> values{
+      "common/fsst/header/value/0000",
+      "common/fsst/header/value/0001",
+      "common/fsst/header/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  std::vector<char> malformed{encoded.begin(), encoded.end()};
+  const auto compressionTypeOffset = EncodingPrefix::prefixSize(encoded, false);
+  malformed[compressionTypeOffset] = static_cast<char>(0xff);
+
+  expectMalformedHeaderFromAllApis(
+      {malformed.data(), malformed.size()},
+      "Unsupported FSST compression type: 255.");
 }
 
 TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
@@ -639,6 +816,11 @@ TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
 
   const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
   const char* cursor = encoded.data() + headerOffset;
+  EXPECT_EQ(
+      static_cast<CompressionType>(encoding::readChar(cursor)),
+      CompressionType::Uncompressed);
+  const auto symbolTableSizeOffset =
+      static_cast<size_t>(cursor - encoded.data());
   const auto symbolTableSize = varint::readVarint32(&cursor);
   const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
   const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
@@ -656,7 +838,7 @@ TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
 
   const std::vector<std::vector<char>> malformedHeaders{
       replaceHeaderField(
-          headerOffset,
+          symbolTableSizeOffset,
           symbolTableOffset,
           {static_cast<char>(0x80),
            static_cast<char>(0x80),
@@ -665,7 +847,7 @@ TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
            static_cast<char>(0x80),
            0}),
       replaceHeaderField(
-          headerOffset,
+          symbolTableSizeOffset,
           symbolTableOffset,
           {static_cast<char>(0x80),
            static_cast<char>(0x80),
@@ -674,7 +856,9 @@ TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
            static_cast<char>(0x10),
            0}),
       replaceHeaderField(
-          headerOffset, symbolTableOffset, {static_cast<char>(0x80), 0, 0}),
+          symbolTableSizeOffset,
+          symbolTableOffset,
+          {static_cast<char>(0x80), 0, 0}),
       replaceHeaderField(
           symbolTableEnd,
           lengthsOffset,
@@ -703,10 +887,11 @@ TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
   const auto encoded = encodeFsst(values, buffer);
   ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
   const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+  const auto sectionOffset = headerOffset + sizeof(uint8_t);
 
   std::vector<char> symbolTableBacking(128, 0);
-  std::copy_n(encoded.data(), headerOffset, symbolTableBacking.data());
-  char* cursor = symbolTableBacking.data() + headerOffset;
+  std::copy_n(encoded.data(), sectionOffset, symbolTableBacking.data());
+  char* cursor = symbolTableBacking.data() + sectionOffset;
   varint::writeVarint(uint32_t{64}, &cursor);
   const auto shortSymbolTableSize =
       static_cast<size_t>(cursor - symbolTableBacking.data()) + 8;
@@ -716,8 +901,8 @@ TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
       "FSST symbol table exceeds encoding bounds.");
 
   std::vector<char> lengthsBacking(128, 0);
-  std::copy_n(encoded.data(), headerOffset, lengthsBacking.data());
-  cursor = lengthsBacking.data() + headerOffset;
+  std::copy_n(encoded.data(), sectionOffset, lengthsBacking.data());
+  cursor = lengthsBacking.data() + sectionOffset;
   varint::writeVarint(uint32_t{1}, &cursor);
   *cursor++ = 0;
   varint::writeVarint(uint32_t{64}, &cursor);
@@ -727,9 +912,10 @@ TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
       FsstEncoding::lengthsEncoding({lengthsBacking.data(), shortLengthsSize}),
       "FSST lengths encoding exceeds encoding bounds.");
 
-  std::vector<char> oversizedSymbolTable(headerOffset + FSST_MAXHEADER + 16, 0);
-  std::copy_n(encoded.data(), headerOffset, oversizedSymbolTable.data());
-  cursor = oversizedSymbolTable.data() + headerOffset;
+  std::vector<char> oversizedSymbolTable(
+      sectionOffset + FSST_MAXHEADER + 16, 0);
+  std::copy_n(encoded.data(), sectionOffset, oversizedSymbolTable.data());
+  cursor = oversizedSymbolTable.data() + sectionOffset;
   varint::writeVarint(static_cast<uint32_t>(FSST_MAXHEADER + 1), &cursor);
   cursor += FSST_MAXHEADER + 1;
   varint::writeVarint(uint32_t{1}, &cursor);
@@ -740,9 +926,9 @@ TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
            static_cast<size_t>(cursor - oversizedSymbolTable.data())}),
       "FSST symbol table size exceeds FSST_MAXHEADER.");
 
-  std::vector<char> emptySectionHeader(headerOffset + 4, 0);
-  std::copy_n(encoded.data(), headerOffset, emptySectionHeader.data());
-  cursor = emptySectionHeader.data() + headerOffset;
+  std::vector<char> emptySectionHeader(sectionOffset + 4, 0);
+  std::copy_n(encoded.data(), sectionOffset, emptySectionHeader.data());
+  cursor = emptySectionHeader.data() + sectionOffset;
   varint::writeVarint(uint32_t{0}, &cursor);
   varint::writeVarint(uint32_t{1}, &cursor);
   *cursor++ = 0;
@@ -752,7 +938,7 @@ TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
            static_cast<size_t>(cursor - emptySectionHeader.data())}),
       "FSST symbol table size must be positive.");
 
-  cursor = emptySectionHeader.data() + headerOffset;
+  cursor = emptySectionHeader.data() + sectionOffset;
   varint::writeVarint(uint32_t{1}, &cursor);
   *cursor++ = 0;
   varint::writeVarint(uint32_t{0}, &cursor);
@@ -1040,6 +1226,7 @@ TEST_F(FsstEncodingTest, zeroRowReadsRejectTrailingBlob) {
       encodeTrivialChild<uint32_t>(std::span<const uint32_t>{});
   const FsstSections zeroRowSections{
       .prefix = zeroRowPrefix,
+      .compressionType = CompressionType::Uncompressed,
       .symbolTable = sections.symbolTable,
       .lengths = emptyLengths,
       .blob = "x",

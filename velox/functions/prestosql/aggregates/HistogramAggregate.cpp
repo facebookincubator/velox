@@ -357,6 +357,11 @@ class HistogramAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Retains a count for every distinct input value.
+    return false;
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto* mapVector = (*result)->as<MapVector>();

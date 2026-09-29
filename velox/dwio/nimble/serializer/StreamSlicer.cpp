@@ -107,13 +107,14 @@ std::string_view nullableNullsStream(
     const Encoding::Options& encodingOptions) {
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, encodingOptions.useVarintRowCount);
+  const char* const end = encoded.data() + encoded.size();
   const auto valuesSize = encoding::readUint32(pos);
   NIMBLE_CHECK_LE(
       valuesSize,
-      static_cast<size_t>(encoded.end() - pos),
+      static_cast<size_t>(end - pos),
       "Nullable values child exceeds encoding size");
   pos += valuesSize;
-  return {pos, encoded.end()};
+  return {pos, static_cast<size_t>(end - pos)};
 }
 
 uint32_t maxStreamOffset(const StreamDescriptor& descriptor) {
@@ -156,6 +157,8 @@ uint32_t maxStreamOffset(const Type& type) {
       }
       return offset;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
     case Kind::ArrayWithOffsets:
       return std::max(
           {maxStreamOffset(type.asArrayWithOffsets().offsetsDescriptor()),
@@ -607,6 +610,8 @@ void StreamSlicer::sliceType(
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
     default:
       NIMBLE_UNSUPPORTED(
           "StreamSlicer does not support slicing {} yet", type.kind());

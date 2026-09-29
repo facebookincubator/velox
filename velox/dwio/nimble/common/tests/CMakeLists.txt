@@ -26,6 +26,7 @@ add_executable(
   ExceptionTests.cpp
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
+  TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
   TestUtils.h

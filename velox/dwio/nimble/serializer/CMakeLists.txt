@@ -65,8 +65,10 @@ target_link_libraries(
   nimble_stream_data
   nimble_serializer_options
   nimble_encodings
+  nimble_velox_schema
   nimble_common
   velox_memory
+  lz4
 )
 
 add_library(nimble_stream_data_parser StreamDataParser.cpp StreamDataParser.h)
@@ -92,6 +94,26 @@ target_link_libraries(
   nimble_velox_schema_reader
   nimble_common
   velox_memory
+  Folly::folly
+)
+
+add_library(nimble_encoding_view_decoder EncodingViewDecoder.cpp EncodingViewDecoder.h)
+target_link_libraries(nimble_encoding_view_decoder nimble_common nimble_encodings velox_memory)
+
+add_library(nimble_stream_reader StreamReader.cpp StreamReader.h)
+target_link_libraries(
+  nimble_stream_reader
+  nimble_common
+  nimble_compression
+  nimble_encodings
+  nimble_encoding_view_decoder
+  nimble_batch_reader
+  nimble_velox_common
+  nimble_velox_field_reader
+  velox_dwio_common
+  velox_common_base
+  velox_memory
+  velox_vector
   Folly::folly
 )
 

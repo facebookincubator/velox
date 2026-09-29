@@ -112,13 +112,13 @@ TEST_F(LocalPartitionTest, gather) {
            .singleAggregation({}, {"min(c0)", "max(c0)"})
            .planNode();
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  AssertQueryBuilder queryBuilder(op);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
-  task = queryBuilder.assertResults("SELECT -71, 152");
+  task = queryBuilder.assertResults({Variant(-71), Variant(152)});
 }
 
 TEST_F(LocalPartitionTest, partition) {

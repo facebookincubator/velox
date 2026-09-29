@@ -120,6 +120,7 @@ class TableEvolutionFuzzer {
     int64_t numSubfieldFilters{0};
     int64_t numFilterOnlyColumns{0};
     uint64_t rowsReducedByPushdown{0};
+    bool originalVerificationPassed{false};
     /// Identifies the failed phase; empty for successful queries.
     std::string failurePhase;
     bool executionSucceeded{false};
@@ -225,6 +226,7 @@ class TableEvolutionFuzzer {
     int64_t numExecutionFailures{0};
     int64_t numVerificationsPassed{0};
     int64_t numVerificationsFailed{0};
+    int64_t numOriginalVerificationsPassed{0};
     ConfigCoverage configs;
     QueryShapeCoverage queryShapes;
     std::map<std::string, int64_t> failuresByPhase;
@@ -266,6 +268,10 @@ class TableEvolutionFuzzer {
     /// execution, and verification details are available. Called before an
     /// execution or verification failure is rethrown.
     std::function<void(const QueryCoverage&)> queryCoverageObserver;
+
+    /// Logs file-format-specific metrics within comprehensive coverage
+    /// reports. Unset when the caller has no additional metrics.
+    std::function<void()> fileFormatCoverageLogger;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -300,6 +306,20 @@ class TableEvolutionFuzzer {
   // dwio-packaged defined file formats.
   static const std::vector<dwio::common::FileFormat> parseFileFormats(
       std::string input);
+
+  /// Returns 'name' as a double-quoted SQL identifier, doubling any embedded
+  /// quote. Column names reach the parser inside expression strings, so a name
+  /// that collides with a keyword or does not lex as a bare identifier has to
+  /// be quoted to survive the round trip.
+  static std::string quoteIdentifier(std::string_view name);
+
+  /// Generates a pushdown-eligible aggregation over the columns of 'schema'
+  /// that are absent from 'filteredColumns'. Returns nullopt when no column is
+  /// eligible. Grouping keys and aggregate operands are quoted identifiers.
+  static std::optional<AggregationConfig> generateAggregationConfig(
+      const RowTypePtr& schema,
+      FuzzerGenerator& rng,
+      const std::unordered_set<std::string>& filteredColumns);
 
   /// Returns true if 'columnName' is referenced by 'aggregationConfig's
   /// grouping keys or aggregate expressions.
@@ -340,13 +360,20 @@ class TableEvolutionFuzzer {
   /// Remaining filters are not generated: the expression fuzzer invents columns
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
-  void runOnInputFile(const InputFile& inputFile);
+  ///
+  /// Returns false, having done nothing, when the file carries no columns or no
+  /// rows. Neither is a finding, and neither becomes one on a retry, so a
+  /// caller looping to a deadline should stop rather than call again.
+  bool runOnInputFile(const InputFile& inputFile);
 
   const CoverageAccumulator& coverageStats() const {
     return coverageStats_;
   }
 
-  /// Logs the current cumulative dimension and per-plan coverage summaries.
+  /// Logs cumulative query and verification totals.
+  void logCoverageProgress() const;
+
+  /// Logs progress, file-format-specific metrics, and all coverage dimensions.
   void logCoverageSummary() const;
 
   virtual ~TableEvolutionFuzzer() = default;
@@ -364,6 +391,14 @@ class TableEvolutionFuzzer {
     dwio::common::FileFormat fileFormat;
 
     int bucketCount() const;
+  };
+
+  struct FlatMapAsStructSelection {
+    // Output schema containing selected map columns as structs.
+    RowTypePtr outputSchema;
+
+    // Ordered keys for each selected map column.
+    std::map<int, std::vector<std::string>> keysByColumn;
   };
 
   friend std::ostream& operator<<(
@@ -431,9 +466,25 @@ class TableEvolutionFuzzer {
       const std::unordered_map<std::string, std::string>&
           readSessionProperties);
 
+  // Builds the in-memory oracle plan over the original generated rows.
+  std::unique_ptr<TaskCursor> makeValuesTask(
+      const std::vector<RowVectorPtr>& input,
+      const RowTypePtr& tableSchema,
+      const PushdownConfig& pushdownConfig,
+      const FlatMapAsStructSelection& flatMapSelection,
+      const std::vector<std::string>& outputColumnNames);
+
+  // Selects rows assigned to 'selectedBucket' using the final table's Hive
+  // bucketing semantics.
+  std::vector<RowVectorPtr> selectRowsForBucket(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<column_index_t>& bucketColumnIndices,
+      std::optional<int32_t> selectedBucket,
+      int32_t bucketCount) const;
+
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
-  RowTypePtr buildFlatmapAsStructSchema(
+  FlatMapAsStructSelection buildFlatmapAsStructSchema(
       const RowTypePtr& tableSchema,
       const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
@@ -454,6 +505,7 @@ class TableEvolutionFuzzer {
       const std::string& tableOutputRootDirPath,
       std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
       std::vector<RowVectorPtr>& finalExpectedBatches,
+      std::vector<RowVectorPtr>& originalBatches,
       folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
       std::vector<int>& globallyConsistentColumnIndexVector);
@@ -479,16 +531,18 @@ class TableEvolutionFuzzer {
       const std::unordered_set<std::string>& subfieldFilteredFields);
 
   /// Generates a single fresh query shape over the already-written files and
-  /// verifies the pushdown plan against the FilterNode reference plan. Draws
-  /// subfield filters, remaining-filter application, dropped filter-only
-  /// columns, aggregation config, and the flatmap-as-struct read schema, then
-  /// rebuilds the scan splits (no rewrite) and runs both scan tasks. Called
-  /// once per query shape so a single write amortizes many shapes.
+  /// verifies the pushdown and FilterNode plans against each other and an
+  /// in-memory Values plan over the original rows. Draws subfield filters,
+  /// remaining-filter application, dropped filter-only columns, aggregation
+  /// config, and the flatmap-as-struct read schema, then rebuilds the scan
+  /// splits (no rewrite) and runs all three tasks. Called once per query shape
+  /// so a single write amortizes many shapes.
   void runQueryShape(
       const std::vector<std::vector<RowVectorPtr>>& writeResults,
       const std::vector<Setup>& testSetups,
       const std::vector<column_index_t>& bucketColumnIndices,
       const RowVectorPtr& finalExpectedData,
+      const std::vector<RowVectorPtr>& originalBatches,
       const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
       const std::vector<int>& globallyConsistentColumnIndexVector,

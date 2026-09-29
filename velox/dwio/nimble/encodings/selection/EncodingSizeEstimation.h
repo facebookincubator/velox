@@ -164,7 +164,11 @@ struct EncodingSizeEstimation {
         return ConstantEncoding<T>::estimateSize(values, statistics, options);
       }
       case EncodingType::Huffman: {
-        if constexpr (isIntegralType<physicalType>()) {
+        // Gates on T, not physicalType: EncodingFactory reads Huffman back
+        // through RETURN_ENCODING_BY_INTEGER_TYPE, which rejects floating-point
+        // data types. Neighbouring cases may gate on physicalType because their
+        // read dispatch accepts it.
+        if constexpr (isIntegralType<T>()) {
           return HuffmanEncoding<T>::estimateSize(values, statistics, options);
         } else {
           return std::nullopt;

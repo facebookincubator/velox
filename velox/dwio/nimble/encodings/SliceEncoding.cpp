@@ -347,6 +347,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
     case EncodingType::ALP:
+    case EncodingType::ALPRD:
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
     case EncodingType::SubIntSplit:
@@ -429,6 +430,7 @@ size_t applyValueDeltaPushdown(
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
     case EncodingType::ALP:
+    case EncodingType::ALPRD:
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
     case EncodingType::SubIntSplit:

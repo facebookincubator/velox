@@ -19,27 +19,31 @@
 
 namespace facebook::velox::functions {
 
-void registerSfmSketchFunctions(const std::string& prefix) {
+void registerSfmSketchFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerSfmSketchType();
 
   registerFunction<SfmSketchCardinality, int64_t, SfmSketch>(
-      {prefix + "cardinality"});
+      {prefix + "cardinality"}, {}, true, defaultOwner);
 
   registerFunction<NoisyEmptyApproxSetSfm, SfmSketch, Constant<double>>(
-      {prefix + "noisy_empty_approx_set_sfm"});
+      {prefix + "noisy_empty_approx_set_sfm"}, {}, true, defaultOwner);
   registerFunction<
       NoisyEmptyApproxSetSfm,
       SfmSketch,
       Constant<double>,
-      Constant<int64_t>>({prefix + "noisy_empty_approx_set_sfm"});
+      Constant<int64_t>>(
+      {prefix + "noisy_empty_approx_set_sfm"}, {}, true, defaultOwner);
   registerFunction<
       NoisyEmptyApproxSetSfm,
       SfmSketch,
       Constant<double>,
       Constant<int64_t>,
-      Constant<int64_t>>({prefix + "noisy_empty_approx_set_sfm"});
+      Constant<int64_t>>(
+      {prefix + "noisy_empty_approx_set_sfm"}, {}, true, defaultOwner);
 
   registerFunction<mergeSfmSketchArray, SfmSketch, Array<SfmSketch>>(
-      {prefix + "merge_sfm"});
+      {prefix + "merge_sfm"}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

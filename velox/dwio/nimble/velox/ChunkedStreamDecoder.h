@@ -24,27 +24,44 @@ namespace facebook::nimble {
 
 class ChunkedStreamDecoder : public Decoder {
  public:
+  /// Creates a decoder for one encoded chunk.
+  using EncodingFactoryCallback = std::function<std::unique_ptr<Encoding>(
+      velox::memory::MemoryPool&,
+      std::string_view,
+      std::function<void*(uint32_t)>)>;
+
   ChunkedStreamDecoder(
       velox::memory::MemoryPool& pool,
       std::unique_ptr<ChunkedStream> stream,
-      std::function<std::unique_ptr<Encoding>(
-          velox::memory::MemoryPool&,
-          std::string_view,
-          std::function<void*(uint32_t)>)> encodingFactory,
-      bool optimizeStringBufferHandling,
+      EncodingFactoryCallback encodingFactory,
+      bool stringDecoderZeroCopy,
       const MetricsLogger& logger)
-      : pool_{pool},
+      : pool_{&pool},
         stream_{std::move(stream)},
         encodingFactory_{std::move(encodingFactory)},
-        optimizeStringBufferHandling_{optimizeStringBufferHandling},
+        stringDecoderZeroCopy_{stringDecoderZeroCopy},
         logger_{logger} {}
 
   uint32_t next(
       uint32_t count,
       void* output,
+      std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
-      std::function<void*()> getOutputNulls = nullptr,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
+
+  uint32_t read(
+      std::span<const uint32_t> rows,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
+
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
 
   void skip(uint32_t count) override;
 
@@ -57,16 +74,12 @@ class ChunkedStreamDecoder : public Decoder {
   }
 
  private:
-  velox::memory::MemoryPool& pool_;
+  velox::memory::MemoryPool* const pool_;
   std::unique_ptr<ChunkedStream> stream_;
   std::unique_ptr<Encoding> encoding_;
   uint32_t remaining_{0};
-  std::function<std::unique_ptr<Encoding>(
-      velox::memory::MemoryPool&,
-      std::string_view,
-      std::function<void*(uint32_t)>)>
-      encodingFactory_;
-  bool optimizeStringBufferHandling_;
+  const EncodingFactoryCallback encodingFactory_;
+  const bool stringDecoderZeroCopy_;
   const MetricsLogger& logger_;
   std::vector<velox::BufferPtr> currentStringBuffers_;
   // For compatibility with old encoding behavior.

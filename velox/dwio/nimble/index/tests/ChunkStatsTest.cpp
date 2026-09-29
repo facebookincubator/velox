@@ -28,9 +28,11 @@ class ChunkStatsTest : public ClusterIndexTestBase {};
 TEST_F(ChunkStatsTest, createRejectsNullMetadata) {
   NIMBLE_ASSERT_THROW(
       ChunkStatsGroup::create(
+          ChunkStatsVersion::kV1,
           /*firstStripe=*/0,
           /*stripeCount=*/1,
-          std::unique_ptr<MetadataBuffer>{}),
+          std::unique_ptr<MetadataBuffer>{},
+          *pool_),
       "Chunk stats metadata must not be null.");
 }
 
