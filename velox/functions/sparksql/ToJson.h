@@ -380,7 +380,7 @@ struct ToJsonFunction {
         isSupportedType(inputTypes[0], true),
         "to_json function does not support type {}.",
         inputTypes[0]->toString());
-    sessionTimezone_ = getTimeZoneFromConfig(config);
+    sessionTimezone_ = config.timeZoneToAdjustTo();
     ignoreNullFields_ = SparkQueryConfig{config}.jsonIgnoreNullFields();
   }
 

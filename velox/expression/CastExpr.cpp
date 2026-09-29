@@ -43,16 +43,6 @@ namespace facebook::velox::exec {
 
 namespace {
 
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    const auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
 bool isDecimalReinterpretCast(const TypePtr& fromType, const TypePtr& toType) {
   if (!fromType->isDecimal() || !toType->isDecimal()) {
     return false;
@@ -190,7 +180,7 @@ VectorPtr CastExpr::castFromDate(
       }
 
       const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+          context.execCtx()->queryCtx()->queryConfig().timeZoneToAdjustTo();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         auto timestamp = Timestamp::fromDate(inputFlatVector->valueAt(row));
         if (timeZone) {
@@ -270,7 +260,7 @@ VectorPtr CastExpr::castToDate(
       }
 
       const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+          context.execCtx()->queryCtx()->queryConfig().timeZoneToAdjustTo();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         const auto days = util::toDate(inputVector->valueAt(row), timeZone);
         resultFlatVector->set(row, days);
@@ -395,7 +385,7 @@ VectorPtr CastExpr::castFromTime(
 
       // Get session timezone
       const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+          context.execCtx()->queryCtx()->queryConfig().timeZoneToAdjustTo();
       // Get session start time
       const auto startTimeMs =
           context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
@@ -504,7 +494,7 @@ VectorPtr CastExpr::castToTime(
 
       // Get session timezone and start time for timezone conversions
       const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+          context.execCtx()->queryCtx()->queryConfig().timeZoneToAdjustTo();
       const auto sessionStartTimeMs =
           context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
 
@@ -1175,7 +1165,7 @@ VectorPtr CastExpr::applyTimestampTimestampUtcCast(
     exec::EvalCtx& context,
     const BaseVector& input) {
   const auto* sessionTimeZone =
-      getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+      context.execCtx()->queryCtx()->queryConfig().timeZoneToAdjustTo();
   if (!sessionTimeZone) {
     if constexpr (kToUtc) {
       if (input.isConstantEncoding()) {

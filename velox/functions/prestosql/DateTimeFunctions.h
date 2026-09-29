@@ -159,14 +159,14 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* date) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Timestamp>* timestamp) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -508,7 +508,7 @@ struct TimestampPlusInterval {
       const core::QueryConfig& config,
       const arg_type<Timestamp>*,
       const arg_type<IntervalYearMonth>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -694,7 +694,7 @@ struct IntervalPlusTimestamp {
       const core::QueryConfig& config,
       const arg_type<IntervalYearMonth>*,
       const arg_type<Timestamp>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -749,7 +749,7 @@ struct TimestampMinusInterval {
       const core::QueryConfig& config,
       const arg_type<Timestamp>*,
       const arg_type<IntervalYearMonth>*) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1131,7 +1131,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
       const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
 
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
@@ -1277,7 +1277,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Varchar>* unitString,
       const int64_t* /*value*/,
       const arg_type<Timestamp>* /*timestamp*/) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (unitString != nullptr) {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
@@ -1382,7 +1382,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
 
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1484,7 +1484,7 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* formatString) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (formatString != nullptr) {
       setFormatter(*formatString);
       isConstFormat_ = true;
@@ -1566,8 +1566,8 @@ struct FromIso8601Timestamp {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    const auto* sessionTimeZone = getSessionTimeZone(config);
-    if (sessionTimeZone != nullptr) {
+    // Leave the GMT default in place when 'session_timezone' is unset.
+    if (const auto* sessionTimeZone = config.timeZone()) {
       sessionTimeZone_ = sessionTimeZone;
     }
   }
@@ -1622,8 +1622,8 @@ struct DateParseFunction {
       isConstFormat_ = true;
     }
 
-    const auto* sessionTimeZone = getSessionTimeZone(config);
-    if (sessionTimeZone != nullptr) {
+    // Leave the GMT default in place when 'session_timezone' is unset.
+    if (const auto* sessionTimeZone = config.timeZone()) {
       sessionTimeZone_ = sessionTimeZone;
     }
   }
@@ -1660,7 +1660,7 @@ struct FormatDateTimeFunction {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* formatString) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone_ = config.timeZoneToAdjustTo();
     if (formatString != nullptr) {
       setFormatter(*formatString);
       isConstFormat_ = true;
@@ -1746,8 +1746,8 @@ struct ParseDateTimeFunction {
       isConstFormat_ = true;
     }
 
-    const auto* sessionTimeZone = getSessionTimeZone(config);
-    if (sessionTimeZone != nullptr) {
+    // Leave the GMT default in place when 'session_timezone' is unset.
+    if (const auto* sessionTimeZone = config.timeZone()) {
       sessionTimeZone_ = sessionTimeZone;
     }
   }
@@ -1788,7 +1788,7 @@ struct CurrentDateFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
-    timeZone_ = getSessionTimeZone(config);
+    timeZone_ = config.timeZone();
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<Date>& result) {
@@ -1830,8 +1830,8 @@ struct CurrentTimestampFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
-    timeZone_ = getSessionTimeZone(config);
-    VELOX_USER_CHECK_NOT_NULL(timeZone_, "Timezone cannot be null");
+    timeZone_ = config.timeZone();
+    VELOX_USER_CHECK_NOT_NULL(timeZone_, "Session timezone is not set");
     result_ = pack(ts, timeZone_->id());
   }
 
@@ -1886,7 +1886,7 @@ struct ToISO8601Function {
       const arg_type<Timestamp>* /*input*/) {
     if (inputTypes[0]->isTimestamp()) {
       VELOX_DCHECK(inputTypes[0]->equivalent(*TIMESTAMP()));
-      timeZone_ = getTimeZoneFromConfig(config);
+      timeZone_ = config.timeZoneToAdjustTo();
     }
   }
 
@@ -2167,8 +2167,8 @@ struct CurrentTimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
-    const tz::TimeZone* timeZone = getSessionTimeZone(config);
-    VELOX_USER_CHECK_NOT_NULL(timeZone, "Timezone cannot be null");
+    const tz::TimeZone* timeZone = config.timeZone();
+    VELOX_USER_CHECK_NOT_NULL(timeZone, "Session timezone is not set");
 
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 

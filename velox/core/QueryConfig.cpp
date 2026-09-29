@@ -311,4 +311,19 @@ std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()
   return config_->rawConfigsCopy();
 }
 
+const tz::TimeZone* QueryConfig::timeZone() const {
+  const auto& sessionTzName = sessionTimezone();
+  if (!sessionTzName.empty()) {
+    return tz::locateZone(sessionTzName);
+  }
+  return nullptr;
+}
+
+const tz::TimeZone* QueryConfig::timeZoneToAdjustTo() const {
+  if (adjustTimestampToTimezone()) {
+    return timeZone();
+  }
+  return nullptr;
+}
+
 } // namespace facebook::velox::core

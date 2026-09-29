@@ -6781,7 +6781,7 @@ TEST_F(DateTimeFunctionsTest, currentTimestamp) {
     // Missing session timezone must throw regardless of the flag.
     VELOX_ASSERT_USER_THROW(
         callCurrentTimestamp(1758499200000, std::nullopt, adjustTimestamp),
-        "Timezone cannot be null");
+        "Session timezone is not set");
 
     auto laPacked = callCurrentTimestamp(
         1758499200000, "America/Los_Angeles", adjustTimestamp);
@@ -7271,7 +7271,7 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
   for (const bool adjustTimestamp : {true, false}) {
     VELOX_ASSERT_USER_THROW(
         callCurrentTime(1710064800000, std::nullopt, adjustTimestamp),
-        "Timezone cannot be null");
+        "Session timezone is not set");
   }
 
   testCurrentTime(1710064800000, "UTC", 36000000, 0);
