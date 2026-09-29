@@ -517,7 +517,7 @@ class NimbleIndexProjector {
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
   velox::memory::MemoryPool* const pool_;
   std::unique_ptr<DataInput> dataInput_;
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;

@@ -15,30 +15,28 @@
  */
 #pragma once
 
-#include "velox/dwio/nimble/index/ClusterIndexBase.h"
+#include "velox/dwio/nimble/index/ClusterIndexWriterBase.h"
 
 namespace facebook::nimble::index {
 
-/// Cluster index backed by flat Prefix or Trivial encoded key chunks.
-class ClusterIndex final : public ClusterIndexBase {
+struct ClusterIndexConfig;
+
+/// Writes a cluster index backed by hierarchical integral key chunks.
+class HierarchicalClusterIndexWriter final : public ClusterIndexWriterBase {
  public:
-  static std::unique_ptr<ClusterIndex> create(
-      Section rootSection,
-      velox::memory::MemoryPool* pool,
-      const Options& options);
-
-  ~ClusterIndex() override;
-
- private:
-  ClusterIndex(
-      Section rootSection,
-      std::shared_ptr<MetadataInput> metadataInput,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
-      bool pinIndex,
-      bool preloadIndex,
+  static std::unique_ptr<HierarchicalClusterIndexWriter> create(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
       velox::memory::MemoryPool* pool);
 
-  friend class test::ClusterIndexTestHelper;
+  ~HierarchicalClusterIndexWriter() override;
+
+ private:
+  HierarchicalClusterIndexWriter(
+      const ClusterIndexConfig& config,
+      const velox::RowTypePtr& inputType,
+      std::vector<SortOrder> sortOrders,
+      velox::memory::MemoryPool* pool);
 };
 
 } // namespace facebook::nimble::index

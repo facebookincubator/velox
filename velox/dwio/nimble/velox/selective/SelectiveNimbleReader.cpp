@@ -244,7 +244,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   int32_t endStripe_{};
 
   // Index related fields.
-  const ClusterIndex* clusterIndex_{nullptr};
+  const ClusterIndexBase* clusterIndex_{nullptr};
   // File-level row range from index lookup, if index bounds are active.
   std::optional<RowRange> indexRowRange_;
 
