@@ -29,8 +29,8 @@
 #include <string_view>
 #include <vector>
 
-#include "fb_velox/common/Profiler.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/common/fb/Profiler.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
