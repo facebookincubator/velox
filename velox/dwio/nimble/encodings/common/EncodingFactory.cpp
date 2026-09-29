@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -175,6 +176,20 @@ std::unique_ptr<Encoding> EncodingFactory::create(
               dataType);
       }
     }
+    case EncodingType::ALPRD: {
+      switch (dataType) {
+        case DataType::Float:
+          return std::make_unique<ALPRDEncoding<float>>(
+              pool, data, stringBufferFactory, options);
+        case DataType::Double:
+          return std::make_unique<ALPRDEncoding<double>>(
+              pool, data, stringBufferFactory, options);
+        default:
+          NIMBLE_INCOMPATIBLE_ENCODING(
+              "ALPRD encoding only supports float and double data types, got {}.",
+              dataType);
+      }
+    }
     case EncodingType::BlockBitPacking: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingEncoding, dataType);
     }
@@ -188,7 +203,7 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
     case EncodingType::SubIntSplit: {
-      RETURN_ENCODING_BY_VARINT_TYPE(SubIntSplitEncoding, dataType);
+      RETURN_ENCODING_BY_WIDE_NUMERIC_TYPE(SubIntSplitEncoding, dataType);
     }
     case EncodingType::Huffman: {
       RETURN_ENCODING_BY_INTEGER_TYPE(HuffmanEncoding, dataType);
@@ -439,6 +454,15 @@ std::string_view EncodingFactory::encode(
           "ALP encoding should only be selected for float or double data types, got {}.",
           TypeTraits<T>::dataType);
     }
+    case EncodingType::ALPRD: {
+      if constexpr (isFloatingPointType<T>()) {
+        return ALPRDEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ALPRD encoding only supports float and double data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
     case EncodingType::BlockBitPacking: {
       if constexpr (isNumericType<physicalType>()) {
         return BlockBitPackingEncoding<T>::encode(
@@ -475,6 +499,11 @@ std::string_view EncodingFactory::encode(
           "types, got {}.",
           TypeTraits<T>::dataType);
     }
+    // Reachable only when something names SubIntSplit explicitly, such as an
+    // encoding-layout replay or a benchmark. EncodingSizeEstimation has no
+    // SubIntSplit case, so estimateSize() returns nullopt for it and the
+    // selection policy skips it as incompatible -- default selection can never
+    // land here.
     case EncodingType::SubIntSplit: {
       if constexpr (
           isNumericType<physicalType>() &&

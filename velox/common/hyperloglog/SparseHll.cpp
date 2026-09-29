@@ -92,6 +92,19 @@ std::string SparseHlls::serializeEmpty(int8_t indexBitLength) {
   return serialized;
 }
 
+void SparseHlls::serializeSingleHash(
+    uint64_t hash,
+    int8_t indexBitLength,
+    char* output) {
+  common::OutputByteStream stream(output);
+  stream.appendOne(kPrestoSparseV2);
+  stream.appendOne(indexBitLength);
+  stream.appendOne(static_cast<int16_t>(1));
+  stream.appendOne(encode(
+      computeIndex(hash, kIndexBitLength),
+      numberOfLeadingZeros(hash, kIndexBitLength)));
+}
+
 bool SparseHlls::canDeserialize(const char* input) {
   return *reinterpret_cast<const int8_t*>(input) == kPrestoSparseV2;
 }

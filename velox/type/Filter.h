@@ -830,6 +830,14 @@ class BigintRange final : public Filter {
     return isSingleValue_;
   }
 
+  bool lowerUnbounded() const {
+    return lower_ == std::numeric_limits<int64_t>::min();
+  }
+
+  bool upperUnbounded() const {
+    return upper_ == std::numeric_limits<int64_t>::max();
+  }
+
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   std::string toString() const override {

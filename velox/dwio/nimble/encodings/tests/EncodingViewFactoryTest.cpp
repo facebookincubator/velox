@@ -26,12 +26,12 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 using namespace facebook;
 
@@ -111,7 +111,7 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
       0x0999c1e5b8460001,
       0x299f100bfa830002,
   };
-  const std::vector<nimble::detail::subintsplit::SegmentPlan> segments{
+  const std::vector<nimble::subintsplit::SectionPlan> segments{
       {.bitStart = 0, .bitEnd = 15},
       {.bitStart = 16, .bitEnd = 58},
       {.bitStart = 59, .bitEnd = 63},
@@ -121,7 +121,7 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
   nimble::EncodingLayout layout{
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingLayout::Config{
-          nimble::detail::subintsplit::makePreserveSplitConfig(segments)},
+          nimble::subintsplit::makePreserveSplitConfig(segments)},
       nimble::CompressionType::Uncompressed,
       std::move(children)};
   const nimble::EncodingSelectionPolicyCreator leafPolicyCreator =
@@ -152,7 +152,7 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
   EXPECT_EQ(captured.childrenCount(), segments.size());
   EXPECT_EQ(
       captured.config().get(
-          std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey)),
+          std::string(nimble::subintsplit::kSplitBoundariesConfigKey)),
       "0-15;16-58;59-63");
 
   auto view = nimble::createEncodingView(encoded, pool_.get());

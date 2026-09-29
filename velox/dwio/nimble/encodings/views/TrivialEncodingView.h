@@ -43,11 +43,11 @@ class TrivialEncodingView final : public TypedEncodingView<T> {
     const auto payload = this->decompressPayload(
         compressionType,
         TypeTraits<T>::dataType,
-        {pos, static_cast<size_t>(data.end() - pos)});
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
     values_ = reinterpret_cast<const physicalType*>(payload.data());
     NIMBLE_CHECK_EQ(
         reinterpret_cast<const char*>(values_ + this->rowCount_),
-        payload.end(),
+        payload.data() + payload.size(),
         "Unexpected Trivial view end.");
   }
 
@@ -81,11 +81,11 @@ class TrivialEncodingView<bool> final : public TypedEncodingView<bool> {
     const auto payload = this->decompressPayload(
         compressionType,
         DataType::Undefined,
-        {pos, static_cast<size_t>(data.end() - pos)});
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
     bitmap_ = payload.data();
     NIMBLE_CHECK_EQ(
         bitmap_ + FixedBitArray::bufferSize(this->rowCount_, 1),
-        payload.end(),
+        payload.data() + payload.size(),
         "Unexpected Trivial bool view end.");
   }
 
@@ -138,7 +138,7 @@ class TrivialEncodingView<std::string_view> final
     const auto payload = this->decompressPayload(
         compressionType,
         DataType::String,
-        {pos, static_cast<size_t>(data.end() - pos)});
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
     blob_ = payload.data();
     NIMBLE_CHECK_EQ(
         offsets_.back(), payload.size(), "Unexpected Trivial string view end.");

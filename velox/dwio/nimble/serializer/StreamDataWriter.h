@@ -594,7 +594,8 @@ StreamDataWriter<T>::StreamDataWriter(
       pool_{pool},
       streamEncodingBuffer_{std::make_unique<nimble::Buffer>(*pool)},
       streamEncodingLayouts_{streamEncodingLayouts},
-      outputBuffer_{buffer} {
+      outputBuffer_{buffer},
+      requiresNullBarrier_{!options_.hybridFlatMapColumns.empty()} {
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
 
   const auto version = options_.version;

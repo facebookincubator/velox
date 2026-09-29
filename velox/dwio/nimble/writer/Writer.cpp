@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -27,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
@@ -38,6 +40,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -60,6 +63,7 @@
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
@@ -70,6 +74,8 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -701,15 +707,43 @@ class WriterStreamContext : public StreamContext {
     isNullStream_ = value;
   }
 
+  // A stream is a flat map in-map stream exactly when it has value stream
+  // offsets recorded against it: setInMapValueStreamOffsets() is the only
+  // thing that populates them, and it is called for nothing else. Deriving it
+  // rather than carrying a parallel bool removes the obligation to keep the
+  // two in sync.
+  //
+  // The offsets are never empty for an in-map stream. Every arm of
+  // visitValueStreamLeaves() yields at least one descriptor -- scalars and
+  // containers visit their own, Row and FlatMap recurse under a
+  // NIMBLE_CHECK_GT(childrenCount, 0) -- so a key always has at least one
+  // value stream to record.
   bool isInMapStream() const {
-    return isInMapStream_;
+    return !flatMapValueStreamOffsets_.empty();
   }
 
-  void setIsInMapStream(bool value) {
-    isInMapStream_ = value;
+  // Offsets of the value streams the reader consults to decide whether this
+  // in-map stream's key had data in a stripe. Empty for every other stream.
+  //
+  // Built with visitValueStreamLeaves(), the readers' own traversal, so the
+  // two cannot drift. That matters more than it looks: a walk that merely
+  // collects "every stream under this subtree" is a different question and
+  // answers it differently -- it would count a Row's nulls stream, and recurse
+  // past an Array's or Map's lengths, none of which the reader treats as
+  // evidence.
+  //
+  // Fixed once at schema configure time. The value subtree of a flat map key
+  // is static, because flat map keys are the only thing discovered
+  // dynamically and flat maps are never nested.
+  const std::vector<offset_size>& flatMapValueStreamOffsets() const {
+    return flatMapValueStreamOffsets_;
   }
 
-  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
+  // Marks this stream as an in-map stream and records its value streams in one
+  // step: with isInMapStream() derived from these, a stream must never be
+  // observable as one without the other.
+  void setInMapValueStreamOffsets(std::vector<offset_size> offsets) {
+    NIMBLE_DCHECK(!offsets.empty(), "An in-map stream has value streams");
     flatMapValueStreamOffsets_ = std::move(offsets);
   }
 
@@ -749,10 +783,6 @@ class WriterStreamContext : public StreamContext {
 
  private:
   bool isNullStream_{false};
-  bool isInMapStream_{false};
-  // Value stream descriptor offsets for this in-map stream's flat-map field.
-  // Empty for non in-map streams and flat-map values with no reader-visible
-  // value stream.
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
@@ -984,6 +1014,7 @@ void configureDictionary(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Shared dictionary value must resolve to an integer or string "
           "scalar, array element, or map value, got {}.",
@@ -1273,63 +1304,6 @@ void findNodeIds(
 
   for (const auto& child : typeWithId.getChildren()) {
     findNodeIds(*child, output, predicate);
-  }
-}
-
-void collectFlatMapValueStreamOffsets(
-    const TypeBuilder& type,
-    std::vector<offset_size>& offsets) {
-  switch (type.kind()) {
-    case Kind::Scalar:
-      offsets.push_back(type.asScalar().scalarDescriptor().offset());
-      return;
-    case Kind::TimestampMicroNano:
-      offsets.push_back(
-          type.asTimestampMicroNano().microsDescriptor().offset());
-      offsets.push_back(type.asTimestampMicroNano().nanosDescriptor().offset());
-      return;
-    case Kind::Array:
-      offsets.push_back(type.asArray().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asArray().elements(), offsets);
-      return;
-    case Kind::ArrayWithOffsets:
-      offsets.push_back(type.asArrayWithOffsets().offsetsDescriptor().offset());
-      offsets.push_back(type.asArrayWithOffsets().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asArrayWithOffsets().elements(), offsets);
-      return;
-    case Kind::Map:
-      offsets.push_back(type.asMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(type.asMap().values(), offsets);
-      return;
-    case Kind::SlidingWindowMap:
-      offsets.push_back(type.asSlidingWindowMap().offsetsDescriptor().offset());
-      offsets.push_back(type.asSlidingWindowMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().values(), offsets);
-      return;
-    case Kind::Row: {
-      const auto& row = type.asRow();
-      offsets.push_back(row.nullsDescriptor().offset());
-      for (size_t i = 0; i < row.childrenCount(); ++i) {
-        collectFlatMapValueStreamOffsets(row.childAt(i), offsets);
-      }
-      return;
-    }
-    case Kind::FlatMap: {
-      const auto& flatMap = type.asFlatMap();
-      offsets.push_back(flatMap.nullsDescriptor().offset());
-      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        offsets.push_back(flatMap.inMapDescriptorAt(i).offset());
-        collectFlatMapValueStreamOffsets(flatMap.childAt(i), offsets);
-      }
-      return;
-    }
-    default:
-      NIMBLE_UNREACHABLE("Unsupported type kind {}", type.kind());
   }
 }
 
@@ -1731,7 +1705,6 @@ void initializeEncodingLayouts(
       SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
       return;
     }
-
     switch (typeBuilder.kind()) {
       case Kind::Scalar: {
         NIMBLE_CHECK_EQ(
@@ -1861,6 +1834,10 @@ void initializeEncodingLayouts(
       case Kind::FlatMap: {
         NIMBLE_UNREACHABLE("Flatmap handled already");
       }
+      case Kind::HybridFlatMap: {
+        NIMBLE_UNSUPPORTED(
+            "Hybrid FlatMap is supported only by the serialized-value writer.");
+      }
     }
 #undef SET_STREAM_CONTEXT
   }
@@ -1874,10 +1851,13 @@ void configureAddedFlatMapField(
   auto& flatmapBuilder = flatmap.asFlatMap();
   auto& inMapContext = streamContext(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
-  inMapContext.setIsInMapStream(true);
   std::vector<offset_size> valueStreamOffsets;
-  collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
-  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
+  visitValueStreamLeaves(fieldType, [&](offset_size offset) {
+    valueStreamOffsets.push_back(offset);
+    // Collect every leaf: the visitor's true short-circuits the walk.
+    return false;
+  });
+  inMapContext.setInMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
@@ -2042,14 +2022,19 @@ Writer::Writer(
           {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
                &context_->schemaBuilder(),
                context_->options().featureReordering),
+           .metadataFlushThreshold =
+               context_->options().metadataFlushThreshold.value_or(
+                   kMetadataFlushThreshold),
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
                    kMetadataCompressionThreshold),
+           .streamChecksumsEnabled = context_->options().enableStreamChecksums,
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
            .enableChunkStats = context_->options().enableChunkStats,
            .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
+           .maxChunkStringStatSize = context_->options().maxChunkStringStatSize,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
            .stripeGroupEncodingLayoutReadFactors =
@@ -2433,7 +2418,12 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
     clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
   }
 
-  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted) {
+  // Read back from the tablet writer rather than from options, so the recorded
+  // flag cannot drift from what was actually written.
+  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+
+  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
+      !hasStreamChecksums) {
     return;
   }
 
@@ -2441,7 +2431,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
       FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)}
+          std::move(clusterIndexKeyColumnsWithOmittedStorage),
+          hasStreamChecksums}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -2573,6 +2564,23 @@ bool Writer::finish() {
 void Writer::abort() {
   checkRunning();
   setState(State::kAborted);
+}
+
+// Placeholders for the suspend and resume API, whose implementation lands
+// with the write path. Both throw, which is why clang-tidy reads suspend()
+// as never returning.
+
+// @lint-ignore CLANGTIDY clang-diagnostic-missing-noreturn
+void Writer::suspend() {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer suspend is not implemented yet.");
+}
+
+std::unique_ptr<Writer> Writer::resume(
+    const velox::TypePtr& /* type */,
+    std::string_view /* path */,
+    velox::memory::MemoryPool& /* pool */,
+    const WriterOptions& /* options */) {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer resume is not implemented yet.");
 }
 
 void Writer::flush() {
@@ -2796,6 +2804,11 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
+  // A reclaim-triggered flush must remain on the reclaiming thread. Dispatching
+  // executor tasks could enter memory arbitration recursively.
+  if (velox::memory::underMemoryArbitration()) {
+    return 1;
+  }
   const auto minStreamsPerEncodingTask =
       std::max(1u, options.minStreamsPerEncodingTask);
   const auto maxByStreams =
@@ -2929,41 +2942,56 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add(
-            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
-              velox::common::testutil::TestValue::adjust(
-                  "facebook::nimble::Writer::parallelEncodeTask",
-                  const_cast<uint32_t*>(&taskId));
-              const auto startCpuNanos = velox::process::threadCpuNanos();
-              while (true) {
-                const auto fetchIndex =
-                    nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (fetchIndex >= streamCount) {
-                  break;
-                }
-                const auto streamIndex = orderedIndices[fetchIndex];
-                auto& [nodeId, streamData] = streams[streamIndex];
-                uint64_t streamSize{0};
-                processStream(
-                    *streamData,
-                    encodingScratchBufferPool,
-                    encodingBufferPool,
-                    streamSize,
-                    chunkSize);
-                auto* statsCollector = context_->getStatsCollector(nodeId);
-                if (statsCollector) {
-                  statsCollector->addPhysicalSize(streamSize);
-                }
-              }
-              encodingCpuNanos.fetch_add(
-                  velox::process::threadCpuNanos() - startCpuNanos,
-                  std::memory_order_relaxed);
-            });
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool]() {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto fetchIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (fetchIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = orderedIndices[fetchIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            uint64_t streamSize{0};
+            processStream(
+                *streamData,
+                encodingScratchBufferPool,
+                encodingBufferPool,
+                streamSize,
+                chunkSize);
+            auto* statsCollector = context_->getStatsCollector(nodeId);
+            if (statsCollector) {
+              statsCollector->addPhysicalSize(streamSize);
+            }
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
       barrier.waitAll();
     } else {
@@ -3020,6 +3048,72 @@ void Writer::encodeStream(
   streamData.reset();
 }
 
+std::vector<const StreamDescriptorBuilder*>
+Writer::collectAllTrueInMapStreams() {
+  std::vector<const StreamDescriptorBuilder*> candidates;
+  if (!context_->options().skipConstantFlatMapInMapStreams) {
+    return candidates;
+  }
+
+  // Runs before the encode loop because all-true is only knowable from the raw
+  // stream. Afterwards compact() has consumed it, and the encoded form only
+  // answers the question by decoding, which is what this avoids.
+  for (const auto& [_, stream] : context_->streams()) {
+    const auto& descriptor = stream->descriptor();
+    auto* streamContext = descriptor.context<WriterStreamContext>();
+    if (streamContext == nullptr || !streamContext->isInMapStream()) {
+      continue;
+    }
+    const auto offset = descriptor.offset();
+    // Only streams that are still whole. One already chunked mid-stripe has
+    // part of itself encoded, so the raw data left here is just the tail and
+    // says nothing about the stripe.
+    //
+    // Declining costs the space saving, never correctness, and it is hard to
+    // reach. An in-map stream is one byte per row, so it must pass
+    // minStreamChunkRawSize (512KiB, ~524k rows for this one key) AND do so
+    // while the flush policy reports memory pressure, since mid-stripe
+    // chunking only runs under shouldChunk(). A table wide enough to want flat
+    // maps fills a 256MB raw stripe long before one key's in-map reaches half
+    // a megabyte.
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    if (!encodedStreams_[offset].chunks.empty()) {
+      continue;
+    }
+    // In-map streams are ContentStreamData<bool> (FieldWriter.cpp), so data()
+    // is a plain view: no materialization, and none of the string value
+    // streams are touched.
+    if (isAllTrueBoolStream(stream->data())) {
+      candidates.push_back(&descriptor);
+    }
+  }
+  return candidates;
+}
+
+void Writer::suppressAllTrueInMapStreams(
+    const std::vector<const StreamDescriptorBuilder*>& candidates) {
+  // After the encode loop a value stream reached disk exactly when it has
+  // chunks. Nothing needs to be read from the streams themselves, so this
+  // costs no materialization and inspects no encoded bytes.
+  const auto reachedDisk = [this](offset_size offset) {
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    return !encodedStreams_[offset].chunks.empty();
+  };
+
+  for (const auto* descriptor : candidates) {
+    // Drop the all-true in-map stream only while a value stream proves the key
+    // was present. The offsets were recorded with the reader's own traversal,
+    // so the writer cannot count bytes the reader will not look at.
+    const auto* streamContext = descriptor->context<WriterStreamContext>();
+    const auto& valueOffsets = streamContext->flatMapValueStreamOffsets();
+    if (std::any_of(valueOffsets.begin(), valueOffsets.end(), reachedDisk)) {
+      encodedStreams_[descriptor->offset()].chunks.clear();
+    }
+  }
+}
+
 void Writer::processStream(
     StreamData& streamData,
     velox::BufferPool* encodingScratchBufferPool,
@@ -3027,7 +3121,7 @@ void Writer::processStream(
     uint64_t& streamSize,
     std::atomic_uint64_t& chunkSize) {
   const auto offset = streamData.descriptor().offset();
-  const auto* context = streamData.descriptor().context<WriterStreamContext>();
+  auto* context = streamData.descriptor().context<WriterStreamContext>();
   NIMBLE_CHECK(encodedStreams_[offset].chunks.empty());
   if ((context != nullptr) && context->isNullStream()) {
     // For null streams we promote the null values to be written as
@@ -3044,15 +3138,23 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are all-true (every row
-    // has the key) or all-false (no row has the key). The reader distinguishes
-    // these by checking value stream presence: all-true keys have value
-    // streams, all-false keys do not.
+    // When enabled, skip encoding in-map streams that are constant, since the
+    // reader recovers the in-map state from value stream presence.
+    //
+    // All-false is dropped here: the key really is absent from this stripe,
+    // which is exactly what the reader concludes from two missing streams.
+    //
+    // All-true is still encoded here. collectAllTrueInMapStreams() has
+    // already noted it, and suppressAllTrueInMapStreams() drops the chunks
+    // after the stripe is encoded, once it is known whether a value stream
+    // survived to prove the key was present.
     //
     // NOTE: readers that don't infer missing in-map streams require
     // skipConstantFlatMapInMapStreams to remain false.
     streamData.materialize();
-    if (!isConstantBoolStream(streamData.data())) {
+    const auto data = streamData.data();
+    const bool allTrue = isAllTrueBoolStream(data);
+    if (allTrue || !isConstantBoolStream(data)) {
       encodeStream(
           streamData,
           encodingScratchBufferPool,
@@ -3109,6 +3211,78 @@ bool Writer::encodeStreamChunk(
   return writtenChunk;
 }
 
+namespace {
+
+template <typename T>
+void populateTypedChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    uint32_t maxStringStatSize) {
+  const std::span<const T> values{
+      reinterpret_cast<const T*>(chunkView.data().data()),
+      chunkView.data().size() / sizeof(T)};
+  if (values.empty()) {
+    return;
+  }
+  if constexpr (std::is_floating_point_v<T>) {
+    if (std::any_of(values.begin(), values.end(), [](T value) {
+          return std::isnan(value);
+        })) {
+      return;
+    }
+  }
+  const auto [min, max] = std::minmax_element(values.begin(), values.end());
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      return;
+    }
+    chunk.minValue = std::string{*min};
+    chunk.maxValue = std::string{*max};
+  } else {
+    chunk.minValue = *min;
+    chunk.maxValue = *max;
+  }
+}
+
+void populateChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    const WriterOptions& options) {
+  if (!options.enableChunkStats ||
+      options.chunkStatsVersion != ChunkStatsVersion::kV2) {
+    return;
+  }
+#define POPULATE_CHUNK_BOUNDS(scalarKind, Type)            \
+  case ScalarKind::scalarKind:                             \
+    populateTypedChunkBounds<Type>(                        \
+        chunkView, chunk, options.maxChunkStringStatSize); \
+    return
+
+  switch (chunkView.descriptor().scalarKind()) {
+    POPULATE_CHUNK_BOUNDS(Bool, bool);
+    POPULATE_CHUNK_BOUNDS(Int8, int8_t);
+    POPULATE_CHUNK_BOUNDS(UInt8, uint8_t);
+    POPULATE_CHUNK_BOUNDS(Int16, int16_t);
+    POPULATE_CHUNK_BOUNDS(UInt16, uint16_t);
+    POPULATE_CHUNK_BOUNDS(Int32, int32_t);
+    POPULATE_CHUNK_BOUNDS(UInt32, uint32_t);
+    POPULATE_CHUNK_BOUNDS(Int64, int64_t);
+    POPULATE_CHUNK_BOUNDS(UInt64, uint64_t);
+    POPULATE_CHUNK_BOUNDS(Float, float);
+    POPULATE_CHUNK_BOUNDS(Double, double);
+    case ScalarKind::String:
+    case ScalarKind::Binary:
+      populateTypedChunkBounds<std::string_view>(
+          chunkView, chunk, options.maxChunkStringStatSize);
+      return;
+    case ScalarKind::Undefined:
+      return;
+  }
+#undef POPULATE_CHUNK_BOUNDS
+}
+
+} // namespace
+
 uint32_t Writer::encodeChunk(
     const StreamData& chunkView,
     Chunk& chunk,
@@ -3128,6 +3302,7 @@ uint32_t Writer::encodeChunk(
   chunk.rowCount = chunkView.rowCount();
   // Per-chunk null count, precomputed by the chunker.
   chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
+  populateChunkBounds(chunkView, chunk, context_->options());
   ChunkedStreamWriter chunkWriter{
       *encodingBuffer_, context_->options().chunkCompression};
   for (auto& buffer : chunkWriter.encode(encoded)) {
@@ -3170,15 +3345,31 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool] {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
           const auto startCpuNanos = velox::process::threadCpuNanos();
           while (true) {
             const auto inputIndex =
@@ -3270,6 +3461,7 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
+    bool stopWhenPressureRelieved,
     FlushPolicy* flushPolicy) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
@@ -3277,10 +3469,10 @@ bool Writer::flushChunks(
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
     if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+        (stopWhenPressureRelieved && !shouldChunk(flushPolicy))) {
       return false;
     }
   }
@@ -3291,6 +3483,13 @@ bool Writer::writeStripe() {
   if (context_->rowsInStripe() == 0) {
     return false;
   }
+
+  // Which in-map streams are all-true has to be read now, while the raw
+  // streams still hold their bytes; encoding consumes them. Whether each key's
+  // value stream reaches disk is only settled once encoding finishes, so the
+  // candidates are collected here and judged after the loop.
+  ensureWriteStreams();
+  const auto allTrueInMapStreams = collectAllTrueInMapStreams();
 
   if (context_->options().enableChunking) {
     // Chunk all streams.
@@ -3313,6 +3512,8 @@ bool Writer::writeStripe() {
   uint64_t stripeSize{0};
   {
     LoggingScope scope{*context_->logger()};
+
+    suppressAllTrueInMapStreams(allTrueInMapStreams);
 
     size_t nonEmptyCount{0};
     for (auto i = 0; i < encodedStreams_.size(); ++i) {
@@ -3362,45 +3563,68 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
+  const auto& options = context_->options();
+  if (options.enableChunking) {
     const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
-    const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    // O(numStreams) plus an allocation, so it is called only from a branch
+    // that will act on the result.
+    const auto oversizedStreams = [&] {
+      const auto streamCount = streams.size();
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      std::vector<uint32_t> indices;
+      indices.reserve(streamCount);
+      for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          indices.push_back(streamIndex);
+        }
       }
+      return indices;
+    };
+
+    if (options.eagerChunking) {
+      // An oversized stream is capped on its own account, without waiting for
+      // the writer's total to come under pressure. See
+      // WriterOptions::eagerChunking. Stopping once pressure cleared would
+      // leave the streams after that point above the cap, so this walks all
+      // of them.
+      flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/false,
+          flushPolicy.get());
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
-      // Relieve memory pressure by chunking small streams.
-      // Sort streams for chunking based on raw memory usage.
-      // TODO(T240072104): Improve performance by bucketing the streams
-      // by size (by most significant bit) instead of sorting them.
-      // Only sort streams above minChunkSize.
-      streamIndices.resize(streams.size());
-      std::iota(streamIndices.begin(), streamIndices.end(), 0);
-      std::sort(
-          streamIndices.begin(),
-          streamIndices.end(),
-          [&](const uint32_t& a, const uint32_t& b) {
-            return streams[a].second->memoryUsed() >
-                streams[b].second->memoryUsed();
-          });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+    if (shouldChunk(flushPolicy.get())) {
+      // Soft chunking, bounded by maxChunkSize.
+      const bool continueChunking = flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/true,
+          flushPolicy.get());
+      // Hard chunking reaches below maxChunkSize: the escalation for when
+      // capping each stream was not enough.
+      if (continueChunking) {
+        // Sort streams for chunking based on raw memory usage.
+        // TODO(T240072104): Improve performance by bucketing the streams
+        // by size (by most significant bit) instead of sorting them.
+        // Only sort streams above minChunkSize.
+        std::vector<uint32_t> streamIndices(streams.size());
+        std::iota(streamIndices.begin(), streamIndices.end(), 0);
+        std::sort(
+            streamIndices.begin(),
+            streamIndices.end(),
+            [&](const uint32_t& a, const uint32_t& b) {
+              return streams[a].second->memoryUsed() >
+                  streams[b].second->memoryUsed();
+            });
+        flushChunks(
+            streamIndices,
+            /*ensureFullChunks=*/false,
+            /*stopWhenPressureRelieved=*/true,
+            flushPolicy.get());
+      }
     }
   }
 

@@ -113,6 +113,22 @@ target_include_directories(
 add_dependencies(nimble_file_properties_fb nimble_file_properties_schema_fb)
 
 build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/Checkpoint.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  nimble_checkpoint_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_checkpoint_fb INTERFACE)
+target_include_directories(
+  nimble_checkpoint_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(nimble_checkpoint_fb nimble_checkpoint_schema_fb)
+
+build_flatbuffers(
   "${CMAKE_CURRENT_SOURCE_DIR}/HashIndex.fbs"
   "${CMAKE_CURRENT_SOURCE_DIR}"
   nimble_hash_index_schema_fb
@@ -162,6 +178,7 @@ add_dependencies(nimble_vector_index_fb nimble_vector_index_schema_fb)
 
 add_library(
   nimble_tablet_common
+  Checkpoint.cpp
   Compression.cpp
   FileProperties.cpp
   MetadataBuffer.cpp
@@ -174,11 +191,13 @@ add_library(
   FileProperties.h
   Constants.h
   Compression.h
+  Checkpoint.h
   Chunk.h
   Callbacks.h
 )
 target_link_libraries(
   nimble_tablet_common
+  nimble_checkpoint_fb
   nimble_file_properties_fb
   nimble_footer_fb
   nimble_common

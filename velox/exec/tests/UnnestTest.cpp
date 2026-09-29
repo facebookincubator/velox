@@ -336,7 +336,7 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,
                         std::to_string(testData.outputBatchSize))
-                    .assertResults({"SELECT c0, UNNEST(c1) FROM tmp"});
+                    .assertResults("SELECT c0, UNNEST(c1) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
@@ -399,7 +399,7 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
                 std::to_string(testData.outputBatchSize))
-            .assertResults({"SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp"});
+            .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
@@ -433,7 +433,7 @@ TEST_P(UnnestTest, arrayWithNull) {
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .config(
               core::QueryConfig::kPreferredOutputBatchRows, std::to_string(25))
-          .assertResults({"SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp"});
+          .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
       exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors, 164);

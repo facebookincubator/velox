@@ -92,14 +92,15 @@ bool ParquetTypeWithId::hasNonRepeatedLeaf() const {
 }
 
 LevelMode ParquetTypeWithId::makeLevelInfo(LevelInfo& info) const {
-  int repeatedAncestor = maxDefine_;
-  auto node = this;
-  do {
-    if (node->isOptional_) {
-      repeatedAncestor--;
+  int repeatedAncestor = 0;
+  auto node = this->parquetParent();
+  while (node) {
+    if (node->isRepeated_) {
+      repeatedAncestor = node->maxDefine_;
+      break;
     }
     node = node->parquetParent();
-  } while (node && !node->isRepeated_);
+  }
   bool isList = type()->kind() == TypeKind::ARRAY;
   bool isStruct = type()->kind() == TypeKind::ROW;
   bool isMap = type()->kind() == TypeKind::MAP;
@@ -107,18 +108,18 @@ LevelMode ParquetTypeWithId::makeLevelInfo(LevelInfo& info) const {
   if (isStruct) {
     for (auto i = 0; i < getChildren().size(); ++i) {
       auto& child = parquetChildAt(i);
-      hasList |= hasList || containsList(child);
+      hasList |= containsList(child);
     }
   }
   if (isList) {
     // the definition level is the level of a present element.
-    new (&info) LevelInfo(1, maxDefine_ + 1, maxRepeat_, repeatedAncestor);
+    new (&info) LevelInfo(1, maxDefine_, maxRepeat_, repeatedAncestor);
     return LevelMode::kList;
   }
 
   if (isMap) {
     // the definition level is the level of a present element.
-    new (&info) LevelInfo(1, maxDefine_ + 1, maxRepeat_, repeatedAncestor);
+    new (&info) LevelInfo(1, maxDefine_, maxRepeat_, repeatedAncestor);
     return LevelMode::kList;
   }
 

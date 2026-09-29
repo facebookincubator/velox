@@ -88,6 +88,8 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint64_t> CHUNKING_WRITER_MIN_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_MAX_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE;
+  static Entry<bool> CHUNKING_WRITER_EAGER_CHUNKING;
+
   /// VARCHAR subfield paths whose value streams prefer FSST, falling back to
   /// Trivial when FSST misses its compression target. FSST and its fallback use
   /// the normal encoding compression policy. Paths use Velox subfield syntax:

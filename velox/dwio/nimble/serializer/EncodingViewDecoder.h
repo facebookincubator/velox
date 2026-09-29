@@ -19,13 +19,14 @@
 #include <memory>
 #include <string_view>
 
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
 #include "velox/dwio/nimble/velox/Decoder.h"
 
 namespace facebook::nimble {
 
-/// Adapts a single encoded stream chunk to FieldReader's selected-row API.
+/// Adapts a single encoded stream chunk to the FieldReader decoder API.
 class EncodingViewDecoder final : public Decoder {
  public:
   /// Creates an EncodingView for the unwrapped chunk payload.
@@ -37,6 +38,7 @@ class EncodingViewDecoder final : public Decoder {
   EncodingViewDecoder(
       std::string_view encoded,
       velox::memory::MemoryPool* pool,
+      velox::BufferPool* bufferPool,
       const EncodingViewFactory& encodingViewFactory);
 
   uint32_t next(
@@ -66,14 +68,32 @@ class EncodingViewDecoder final : public Decoder {
 
   void reset() override;
 
-  const Encoding* FOLLY_NULLABLE encoding() const override;
+  const Encoding* encoding() const override;
 
  private:
+  // Decodes the next 'count' rows into staging storage and copies them to the
+  // positions set in 'scatterBits', leaving the rest of the first
+  // 'scatterSize' output positions null. Returns the number of non-null
+  // decoded values.
+  uint32_t scatterNext(
+      uint32_t count,
+      void* output,
+      void* outputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers,
+      const uint64_t* scatterBits,
+      int32_t scatterSize);
+
   // Memory pool used to allocate retained string buffers.
   velox::memory::MemoryPool* const pool_;
 
+  // Returns temporary decode storage to the caller-owned cache.
+  velox::BufferPool* const bufferPool_;
+
   // Random-access view over the encoded values.
   std::shared_ptr<const EncodingView> encodingView_;
+
+  // Next logical row consumed by the sequential interface.
+  uint32_t nextRow_{0};
 };
 
 } // namespace facebook::nimble

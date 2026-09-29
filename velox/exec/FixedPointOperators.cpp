@@ -103,6 +103,18 @@ class StateSourceOperator : public exec::SourceOperator {
     return current_ >= batches_.size();
   }
 
+  void close() override {
+    SourceOperator::close();
+    // 'batches_' holds shared references to vectors allocated from the owning
+    // FixedPointLoop's state pool.  Release them here rather than in the
+    // destructor: the loop waits only on each sub-task's taskCompletionFuture,
+    // which fires when drivers close, while this operator object can be
+    // destroyed later on an executor thread, after the loop and its pool are
+    // gone.  Releasing in close() keeps every state-pool reference inside the
+    // loop's lifetime.
+    batches_.clear();
+  }
+
  private:
   const std::string stateName_;
 
@@ -206,6 +218,23 @@ class StateHashJoinOperator : public exec::Operator {
 
   bool isFinished() override {
     return noMoreInput_ && input_ == nullptr && probe_ == nullptr;
+  }
+
+  void close() override {
+    Operator::close();
+    // 'entry_' is a hash table built in the owning FixedPointLoop's state
+    // pool, and 'input_'/'probe_' can also reference state-pool vectors when
+    // this operator reads behind a StateSource.  Release them here rather
+    // than in the destructor: the loop waits only on each sub-task's
+    // taskCompletionFuture, which fires when drivers close, while this
+    // operator object can be destroyed later on an executor thread, after
+    // the loop and its pool are gone.  'lookup_' borrows the table's hashers,
+    // so it is released before 'entry_'.
+    input_ = nullptr;
+    probe_ = nullptr;
+    lookup_.reset();
+    table_ = nullptr;
+    entry_.reset();
   }
 
  private:

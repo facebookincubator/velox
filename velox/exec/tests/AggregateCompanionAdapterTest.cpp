@@ -106,6 +106,16 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
           .build()};
   registerDummyAggregateFunction("aggregateFunc1", signatures);
 
+  core::QueryConfig config({});
+  EXPECT_FALSE(
+      Aggregate::create(
+          "aggregateFunc1_partial",
+          core::AggregationNode::Step::kPartial,
+          {BIGINT()},
+          ARRAY(BIGINT()),
+          config)
+          ->isReducing());
+
   checkAggregateSignaturesCount("aggregateFunc1_partial", 2);
   checkAggregateTypeResolution(
       "aggregateFunc1_partial", {DOUBLE()}, ARRAY(DOUBLE()), ARRAY(DOUBLE()));

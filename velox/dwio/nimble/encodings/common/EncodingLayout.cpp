@@ -20,13 +20,14 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 namespace facebook::nimble {
 
@@ -230,7 +231,7 @@ EncodingLayout EncodingLayoutCapture::capture(
       // Skip the reserved section-order byte.
       encoding::read<uint8_t>(pos);
 
-      std::vector<detail::subintsplit::SegmentPlan> segments;
+      std::vector<subintsplit::SectionPlan> segments;
       std::vector<uint32_t> encodedSizes;
       segments.reserve(numSections);
       encodedSizes.reserve(numSections);
@@ -252,7 +253,17 @@ EncodingLayout EncodingLayoutCapture::capture(
         captureChild(children, pos, encodedSize, options);
       }
       encodingConfig = EncodingLayout::Config{
-          detail::subintsplit::makePreserveSplitConfig(segments)};
+          subintsplit::makePreserveSplitConfig(segments)};
+      break;
+    }
+    case EncodingType::ALPRD: {
+      const auto metadata = ALPRDEncodingBase::readMetadata(encoding, options);
+      // Keep absent exception slots so replay can select their layouts when
+      // a subsequent payload introduces exceptions.
+      children.resize(4);
+      for (uint8_t i = 0; i < metadata.childrenCount(); ++i) {
+        children[i].emplace(capture(metadata.children[i], options));
+      }
       break;
     }
     case EncodingType::ALP: {

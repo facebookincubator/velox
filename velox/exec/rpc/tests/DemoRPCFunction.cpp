@@ -21,7 +21,8 @@ namespace facebook::velox::exec::rpc {
 void DemoAsyncRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode /*instruction*/) {
   simulator_ =
       std::make_shared<test::ResponseSimulator>(std::chrono::milliseconds(1));
 }
@@ -91,7 +92,7 @@ AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
     if (!response.hasError() &&
         responseAs<TextPayload>(response).text.find("OVERLOAD") !=
             std::string::npos) {
-      return CongestionSignal::kError;
+      return CongestionSignal::kOverloaded;
     }
   }
   // Healthy completions feed RTT to the gradient window (the kSuccess path);

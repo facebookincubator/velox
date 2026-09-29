@@ -1964,6 +1964,41 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+/// Converts a TIMESTAMP WITH TIME ZONE to the wall clock read in the target
+/// zone, dropping the zone. The zone the input carries is ignored; only its
+/// instant is used.
+template <typename T>
+struct AtTimezoneConvertToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Target zone when the timezone argument is constant; null otherwise.
+  const tz::TimeZone* targetTimeZone_{nullptr};
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      targetTimeZone_ =
+          tz::locateZone(std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone,
+      const arg_type<Varchar>& timezone) {
+    const auto* targetTimeZone = targetTimeZone_ != nullptr
+        ? targetTimeZone_
+        : tz::locateZone(std::string_view(timezone.data(), timezone.size()));
+
+    Timestamp timestamp = unpackTimestampUtc(*timestampWithTimezone);
+    timestamp.toTimezone(*targetTimeZone);
+    result = timestamp;
+  }
+};
+
 template <typename T>
 struct AtTimezoneTimeWithTimezoneFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -2135,8 +2170,7 @@ struct CurrentTimeFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
-    // Java/Presto session always provides a timezone (TimeZoneKey is required).
-    VELOX_CHECK_NOT_NULL(timeZone);
+    VELOX_USER_CHECK_NOT_NULL(timeZone, "Timezone cannot be null");
 
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 
