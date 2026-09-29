@@ -49,11 +49,16 @@ TabletWriter::TabletWriter(
               ? ChecksumFactory::create(options_.checksumType)
               : nullptr},
       chunkStatsWriter_{
-          options_.enableChunkStats ? ChunkStatsWriter::create(
-                                          options_.chunkStatsVersion,
-                                          pool,
-                                          options_.chunkStatsMinAvgChunks)
-                                    : nullptr} {}
+          options_.enableChunkStats
+              ? ChunkStatsWriter::create(
+                    pool,
+                    {
+                        .version = options_.chunkStatsVersion,
+                        .minAvgChunksPerStream =
+                            options_.chunkStatsMinAvgChunks,
+                        .maxStringStatSize = options_.maxChunkStringStatSize,
+                    })
+              : nullptr} {}
 
 namespace {
 template <typename Source, typename Target = Source>

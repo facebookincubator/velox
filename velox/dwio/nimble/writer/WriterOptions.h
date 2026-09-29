@@ -109,6 +109,10 @@ struct WriterOptions {
   /// skipping.
   float chunkStatsMinAvgChunks{2};
 
+  /// Maximum string or binary value length retained in per-chunk bounds.
+  uint32_t maxChunkStringStatSize{
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
+
   /// NOTE: !!! This is under experimentation and please do not turn on in
   /// production use case !!!
   /// Selects how per-stripe-group stream offsets/sizes are serialized:

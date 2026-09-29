@@ -23,6 +23,7 @@
 
 #include <folly/futures/Future.h>
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/type/Type.h"
@@ -37,6 +38,16 @@ namespace facebook::velox::exec::rpc {
 using velox::rpc::RpcPayload;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
+
+/// Describes how a function dispatches one logical call. An asynchronous job
+/// is submitted and completed separately from the initial request.
+enum class RpcDispatchPath {
+  kPerRow,
+  kNativeBatch,
+  kAsyncJob,
+};
+
+VELOX_DECLARE_ENUM_NAME(RpcDispatchPath);
 
 /// Reads a response's payload as the concrete type the function produced.
 ///
@@ -90,9 +101,10 @@ inline TextPayload makeTextPayload(std::string value) {
 /// RPCState wiring, and passthrough columns.
 ///
 /// Lifecycle (called by RPCOperator):
-///   1. initialize(queryConfig, inputTypes, constantInputs) — create/cache
-///      transport and RPC clients, inspect constant values (called once
-///      during operator init).
+///   1. initialize(queryConfig, inputTypes, constantInputs, instruction) —
+///      create/cache transport and RPC clients, inspect constant values, and
+///      record the requested instruction (called once during operator init).
+///      Functions with dynamic options may resolve the backend from row values.
 ///   2. dispatchPerRow(rows, args) — dispatch individual RPCs per row
 ///      OR accumulateBatch(rows, args) + flushBatch() — accumulate and
 ///      dispatch as a batch.
@@ -112,10 +124,45 @@ class AsyncRPCFunction {
   /// @param constantInputs Constant values aligned with inputTypes.
   ///        Non-constant arguments are nullptr. Constant arguments are
   ///        single-element ConstantVectors.
+  /// @param instruction What the query asked for, per-row or batch, already
+  ///        resolved from the caller's objective by the coordinator's policy.
+  ///        The function decides how its resolved backend serves the
+  ///        instruction and exposes only the consequences through the
+  ///        remaining hooks.
   virtual void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) {}
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) {}
+
+  /// Describes whether preparing an input established a backend for admission.
+  enum class AdmissionPreparationResult {
+    /// Dispatch may contact a backend, so the operator must apply admission.
+    kRequiresAdmission,
+    /// Every selected row completes locally, so this input needs no admission.
+    kLocalOnly,
+  };
+
+  /// Called once for each non-empty input vector before the operator binds or
+  /// reserves backend capacity. Implementations may resolve and validate
+  /// input-dependent transport/admission configuration and cache parsed row
+  /// state consumed by dispatchPerRow() or accumulateBatch(). admissionKey()
+  /// and configuredCeiling() must remain stable after the first
+  /// kRequiresAdmission result. A kLocalOnly result promises that dispatch for
+  /// every selected row returns an immediately ready, non-exceptional response
+  /// without contacting a backend.
+  virtual AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) {
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  /// Returns whether row values must be inspected before the operator binds
+  /// admission. The operator queries this after initialize(); the value must
+  /// remain stable afterward.
+  virtual bool requiresRowInspectionBeforeAdmission() const {
+    return true;
+  }
 
   /// Returns the name of this RPC function.
   virtual std::string name() const = 0;
@@ -131,9 +178,10 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Returns the service tier key for rate limiting.
-  /// Empty string means "no tier configured — uses global default limit."
-  virtual std::string tierKey() const {
+  /// Identifies the shared admission bucket for this function.
+  /// Empty string uses the global default bucket. The key may include more
+  /// than a service tier, such as a credential discriminator or tenant.
+  virtual std::string admissionKey() const {
     return "";
   }
 
@@ -209,6 +257,20 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the number of currently pending rows this function will accept in
+  /// one flush, up to `desired`. A function may return fewer when its backend
+  /// caps a request by serialized bytes, tokens, or protocol size; the
+  /// framework deals only in rows.
+  ///
+  /// `desired` is positive. The return value must be in [1, desired] so the
+  /// drain always makes progress without exceeding the operator's requested row
+  /// count. A row that cannot be sent at all is failed loudly inside
+  /// flushBatch() rather than stalling the loop. Rows are counted from the
+  /// front of the pending queue, matching flushBatch()'s order.
+  virtual int32_t maxRowsPerFlush(int32_t desired) const {
+    return desired;
+  }
+
   /// Returns the number of backend admission slots needed to flush 'numRows'.
   /// The result must be positive and nondecreasing with 'numRows', and one row
   /// must require exactly one unit. Native and asynchronous batch APIs consume
@@ -234,20 +296,26 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
-    kError,
+    /// Unit completed cleanly, but its latency is not a congestion sample.
+    /// Recover shared admission without updating the gradient window.
+    kSuccessNoLatency,
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed without explicit evidence of overload. Neither controller
+    /// reacts; reducing admission concurrency would not address this signal.
+    kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluate congestion from completed responses. Called by RPCOperator after
-  /// a unit (a drained set of PER_ROW rows, or one BATCH) completes. The
-  /// function inspects responses and returns a signal the operator maps to the
-  /// latency-gradient window: kSuccess feeds the unit's round-trip latency as a
-  /// gradient sample, kError applies a multiplicative decrease. User-data
-  /// errors (bad handle, null input) must classify as kNone so they never move
-  /// the window — only true backend overload should back off. Default: kNone
-  /// (no congestion control).
+  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
+  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient
+  /// and recovers shared admission; kSuccessNoLatency only recovers shared
+  /// admission; kOverloaded applies a multiplicative decrease to both
+  /// controllers; kNonOverloadError reports a failure without moving either
+  /// controller; and kNone skips evaluation. Defaults to kNone (no congestion
+  /// control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;

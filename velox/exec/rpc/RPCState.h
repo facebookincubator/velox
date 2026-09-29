@@ -128,6 +128,7 @@ class RPCState {
     int64_t windowLimit{0};
     int64_t baselineRttNs{0};
     int64_t numShrinks{0};
+    int64_t numOverloadShrinks{0};
     int64_t peakInFlight{0};
     // Transport RTT.
     int64_t rttMinNs{0};

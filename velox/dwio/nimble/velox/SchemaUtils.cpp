@@ -181,6 +181,7 @@ const TypeBuilder& allSubscriptValueType(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Value stream subfield path cannot apply [*] to {}: '{}'.",
           type.kind(),
@@ -292,6 +293,12 @@ velox::TypePtr convertToVeloxType(const Type& type) {
           // to it, so it is guaranteed that flatMapType.childAt(0)
           // is always valid.
           convertToVeloxType(*flatMapType.childAt(0)));
+    }
+    case Kind::HybridFlatMap: {
+      const auto& hybridFlatMapType = type.asHybridFlatMap();
+      return std::make_shared<const velox::MapType>(
+          convertToVeloxScalarType(hybridFlatMapType.keyScalarKind()),
+          convertToVeloxType(hybridFlatMapType.valueType()));
     }
     default:
       NIMBLE_UNREACHABLE("Unknown type kind {}.", toString(type.kind()));
@@ -844,6 +851,7 @@ void emitPlaceholderStreamOffsets(
       return;
     }
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       // Value subtrees of a FlatMap are not themselves FlatMaps per the
       // encoding invariant.
       NIMBLE_FAIL(
@@ -1092,7 +1100,11 @@ void projectStreamOffsets(
       return;
     }
     case Kind::FlatMap:
-      NIMBLE_FAIL("FlatMap projection is supported only for top-level columns");
+      NIMBLE_UNSUPPORTED(
+          "FlatMap projection is supported only for top-level columns");
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Hybrid FlatMap projection requires group-aware projection");
   }
   NIMBLE_UNREACHABLE("Unknown type kind: {}", type->kind());
 }

@@ -140,7 +140,8 @@ class SubIntSplitEncoding
   // or by running the DP planner over a sample.
   static std::vector<subintsplit::SectionPlan> planSections(
       EncodingSelection<physicalType>& selection,
-      std::span<const physicalType> values);
+      std::span<const physicalType> values,
+      const Encoding::Options& options);
 
   // Assembles the prefix, the section headers and the section payloads into
   // `buffer`.
@@ -194,7 +195,7 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      sections_{pool},
+      sections_{pool, options.subIntSplitDecodeChunkSize},
       decodeBuf_{&pool},
       pendingBuf_{&pool} {
   const char* pos = data.data() + this->dataOffset();
@@ -261,16 +262,15 @@ template <typename T>
 void SubIntSplitEncoding<T>::decodeChunked(
     uint32_t rowCount,
     physicalType* output) {
-  constexpr uint32_t kChunk =
-      subintsplit::SectionTable<physicalType>::kDecodeChunkSize;
+  const uint32_t chunkSize = sections_.decodeChunkSize();
 
   // Delta streams store zigzag steps, so the accumulator carries across chunks
   // and across successive materialize() calls -- which is why they can only be
   // read sequentially.
   bool atStreamStart = (row_ == 0);
 
-  for (uint32_t start = 0; start < rowCount; start += kChunk) {
-    const uint32_t count = std::min(kChunk, rowCount - start);
+  for (uint32_t start = 0; start < rowCount; start += chunkSize) {
+    const uint32_t count = std::min(chunkSize, rowCount - start);
     sections_.decodeChunk(count, output + start);
 
     if (deltaEncoded_) {
@@ -462,7 +462,8 @@ void SubIntSplitEncoding<T>::bulkScan(
 template <typename T>
 std::vector<subintsplit::SectionPlan> SubIntSplitEncoding<T>::planSections(
     EncodingSelection<physicalType>& selection,
-    std::span<const physicalType> values) {
+    std::span<const physicalType> values,
+    const Encoding::Options& options) {
   constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
 
   const auto mode =
@@ -478,9 +479,29 @@ std::vector<subintsplit::SectionPlan> SubIntSplitEncoding<T>::planSections(
     return std::move(parsed.value());
   }
 
+  auto samplerConfig = subintsplit::defaultSamplerConfig();
+  if (options.subIntSplitPlannerMaxSamples > 0) {
+    samplerConfig.maxSamples = options.subIntSplitPlannerMaxSamples;
+  }
   std::vector<uint64_t> samples;
-  subintsplit::sampleIntoU64<physicalType>(values, samples);
-  return subintsplit::selectSplits(samples, kBits, values.size()).sections;
+  subintsplit::sampleIntoU64<physicalType>(values, samples, samplerConfig);
+
+  auto selectorConfig = subintsplit::defaultSelectorConfig();
+  selectorConfig.decodeCostBitsPerValue =
+      options.subIntSplitDecodeCostBitsPerValue;
+  if (options.subIntSplitBoundaryPruneThreshold >= 0.0) {
+    selectorConfig.boundaryPruneThreshold =
+        options.subIntSplitBoundaryPruneThreshold;
+  }
+  selectorConfig.maxCandidateBoundaries =
+      options.subIntSplitMaxCandidateBoundaries;
+  selectorConfig.maxSectionWidth =
+      static_cast<int>(options.subIntSplitMaxSectionWidth);
+  selectorConfig.frequencyMetricsMaxWidth =
+      static_cast<int>(options.subIntSplitFrequencyMetricsMaxWidth);
+  return subintsplit::selectSplits(
+             samples, kBits, values.size(), selectorConfig)
+      .sections;
 }
 
 template <typename T>
@@ -540,7 +561,7 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
     NIMBLE_INCOMPATIBLE_ENCODING("SubIntSplitEncoding cannot be empty.");
   }
 
-  const auto sections = planSections(selection, values);
+  const auto sections = planSections(selection, values, options);
   NIMBLE_CHECK(
       !sections.empty(), "SubIntSplitEncoding: selector returned no sections");
 

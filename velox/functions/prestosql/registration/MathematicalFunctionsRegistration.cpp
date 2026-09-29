@@ -24,139 +24,174 @@ namespace facebook::velox::functions {
 
 namespace {
 
-void registerTruncate(const std::vector<std::string>& names) {
-  registerFunction<TruncateFunction, double, double>(names);
-  registerFunction<TruncateFunction, float, float>(names);
-  registerFunction<TruncateFunction, double, double, int32_t>(names);
-  registerFunction<TruncateFunction, float, float, int32_t>(names);
+void registerTruncate(
+    const std::vector<std::string>& names,
+    std::string_view defaultOwner) {
+  registerFunction<TruncateFunction, double, double>(
+      names, {}, true, defaultOwner);
+  registerFunction<TruncateFunction, float, float>(
+      names, {}, true, defaultOwner);
+  registerFunction<TruncateFunction, double, double, int32_t>(
+      names, {}, true, defaultOwner);
+  registerFunction<TruncateFunction, float, float, int32_t>(
+      names, {}, true, defaultOwner);
 }
 
-void registerMathFunctions(const std::string& prefix) {
-  registerUnaryNumeric<CeilFunction>({prefix + "ceil", prefix + "ceiling"});
-  registerUnaryNumeric<FloorFunction>({prefix + "floor"});
+void registerMathFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerUnaryNumeric<CeilFunction>(
+      {prefix + "ceil", prefix + "ceiling"}, defaultOwner);
+  registerUnaryNumeric<FloorFunction>({prefix + "floor"}, defaultOwner);
 
-  registerUnaryNumeric<AbsFunction>({prefix + "abs"});
+  registerUnaryNumeric<AbsFunction>({prefix + "abs"}, defaultOwner);
   registerFunction<
       DecimalAbsFunction,
       LongDecimal<P1, S1>,
-      LongDecimal<P1, S1>>({prefix + "abs"});
+      LongDecimal<P1, S1>>({prefix + "abs"}, {}, true, defaultOwner);
   registerFunction<
       DecimalAbsFunction,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P1, S1>>({prefix + "abs"});
+      ShortDecimal<P1, S1>>({prefix + "abs"}, {}, true, defaultOwner);
 
-  registerUnaryFloatingPoint<NegateFunction>({prefix + "negate"});
+  registerUnaryFloatingPoint<NegateFunction>({prefix + "negate"}, defaultOwner);
   registerFunction<NegateFunction, LongDecimal<P1, S1>, LongDecimal<P1, S1>>(
-      {prefix + "negate"});
+      {prefix + "negate"}, {}, true, defaultOwner);
   registerFunction<NegateFunction, ShortDecimal<P1, S1>, ShortDecimal<P1, S1>>(
-      {prefix + "negate"});
+      {prefix + "negate"}, {}, true, defaultOwner);
 
-  registerFunction<RadiansFunction, double, double>({prefix + "radians"});
-  registerFunction<DegreesFunction, double, double>({prefix + "degrees"});
-  registerUnaryNumeric<RoundFunction>({prefix + "round"});
-  registerFunction<RoundFunction, int8_t, int8_t, int32_t>({prefix + "round"});
+  registerFunction<RadiansFunction, double, double>(
+      {prefix + "radians"}, {}, true, defaultOwner);
+  registerFunction<DegreesFunction, double, double>(
+      {prefix + "degrees"}, {}, true, defaultOwner);
+  registerUnaryNumeric<RoundFunction>({prefix + "round"}, defaultOwner);
+  registerFunction<RoundFunction, int8_t, int8_t, int32_t>(
+      {prefix + "round"}, {}, true, defaultOwner);
   registerFunction<RoundFunction, int16_t, int16_t, int32_t>(
-      {prefix + "round"});
+      {prefix + "round"}, {}, true, defaultOwner);
   registerFunction<RoundFunction, int32_t, int32_t, int32_t>(
-      {prefix + "round"});
+      {prefix + "round"}, {}, true, defaultOwner);
   registerFunction<RoundFunction, int64_t, int64_t, int32_t>(
-      {prefix + "round"});
-  registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+      {prefix + "round"}, {}, true, defaultOwner);
+  registerFunction<RoundFunction, double, double, int32_t>(
+      {prefix + "round"}, {}, true, defaultOwner);
+  registerFunction<RoundFunction, float, float, int32_t>(
+      {prefix + "round"}, {}, true, defaultOwner);
   registerFunction<PowerFunction, double, double, double>(
-      {prefix + "power", prefix + "pow"});
+      {prefix + "power", prefix + "pow"}, {}, true, defaultOwner);
   registerFunction<PowerFunction, double, int64_t, int64_t>(
-      {prefix + "power", prefix + "pow"});
-  registerFunction<ExpFunction, double, double>({prefix + "exp"});
+      {prefix + "power", prefix + "pow"}, {}, true, defaultOwner);
+  registerFunction<ExpFunction, double, double>(
+      {prefix + "exp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, int8_t, int8_t, int8_t, int8_t>(
-      {prefix + "clamp"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, int16_t, int16_t, int16_t, int16_t>(
-      {prefix + "clamp"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, int32_t, int32_t, int32_t, int32_t>(
-      {prefix + "clamp"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, int64_t, int64_t, int64_t, int64_t>(
-      {prefix + "clamp"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, double, double, double, double>(
-      {prefix + "clamp"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
   registerFunction<ClampFunction, float, float, float, float>(
-      {prefix + "clamp"});
-  registerFunction<LnFunction, double, double>({prefix + "ln"});
-  registerFunction<Log2Function, double, double>({prefix + "log2"});
-  registerFunction<Log10Function, double, double>({prefix + "log10"});
-  registerFunction<SqrtFunction, double, double>({prefix + "sqrt"});
-  registerFunction<CbrtFunction, double, double>({prefix + "cbrt"});
+      {prefix + "clamp"}, {}, true, defaultOwner);
+  registerFunction<LnFunction, double, double>(
+      {prefix + "ln"}, {}, true, defaultOwner);
+  registerFunction<Log2Function, double, double>(
+      {prefix + "log2"}, {}, true, defaultOwner);
+  registerFunction<Log10Function, double, double>(
+      {prefix + "log10"}, {}, true, defaultOwner);
+  registerFunction<SqrtFunction, double, double>(
+      {prefix + "sqrt"}, {}, true, defaultOwner);
+  registerFunction<CbrtFunction, double, double>(
+      {prefix + "cbrt"}, {}, true, defaultOwner);
   registerFunction<
       WidthBucketFunction,
       int64_t,
       double,
       double,
       double,
-      int64_t>({prefix + "width_bucket"});
+      int64_t>({prefix + "width_bucket"}, {}, true, defaultOwner);
 
-  registerUnaryNumeric<SignFunction>({prefix + "sign"});
-  registerFunction<InfinityFunction, double>({prefix + "infinity"});
-  registerFunction<IsFiniteFunction, bool, double>({prefix + "is_finite"});
-  registerFunction<IsInfiniteFunction, bool, double>({prefix + "is_infinite"});
-  registerFunction<IsNanFunction, bool, double>({prefix + "is_nan"});
-  registerFunction<NanFunction, double>({prefix + "nan"});
-  registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
-  registerUnaryIntegral<RandFunction>({prefix + "rand", prefix + "random"});
+  registerUnaryNumeric<SignFunction>({prefix + "sign"}, defaultOwner);
+  registerFunction<InfinityFunction, double>(
+      {prefix + "infinity"}, {}, true, defaultOwner);
+  registerFunction<IsFiniteFunction, bool, double>(
+      {prefix + "is_finite"}, {}, true, defaultOwner);
+  registerFunction<IsInfiniteFunction, bool, double>(
+      {prefix + "is_infinite"}, {}, true, defaultOwner);
+  registerFunction<IsNanFunction, bool, double>(
+      {prefix + "is_nan"}, {}, true, defaultOwner);
+  registerFunction<NanFunction, double>(
+      {prefix + "nan"}, {}, true, defaultOwner);
+  registerFunction<RandFunction, double>(
+      {prefix + "rand", prefix + "random"}, {}, true, defaultOwner);
+  registerUnaryIntegral<RandFunction>(
+      {prefix + "rand", prefix + "random"}, defaultOwner);
   registerFunction<SecureRandFunction, double>(
-      {prefix + "secure_rand", prefix + "secure_random"});
+      {prefix + "secure_rand", prefix + "secure_random"},
+      {},
+      true,
+      defaultOwner);
   registerBinaryNumeric<SecureRandFunction>(
-      {prefix + "secure_rand", prefix + "secure_random"});
+      {prefix + "secure_rand", prefix + "secure_random"}, defaultOwner);
   registerFunction<FromBaseFunction, int64_t, Varchar, int64_t>(
-      {prefix + "from_base"});
+      {prefix + "from_base"}, {}, true, defaultOwner);
   registerFunction<ToBaseFunction, Varchar, int64_t, int64_t>(
-      {prefix + "to_base"});
-  registerFunction<PiFunction, double>({prefix + "pi"});
-  registerFunction<EulerConstantFunction, double>({prefix + "e"});
+      {prefix + "to_base"}, {}, true, defaultOwner);
+  registerFunction<PiFunction, double>({prefix + "pi"}, {}, true, defaultOwner);
+  registerFunction<EulerConstantFunction, double>(
+      {prefix + "e"}, {}, true, defaultOwner);
 
-  registerTruncate({prefix + "truncate"});
+  registerTruncate({prefix + "truncate"}, defaultOwner);
 
   registerFunction<
       CosineSimilarityFunctionMap,
       double,
       Map<Varchar, double>,
-      Map<Varchar, double>>({prefix + "cosine_similarity"});
+      Map<Varchar, double>>(
+      {prefix + "cosine_similarity"}, {}, true, defaultOwner);
   registerFunction<
       CosineSimilarityFunctionArray,
       double,
       Array<double>,
-      Array<double>>({prefix + "cosine_similarity"});
+      Array<double>>({prefix + "cosine_similarity"}, {}, true, defaultOwner);
   registerFunction<DotProductArray, double, Array<double>, Array<double>>(
-      {prefix + "dot_product"});
+      {prefix + "dot_product"}, {}, true, defaultOwner);
 #ifdef VELOX_ENABLE_FAISS
   registerFunction<
       CosineSimilarityFunctionFloatArray,
       float,
       Array<float>,
-      Array<float>>({prefix + "cosine_similarity"});
+      Array<float>>({prefix + "cosine_similarity"}, {}, true, defaultOwner);
   registerFunction<
       L2SquaredFunctionFloatArray,
       float,
       Array<float>,
-      Array<float>>({prefix + "l2_squared"});
+      Array<float>>({prefix + "l2_squared"}, {}, true, defaultOwner);
   registerFunction<
       L2SquaredFunctionDoubleArray,
       double,
       Array<double>,
-      Array<double>>({prefix + "l2_squared"});
+      Array<double>>({prefix + "l2_squared"}, {}, true, defaultOwner);
   registerFunction<DotProductFloatArray, float, Array<float>, Array<float>>(
-      {prefix + "dot_product"});
+      {prefix + "dot_product"}, {}, true, defaultOwner);
 #endif
 }
 
 } // namespace
 
-void registerMathematicalFunctions(const std::string& prefix = "") {
-  registerMathFunctions(prefix);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
+void registerMathematicalFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {}) {
+  registerMathFunctions(prefix, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_not, prefix + "not", defaultOwner);
 
-  registerDecimalFloor(prefix);
-  registerDecimalCeil(prefix);
-  registerDecimalRound(prefix);
-  registerDecimalTruncate(prefix);
+  registerDecimalFloor(prefix, defaultOwner);
+  registerDecimalCeil(prefix, defaultOwner);
+  registerDecimalRound(prefix, defaultOwner);
+  registerDecimalTruncate(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

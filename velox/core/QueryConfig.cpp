@@ -99,6 +99,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kPreferredOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMaxOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMergeJoinOutputBatchStartSize);
+    VELOX_REGISTER_QUERY_CONFIG(kMergeJoinStreamLeftSide);
 
     // Table scan.
     VELOX_REGISTER_QUERY_CONFIG(kTableScanGetOutputTimeLimitMs);

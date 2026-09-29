@@ -27,11 +27,11 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/Casts.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
@@ -354,8 +354,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
+  io::addIoStatsToRuntimeStats(*ioStatistics_, "", result);
+  if (const auto it = result.find(std::string(io::kStorageReadBytes));
+      it != result.end()) {
+    // Preserve the DWIO value before a ReadFile-layer value overrides it.
+    // Overread bytes are defined relative to this counter.
+    result.emplace(kDwioStorageReadBytes, it->second);
+  }
+  // Preserve a zero-valued totalScanTime before scan timing is recorded.
   result.insert({
-      {std::string(connector::hive::HiveDataSource::kTotalScanTime),
+      {std::string(io::kTotalScanTime),
        RuntimeMetric(
            ioStatistics_->totalScanTimeNs(), RuntimeCounter::Unit::kNanos)},
       {std::string(Connector::kTotalRemainingFilterTime),
@@ -364,8 +372,13 @@ CudfHiveDataSource::getRuntimeStats() {
            RuntimeCounter::Unit::kNanos)},
   });
   const auto& ioStats = ioStats_->stats();
-  for (const auto& storageStats : ioStats) {
-    result.emplace(storageStats.first, storageStats.second);
+  for (const auto& [key, value] : ioStats) {
+    // Keep the ReadFile-layer value under the established key.
+    if (key == io::kStorageReadBytes) {
+      result[std::string(key)] = value;
+    } else {
+      result.emplace(key, value);
+    }
   }
   return result;
 }
