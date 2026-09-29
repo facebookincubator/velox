@@ -4132,6 +4132,25 @@ TEST_F(TableScanTest, remainingFilter) {
       "SELECT * FROM tmp WHERE not (c0 > 0 or c1 > c0)");
 }
 
+TEST_F(TableScanTest, remainingFilterWithNoProjectedColumns) {
+  auto data =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5})});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {data});
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .tableScan(ROW({}, {}), {}, "c0 % 2 = 0", asRowType(data->type()))
+          .planNode();
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .copyResults(pool());
+
+  EXPECT_EQ(result->size(), 3);
+  EXPECT_EQ(result->childrenSize(), 0);
+  EXPECT_TRUE(result->type()->equivalent(*ROW({}, {})));
+}
+
 TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
