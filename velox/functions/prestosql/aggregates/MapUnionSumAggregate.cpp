@@ -601,6 +601,7 @@ void registerMapUnionSumAggregate(
                 "Unexpected key type {}", TypeKindName::toName(keyTypeKind));
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }
