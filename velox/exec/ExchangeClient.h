@@ -38,8 +38,10 @@ namespace facebook::velox::exec {
 ///
 /// The control-plane operations addRemoteTaskId(), noMoreRemoteTasks(), and
 /// close() must be safe to call from multiple threads: Task adds remote tasks
-/// from the split path while drivers consume data. The status accessors provide
-/// best-effort snapshots for diagnostics.
+/// from the split path while drivers consume data. close() and
+/// noMoreRemoteTasks() must not throw. If one does while a task terminates,
+/// Task logs the error and continues so that termination completes. The
+/// status accessors provide best-effort snapshots for diagnostics.
 class ExchangeClient {
  public:
   virtual ~ExchangeClient() = default;
@@ -50,10 +52,11 @@ class ExchangeClient {
   /// ignored.
   virtual void addRemoteTaskId(std::string_view remoteTaskId) = 0;
 
-  /// Signals that no more calls to addRemoteTaskId() will follow.
+  /// Signals that no more calls to addRemoteTaskId() will follow. Must not
+  /// throw.
   virtual void noMoreRemoteTasks() = 0;
 
-  /// Releases the producers and unblocks consumers. Idempotent.
+  /// Releases the producers and unblocks consumers. Idempotent. Must not throw.
   virtual void close() = 0;
 
   /// Returns runtime statistics aggregated across all producers.

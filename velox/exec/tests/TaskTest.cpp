@@ -523,6 +523,7 @@ class TestShouldYieldOperator : public exec::Operator {
 struct TestExchangeClientCallbacks {
   std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId;
   std::function<void()> onNoMoreRemoteTasks;
+  std::function<void()> onClose;
 };
 
 class TestExchangeClient : public ExchangeClient {
@@ -542,7 +543,11 @@ class TestExchangeClient : public ExchangeClient {
     }
   }
 
-  void close() override {}
+  void close() override {
+    if (callbacks_.onClose != nullptr) {
+      callbacks_.onClose();
+    }
+  }
 
   folly::F14FastMap<std::string, RuntimeMetric> stats() const override {
     return {};
@@ -1032,6 +1037,66 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   task.reset();
   waitForAllTasksToBeDeleted();
   EXPECT_TRUE(transportStateReference.expired());
+}
+
+TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
+  // Task calls close() and, for a queued remote split, noMoreRemoteTasks() on
+  // a transport-defined client while it terminates. An exception from either
+  // must not escape termination and leave join bridges and split promises
+  // unresolved.
+  for (const bool throwOnClose : {true, false}) {
+    SCOPED_TRACE(
+        throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
+    const std::string transportKind{"throwing-exchange"};
+    auto queryRegistry = ExchangeTransportRegistry::create();
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+    queryRegistry->insert(
+        transportKind,
+        ExchangeTransportEntry::make<TestExchangeClient>(
+            [throwOnClose](const ExchangeClientContext&) {
+              auto fail = [] { throw std::runtime_error("transport failure"); };
+              TestExchangeClientCallbacks callbacks;
+              if (throwOnClose) {
+                callbacks.onClose = fail;
+              } else {
+                callbacks.onNoMoreRemoteTasks = fail;
+              }
+              return std::make_shared<TestExchangeClient>(std::move(callbacks));
+            },
+            [](int32_t operatorId,
+               DriverCtx* ctx,
+               const std::shared_ptr<const core::ExchangeNode>& node,
+               const std::shared_ptr<TestExchangeClient>&)
+                -> std::unique_ptr<Operator> {
+              return std::make_unique<TestExchangeOperator>(
+                  operatorId, ctx, node);
+            }));
+
+    auto plan = PlanBuilder()
+                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                    .planFragment();
+    const auto exchangeNodeId = plan.planNode->id();
+    auto task = Task::create(
+        "task-throwing-exchange-client",
+        std::move(plan),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+
+    task->start(1, 1);
+    // The test operator never pulls this split, so it is still queued when
+    // the task terminates and is delivered to the client then.
+    task->addSplit(
+        exchangeNodeId,
+        exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
+    task->noMoreSplits(exchangeNodeId);
+
+    EXPECT_NO_THROW(task->requestAbort().wait());
+    EXPECT_EQ(task->state(), TaskState::kAborted);
+  }
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {

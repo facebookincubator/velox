@@ -2885,7 +2885,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   for (auto& exchangeClient : exchangeClients) {
     if (exchangeClient != nullptr) {
-      exchangeClient->close();
+      try {
+        exchangeClient->close();
+      } catch (const std::exception& ex) {
+        LOG(ERROR) << "Exchange client threw from close() during termination "
+                   << "of task " << taskId_ << ": " << ex.what();
+      }
     }
   }
 
@@ -2958,7 +2963,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     if (splits.second) {
-      client->noMoreRemoteTasks();
+      try {
+        client->noMoreRemoteTasks();
+      } catch (const std::exception& ex) {
+        LOG(ERROR) << "Exchange client threw from noMoreRemoteTasks() during "
+                   << "termination of task " << taskId_ << ": " << ex.what();
+      }
     }
   }
 
