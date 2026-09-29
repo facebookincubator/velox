@@ -211,6 +211,7 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  ensureCudaContextForThread();
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
@@ -292,6 +293,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+  ensureCudaContextForThread();
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
     cudfSplitReader_->resetSplit();
