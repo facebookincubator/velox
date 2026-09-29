@@ -59,12 +59,15 @@ int64_t computeAvgRaw(const std::vector<int64_t>& values) {
 
 constexpr int kBitsPerWord = 8 * sizeof(cudf::bitmask_type);
 
-std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
+std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
     const std::vector<bool>& valid,
     cuda::stream_ref stream) {
+  auto mr = cudf::get_current_device_resource_ref();
   auto numBits = static_cast<cudf::size_type>(valid.size());
   if (numBits == 0) {
-    return {rmm::device_buffer{}, 0};
+    return {
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        0};
   }
   auto maskBytes = cudf::bitmask_allocation_size_bytes(numBits);
   auto numWords = maskBytes / sizeof(cudf::bitmask_type);
@@ -79,7 +82,8 @@ std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
       ++nullCount;
     }
   }
-  rmm::device_buffer mask(maskBytes, stream);
+  auto mask = cudf::create_null_mask(
+      numBits, cudf::mask_state::UNINITIALIZED, stream, mr);
   if (!host.empty()) {
     auto status = cudaMemcpyAsync(
         mask.data(),

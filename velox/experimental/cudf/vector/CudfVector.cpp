@@ -100,7 +100,7 @@ std::pair<uint64_t, std::unique_ptr<cudf::table>> getTableSize(
 void logDefaultStreamIfNeeded(
     cuda::stream_ref stream,
     const char* constructorName) {
-  if (stream.get() != rmm::cuda_stream_default.value()) {
+  if (stream.get() != cudaStream_t{nullptr}) {
     return;
   }
   LOG(WARNING) << constructorName

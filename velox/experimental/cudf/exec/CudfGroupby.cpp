@@ -36,6 +36,7 @@
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/transform.hpp>
@@ -693,7 +694,8 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf::data_type(cudf::type_id::STRUCT),
             size,
             rmm::device_buffer{},
-            rmm::device_buffer{},
+            cudf::create_null_mask(
+                0, cudf::mask_state::UNALLOCATED, stream, mr),
             0,
             std::move(children));
       }
@@ -728,7 +730,8 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf::data_type(cudf::type_id::STRUCT),
             size,
             rmm::device_buffer{},
-            rmm::device_buffer{},
+            cudf::create_null_mask(
+                0, cudf::mask_state::UNALLOCATED, stream, mr),
             0,
             std::move(children));
       }
@@ -953,7 +956,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type(cudf::type_id::STRUCT),
         size,
         rmm::device_buffer{},
-        rmm::device_buffer{},
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
         0,
         std::move(children));
   }
