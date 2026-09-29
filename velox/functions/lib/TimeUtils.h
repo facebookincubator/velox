@@ -34,17 +34,6 @@ inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
-FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
-    const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
 FOLLY_ALWAYS_INLINE int64_t
 getSeconds(Timestamp timestamp, const tz::TimeZone* timeZone) {
   if (timeZone != nullptr) {
@@ -126,7 +115,7 @@ struct InitSessionTimezone {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = getTimeZoneFromConfig(config);
+    timeZone_ = config.timeZoneToAdjustTo();
   }
 };
 
