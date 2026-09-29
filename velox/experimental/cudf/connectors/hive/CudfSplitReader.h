@@ -230,6 +230,9 @@ class CudfSplitReader : public NvtxHelper {
   std::size_t chunkReadLimit_{0};
   std::size_t passReadLimit_{0};
 
+  // Whether Parquet column names are matched case-insensitively
+  bool caseInsensitiveColumnNames_{false};
+
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;

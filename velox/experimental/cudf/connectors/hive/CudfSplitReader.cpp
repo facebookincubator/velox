@@ -225,6 +225,8 @@ CudfSplitReader::CudfSplitReader(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
       hiveConfig.maxCoalescedDistanceBytes(sessionProperties));
+  caseInsensitiveColumnNames_ =
+      hiveConfig.isFileColumnNamesReadAsLowerCase(sessionProperties);
 }
 
 CudfSplitReader::~CudfSplitReader() {
@@ -533,6 +535,7 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
           .timestamp_type(cudfHiveConfig_->timestampType())
+          .case_sensitive_names(not caseInsensitiveColumnNames_)
           .build();
 
   // Set skip_bytes and num_bytes if available
