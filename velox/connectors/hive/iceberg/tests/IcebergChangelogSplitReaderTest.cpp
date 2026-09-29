@@ -49,12 +49,12 @@ class IcebergChangelogSplitReaderTest : public test::IcebergTestBase {
         makeScanSpec(
             dataType,
             /*outputSubfields=*/{},
-            /*filters=*/{},
+            /*subfieldFilters=*/{},
             dataType,
             /*partitionKeys=*/{},
             /*infoColumns=*/{},
             SpecialColumnNames{},
-            /*reorderFiltersDisabled=*/false,
+            /*disableStatsBasedFilterReorder=*/false,
             pool())};
     return std::make_unique<IcebergChangelogSplitReader>(
         split,

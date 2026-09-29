@@ -62,7 +62,8 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
       folly::Executor* executor,
       const RowTypePtr& changelogOutputType,
       ColumnHandleMap changelogColumnHandles,
-      const common::SubfieldFilters* changelogFilters);
+      const common::SubfieldFilters* changelogFilters,
+      const common::SubfieldFilters* changelogDynamicFilters = nullptr);
 
   // Returns the changelog output schema. Overrides the base IcebergSplitReader
   // so FileDataSource uses the changelog column names for output allocation and
@@ -107,10 +108,15 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
   // lifetime of the split.
   const ChangelogSplitInfo* changelogSplitInfo_{nullptr};
 
-  // Subfield filters for the changelog constant columns
-  // (operation/ordinal/snapshotid). Not owned; lifetime is guaranteed by the
-  // owning FileDataSource.
+  // Static subfield filters for the changelog constant columns
+  // (operation/ordinal/snapshotid) from the table handle. Not owned; lifetime
+  // is guaranteed by the owning FileDataSource.
   const common::SubfieldFilters* const changelogFilters_;
+
+  // Dynamic filters accumulated via IcebergDataSource::addDynamicFilter() at
+  // runtime (e.g. from HashProbe). Not owned; lifetime is guaranteed by the
+  // owning IcebergDataSource. May be null if no dynamic filters were injected.
+  const common::SubfieldFilters* const changelogDynamicFilters_;
 
   // Reusable buffer for the base-table batch produced by IcebergSplitReader.
   VectorPtr dataOutput_;

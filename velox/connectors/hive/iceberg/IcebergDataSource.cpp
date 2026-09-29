@@ -69,27 +69,6 @@ IcebergDataSource::IcebergDataSource(
   }
   auto dataReaderOutputType = ROW(std::move(dataNames), std::move(dataTypes));
 
-  // Reject rowdata.* subfield filters up front: the base-table row reader uses
-  // dataScanSpec (no changelog-space filters), so any rowdata pushdown would be
-  // silently dropped, producing incorrect results. Predicates on rowdata
-  // columns must be expressed as a remainingFilter (post-scan Filter operator).
-  for (const auto& [subfield, filter] : filters_) {
-    const auto& path = subfield.path();
-    if (path.empty()) {
-      continue;
-    }
-    const auto* root = path[0]->as<common::Subfield::NestedField>();
-    if (root == nullptr) {
-      continue;
-    }
-    VELOX_USER_CHECK(
-        root->name() != kChangelogColRowdata,
-        "Subfield filter pushdown on rowdata columns is not supported for "
-        "changelog queries. Predicates on rowdata columns must be expressed "
-        "as a remainingFilter. Unsupported filter: {}",
-        subfield.toString());
-  }
-
   // Changelog metadata filters (operation/ordinal/snapshotid) must NOT be
   // forwarded — those names don't exist in the base-table schema.
   auto dataScanSpec = makeScanSpec(
@@ -111,6 +90,42 @@ IcebergDataSource::IcebergDataSource(
       std::move(dataScanSpec)};
 }
 
+void IcebergDataSource::addDynamicFilter(
+    column_index_t outputChannel,
+    const std::shared_ptr<common::Filter>& filter) {
+  if (!changelogScanContext_.has_value()) {
+    // Regular (non-changelog) query: delegate to the base implementation which
+    // sets the filter on scanSpec_ for the row reader to consume.
+    FileDataSource::addDynamicFilter(outputChannel, filter);
+    return;
+  }
+
+  // Changelog query: translate the output channel to a column name and
+  // accumulate into changelogDynamicFilters_ for split-level evaluation.
+  //
+  // rowdata is a ROW-typed column; HashProbe never produces a pushable filter
+  // for ROW types (VectorHasher::getFilter returns null for them), so this
+  // branch is unreachable in practice.  If it were somehow reached, delegating
+  // to FileDataSource::addDynamicFilter would set the filter on scanSpec_
+  // (changelog-space) rather than dataScanSpec (base-table), silently dropping
+  // it and producing wrong results.  We therefore drop it explicitly here —
+  // the join key comparison in HashProbe will still enforce correctness.
+  const auto& colName = outputType()->nameOf(outputChannel);
+  if (colName == kChangelogColRowdata) {
+    return;
+  }
+
+  // Driver::pushdownFilters already merges all filters for a given channel
+  // before calling addDynamicFilter, so the incoming filter is already the
+  // intersection of all dynamic filters for this column.  Mirror what
+  // ScanSpec::setFilter does: unconditional overwrite.
+  auto [it, inserted] = changelogDynamicFilters_.emplace(
+      common::Subfield(std::string(colName)), filter);
+  if (!inserted) {
+    it->second = filter;
+  }
+}
+
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
@@ -130,7 +145,8 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
         ioExecutor_,
         outputType(),
         *columnHandles_,
-        &filters_);
+        &filters_,
+        &changelogDynamicFilters_);
   }
 
   // Regular (non-changelog) Iceberg query.

@@ -55,7 +55,8 @@ IcebergChangelogSplitReader::IcebergChangelogSplitReader(
     folly::Executor* executor,
     const RowTypePtr& changelogOutputType,
     ColumnHandleMap changelogColumnHandles,
-    const common::SubfieldFilters* changelogFilters)
+    const common::SubfieldFilters* changelogFilters,
+    const common::SubfieldFilters* changelogDynamicFilters)
     : IcebergSplitReader(
           icebergSplit,
           tableHandle,
@@ -72,7 +73,8 @@ IcebergChangelogSplitReader::IcebergChangelogSplitReader(
           scanContext.dataColumnHandles),
       changelogOutputType_(changelogOutputType),
       changelogColumnHandles_(std::move(changelogColumnHandles)),
-      changelogFilters_(changelogFilters) {}
+      changelogFilters_(changelogFilters),
+      changelogDynamicFilters_(changelogDynamicFilters) {}
 
 void IcebergChangelogSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
@@ -100,27 +102,42 @@ void IcebergChangelogSplitReader::prepareSplit(
 }
 
 bool IcebergChangelogSplitReader::applyChangelogFilters() const {
-  if (changelogFilters_ == nullptr) {
-    return true;
-  }
   VELOX_CHECK_NOT_NULL(changelogSplitInfo_);
 
-  const auto& filters = *changelogFilters_;
   const auto operationStr = operationName(changelogSplitInfo_->operation);
 
-  auto evaluate = [&](std::string_view colName, auto evaluateFn) -> bool {
-    auto it = filters.find(common::Subfield(std::string(colName)));
-    if (it == filters.end()) {
-      return true; // No filter on this column — pass.
+  // Evaluates a single column against the filter found in 'filterMap'.
+  // Returns true (pass) when no filter is present for that column.
+  auto evaluateOne = [&](const common::SubfieldFilters& filterMap,
+                         std::string_view colName,
+                         auto evaluateFn) -> bool {
+    auto it = filterMap.find(common::Subfield(std::string(colName)));
+    if (it == filterMap.end()) {
+      return true;
     }
     return evaluateFn(it->second.get());
+  };
+
+  // Evaluates a column against both the static table-handle filters and any
+  // runtime dynamic filters, requiring both to pass (AND semantics).
+  auto evaluate = [&](std::string_view colName, auto evaluateFn) -> bool {
+    if (changelogFilters_ != nullptr &&
+        !evaluateOne(*changelogFilters_, colName, evaluateFn)) {
+      return false;
+    }
+    if (changelogDynamicFilters_ != nullptr &&
+        !evaluateOne(*changelogDynamicFilters_, colName, evaluateFn)) {
+      return false;
+    }
+    return true;
   };
 
   return evaluate(
              kChangelogColOperation,
              [&](const common::Filter* filter) {
                return filter->testBytes(
-                   operationStr.data(), operationStr.size());
+                   operationStr.data(),
+                   static_cast<int32_t>(operationStr.size()));
              }) &&
       evaluate(
              kChangelogColOrdinal,
