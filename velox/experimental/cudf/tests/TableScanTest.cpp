@@ -634,7 +634,7 @@ TEST_F(TableScanTest, mixedCaseFileColumnNames) {
           .plan(plan)
           .splits(makeCudfHiveConnectorSplits({filePath}))
           .copyResults(pool_.get()),
-      "Column index cannot be more than number of columns in the table");
+      "Encountered non-existent column 'filter_col'");
 }
 
 INSTANTIATE_TEST_SUITE_P(
