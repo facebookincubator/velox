@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 698f943 from 2026-09-29 (main branch)
+# cudf commit 6bbcaed from 2026-09-29 (main branch)
 set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 698f9438d5c69e7eeea6d986a5e2adf4d6cf2678)
+set(VELOX_cudf_COMMIT 6bbcaedd6bdca0fcf9f065a5a2cc4005c2dd0ab2)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  d3c6c7f072a374f0fa5fb22d2053ca0210805c183f59567ecbb2eddb26b34a5e
+  d3cb056ec8387874f016f65c41c0957f4de01d6cc8c0ba2500eac7181abdc1da
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit ea043d6 from 2026-09-29 (main branch)
+  # ucxx commit 7ecd4f5 from 2026-09-29 (main branch)
   set(VELOX_ucxx_VERSION 0.53)
-  set(VELOX_ucxx_COMMIT ea043d6fd6ffca6ea37fb4732623b7527163d20c)
+  set(VELOX_ucxx_COMMIT 7ecd4f55ce9a833b3f23c85a574d07db8f98e0b8)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    25793164cf3e11d6ba777ce70527a142691ee9979691ce9bfa188e6692a0ee01
+    8e3ab889d8a4610b2859d3b36d981eac8b0eb68034ebf4ec9fdba645c255159c
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
