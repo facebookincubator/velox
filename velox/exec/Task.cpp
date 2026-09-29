@@ -2799,7 +2799,6 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
-  std::vector<std::shared_ptr<ExchangeTransportEntry>> exchangeTransportEntries;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -2861,7 +2860,6 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     exchangeClients.swap(exchangeClients_);
-    exchangeTransportEntries.swap(exchangeTransportEntries_);
 
     barrierPromises.swap(barrierFinishPromises_);
     // Clear the barrier flag to ensure underBarrier() returns false after task
@@ -2963,10 +2961,6 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       client->noMoreRemoteTasks();
     }
   }
-
-  // Transport entries can own state used by their clients. Keep that state
-  // alive until all remaining remote splits have been delivered.
-  exchangeTransportEntries.clear();
 
   for (auto& splitGroupState : splitGroupStates) {
     splitGroupState.clear();

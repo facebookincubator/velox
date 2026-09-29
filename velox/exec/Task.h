@@ -1360,7 +1360,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // Exchange transport entries, indexed by pipeline ID like
   // 'exchangeClients_'. Each entry created the client at the same index and
   // carries the factories that build the matching exchange operators. Null for
-  // pipelines that don't read from an exchange.
+  // pipelines that don't read from an exchange. Kept until the Task is
+  // destroyed, not cleared on termination, because the clients remain
+  // reachable through 'exchangeClientByPlanNode_' and may use state the entry
+  // owns.
   std::vector<std::shared_ptr<ExchangeTransportEntry>>
       exchangeTransportEntries_;
 

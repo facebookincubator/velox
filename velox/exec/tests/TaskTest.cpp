@@ -519,17 +519,26 @@ class TestShouldYieldOperator : public exec::Operator {
   bool shouldYieldResult_{false};
 };
 
+// Hooks invoked by TestExchangeClient's control-plane methods.
+struct TestExchangeClientCallbacks {
+  std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId;
+  std::function<void()> onNoMoreRemoteTasks;
+};
+
 class TestExchangeClient : public ExchangeClient {
  public:
-  explicit TestExchangeClient(
-      std::function<void()> noMoreRemoteTasksCallback = nullptr)
-      : noMoreRemoteTasksCallback_{std::move(noMoreRemoteTasksCallback)} {}
+  explicit TestExchangeClient(TestExchangeClientCallbacks callbacks = {})
+      : callbacks_{std::move(callbacks)} {}
 
-  void addRemoteTaskId(std::string_view /*remoteTaskId*/) override {}
+  void addRemoteTaskId(std::string_view remoteTaskId) override {
+    if (callbacks_.onAddRemoteTaskId != nullptr) {
+      callbacks_.onAddRemoteTaskId(remoteTaskId);
+    }
+  }
 
   void noMoreRemoteTasks() override {
-    if (noMoreRemoteTasksCallback_ != nullptr) {
-      noMoreRemoteTasksCallback_();
+    if (callbacks_.onNoMoreRemoteTasks != nullptr) {
+      callbacks_.onNoMoreRemoteTasks();
     }
   }
 
@@ -548,7 +557,7 @@ class TestExchangeClient : public ExchangeClient {
   }
 
  private:
-  std::function<void()> noMoreRemoteTasksCallback_;
+  TestExchangeClientCallbacks callbacks_;
 };
 
 class TestExchangeOperator : public SourceOperator {
@@ -931,11 +940,12 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   std::weak_ptr<TestExchangeTransportState> transportStateReference =
       transportState;
   bool transportStateAvailableOnNoMoreRemoteTasks{false};
+  bool transportStateAvailableOnLateSplit{false};
   auto entry = ExchangeTransportEntry::make<TestExchangeClient>(
       [transportState,
        transportStateReference,
-       &transportStateAvailableOnNoMoreRemoteTasks](
-          const ExchangeClientContext&) {
+       &transportStateAvailableOnNoMoreRemoteTasks,
+       &transportStateAvailableOnLateSplit](const ExchangeClientContext&) {
         auto task = transportState->task.lock();
         if (task != nullptr) {
           std::thread mutexProbe([&] {
@@ -947,11 +957,23 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
           });
           mutexProbe.join();
         }
-        auto client = std::make_shared<TestExchangeClient>(
-            [transportStateReference,
-             &transportStateAvailableOnNoMoreRemoteTasks] {
-              transportStateAvailableOnNoMoreRemoteTasks =
-                  !transportStateReference.expired();
+        auto client =
+            std::make_shared<TestExchangeClient>(TestExchangeClientCallbacks{
+                .onAddRemoteTaskId =
+                    [transportStateReference,
+                     &transportStateAvailableOnLateSplit](
+                        std::string_view remoteTaskId) {
+                      if (remoteTaskId == "late-remote-task") {
+                        transportStateAvailableOnLateSplit =
+                            !transportStateReference.expired();
+                      }
+                    },
+                .onNoMoreRemoteTasks =
+                    [transportStateReference,
+                     &transportStateAvailableOnNoMoreRemoteTasks] {
+                      transportStateAvailableOnNoMoreRemoteTasks =
+                          !transportStateReference.expired();
+                    },
             });
         transportState->clientFromFactory = client.get();
         return client;
@@ -998,6 +1020,17 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
 
   task->requestAbort().wait();
   EXPECT_TRUE(transportStateAvailableOnNoMoreRemoteTasks);
+
+  // A terminated Task still hands remote splits that arrive late to the
+  // client, so the transport state stays alive as long as the Task.
+  EXPECT_FALSE(transportStateReference.expired());
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_TRUE(transportStateAvailableOnLateSplit);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
   EXPECT_TRUE(transportStateReference.expired());
 }
 
