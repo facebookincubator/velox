@@ -377,7 +377,6 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
                  Op::LESS_EQUAL,
                  {inputCudfDataTypes[0], inputCudfDataTypes[2]});
     }
-
   }
 
   if (expr->isCastKind()) {
