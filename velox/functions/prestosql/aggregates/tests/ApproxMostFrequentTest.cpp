@@ -144,7 +144,7 @@ TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
   auto run = [&](int64_t buckets) {
     auto rows = makeRowVector({
         makeConstant<int64_t>(buckets, buckets),
-        makeFlatVector<int>(buckets, folly::identity),
+        makeFlatIdentityVector<int>(buckets),
         makeConstant<int64_t>(buckets, buckets),
     });
     auto plan = exec::test::PlanBuilder()

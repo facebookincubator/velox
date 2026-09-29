@@ -258,12 +258,12 @@ uint64_t GroupingSet::compact() {
   uint64_t freedBytes = 0;
 
   if (isGlobal_) {
-    if (globalAggregationInitialized_) {
+    if (globalAggregationRow_ != nullptr) {
       VELOX_CHECK_NOT_NULL(lookup_);
       VELOX_CHECK_EQ(lookup_->hits.size(), 1);
-      char* group = lookup_->hits[0];
       for (auto& aggregate : aggregates_) {
-        freedBytes += aggregate.function->compact(folly::Range(&group, 1));
+        freedBytes += aggregate.function->compact(
+            folly::Range(&globalAggregationRow_, 1));
       }
     }
   } else if (table_ != nullptr) {
@@ -500,7 +500,7 @@ void GroupingSet::createHashTable() {
 }
 
 void GroupingSet::initializeGlobalAggregation() {
-  if (globalAggregationInitialized_) {
+  if (globalAggregationRow_ != nullptr) {
     return;
   }
 
@@ -601,7 +601,8 @@ void GroupingSet::initializeGlobalAggregation() {
     }
   }
 
-  lookup_->hits[0] = rows_.allocateFixed(offset, alignment);
+  globalAggregationRow_ = rows_.allocateFixed(offset, alignment);
+  lookup_->hits[0] = globalAggregationRow_;
   const auto singleGroup = std::vector<vector_size_t>{0};
   for (auto& aggregate : aggregates_) {
     if (!aggregate.sortingKeys.empty()) {
@@ -619,8 +620,45 @@ void GroupingSet::initializeGlobalAggregation() {
       aggregation->initializeNewGroups(lookup_->hits.data(), singleGroup);
     }
   }
+}
 
-  globalAggregationInitialized_ = true;
+void GroupingSet::mergeGlobalAggregations(
+    const std::vector<GroupingSet*>& others) {
+  VELOX_CHECK(isGlobal_ && isPartial_);
+  VELOX_CHECK(!others.empty());
+
+  std::vector<GroupingSet*> initializedOthers;
+  initializedOthers.reserve(others.size());
+  for (auto* other : others) {
+    VELOX_CHECK(other->isGlobal_ && other->isPartial_);
+    VELOX_CHECK_EQ(aggregates_.size(), other->aggregates_.size());
+    if (other->globalAggregationRow_ != nullptr) {
+      initializedOthers.push_back(other);
+    }
+  }
+  if (initializedOthers.empty()) {
+    return;
+  }
+
+  initializeGlobalAggregation();
+  SelectivityVector rows(1);
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    auto& aggregate = aggregates_[i];
+    auto& function = aggregate.function;
+    for (auto* other : initializedOthers) {
+      auto intermediate =
+          BaseVector::create(aggregate.intermediateType, 1, pool_);
+      // Extraction can depend on metadata that the function instance learned
+      // from its input, so only the peer's function can serialize its state.
+      other->aggregates_[i].function->extractAccumulators(
+          &other->globalAggregationRow_, 1, &intermediate);
+      function->addSingleGroupIntermediateResults(
+          globalAggregationRow_,
+          rows,
+          {intermediate},
+          /*mayPushdown=*/false);
+    }
+  }
 }
 
 void GroupingSet::addGlobalAggregationInput(
@@ -634,7 +672,7 @@ void GroupingSet::addGlobalAggregationInput(
 
   masks_.addInput(input, activeRows_);
 
-  auto* group = lookup_->hits[0];
+  auto* group = globalAggregationRow_;
 
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
@@ -769,7 +807,7 @@ bool GroupingSet::getDefaultGlobalGroupingSetOutput(
 }
 
 void GroupingSet::destroyGlobalAggregations() {
-  if (!globalAggregationInitialized_) {
+  if (globalAggregationRow_ == nullptr) {
     return;
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
@@ -923,7 +961,7 @@ void GroupingSet::resetGlobalAggregation() {
   destroyGlobalAggregations();
   rows_.clear();
   stringAllocator_.clear();
-  globalAggregationInitialized_ = false;
+  globalAggregationRow_ = nullptr;
 }
 
 bool GroupingSet::isPartialFull(int64_t maxBytes) {

@@ -153,14 +153,13 @@ class TestSkewedJoinBuild : public exec::Operator {
   void noMoreInput() override {
     Operator::noMoreInput();
     std::vector<ContinuePromise> promises;
-    std::vector<std::shared_ptr<exec::Driver>> peers;
+    std::vector<std::shared_ptr<exec::Operator>> peerOperators;
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
     // state. allPeersFinished is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->task()->allPeersFinished(
-            planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
       return;
     }
     VELOX_FAIL("Last driver should not finish successfully.");
@@ -2899,8 +2898,8 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
@@ -3044,8 +3043,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
 
 TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
