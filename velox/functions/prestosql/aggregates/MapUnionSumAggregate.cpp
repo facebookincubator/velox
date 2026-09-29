@@ -332,6 +332,12 @@ class MapUnionSumAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Duplicate keys across input maps are expected to be rare, so state
+    // generally grows with input cardinality.
+    return false;
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto mapVector = (*result)->as<MapVector>();
