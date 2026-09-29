@@ -114,6 +114,30 @@ class ToCudfSelectionTest : public OperatorTestBase {
     return false;
   }
 
+  bool wasCudfOrderByUsed(const std::shared_ptr<exec::Task>& task) {
+    auto stats = task->taskStats();
+    for (const auto& pipelineStats : stats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == "CudfOrderBy") {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool wasDefaultOrderByUsed(const std::shared_ptr<exec::Task>& task) {
+    auto stats = task->taskStats();
+    for (const auto& pipelineStats : stats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == OperatorType::kOrderBy) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -365,6 +389,39 @@ TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// An OrderBy that only passes a MAP column through (never operates on it) must
+// not be offloaded to cuDF. MAP has no cuDF/Arrow-interop representation, so
+// the CudfFromVelox inserted ahead of a GPU sort would abort in
+// cudf::from_arrow with "Unsupported type_id conversion to cudf". The sort key
+// is a plain BIGINT; the map rides through as a passthrough payload. Whether a
+// supported query runs must not depend on which column happens to be the sort
+// key.
+TEST_F(ToCudfSelectionTest, orderByWithPassthroughMapStaysOnCpu) {
+  auto data = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({3, 1, 2}),
+       makeMapVector<std::string, std::string>(
+           {{{"a", "1"}}, {{"b", "2"}}, {{"c", "3"}}})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"k ASC NULLS LAST"}, /*isPartial=*/false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeMapVector<std::string, std::string>(
+           {{{"b", "2"}}, {{"c", "3"}}, {{"a", "1"}}})});
+
+  auto task = AssertQueryBuilder(plan)
+                  .config("cudf.enabled", true)
+                  .assertResults(expected);
+
+  ASSERT_FALSE(wasCudfOrderByUsed(task));
+  ASSERT_TRUE(wasDefaultOrderByUsed(task));
 }
 
 // Test supported aggregation should use CUDF
