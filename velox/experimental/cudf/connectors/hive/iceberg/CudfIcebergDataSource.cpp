@@ -46,7 +46,22 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           executor,
           connectorQueryCtx,
           cudfHiveConfig),
-      hiveConfig_(hiveConfig) {}
+      hiveConfig_(hiveConfig) {
+  const auto addPartitionColumn =
+      [this](const velox_hive::FileColumnHandle& handle) {
+        if (handle.columnType() ==
+            velox_hive::FileColumnHandle::ColumnType::kPartitionKey) {
+          partitionColumnNames_.insert(handle.name());
+        }
+      };
+  for (const auto& [_, handle] : columnHandles) {
+    addPartitionColumn(
+        *checkedPointerCast<const velox_hive::FileColumnHandle>(handle));
+  }
+  for (const auto& handle : tableHandle_->filterColumnHandles()) {
+    addPartitionColumn(*handle);
+  }
+}
 
 void CudfIcebergDataSource::convertSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
@@ -72,6 +87,7 @@ CudfIcebergDataSource::createCudfSplitReader() {
   return std::make_unique<CudfIcebergSplitReader>(
       split_,
       icebergSplit_,
+      partitionColumnNames_,
       tableHandle_,
       outputType_,
       readColumnNames_,

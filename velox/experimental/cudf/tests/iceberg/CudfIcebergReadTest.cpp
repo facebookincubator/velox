@@ -749,42 +749,98 @@ TEST_F(CudfIcebergReadTest, columnAliasUsesPhysicalFileName) {
 }
 
 /// If a partition field shares a physical column's name, read the physical
-/// column instead of substituting the name-keyed partition value.
+/// column instead of substituting the name-keyed partition value, whether the
+/// column is projected or only read as an equality-delete key.
 TEST_F(CudfIcebergReadTest, transformedPartitionNameCollision) {
+  // Every part_col value maps to bucket[4] = 2.
   auto data = makeRowVector(
       {"part_col", "value"},
       {
-          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({4, 16, 19}),
           makeFlatVector<std::string>({"a", "b", "c"}),
       });
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
+  // Simulate bucket[4](part_col) with the partition field named after its
+  // source column. part_col is present in the data file, so its physical
+  // values win over the name-keyed partition value.
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys = {{"part_col", "2"}};
   const auto rowType = asRowType(data->type());
+
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(rowType)
                   .dataColumns(rowType)
-                  .subfieldFilter("part_col = 20")
+                  .subfieldFilter("part_col = 16")
+                  .endTableScan()
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({makeRowVector(
+          {"part_col", "value"},
+          {
+              makeFlatVector<int64_t>({16}),
+              makeFlatVector<std::string>({"b"}),
+          })});
+
+  // An equality delete keyed on the non-projected part_col reads the physical
+  // column rather than rejecting it as a partition column.
+  auto deleteFile = TempFilePath::create();
+  writeDeleteFile(
+      DeleteFileFormat::PARQUET,
+      deleteFile->getPath(),
+      {makeRowVector({"part_col"}, {makeFlatVector<int64_t>({16})})});
+  IcebergDeleteFile equalityDelete(
+      FileContent::kEqualityDeletes,
+      deleteFile->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(deleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  auto valueOnlyPlan = PlanBuilder()
+                           .startTableScan()
+                           .connectorId(kCudfIcebergConnectorId)
+                           .outputType(ROW({"value"}, {VARCHAR()}))
+                           .dataColumns(rowType)
+                           .endTableScan()
+                           .planNode();
+  AssertQueryBuilder(valueOnlyPlan)
+      .splits(makeIcebergSplits(
+          dataFile->getPath(), {equalityDelete}, partitionKeys))
+      .assertResults({makeRowVector(
+          {"value"}, {makeFlatVector<std::string>({"a", "c"})})});
+}
+
+/// A data column added after a file was written reads as NULL from that file,
+/// even if a transformed partition field shares its name.
+TEST_F(CudfIcebergReadTest, schemaEvolutionTransformedPartitionNameCollision) {
+  // The file predates the `shard` column. Its partition spec is
+  // bucket[4](user_id) with the partition field named `shard`, and every
+  // user_id maps to bucket 2.
+  auto oldData =
+      makeRowVector({"user_id"}, {makeFlatVector<int64_t>({4, 16, 19})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), oldData);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(ROW({"shard"}, {BIGINT()}))
+                  .dataColumns(ROW({"user_id", "shard"}, {BIGINT(), BIGINT()}))
                   .endTableScan()
                   .planNode();
 
-  // Simulate bucket[4](part_col), whose ordinal happens to use the source
-  // column name. Empty identityPartitionKeys means this value cannot replace
-  // physical part_col values.
+  // `shard` is a regular column, so the bucket ordinal cannot supply it.
   const std::unordered_map<std::string, std::optional<std::string>>
-      partitionKeys = {{"part_col", "2"}};
-  auto expected = makeRowVector(
-      {"part_col", "value"},
-      {
-          makeFlatVector<int64_t>({20}),
-          makeFlatVector<std::string>({"b"}),
-      });
-
+      partitionKeys = {{"shard", "2"}};
   AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
-      .assertResults({expected});
+      .assertResults({makeRowVector(
+          {"shard"}, {makeNullConstant(TypeKind::BIGINT, oldData->size())})});
 }
 
 /// A nonempty data file in a NULL partition must return one NULL partition
@@ -855,13 +911,14 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
   auto tableType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
   auto outputType = ROW({"country"}, {VARCHAR()});
 
-  facebook::velox::connector::ColumnHandleMap assignments;
-  assignments["country"] = std::make_shared<HiveColumnHandle>(
+  const auto countryHandle = std::make_shared<HiveColumnHandle>(
       "country",
       HiveColumnHandle::ColumnType::kPartitionKey,
       VARCHAR(),
       VARCHAR(),
       std::vector<common::Subfield>{});
+  facebook::velox::connector::ColumnHandleMap assignments;
+  assignments["country"] = countryHandle;
 
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
       {"country", "US"}};
@@ -973,7 +1030,8 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
       .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
       .assertResults({mixedMatchExpected});
 
-  // Filter-only partition (not in output): inject, filter, then strip.
+  // Filter-only partition (not in output): inject, filter, then strip. The
+  // filter-only handle declares `country` as a partition key.
   auto fileOnlyAssignments = facebook::velox::connector::ColumnHandleMap{};
   fileOnlyAssignments["c0"] = mixedAssignments["c0"];
   auto fileOnlyOutput = ROW({"c0"}, {BIGINT()});
@@ -984,6 +1042,7 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
                                  .outputType(fileOnlyOutput)
                                  .dataColumns(tableType)
                                  .assignments(fileOnlyAssignments)
+                                 .filterColumnHandles({countryHandle})
                                  .subfieldFilter("country = 'US'")
                                  .endTableScan()
                                  .planNode();
@@ -998,6 +1057,7 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
                                    .outputType(fileOnlyOutput)
                                    .dataColumns(tableType)
                                    .assignments(fileOnlyAssignments)
+                                   .filterColumnHandles({countryHandle})
                                    .subfieldFilter("country = 'CA'")
                                    .endTableScan()
                                    .planNode();
@@ -2908,7 +2968,6 @@ TEST_F(CudfIcebergReadTest, schemaEvolutionAddColumns) {
 // Hive-migrated partition columns: values come from the partitionKeys map,
 // not the data file, and are injected by adaptColumns.
 TEST_F(CudfIcebergReadTest, partitionColumnsFromHive) {
-  auto fileRowType = ROW({"c0", "c1"}, {BIGINT(), INTEGER()});
   auto tableRowType =
       ROW({"c0", "c1", "region", "year"},
           {BIGINT(), INTEGER(), VARCHAR(), INTEGER()});
@@ -2929,20 +2988,7 @@ TEST_F(CudfIcebergReadTest, partitionColumnsFromHive) {
   auto icebergSplits =
       makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
 
-  // Build column handles marking partition columns.
-  facebook::velox::connector::ColumnHandleMap assignments;
-  for (uint32_t i = 0; i < tableRowType->size(); ++i) {
-    const auto& name = tableRowType->nameOf(i);
-    auto columnType = (i >= fileRowType->size())
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-    assignments[name] = std::make_shared<HiveColumnHandle>(
-        name,
-        columnType,
-        tableRowType->childAt(i),
-        tableRowType->childAt(i),
-        std::vector<common::Subfield>{});
-  }
+  const auto assignments = makeAssignments(tableRowType, {"region", "year"});
 
   // Expected result: c0 and c1 from file, region and year from partition keys.
   auto expected = makeRowVector(
@@ -2971,7 +3017,6 @@ TEST_F(CudfIcebergReadTest, partitionColumnsFromHive) {
 // while Iceberg-native tables store days-since-epoch ("20244"). Both must
 // decode to the same DATE result.
 TEST_F(CudfIcebergReadTest, partitionColumnsDate) {
-  auto fileRowType = ROW({"c0"}, {BIGINT()});
   auto tableRowType = ROW({"c0", "partitiondate"}, {BIGINT(), DATE()});
 
   // Write a data file with only the non-partition column c0.
@@ -2984,20 +3029,7 @@ TEST_F(CudfIcebergReadTest, partitionColumnsDate) {
   // 2025-06-05 is 20244 days since the Unix epoch.
   const int32_t kDays = DATE()->toDays("2025-06-05");
 
-  // Build column handles marking partitiondate as a partition key.
-  facebook::velox::connector::ColumnHandleMap assignments;
-  for (uint32_t i = 0; i < tableRowType->size(); ++i) {
-    const auto& name = tableRowType->nameOf(i);
-    auto columnType = (i >= fileRowType->size())
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-    assignments[name] = std::make_shared<HiveColumnHandle>(
-        name,
-        columnType,
-        tableRowType->childAt(i),
-        tableRowType->childAt(i),
-        std::vector<common::Subfield>{});
-  }
+  const auto assignments = makeAssignments(tableRowType, {"partitiondate"});
 
   auto expected = makeRowVector(
       tableRowType->names(),
