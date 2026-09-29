@@ -351,8 +351,8 @@ TEST_F(IcebergChangelogE2ETest, rowdataSubfieldFilterThrows) {
       exec::test::AssertQueryBuilder(plan)
           .split(changelogSplit)
           .copyResults(pool()),
-      "Subfield filter pushdown on rowdata columns is not supported for "
-      "changelog queries");
+      "Subfield filter pushdown on 'rowdata' is not supported for changelog "
+      "queries");
 }
 
 TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
@@ -393,8 +393,6 @@ TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
     ASSERT_EQ(nameVector->valueAt(i), StringView(expectedName));
   }
 }
-
-// --- Aggregation tests -------------------------------------------------------
 
 TEST_F(IcebergChangelogE2ETest, countAllRows) {
   std::string dataFilePath = writeTestFile();
@@ -512,8 +510,6 @@ TEST_F(IcebergChangelogE2ETest, groupByOperationCountRowdata) {
                 std::string(kChangelogOpDelete)}),
            makeFlatVector<int64_t>({expectedRows(), expectedRows()})}));
 }
-
-// --- Ordering tests ----------------------------------------------------------
 
 TEST_F(IcebergChangelogE2ETest, orderByOrdinal) {
   std::string dataFilePath = writeTestFile();
@@ -653,6 +649,172 @@ TEST_F(IcebergChangelogE2ETest, orderByRowdataSubfieldSelectMetadata) {
     ASSERT_EQ(orderedOrdinalVector->valueAt(i), 1);
     ASSERT_EQ(orderedSnapshotVector->valueAt(i), 100);
   }
+}
+
+// Verifies that dynamic filters injected at runtime by HashProbe on a
+// changelog constant column (snapshotid) are applied at split-skipping time.
+//
+// HashProbe sets canReplaceWithDynamicFilter_ (single unique key, no
+// build-side output columns, no post-join filter), which means it pushes the
+// dynamic filter to the scan AND skips the join key comparison entirely —
+// passing all probe rows through fillOutput() on the assumption the scan
+// filtered them. IcebergDataSource::addDynamicFilter() intercepts the filter,
+// accumulates it in changelogDynamicFilters_, and IcebergChangelogSplitReader
+// evaluates it in prepareSplit() to skip non-matching splits.
+TEST_F(IcebergChangelogE2ETest, dynamicFilterOnSnapshotIdApplied) {
+  std::string dataFilePath = writeTestFile();
+
+  // Three splits with distinct snapshotids.
+  std::vector<std::shared_ptr<ConnectorSplit>> changelogSplits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kInsert, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kDelete, 2, 200),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::kUpdateAfter, 3, 300),
+  };
+
+  // Build side: a single-row table with snapshotid=100. The HashJoin will
+  // inject a dynamic filter snapshotid IN (100) into the probe scan.
+  auto buildVector =
+      makeRowVector({"build_snapshotid"}, {makeFlatVector<int64_t>({100})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId changelogScanId;
+
+  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .capturePlanNodeId(changelogScanId)
+                  .hashJoin(
+                      {"snapshotid"},
+                      {"build_snapshotid"},
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .values({buildVector})
+                          .planNode(),
+                      /*filter=*/"",
+                      {"snapshotid"})
+                  .planNode();
+
+  auto result = exec::test::AssertQueryBuilder(plan)
+                    .splits(changelogScanId, changelogSplits)
+                    .copyResults(pool());
+
+  ASSERT_NE(result, nullptr);
+  // With the fix: only the snapshotid=100 split passes the dynamic filter.
+  ASSERT_EQ(result->size(), expectedRows());
+  auto snapshotVector = result->childAt(0)->as<SimpleVector<int64_t>>();
+  for (auto i = 0; i < result->size(); i++) {
+    ASSERT_EQ(snapshotVector->valueAt(i), 100);
+  }
+}
+
+// Verifies that dynamic filters from two sequential hash joins on the same
+// changelog column (snapshotid) are merged (ANDed) and applied correctly.
+//
+// Two downstream HashProbe operators each push a dynamic filter onto the
+// changelog scan's snapshotid channel.  addDynamicFilter() is called twice for
+// the same subfield: the first call inserts it; the second hits the merge path
+// (Filter::merge) so the accumulated filter is the intersection of both.
+// Build1 = {100, 200}, build2 = {200, 300} → only snapshotid=200 survives.
+TEST_F(IcebergChangelogE2ETest, mergedDynamicFiltersOnSnapshotId) {
+  std::string dataFilePath = writeTestFile();
+
+  std::vector<std::shared_ptr<ConnectorSplit>> changelogSplits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kInsert, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kDelete, 2, 200),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::kUpdateAfter, 3, 300),
+  };
+
+  // Build side 1: {100, 200} — pushes snapshotid IN (100, 200).
+  auto build1 =
+      makeRowVector({"b1_snapshotid"}, {makeFlatVector<int64_t>({100, 200})});
+  // Build side 2: {200, 300} — pushes snapshotid IN (200, 300).
+  auto build2 =
+      makeRowVector({"b2_snapshotid"}, {makeFlatVector<int64_t>({200, 300})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId changelogScanId;
+
+  // Two chained joins on snapshotid with no build-side output columns, so
+  // canReplaceWithDynamicFilter_ fires on both and both filters are pushed.
+  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .capturePlanNodeId(changelogScanId)
+                  .hashJoin(
+                      {"snapshotid"},
+                      {"b1_snapshotid"},
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .values({build1})
+                          .planNode(),
+                      /*filter=*/"",
+                      {"snapshotid"})
+                  .hashJoin(
+                      {"snapshotid"},
+                      {"b2_snapshotid"},
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .values({build2})
+                          .planNode(),
+                      /*filter=*/"",
+                      {"snapshotid"})
+                  .planNode();
+
+  auto result = exec::test::AssertQueryBuilder(plan)
+                    .splits(changelogScanId, changelogSplits)
+                    .copyResults(pool());
+
+  ASSERT_NE(result, nullptr);
+  // Intersection of {100,200} and {200,300} = {200}: only the DELETE split.
+  ASSERT_EQ(result->size(), expectedRows());
+  auto snapshotVector = result->childAt(0)->as<SimpleVector<int64_t>>();
+  for (auto i = 0; i < result->size(); i++) {
+    ASSERT_EQ(snapshotVector->valueAt(i), 200);
+  }
+}
+
+// Verifies that a subfield filter rooted on a column that is not one of the
+// four changelog columns (operation/ordinal/snapshotid/rowdata) is rejected
+// with a clear VeloxUserError at DataSource construction time.
+// Such a filter (e.g. on "$path") would otherwise pass the old rowdata-only
+// denylist, get forwarded into the base-table scan spec, and crash with a
+// confusing "Field not found" error.
+TEST_F(IcebergChangelogE2ETest, unknownColumnFilterIsRejected) {
+  std::string dataFilePath = writeTestFile();
+
+  // Bake a filter on "$path" — not one of the four changelog columns —
+  // directly into the table handle.
+  common::SubfieldFilters filters;
+  filters[common::Subfield("$path")] = std::make_shared<common::BytesValues>(
+      std::vector<std::string>{"nonexistent/path"}, false);
+  auto filteredHandle =
+      makeChangelogTableHandle(dataRowType_, std::move(filters));
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(filteredHandle)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .planNode();
+
+  auto changelogSplit =
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kInsert, 1, 100);
+
+  VELOX_ASSERT_USER_THROW(
+      exec::test::AssertQueryBuilder(plan)
+          .split(changelogSplit)
+          .copyResults(pool()),
+      "Subfield filter pushdown on '$path' is not supported for changelog "
+      "queries");
 }
 
 } // namespace

@@ -18,9 +18,11 @@
 
 #include <numeric>
 
+#include <folly/container/F14Set.h>
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitInfo.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
@@ -83,11 +85,51 @@ IcebergConnector::IcebergConnector(
   registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
 }
 
+void IcebergConnector::validateChangelogSubfieldFilters(
+    const IcebergTableHandle& handle) {
+  // Only the three constant changelog columns support subfield filter pushdown
+  // (evaluated at split-skipping time before any I/O).  rowdata filters cannot
+  // be pushed down because the row reader uses dataScanSpec (base-table column
+  // names) and has no awareness of changelog-space column names.  Any other
+  // root name would reach makeScanSpec with an unknown field and crash with a
+  // confusing "Field not found" error.  Predicates on rowdata columns must be
+  // expressed as a remainingFilter (post-scan Filter operator).
+  static const folly::F14FastSet<std::string_view> kPushdownAllowed{
+      kChangelogColOperation,
+      kChangelogColOrdinal,
+      kChangelogColSnapshotId,
+  };
+  for (const auto& [subfield, filter] : handle.subfieldFilters()) {
+    const auto& path = subfield.path();
+    if (path.empty()) {
+      continue;
+    }
+    const auto* root = path[0]->as<common::Subfield::NestedField>();
+    if (root == nullptr) {
+      continue;
+    }
+    VELOX_USER_CHECK(
+        kPushdownAllowed.contains(root->name()),
+        "Subfield filter pushdown on '{}' is not supported for changelog "
+        "queries. Only filters on operation, ordinal, and snapshotid are "
+        "supported. Predicates on rowdata columns must be expressed as a "
+        "remainingFilter. Unsupported filter: {}",
+        root->name(),
+        subfield.toString());
+  }
+}
+
 std::unique_ptr<DataSource> IcebergConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  auto* icebergHandle =
+      dynamic_cast<const IcebergTableHandle*>(tableHandle.get());
+  if (icebergHandle && icebergHandle->isChangelogQuery()) {
+    validateChangelogSubfieldFilters(*icebergHandle);
+  }
+
   return std::make_unique<IcebergDataSource>(
       outputType,
       tableHandle,

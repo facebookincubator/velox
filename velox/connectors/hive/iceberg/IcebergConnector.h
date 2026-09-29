@@ -20,6 +20,8 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+class IcebergTableHandle;
+
 /// Provides Iceberg table format support.
 /// - Creates IcebergDataSource instances for reading Iceberg tables with
 ///   support for delete files and schema evolution.
@@ -66,6 +68,14 @@ class IcebergConnector final : public HiveConnector {
 
  private:
   const std::shared_ptr<IcebergConfig> icebergConfig_;
+
+  /// Validates that all subfield filters in a changelog table handle are rooted
+  /// on one of the three supported constant columns (operation/ordinal/
+  /// snapshotid). Throws VeloxUserError for rowdata or any unknown column
+  /// before the base FileDataSource constructor runs makeScanSpec, preventing a
+  /// confusing "Field not found" crash.
+  static void validateChangelogSubfieldFilters(
+      const IcebergTableHandle& handle);
 };
 
 class IcebergConnectorFactory final : public ConnectorFactory {

@@ -47,6 +47,18 @@ class IcebergDataSource : public HiveDataSource {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
+  /// For changelog queries, intercepts dynamic filters on the three constant
+  /// changelog columns (operation/ordinal/snapshotid) and accumulates them in
+  /// changelogDynamicFilters_ so they can be applied at split-skipping time in
+  /// IcebergChangelogSplitReader::prepareSplit(). rowdata dynamic filters are
+  /// dropped (ROW-typed columns never produce pushable filters from HashProbe,
+  /// so this is unreachable in practice; if somehow reached, forwarding to base
+  /// would silently corrupt results). For non-changelog queries delegates to
+  /// FileDataSource::addDynamicFilter().
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
+
  protected:
   /// Creates an IcebergSplitReader (regular) or IcebergChangelogSplitReader
   /// (changelog) depending on the table handle's isChangelogQuery() flag.
@@ -62,6 +74,12 @@ class IcebergDataSource : public HiveDataSource {
   /// Changelog-only: scan state shared across splits (nullopt for regular
   /// queries).
   std::optional<ChangelogScanContext> changelogScanContext_;
+
+  /// Changelog-only: dynamic filters on the constant changelog columns
+  /// (operation/ordinal/snapshotid) accumulated via addDynamicFilter().
+  /// Passed by pointer into each IcebergChangelogSplitReader so that filters
+  /// injected by HashProbe at runtime are applied during split-level skipping.
+  common::SubfieldFilters changelogDynamicFilters_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
