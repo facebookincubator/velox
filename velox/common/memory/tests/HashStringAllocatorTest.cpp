@@ -827,14 +827,11 @@ TEST_F(HashStringAllocatorTest, inputStreamNegativeSize) {
       in.readBytes(reinterpret_cast<uint8_t*>(buf), -1),
       "(-1 vs. 0) Attempting to read negative number of bytes");
   VELOX_ASSERT_THROW(
-      in.skip(-1),
-      "(-1 vs. 0) Attempting to skip negative number of bytes");
+      in.skip(-1), "(-1 vs. 0) Attempting to skip negative number of bytes");
   VELOX_ASSERT_THROW(
       in.nextView(-1),
       "(-1 vs. 0) Attempting to view negative number of bytes");
-  VELOX_ASSERT_THROW(
-      in.seekp(-1),
-      "(-1 vs. 0) Seeking past start of stream");
+  VELOX_ASSERT_THROW(in.seekp(-1), "(-1 vs. 0) Seeking past start of stream");
 }
 
 } // namespace
