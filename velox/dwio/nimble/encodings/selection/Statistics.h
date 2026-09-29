@@ -206,6 +206,21 @@ class Statistics {
     return max_.value();
   }
 
+  /// Whether every value in the stream is identical.
+  ///
+  /// Answering constancy from the data costs a comparison per value and stops
+  /// at the first one that differs, so a stream that is not constant is
+  /// usually settled within a handful of reads. uniqueCounts() reaches the
+  /// same verdict only after inserting one hash entry per value and sizing a
+  /// table to match -- on a wide column that is the dominant cost of encoding
+  /// selection, paid to learn a fact the second element already gave away.
+  bool isConstant() const noexcept {
+    if (!isConstant_.has_value()) {
+      populateIsConstant();
+    }
+    return isConstant_.value();
+  }
+
   /// Returns whether integral input values are non-decreasing when interpreted
   /// as LogicalType. LogicalType must be explicit because signed values use
   /// unsigned physical storage.
@@ -293,6 +308,9 @@ class Statistics {
   std::span<const InputType> data_;
 
   void populateRepeats(bool collectRunValues = false) const;
+
+  // Compares against the first value and stops at the first mismatch.
+  void populateIsConstant() const noexcept;
   void populateUniques() const;
   void populateMinMax() const;
   void populateBucketCounts() const;
@@ -309,6 +327,7 @@ class Statistics {
   mutable std::optional<uint64_t> maxRepeat_;
   mutable std::optional<uint64_t> totalStringsLength_;
   mutable std::optional<uint64_t> totalStringsRepeatLength_;
+  mutable std::optional<bool> isConstant_;
   mutable std::optional<T> min_;
   mutable std::optional<T> max_;
 

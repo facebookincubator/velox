@@ -39,6 +39,7 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/tablet/Checkpoint.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
@@ -292,6 +293,16 @@ class TabletReader {
   const FileProperties& properties() const {
     return properties_;
   }
+
+  /// Returns true when the file carries a checkpoint marker. Reads only the
+  /// optional-section directory; the checkpoint payload remains unloaded.
+  bool suspended() const {
+    return hasOptionalSection(std::string{kCheckpointSection});
+  }
+
+  /// Loads and parses the checkpoint on demand. Returns std::nullopt for a
+  /// finalized file and retains no parsed checkpoint between calls.
+  std::optional<Checkpoint> checkpoint() const;
 
   /// Finds the dense index matching the given columns, or nullptr if none.
   const index::IndexLookup* denseIndex(

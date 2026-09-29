@@ -188,7 +188,7 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
     case EncodingType::SubIntSplit: {
-      RETURN_ENCODING_BY_VARINT_TYPE(SubIntSplitEncoding, dataType);
+      RETURN_ENCODING_BY_WIDE_NUMERIC_TYPE(SubIntSplitEncoding, dataType);
     }
     case EncodingType::Huffman: {
       RETURN_ENCODING_BY_INTEGER_TYPE(HuffmanEncoding, dataType);
@@ -475,6 +475,11 @@ std::string_view EncodingFactory::encode(
           "types, got {}.",
           TypeTraits<T>::dataType);
     }
+    // Reachable only when something names SubIntSplit explicitly, such as an
+    // encoding-layout replay or a benchmark. EncodingSizeEstimation has no
+    // SubIntSplit case, so estimateSize() returns nullopt for it and the
+    // selection policy skips it as incompatible -- default selection can never
+    // land here.
     case EncodingType::SubIntSplit: {
       if constexpr (
           isNumericType<physicalType>() &&

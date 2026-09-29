@@ -40,15 +40,27 @@ namespace facebook::nimble::subintsplit {
 template <typename PhysicalType>
 class SectionTable {
  public:
-  /// Output elements combined per call to decodeChunk(). Chosen so the output
-  /// slice and the scratch buffer together stay in cache across the whole
-  /// section loop:
-  ///   uint64 output + uint64 scratch: 4096 * 8 * 2 = 64 KB (fits 256 KB L2)
-  ///   uint64 output + uint8  scratch: 4096 * 8 + 4096 = 36 KB (fits L1)
-  static constexpr uint32_t kDecodeChunkSize = 4096;
+  /// Output elements combined per call to decodeChunk() when the caller does
+  /// not choose one.
+  ///
+  /// decodeChunk() makes one read-modify-write pass over the chunk per section,
+  /// which suggests a chunk small enough to stay in L1 across every pass. A
+  /// sweep of 4096/2048/1024/512 over 20 data patterns says otherwise: mean
+  /// decode was 4416/4430/4447/4411 MB/s, flat within noise even on the 7-
+  /// section streams. The output is cache-resident either way, and the cost of
+  /// an extra section is its child materialize(), not the combine pass. The
+  /// value is left configurable for unusual cache geometries, but there is no
+  /// tuning win here on current hardware.
+  static constexpr uint32_t kDefaultDecodeChunkSize = 4096;
 
-  explicit SectionTable(velox::memory::MemoryPool& pool)
-      : pool_{pool}, scratch_{&pool} {}
+  SectionTable(velox::memory::MemoryPool& pool, uint32_t decodeChunkSize)
+      : decodeChunkSize_{decodeChunkSize > 0 ? decodeChunkSize : kDefaultDecodeChunkSize},
+        pool_{pool},
+        scratch_{&pool} {}
+
+  uint32_t decodeChunkSize() const noexcept {
+    return decodeChunkSize_;
+  }
 
   /// Parses `numSections` section headers at `pos` and builds a nested encoding
   /// for each.
@@ -67,7 +79,7 @@ class SectionTable {
   void skip(uint32_t numRows);
 
   /// Combines every section for `numValues` values, starting at the current
-  /// cursors, into `output`. `numValues` must not exceed kDecodeChunkSize.
+  /// cursors, into `output`. `numValues` must not exceed decodeChunkSize().
   void decodeChunk(uint32_t numValues, PhysicalType* output);
 
   /// True when a single section reproduces each value verbatim -- it spans the
@@ -125,6 +137,8 @@ class SectionTable {
   PhysicalType constantOr_{0};
 
   bool passThrough_{false};
+
+  const uint32_t decodeChunkSize_;
 
   velox::memory::MemoryPool& pool_;
 
@@ -219,10 +233,10 @@ void SectionTable<PhysicalType>::decodeChunk(
     return;
   }
 
-  constexpr uint32_t kScratchBytes =
-      kDecodeChunkSize * static_cast<uint32_t>(sizeof(PhysicalType));
-  if (scratch_.size() < kScratchBytes) [[unlikely]] {
-    scratch_.resize(kScratchBytes);
+  const uint32_t scratchBytes =
+      decodeChunkSize_ * static_cast<uint32_t>(sizeof(PhysicalType));
+  if (scratch_.size() < scratchBytes) [[unlikely]] {
+    scratch_.resize(scratchBytes);
   }
 
   for (size_t i = 0; i < dynamicSections_.size(); ++i) {

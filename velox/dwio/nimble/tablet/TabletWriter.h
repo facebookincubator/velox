@@ -82,6 +82,9 @@ class TabletWriter {
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.
     float chunkStatsMinAvgChunks{2};
+    // Maximum string or binary value length retained in per-chunk bounds.
+    uint32_t maxChunkStringStatSize{
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
     // Selects how per-stripe-group stream offsets/sizes are serialized (default
     // kRaw); see StripeGroup::EncodingLayout.
     StripeGroup::EncodingLayout stripeGroupEncodingLayout{

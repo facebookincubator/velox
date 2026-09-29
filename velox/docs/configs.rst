@@ -33,6 +33,15 @@ Generic Configuration
      - Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
        and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
        dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.
+   * - merge_join_stream_left_side
+     - bool
+     - true
+     - Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group. When a key
+       is skewed the group can span many input batches and all of them are held until the group is done. With this
+       set, such joins drop the left batches whose rows have been emitted and resume the group from the batches read
+       next, bounding left-side retention to two batches. Only applies to inner and left joins without a filter;
+       every other join type revisits the left group, so the config is inert there. Set to false to restore
+       buffering of the whole group.
    * - max_elements_size_in_repeat_and_sequence
      - integer
      - 10000

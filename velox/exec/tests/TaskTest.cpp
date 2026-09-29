@@ -1503,6 +1503,48 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   }
 }
 
+TEST_F(TaskTest, executionEndsBeforeOutputIsConsumed) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({0, 1, 10})});
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder().values({data}).partitionedOutput({}, 1).planNode();
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  // Drive execution to completion without fetching the partitioned output.
+  while (cursor->moveNext()) {
+  }
+
+  // The cursor queue can close before the producing driver unregisters.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (task->taskStats().numCompletedDrivers == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  const auto produced = task->taskStats();
+  EXPECT_EQ(produced.numCompletedDrivers, produced.numTotalDrivers);
+  EXPECT_GT(produced.executionEndTimeMs, 0);
+  EXPECT_EQ(produced.endTimeMs, 0);
+  EXPECT_EQ(produced.terminationTimeMs, 0);
+  EXPECT_TRUE(task->isRunning());
+  EXPECT_TRUE(produced.outputBufferStats.has_value());
+  if (produced.outputBufferStats) {
+    EXPECT_GT(produced.outputBufferStats->bufferedBytes, 0);
+  }
+
+  // Delay the consumer after production, then release the destination as the
+  // exchange client does when it finishes consuming results.
+  std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  DefaultOutputBufferManager::getInstanceRef()->deleteResults(
+      task->taskId(), 0);
+  EXPECT_TRUE(waitForTaskCompletion(task.get()));
+  const auto consumed = task->taskStats();
+  EXPECT_EQ(consumed.executionEndTimeMs, produced.executionEndTimeMs);
+  EXPECT_GE(consumed.endTimeMs, produced.executionEndTimeMs + 20);
+  EXPECT_GE(consumed.terminationTimeMs, consumed.endTimeMs);
+}
+
 TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
   constexpr int32_t numBatches = 10;
   std::vector<RowVectorPtr> dataBatches;

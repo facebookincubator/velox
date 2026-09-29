@@ -625,6 +625,7 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .windowLimit = window_.limit(),
       .baselineRttNs = window_.baselineRttNs(),
       .numShrinks = window_.numShrinks(),
+      .numOverloadShrinks = window_.numOverloadShrinks(),
       .peakInFlight = peakInFlight_,
       .rttMinNs = numRttSamples_ > 0 ? rttMinNs_ : 0,
       .rttMaxNs = rttMaxNs_,

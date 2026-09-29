@@ -53,6 +53,7 @@
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
+#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -3912,6 +3913,95 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruningDisabledReadsAllStripes) {
   dwio::common::RuntimeStats stats;
   readers.rowReader->updateRuntimeStats(stats);
   EXPECT_EQ(stats.skippedStrides, 0);
+}
+
+// The stripe-stats section is optional, so a file whose copy of it cannot be
+// deserialized must still be readable: pruning is an optimization and losing it
+// costs a full scan, not the file. The eager load runs in the ReaderBase
+// constructor and is not covered by the pruning killswitch, so a throw here
+// would fail every read of the file with no way to turn it off.
+TEST_P(SelectiveNimbleReaderTest, corruptStripeStatsSectionStillReads) {
+  auto firstStripe = makeRowVector({
+      makeFlatVector<int64_t>(100, folly::identity),
+  });
+  auto secondStripe = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
+  });
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          200, [](auto row) { return row < 100 ? row : 900 + row; }),
+  });
+
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return true; });
+  };
+  std::string fileContent;
+  {
+    test::ScopedFeatureGate stripeStatsGate{
+        FeatureGate::FeatureSet::kStripeStatsWrite,
+        FeatureGate::FeatureSet::kStripeStatsPruning};
+    fileContent = test::createNimbleFile(
+        *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
+  }
+
+  // Locate the section from the footer and scribble over its payload, leaving
+  // every other section and the footer itself intact.
+  {
+    auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
+    auto tabletOptions = test::makeTestTabletOptions(pool());
+    auto tablet = TabletReader::create(readFile, pool(), tabletOptions);
+    const auto& sections = tablet->optionalSections();
+    auto it = sections.find(std::string(kStripeStatsSection));
+    ASSERT_NE(it, sections.end())
+        << "writer did not emit a stripe-stats section, so this test would "
+           "pass without exercising the corrupt path";
+    ASSERT_GT(it->second.size(), 0);
+    for (uint32_t i = 0; i < it->second.size(); ++i) {
+      fileContent[it->second.offset() + i] = static_cast<char>(0xFF);
+    }
+  }
+
+  // Pin that the corruption really is undeserializable. Without this, a
+  // deserializer that returned null rather than throwing would be absorbed by
+  // the pre-existing null check, and the rest of this test would pass whether
+  // or not the catch below exists.
+  {
+    auto corruptFile = std::make_shared<InMemoryReadFile>(fileContent);
+    auto tablet = TabletReader::create(
+        corruptFile, pool(), test::makeTestTabletOptions(pool()));
+    auto section =
+        tablet->loadOptionalSection(std::string(kStripeStatsSection));
+    ASSERT_TRUE(section.has_value());
+    NIMBLE_ASSERT_THROW(
+        VectorizedStripeStats::deserialize(section->content(), *pool()),
+        "65535");
+  }
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(10, 20, false));
+
+  test::ScopedFeatureGate stripeStatsGate{
+      FeatureGate::FeatureSet::kStripeStatsPruning};
+  auto readers =
+      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+
+  // Falls back to a full scan and returns exactly the matching rows.
+  validate(
+      *input,
+      *readers.rowReader,
+      7,
+      /*dropColumn=*/-1,
+      [](auto row) { return row >= 10 && row <= 20; },
+      /*allowStripePruning=*/true);
+
+  dwio::common::RuntimeStats corruptStats;
+  readers.rowReader->updateRuntimeStats(corruptStats);
+  EXPECT_EQ(corruptStats.skippedStrides, 0);
 }
 
 TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneStringFilter) {
