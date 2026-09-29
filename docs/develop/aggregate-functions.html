@@ -213,6 +213,9 @@ SimpleVariadicArrayAggAggregate.cpp under velox/exec/tests.</p>
 <span class="w">  </span><span class="c1">// Optional. Default is true.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">default_null_behavior_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
+<span class="w">  </span><span class="c1">// Optional. Default is true.</span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_reducing_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+
 <span class="w">  </span><span class="c1">// Optional.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
 <span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
@@ -268,7 +271,11 @@ change during aggregation. For example, a function might use this to read a bool
 flag that controls null handling behavior.</p>
 <p>The author can define an optional flag <cite>default_null_behavior_</cite> indicating
 whether the aggregation function has default-null behavior. This flag is true
-by default. Next, the class can have an optional method <cite>toIntermediate()</cite>
+by default. The optional <cite>is_reducing_</cite> flag indicates whether the accumulator
+state is expected to be smaller than its input. This flag is true by default.
+Set it to false for aggregates whose state generally grows with input
+cardinality, such as aggregates that collect input values into an array. Next,
+the class can have an optional method <cite>toIntermediate()</cite>
 that converts the aggregation function’s raw input directly to its intermediate
 states. Finally, the author must define a struct named <cite>AccumulatorType</cite> in
 the aggregation function class. We explain each part in more details below.</p>
