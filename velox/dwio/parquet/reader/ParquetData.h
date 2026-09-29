@@ -37,11 +37,13 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::SplitStats& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      bool nullStructIfAllFieldsMissing)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        nullStructIfAllFieldsMissing_(nullStructIfAllFieldsMissing) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -50,10 +52,19 @@ class ParquetParams : public dwio::common::FormatParams {
     return timestampPrecision_;
   }
 
+  const FileMetaDataPtr& fileMetaData() const {
+    return metaData_;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return nullStructIfAllFieldsMissing_;
+  }
+
  private:
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  const bool nullStructIfAllFieldsMissing_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -163,6 +174,7 @@ class ParquetData : public dwio::common::FormatData {
     // 'nullsOnly' set and is responsible for reading however many nulls or
     // pages it takes to skip 'numValues' top level rows.
     if (nullsOnly) {
+      VELOX_CHECK_NOT_NULL(reader_);
       reader_->skipNullsOnly(numValues);
     }
     if (presetNulls_) {

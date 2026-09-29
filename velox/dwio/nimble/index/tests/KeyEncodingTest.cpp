@@ -22,6 +22,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/KeyEncoding.h"
@@ -40,25 +41,48 @@ class KeyEncodingTest : public ::testing::TestWithParam<EncodingType> {
     leafPool_ = pool_->addLeafChild("leaf");
   }
 
+  // Pins the key-stream encoding the way ClusterIndexWriter does. A
+  // selection policy would not: EncodingSizeEstimation has no Prefix case
+  // for std::string_view, so it reports Prefix as incompatible and the
+  // policy silently falls back to Trivial.
+  static EncodingLayout keyEncodingLayout(EncodingType encodingType) {
+    if (encodingType == EncodingType::Prefix) {
+      return EncodingLayout{
+          EncodingType::Prefix, {}, CompressionType::Uncompressed};
+    }
+    return EncodingLayout{
+        EncodingType::Trivial,
+        {},
+        CompressionType::Uncompressed,
+        {EncodingLayout{
+            EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+  }
+
   std::unique_ptr<KeyEncoding> createKeyEncoding(
       const std::vector<std::string_view>& keys) {
     Buffer encodingBuffer{*leafPool_};
     auto policy =
-        std::make_unique<ManualEncodingSelectionPolicy<std::string_view>>(
-            std::vector<std::pair<EncodingType, float>>{{GetParam(), 1.0}},
+        std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+            keyEncodingLayout(GetParam()),
             CompressionOptions{},
-            std::nullopt);
+            [](DataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+              return nullptr;
+            });
     auto encoded = EncodingFactory::encode<std::string_view>(
         std::move(policy), keys, encodingBuffer);
     encodedData_ = std::string(encoded.data(), encoded.size());
     stringBuffers_.clear();
-    return KeyEncoding::create(
+    auto keyEncoding = KeyEncoding::create(
         *leafPool_, encodedData_, [this](uint32_t totalLength) -> void* {
           auto& buffer = stringBuffers_.emplace_back(
               velox::AlignedBuffer::allocate<char>(
                   totalLength, leafPool_.get()));
           return buffer->asMutable<void>();
         });
+    // Guards against the encoding silently degrading to Trivial, which would
+    // make the /Prefix instantiation test the same path twice.
+    EXPECT_EQ(keyEncoding->encodingType(), GetParam());
+    return keyEncoding;
   }
 
   // Generates sorted string values.
@@ -348,6 +372,17 @@ TEST_P(KeyEncodingTest, materializeSubRange) {
   }
 }
 
+TEST_P(KeyEncodingTest, materializeEmptyRangeAtEnd) {
+  // startRow == rowCount with count == 0 is the natural way to ask for
+  // "nothing left", and both encodings must answer it the same way.
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+  ASSERT_EQ(keyEncoding->rowCount(), 50);
+
+  EXPECT_TRUE(keyEncoding->materialize(50, 0).empty());
+  EXPECT_TRUE(keyEncoding->materialize(17, 0).empty());
+}
+
 TEST_P(KeyEncodingTest, materializeSingleRow) {
   std::vector<std::string_view> values = {"aaa", "bbb", "ccc"};
   auto keyEncoding = createKeyEncoding(values);
@@ -355,6 +390,99 @@ TEST_P(KeyEncodingTest, materializeSingleRow) {
   auto result = keyEncoding->materialize(1, 1);
   ASSERT_EQ(result.size(), 1);
   EXPECT_EQ(result[0], "bbb");
+}
+
+// ---------------------------------------------------------------------------
+// cursor() tests
+// ---------------------------------------------------------------------------
+
+TEST_P(KeyEncodingTest, cursorFullScan) {
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+
+  std::vector<std::string> scanned;
+  scanned.reserve(values.size());
+  auto cursor = keyEncoding->cursor(0);
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    scanned.emplace_back(cursor->next());
+  }
+  EXPECT_EQ(scanned, storage);
+}
+
+TEST_P(KeyEncodingTest, cursorFromMiddleRow) {
+  // 50 keys span several prefix restart blocks, so row 19 starts inside a
+  // block rather than on a restart boundary.
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+
+  constexpr uint32_t kStartRow = 19;
+  auto cursor = keyEncoding->cursor(kStartRow);
+  for (uint32_t row = kStartRow; row < values.size(); ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    EXPECT_EQ(cursor->next(), values[row]);
+  }
+}
+
+TEST_P(KeyEncodingTest, cursorAcrossRestartBlocks) {
+  // Prefix encoding emits a full key every kDefaultRestartInterval rows, so
+  // 50 keys span four restart blocks. Start on a block boundary, just after
+  // one, and just before the next, and in each case run to the end so the
+  // cursor crosses every later boundary.
+  constexpr uint32_t kNumKeys = 50;
+  auto [storage, values] = generateSortedKeys(kNumKeys);
+  auto keyEncoding = createKeyEncoding(values);
+
+  for (const uint32_t startRow : {0u, 1u, 15u, 16u, 17u, 31u, 32u, 49u}) {
+    SCOPED_TRACE(fmt::format("startRow={}", startRow));
+    auto cursor = keyEncoding->cursor(startRow);
+    for (uint32_t row = startRow; row < kNumKeys; ++row) {
+      ASSERT_TRUE(cursor->hasNext());
+      EXPECT_EQ(cursor->next(), values[row]);
+    }
+    EXPECT_FALSE(cursor->hasNext());
+  }
+}
+
+TEST_P(KeyEncodingTest, cursorRefusesToAdvancePastTheEnd) {
+  auto [storage, values] = generateSortedKeys(20);
+  auto keyEncoding = createKeyEncoding(values);
+
+  auto cursor = keyEncoding->cursor(18);
+  EXPECT_TRUE(cursor->hasNext());
+  EXPECT_EQ(cursor->next(), values[18]);
+  EXPECT_EQ(cursor->next(), values[19]);
+  EXPECT_FALSE(cursor->hasNext());
+  // Enforced in optimized builds too: over-advancing would read out of
+  // bounds rather than fail.
+  EXPECT_THROW(cursor->next(), NimbleInternalError);
+}
+
+TEST_P(KeyEncodingTest, cursorSingleRow) {
+  std::vector<std::string_view> values = {"only"};
+  auto keyEncoding = createKeyEncoding(values);
+
+  auto cursor = keyEncoding->cursor(0);
+  EXPECT_EQ(cursor->next(), "only");
+}
+
+TEST_P(KeyEncodingTest, cursorsAreIndependent) {
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+
+  auto first = keyEncoding->cursor(0);
+  auto second = keyEncoding->cursor(25);
+  for (uint32_t row = 0; row < 25; ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    EXPECT_EQ(first->next(), values[row]);
+    EXPECT_EQ(second->next(), values[25 + row]);
+  }
+}
+
+TEST_P(KeyEncodingTest, cursorStartRowOutOfRange) {
+  std::vector<std::string_view> values = {"aaa", "bbb"};
+  auto keyEncoding = createKeyEncoding(values);
+
+  EXPECT_THROW(keyEncoding->cursor(2), NimbleInternalError);
 }
 
 // ---------------------------------------------------------------------------

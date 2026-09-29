@@ -23,7 +23,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
@@ -69,14 +68,23 @@ class TabletWriter {
     uint32_t metadataFlushThreshold{kMetadataFlushThreshold};
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
+    // When true, records a checksum of each stream's on-disk bytes in the
+    // stripe group, letting readers verify an individual stream without
+    // reading the whole file. Independent of checksumType's whole-file
+    // checksum, which is always written.
+    bool streamChecksumsEnabled{false};
     bool streamDeduplicationEnabled{true};
-    // When true, chunk-level position index is built for all streams,
-    // enabling O(1) chunk-level seeking within stripes.
-    bool enableChunkIndex{false};
+    // When true, chunk statistics are built for all streams.
+    bool enableChunkStats{false};
+    // Selects the on-disk chunk statistics representation.
+    ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
     // Skip writing chunk stats for a stripe group if the average number
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.
     float chunkStatsMinAvgChunks{2};
+    // Maximum string or binary value length retained in per-chunk bounds.
+    uint32_t maxChunkStringStatSize{
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
     // Selects how per-stripe-group stream offsets/sizes are serialized (default
     // kRaw); see StripeGroup::EncodingLayout.
     StripeGroup::EncodingLayout stripeGroupEncodingLayout{
@@ -134,6 +142,11 @@ class TabletWriter {
   /// its location. Used by index writers to store sub-index entries as
   /// separate sections.
   MetadataSection createMetadataSection(std::string_view metadata);
+
+  /// Returns whether per-stream checksums are recorded in stripe groups.
+  bool streamChecksumsEnabled() const {
+    return options_.streamChecksumsEnabled;
+  }
 
   /// The number of bytes written so far.
   uint64_t size() const {
@@ -206,7 +219,11 @@ class TabletWriter {
   void writeWithChecksum(std::string_view data);
   void writeWithChecksum(const folly::IOBuf& buf);
 
-  void writeStreamWithChecksum(const Stream& stream);
+  // Writes the stream's bytes and returns their checksum, or 0 when stream
+  // checksums are disabled. A stream is written as several non-contiguous
+  // pieces, so the value is accumulated across them; readers hash the
+  // reassembled stream in one call, which yields the same result.
+  uint32_t writeStreamWithChecksum(const Stream& stream);
 
   // Starts chunk stats writing for a new stripe.
   void finishStripeChunkStats(size_t streamCount);
@@ -226,6 +243,10 @@ class TabletWriter {
   velox::memory::MemoryPool* const pool_;
   const Options options_;
   const std::unique_ptr<Checksum> checksum_;
+  // Separate accumulator for per-stream checksums. Cannot share checksum_,
+  // which must accumulate the whole file uninterrupted for the postscript.
+  // Null when stream checksums are disabled.
+  const std::unique_ptr<Checksum> streamChecksum_;
   // Chunk-level position index.
   const std::unique_ptr<ChunkStatsWriter> chunkStatsWriter_;
 
@@ -244,6 +265,9 @@ class TabletWriter {
   // Accumulated stream sizes within each stripe. Same behavior as
   // streamOffsets_.
   std::vector<std::vector<uint32_t>> streamSizes_;
+  // Accumulated per-stream checksums. Same behavior as streamOffsets_. Empty
+  // when stream checksums are disabled.
+  std::vector<std::vector<uint32_t>> streamChecksums_;
 
   // Current stripe group index.
   uint32_t stripeGroupIndex_{0};

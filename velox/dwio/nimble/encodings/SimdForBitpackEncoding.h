@@ -299,7 +299,8 @@ std::string_view SimdForBitpackEncoding<T>::validateEncodedPrefix(
       encoded.size() >= EncodingPrefix::kRowCountOffset,
       "Truncated SimdForBitpack prefix.");
   const char* cursor = encoded.data() + EncodingPrefix::kRowCountOffset;
-  readPrefixRowCount(cursor, encoded.end(), options.useVarintRowCount);
+  readPrefixRowCount(
+      cursor, encoded.data() + encoded.size(), options.useVarintRowCount);
   return encoded;
 }
 
@@ -351,7 +352,7 @@ SimdForBitpackEncoding<T>::parseHeader(
   validateEncodedPrefix(encoded, options);
   Header header;
   const char* cursor = encoded.data() + EncodingPrefix::kRowCountOffset;
-  const char* const encodedEnd = encoded.end();
+  const char* const encodedEnd = encoded.data() + encoded.size();
   header.rowCount =
       readPrefixRowCount(cursor, encodedEnd, options.useVarintRowCount);
   NIMBLE_CHECK_FILE(

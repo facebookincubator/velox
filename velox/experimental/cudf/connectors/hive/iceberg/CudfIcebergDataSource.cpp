@@ -58,6 +58,15 @@ void CudfIcebergDataSource::convertSplit(
   CudfHiveDataSource::convertSplit(split);
 }
 
+void CudfIcebergDataSource::setFromDataSource(
+    std::unique_ptr<velox_connector::DataSource> source) {
+  auto* preparedSource =
+      checkedPointerCast<CudfIcebergDataSource>(source.get());
+
+  icebergSplit_ = std::move(preparedSource->icebergSplit_);
+  CudfHiveDataSource::setFromDataSource(std::move(source));
+}
+
 std::unique_ptr<CudfSplitReader>
 CudfIcebergDataSource::createCudfSplitReader() {
   return std::make_unique<CudfIcebergSplitReader>(
@@ -73,8 +82,8 @@ CudfIcebergDataSource::createCudfSplitReader() {
       hiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_,
+      CudfHiveDataSource::getFilters());
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

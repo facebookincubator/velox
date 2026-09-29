@@ -213,6 +213,12 @@ About comment style:
 
 * **Avoid redundant comments** that simply repeat what the code already says.
   Comments should explain *why*, not *what*.
+  * "Why" means why the code is the way it is: the constraint, invariant or
+    tradeoff a reader must respect to change it safely. Not how it got that
+    way. What the code used to be, why that was wrong, and which alternative
+    was rejected describe the change, not the code, and belong in the commit
+    message, which `git blame` will find. A comment is read every time; a
+    commit message is read once, by whoever asks.
 
 ```cpp
 // ❌ Avoid - comment just repeats the code
@@ -230,6 +236,17 @@ return result;
 // ✅ Prefer - comment explains WHY, not WHAT
 // Use a larger buffer to avoid repeated reallocations for typical queries.
 buffer.reserve(1024);
+
+// ❌ Avoid - comment explains the change, not the code
+/// Was a std::string, which forced a JSON round-trip per row. Replaced with
+/// an opaque payload so the framework never parses it. Deriving a response
+/// type per function was rejected because it makes a missing response
+/// representable.
+std::shared_ptr<const Payload> payload;
+
+// ✅ Prefer - comment explains the constraint the reader must respect
+/// Opaque to the framework. Only the function that produced it may read it.
+std::shared_ptr<const Payload> payload;
 ```
 
 * **Do not reference other implementations** in comments ("like Java Presto",
@@ -515,6 +532,16 @@ myFunc();
     of namespaces is obliterated when the code starts doing this prolifically.
     Frequently, `using foo::bar::BazClass;` is better.
 
+## Types
+
+* **Use the short `ROW` forms** rather than spelling out parallel vectors.
+  * One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  * Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  * Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
+
 ## Type Aliases
 
 * For types widely used together with std::shared_ptr, consider introducing
@@ -623,6 +650,35 @@ defines it; CMake and every open-source build see the new API alone.
   * `SizeIs(n)` - collection has n elements
 
   Requires `#include <gmock/gmock.h>`.
+* **Assert the error message, not just the type.** Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable. In
+  production that text is the whole diagnosis: for `VELOX_USER_*` it is what
+  the query author sees, for `VELOX_CHECK` it is where the on-call engineer
+  starts. `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and
+  leaves the message unread.
+* **Scope each case instead of numbering names.** When a test walks through
+  several cases, wrap each in braces and reuse one name. `rowType1`,
+  `rowType2` and `expected1` make the reader track which one is live, and keep
+  dead values in scope.
+
+  ```cpp
+  // ❌ Avoid
+  auto rowType1 = ROW("a", BIGINT());
+  ...
+  auto rowType2 = ROW("b", VARCHAR());
+
+  // ✅ Prefer
+  {
+    auto rowType = ROW("a", BIGINT());
+    ...
+  }
+  {
+    auto rowType = ROW("b", VARCHAR());
+    ...
+  }
+  ```
 
 ## Common Mistakes
 

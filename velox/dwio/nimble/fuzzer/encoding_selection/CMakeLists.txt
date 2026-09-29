@@ -57,7 +57,7 @@ target_link_libraries(
   nimble_random_encoding_selection_policy
   nimble_tablet_reader
   nimble_velox_schema_serialization
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_selective
   nimble_writer
   velox_memory

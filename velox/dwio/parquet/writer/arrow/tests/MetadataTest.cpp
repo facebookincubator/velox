@@ -21,29 +21,13 @@
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
-#include "velox/common/io/IoStatistics.h"
-#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ParquetTestFile.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 namespace facebook::velox::parquet::arrow {
 namespace metadata {
-
-using namespace facebook::velox::common::testutil;
-
-namespace {
-void writeToFile(
-    std::shared_ptr<TempFilePath> filePath,
-    std::shared_ptr<arrow::Buffer> buffer) {
-  auto localWriteFile =
-      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
-  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto bufferToString = bufferReader->buffer()->ToString();
-  localWriteFile->append(bufferToString);
-  localWriteFile->close();
-}
-} // namespace
 
 // Helper function for generating table metadata.
 std::unique_ptr<FileMetaData> generateTableMetaData(
@@ -407,37 +391,21 @@ TEST(Metadata, testAddKeyValueMetadata) {
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-  // Write the buffer to a temp file path.
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath, buffer);
-  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
-      memory::memoryManager()->addRootPool("MetadataTest");
-  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
-      rootPool->addLeafChild("MetadataTest");
-  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
-  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats);
-  readerOptions.setMetadataIoStats(metadataIoStats);
-  auto input = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePath->getPath()),
-      readerOptions.memoryPool());
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(input), readerOptions);
-  ASSERT_EQ(3, reader->fileMetaData().keyValueMetadataSize());
+  auto file = test::ParquetTestFile::open(buffer, "MetadataTest");
+  auto& reader = file.reader();
+  ASSERT_EQ(3, reader.fileMetaData().keyValueMetadataSize());
   // Verify keys that were added before file writer was closed are present.
   for (int i = 1; i <= 3; ++i) {
     auto index = std::to_string(i);
     auto value =
-        reader->fileMetaData().keyValueMetadataValue("test_key_" + index);
+        reader.fileMetaData().keyValueMetadataValue("test_key_" + index);
     EXPECT_EQ("test_value_" + index, value);
   }
   // Verify keys that were added after file writer was closed are not present.
-  EXPECT_FALSE(reader->fileMetaData().keyValueMetadataContains("test_key_4"));
+  EXPECT_FALSE(reader.fileMetaData().keyValueMetadataContains("test_key_4"));
   ASSERT_EQ(
       CREATED_BY_VERSION + std::string(" version ") + VELOX_VERSION,
-      reader->fileMetaData().createdBy());
+      reader.fileMetaData().createdBy());
 }
 
 // TODO: disabled as they require Arrow parquet data dir.
@@ -530,30 +498,14 @@ TEST(Metadata, testSortingColumns) {
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-  // Write the buffer to a temp file path.
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath, buffer);
-  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
-      memory::memoryManager()->addRootPool("MetadataTest");
-  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
-      rootPool->addLeafChild("MetadataTest");
-  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
-  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats);
-  readerOptions.setMetadataIoStats(metadataIoStats);
-  auto input = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePath->getPath()),
-      readerOptions.memoryPool());
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(input), readerOptions);
-  ASSERT_EQ(1, reader->fileMetaData().numRowGroups());
-  auto rowGroup = reader->fileMetaData().rowGroup(0);
+  auto file = test::ParquetTestFile::open(buffer, "MetadataTest");
+  auto& reader = file.reader();
+  ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
+  auto rowGroup = reader.fileMetaData().rowGroup(0);
   EXPECT_EQ(sortingColumns[0].columnIdx, rowGroup.sortingColumnIdx(0));
   EXPECT_EQ(sortingColumns[0].descending, rowGroup.sortingColumnDescending(0));
   EXPECT_EQ(sortingColumns[0].nullsFirst, rowGroup.sortingColumnNullsFirst(0));
-  ASSERT_EQ(createdBy, reader->fileMetaData().createdBy());
+  ASSERT_EQ(createdBy, reader.fileMetaData().createdBy());
 }
 
 TEST(ApplicationVersion, basics) {

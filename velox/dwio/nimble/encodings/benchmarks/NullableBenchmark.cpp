@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+#include <stdexcept>
 #include "folly/Benchmark.h"
+#include "folly/init/Init.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 
@@ -38,6 +41,19 @@ NullableData makeNullable(Vector<uint32_t> values, uint32_t nonNullPct) {
   return {std::move(values), std::move(nulls)};
 }
 
+NullableData makeMaterializeNullable(uint32_t nonNullPct) {
+  auto& pool = benchmarkPool();
+  Vector<uint32_t> values{pool.get()};
+  Vector<bool> nulls{pool.get()};
+  values.resize(kNumElements);
+  nulls.resize(kNumElements);
+  for (uint32_t i = 0; i < kNumElements; ++i) {
+    values[i] = i * 2'654'435'761U;
+    nulls[i] = (i * 37U) % 100 < nonNullPct;
+  }
+  return {std::move(values), std::move(nulls)};
+}
+
 std::string encodeNullable(const NullableData& nd) {
   using P = typename TypeTraits<uint32_t>::physicalType;
   auto& pool = benchmarkPool();
@@ -47,7 +63,10 @@ std::string encodeNullable(const NullableData& nd) {
   auto nulls = std::span<const bool>(nd.nulls.data(), nd.nulls.size());
   EncodingSelectionResult result{.encodingType = EncodingType::Nullable};
   auto selection = EncodingSelection<P>{
-      std::move(result), Statistics<P>::create(values), nullptr};
+      std::move(result),
+      Statistics<P>::create(values),
+      makeDefaultPolicy(TypeTraits<uint32_t>::dataType),
+  };
   auto enc = NullableEncoding<uint32_t>::encodeNullable(
       selection, values, nulls, buffer);
   return std::string{enc.data(), enc.size()};
@@ -63,9 +82,38 @@ void encodeNullableBench(const NullableData& nd, uint32_t iters) {
     Buffer buffer{*pool};
     EncodingSelectionResult result{.encodingType = EncodingType::Nullable};
     auto selection = EncodingSelection<P>{
-        std::move(result), Statistics<P>::create(values), nullptr};
+        std::move(result),
+        Statistics<P>::create(values),
+        makeDefaultPolicy(TypeTraits<uint32_t>::dataType),
+    };
     NullableEncoding<uint32_t>::encodeNullable(
         selection, values, nulls, buffer);
+  }
+}
+
+void materializeNullableBench(
+    const std::string& encoded,
+    const facebook::velox::bits::Bitmap* scatterOutputBitmap,
+    uint32_t iters) {
+  auto& pool = benchmarkPool();
+  std::vector<uint32_t> output(kNumElements);
+  std::vector<uint64_t> outputNulls(
+      facebook::velox::bits::nwords(kNumElements));
+  auto encodingOwner = EncodingFactory{}.create(*pool, encoded, nullFactory());
+  auto* encoding = encodingOwner.get();
+  if (encoding == nullptr) {
+    throw std::runtime_error("EncodingFactory returned null.");
+  }
+  while (iters--) {
+    encoding->reset();
+    const auto nonNullCount = encoding->materializeNullable(
+        kNumElements,
+        output.data(),
+        [&outputNulls]() -> void* { return outputNulls.data(); },
+        scatterOutputBitmap);
+    folly::doNotOptimizeAway(nonNullCount);
+    folly::doNotOptimizeAway(output.data());
+    folly::doNotOptimizeAway(outputNulls.data());
   }
 }
 
@@ -101,7 +149,41 @@ NULLABLE_BENCH(Increasing, makeIncreasing<uint32_t>(), 80);
 
 #undef NULLABLE_BENCH
 
-int main() {
+#define NULLABLE_MATERIALIZE_BENCH(NonNullPct)                              \
+  BENCHMARK(                                                                \
+      Nullable_Materialize_ByteReference_##NonNullPct##pctNonNull, iters) { \
+    std::string encoded;                                                    \
+    std::vector<uint64_t> identityScatterBits;                              \
+    BENCHMARK_SUSPEND {                                                     \
+      encoded = encodeNullable(makeMaterializeNullable(NonNullPct));        \
+      identityScatterBits.assign(                                           \
+          facebook::velox::bits::nwords(kNumElements), ~uint64_t{0});       \
+    }                                                                       \
+    const facebook::velox::bits::Bitmap identityScatterBitmap{              \
+        identityScatterBits.data(), kNumElements};                          \
+    materializeNullableBench(encoded, &identityScatterBitmap, iters);       \
+  }                                                                         \
+  BENCHMARK_RELATIVE(                                                       \
+      Nullable_Materialize_Packed_##NonNullPct##pctNonNull, iters) {        \
+    std::string encoded;                                                    \
+    BENCHMARK_SUSPEND {                                                     \
+      encoded = encodeNullable(makeMaterializeNullable(NonNullPct));        \
+    }                                                                       \
+    materializeNullableBench(encoded, nullptr, iters);                      \
+  }                                                                         \
+  BENCHMARK_DRAW_LINE()
+
+// An identity scatter bitmap selects the retained byte-per-row path without
+// changing output positions, which makes it a reference for contiguous reads.
+NULLABLE_MATERIALIZE_BENCH(1);
+NULLABLE_MATERIALIZE_BENCH(10);
+NULLABLE_MATERIALIZE_BENCH(50);
+NULLABLE_MATERIALIZE_BENCH(100);
+
+#undef NULLABLE_MATERIALIZE_BENCH
+
+int main(int argc, char** argv) {
+  const folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
   folly::runBenchmarks();
 }

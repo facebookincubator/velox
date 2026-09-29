@@ -2150,7 +2150,8 @@ class TestCustomExchange : public exec::Exchange {
             std::make_shared<core::ExchangeNode>(
                 customExchangeNode->id(),
                 customExchangeNode->outputType(),
-                customExchangeNode->serdeKind()),
+                customExchangeNode->serdeKind(),
+                std::string{core::TransportKind::kInMemory}),
             std::move(exchangeClient)) {}
 
   RowVectorPtr getOutput() override {
@@ -3342,12 +3343,12 @@ TEST_P(MultiFragmentTest, emptySchema) {
                       .singleAggregation({}, {"count(1)"})
                       .planNode();
 
-  test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+  test::AssertQueryBuilder(rootPlan)
       .split(remoteSplit(leafTaskId))
       .config(
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
-      .assertResults("SELECT 1000");
+      .assertSingleResult<int64_t>(1'000);
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();

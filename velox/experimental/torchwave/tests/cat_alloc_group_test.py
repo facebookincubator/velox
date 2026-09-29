@@ -37,6 +37,7 @@ class CatAllocGroupTest(nn.Module):
         d0..d5 (64 longs each) and reps (64 longs) -- six 1-D gathers
         plain (32 longs) -- an operand the graph is handed rather than computes
         m0..m2 (4x8 floats) and mreps (4 longs) -- three 2-D gathers
+        e0..e2 (64 longs each) -- gathers read only by the scaling below
     Outputs:
         wide:  cat of four gathers -- the case every operand is placed in
         mixed: cat of two gathers around a graph input, which has to be copied
@@ -44,6 +45,11 @@ class CatAllocGroupTest(nn.Module):
         pair:  cat of two -- below the threshold, so the ordinary path
         nd:    cat of three 2-D gathers along dim 0, where an operand's region
                of the result spans whole rows
+        scaled: cat of three gathers with an elementwise op in between. Like
+               'nd' the extents are behind the gathers' reserve functions, but
+               the elementwise op has a size expression of its own, so only a
+               walk up the producer chain shows the layout cannot be computed
+               ahead of the operands.
         marks: the second use of every gather
     """
 
@@ -61,7 +67,10 @@ class CatAllocGroupTest(nn.Module):
         m1: Tensor,
         m2: Tensor,
         mreps: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        e0: Tensor,
+        e1: Tensor,
+        e2: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         r0 = torch.repeat_interleave(d0, reps)
         r1 = torch.repeat_interleave(d1, reps)
         r2 = torch.repeat_interleave(d2, reps)
@@ -78,6 +87,14 @@ class CatAllocGroupTest(nn.Module):
         n2 = torch.repeat_interleave(m2, mreps, dim=0)
         nd = torch.cat([n0, n1, n2], dim=0)
 
+        scaled = torch.cat(
+            [
+                torch.repeat_interleave(e0, reps) * 3,
+                torch.repeat_interleave(e1, reps) * 3,
+                torch.repeat_interleave(e2, reps) * 3,
+            ]
+        )
+
         marks = r0 + r1 + r2 + r3 + r4 + r5
 
-        return wide, mixed, pair, nd, marks
+        return wide, mixed, pair, nd, scaled, marks

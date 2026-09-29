@@ -110,7 +110,7 @@ class SubstrFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     const auto start = std::optional<cudf::size_type>{start_};

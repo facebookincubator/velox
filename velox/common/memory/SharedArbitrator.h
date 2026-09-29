@@ -20,7 +20,6 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include "velox/common/base/Counters.h"
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/ArbitrationOperation.h"
@@ -87,20 +86,28 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static uint64_t maxMemoryArbitrationTimeNs(
         const std::unordered_map<std::string, std::string>& configs);
 
-    /// When shrinking capacity, the shrink bytes will be adjusted in a way such
-    /// that AFTER shrink, the stricter (whichever is smaller) of the following
-    /// conditions is met, in order to better fit the pool's current memory
-    /// usage:
-    /// - Free capacity is greater or equal to capacity *
-    /// 'memoryPoolMinFreeCapacityPct'
-    /// - Free capacity is greater or equal to 'memoryPoolMinFreeCapacity'
+    /// Limits how much free capacity memory arbitration can shrink from a query
+    /// memory pool, so that the pool keeps enough free capacity for its future
+    /// allocations to reduce the chance of another arbitration. When both
+    /// 'memoryPoolMinFreeCapacity' and 'memoryPoolMinFreeCapacityPct' are set
+    /// to non-zero, a normal shrink of an active pool never reduces free
+    /// capacity below the smaller of:
+    /// - capacity * 'memoryPoolMinFreeCapacityPct'
+    /// - 'memoryPoolMinFreeCapacity'
     ///
-    /// NOTE: In the conditions when original requested shrink bytes ends up
-    /// with more free capacity than above 2 conditions, the adjusted shrink
-    /// bytes is not respected.
+    /// If the free capacity is already at or below this minimum, nothing is
+    /// shrunk. The pool may also give up less because its capacity is never
+    /// shrunk below 'memoryPoolReservedCapacity', so it keeps more free
+    /// capacity than the minimum.
     ///
-    /// NOTE: Capacity shrink adjustment is enabled when both
-    /// 'memoryPoolMinFreeCapacityPct' and 'memoryPoolMinFreeCapacity' are set.
+    /// For example, with capacity 1GB, 'memoryPoolMinFreeCapacityPct' 0.25 and
+    /// 'memoryPoolMinFreeCapacity' 128MB, the minimum is the smaller of 1GB *
+    /// 0.25 = 256MB and 128MB, which is 128MB. So a pool with 400MB of free
+    /// capacity gives up at most 272MB through shrink.
+    ///
+    /// NOTE: this limit applies only when both 'memoryPoolMinFreeCapacity'
+    /// and 'memoryPoolMinFreeCapacityPct' are set. It is bypassed when a pool
+    /// releases all its free capacity at once and for inactive pools.
     static constexpr std::string_view kMemoryPoolMinFreeCapacity{
         "memory-pool-min-free-capacity"};
     static constexpr std::string_view kDefaultMemoryPoolMinFreeCapacity{

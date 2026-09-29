@@ -34,18 +34,12 @@ class FlatmapEncodingLayoutContext : public TypeBuilderContext {
       keyEncodings_;
 };
 
-// Legacy writer spellings with a version header are read-only / migration-only.
-// Callers that still pass them are silently upgraded to kSerialization so
-// round-trips use the current wire format while call sites migrate. A missing
-// version is the production no-header legacy format and must remain stable.
+// Legacy writer spellings are read-only / migration-only. Callers that still
+// pass them are silently upgraded to kSerialization so round-trips use the
+// current wire format while call sites migrate.
 SerializerOptions normalizeWriterVersion(SerializerOptions options) {
-  if (!options.version.has_value()) {
-    return options;
-  }
-
-  const auto version = options.version.value();
-  if (version == SerializationVersion::kLegacy ||
-      version == SerializationVersion::kLegacyCompact ||
+  const auto version = options.version;
+  if (version == SerializationVersion::kLegacyCompact ||
       version == SerializationVersion::kLegacySerialization) {
     LOG_FIRST_N(WARNING, 10)
         << "Serializer constructed with " << toString(version)
@@ -65,8 +59,7 @@ Serializer::Serializer(
     : options_{normalizeWriterVersion(std::move(options))},
       context_{*pool},
       nestedEncodingBufferPool_{
-          options_.enableEncoding() &&
-                  options_.maxCachedNestedEncodingBuffers > 0
+          options_.maxCachedNestedEncodingBuffers > 0
               ? std::make_unique<EncodingBufferPool>(
                     context_.bufferMemoryPool().get(),
                     options_.maxCachedNestedEncodingBuffers)
@@ -74,12 +67,10 @@ Serializer::Serializer(
       buffer_{context_.bufferMemoryPool().get()} {
   options_.encodingOptions.encodingBufferPool = nestedEncodingBufferPool_.get();
 
-  const auto version = options_.serializationVersion();
   NIMBLE_CHECK(
-      version == SerializationVersion::kLegacy ||
-          version == SerializationVersion::kSerialization,
-      "Serializer writes must use kLegacy or kSerialization. Got: {}",
-      version);
+      options_.version == SerializationVersion::kSerialization,
+      "Serializer writes must use kSerialization. Got: {}",
+      options_.version);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(type);
 
@@ -89,6 +80,29 @@ Serializer::Serializer(
     for (const auto& [columnName, keys] : options_.flatMapColumns) {
       auto nodeId = typeWithId->childByName(columnName)->id();
       context_.addFlatMapNodeId(nodeId, keys);
+    }
+  }
+
+  if (!options_.hybridFlatMapColumns.empty()) {
+    context_.reserveHybridFlatMapNodes(options_.hybridFlatMapColumns.size());
+    for (const auto& [columnName, hybridMap] : options_.hybridFlatMapColumns) {
+      NIMBLE_USER_CHECK(
+          !options_.flatMapColumns.contains(columnName),
+          "Column '{}' cannot use both FlatMap and hybrid FlatMap options.",
+          columnName);
+      const auto childIndex =
+          type->as<velox::TypeKind::ROW>().getChildIdxIfExists(columnName);
+      NIMBLE_USER_CHECK(
+          childIndex.has_value(),
+          "Hybrid FlatMap column '{}' does not exist.",
+          columnName);
+      const auto& child = typeWithId->childAt(*childIndex);
+      NIMBLE_USER_CHECK_EQ(
+          child->type()->kind(),
+          velox::TypeKind::MAP,
+          "Hybrid FlatMap column '{}' must be a MAP.",
+          columnName);
+      context_.addHybridFlatMapNode(child->id(), hybridMap);
     }
   }
 
@@ -140,7 +154,9 @@ std::string_view Serializer::serialize(
 void Serializer::validateSupportedInput(
     const velox::VectorPtr& vector,
     const OrderedRanges& ranges) const {
-  if (options_.flatMapColumns.empty() || !vector->mayHaveNulls()) {
+  if ((options_.flatMapColumns.empty() &&
+       options_.hybridFlatMapColumns.empty()) ||
+      !vector->mayHaveNulls()) {
     return;
   }
 
@@ -152,7 +168,7 @@ void Serializer::validateSupportedInput(
   });
   NIMBLE_CHECK(
       !hasNullRow,
-      "Top-level row nulls are not supported when serializing FlatMap columns.");
+      "Top-level row nulls are not supported when serializing FlatMap/Hybrid FlatMap columns.");
 }
 
 void Serializer::buildStreamEncodingLayouts() {
@@ -277,6 +293,24 @@ void Serializer::initEncodingLayouts(
         const auto it = keyEncodings.find(flatMapBuilder.nameAt(index));
         if (it != keyEncodings.end()) {
           initEncodingLayouts(*it->second, flatMapBuilder.childAt(index));
+        }
+      }
+      break;
+    }
+    case Kind::HybridFlatMap: {
+      NIMBLE_CHECK_EQ(
+          tree.schemaKind(),
+          Kind::HybridFlatMap,
+          "Incompatible encoding layout node. Expecting hybrid FlatMap node.");
+      const auto& hybridMap = typeBuilder.asHybridFlatMap();
+      addLayout(
+          hybridMap.nullsDescriptor().offset(),
+          EncodingLayoutTree::StreamIdentifiers::FlatMap::NullsStream);
+      if (tree.childrenCount() > 0) {
+        // Groups share one logical value type, so the same layout applies to
+        // each group's subtree.
+        for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+          initEncodingLayouts(tree.child(0), hybridMap.groupAt(i).valueType);
         }
       }
       break;

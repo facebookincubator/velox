@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
@@ -293,6 +294,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::DeltaBlockEncoding, dataType);
     }
+    case EncodingType::EliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::EliasFanoEncoding, dataType);
+    }
     // SubIntSplit integration commented out (disabled):
     /*
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -324,6 +329,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::HuffmanEncoding, dataType);
     }
+    case EncodingType::ALPRD:
+      // ALPRD and its integer children use the shared implementation. Calling
+      // the base factory on this object also preserves the decoding options.
+      return ::facebook::nimble::EncodingFactory::create(
+          memoryPool, data, std::move(stringBufferFactory));
     case EncodingType::ALP: {
       switch (dataType) {
         case DataType::Float:

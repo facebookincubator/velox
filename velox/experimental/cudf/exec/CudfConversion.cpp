@@ -184,7 +184,7 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
 
 void CudfFromVelox::doClose() {
   // TODO(kn): Remove default stream after redesign of CudfFromVelox
-  cudf::get_default_stream(cudf::allow_default_stream).synchronize();
+  cudf::get_default_stream(cudf::allow_default_stream).sync();
   Operator::close();
   inputs_.clear();
 }
@@ -247,7 +247,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
   auto tableView = cudfVector->getTableView();
   auto output = with_arrow::toVeloxColumn(
       tableView, pool(), outputType_, "", stream, get_temp_mr());
-  stream.synchronize();
+  stream.sync();
   output->setType(outputType_);
   return output;
 }
@@ -274,7 +274,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
 //      result to Velox in one shot.  This preserves the GPU-side merge
 //      that avoids emitting many undersized Velox batches downstream.
 //
-// In both cases exactly one toVeloxColumn + stream.synchronize() is issued
+// In both cases exactly one toVeloxColumn + stream.sync() is issued
 // per output batch, regardless of how many GPU inputs were consumed.
 RowVectorPtr CudfToVelox::doGetOutput() {
   if (finished_) {
@@ -345,7 +345,7 @@ RowVectorPtr CudfToVelox::doGetOutput() {
       auto tableView = concatTable->view();
       veloxBuffer_ = with_arrow::toVeloxColumn(
           tableView, pool(), outputType_, "", stream, get_temp_mr());
-      stream.synchronize();
+      stream.sync();
       veloxBuffer_->setType(outputType_);
       veloxOffset_ = 0;
       averageRowSize_ = std::nullopt;

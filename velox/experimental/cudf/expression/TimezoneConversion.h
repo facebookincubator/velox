@@ -20,7 +20,7 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 #include <string_view>
@@ -45,7 +45,7 @@ namespace facebook::velox::cudf_velox {
 std::unique_ptr<cudf::column> toLocalTimestamp(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Converts a column of wall-clock local timestamps in `timezoneName` to the
@@ -66,7 +66,7 @@ std::unique_ptr<cudf::column> toLocalTimestamp(
 std::unique_ptr<cudf::column> toUtcTimestamp(
     const cudf::column_view& localTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the per-row UT offset (DURATION_SECONDS), DST-aware, for the given
@@ -78,7 +78,7 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
 std::unique_ptr<cudf::column> utcOffsetSeconds(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

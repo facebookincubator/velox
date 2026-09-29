@@ -134,7 +134,7 @@ std::unique_ptr<EncodingSelectionPolicyBase>
 RandomEncodingSelectionPolicyFactory::createPolicy(DataType dataType) const {
   // Derive the root policy's seed from the base seed and the column's data type
   // so top-level columns of different types diverge; createImpl then folds in
-  // each nested slot. Deterministic and independent of encode thread order.
+  // each nested slot.
   const uint64_t rootSeed = folly::hash::hash_combine(
       seed_, static_cast<std::underlying_type_t<DataType>>(dataType));
   UNIQUE_PTR_FACTORY(

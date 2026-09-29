@@ -761,7 +761,7 @@ bool TopNRowNumber::compareSpillRowColumns(
   for (auto i = startColumn; i < endColumn; ++i) {
     if (!output->childAt(inputChannels_[i])
              ->equalValueAt(
-                 next->current().childAt(i).get(),
+                 next->current()->childAt(i).get(),
                  index - 1,
                  next->currentIndex())) {
       return true;
@@ -897,7 +897,7 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
       for (auto i = 0; i < inputChannels_.size(); ++i) {
         output->childAt(inputChannels_[i])
             ->copy(
-                next->current().childAt(i).get(),
+                next->current()->childAt(i).get(),
                 index,
                 next->currentIndex(),
                 1);
@@ -974,7 +974,9 @@ void TopNRowNumber::reclaim(
   VELOX_CHECK(canReclaim());
   VELOX_CHECK(!nonReclaimableSection_);
 
-  if (data_->numRows() == 0) {
+  // The memory pool outlives the operator, so an arbitration reclaim can
+  // arrive after close() has reset 'data_'.
+  if (data_ == nullptr || data_->numRows() == 0) {
     // Nothing to spill.
     return;
   }

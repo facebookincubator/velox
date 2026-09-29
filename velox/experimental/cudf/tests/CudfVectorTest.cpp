@@ -57,8 +57,8 @@ class TestCudaStream {
     }
   }
 
-  rmm::cuda_stream_view view() const {
-    return rmm::cuda_stream_view{stream_};
+  cuda::stream_ref view() const {
+    return cuda::stream_ref{stream_};
   }
 
   cudaStream_t value() const {
@@ -134,7 +134,7 @@ void get_property(
     cuda::mr::device_accessible) noexcept {}
 
 std::unique_ptr<cudf::table> makeTable(
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::array<int32_t, 4> values{{1, 2, 3, 4}};
   rmm::device_buffer data(values.size() * sizeof(int32_t), stream, mr);
@@ -143,7 +143,7 @@ std::unique_ptr<cudf::table> makeTable(
       values.data(),
       values.size() * sizeof(int32_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
 
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(
@@ -157,7 +157,7 @@ std::unique_ptr<cudf::table> makeTable(
 }
 
 std::unique_ptr<cudf::packed_table> makePackedTable(
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     RecordingAsyncDeviceResource& resource) {
   auto table = makeTable(stream, cudf::get_current_device_resource_ref());
   auto packedColumns = cudf::pack(
@@ -166,7 +166,7 @@ std::unique_ptr<cudf::packed_table> makePackedTable(
       rmm::to_device_async_resource_ref_checked(&resource));
   // CudfVector does not join producer streams. Synchronize the packing stream
   // before handing the packed table to CudfVector.
-  stream.synchronize();
+  stream.sync();
   auto tableView = cudf::unpack(packedColumns);
   return std::make_unique<cudf::packed_table>(
       cudf::packed_table{tableView, std::move(packedColumns)});
@@ -183,7 +183,7 @@ TEST_F(CudfVectorTest, retainedSizeReportsDeviceStorage) {
   TestCudaStream stream;
   auto table =
       makeTable(stream.view(), cudf::get_current_device_resource_ref());
-  stream.view().synchronize();
+  stream.view().sync();
 
   CudfVector vector(
       pool_.get(),
@@ -204,7 +204,7 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   auto table = makeTable(
       allocationStream.view(),
       rmm::to_device_async_resource_ref_checked(&resource));
-  allocationStream.view().synchronize();
+  allocationStream.view().sync();
 
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
@@ -268,7 +268,7 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
 
   EXPECT_GT(resource.deallocationCount(), 0);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
-  targetStream.view().synchronize();
+  targetStream.view().sync();
   EXPECT_EQ(materialized->num_columns(), 1);
   EXPECT_EQ(materialized->num_rows(), 4);
 }

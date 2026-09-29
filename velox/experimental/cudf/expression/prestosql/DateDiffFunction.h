@@ -50,7 +50,7 @@ class DateDiffFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override;
 
  private:
@@ -70,7 +70,7 @@ class DateDiffFunction : public CudfFunction {
       const Operand& rhs,
       cudf::binary_operator op,
       cudf::data_type out,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   static cudf::size_type getSize(const Operand& a, const Operand& b);
@@ -81,7 +81,7 @@ class DateDiffFunction : public CudfFunction {
       const Operand& op,
       cudf::size_type size,
       std::unique_ptr<cudf::column>& owned,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   // For day/week: subtract DATE columns to get DURATION_DAYS, then
@@ -90,7 +90,7 @@ class DateDiffFunction : public CudfFunction {
       const Operand& left,
       const Operand& right,
       int64_t divisor,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // Floors both operands to millisecond precision (matching Velox CPU's
@@ -109,14 +109,14 @@ class DateDiffFunction : public CudfFunction {
       const Operand& left,
       const Operand& right,
       int64_t msPerUnit,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // Extracts a datetime component and casts the result to INT64.
   static std::unique_ptr<cudf::column> extractComponentAsInt64(
       cudf::column_view col,
       cudf::datetime::datetime_component component,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   // Extracts the calendar year as INT64 without going through cuDF's
@@ -130,7 +130,7 @@ class DateDiffFunction : public CudfFunction {
   // TIMESTAMP_DAYS column can represent.
   static std::unique_ptr<cudf::column> extractYearAsInt64(
       cudf::column_view daysCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   // Returns the number of microseconds elapsed since local midnight for a
@@ -140,7 +140,7 @@ class DateDiffFunction : public CudfFunction {
   // across timezones - only self-consistent ordering within the column.
   static std::unique_ptr<cudf::column> timeOfDayMicros(
       cudf::column_view ts,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   // Calendar-aware diff for year (isYear=true), or month (isYear=false,
@@ -157,7 +157,7 @@ class DateDiffFunction : public CudfFunction {
       const Operand& left,
       const Operand& right,
       bool isYear,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   std::string unit_;

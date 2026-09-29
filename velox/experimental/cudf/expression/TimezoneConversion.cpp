@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -33,7 +34,6 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/unary.hpp>
-#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/wrappers/durations.hpp>
 
@@ -79,7 +79,7 @@ cudf::type_id durationTypeIdForTimestamp(cudf::type_id timestampType) {
 std::unique_ptr<cudf::column> withInputNullMask(
     std::unique_ptr<cudf::column> offset,
     const cudf::column_view& input,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (input.null_count() > 0) {
     offset->set_null_mask(
@@ -144,7 +144,7 @@ template <typename T>
 std::unique_ptr<cudf::column> makeDeviceColumn(
     const std::vector<T>& host,
     cudf::type_id typeId,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto size = static_cast<cudf::size_type>(host.size());
   auto column = cudf::make_fixed_width_column(
@@ -155,7 +155,7 @@ std::unique_ptr<cudf::column> makeDeviceColumn(
         host.data(),
         host.size() * sizeof(T),
         cudaMemcpyHostToDevice,
-        stream.value()));
+        stream.get()));
   }
   return column;
 }
@@ -167,7 +167,7 @@ std::unique_ptr<cudf::column> makeDeviceColumn(
 // stream before returning so the host vectors outlive the async uploads.
 std::unique_ptr<cudf::table> buildForwardTable(
     const std::vector<Transition>& transitions,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<int64_t> keys;
   std::vector<int64_t> offsets;
@@ -184,7 +184,7 @@ std::unique_ptr<cudf::table> buildForwardTable(
       makeDeviceColumn(keys, cudf::type_id::TIMESTAMP_SECONDS, stream, mr));
   columns.push_back(
       makeDeviceColumn(offsets, cudf::type_id::DURATION_SECONDS, stream, mr));
-  stream.synchronize();
+  stream.sync();
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
@@ -199,7 +199,7 @@ std::unique_ptr<cudf::table> buildForwardTable(
 // the stream before returning so the host vectors outlive the async uploads.
 std::unique_ptr<cudf::table> buildInverseTable(
     const std::vector<Transition>& transitions,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Force the first key below every representable input so the active-interval
   // index (upper_bound - 1) is never out of range.
@@ -251,7 +251,7 @@ std::unique_ptr<cudf::table> buildInverseTable(
   columns.push_back(
       makeDeviceColumn(offsets, cudf::type_id::DURATION_SECONDS, stream, mr));
   columns.push_back(makeDeviceColumn(gaps, cudf::type_id::BOOL8, stream, mr));
-  stream.synchronize();
+  stream.sync();
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
@@ -262,7 +262,7 @@ std::unique_ptr<cudf::table> buildInverseTable(
 std::unique_ptr<cudf::column> activeIntervalIndices(
     const cudf::column_view& transitionKeys,
     const cudf::column_view& timestamps,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto key = cudf::cast(
       timestamps,
@@ -306,13 +306,13 @@ class OffsetTable {
   // mask is re-applied so a null instant yields a null offset.
   std::unique_ptr<cudf::column> utcOffset(
       const cudf::column_view& utcTimestamps,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // utc + offset, at the input's resolution.
   std::unique_ptr<cudf::column> toLocal(
       const cudf::column_view& utcTimestamps,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // local - offset; raises a user error on a nonexistent (spring-forward gap)
@@ -320,7 +320,7 @@ class OffsetTable {
   // earliest instant. Null rows are never treated as gaps.
   std::unique_ptr<cudf::column> toUtc(
       const cudf::column_view& localTimestamps,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
  private:
@@ -348,7 +348,7 @@ std::shared_ptr<const OffsetTable> OffsetTable::get(
   }
   // Build on the default stream and current resource so the cached device
   // tables do not depend on any caller's stream or memory resource.
-  auto stream = cudf::get_default_stream();
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = cudf::get_current_device_resource_ref();
   auto transitions = enumerateTransitions(timeZone);
   VELOX_CHECK(!transitions.empty());
@@ -362,7 +362,7 @@ std::shared_ptr<const OffsetTable> OffsetTable::get(
 
 std::unique_ptr<cudf::column> OffsetTable::utcOffset(
     const cudf::column_view& utcTimestamps,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto indices = activeIntervalIndices(
       forward_->view().column(0), utcTimestamps, stream, mr);
@@ -378,7 +378,7 @@ std::unique_ptr<cudf::column> OffsetTable::utcOffset(
 
 std::unique_ptr<cudf::column> OffsetTable::toLocal(
     const cudf::column_view& utcTimestamps,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto offsetSeconds = utcOffset(utcTimestamps, stream, mr);
 
@@ -403,7 +403,7 @@ std::unique_ptr<cudf::column> OffsetTable::toLocal(
 
 std::unique_ptr<cudf::column> OffsetTable::toUtc(
     const cudf::column_view& localTimestamps,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto indices = activeIntervalIndices(
       inverse_->view().column(0), localTimestamps, stream, mr);
@@ -465,7 +465,7 @@ std::unique_ptr<cudf::column> OffsetTable::toUtc(
 std::unique_ptr<cudf::column> utcOffsetSeconds(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return OffsetTable::get(tz::locateZone(timezoneName))
       ->utcOffset(utcTimestamps, stream, mr);
@@ -474,7 +474,7 @@ std::unique_ptr<cudf::column> utcOffsetSeconds(
 std::unique_ptr<cudf::column> toLocalTimestamp(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return OffsetTable::get(tz::locateZone(timezoneName))
       ->toLocal(utcTimestamps, stream, mr);
@@ -483,7 +483,7 @@ std::unique_ptr<cudf::column> toLocalTimestamp(
 std::unique_ptr<cudf::column> toUtcTimestamp(
     const cudf::column_view& localTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return OffsetTable::get(tz::locateZone(timezoneName))
       ->toUtc(localTimestamps, stream, mr);

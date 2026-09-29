@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/core/PlanNode.h"
+
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -37,19 +39,41 @@ CudfOrderBy::CudfOrderBy(
           nvtx3::rgb{64, 224, 208}, // Turquoise
           NvtxMethodFlag::kAll,
           std::nullopt,
-          orderByNode),
-      orderByNode_(orderByNode) {
-  sortKeys_.reserve(orderByNode->sortingKeys().size());
-  columnOrder_.reserve(orderByNode->sortingKeys().size());
-  nullOrder_.reserve(orderByNode->sortingKeys().size());
-  for (int i = 0; i < orderByNode->sortingKeys().size(); ++i) {
-    const auto channel =
-        exec::exprToChannel(orderByNode->sortingKeys()[i].get(), outputType_);
+          orderByNode) {
+  initializeSortKeys(orderByNode->sortingKeys(), orderByNode->sortingOrders());
+}
+
+CudfOrderBy::CudfOrderBy(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const core::MergeExchangeNode>& mergeExchangeNode)
+    : CudfOperatorBase(
+          operatorId,
+          driverCtx,
+          mergeExchangeNode->outputType(),
+          mergeExchangeNode->id(),
+          "CudfOrderBy",
+          nvtx3::rgb{64, 224, 208}, // Turquoise
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          mergeExchangeNode) {
+  initializeSortKeys(
+      mergeExchangeNode->sortingKeys(), mergeExchangeNode->sortingOrders());
+}
+
+void CudfOrderBy::initializeSortKeys(
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  sortKeys_.reserve(sortingKeys.size());
+  columnOrder_.reserve(sortingKeys.size());
+  nullOrder_.reserve(sortingKeys.size());
+  for (size_t i = 0; i < sortingKeys.size(); ++i) {
+    const auto channel = exec::exprToChannel(sortingKeys[i].get(), outputType_);
     VELOX_CHECK(
         channel != kConstantChannel,
         "OrderBy doesn't allow constant sorting keys");
     sortKeys_.push_back(channel);
-    auto const& sortingOrder = orderByNode->sortingOrders()[i];
+    const auto& sortingOrder = sortingOrders[i];
     columnOrder_.push_back(
         sortingOrder.isAscending() ? cudf::order::ASCENDING
                                    : cudf::order::DESCENDING);

@@ -1569,4 +1569,44 @@ void AggregationTestBase::testFailingAggregations(
         expectedMessage);
   }
 }
+
+uint32_t aggregateAndReadRowSize(
+    memory::MemoryPool* pool,
+    const std::string& name,
+    const TypePtr& valueType,
+    const VectorPtr& values,
+    const VectorPtr& comparisons) {
+  core::QueryConfig queryConfig({});
+  auto fn = exec::Aggregate::create(
+      name,
+      core::AggregationNode::Step::kSingle,
+      std::vector<TypePtr>{valueType, comparisons->type()},
+      valueType,
+      queryConfig);
+
+  HashStringAllocator stringAllocator{pool};
+  fn->setAllocator(&stringAllocator);
+
+  const int32_t rowSizeOffset = bits::nbytes(1);
+  int32_t offset = rowSizeOffset + sizeof(uint32_t);
+  offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
+  fn->setOffsets(
+      offset,
+      exec::RowContainer::nullByte(0),
+      exec::RowContainer::nullMask(0),
+      exec::RowContainer::initializedByte(0),
+      exec::RowContainer::initializedMask(0),
+      rowSizeOffset);
+
+  const auto size = values->size();
+  std::vector<char> group(offset + fn->accumulatorFixedWidthSize());
+  std::vector<char*> groups(size, group.data());
+  std::vector<vector_size_t> indices{0};
+  fn->initializeNewGroups(groups.data(), indices);
+
+  SelectivityVector rows{size};
+  fn->addRawInput(groups.data(), rows, {values, comparisons}, false);
+
+  return *reinterpret_cast<uint32_t*>(group.data() + rowSizeOffset);
+}
 } // namespace facebook::velox::functions::aggregate::test

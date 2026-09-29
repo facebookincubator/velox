@@ -255,10 +255,6 @@ class BufferInputStream : public ByteInputStream {
   // buffers can be made by specialization.
   void nextRange();
 
-  const std::vector<ByteRange>& ranges() const {
-    return ranges_;
-  }
-
   // The byte ranges backing this stream. Guaranteed to be non-empty after
   // construction.
   std::vector<ByteRange> ranges_;

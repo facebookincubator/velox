@@ -277,7 +277,7 @@ TrivialEncoding<T>::TrivialEncoding(
   } else {
     NIMBLE_CHECK_EQ(
         reinterpret_cast<const char*>(values_ + this->rowCount()),
-        data.end(),
+        data.data() + data.size(),
         "Unexpected trivial encoding end");
   }
 }
@@ -353,7 +353,8 @@ std::string_view TrivialEncoding<T>::slice(
         buffer.getMemoryPool(),
         compressionType,
         TypeTraits<T>::dataType,
-        {sourcePos, static_cast<size_t>(encoded.end() - sourcePos)},
+        {sourcePos,
+         static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)},
         options.decompressCounter(),
         options.bufferPool);
     sourcePos = uncompressed->template as<char>();

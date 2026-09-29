@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -731,7 +732,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 
     ASSERT_EQ("-- Exchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
+        fmt::format(
+            "-- Exchange[0][{} in-memory] -> a:BIGINT, b:VARCHAR\n", serdeKind),
         plan->toString(true, false));
   }
 }
@@ -750,7 +752,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
     ASSERT_EQ("-- MergeExchange[0]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- MergeExchange[0][a ASC NULLS LAST, {}] -> a:BIGINT, b:VARCHAR\n",
+            "-- MergeExchange[0][a ASC NULLS LAST, {} in-memory] -> a:BIGINT, b:VARCHAR\n",
             serdeKind),
         plan->toString(true, false));
   }
@@ -789,6 +791,51 @@ TEST_F(PlanNodeToStringTest, tableScan) {
     ASSERT_EQ(
         "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableScanAssignments) {
+  {
+    // A complex column shows the parts the scan asks for; a scalar column
+    // shows nothing.
+    RowTypePtr rowType{ROW({
+        {"m", MAP(VARCHAR(), BIGINT())},
+        {"n", BIGINT()},
+    })};
+
+    connector::ColumnHandleMap assignments;
+    assignments["m"] = test::HiveConnectorTestBase::makeColumnHandle(
+        "m", rowType->childAt(0), {"m[\"k\"]"});
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(1));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table, assignments: [m := HiveColumnHandle "
+        "[name: m, columnType: Regular, dataType: MAP<VARCHAR,BIGINT>, "
+        "requiredSubfields: [ m[\"k\"] ]]]] "
+        "-> m:MAP<VARCHAR,BIGINT>, n:BIGINT\n",
+        plan->toString(true, false));
+  }
+
+  {
+    // A scan of scalars alone adds nothing.
+    RowTypePtr rowType{ROW("n", BIGINT())};
+
+    connector::ColumnHandleMap assignments;
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(0));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table] -> n:BIGINT\n",
         plan->toString(true, false));
   }
 }
@@ -1046,6 +1093,21 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
         plan->toString(true, false));
   }
 
+  // TableWrite with NOT NULL columns.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .startTableWriter()
+                    .outputDirectoryPath(outputDir->getPath())
+                    .notNullColumns({"c0", "c2"})
+                    .endTableWriter()
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0 not null, c1, c2 not null] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
   // TableWrite with stats (no grouping keys) and TableWriteMerge.
   {
     core::TableWriteNodePtr writeNode;
@@ -1190,7 +1252,7 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, convergencePlan: none] -> x:BIGINT\n",
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> x:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1221,7 +1283,7 @@ TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
 
   ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, convergencePlan: present] -> a:BIGINT, b:BIGINT\n",
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> a:BIGINT, b:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1271,7 +1333,7 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
 
   ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, convergencePlan: present] -> id:BIGINT, depth:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> id:BIGINT, depth:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1308,7 +1370,7 @@ TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
 
   ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, convergencePlan: none] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 

@@ -86,7 +86,7 @@ bool CudfAssignUniqueId::isFinished() {
 
 std::unique_ptr<cudf::column> CudfAssignUniqueId::generateIdColumn(
     vector_size_t size,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<int64_t> starts, sizes;
   starts.reserve(size / kRowIdsPerRequest + 1);

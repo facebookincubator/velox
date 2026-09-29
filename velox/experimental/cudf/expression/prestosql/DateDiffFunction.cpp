@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/DateDiffFunction.h"
@@ -130,7 +131,7 @@ DateDiffFunction::DateDiffFunction(
   // regardless of unit_ or input data; cache them once here instead of
   // reallocating on every eval() call (see DateTruncFunction for the same
   // pattern).
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
   threeScalar_ =
       std::make_unique<cudf::numeric_scalar<int64_t>>(3, true, stream, mr);
@@ -140,13 +141,13 @@ DateDiffFunction::DateDiffFunction(
       std::make_unique<cudf::numeric_scalar<int64_t>>(1, true, stream, mr);
   minusOneScalar_ =
       std::make_unique<cudf::numeric_scalar<int64_t>>(-1, true, stream, mr);
-  stream.synchronize();
+  stream.sync();
 }
 
 ColumnOrView DateDiffFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   // Resolve the two date/timestamp operands. Constants were captured at
   // construction as scalars; column refs arrive via inputColumns in
@@ -228,7 +229,7 @@ std::unique_ptr<cudf::column> DateDiffFunction::binaryOp(
     const Operand& rhs,
     cudf::binary_operator op,
     cudf::data_type out,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (lhs.col && rhs.col) {
     return cudf::binary_operation(*lhs.col, *rhs.col, op, out, stream, mr);
@@ -252,7 +253,7 @@ cudf::column_view DateDiffFunction::ensureColumn(
     const Operand& op,
     cudf::size_type size,
     std::unique_ptr<cudf::column>& owned,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (op.col) {
     return *op.col;
@@ -265,7 +266,7 @@ ColumnOrView DateDiffFunction::diffBySubtraction(
     const Operand& left,
     const Operand& right,
     int64_t divisor,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   if (isDate_) {
     // DATE columns are TIMESTAMP_DAYS, whose matching DURATION_DAYS is
@@ -313,7 +314,7 @@ ColumnOrView DateDiffFunction::diffTimestamp(
     const Operand& left,
     const Operand& right,
     int64_t msPerUnit,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto n = getSize(left, right);
   std::unique_ptr<cudf::column> leftOwned, rightOwned;
@@ -369,7 +370,7 @@ ColumnOrView DateDiffFunction::diffTimestamp(
 std::unique_ptr<cudf::column> DateDiffFunction::extractComponentAsInt64(
     cudf::column_view col,
     cudf::datetime::datetime_component component,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto extracted =
       cudf::datetime::extract_datetime_component(col, component, stream, mr);
@@ -379,7 +380,7 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractComponentAsInt64(
 
 std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
     cudf::column_view daysCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       daysCol.type().id() == cudf::type_id::TIMESTAMP_DAYS,
@@ -502,7 +503,7 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
 
 std::unique_ptr<cudf::column> DateDiffFunction::timeOfDayMicros(
     cudf::column_view ts,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   const bool isNanos = ts.type().id() == cudf::type_id::TIMESTAMP_NANOSECONDS;
   // Floor to day precision via floor_datetimes() rather than a round-trip
@@ -541,7 +542,7 @@ ColumnOrView DateDiffFunction::diffByComponent(
     const Operand& left,
     const Operand& right,
     bool isYear,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   using cudf::datetime::datetime_component;
   auto n = getSize(left, right);

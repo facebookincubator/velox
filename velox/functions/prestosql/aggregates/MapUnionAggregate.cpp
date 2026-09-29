@@ -28,6 +28,12 @@ class MapUnionAggregate : public MapAggregateBase<K, AccumulatorType> {
 
   explicit MapUnionAggregate(TypePtr resultType) : Base(resultType) {}
 
+  bool isReducing() const override {
+    // Duplicate keys across input maps are expected to be rare, so state
+    // generally grows with input cardinality.
+    return false;
+  }
+
   bool supportsToIntermediate() const override {
     return true;
   }
@@ -113,7 +119,7 @@ void registerMapUnionAggregate(
         const auto keyType = resultType->childAt(0);
 
         if (keyType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               createMapUnionAggregateWithCustomCompare,
               keyType->kind(),
               resultType);

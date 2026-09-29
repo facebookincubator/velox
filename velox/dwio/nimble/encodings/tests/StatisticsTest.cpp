@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -62,6 +63,63 @@ class StatisticsBoolTests : public ::testing::Test {};
 template <typename C>
 class StatisticsStringTests : public ::testing::Test {};
 
+TYPED_TEST(StatisticsIntegerTests, isNonDecreasing) {
+  using ValueType = typename TypeParam::valueType;
+
+  const std::vector<ValueType> sorted{
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(3),
+  };
+  const std::vector<ValueType> unsorted{
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(3),
+      static_cast<ValueType>(2),
+  };
+
+  EXPECT_TRUE(TypeParam::create(sorted).template isNonDecreasing<ValueType>());
+  EXPECT_FALSE(
+      TypeParam::create(unsorted).template isNonDecreasing<ValueType>());
+  EXPECT_TRUE(
+      TypeParam::create(std::span<const ValueType>{})
+          .template isNonDecreasing<ValueType>());
+}
+
+template <typename SignedType>
+void testNaturalAndSignedOrderCachesAreIndependent() {
+  using UnsignedType = std::make_unsigned_t<SignedType>;
+  const std::vector<UnsignedType> signedSorted{
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::min()),
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(0),
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::max()),
+  };
+  const auto signedFirst =
+      nimble::Statistics<UnsignedType>::create(signedSorted);
+  EXPECT_TRUE(signedFirst.template isNonDecreasing<SignedType>());
+  EXPECT_FALSE(signedFirst.template isNonDecreasing<UnsignedType>());
+
+  const auto naturalFirst =
+      nimble::Statistics<UnsignedType>::create(signedSorted);
+  EXPECT_FALSE(naturalFirst.template isNonDecreasing<UnsignedType>());
+  EXPECT_TRUE(naturalFirst.template isNonDecreasing<SignedType>());
+
+  const std::vector<UnsignedType> signedUnsorted{
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(-2),
+  };
+  EXPECT_FALSE(
+      nimble::Statistics<UnsignedType>::create(signedUnsorted)
+          .template isNonDecreasing<SignedType>());
+}
+
+TEST(StatisticsTest, naturalAndSignedOrderCachesAreIndependent) {
+  testNaturalAndSignedOrderCachesAreIndependent<int8_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int16_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int32_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int64_t>();
+}
+
 TEST(StatisticsTest, runValues) {
   const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3};
   const std::vector<int32_t> expected = {1, 2, 1, 3};
@@ -84,6 +142,44 @@ TEST(StatisticsTest, runValues) {
 
   const std::vector<int32_t> empty;
   EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runValues().empty());
+}
+
+TEST(StatisticsTest, minMaxBlocks) {
+  const std::vector<uint64_t> data = {9, 3, 7, 2, 10, 4, 5};
+  const auto statistics = nimble::Statistics<uint64_t>::create(data);
+  const auto& blocks = statistics.minMaxBlocks(/*blockSize=*/3);
+
+  ASSERT_EQ(blocks.size(), 3);
+  EXPECT_EQ(blocks[0].count, 3);
+  EXPECT_EQ(blocks[0].min, 3);
+  EXPECT_EQ(blocks[0].max, 9);
+  EXPECT_EQ(blocks[1].count, 3);
+  EXPECT_EQ(blocks[1].min, 2);
+  EXPECT_EQ(blocks[1].max, 10);
+  EXPECT_EQ(blocks[2].count, 1);
+  EXPECT_EQ(blocks[2].min, 5);
+  EXPECT_EQ(blocks[2].max, 5);
+
+  const std::vector<uint64_t> empty;
+  EXPECT_TRUE(
+      nimble::Statistics<uint64_t>::create(empty).minMaxBlocks().empty());
+}
+
+TEST(StatisticsTest, mostFrequent) {
+  const std::vector<int32_t> data = {3, 2, 3, 2, 4};
+  const auto statistics = nimble::Statistics<int32_t>::create(data);
+  const auto& uniqueCounts = statistics.uniqueCounts().value();
+
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+
+  const std::vector<int32_t> empty;
+  EXPECT_EQ(
+      nimble::Statistics<int32_t>::create(empty)
+          .uniqueCounts()
+          .value()
+          .mostFrequent(),
+      std::nullopt);
 }
 
 TYPED_TEST(StatisticsNumericTests, create) {
@@ -526,5 +622,60 @@ TYPED_TEST(StatisticsIntegerTests, buckets) {
   EXPECT_GT(buckets.size(), 0);
   for (auto i = 0; i < buckets.size(); ++i) {
     EXPECT_EQ(expectedBuckets[i], buckets[i]) << "index: " << i;
+  }
+}
+
+// Constancy is the only question ConstantEncoding asks, and it used to be
+// answered by building a unique-value map. The scan has to stop at the first
+// value that differs rather than reading the whole stream.
+TEST(StatisticsTests, isConstantDetectsConstantAndNonConstant) {
+  const std::vector<int64_t> constant(1'000, 7);
+  EXPECT_TRUE(nimble::Statistics<int64_t>::create(constant).isConstant());
+
+  const std::vector<int64_t> single{42};
+  EXPECT_TRUE(nimble::Statistics<int64_t>::create(single).isConstant());
+
+  // Differs only in the last position, so a correct scan still reads it all.
+  std::vector<int64_t> tail(1'000, 7);
+  tail.back() = 8;
+  EXPECT_FALSE(nimble::Statistics<int64_t>::create(tail).isConstant());
+
+  // Differs at the second position, which is where the scan should stop.
+  std::vector<int64_t> head(1'000, 7);
+  head[1] = 8;
+  EXPECT_FALSE(nimble::Statistics<int64_t>::create(head).isConstant());
+}
+
+// isConstant() must agree with the unique count it replaced, on every type
+// ConstantEncoding is selected for.
+TEST(StatisticsTests, isConstantAgreesWithUniqueCounts) {
+  {
+    const std::vector<int64_t> data{5, 5, 5};
+    const auto stats = nimble::Statistics<int64_t>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    // Floating point runs on the physical representation, so constancy is
+    // bit-exact -- which is what the non-ALP encodings require.
+    const std::vector<uint64_t> data{
+        std::bit_cast<uint64_t>(1.5), std::bit_cast<uint64_t>(1.5)};
+    const auto stats = nimble::Statistics<uint64_t>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    constexpr bool kAllTrue[]{true, true, true};
+    const auto stats =
+        nimble::Statistics<bool>::create(std::span<const bool>{kAllTrue});
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    const std::vector<std::string_view> data{"abc", "abc"};
+    const auto stats = nimble::Statistics<std::string_view>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    const std::vector<std::string_view> mixed{"abc", "abd"};
+    const auto stats = nimble::Statistics<std::string_view>::create(mixed);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
   }
 }

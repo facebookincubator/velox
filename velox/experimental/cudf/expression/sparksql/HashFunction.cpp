@@ -71,7 +71,7 @@ HashFunction::HashFunction(
 ColumnOrView HashFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     [[maybe_unused]] cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK(!inputColumns.empty());
   auto inputTableView = convertToTableView(inputColumns);

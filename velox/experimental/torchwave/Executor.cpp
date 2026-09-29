@@ -25,6 +25,7 @@
 #include <folly/chrono/Hardware.h>
 #include <gflags/gflags.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -1943,6 +1944,51 @@ void computeGpuTimeline(ExecutionState& state) {
 
 } // namespace
 
+namespace {
+
+// Records how many thread-block clocks one unit of the step's modelled cost
+// bought, so the next execution of the same step can express a minimum block
+// size in microseconds rather than in cost units. Total block time over total
+// modelled work: both scale with the step's size, so the ratio survives a
+// change of batch.
+void recordStepClockRate(ExecutionState& state, const LaunchDebugInfo& info) {
+  if (info.pinnedInfo == nullptr || info.numBlocks <= 0 ||
+      info.sequenceNumber < 0 ||
+      info.sequenceNumber >= static_cast<int32_t>(state.stepVectors.size())) {
+    return;
+  }
+  auto& steps = state.stepVectors.at(info.sequenceNumber);
+  if (info.stepIdx < 0 || info.stepIdx >= static_cast<int32_t>(steps.size())) {
+    return;
+  }
+  auto& sv = steps.at(info.stepIdx);
+  double totalCost = 0;
+  for (auto cost : sv.costs) {
+    totalCost += cost;
+  }
+  if (totalCost <= 0) {
+    return;
+  }
+  int64_t totalClocks = 0;
+  int64_t maxClocks = 0;
+  for (int32_t block = 0; block < info.numBlocks; ++block) {
+    const auto clocks = info.pinnedInfo[block].clocks;
+    totalClocks += clocks;
+    maxClocks = std::max(maxClocks, clocks);
+  }
+  if (totalClocks > 0) {
+    sv.clocksPerCost = static_cast<double>(totalClocks) / totalCost;
+  }
+  // Same figure the balance line prints: mean block clocks over the slowest.
+  if (maxClocks > 0) {
+    sv.measuredUtil = static_cast<double>(totalClocks) /
+        (static_cast<double>(maxClocks) * info.numBlocks);
+    sv.measuredBlocks = info.numBlocks;
+  }
+}
+
+} // namespace
+
 void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   auto& infos = state.launchDebugInfos;
   threadInfo.debugInfo.clear();
@@ -1991,6 +2037,7 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
     } else {
       threadInfo.debugInfo.emplace_back();
     }
+    recordStepClockRate(state, info);
     LaunchMeta meta;
     meta.sequenceNumber = info.sequenceNumber;
     meta.stepIdx = info.stepIdx;
@@ -2029,6 +2076,8 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.numFused = static_cast<int32_t>(sv.kernels.size());
         meta.numStandalone = static_cast<int32_t>(sv.standalones.size());
         meta.numShortcut = static_cast<int32_t>(sv.shortcutStandalones.size());
+        meta.gridStats = sv.gridStats;
+        meta.segments = sv.segments;
       }
     }
     threadInfo.launchMeta.push_back(std::move(meta));
@@ -2091,20 +2140,18 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
     }
     const auto& debugBlocks = info.debugInfo[mi];
 
-    // Sum clocks per launch using block position, not opcode matching.
-    // Block 0..numBlocksPerLaunch[0]-1 belong to launch 0, etc.
+    // Sum clocks per launch through launchIndices rather than opcode matching.
+    // The blocks of one launch are not necessarily a contiguous run: the emit
+    // order follows projected latency, and a partitioned step splits an op
+    // across launches.
     std::vector<int64_t> launchClocks(sv.kernels.size(), 0);
-    int32_t blockStart = 0;
-    for (size_t li = 0; li < sv.kernels.size(); ++li) {
-      int32_t nBlocks =
-          li < sv.numBlocksPerLaunch.size() ? sv.numBlocksPerLaunch.at(li) : 0;
-      for (int32_t b = 0; b < nBlocks; ++b) {
-        auto idx = blockStart + b;
-        if (idx < static_cast<int32_t>(debugBlocks.size())) {
-          launchClocks[li] += debugBlocks[idx].clocks;
-        }
+    for (size_t b = 0; b < debugBlocks.size() && b < sv.launchIndices.size();
+         ++b) {
+      const auto launchIdx = sv.launchIndices[b];
+      if (launchIdx >= 0 &&
+          launchIdx < static_cast<int32_t>(launchClocks.size())) {
+        launchClocks[launchIdx] += debugBlocks[b].clocks;
       }
-      blockStart += nBlocks;
     }
 
     int64_t totalActualClocks = 0;
@@ -2425,6 +2472,70 @@ std::string WaveGraphExecutor::makePerfReport(
     ss << fmt::format(
         "  fused outputs built by a host-side view: {}\n", viewDescs);
   }
+  // How far each step's grid is from a balanced, fully occupied wave, and
+  // which of the two pathologies it suffers from. They need different fixes:
+  // starvation is ops stuck on one block once a step has as many ops as the
+  // wave has blocks, poisoning is one shared-memory-hungry op cutting the
+  // occupancy of a step whose work sits elsewhere.
+  {
+    const std::array<float, 4> kSkewBuckets{1.1f, 1.5f, 2.0f, 4.0f};
+    std::array<int32_t, 5> skewHistogram{};
+    int32_t measuredSteps = 0;
+    int32_t starvedSteps = 0;
+    int64_t starvedOps = 0;
+    int32_t poisonedSteps = 0;
+    int32_t splitSteps = 0;
+    float worstSkew = 0;
+    int32_t worstSeq = -1;
+    int32_t worstStep = -1;
+    for (const auto& m : info.launchMeta) {
+      const auto& stats = m.gridStats;
+      if (stats.numOps == 0) {
+        continue;
+      }
+      ++measuredSteps;
+      size_t bucket = 0;
+      while (bucket < kSkewBuckets.size() &&
+             stats.skew >= kSkewBuckets[bucket]) {
+        ++bucket;
+      }
+      ++skewHistogram[bucket];
+      if (stats.numStarved > 0) {
+        ++starvedSteps;
+        starvedOps += stats.numStarved;
+      }
+      if (stats.occupancy < stats.bestOccupancy) {
+        ++poisonedSteps;
+      }
+      if (stats.numSegments > 1) {
+        ++splitSteps;
+      }
+      if (stats.skew > worstSkew) {
+        worstSkew = stats.skew;
+        worstSeq = m.sequenceNumber;
+        worstStep = m.stepIdx;
+      }
+    }
+    if (measuredSteps > 0) {
+      ss << fmt::format(
+          "Grid balance: {} steps; skew <1.1 {}, <1.5 {}, <2 {}, <4 {}, >=4 {}; worst {:.1f} at node {} step {}\n",
+          measuredSteps,
+          skewHistogram[0],
+          skewHistogram[1],
+          skewHistogram[2],
+          skewHistogram[3],
+          skewHistogram[4],
+          worstSkew,
+          worstSeq,
+          worstStep);
+      ss << fmt::format(
+          "  block starvation: {} steps, {} ops left on one block that could use more; shared-memory poisoning: {} steps; split into several launches: {}\n",
+          starvedSteps,
+          starvedOps,
+          poisonedSteps,
+          splitSteps);
+    }
+  }
   ss << "WaveConfig: " << WaveConfig::get().toString() << "\n";
 
   // Per-node, per-step report.
@@ -2629,6 +2740,7 @@ std::string WaveGraphExecutor::makePerfReport(
       // Thread block balance for this step.
       if (idx < info.debugInfo.size() && !info.debugInfo[idx].empty()) {
         const auto& blocks = info.debugInfo[idx];
+        const auto numBlocks = static_cast<int32_t>(blocks.size());
         int64_t maxClocks = 0;
         int64_t totalClocks = 0;
         int64_t totalBarrier = 0;
@@ -2637,17 +2749,93 @@ std::string WaveGraphExecutor::makePerfReport(
           totalClocks += b.clocks;
           totalBarrier += b.barrierClocks;
         }
-        double util = maxClocks > 0 ? 100.0 * totalClocks /
-                (maxClocks * static_cast<int64_t>(blocks.size()))
-                                    : 0.0;
         double syncPct =
             totalClocks > 0 ? 100.0 * totalBarrier / totalClocks : 0.0;
-        ss << fmt::format(
-            "    balance: util={:.1f}% sync={:.1f}% maxClk={} blocks={}\n",
-            util,
-            syncPct,
-            maxClocks,
-            blocks.size());
+
+        // The launches of a split step run back to back on one stream, so the
+        // step's makespan is the sum of their maxima rather than the largest
+        // block anywhere in it, and a block is only idle relative to the
+        // launch it actually ran in. Scoring the whole step against one global
+        // max reads a short launch queued behind a long one as imbalance: on
+        // the ROO graph node 36 step 3 reported 70% while both of its launches
+        // were above 75%. Each launch owns a contiguous range of this block
+        // array, so score them one at a time and add the rectangles up.
+        struct Span {
+          int32_t first;
+          int32_t count;
+          int64_t max{0};
+          int64_t sum{0};
+        };
+        std::vector<Span> spans;
+        for (const auto& s : m.segments) {
+          if (s.firstBlock >= 0 && s.numBlocks > 0 &&
+              s.firstBlock + s.numBlocks <= numBlocks) {
+            spans.push_back({s.firstBlock, s.numBlocks});
+          }
+        }
+        // A step the packer left whole, or one whose segments do not describe
+        // this array, is one launch over all of it -- which makes the numbers
+        // below identical to scoring the step as a single rectangle.
+        int32_t covered = 0;
+        for (const auto& s : spans) {
+          covered += s.count;
+        }
+        if (spans.empty() || covered != numBlocks) {
+          spans.assign(1, Span{0, numBlocks});
+        }
+        int64_t makespan = 0;
+        int64_t rectangles = 0;
+        for (auto& s : spans) {
+          for (int32_t b = s.first; b < s.first + s.count; ++b) {
+            s.max = std::max(s.max, blocks[b].clocks);
+            s.sum += blocks[b].clocks;
+          }
+          makespan += s.max;
+          rectangles += s.max * s.count;
+        }
+        double util = rectangles > 0
+            ? 100.0 * static_cast<double>(totalClocks) /
+                static_cast<double>(rectangles)
+            : 0.0;
+
+        if (spans.size() == 1) {
+          ss << fmt::format(
+              "    balance: util={:.1f}% sync={:.1f}% maxClk={} blocks={}\n",
+              util,
+              syncPct,
+              maxClocks,
+              numBlocks);
+        } else {
+          ss << fmt::format(
+              "    balance: util={:.1f}% sync={:.1f}% makespan={} maxClk={} "
+              "blocks={} launches={}\n",
+              util,
+              syncPct,
+              makespan,
+              maxClocks,
+              numBlocks,
+              spans.size());
+          // targetBlocks is one wave at the occupancy the step launches with,
+          // so this says whether a launch is also several hardware waves --
+          // the same effect one level down, and invisible in the block count.
+          const int32_t wave = m.gridStats.targetBlocks;
+          for (size_t li = 0; li < spans.size(); ++li) {
+            const auto& s = spans[li];
+            ss << fmt::format(
+                "      launch {}: util={:.1f}% max={} blocks={} first={}",
+                li,
+                s.max > 0 ? 100.0 * static_cast<double>(s.sum) /
+                        static_cast<double>(s.max * s.count)
+                          : 0.0,
+                s.max,
+                s.count,
+                s.first);
+            if (wave > 0) {
+              ss << fmt::format(" waves={}", (s.count + wave - 1) / wave);
+            }
+            ss << "\n";
+          }
+        }
 
         // Per-op breakdown sorted by max clocks descending.
         struct OpStats {
@@ -2658,9 +2846,24 @@ std::string WaveGraphExecutor::makePerfReport(
           int64_t opBarrier{0};
           int64_t count{0};
           int64_t numElements{0};
+          /// Blocks this op contributed to each launch, parallel to 'spans'.
+          /// Which launch an op landed in is the thing that decides whether it
+          /// is holding one up: an op is only measured against the others it
+          /// actually ran beside.
+          std::vector<int32_t> perLaunch;
         };
+        // Block index -> launch, from the contiguous ranges above.
+        std::vector<int32_t> blockLaunch(numBlocks, 0);
+        for (size_t li = 0; li < spans.size(); ++li) {
+          for (int32_t b = spans[li].first;
+               b < spans[li].first + spans[li].count;
+               ++b) {
+            blockLaunch[b] = static_cast<int32_t>(li);
+          }
+        }
         std::map<int32_t, OpStats> opMap;
-        for (const auto& b : blocks) {
+        for (int32_t i = 0; i < numBlocks; ++i) {
+          const auto& b = blocks[i];
           auto& s = opMap[b.op];
           s.op = b.op;
           s.opMin = std::min(s.opMin, b.clocks);
@@ -2668,6 +2871,8 @@ std::string WaveGraphExecutor::makePerfReport(
           s.opSum += b.clocks;
           s.opBarrier += b.barrierClocks;
           s.count++;
+          s.perLaunch.resize(spans.size(), 0);
+          ++s.perLaunch[blockLaunch[i]];
           referencedOps.insert(b.op);
           opTotalClocks[b.op] += b.clocks;
         }
@@ -2703,7 +2908,7 @@ std::string WaveGraphExecutor::makePerfReport(
         for (auto& s : sortedOps) {
           auto opAvg = s.opSum / s.count;
           ss << fmt::format(
-              "      op {} ({} blocks, {}): clk max/avg/min={}/{}/{} barrier={}\n",
+              "      op {} ({} blocks, {}): clk max/avg/min={}/{}/{} barrier={}",
               s.op,
               s.count,
               fmtSize(s.numElements),
@@ -2711,6 +2916,15 @@ std::string WaveGraphExecutor::makePerfReport(
               opAvg,
               s.opMin,
               s.opBarrier);
+          if (spans.size() > 1) {
+            ss << " in";
+            for (size_t li = 0; li < s.perLaunch.size(); ++li) {
+              if (s.perLaunch[li] > 0) {
+                ss << fmt::format(" L{}={}", li, s.perLaunch[li]);
+              }
+            }
+          }
+          ss << "\n";
         }
       }
     }

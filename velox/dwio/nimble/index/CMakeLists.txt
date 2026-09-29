@@ -13,6 +13,7 @@
 # limitations under the License.
 add_library(
   nimble_index
+  BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
@@ -33,6 +34,8 @@ add_library(
   IndexLookup.cpp
   IndexWriter.cpp
   SortOrder.cpp
+  VectorIndexWriter.h
+  VectorIndexConfig.h
   SortedIndexWriter.h
   SortedIndexConfig.h
   SortedIndex.h
@@ -60,6 +63,7 @@ add_library(
   ClusterIndex.h
   ChunkStatsGroup.h
   ChunkStats.h
+  BlockedBloomFilter.h
   BloomFilter.h
 )
 
@@ -83,6 +87,28 @@ target_link_libraries(
   fmt::fmt
   velox_dwio_common
   velox_memory
+  Folly::folly
+)
+
+add_library(
+  nimble_vector_index
+  VectorIndex.cpp
+  VectorIndexWriter.cpp
+  VectorIndexUtility.cpp
+  VectorIndex.h
+  VectorIndexUtility.h
+)
+target_link_libraries(
+  nimble_vector_index
+  nimble_index
+  nimble_common
+  nimble_tablet_common
+  nimble_vector_index_fb
+  velox_buffer
+  velox_memory
+  velox_type
+  velox_vector
+  FAISS::faiss
   Folly::folly
 )
 

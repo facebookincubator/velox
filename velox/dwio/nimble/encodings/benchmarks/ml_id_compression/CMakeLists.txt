@@ -42,6 +42,7 @@ velox_add_test_headers(
   nimble_ml_id_benchmark_common
   AblationPolicy.h
   Axes.h
+  BenchCommon.h
   CachePolicy.h
   DriverSweep.h
   ElemType.h

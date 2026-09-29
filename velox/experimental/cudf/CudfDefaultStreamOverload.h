@@ -25,13 +25,13 @@
 // The definition lives in GpuResources.cpp (which does NOT include
 // CudfNoDefaults.h, so it can call the real cudf::get_default_stream()).
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 namespace cudf {
 
 struct allow_default_stream_t {};
 constexpr allow_default_stream_t allow_default_stream{};
 
-rmm::cuda_stream_view const get_default_stream(allow_default_stream_t);
+cuda::stream_ref const get_default_stream(allow_default_stream_t);
 
 } // namespace cudf

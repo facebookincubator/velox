@@ -115,6 +115,9 @@ class BaseRuntimeStatWriter {
   }
 };
 
+/// Discards every metric written to it.
+class NoopRuntimeStatWriter : public BaseRuntimeStatWriter {};
+
 /// Setting a concrete runtime stats writer on the thread will ensure that any
 /// code can add runtime counters to the current Operator running on that
 /// thread.

@@ -30,8 +30,13 @@ class CompileState {
     return driver_;
   }
 
-  // Get plan node by id lookup.
+  // Get plan node by id lookup (asserts the id exists).
   core::PlanNodePtr getPlanNode(const core::PlanNodeId& id) const;
+
+  // Resolve the plan node for an operator. Falls back to
+  // driverFactory_.consumerNode for operators like CallbackSink whose
+  // planNodeId is "N/A". May return nullptr.
+  core::PlanNodePtr resolveOperatorPlanNode(const exec::Operator* op) const;
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.

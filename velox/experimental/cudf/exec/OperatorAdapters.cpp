@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
@@ -53,9 +54,11 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MarkDistinct.h"
+#include "velox/exec/Merge.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
@@ -75,6 +78,11 @@ OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
 void OperatorAdapterRegistry::registerAdapter(
     std::unique_ptr<OperatorAdapter> adapter) {
   adapters_.push_back(std::move(adapter));
+}
+
+void OperatorAdapterRegistry::registerAdapterFront(
+    std::unique_ptr<OperatorAdapter> adapter) {
+  adapters_.insert(adapters_.begin(), std::move(adapter));
 }
 
 const OperatorAdapter* OperatorAdapterRegistry::findAdapter(
@@ -104,7 +112,7 @@ class TableScanAdapter : public OperatorAdapter {
   TableScanAdapter() : OperatorAdapter("TableScan") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::TableScan*>(op) != nullptr;
+    return op->is<exec::TableScan>();
   }
 
   bool canRunOnGPU(
@@ -167,14 +175,14 @@ class FilterProjectAdapter : public OperatorAdapter {
   FilterProjectAdapter() : OperatorAdapter("FilterProject") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::FilterProject*>(op) != nullptr;
+    return op->is<exec::FilterProject>();
   }
 
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op);
+    auto filterProjectOp = op->as<exec::FilterProject>();
     if (!filterProjectOp) {
       LOG_FALLBACK(
           "FilterProjectAdapter operator is not FilterProject, PlanNode id: {}",
@@ -236,7 +244,7 @@ class FilterProjectAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op);
+    auto filterProjectOp = op->as<exec::FilterProject>();
     auto projectPlanNode =
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     auto filterPlanNode = filterProjectOp->filterNode();
@@ -255,8 +263,8 @@ class AggregationAdapter : public OperatorAdapter {
   AggregationAdapter() : OperatorAdapter("Aggregation") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::HashAggregation*>(op) != nullptr ||
-        dynamic_cast<const exec::StreamingAggregation*>(op) != nullptr;
+    return op->is<exec::HashAggregation>() ||
+        op->is<exec::StreamingAggregation>();
   }
 
   bool canRunOnGPU(
@@ -388,7 +396,7 @@ class HashJoinBuildAdapter : public CudfHashJoinBaseAdapter {
   HashJoinBuildAdapter() : CudfHashJoinBaseAdapter("HashJoinBuild") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::HashBuild*>(op) != nullptr;
+    return op->is<exec::HashBuild>();
   }
 
   bool acceptsGpuInput() const override {
@@ -420,7 +428,7 @@ class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
   HashJoinProbeAdapter() : CudfHashJoinBaseAdapter("HashJoinProbe") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::HashProbe*>(op) != nullptr;
+    return op->is<exec::HashProbe>();
   }
 
   bool acceptsGpuInput() const override {
@@ -503,7 +511,7 @@ class NestedLoopJoinBuildAdapter : public CudfNestedLoopJoinBaseAdapter {
       : CudfNestedLoopJoinBaseAdapter("NestedLoopJoinBuild") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::NestedLoopJoinBuild*>(op) != nullptr;
+    return op->is<exec::NestedLoopJoinBuild>();
   }
 
   bool acceptsGpuInput() const override {
@@ -537,7 +545,7 @@ class NestedLoopJoinProbeAdapter : public CudfNestedLoopJoinBaseAdapter {
       : CudfNestedLoopJoinBaseAdapter("NestedLoopJoinProbe") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::NestedLoopJoinProbe*>(op) != nullptr;
+    return op->is<exec::NestedLoopJoinProbe>();
   }
 
   bool acceptsGpuInput() const override {
@@ -570,7 +578,7 @@ class OrderByAdapter : public OperatorAdapter {
   OrderByAdapter() : OperatorAdapter("OrderBy") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::OrderBy*>(op) != nullptr;
+    return op->is<exec::OrderBy>();
   }
 
   bool canRunOnGPU(
@@ -610,7 +618,7 @@ class TopNAdapter : public OperatorAdapter {
   TopNAdapter() : OperatorAdapter("TopN") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::TopN*>(op) != nullptr;
+    return op->is<exec::TopN>();
   }
 
   bool canRunOnGPU(
@@ -648,7 +656,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
   TopNRowNumberAdapter() : OperatorAdapter("TopNRowNumber") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::TopNRowNumber*>(op) != nullptr;
+    return op->is<exec::TopNRowNumber>();
   }
 
   bool canRunOnGPU(
@@ -692,7 +700,7 @@ class LimitAdapter : public OperatorAdapter {
   LimitAdapter() : OperatorAdapter("Limit") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::Limit*>(op) != nullptr;
+    return op->is<exec::Limit>();
   }
 
   bool canRunOnGPU(
@@ -732,7 +740,7 @@ class LocalPartitionAdapter : public OperatorAdapter {
   LocalPartitionAdapter() : OperatorAdapter("LocalPartition") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::LocalPartition*>(op) != nullptr;
+    return op->is<exec::LocalPartition>();
   }
 
   bool canRunOnGPU(
@@ -789,7 +797,7 @@ class LocalExchangeAdapter : public OperatorAdapter {
   LocalExchangeAdapter() : OperatorAdapter("LocalExchange") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::LocalExchange*>(op) != nullptr;
+    return op->is<exec::LocalExchange>();
   }
 
   // LocalExchange consumes whatever the producing pipeline enqueued, so it
@@ -845,7 +853,7 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
   AssignUniqueIdAdapter() : OperatorAdapter("AssignUniqueId") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::AssignUniqueId*>(op) != nullptr;
+    return op->is<exec::AssignUniqueId>();
   }
 
   bool canRunOnGPU(
@@ -891,7 +899,7 @@ class ValuesAdapter : public OperatorAdapter {
   ValuesAdapter() : OperatorAdapter("Values") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::Values*>(op) != nullptr;
+    return op->is<exec::Values>();
   }
 
   bool canRunOnGPU(
@@ -931,7 +939,7 @@ class MarkDistinctAdapter : public OperatorAdapter {
   MarkDistinctAdapter() : OperatorAdapter("MarkDistinct") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::MarkDistinct*>(op) != nullptr;
+    return op->is<exec::MarkDistinct>();
   }
 
   bool canRunOnGPU(
@@ -972,7 +980,7 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
   EnforceSingleRowAdapter() : OperatorAdapter("EnforceSingleRow") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::EnforceSingleRow*>(op) != nullptr;
+    return op->is<exec::EnforceSingleRow>();
   }
 
   bool canRunOnGPU(
@@ -1007,22 +1015,110 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
   }
 };
 
-/// CallbackSinkAdapter - Keeps original operator
+/// CallbackSinkAdapter - Keeps original operator (accepts GPU input when part
+/// of LocalMergeNode)
 class CallbackSinkAdapter : public OperatorAdapter {
  public:
   CallbackSinkAdapter() : OperatorAdapter("CallbackSink") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::CallbackSink*>(op) != nullptr;
+    return op->is<exec::CallbackSink>();
   }
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    LOG_FALLBACK(
-        "CallbackSink operator not supported on cuDF, PlanNode id: {}",
-        planNode->id());
+    auto supported = planNode &&
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
+            nullptr;
+    if (!supported) {
+      LOG_FALLBACK(
+          "CallbackSink operator not supported on cuDF, PlanNode id: {}",
+          planNode ? planNode->id() : "null");
+    }
+    return supported;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {}; // Keep original operator
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+/// LocalMergeAdapter - Replaces CPU LocalMerge with GPU CudfLocalMerge
+class LocalMergeAdapter : public OperatorAdapter {
+ public:
+  LocalMergeAdapter() : OperatorAdapter("LocalMerge") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::LocalMerge>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    return planNode &&
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
+        nullptr;
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto localMergePlanNode =
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfLocalMerge>(operatorId, ctx, localMergePlanNode));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return false;
+  }
+};
+
+/// PartitionedOutputAdapter - Keeps original operator (CPU sink for shuffle)
+class PartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  PartitionedOutputAdapter() : OperatorAdapter("PartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::PartitionedOutput>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
     return false;
   }
 
@@ -1053,7 +1149,7 @@ class WindowAdapter : public OperatorAdapter {
   WindowAdapter() : OperatorAdapter("Window") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::Window*>(op) != nullptr;
+    return op->is<exec::Window>();
   }
 
   bool canRunOnGPU(
@@ -1105,7 +1201,7 @@ class GroupIdAdapter : public OperatorAdapter {
   GroupIdAdapter() : OperatorAdapter("GroupId") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const exec::GroupId*>(op) != nullptr;
+    return op->is<exec::GroupId>();
   }
 
   bool canRunOnGPU(
@@ -1161,12 +1257,14 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<LimitAdapter>());
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<LocalMergeAdapter>());
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
   registry.registerAdapter(std::make_unique<MarkDistinctAdapter>());
   registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
   registry.registerAdapter(std::make_unique<GroupIdAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
+  registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
 }
 

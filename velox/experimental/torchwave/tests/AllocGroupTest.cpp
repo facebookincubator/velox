@@ -313,35 +313,50 @@ TEST(AllocGroupTest, needsSyncPropagates) {
 // An operand that crosses the concat's kernel boundary, as concatSetOutputs
 // describes one: an earlier kernel produces it and its extent is read straight
 // off the value.
-ConcatInputInfo boundaryOperand(nativert::ValueId valueId) {
+// 'carve' is the verdict placement reaches while the concat is placed -- see
+// CompileCtx::decideConcatCarve, which is where the rules behind it live. The
+// group applies it rather than deciding again, so these tests state it
+// directly; what they exercise is what the group does with it.
+ConcatInputInfo boundaryOperand(nativert::ValueId valueId, bool carve = true) {
   ConcatInputInfo operand;
   operand.valueId = valueId;
   operand.isSubgraphInput = true;
   operand.sizeExpr.op = SizeShortcut::kMax;
   operand.sizeExpr.values = {valueId};
+  operand.carve = carve;
   return operand;
 }
 
 // An operand the concat's own kernel computes, whose extent follows 'from'.
 ConcatInputInfo internalOperand(
     nativert::ValueId valueId,
-    nativert::ValueId from) {
+    nativert::ValueId from,
+    bool carve = true) {
   ConcatInputInfo operand;
   operand.valueId = valueId;
   operand.sizeExpr.op = SizeShortcut::kMax;
   operand.sizeExpr.values = {from};
+  operand.carve = carve;
   return operand;
 }
 
+// 'layoutNode' and 'layoutStep' are where placement settled the result's
+// layout -- see CompileCtx::decideConcatCarve. The group is created there
+// rather than at a point this pass looks for, so the tests state it as they
+// state the carve verdicts.
 ConcatFootprint oneDimCat(
     nativert::ValueId resultId,
-    std::vector<ConcatInputInfo> operands) {
+    std::vector<ConcatInputInfo> operands,
+    int32_t layoutNode = 0,
+    int32_t layoutStep = 0) {
   ConcatFootprint concat;
   concat.resultId = resultId;
   concat.dtype = at::kFloat;
   concat.dim = 0;
   concat.outRank = 1;
   concat.operands = std::move(operands);
+  concat.layoutNode = layoutNode;
+  concat.layoutStep = layoutStep;
   return concat;
 }
 
@@ -425,7 +440,9 @@ TEST(AllocGroupTest, concatCarvesEveryOperand) {
                  13,
                  {boundaryOperand(10),
                   boundaryOperand(11),
-                  boundaryOperand(12)})}}}},
+                  boundaryOperand(12)},
+                 /*layoutNode=*/0,
+                 /*layoutStep=*/1)}}}},
   };
 
   folly::F14FastSet<nativert::ValueId> claimed;
@@ -519,12 +536,18 @@ TEST(AllocGroupTest, concatOfTwoOperandsIsLeftAlone) {
   EXPECT_TRUE(claimed.empty());
 }
 
-// An operand whose extent the device settles is not knowable when the result
-// would have to be laid out, and the offsets of every operand after it depend
-// on it. The whole concat stays on the ordinary path.
-TEST(AllocGroupTest, concatWithADeviceSizedOperandIsLeftAlone) {
+// An operand whose extent the device settles does not refuse the concat. It
+// puts a floor under where the result can be laid out: not until the step that
+// writes the extent has finished and the host has read it back. Everything the
+// concat joins is measurable from there on, so the layout is computed at the
+// first point past that step and the group waits for the read-back before it
+// carves.
+TEST(AllocGroupTest, concatWithADeviceSizedOperandWaitsForTheExtent) {
   auto concat = oneDimCat(
-      13, {boundaryOperand(10), boundaryOperand(11), boundaryOperand(12)});
+      13,
+      {boundaryOperand(10), boundaryOperand(11), boundaryOperand(12)},
+      /*layoutNode=*/1,
+      /*layoutStep=*/0);
   concat.operands[1].hasShapeOnDevice = true;
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
@@ -545,8 +568,15 @@ TEST(AllocGroupTest, concatWithADeviceSizedOperandIsLeftAlone) {
   folly::F14FastSet<nativert::ValueId> claimed;
   AllocGroupStats stats;
 
-  EXPECT_TRUE(graphConcatGroups(nodes, claimed, &stats).empty());
-  EXPECT_EQ(stats.numConcatOnDevice, 1);
+  auto groups = graphConcatGroups(nodes, claimed, &stats);
+  ASSERT_EQ(groups.size(), 1u);
+  EXPECT_EQ(stats.numConcatOnDevice, 0);
+  // Node 0 writes the extent, so the layout cannot be computed there; the
+  // concat's own point is the first one past it.
+  EXPECT_EQ(groups[0].allocNode, 1);
+  EXPECT_EQ(groups[0].allocStep, 0);
+  // The host reads the extent back before it lays anything out.
+  EXPECT_TRUE(groups[0].needsSync);
 }
 
 // An operand the concat's own kernel computes is not there to measure, but its
@@ -570,7 +600,7 @@ TEST(AllocGroupTest, concatMeasuresAnInternalOperandFromItsSizeExpression) {
                  13,
                  {boundaryOperand(10),
                   boundaryOperand(11),
-                  internalOperand(20, 10)})}}}},
+                  internalOperand(20, 10, /*carve=*/false)})}}}},
   };
 
   folly::F14FastSet<nativert::ValueId> claimed;
@@ -581,12 +611,19 @@ TEST(AllocGroupTest, concatMeasuresAnInternalOperandFromItsSizeExpression) {
   EXPECT_THAT(groups[0].concat->memberOfOperand, ElementsAre(0, 1, -1));
 }
 
-// A reserve function reads whatever it likes, and nothing says what it needs is
-// there when the result would be laid out. Running it early is refused rather
-// than risked.
-TEST(AllocGroupTest, concatWithAnInternalReserveIsLeftAlone) {
+// An operand sized by its own reserve function does not sink the concat. The
+// reserve is how that operand's extent is computed everywhere else, and the
+// group measures it the same way -- with the invocation's bindings already
+// bound to it, so only a frame is needed. The operand is still not carved: the
+// concat's own kernel writes it, so there is no separate buffer to redirect.
+TEST(AllocGroupTest, concatMeasuresAnOperandFromItsOwnReserve) {
   auto concat = oneDimCat(
-      13, {boundaryOperand(10), boundaryOperand(11), internalOperand(20, 10)});
+      13,
+      {boundaryOperand(10),
+       boundaryOperand(11),
+       internalOperand(20, 10, /*carve=*/false)},
+      /*layoutNode=*/1,
+      /*layoutStep=*/0);
   concat.operands[2].reserveShape = [](NodeCP,
                                        nativert::ExecutionFrame&,
                                        const FormalToActual&,
@@ -613,8 +650,11 @@ TEST(AllocGroupTest, concatWithAnInternalReserveIsLeftAlone) {
   folly::F14FastSet<nativert::ValueId> claimed;
   AllocGroupStats stats;
 
-  EXPECT_TRUE(graphConcatGroups(nodes, claimed, &stats).empty());
-  EXPECT_EQ(stats.numConcatUnplaceableOperand, 1);
+  auto groups = graphConcatGroups(nodes, claimed, &stats);
+  ASSERT_EQ(groups.size(), 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+  EXPECT_THAT(groups[0].actualIds, ElementsAre(10, 11));
+  EXPECT_THAT(groups[0].concat->memberOfOperand, ElementsAre(0, 1, -1));
 }
 
 // A view has no storage of its own to redirect, so it is not carved -- but it
@@ -623,7 +663,10 @@ TEST(AllocGroupTest, concatWithAnInternalReserveIsLeftAlone) {
 // carved and the view is copied into the region it occupies.
 TEST(AllocGroupTest, concatCarvesAroundAViewOperand) {
   auto concat = oneDimCat(
-      13, {boundaryOperand(10), boundaryOperand(11), boundaryOperand(12)});
+      13,
+      {boundaryOperand(10),
+       boundaryOperand(11),
+       boundaryOperand(12, /*carve=*/false)});
   concat.operands[2].isView = true;
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
@@ -651,6 +694,116 @@ TEST(AllocGroupTest, concatCarvesAroundAViewOperand) {
   EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
 }
 
+// Operands no launch allocates -- views, delegated outputs -- reach the frame
+// when the launch that owns them is sized, not before. The group has to be
+// placed there and not at the first execution point: laying the result out any
+// earlier measures empty frame slots, which arrive as zero extents (an empty
+// operand is legal) and give a result of the wrong size for every operand to be
+// copied into.
+TEST(AllocGroupTest, concatWaitsForAnOperandBoundByALaterLaunch) {
+  const std::vector<NodeFootprint> nodes = {
+      {.node = 0,
+       .launches =
+           {{.step = 0,
+             .writes = {9},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false}}}},
+      {.node = 1, .launches = {{.step = 0, .binds = {10, 11, 12}}}},
+      {.node = 2,
+       .launches =
+           {{.step = 0,
+             .writes = {13},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false},
+             .concats = {oneDimCat(
+                 13,
+                 {boundaryOperand(10, /*carve=*/false),
+                  boundaryOperand(11, /*carve=*/false),
+                  boundaryOperand(12, /*carve=*/false)},
+                 /*layoutNode=*/1,
+                 /*layoutStep=*/0)}}}},
+  };
+
+  folly::F14FastSet<nativert::ValueId> claimed;
+  AllocGroupStats stats;
+  auto groups = graphConcatGroups(nodes, claimed, &stats);
+
+  ASSERT_EQ(groups.size(), 1);
+  EXPECT_EQ(groups[0].allocNode, 1);
+  EXPECT_EQ(groups[0].allocStep, 0);
+  // None of them is a buffer of its own, so the group carves nothing and only
+  // places the result the three are copied into.
+  EXPECT_TRUE(groups[0].actualIds.empty());
+  EXPECT_THAT(claimed, ::testing::UnorderedElementsAre(13));
+}
+
+// An operand no launch writes and no launch binds could be a graph input or the
+// output of one of the many nodes no wave kernel covers, and the scan cannot
+// tell which. It gets the concat's own point, where it is certainly there: the
+// concat's launch reads it.
+TEST(AllocGroupTest, concatOfUnseenOperandsWaitsForItsOwnLaunch) {
+  const std::vector<NodeFootprint> nodes = {
+      {.node = 0,
+       .launches =
+           {{.step = 0,
+             .writes = {9},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false}}}},
+      {.node = 1,
+       .lastStep = 1,
+       .launches =
+           {{.step = 0, .reads = {10, 11, 12}},
+            {.step = 1,
+             .writes = {13},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false},
+             .concats = {oneDimCat(
+                 13,
+                 {boundaryOperand(10, /*carve=*/false),
+                  boundaryOperand(11, /*carve=*/false),
+                  boundaryOperand(12, /*carve=*/false)},
+                 /*layoutNode=*/1,
+                 /*layoutStep=*/1)}}}},
+  };
+
+  folly::F14FastSet<nativert::ValueId> claimed;
+  auto groups = graphConcatGroups(nodes, claimed, nullptr);
+
+  ASSERT_EQ(groups.size(), 1);
+  EXPECT_EQ(groups[0].allocNode, 1);
+  EXPECT_EQ(groups[0].allocStep, 1);
+  EXPECT_TRUE(groups[0].actualIds.empty());
+}
+
+// A concat placement gave operand copies of their own but the group pass will
+// not place is a wrong answer, not a missed optimization: only the group binds
+// the band a copy writes, so the copy would fill an empty frame slot and the
+// concat's kernel, told the operand is copied, would fill nothing.
+TEST(AllocGroupTest, refusingAConcatWithOperandCopiesIsAnError) {
+  auto concat = oneDimCat(
+      13, {boundaryOperand(10), boundaryOperand(11), boundaryOperand(12)});
+  concat.operands[0].copyDestId = 20;
+  const std::vector<NodeFootprint> nodes = {
+      {.node = 0,
+       .launches =
+           {{.step = 0,
+             .writes = {10, 11, 12, 13},
+             .writeDtypes = {at::kFloat, at::kFloat, at::kFloat, at::kFloat},
+             .writeNeedsSync = {false, false, false, false}}}},
+      // A second write of the result is what makes the group pass refuse it.
+      {.node = 1,
+       .launches =
+           {{.step = 0,
+             .writes = {13},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false},
+             .concats = {concat}}}},
+  };
+
+  folly::F14FastSet<nativert::ValueId> claimed;
+  EXPECT_THROW(graphConcatGroups(nodes, claimed, nullptr), c10::Error);
+}
+
 // A view cannot value-convert, so an operand the concat would promote to the
 // result's dtype has to keep its own buffer and be copied in.
 TEST(AllocGroupTest, concatDoesNotCarveAPromotedOperand) {
@@ -670,7 +823,7 @@ TEST(AllocGroupTest, concatDoesNotCarveAPromotedOperand) {
              .concats = {oneDimCat(
                  13,
                  {boundaryOperand(10),
-                  boundaryOperand(11),
+                  boundaryOperand(11, /*carve=*/false),
                   boundaryOperand(12)})}}}},
   };
 
@@ -720,7 +873,10 @@ TEST(AllocGroupTest, concatDoesNotCarveARepeatedOperand) {
 // ArgumentMeta::mayWriteStrided is handed the view. The rest are copied in.
 TEST(AllocGroupTest, concatOffTheOutermostAxisNeedsAStridedWriter) {
   auto concat = oneDimCat(
-      13, {boundaryOperand(10), boundaryOperand(11), boundaryOperand(12)});
+      13,
+      {boundaryOperand(10, /*carve=*/false),
+       boundaryOperand(11),
+       boundaryOperand(12, /*carve=*/false)});
   concat.outRank = 2;
   concat.dim = 1;
   concat.operands[1].mayWriteStrided = true;
@@ -750,7 +906,9 @@ TEST(AllocGroupTest, concatOffTheOutermostAxisNeedsAStridedWriter) {
   EXPECT_EQ(groups[0].concat->dim, 1);
   EXPECT_THAT(groups[0].actualIds, ElementsAre(11));
   EXPECT_THAT(groups[0].concat->memberOfOperand, ElementsAre(-1, 0, -1));
-  EXPECT_EQ(stats.numConcatStridedBand, 2);
+  // The two the verdict left out still contribute their extents, so the result
+  // is laid out around them and only their data is copied in.
+  EXPECT_EQ(stats.numConcatMembers, 1);
 }
 
 // Nothing is installed unless a collector is alive, so the ordinary allocation

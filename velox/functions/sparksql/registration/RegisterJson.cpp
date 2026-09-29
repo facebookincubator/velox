@@ -21,6 +21,16 @@
 #include "velox/functions/sparksql/ToJson.h"
 
 namespace facebook::velox::functions::sparksql {
+namespace {
+
+// registerFunction takes a template <class> typename, which a two-parameter
+// ToJsonFunction does not bind to under strict C++17 template template argument
+// matching. Bind allowScalarRoot here so the registered template takes one
+// parameter.
+template <typename T>
+using ToJson = ToJsonFunction<T, /*allowScalarRoot=*/false>;
+
+} // namespace
 
 void registerJsonFunctions(const std::string& prefix) {
   registerFunction<GetJsonObjectFunction, Varchar, Varchar, Varchar>(
@@ -29,9 +39,8 @@ void registerJsonFunctions(const std::string& prefix) {
       {prefix + "json_object_keys"});
   registerFunction<JsonArrayLengthFunction, int32_t, Varchar>(
       {prefix + "json_array_length"});
-  registerFunction<ToJsonFunction, Varchar, Generic<T1>>({prefix + "to_json"});
-  registerFunction<ToJsonFunction, Varchar, Generic<T1>, Varchar>(
-      {prefix + "to_json"});
+  registerFunction<ToJson, Varchar, Generic<T1>>({prefix + "to_json"});
+  registerFunction<ToJson, Varchar, Generic<T1>, Varchar>({prefix + "to_json"});
 }
 
 } // namespace facebook::velox::functions::sparksql

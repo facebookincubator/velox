@@ -105,7 +105,7 @@ class NullColumnReaderTest : public ::testing::Test,
 TEST_F(NullColumnReaderTest, missingScalarColumn) {
   constexpr int kSize = 100;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -130,7 +130,7 @@ TEST_F(NullColumnReaderTest, missingScalarColumn) {
 TEST_F(NullColumnReaderTest, missingComplexColumn) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int32_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {INTEGER(), ARRAY(BIGINT())});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -149,7 +149,7 @@ TEST_F(NullColumnReaderTest, missingComplexColumn) {
 TEST_F(NullColumnReaderTest, missingTimestampColumn) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int32_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {INTEGER(), TIMESTAMP()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -167,7 +167,7 @@ TEST_F(NullColumnReaderTest, missingTimestampColumn) {
 TEST_F(NullColumnReaderTest, filterIsNullOnMissing) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -190,7 +190,7 @@ TEST_F(NullColumnReaderTest, filterIsNullOnMissing) {
 TEST_F(NullColumnReaderTest, filterIsNotNullOnMissing) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -209,7 +209,7 @@ TEST_F(NullColumnReaderTest, filterIsNotNullOnMissing) {
 TEST_F(NullColumnReaderTest, filterValueOnMissing) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -227,7 +227,7 @@ TEST_F(NullColumnReaderTest, filterValueOnMissing) {
 TEST_F(NullColumnReaderTest, filterValueAllowNullOnMissing) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -249,7 +249,7 @@ TEST_F(NullColumnReaderTest, filterValueAllowNullOnMissing) {
 TEST_F(NullColumnReaderTest, skipOnMissingColumn) {
   constexpr int kSize = 100;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   auto readType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");

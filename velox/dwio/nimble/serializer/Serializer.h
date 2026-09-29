@@ -28,8 +28,8 @@ namespace facebook::nimble {
 /// Serializer converts Velox vectors into a serialized nimble format.
 ///
 /// This class provides a lightweight serialization interface for converting
-/// Velox vectors to nimble encoded byte streams. It supports flat map encoding
-/// for specified columns via Serializer::Options::flatMapColumns.
+/// Velox vectors to nimble encoded byte streams. It supports FlatMap and
+/// Hybrid FlatMap encoding through SerializerOptions column configuration.
 class Serializer {
  public:
   using Options = SerializerOptions;
@@ -66,13 +66,11 @@ class Serializer {
       const EncodingLayoutTree& tree,
       const TypeBuilder& typeBuilder);
 
-  // Returns pointer to streamEncodingLayouts_ if encoding is enabled and we
-  // have captured encodings to replay. Otherwise returns nullptr.
+  // Returns pointer to streamEncodingLayouts_ if we have captured encodings to
+  // replay. Otherwise returns nullptr.
   const std::unordered_map<uint32_t, const EncodingLayout*>*
   getStreamEncodingLayouts() const {
-    return (options_.enableEncoding() && !streamEncodingLayouts_.empty())
-        ? &streamEncodingLayouts_
-        : nullptr;
+    return streamEncodingLayouts_.empty() ? nullptr : &streamEncodingLayouts_;
   }
 
   // Validates input shapes that the serializer can write but the dense
@@ -136,8 +134,7 @@ void Serializer::serialize(
     }
     streamWriter.writeData(*streamData);
   }
-  // Pass nodeCount for kLegacy to fill trailing zeros.
-  streamWriter.close(context_.schemaBuilder().nodeCount());
+  streamWriter.close();
 
   writer_->reset();
   context_.resetStringBuffer();

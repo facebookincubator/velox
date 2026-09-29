@@ -28,6 +28,7 @@
 #include "boost/math/distributions/gamma.hpp"
 #include "boost/math/distributions/poisson.hpp"
 #include "boost/math/special_functions/erf.hpp"
+#include "boost/math/tools/toms748_solve.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -174,6 +175,42 @@ struct LaplaceCDFFunction {
   }
 };
 
+constexpr std::uintmax_t kInverseBetaCdfMaxIterations =
+    std::numeric_limits<double>::digits -
+    std::numeric_limits<double>::min_exponent;
+
+// Uses a bracketed solver when Boost's faster quantile implementation fails
+// to converge.
+FOLLY_ALWAYS_INLINE double inverseBetaCdfByBracketing(
+    const boost::math::beta_distribution<>& distribution,
+    double probability,
+    std::uintmax_t maxIterations) {
+  if (probability == 0.0 || probability == 1.0) {
+    return probability;
+  }
+
+  const auto objective = [&](double value) {
+    return boost::math::cdf(distribution, value) - probability;
+  };
+  auto tolerance = boost::math::tools::eps_tolerance<double>();
+  std::pair<double, double> bounds;
+  try {
+    bounds = boost::math::tools::toms748_solve(
+        objective, 0.0, 1.0, tolerance, maxIterations);
+  } catch (const std::exception& error) {
+    VELOX_USER_FAIL(
+        "Failed to compute inverse beta CDF with fallback solver: {}",
+        error.what());
+  }
+  const auto [lowerBound, upperBound] = bounds;
+  VELOX_USER_CHECK(
+      tolerance(lowerBound, upperBound),
+      "Failed to compute inverse beta CDF: fallback solver did not converge "
+      "after {} iterations",
+      maxIterations);
+  return (lowerBound + upperBound) / 2;
+}
+
 template <typename T>
 struct InverseBetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -187,8 +224,13 @@ struct InverseBetaCDFFunction {
     VELOX_USER_CHECK((a > 0) && (a != kInf), "a must be > 0");
     VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
 
-    boost::math::beta_distribution<> dist(a, b);
-    result = boost::math::quantile(dist, p);
+    const boost::math::beta_distribution<> dist(a, b);
+    try {
+      result = boost::math::quantile(dist, p);
+    } catch (const boost::math::evaluation_error&) {
+      result =
+          inverseBetaCdfByBracketing(dist, p, kInverseBetaCdfMaxIterations);
+    }
   }
 };
 

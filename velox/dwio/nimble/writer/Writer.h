@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <string_view>
 
 #include "velox/buffer/BufferPool.h"
@@ -25,6 +26,7 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
@@ -78,6 +80,37 @@ class Writer : public velox::dwio::common::Writer {
   /// bytes for the caller (or the sink) to discard.
   void abort() override;
 
+  /// Flushes the in-flight stripe, writes a footer and postscript plus a
+  /// `columnar.checkpoint` optional section, and closes the underlying file
+  /// without finalizing it. The storage object is left unsealed so that
+  /// resume() can append to it, and the writer rejects further writes.
+  ///
+  /// The result has a valid footer and remains structurally inspectable. It
+  /// may omit serving artifacts that require the complete file, such as the
+  /// finalized index and shared-dictionary catalogs. See
+  /// TabletReader::suspended().
+  ///
+  /// Not implemented yet.
+  void suspend();
+
+  /// Reopens the suspended file at 'path' and rebuilds writer state from it,
+  /// so that writing continues where it left off. Opens the file for read to
+  /// consume the footer and the checkpoint section, then reopens it for
+  /// append at its end. Nearly all the state comes from sections a reader
+  /// already consumes; only the residue comes from the checkpoint.
+  ///
+  /// Fails when the file carries no checkpoint section, or when 'type' and
+  /// 'options' would lay streams out differently than the suspended file
+  /// did: the final footer holds a single schema that has to describe every
+  /// stripe.
+  ///
+  /// Not implemented yet.
+  static std::unique_ptr<Writer> resume(
+      const velox::TypePtr& type,
+      std::string_view path,
+      velox::memory::MemoryPool& pool,
+      const WriterOptions& options);
+
   /// Names the writer publishes its counters under. Consumers name a key
   /// instead of a struct field, so adding a counter no longer changes this
   /// class's API.
@@ -90,10 +123,12 @@ class Writer : public velox::dwio::common::Writer {
     static constexpr std::string_view kWriteCpuNanos = "nimble.writeCpuNanos";
     /// Wall clock time spent in tabletWriter write.
     static constexpr std::string_view kWriteWallNanos = "nimble.writeWallNanos";
-    /// CPU time spent ingesting vectors into field writer buffers. Sequential —
-    /// no wall time needed.
+    /// CPU time spent ingesting vectors into field writer buffers.
     static constexpr std::string_view kIngestionCpuNanos =
         "nimble.ingestionCpuNanos";
+    /// Wall clock time spent ingesting vectors into field writer buffers.
+    static constexpr std::string_view kIngestionWallNanos =
+        "nimble.ingestionWallNanos";
     /// CPU time spent on encoding and compression.
     // TODO: Separate encoding and compression costs.
     static constexpr std::string_view kEncodingCpuNanos =
@@ -203,9 +238,14 @@ class Writer : public velox::dwio::common::Writer {
 
   bool shouldChunk(FlushPolicy* policy) const;
 
+  // Chunks 'indices' in batches of chunkedStreamBatchSize. When
+  // 'stopWhenPressureRelieved', gives up as soon as the policy reports the
+  // writer is no longer over its memory budget; cap enforcement passes false
+  // so that every oversized stream is chunked, not just the first batch.
   bool flushChunks(
       const std::vector<uint32_t>& indices,
       bool ensureFullChunks,
+      bool stopWhenPressureRelieved,
       FlushPolicy* policy);
 
   bool encodeStreamChunk(
@@ -234,6 +274,19 @@ class Writer : public velox::dwio::common::Writer {
       EncodingBufferPool* encodingBufferPool,
       uint64_t& streamSize,
       std::atomic_uint64_t& chunkSize);
+
+  // Returns the descriptors of all-true, single-chunk flat map in-map streams.
+  // Must run single-threaded in the encode prologue of the closing pass: it
+  // reads raw peer streams, which the concurrent encode is free to consume, and
+  // all-true is knowable only there. By then no further rows can arrive, so
+  // both "pending" and "already chunked" are stable.
+  std::vector<const StreamDescriptorBuilder*> collectAllTrueInMapStreams();
+
+  // Clears the encoded chunks of the candidates whose key is still provable
+  // from a value stream, so those in-map streams reach disk as nothing. Runs
+  // after the encode loop, where "reached disk" is just chunk presence.
+  void suppressAllTrueInMapStreams(
+      const std::vector<const StreamDescriptorBuilder*>& candidates);
 
   void processStream(
       StreamData& streamData,
@@ -288,7 +341,8 @@ class Writer : public velox::dwio::common::Writer {
   void updateIoStatistics();
 
   // Writes caller-supplied key/value metadata into the optional metadata
-  // section.
+  // section, merging whatever `options.metadataProvider` returns over
+  // `options.metadata`.
   void writeMetadata();
   // Writes the column statistics section, using the vectorized representation
   // when enabled and the legacy raw-size section otherwise.
@@ -323,7 +377,14 @@ class Writer : public velox::dwio::common::Writer {
   // by sequential writes; parallel writes use one pool per concurrent encode
   // task because EncodingBufferPool is not thread-safe.
   std::unique_ptr<EncodingBufferPool> makeEncodingBufferPool() const;
-  uint32_t encodingConcurrency(uint32_t taskCount) const;
+  uint32_t encodingConcurrency(uint32_t streamCount) const;
+
+  // Orders stream indices largest-first, so that parallel encode batches group
+  // comparably sized streams together. The streamCount overload orders the
+  // identity range [0, streamCount) without materializing it first.
+  std::vector<uint32_t> encodeOrder(uint32_t streamCount) const;
+  std::vector<uint32_t> encodeOrder(
+      std::span<const uint32_t> streamIndices) const;
   void ensureEncodingScratchBufferPools(uint32_t poolCount);
   void ensureEncodingBufferPools(uint32_t poolCount);
   velox::BufferPool* encodingScratchBufferPool(uint32_t index = 0);
@@ -356,6 +417,8 @@ class Writer : public velox::dwio::common::Writer {
   std::unique_ptr<velox::WriteFile> file_;
   const std::unique_ptr<index::IndexWriter> clusterIndexWriter_;
   const std::vector<DenseIndexWriter> denseIndexWriters_;
+  // Accumulates vectors for all configured similarity-search indexes.
+  const std::unique_ptr<index::VectorIndexWriter> vectorIndexWriter_;
   const std::unique_ptr<TabletWriter> tabletWriter_;
   // Built once at construction from `options.bufferPolicyFactory`; null if
   // the caller didn't set the factory (legacy FlushPolicy path).

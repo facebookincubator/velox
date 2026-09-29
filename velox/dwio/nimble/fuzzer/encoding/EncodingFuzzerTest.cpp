@@ -50,14 +50,15 @@
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
-#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 #endif
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
@@ -442,6 +443,26 @@ TYPED_TEST(SubIntSplitFuzzerTest, correctness) {
   fuzzer.run();
 }
 
+TYPED_TEST(SubIntSplitFuzzerTest, compressionAndRowCountFormats) {
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(
+        ::testing::Message() << "useVarintRowCount=" << useVarintRowCount);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    EncodingFuzzer<TypeParam> fuzzer(
+        /*iterations=*/1,
+        /*maxRows=*/128,
+        /*seed=*/0x51'51,
+        /*testCompression=*/true,
+        options,
+        /*minDistinctValues=*/1,
+        /*maxDistinctValues=*/std::numeric_limits<uint32_t>::max(),
+        /*largeInputRows=*/0,
+        /*realNestedSelection=*/true);
+    fuzzer.run();
+  }
+}
+
 namespace {
 
 template <typename T>
@@ -468,7 +489,8 @@ EncodingSelectionPolicyCreator makeLeafPolicyCreator() {
 }
 
 // Builds an EncodingSelection from the policy and calls SubIntSplitEncoding
-// directly, mirroring EncodingFactory::encode (which has no SubIntSplit case).
+// directly. EncodingFactory::encode picks the encoding itself, which would not
+// force SubIntSplit; this mirrors the body of its SubIntSplit case.
 template <typename T>
 std::string_view encodeWithPolicy(
     std::unique_ptr<EncodingSelectionPolicy<T>> policy,
@@ -486,12 +508,16 @@ std::string_view encodeWithPolicy(
       selection, physicalValues, buffer, /*options=*/{});
 }
 
+// Goes through EncodingFactory rather than constructing the encoding directly,
+// so every fuzz case also covers the factory's SubIntSplit dispatch.
 template <typename T>
 std::unique_ptr<Encoding> decodeSubIntSplit(
     std::string_view encoded,
     velox::memory::MemoryPool& pool) {
-  return std::make_unique<SubIntSplitEncoding<T>>(
-      pool, encoded, [](uint32_t) { return nullptr; });
+  auto decoded =
+      EncodingFactory().create(pool, encoded, [](uint32_t) { return nullptr; });
+  EXPECT_EQ(decoded->encodingType(), EncodingType::SubIntSplit);
+  return decoded;
 }
 
 // Bit-exact comparison (float/double checked on their bit pattern, NaN-safe).
@@ -529,8 +555,7 @@ constexpr SnowflakeLayout snowflakeLayout() {
 // A random contiguous partition of [0, kBits) into 1..6 sections -- a valid
 // preserve-mode boundary set (covers all bits, no gaps/overlaps).
 template <typename T>
-std::vector<detail::subintsplit::SegmentPlan> makeRandomSegments(
-    std::mt19937& rng) {
+std::vector<subintsplit::SectionPlan> makeRandomSegments(std::mt19937& rng) {
   constexpr int kBits =
       static_cast<int>(sizeof(typename TypeTraits<T>::physicalType) * 8);
   std::uniform_int_distribution<int> internalCutCount(
@@ -541,7 +566,7 @@ std::vector<detail::subintsplit::SegmentPlan> makeRandomSegments(
   while (static_cast<int>(boundaries.size()) < cuts) {
     boundaries.insert(cutPos(rng));
   }
-  std::vector<detail::subintsplit::SegmentPlan> segments;
+  std::vector<subintsplit::SectionPlan> segments;
   int start = 0;
   for (const int boundary : boundaries) {
     segments.push_back({.bitStart = start, .bitEnd = boundary - 1});
@@ -553,19 +578,18 @@ std::vector<detail::subintsplit::SegmentPlan> makeRandomSegments(
 
 template <typename T>
 EncodingLayout makePreserveLayout(
-    const std::vector<detail::subintsplit::SegmentPlan>& segments) {
+    const std::vector<subintsplit::SectionPlan>& segments) {
   std::vector<std::optional<const EncodingLayout>> children(segments.size());
   return EncodingLayout{
       EncodingType::SubIntSplit,
-      EncodingLayout::Config{
-          detail::subintsplit::makePreserveSplitConfig(segments)},
+      EncodingLayout::Config{subintsplit::makePreserveSplitConfig(segments)},
       CompressionType::Uncompressed,
       std::move(children)};
 }
 
 template <typename T>
 std::string_view encodePreserve(
-    const std::vector<detail::subintsplit::SegmentPlan>& segments,
+    const std::vector<subintsplit::SectionPlan>& segments,
     std::span<const T> values,
     Buffer& buffer) {
   const auto layout = makePreserveLayout<T>(segments);
@@ -598,6 +622,8 @@ std::vector<Vector<T>> makeSubIntSplitDatasets(
   datasets.push_back(makeDominantValueData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeBitStructuredData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeSnowflakeData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeAdversarialBitPatternData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeMixedRegimeData<T>(pool, rng, rowCount, buffer));
   std::erase_if(datasets, [](const Vector<T>& d) { return d.empty(); });
   return datasets;
@@ -643,7 +669,7 @@ TYPED_TEST(SubIntSplitFuzzerTest, snowflakeFieldAlignedSplit) {
   const auto layout = snowflakeLayout<T>();
   constexpr int kBits =
       static_cast<int>(sizeof(typename TypeTraits<T>::physicalType) * 8);
-  const std::vector<detail::subintsplit::SegmentPlan> segments = {
+  const std::vector<subintsplit::SectionPlan> segments = {
       {.bitStart = 0, .bitEnd = layout.sequenceBits - 1},
       {.bitStart = layout.sequenceBits,
        .bitEnd = layout.sequenceBits + layout.workerBits - 1},

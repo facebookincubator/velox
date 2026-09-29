@@ -61,7 +61,7 @@ cudf::size_type countNulls(const std::vector<bool>& valid) {
 
 rmm::device_buffer makeNullMask(
     const std::vector<bool>& valid,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto size = checkedSize(valid);
   auto nullMask =
@@ -77,13 +77,13 @@ rmm::device_buffer makeNullMask(
       hostMask.data(),
       hostMask.size() * sizeof(cudf::bitmask_type),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
   return nullMask;
 }
 
 std::unique_ptr<cudf::column> makeNullableIntColumn(
     const std::vector<bool>& valid,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto size = checkedSize(valid);
   return std::make_unique<cudf::column>(
@@ -96,7 +96,7 @@ std::unique_ptr<cudf::column> makeNullableIntColumn(
 
 std::vector<cudf::bitmask_type> copyNullMaskToHost(
     cudf::column_view column,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   std::vector<cudf::bitmask_type> hostMask(
       cudf::num_bitmask_words(column.size()));
   CUDF_CUDA_TRY(cudaMemcpyAsync(
@@ -104,15 +104,15 @@ std::vector<cudf::bitmask_type> copyNullMaskToHost(
       column.null_mask(),
       hostMask.size() * sizeof(cudf::bitmask_type),
       cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
+      stream.get()));
+  stream.sync();
   return hostMask;
 }
 
 void assertValidity(
     cudf::column_view column,
     const std::vector<bool>& expectedValid,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   ASSERT_EQ(column.size(), checkedSize(expectedValid));
   EXPECT_EQ(column.null_count(), countNulls(expectedValid));
   if (!column.has_nulls()) {
@@ -130,7 +130,7 @@ void assertValidity(
 
 class NullMaskTest : public ::testing::Test {
  protected:
-  rmm::cuda_stream_view stream_{cudf::get_default_stream()};
+  cuda::stream_ref stream_{cudf::get_default_stream()};
   rmm::device_async_resource_ref mr_{cudf::get_current_device_resource_ref()};
 };
 

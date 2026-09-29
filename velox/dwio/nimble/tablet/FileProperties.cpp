@@ -27,11 +27,13 @@ namespace facebook::nimble {
 FileProperties::FileProperties(
     bool compactRowCountEncoding,
     bool clusterIndexKeyColumnStorageOmitted,
-    std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage)
+    std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
+    bool hasStreamChecksums)
     : compactRowCountEncoding_{compactRowCountEncoding},
       clusterIndexKeyColumnStorageOmitted_{clusterIndexKeyColumnStorageOmitted},
       clusterIndexKeyColumnsWithOmittedStorage_{
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)} {
+          std::move(clusterIndexKeyColumnsWithOmittedStorage)},
+      hasStreamChecksums_{hasStreamChecksums} {
   NIMBLE_CHECK_EQ(
       clusterIndexKeyColumnStorageOmitted_,
       !clusterIndexKeyColumnsWithOmittedStorage_.empty(),
@@ -60,7 +62,8 @@ std::string FileProperties::serialize() const {
           builder,
           clusterIndexKeyColumnStorageOmitted_,
           clusterIndexKeyColumnsWithOmittedStorage,
-          compactEncodingOffset));
+          compactEncodingOffset,
+          hasStreamChecksums_));
 
   return std::string{
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -88,10 +91,12 @@ FileProperties FileProperties::deserialize(std::string_view data) {
       serialized->cluster_index_key_column_storage_omitted(),
       !clusterIndexKeyColumnsWithOmittedStorage.empty(),
       "cluster_index_key_column_storage_omitted must match cluster_index_key_columns_with_omitted_storage presence");
+
   return FileProperties{
       compactRowCountEncoding,
       serialized->cluster_index_key_column_storage_omitted(),
-      std::move(clusterIndexKeyColumnsWithOmittedStorage)};
+      std::move(clusterIndexKeyColumnsWithOmittedStorage),
+      serialized->has_stream_checksums()};
 }
 
 } // namespace facebook::nimble

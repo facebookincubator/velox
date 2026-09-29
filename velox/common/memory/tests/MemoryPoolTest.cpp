@@ -142,6 +142,12 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
   MemoryReclaimer::Stats stats_;
 };
 
+class MemoryArbitratorTestHelper : public MemoryArbitrator {
+ public:
+  using MemoryArbitrator::growPool;
+  using MemoryArbitrator::shrinkPool;
+};
+
 TEST_P(MemoryPoolTest, ctor) {
   MemoryManager::Options options;
   options.alignment = 64;
@@ -548,11 +554,13 @@ TEST_P(MemoryPoolTest, growFailures) {
     ASSERT_EQ(poolWithoutLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithoutLimit->reservedBytes(), 0);
     VELOX_ASSERT_THROW(
-        poolWithoutLimit->grow(1, 0), "Can't grow with unlimited capacity");
+        MemoryArbitratorTestHelper::growPool(poolWithoutLimit.get(), 1, 0),
+        "Can't grow with unlimited capacity");
     ASSERT_EQ(poolWithoutLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithoutLimit->reservedBytes(), 0);
     VELOX_ASSERT_THROW(
-        poolWithoutLimit->grow(1, 1'000), "Can't grow with unlimited capacity");
+        MemoryArbitratorTestHelper::growPool(poolWithoutLimit.get(), 1, 1'000),
+        "Can't grow with unlimited capacity");
     ASSERT_EQ(poolWithoutLimit->usedBytes(), 0);
   }
   {
@@ -561,17 +569,25 @@ TEST_P(MemoryPoolTest, growFailures) {
     ASSERT_EQ(poolWithLimit->capacity(), capacity);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
-    ASSERT_EQ(poolWithLimit->shrink(poolWithLimit->reservedBytes()), capacity);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(
+            poolWithLimit.get(), poolWithLimit->reservedBytes()),
+        capacity);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
-    ASSERT_TRUE(poolWithLimit->grow(capacity / 2, 0));
+    ASSERT_TRUE(
+        MemoryArbitratorTestHelper::growPool(
+            poolWithLimit.get(), capacity / 2, 0));
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
-    ASSERT_FALSE(poolWithLimit->grow(capacity, 0));
+    ASSERT_FALSE(
+        MemoryArbitratorTestHelper::growPool(poolWithLimit.get(), capacity, 0));
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->capacity(), capacity / 2);
-    ASSERT_FALSE(poolWithLimit->grow(capacity, 1'000));
+    ASSERT_FALSE(
+        MemoryArbitratorTestHelper::growPool(
+            poolWithLimit.get(), capacity, 1'000));
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
   }
@@ -583,17 +599,23 @@ TEST_P(MemoryPoolTest, growFailures) {
     ASSERT_EQ(poolWithLimit->capacity(), capacity);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
-    ASSERT_EQ(poolWithLimit->shrink(poolWithLimit->capacity()), capacity);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(
+            poolWithLimit.get(), poolWithLimit->capacity()),
+        capacity);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->capacity(), 0);
 
-    ASSERT_FALSE(poolWithLimit->grow(capacity / 2, capacity));
+    ASSERT_FALSE(
+        MemoryArbitratorTestHelper::growPool(
+            poolWithLimit.get(), capacity / 2, capacity));
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->capacity(), 0);
 
-    ASSERT_FALSE(poolWithLimit->grow(0, capacity));
+    ASSERT_FALSE(
+        MemoryArbitratorTestHelper::growPool(poolWithLimit.get(), 0, capacity));
     ASSERT_EQ(poolWithLimit->reservedBytes(), 0);
     ASSERT_EQ(poolWithLimit->usedBytes(), 0);
     ASSERT_EQ(poolWithLimit->capacity(), 0);
@@ -606,7 +628,7 @@ TEST_P(MemoryPoolTest, grow) {
   auto manager = getMemoryManager();
   const int64_t capacity = 4 * GB;
   auto root = manager->addRootPool("grow", capacity);
-  root->shrink(capacity / 2);
+  MemoryArbitratorTestHelper::shrinkPool(root.get(), capacity / 2);
   ASSERT_EQ(root->capacity(), capacity / 2);
 
   auto leaf = root->addLeafChild("leafPool");
@@ -614,19 +636,19 @@ TEST_P(MemoryPoolTest, grow) {
   ASSERT_EQ(root->capacity(), capacity / 2);
   ASSERT_EQ(root->reservedBytes(), 1 * MB);
 
-  ASSERT_TRUE(root->grow(0, 2 * MB));
+  ASSERT_TRUE(MemoryArbitratorTestHelper::growPool(root.get(), 0, 2 * MB));
   ASSERT_EQ(root->reservedBytes(), 3 * MB);
   ASSERT_EQ(root->capacity(), capacity / 2);
 
-  ASSERT_TRUE(root->grow(0, 4 * MB));
+  ASSERT_TRUE(MemoryArbitratorTestHelper::growPool(root.get(), 0, 4 * MB));
   ASSERT_EQ(root->reservedBytes(), 7 * MB);
   ASSERT_EQ(root->capacity(), capacity / 2);
 
-  ASSERT_TRUE(root->grow(1 * MB, 2 * MB));
+  ASSERT_TRUE(MemoryArbitratorTestHelper::growPool(root.get(), 1 * MB, 2 * MB));
   ASSERT_EQ(root->reservedBytes(), 9 * MB);
   ASSERT_EQ(root->capacity(), capacity / 2 + 1 * MB);
 
-  ASSERT_TRUE(root->grow(6 * MB, 4 * MB));
+  ASSERT_TRUE(MemoryArbitratorTestHelper::growPool(root.get(), 6 * MB, 4 * MB));
   ASSERT_EQ(root->reservedBytes(), 13 * MB);
   ASSERT_EQ(root->capacity(), capacity / 2 + 7 * MB);
 
@@ -3114,8 +3136,11 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     }
     if (capacity == 0) {
       VELOX_ASSERT_THROW(leafPool->allocate(allocationSize), "");
-      ASSERT_EQ(leafPool->shrink(0), 0);
-      ASSERT_EQ(leafPool->shrink(allocationSize), 0);
+      ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), 0), 0);
+      ASSERT_EQ(
+          MemoryArbitratorTestHelper::shrinkPool(
+              leafPool.get(), allocationSize),
+          0);
       continue;
     }
     void* buffer = leafPool->allocate(allocationSize);
@@ -3123,15 +3148,34 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
       ASSERT_EQ(rootPool->freeBytes(), 0);
       ASSERT_EQ(leafPool->freeBytes(), 0);
       ASSERT_EQ(aggregationPool->freeBytes(), 0);
-      VELOX_ASSERT_THROW(leafPool->shrink(0), "");
-      VELOX_ASSERT_THROW(leafPool->shrink(allocationSize), "");
-      VELOX_ASSERT_THROW(leafPool->shrink(kMaxMemory), "");
-      VELOX_ASSERT_THROW(aggregationPool->shrink(0), "");
-      VELOX_ASSERT_THROW(aggregationPool->shrink(allocationSize), "");
-      VELOX_ASSERT_THROW(aggregationPool->shrink(kMaxMemory), "");
-      VELOX_ASSERT_THROW(rootPool->shrink(0), "");
-      VELOX_ASSERT_THROW(rootPool->shrink(allocationSize), "");
-      VELOX_ASSERT_THROW(rootPool->shrink(kMaxMemory), "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), 0), "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(
+              leafPool.get(), allocationSize),
+          "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), kMaxMemory),
+          "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(aggregationPool.get(), 0), "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(
+              aggregationPool.get(), allocationSize),
+          "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(
+              aggregationPool.get(), kMaxMemory),
+          "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(rootPool.get(), 0), "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(
+              rootPool.get(), allocationSize),
+          "");
+      VELOX_ASSERT_THROW(
+          MemoryArbitratorTestHelper::shrinkPool(rootPool.get(), kMaxMemory),
+          "");
       leafPool->free(buffer, allocationSize);
       continue;
     }
@@ -3139,8 +3183,9 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     ASSERT_EQ(leafPool->freeBytes(), capacity - allocationSize);
     ASSERT_EQ(aggregationPool->freeBytes(), capacity - allocationSize);
 
-    ASSERT_EQ(leafPool->shrink(allocationSize), allocationSize);
-
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), allocationSize),
+        allocationSize);
     ASSERT_EQ(leafPool->capacity(), capacity - allocationSize);
     ASSERT_EQ(aggregationPool->capacity(), capacity - allocationSize);
     ASSERT_EQ(rootPool->capacity(), capacity - allocationSize);
@@ -3149,7 +3194,9 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     ASSERT_EQ(aggregationPool->freeBytes(), capacity - 2 * allocationSize);
     ASSERT_EQ(rootPool->freeBytes(), capacity - 2 * allocationSize);
 
-    ASSERT_EQ(aggregationPool->shrink(), capacity - 2 * allocationSize);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(aggregationPool.get(), 0),
+        capacity - 2 * allocationSize);
     ASSERT_EQ(leafPool->capacity(), allocationSize);
     ASSERT_EQ(aggregationPool->capacity(), allocationSize);
     ASSERT_EQ(rootPool->capacity(), allocationSize);
@@ -3158,9 +3205,10 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     ASSERT_EQ(aggregationPool->freeBytes(), 0);
     ASSERT_EQ(rootPool->freeBytes(), 0);
 
-    ASSERT_EQ(leafPool->shrink(), 0);
-    ASSERT_EQ(aggregationPool->shrink(), 0);
-    ASSERT_EQ(rootPool->shrink(), 0);
+    ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), 0), 0);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(aggregationPool.get(), 0), 0);
+    ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(rootPool.get(), 0), 0);
 
     leafPool->free(buffer, allocationSize);
 
@@ -3172,14 +3220,20 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     ASSERT_EQ(aggregationPool->freeBytes(), allocationSize);
     ASSERT_EQ(rootPool->freeBytes(), allocationSize);
 
-    ASSERT_EQ(leafPool->shrink(allocationSize / 2), allocationSize / 2);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(
+            leafPool.get(), allocationSize / 2),
+        allocationSize / 2);
     ASSERT_EQ(leafPool->capacity(), allocationSize / 2);
     ASSERT_EQ(aggregationPool->capacity(), allocationSize / 2);
     ASSERT_EQ(rootPool->capacity(), allocationSize / 2);
 
-    ASSERT_EQ(leafPool->shrink(), allocationSize / 2);
-    ASSERT_EQ(aggregationPool->shrink(), 0);
-    ASSERT_EQ(rootPool->shrink(), 0);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), 0),
+        allocationSize / 2);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(aggregationPool.get(), 0), 0);
+    ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(rootPool.get(), 0), 0);
 
     ASSERT_EQ(leafPool->capacity(), 0);
     ASSERT_EQ(aggregationPool->capacity(), 0);
@@ -3189,21 +3243,34 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
     ASSERT_EQ(aggregationPool->freeBytes(), 0);
     ASSERT_EQ(rootPool->freeBytes(), 0);
 
-    ASSERT_EQ(leafPool->shrink(allocationSize), 0);
-    ASSERT_EQ(aggregationPool->shrink(allocationSize), 0);
-    ASSERT_EQ(rootPool->shrink(allocationSize), 0);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(leafPool.get(), allocationSize),
+        0);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(
+            aggregationPool.get(), allocationSize),
+        0);
+    ASSERT_EQ(
+        MemoryArbitratorTestHelper::shrinkPool(rootPool.get(), allocationSize),
+        0);
 
     const int step = 10;
     for (int i = 0; i < step; ++i) {
       const int expectedCapacity = (i + 1) * allocationSize;
       if (i % 3 == 0) {
-        ASSERT_TRUE(leafPool->grow(allocationSize, 0));
+        ASSERT_TRUE(
+            MemoryArbitratorTestHelper::growPool(
+                leafPool.get(), allocationSize, 0));
         ASSERT_EQ(leafPool->capacity(), expectedCapacity);
       } else if (i % 3 == 1) {
-        ASSERT_TRUE(aggregationPool->grow(allocationSize, 0));
+        ASSERT_TRUE(
+            MemoryArbitratorTestHelper::growPool(
+                aggregationPool.get(), allocationSize, 0));
         ASSERT_EQ(leafPool->capacity(), expectedCapacity);
       } else {
-        ASSERT_TRUE(rootPool->grow(allocationSize, 0));
+        ASSERT_TRUE(
+            MemoryArbitratorTestHelper::growPool(
+                rootPool.get(), allocationSize, 0));
         ASSERT_EQ(leafPool->capacity(), expectedCapacity);
       }
       ASSERT_EQ(leafPool->capacity(), expectedCapacity);

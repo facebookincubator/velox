@@ -121,7 +121,7 @@ cudf::column_view bitcastColumn(
 
 cudf::numeric_scalar<int64_t> int64Scalar(
     int64_t value,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::numeric_scalar<int64_t>(value, true, stream);
 }
 
@@ -130,7 +130,7 @@ std::unique_ptr<cudf::column> binaryOp(
     const cudf::scalar& rhs,
     cudf::binary_operator op,
     cudf::data_type outType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::binary_operation(lhs, rhs, op, outType, stream, mr);
 }
@@ -139,7 +139,7 @@ std::unique_ptr<cudf::column> binaryOp(
 // ZONE column.
 std::unique_ptr<cudf::column> unpackMillis(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return binaryOp(
       packed,
@@ -165,7 +165,7 @@ struct DistinctZones {
 // host so each zone's name/transition lookup runs once. One device->host sync.
 DistinctZones distinctZones(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto perRowKey = binaryOp(
       packed,
@@ -192,14 +192,14 @@ DistinctZones distinctZones(
       uniqueKeys.data<int64_t>(),
       hostKeys.size() * sizeof(int64_t),
       cudaMemcpyDeviceToHost,
-      stream.value()));
+      stream.get()));
   CUDF_CUDA_TRY(cudaMemcpyAsync(
       hostValid.data(),
       uniqueValid->view().data<int8_t>(),
       hostValid.size() * sizeof(int8_t),
       cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
+      stream.get()));
+  stream.sync();
 
   std::vector<int16_t> keys;
   keys.reserve(uniqueKeys.size());
@@ -218,7 +218,7 @@ DistinctZones distinctZones(
 // O(#distinct zones) device passes.
 std::unique_ptr<cudf::column> perRowOffsetSeconds(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto millis = unpackMillis(packed, stream, mr);
   auto millisTs =
@@ -253,7 +253,7 @@ std::unique_ptr<cudf::column> perRowOffsetSeconds(
 // copy_if_else. Null rows stay null. O(#distinct zones) device passes.
 std::unique_ptr<cudf::column> perRowZoneName(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto zones = distinctZones(packed, stream, mr);
 
@@ -290,7 +290,7 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
     const cudf::column_view& offsetSeconds,
     bool includeColon,
     const std::optional<std::string>& zeroOffsetText,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto isNegative = binaryOp(
       offsetSeconds,
@@ -389,7 +389,7 @@ struct LocalAndOffset {
 
 LocalAndOffset localAndOffset(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto millis = unpackMillis(packed, stream, mr);
   auto offsetSeconds = perRowOffsetSeconds(packed, stream, mr);
@@ -536,7 +536,7 @@ class ToUnixtimeFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto millis = unpackMillis(packed, stream, mr);
@@ -565,7 +565,7 @@ class AtTimezoneFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     // Keep the UTC millis bits, replace the low 12 zone bits with the new key.
@@ -606,7 +606,7 @@ class TimezoneFieldFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto offsetSeconds = perRowOffsetSeconds(packed, stream, mr);
@@ -652,7 +652,7 @@ class ToIso8601Function : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto parts = localAndOffset(packed, stream, mr);
@@ -693,7 +693,7 @@ class FormatDatetimeFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto parts = localAndOffset(packed, stream, mr);
@@ -758,7 +758,7 @@ class FormatDatetimeFunction : public CudfFunction {
 // packed value instead of rejecting it as CPU does.
 void checkMillisInRange(
     const cudf::column_view& millis,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (millis.size() == 0 || millis.null_count() == millis.size()) {
     return;
@@ -794,7 +794,7 @@ void checkMillisInRange(
 // zone field and corrupts the packed millis.
 void checkOffsetMagnitudeInRange(
     const cudf::column_view& magnitudeMinutes,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (magnitudeMinutes.size() == 0 ||
       magnitudeMinutes.null_count() == magnitudeMinutes.size()) {
@@ -816,7 +816,7 @@ void checkOffsetMagnitudeInRange(
 // false (so a batch of only SQL-NULL rows raises no error).
 bool anyRowTrue(
     const cudf::column_view& mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (mask.size() == 0) {
     return false;
@@ -842,7 +842,7 @@ std::unique_ptr<cudf::column> signedOffsetMinutes(
     const cudf::column_view& signChar,
     const cudf::column_view& hoursDigits,
     const cudf::column_view& minutesDigits,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto offsetHours = cudf::replace_nulls(
       cudf::strings::to_integers(
@@ -902,7 +902,7 @@ std::unique_ptr<cudf::column> signedOffsetMinutes(
 // >0 -> offset+840.
 std::unique_ptr<cudf::column> zoneKeyFromOffsetMinutes(
     const cudf::column_view& offsetMinutes,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto idPositive = binaryOp(
       offsetMinutes,
@@ -967,7 +967,7 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto seconds = asView(inputColumns[0]);
     const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
@@ -1125,7 +1125,7 @@ class NowFunction : public CudfFunction {
   ColumnOrView eval(
       [[maybe_unused]] std::vector<ColumnOrView>& inputColumns,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_USER_CHECK(
         context_.adjustTimestampToTimezone && !context_.sessionTimezone.empty(),
@@ -1166,7 +1166,7 @@ class ParseDatetimeFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
     // cuDF parses the wall clock as UTC. With no embedded zone the result is
@@ -1269,7 +1269,7 @@ class FromIso8601Function : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
     // Time-only inputs carry no date; CPU defaults them to 1970-01-01. Prefix

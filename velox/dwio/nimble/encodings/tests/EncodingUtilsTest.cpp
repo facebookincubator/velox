@@ -18,9 +18,16 @@
 #include <array>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
+#include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
+#include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 using namespace facebook::nimble;
 
@@ -144,4 +151,144 @@ TEST(EncodingUtilsTest, copyPackedBitsRejectsEmptyRange) {
           /*bitCount=*/0,
           output.data()),
       "Cannot copy zero bits.");
+}
+
+class FindSortedPositionSlotsTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    pool_ = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+    buffer_ = std::make_unique<Buffer>(*pool_);
+  }
+
+  Vector<uint32_t> makePositions(std::initializer_list<uint32_t> values) {
+    Vector<uint32_t> v{pool_.get()};
+    v.insert(v.end(), values.begin(), values.end());
+    return v;
+  }
+
+  // Trivial encoding is viewable, so it drives the view + readAt binary-search
+  // branch of findSortedPositionSlots.
+  std::string_view encodeAsView(const Vector<uint32_t>& values) {
+    return test::Encoder<TrivialEncoding<uint32_t>>::encode(*buffer_, values);
+  }
+
+  // Varint encoding is NOT viewable, so it drives the materialize + binary-
+  // search-on-decoded-values fallback branch.
+  std::string_view encodeAsMaterialize(const Vector<uint32_t>& values) {
+    return test::Encoder<VarintEncoding<uint32_t>>::encode(*buffer_, values);
+  }
+
+  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
+  std::unique_ptr<Buffer> buffer_;
+};
+
+// Exercises both branches with the same behavioral test suite so the view and
+// materialize paths cannot silently diverge.
+TEST_F(FindSortedPositionSlotsTest, matchesLowerBoundAcrossBranches) {
+  const auto positions = makePositions({3, 7, 12, 18, 25, 30});
+  const auto positionCount = static_cast<uint32_t>(positions.size());
+
+  struct BranchCase {
+    const char* name;
+    std::string_view encoded;
+  };
+  const BranchCase branches[] = {
+      {"viewBranch", encodeAsView(positions)},
+      {"materializeBranch", encodeAsMaterialize(positions)},
+  };
+
+  struct RangeCase {
+    const char* name;
+    uint32_t lo;
+    uint32_t hi;
+    uint32_t expectedStart;
+    uint32_t expectedEnd;
+  };
+  const RangeCase ranges[] = {
+      // Strictly interior range: 12 and 18 fall inside [10, 20).
+      {"interior", 10, 20, 2, 4},
+      // lo hits the smallest position value; retains positions >= 3 and < 30.
+      {"loEqualsFirst", 3, 30, 0, 5},
+      // hi hits the largest position value; retains everything before it.
+      {"hiEqualsLast", 0, 30, 0, 5},
+      // hi past the max keeps every slot.
+      {"fullRange", 0, 100, 0, positionCount},
+      // Range that starts before the first value.
+      {"loBelowMin", 0, 5, 0, 1},
+      // Range that starts after the last value returns (positionCount,
+      // positionCount).
+      {"loAboveMax", 40, 50, positionCount, positionCount},
+      // Empty range (lo == hi) collapses both slots to the same lower_bound.
+      {"emptyAtValue", 12, 12, 2, 2},
+      {"emptyBetweenValues", 20, 20, 4, 4},
+      // Range that ends before any position keeps no slots.
+      {"hiBelowMin", 0, 3, 0, 0},
+      // Single-slot range around the last value.
+      {"singleAtEnd", 25, 30, 4, 5},
+  };
+
+  for (const auto& branch : branches) {
+    SCOPED_TRACE(branch.name);
+    for (const auto& range : ranges) {
+      SCOPED_TRACE(
+          testing::Message()
+          << range.name << " lo=" << range.lo << " hi=" << range.hi);
+      const auto [slotStart, slotEnd] = detail::findSortedPositionSlots(
+          branch.encoded,
+          positionCount,
+          range.lo,
+          range.hi,
+          *pool_,
+          /*options=*/{});
+      EXPECT_EQ(slotStart, range.expectedStart);
+      EXPECT_EQ(slotEnd, range.expectedEnd);
+    }
+  }
+}
+
+TEST_F(FindSortedPositionSlotsTest, singlePositionArray) {
+  const auto positions = makePositions({42});
+  const auto viewEncoded = encodeAsView(positions);
+  const auto materializeEncoded = encodeAsMaterialize(positions);
+
+  for (const auto encoded : {viewEncoded, materializeEncoded}) {
+    // Range strictly before the single value.
+    auto slots = detail::findSortedPositionSlots(encoded, 1, 0, 42, *pool_, {});
+    EXPECT_EQ(slots.slotStart, 0);
+    EXPECT_EQ(slots.slotEnd, 0);
+
+    // Range that spans the single value.
+    slots = detail::findSortedPositionSlots(encoded, 1, 0, 100, *pool_, {});
+    EXPECT_EQ(slots.slotStart, 0);
+    EXPECT_EQ(slots.slotEnd, 1);
+
+    // Range strictly after the single value.
+    slots = detail::findSortedPositionSlots(encoded, 1, 43, 100, *pool_, {});
+    EXPECT_EQ(slots.slotStart, 1);
+    EXPECT_EQ(slots.slotEnd, 1);
+  }
+}
+
+TEST_F(FindSortedPositionSlotsTest, positionCountSubsetSlicesLeadingPrefix) {
+  // Callers may request a search over a leading prefix of the encoded
+  // positions by passing positionCount < actual encoded row count. This mirrors
+  // the sentinel-aware usage where SparseBool keeps the trailing sentinel out
+  // of the search domain in some workflows.
+  const auto positions = makePositions({1, 2, 3, 4, 5, 6, 7, 8});
+  const auto viewEncoded = encodeAsView(positions);
+  const auto materializeEncoded = encodeAsMaterialize(positions);
+
+  for (const auto encoded : {viewEncoded, materializeEncoded}) {
+    const auto [slotStart, slotEnd] = detail::findSortedPositionSlots(
+        encoded,
+        /*positionCount=*/4,
+        /*valueStartOffset=*/2,
+        /*valueEndOffset=*/10,
+        *pool_,
+        {});
+    // Only positions {1, 2, 3, 4} are considered; slots [1..4) are >= 2 and
+    // < 10.
+    EXPECT_EQ(slotStart, 1);
+    EXPECT_EQ(slotEnd, 4);
+  }
 }

@@ -43,7 +43,7 @@ class DateAddFunction : public CudfFunction {
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       [[maybe_unused]] cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override;
 
  private:
@@ -52,7 +52,7 @@ class DateAddFunction : public CudfFunction {
   ColumnOrView evalDayBased(
       cudf::column_view dateCol,
       std::optional<cudf::column_view> valueCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   /// Adds value*scale months (where scale comes from unit_) to dateCol. When
@@ -60,7 +60,7 @@ class DateAddFunction : public CudfFunction {
   ColumnOrView evalMonthBased(
       cudf::column_view dateCol,
       std::optional<cudf::column_view> valueCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // Unit of the increment; one of {kDay, kWeek, kMonth, kQuarter, kYear}.

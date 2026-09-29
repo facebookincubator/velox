@@ -17,6 +17,7 @@
 
 #include <folly/Synchronized.h>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
@@ -53,6 +54,20 @@ class OperatorCtx {
   }
 
   const std::string& taskId() const;
+
+  /// Returns the number of other drivers in this driver's pipeline.
+  int32_t numPeers() const;
+
+  /// Synchronizes this operator with its peers in the same pipeline. Returns
+  /// true only to the last peer, populating 'peerOperators' and the
+  /// corresponding 'promises'. Other peers receive 'future' and return false.
+  /// The last peer must fulfill every promise, including when an exception
+  /// occurs. If 'future' is null, non-last peers do not wait and are not
+  /// returned. Each peer operator retains its owning driver until released.
+  bool allPeersFinished(
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Operator>>& peerOperators) const;
 
   Driver* driver() const {
     return driverCtx_->driver;
@@ -223,6 +238,26 @@ class Operator : public BaseRuntimeStatWriter {
 
   virtual ~Operator() = default;
 
+  /// Returns true if this operator is of type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this operator as 'T', or nullptr if it has a different type.
+  template <typename T>
+  T* as() {
+    static_assert(std::is_base_of_v<Operator, T>);
+    return dynamic_cast<T*>(this);
+  }
+
+  /// Returns this operator as 'T', or nullptr if it has a different type.
+  template <typename T>
+  const T* as() const {
+    static_assert(std::is_base_of_v<Operator, T>);
+    return dynamic_cast<const T*>(this);
+  }
+
   /// Does initialization work for this operator which requires memory
   /// allocation from memory pool that can't be done under operator constructor.
   ///
@@ -348,6 +383,13 @@ class Operator : public BaseRuntimeStatWriter {
 
   virtual bool preservesOrder() const {
     return false;
+  }
+
+  /// Returns this operator's contribution to its plan node's input and output
+  /// totals. An operator that shares its plan node id with other operators
+  /// overrides this so that 'toPlanStats' does not count the same rows twice.
+  virtual core::PlanNode::Boundary planNodeBoundary() const {
+    return core::PlanNode::Boundary::kBoth;
   }
 
   /// Returns copy of operator stats. If 'clear' is true, the function also

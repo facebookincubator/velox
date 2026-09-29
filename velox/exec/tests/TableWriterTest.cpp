@@ -169,7 +169,7 @@ TEST_F(BasicTableWriterTest, structAsMap) {
 
 TEST_F(BasicTableWriterTest, targetFileName) {
   constexpr const char* kFileName = "test.dwrf";
-  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = TempDirectoryPath::create();
   auto plan = PlanBuilder()
                   .values({data})
@@ -213,7 +213,7 @@ TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
     dwio::common::registerWriterFactory(originalFactory);
   });
 
-  auto data = makeRowVector({makeFlatVector<int64_t>(1'000, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   auto directory = TempDirectoryPath::create();
   auto plan =
@@ -2115,7 +2115,8 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
                               rowType_->children(),
                               partitionedBy_,
                               nullptr,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
                       false,
                       CommitStrategy::kNoCommit))
                   .planNode();
@@ -2199,7 +2200,8 @@ TEST_P(AllTableWriterTest, columnStats) {
                               rowType_->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
                       false,
                       commitStrategy_))
                   .planNode();
@@ -2293,7 +2295,8 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
               rowType_->children(),
               partitionedBy_,
               bucketProperty_,
-              makeLocationHandle(outputDirectory->getPath()))),
+              makeLocationHandle(outputDirectory->getPath())),
+          /*notNullColumns=*/folly::F14FastSet<std::string>{}),
       false,
       commitStrategy_));
 
@@ -2358,7 +2361,7 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
 TEST_F(BasicTableWriterTest, columnStatsWithTableWriteMergeFinal) {
   auto outputDirectory = TempDirectoryPath::create();
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatIdentityVector<int32_t>(100),
   });
 
   // Stats columns: min(c0), max(c0) at channels 3 and 4.
@@ -2412,7 +2415,7 @@ TEST_F(BasicTableWriterTest, columnStatsWithTableWriteMergeFinal) {
 TEST_F(BasicTableWriterTest, columnStatsWithTableWriteMergeFinalPartitioned) {
   auto outputDirectory = TempDirectoryPath::create();
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatIdentityVector<int32_t>(100),
       makeFlatVector<int32_t>(100, [](auto row) { return row % 3; }),
   });
 
@@ -2525,7 +2528,7 @@ TEST_F(BasicTableWriterTest, columnStatsWithTwoStageMerge) {
   // Run worker plan on 2 different inputs (simulating 2 workers).
   // Worker 1: c0 = 0..49, Worker 2: c0 = 50..99.
   std::vector<RowVectorPtr> workerInputs = {
-      makeRowVector({makeFlatVector<int32_t>(50, folly::identity)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(50)}),
       makeRowVector(
           {makeFlatVector<int32_t>(50, [](auto row) { return row + 50; })}),
   };

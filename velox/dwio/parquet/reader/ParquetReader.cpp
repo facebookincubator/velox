@@ -222,6 +222,8 @@ ParquetReaderFactory::createFormatOptions(
       ParquetConfig::allowInt32Narrowing(connectorConfig, session));
   options->setFooterMemoryTrackingThreshold(
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
+  options->setNullStructIfAllFieldsMissing(
+      ParquetConfig::nullStructIfAllFieldsMissing(connectorConfig, session));
   return options;
 }
 
@@ -264,6 +266,10 @@ class ReaderBase {
 
   const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
     return schemaWithId_;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return parquetReaderOptions_.nullStructIfAllFieldsMissing();
   }
 
   bool isFileColumnNamesReadAsLowerCase() const {
@@ -858,7 +864,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat + 1,
-              maxDefine,
+              maxDefine + 1,
               isOptional,
               isRepeated);
         }
@@ -1076,7 +1082,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           std::nullopt,
           std::nullopt,
           maxRepeat,
-          maxDefine - 1,
+          maxDefine,
           isOptional,
           isRepeated);
     }
@@ -1610,7 +1616,8 @@ class ParquetRowReader::Impl {
         splitStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        readerBase_->nullStructIfAllFieldsMissing());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(

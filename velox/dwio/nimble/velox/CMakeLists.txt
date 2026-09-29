@@ -30,12 +30,28 @@ target_link_libraries(
 add_library(nimble_velox_schema SchemaTypes.cpp SchemaTypes.h)
 target_link_libraries(nimble_velox_schema nimble_common Folly::folly)
 
+add_library(nimble_velox_hybrid_flat_map HybridFlatMap.cpp HybridFlatMap.h)
+target_link_libraries(
+  nimble_velox_hybrid_flat_map
+  nimble_velox_schema
+  nimble_velox_schema_fb
+  nimble_common
+  Folly::folly
+)
+
 add_library(nimble_velox_schema_reader SchemaReader.cpp SchemaReader.h)
-target_link_libraries(nimble_velox_schema_reader nimble_velox_schema nimble_common Folly::folly)
+target_link_libraries(
+  nimble_velox_schema_reader
+  nimble_velox_hybrid_flat_map
+  nimble_velox_schema
+  nimble_common
+  Folly::folly
+)
 
 add_library(nimble_velox_schema_builder SchemaBuilder.cpp SchemaBuilder.h)
 target_link_libraries(
   nimble_velox_schema_builder
+  nimble_velox_hybrid_flat_map
   nimble_velox_schema_reader
   nimble_velox_schema
   nimble_common
@@ -149,18 +165,18 @@ target_link_libraries(
 )
 
 add_library(
-  nimble_velox_reader
+  nimble_batch_reader
   ChunkedStream.cpp
   ChunkedStreamDecoder.cpp
   StreamLabels.cpp
-  VeloxReader.cpp
-  VeloxReader.h
+  BatchReader.cpp
+  BatchReader.h
   StreamLabels.h
   ChunkedStreamDecoder.h
   ChunkedStream.h
 )
 target_link_libraries(
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_common
   nimble_velox_schema
   nimble_velox_schema_serialization

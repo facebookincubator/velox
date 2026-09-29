@@ -141,6 +141,8 @@ HashProbe::HashProbe(
               ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
@@ -425,6 +427,19 @@ void HashProbe::pushdownDynamicFilters() {
           if (!hashProbeStringDynamicFilterPushdownEnabled) {
             return false;
           }
+          // A custom logical type may have a connector-specific physical
+          // representation that differs from its in-memory representation, so
+          // generic code here cannot assume the two are byte-equivalent. A
+          // pushed-down filter is evaluated by the scan against the physical
+          // bytes, so producing one from in-memory values could drop matching
+          // rows. Skip the filter and let the hash join do the matching; this
+          // costs an optimization, not correctness.
+          // TODO: Restore pushdown for VARCHAR/VARBINARY-backed custom types
+          // whose connector physical representation is known to match the
+          // in-memory one, rather than skipping every custom type.
+          if (customTypeExists(hasher.type()->name())) {
+            return false;
+          }
         }
         filter = hasher.getFilter(false);
         if (!filter) {
@@ -646,8 +661,7 @@ std::vector<HashProbe*> HashProbe::findPeerOperators() {
   std::vector<HashProbe*> probeOps;
   probeOps.reserve(operators.size());
   for (auto* op : operators) {
-    auto* probeOp = dynamic_cast<HashProbe*>(op);
-    probeOps.push_back(probeOp);
+    probeOps.push_back(op->as<HashProbe>());
   }
   return probeOps;
 }
@@ -1373,7 +1387,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          preferredOutputBatchBytes_);
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1966,7 +1980,7 @@ void HashProbe::noMoreInputInternal() {
   }
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
 
   // Reset flags about outputting build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
@@ -1982,12 +1996,10 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
+  if (!operatorCtx_->allPeersFinished(
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peerOperators)) {
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -2062,10 +2074,7 @@ void HashProbe::ensureOutputFits() {
   }
 
   const uint64_t bytesToReserve = static_cast<uint64_t>(
-      static_cast<double>(operatorCtx_->driverCtx()
-                              ->queryConfig()
-                              .preferredOutputBatchBytes()) *
-      1.2);
+      static_cast<double>(preferredOutputBatchBytes_) * 1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }

@@ -74,7 +74,7 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
         cudf::table_view const& input,                                         \
         TypePtr const& outputType,                                             \
         vector_size_t /* inputRowCount */,                                     \
-        rmm::cuda_stream_view stream,                                          \
+        cuda::stream_ref stream,                                               \
         rmm::device_async_resource_ref mr) override {                          \
       auto const aggRequest =                                                  \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>();         \
@@ -111,7 +111,7 @@ struct ReduceCountAggregator : ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t inputRowCount,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     if (exec::isRawInput(step)) {
       int64_t count;
@@ -188,7 +188,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t /* inputRowCount */,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
     switch (step) {
@@ -288,7 +288,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
 cudf_velox::DecimalSumStateColumns makeSumCountColumns(
     cudf::scalar const& sumScalar,
     cudf::scalar const& countScalar,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   cudf_velox::DecimalSumStateColumns cols;
   cols.sum = cudf::make_column_from_scalar(sumScalar, 1, stream, mr);
@@ -298,7 +298,7 @@ cudf_velox::DecimalSumStateColumns makeSumCountColumns(
 
 std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
     cudf::column_view inputCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::unique_ptr<cudf::column> castedInput;
   inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
@@ -326,7 +326,7 @@ std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
 cudf_velox::DecimalSumStateColumns mergeSerializedDecimalSumState(
     cudf::column_view inputCol,
     int32_t scale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumAndCount =
@@ -349,7 +349,7 @@ cudf_velox::DecimalSumStateColumns mergeSerializedDecimalSumState(
 std::unique_ptr<cudf::column> intermediateDecimalMergeSerializedString(
     cudf::column_view inputCol,
     int32_t scale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto merged = mergeSerializedDecimalSumState(inputCol, scale, stream, mr);
   return serializeDecimalPartialOrIntermediateState(
@@ -360,7 +360,7 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
     cudf::column_view inputCol,
     int32_t scale,
     TypePtr const& resultType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto merged = mergeSerializedDecimalSumState(inputCol, scale, stream, mr);
   return finalizeDecimalAverage(
@@ -370,7 +370,7 @@ std::unique_ptr<cudf::column> finalDecimalAvgFromSerializedString(
 std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
     cudf::column_view inputCol,
     TypePtr const& resultType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::unique_ptr<cudf::column> castedInput;
   inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
@@ -393,7 +393,7 @@ std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
 std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
     cudf::column_view inputCol,
     TypePtr const& outputType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
@@ -410,7 +410,7 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
 std::unique_ptr<cudf::column> reduceIntermediateDecimalFromSerializedColumn(
     cudf::column_view inputCol,
     TypePtr const& outputType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateIntermediateColumnType(inputCol);
   // outputType here could be DECIMAL or VARBINARY
@@ -423,7 +423,7 @@ std::unique_ptr<cudf::column> reduceIntermediateDecimalFromSerializedColumn(
 std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
     cudf::column_view inputCol,
     TypePtr const& outputType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
@@ -436,7 +436,7 @@ std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
 std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(
     cudf::column_view inputCol,
     TypePtr const& outputType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
@@ -461,7 +461,7 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t /* inputRowCount */,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     // Mask applies only at raw-input steps (kSingle/kPartial), where maskIndex
     // is set. Null-inject masked rows so cuDF's null-excluding sum and count
@@ -500,7 +500,7 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t /* inputRowCount */,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     // Decimal avg uses a dedicated path that does not honor masks; masked avg
     // already falls back to CPU (see canReduceBeEvaluatedByCudf).
@@ -548,7 +548,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t /* inputRowCount */,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     VELOX_CHECK(
         !maskIndex.has_value(), "approx_distinct does not support masks");
@@ -564,7 +564,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
  private:
   std::unique_ptr<cudf::column> makeSketchColumn(
       cuda::std::span<cuda::std::byte const> sketch_bytes,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
 
@@ -575,7 +575,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         offsets,
         2 * sizeof(cudf::size_type),
         cudaMemcpyHostToDevice,
-        stream.value()));
+        stream.get()));
 
     rmm::device_buffer chars_buffer{sketch_bytes.size(), stream, mr};
     CUDF_CUDA_TRY(cudaMemcpyAsync(
@@ -583,10 +583,10 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         sketch_bytes.data(),
         sketch_bytes.size(),
         cudaMemcpyDeviceToDevice,
-        stream.value()));
+        stream.get()));
 
     // Sync stream before stack-allocated offsets goes out of scope
-    stream.synchronize();
+    stream.sync();
 
     auto offsets_column = std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT32},
@@ -607,7 +607,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
   auto mergeSketchesAndApply(
       cudf::column_view const& sketch_column,
       Func&& func,
-      rmm::cuda_stream_view stream) {
+      cuda::stream_ref stream) {
     auto strings_col = cudf::strings_column_view(sketch_column);
     auto offsets_col = strings_col.offsets();
     auto chars_ptr = strings_col.chars_begin(stream);
@@ -619,8 +619,8 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         offsets_col.begin<cudf::size_type>(),
         num_offsets * sizeof(cudf::size_type),
         cudaMemcpyDeviceToHost,
-        stream.value()));
-    stream.synchronize(); // Need host_offsets before proceeding
+        stream.get()));
+    stream.sync(); // Need host_offsets before proceeding
 
     cudf::size_type first_offset = host_offsets[0];
     cudf::size_type first_size = host_offsets[1] - first_offset;
@@ -634,7 +634,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         chars_ptr + first_offset,
         static_cast<std::size_t>(first_size),
         cudaMemcpyDeviceToDevice,
-        stream.value()));
+        stream.get()));
 
     cudf::approx_distinct_count merged_sketch(
         cuda::std::span<cuda::std::byte>(
@@ -655,7 +655,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
             chars_ptr + start_offset,
             size,
             cudaMemcpyDeviceToDevice,
-            stream.value()));
+            stream.get()));
 
         merged_sketch.merge(
             cuda::std::span<cuda::std::byte>(
@@ -669,19 +669,19 @@ struct ApproxDistinctAggregator : ReduceAggregator {
 
   std::unique_ptr<cudf::column> doPartialReduce(
       cudf::table_view const& input,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto inputTable = cudf::table_view({input.column(inputIndex)});
 
     cudf::approx_distinct_count sketch{
-        inputTable, precision_, kNullPolicy, kNanPolicy, stream};
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream, mr};
 
     return makeSketchColumn(sketch.sketch(), stream, mr);
   }
 
   std::unique_ptr<cudf::column> doIntermediateReduce(
       cudf::table_view const& input,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto sketch_column = input.column(inputIndex);
 
@@ -699,7 +699,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
 
   std::unique_ptr<cudf::column> doFinalReduce(
       cudf::table_view const& input,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto sketch_column = input.column(inputIndex);
 
@@ -899,7 +899,7 @@ void CudfReduce::doAddInput(RowVectorPtr input) {
 
 CudfVectorPtr CudfReduce::doGlobalAggregation(
     cudf::table_view tableView,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
@@ -938,7 +938,7 @@ RowVectorPtr CudfReduce::doGetOutput() {
       std::move(inputs_), inputType_, stream, get_temp_mr());
 
   // Release input data after synchronizing.
-  stream.synchronize();
+  stream.sync();
   inputs_.clear();
 
   if (noMoreInput_) {

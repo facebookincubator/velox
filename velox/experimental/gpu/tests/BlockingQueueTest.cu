@@ -17,7 +17,10 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <algorithm>
+#include <atomic>
+#include <cuda/atomic> // @manual
 #include <mutex>
+#include <thread>
 #include "velox/experimental/gpu/BlockingQueue.h"
 #include "velox/experimental/gpu/Common.h"
 

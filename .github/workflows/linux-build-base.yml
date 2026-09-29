@@ -453,14 +453,16 @@ jobs:
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
       - name: Install Packages
         run: |
           sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-12-9
-          export MINIO_VERSION="2022-05-26T05-48-41Z"
-          export MINIO_BINARY_NAME="minio-2022-05-26"
-          wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
-          sudo mv ./"${MINIO_BINARY_NAME}" /usr/local/bin/
-          sudo chmod +x /usr/local/bin/"${MINIO_BINARY_NAME}"
+          export INSTALL_PREFIX=/usr/local SUDO=sudo
+          source ${GITHUB_WORKSPACE}/scripts/setup-common.sh
+          install_silo linux
           curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
           . "$HOME/.nvm/nvm.sh" && nvm install 22
           . "$HOME/.nvm/nvm.sh" && npm install -g azurite && \

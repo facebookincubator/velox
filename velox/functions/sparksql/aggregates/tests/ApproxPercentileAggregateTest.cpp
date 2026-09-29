@@ -420,7 +420,7 @@ TEST_F(ApproxPercentileAggregateTest, nonFlatPercentileArray) {
       BaseVector::wrapInDictionary(
           nullptr, indices, 3, makeFlatVector<double>({0, 0.5, 1})));
   auto rows = makeRowVector({
-      makeFlatVector<int32_t>(10, folly::identity),
+      makeFlatIdentityVector<int32_t>(10),
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()

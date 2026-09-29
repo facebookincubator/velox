@@ -16,14 +16,15 @@
 
 namespace facebook.nimble.serialization;
 
-/// Split block bloom filter for fast negative lookups.
-/// Uses 256-bit blocks with multiple hash probes per block,
-/// following the Parquet bloom filter design for cache efficiency.
+/// Bloom filter for fast negative lookups.
 table BloomFilter {
-  /// Number of 256-bit blocks in the filter.
-  num_blocks:uint32;
+  /// Deprecated: the block count is derived from the filter payload, whose
+  /// trailer identifies the layout that fixes the block size.
+  num_blocks:uint32 (deprecated);
   /// Bits per key used during construction (for diagnostics/rebuild).
   bits_per_key:float;
-  /// Raw filter data. Size = num_blocks * 32 bytes.
+  /// Serialized filter produced by the bloom filter builder. Self-describing:
+  /// a trailer records the layout, so a reader needs nothing from this table
+  /// to interpret it.
   data:[uint8];
 }
