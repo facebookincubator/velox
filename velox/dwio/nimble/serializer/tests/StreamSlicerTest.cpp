@@ -360,6 +360,7 @@ class StreamSlicerTest : public ::testing::Test {
       bool compressStream = false) {
     auto header = createTabletChunkHeader({
         .rowCount = rowCount,
+        .requiredBarrier = false,
         .streamHasChunkHeader = true,
         .rowRange = RowRange{0, rowCount},
     });
@@ -927,7 +928,7 @@ TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
   const char* pos = sliced.data();
   const auto header =
       readSerializationHeader(pos, sliced.data() + sliced.size());
-  EXPECT_TRUE(header.flags.requiresNullBarrier);
+  EXPECT_TRUE(header.flags.requiredBarrier);
 
   auto output = deserialize(sliced, payload.schema);
   ASSERT_EQ(output->size(), 3);
@@ -1189,25 +1190,38 @@ TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
       "Slice length must be positive");
 }
 
-TEST_F(StreamSlicerTest, rejectsHybridFlatMap) {
-  SchemaBuilder schemaBuilder;
-  auto root = schemaBuilder.createRowTypeBuilder(1);
-  auto hybridMap =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
-  hybridMap->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  hybridMap->addGroup(
-      HybridFlatMap::kDefaultGroupId,
-      {},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
+  constexpr uint32_t kRows = 2;
+  const auto input = makeRowVector(
+      {"features"},
+      {makeMapVector(
+          {1, 1},
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<int64_t>({10, 20}))});
+  HybridFlatMap hybridMap;
+  hybridMap.groups = {
+      {.groupId = 0, .groupKeys = {"1"}},
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+  };
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns = {{"features", std::move(hybridMap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
 
+  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
+  EXPECT_EQ(
+      iobufToString(slicer.slice(serialized, /*offset=*/0, /*length=*/kRows)),
+      serialized);
   NIMBLE_ASSERT_THROW(
-      StreamSlicer(schema, pool_.get(), StreamSlicer::Options{}),
-      "Stream slicing does not support hybrid FlatMap.");
+      slicer.slice(serialized, /*offset=*/0, /*length=*/1),
+      "StreamSlicer cannot row-slice key-major Hybrid FlatMap streams.");
 }
 
 TEST_F(StreamSlicerTest, rejectsLegacyFormats) {

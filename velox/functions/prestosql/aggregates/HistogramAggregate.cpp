@@ -642,7 +642,7 @@ void registerHistogramAggregate(
                 inputType->toString());
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

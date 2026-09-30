@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -33,7 +34,9 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
@@ -42,8 +45,31 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
+using testing::ElementsAre;
+using testing::FieldsAre;
+using testing::IsEmpty;
+using testing::Optional;
 
 namespace facebook::nimble::serde {
+
+HybridFlatMap makeHybridFlatMap(
+    const std::vector<std::vector<std::string>>& explicitGroups) {
+  HybridFlatMap hybridMap;
+  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
+    hybridMap.groups.push_back(
+        HybridFlatMap::Group{
+            .groupId = groupId,
+            .groupKeys = explicitGroups[groupId],
+        });
+  }
+  hybridMap.groups.push_back(
+      HybridFlatMap::Group{
+          .groupId = HybridFlatMap::kDefaultGroupId,
+          .groupKeys = {},
+      });
+  return hybridMap;
+}
 
 // Coalesces an IOBuf chain into a single string for test comparisons.
 std::string toString(const folly::IOBuf& buf) {
@@ -55,12 +81,12 @@ std::string toString(const folly::IOBuf& buf) {
   return result;
 }
 
-bool outputRequiresNullBarrier(const folly::IOBuf& buf) {
+bool outputRequiredBarrier(const folly::IOBuf& buf) {
   const auto serialized = toString(buf);
   const char* pos = serialized.data();
   const auto header =
       readSerializationHeader(pos, serialized.data() + serialized.size());
-  return header.flags.requiresNullBarrier;
+  return header.flags.requiredBarrier;
 }
 
 // Test parameter: input serialization version and output (project) version.
@@ -411,7 +437,7 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
   auto inputSchema = getNimbleSchema(type, serializerOptions);
   serialized[sizeof(uint8_t) + varint::varintSize(vec->size())] =
       static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
-          /*requiresNullBarrier=*/false,
+          /*requiredBarrier=*/false,
           /*streamEncodingUsesVarintRowCount=*/false,
           /*streamHasChunkHeader=*/false));
 
@@ -476,7 +502,7 @@ TEST_F(
   auto projectedStr = toString(projected);
   projectedStr[sizeof(uint8_t) + varint::varintSize(vec->size())] =
       static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
-          /*requiresNullBarrier=*/false,
+          /*requiredBarrier=*/false,
           /*streamEncodingUsesVarintRowCount=*/false,
           /*streamHasChunkHeader=*/false));
 
@@ -1945,6 +1971,347 @@ TEST_F(ProjectorTest, flatMapStreamIndices) {
   EXPECT_EQ(outputFlatMap.inMapDescriptorAt(0).offset(), 3);
 }
 
+TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
+  constexpr vector_size_t kRows{2};
+  constexpr vector_size_t kEntries{6};
+  const auto mapType = MAP(INTEGER(), DOUBLE());
+  const auto type = ROW({{"features", mapType}});
+
+  auto mapOffsets = allocateOffsets(kRows, pool_.get());
+  auto mapSizes = allocateSizes(kRows, pool_.get());
+  mapOffsets->asMutable<vector_size_t>()[0] = 0;
+  mapOffsets->asMutable<vector_size_t>()[1] = 3;
+  mapSizes->asMutable<vector_size_t>()[0] = 3;
+  mapSizes->asMutable<vector_size_t>()[1] = 3;
+  auto mapKeys =
+      BaseVector::create<FlatVector<int32_t>>(INTEGER(), kEntries, pool_.get());
+  auto mapValues =
+      BaseVector::create<FlatVector<double>>(DOUBLE(), kEntries, pool_.get());
+  const std::array<int32_t, kEntries> keys{1, 2, 99, 2, 3, 100};
+  const std::array<double, kEntries> values{10, 20, 990, 21, 30, 1000};
+  for (vector_size_t i = 0; i < kEntries; ++i) {
+    mapKeys->set(i, keys[i]);
+    mapValues->set(i, values[i]);
+  }
+  auto inputMap = std::make_shared<MapVector>(
+      pool_.get(),
+      mapType,
+      nullptr,
+      kRows,
+      mapOffsets,
+      mapSizes,
+      mapKeys,
+      mapValues);
+  auto input = std::make_shared<RowVector>(
+      pool_.get(), type, nullptr, kRows, std::vector<VectorPtr>{inputMap});
+
+  auto serializerOptions = inputSerializerOptions();
+  serializerOptions.hybridFlatMapColumns = {
+      {"features", makeHybridFlatMap({{"1", "2"}, {"3"}})},
+  };
+  Serializer serializer{serializerOptions, type, pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  const auto inputSchema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  Projector projector(
+      inputSchema,
+      makeSubfields({"features[2]", "features[99]"}),
+      pool_.get(),
+      projectorOptions());
+  const auto& sourceHybridMap =
+      inputSchema->asRow().childAt(0)->asHybridFlatMap();
+  const auto& selectedOffsets = projector.testingInputStreamIndices();
+  const auto containsOffset = [&](uint32_t offset) {
+    return std::find(selectedOffsets.begin(), selectedOffsets.end(), offset) !=
+        selectedOffsets.end();
+  };
+  EXPECT_TRUE(
+      containsOffset(sourceHybridMap.groupAt(0).keyDescriptor.offset()));
+  EXPECT_FALSE(
+      containsOffset(sourceHybridMap.groupAt(1).keyDescriptor.offset()));
+  EXPECT_TRUE(
+      containsOffset(sourceHybridMap.defaultGroup().keyDescriptor.offset()));
+  EXPECT_THAT(
+      selectedOffsets,
+      ElementsAre(
+          inputSchema->asRow().nullsDescriptor().offset(),
+          sourceHybridMap.nullsDescriptor().offset(),
+          sourceHybridMap.groupAt(0)
+              .valueType->asScalar()
+              .scalarDescriptor()
+              .offset(),
+          sourceHybridMap.groupAt(0).keyDescriptor.offset(),
+          sourceHybridMap.groupAt(0).inMapDescriptor.offset(),
+          sourceHybridMap.defaultGroup()
+              .valueType->asScalar()
+              .scalarDescriptor()
+              .offset(),
+          sourceHybridMap.defaultGroup().keyDescriptor.offset(),
+          sourceHybridMap.defaultGroup().inMapDescriptor.offset()));
+
+  const auto projectedSchema = projector.projectedSchema();
+  const auto& projectedHybridMap =
+      projectedSchema->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedHybridMap.groupCount(), 2);
+  EXPECT_EQ(projectedHybridMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(0).groupKeys,
+      (std::vector<std::string>{"1", "2"}));
+  EXPECT_TRUE(projectedHybridMap.groupAt(1).groupKeys.empty());
+
+  for (bool useChained : {false, true}) {
+    const auto projected = projectInput(projector, serialized, useChained);
+    EXPECT_TRUE(outputRequiredBarrier(projected));
+
+    const auto wholeGroups = deserialize(
+        toString(projected), projectedSchema, outputDeserializerOptions());
+    const auto* wholeMap =
+        wholeGroups->as<RowVector>()->childAt(0)->as<MapVector>();
+    ASSERT_NE(wholeMap, nullptr);
+    EXPECT_EQ(wholeMap->sizeAt(0), 3);
+    EXPECT_EQ(wholeMap->sizeAt(1), 2);
+
+    Deserializer filteredDeserializer{
+        projectedSchema,
+        makeSubfields({"features[2]", "features[99]"}),
+        pool_.get(),
+        outputDeserializerOptions()};
+    VectorPtr filtered;
+    filteredDeserializer.deserialize(toString(projected), filtered);
+    const auto* filteredMap =
+        filtered->as<RowVector>()->childAt(0)->as<MapVector>();
+    ASSERT_NE(filteredMap, nullptr);
+    EXPECT_EQ(filteredMap->sizeAt(0), 2);
+    EXPECT_EQ(filteredMap->sizeAt(1), 1);
+  }
+}
+
+TEST_P(ProjectorFormatTest, hybridFlatMapMultipleColumnsRoundTrip) {
+  constexpr vector_size_t kRows{1};
+  const auto mapType = MAP(INTEGER(), BIGINT());
+  const auto type = ROW({{"left", mapType}, {"right", mapType}});
+  const auto makeMap = [&](std::array<int32_t, 2> keys,
+                           std::array<int64_t, 2> values) {
+    auto offsets = allocateOffsets(kRows, pool_.get());
+    auto sizes = allocateSizes(kRows, pool_.get());
+    offsets->asMutable<vector_size_t>()[0] = 0;
+    sizes->asMutable<vector_size_t>()[0] = 2;
+    auto keyVector = makeIntVector<int32_t>({keys[0], keys[1]});
+    auto valueVector = makeIntVector<int64_t>({values[0], values[1]});
+    return std::make_shared<MapVector>(
+        pool_.get(),
+        mapType,
+        nullptr,
+        kRows,
+        std::move(offsets),
+        std::move(sizes),
+        std::move(keyVector),
+        std::move(valueVector));
+  };
+  auto input = std::make_shared<RowVector>(
+      pool_.get(),
+      type,
+      nullptr,
+      kRows,
+      std::vector<VectorPtr>{
+          makeMap({1, 2}, {10, 20}), makeMap({10, 11}, {100, 110})});
+  auto options = inputSerializerOptions();
+  options.hybridFlatMapColumns = {
+      {"left", makeHybridFlatMap({{"1", "2"}})},
+      {"right", makeHybridFlatMap({{"10", "11"}})},
+  };
+  auto [serialized, schema] =
+      serializeWithSchema(input, type, std::move(options));
+  Projector projector{
+      schema,
+      makeSubfields({"left[1]", "right[10]"}),
+      pool_.get(),
+      projectorOptions()};
+
+  const auto projected = projector.project(serialized);
+  EXPECT_TRUE(outputRequiredBarrier(projected));
+  const auto output = deserialize(
+      toString(projected),
+      projector.projectedSchema(),
+      outputDeserializerOptions());
+  EXPECT_TRUE(input->equalValueAt(output.get(), 0, 0));
+}
+
+TEST_P(ProjectorFormatTest, hybridFlatMapArrayProjectionRoundTrip) {
+  constexpr vector_size_t kRows{1};
+  constexpr vector_size_t kEntries{2};
+  const auto valueType = ARRAY(BIGINT());
+  const auto mapType = MAP(INTEGER(), valueType);
+  const auto type = ROW({{"features", mapType}});
+  auto arrays = std::make_shared<ArrayVector>(
+      pool_.get(),
+      valueType,
+      nullptr,
+      kEntries,
+      allocateOffsets(kEntries, pool_.get()),
+      allocateSizes(kEntries, pool_.get()),
+      makeIntVector<int64_t>({10, 11, 20}));
+  arrays->mutableOffsets(kEntries)->asMutable<vector_size_t>()[0] = 0;
+  arrays->mutableOffsets(kEntries)->asMutable<vector_size_t>()[1] = 2;
+  arrays->mutableSizes(kEntries)->asMutable<vector_size_t>()[0] = 2;
+  arrays->mutableSizes(kEntries)->asMutable<vector_size_t>()[1] = 1;
+  auto mapOffsets = allocateOffsets(kRows, pool_.get());
+  auto mapSizes = allocateSizes(kRows, pool_.get());
+  mapOffsets->asMutable<vector_size_t>()[0] = 0;
+  mapSizes->asMutable<vector_size_t>()[0] = 2;
+  auto inputMap = std::make_shared<MapVector>(
+      pool_.get(),
+      mapType,
+      nullptr,
+      kRows,
+      std::move(mapOffsets),
+      std::move(mapSizes),
+      makeIntVector<int32_t>({1, 2}),
+      arrays);
+  auto input = std::make_shared<RowVector>(
+      pool_.get(), type, nullptr, kRows, std::vector<VectorPtr>{inputMap});
+  auto options = inputSerializerOptions();
+  options.hybridFlatMapColumns = {
+      {"features", makeHybridFlatMap({{"1", "2"}})},
+  };
+  auto [serialized, schema] =
+      serializeWithSchema(input, type, std::move(options));
+  Projector projector{
+      schema, makeSubfields({"features[2]"}), pool_.get(), projectorOptions()};
+
+  const auto projected = projector.project(serialized);
+  const auto output = deserialize(
+      toString(projected),
+      projector.projectedSchema(),
+      outputDeserializerOptions());
+  EXPECT_TRUE(input->equalValueAt(output.get(), 0, 0));
+}
+
+TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  hybridMap->setAttributes({{"test.attribute", "preserved"}});
+  const auto makeValueType = [&]() {
+    auto value = builder.createRowTypeBuilder(1);
+    value->addChild(
+        "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
+    return value;
+  };
+  hybridMap->addGroup(0, {"1"}, makeValueType());
+  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValueType());
+  root->addChild("features", hybridMap);
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto projectType =
+      ROW({{"features", MAP(BIGINT(), ROW({{"new_value", BIGINT()}}))}});
+  Projector projector{
+      inputSchema,
+      makeSubfields({"features[1]"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType}};
+
+  const auto& projected =
+      projector.projectedSchema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projected.groupCount(), 1);
+  EXPECT_EQ(
+      projected.attributes(),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"test.attribute", "preserved"}}));
+  EXPECT_EQ(projected.groupAt(0).valueType->asRow().nameAt(0), "new_value");
+  EXPECT_EQ(projected.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
+}
+
+TEST_F(ProjectorTest, projectTypeRenamesEveryNestedContainerKind) {
+  SchemaBuilder builder;
+  const auto makeNestedRow = [&]() {
+    auto row = builder.createRowTypeBuilder(1);
+    row->addChild(
+        "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
+    return row;
+  };
+  auto array = builder.createArrayTypeBuilder();
+  array->setChildren(makeNestedRow());
+  array->setAttributes({{"container", "array"}});
+  auto offsetArray = builder.createArrayWithOffsetsTypeBuilder();
+  offsetArray->setChildren(makeNestedRow());
+  offsetArray->setAttributes({{"container", "offset_array"}});
+  auto map = builder.createMapTypeBuilder();
+  map->setChildren(
+      builder.createScalarTypeBuilder(ScalarKind::Int32), makeNestedRow());
+  map->setAttributes({{"container", "map"}});
+  auto slidingMap = builder.createSlidingWindowMapTypeBuilder();
+  slidingMap->setChildren(
+      builder.createScalarTypeBuilder(ScalarKind::Int32), makeNestedRow());
+  slidingMap->setAttributes({{"container", "sliding_map"}});
+  auto flatMap = builder.createFlatMapTypeBuilder(ScalarKind::Int32);
+  flatMap->addChild("1", builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+  auto root = builder.createRowTypeBuilder(6);
+  root->addChild("array", array);
+  root->addChild("offset_array", offsetArray);
+  root->addChild("map", map);
+  root->addChild("sliding_map", slidingMap);
+  root->addChild("flat_map", flatMap);
+  root->addChild("timestamp", builder.createTimestampMicroNanoTypeBuilder());
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+
+  const auto newRow = ROW({{"new_value", BIGINT()}});
+  const auto projectType = ROW(
+      {{"array", ARRAY(newRow)},
+       {"offset_array", ARRAY(newRow)},
+       {"map", MAP(INTEGER(), newRow)},
+       {"sliding_map", MAP(INTEGER(), newRow)},
+       {"flat_map", MAP(INTEGER(), BIGINT())},
+       {"timestamp", TIMESTAMP()}});
+  Projector projector(
+      inputSchema,
+      makeSubfields(
+          {"array",
+           "offset_array",
+           "map",
+           "sliding_map",
+           "flat_map[1]",
+           "timestamp"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType});
+
+  const auto& projected = projector.projectedSchema()->asRow();
+  EXPECT_EQ(
+      projected.childAt(0)->asArray().elements()->asRow().nameAt(0),
+      "new_value");
+  EXPECT_EQ(
+      projected.childAt(1)->asArrayWithOffsets().elements()->asRow().nameAt(0),
+      "new_value");
+  EXPECT_EQ(
+      projected.childAt(2)->asMap().values()->asRow().nameAt(0), "new_value");
+  EXPECT_EQ(
+      projected.childAt(3)->asSlidingWindowMap().values()->asRow().nameAt(0),
+      "new_value");
+}
+
+TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
+  const auto type = ROW({{"features", MAP(VARCHAR(), DOUBLE())}});
+  SerializerOptions validOptions{
+      .version = SerializationVersion::kSerialization,
+      .hybridFlatMapColumns =
+          {{"features", makeHybridFlatMap({{"other", "peer"}})}},
+  };
+  const auto schema = getNimbleSchema(type, validOptions);
+  NIMBLE_ASSERT_THROW(
+      Projector(
+          schema,
+          makeSubfields({"features[\"\"]"}),
+          pool_.get(),
+          {.projectVersion = SerializationVersion::kProjection}),
+      "Hybrid FlatMap key projection cannot use an empty key");
+}
+
 // Test projecting FlatMap with single key.
 TEST_F(ProjectorTest, projectFlatMapSingleKey) {
   auto type = ROW({
@@ -2315,7 +2682,8 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
 
 // All-missing-keys projection on a FlatMap whose value subtree is a Row.
 // Exercises the `emitPlaceholderOffsets` Row branch end-to-end (Row.nulls +
-// 2 inner scalars = 3 UINT32_MAX value slots + 1 inMap slot per missing key).
+// 2 inner scalars = 3 kNoSourceStreamOffset value slots + 1 inMap slot per
+// missing key).
 TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
   auto valueRowType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   auto type =
@@ -2377,8 +2745,8 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
 
   // Project a non-existent key (subscript 999 not in source). Should succeed:
   // the projected FlatMap holds "999" as a synthetic child whose value-subtree
-  // is a clone of the source's value Row, with UINT32_MAX placeholders for
-  // every stream in that subtree plus the inMap.
+  // is a clone of the source's value Row, with kNoSourceStreamOffset
+  // placeholders for every stream in that subtree plus the inMap.
   auto subfields = makeSubfields({"features[\"999\"]"});
   Projector projector{
       inputSchema,
@@ -2412,7 +2780,8 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
 
 // All-missing-keys projection on a FlatMap whose value subtree is an Array.
 // Exercises the `emitPlaceholderOffsets` Array branch end-to-end (Array
-// lengths + 1 element scalar = 2 UINT32_MAX value slots + 1 inMap per key).
+// lengths + 1 element scalar = 2 kNoSourceStreamOffset value slots + 1 inMap
+// per key).
 TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
   auto valueArrayType = ARRAY(INTEGER());
   auto type =
@@ -2520,9 +2889,9 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
 //      deserialize the projected blob.
 //
 // The Projector's nimble-schema-based buildProjectedNimbleType emits key "2"
-// as a synthetic child with UINT32_MAX input offsets, so the Projector
-// writes 0-byte placeholder slots into the trailer at positions 4-5. The
-// expanded schema's offsets line up with these positions, and the
+// as a synthetic child with kNoSourceStreamOffset input offsets, so the
+// Projector writes 0-byte placeholder slots into the trailer at positions 4-5.
+// The expanded schema's offsets line up with these positions, and the
 // Deserializer's gap-fill produces a null/absent column for key "2" while
 // keys "1" and "3" decode their real bytes.
 //
@@ -2663,7 +3032,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
     std::string_view name;
     std::string serialized;
     std::shared_ptr<const nimble::Type> schema;
-    bool expectedInputRequiresNullBarrier;
+    bool expectedInputRequiredBarrier;
   };
 
   auto makeNestedRowInput = [&](std::string_view name,
@@ -2702,7 +3071,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         .name = name,
         .serialized = std::move(serialized),
         .schema = std::move(inputSchema),
-        .expectedInputRequiresNullBarrier = profileHasNull || rootHasNull,
+        .expectedInputRequiredBarrier = profileHasNull || rootHasNull,
     };
   };
 
@@ -2755,7 +3124,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         .name = name,
         .serialized = std::move(serialized),
         .schema = std::move(inputSchema),
-        .expectedInputRequiresNullBarrier = valueRowHasNull,
+        .expectedInputRequiredBarrier = valueRowHasNull,
     };
   };
 
@@ -2821,12 +3190,12 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         .name = name,
         .serialized = std::move(serialized),
         .schema = std::move(inputSchema),
-        .expectedInputRequiresNullBarrier = false,
+        .expectedInputRequiredBarrier = false,
     };
   };
 
-  auto inputRequiresNullBarrier = [](const SerializedInput& input) {
-    return outputRequiresNullBarrier(
+  auto inputRequiredBarrier = [](const SerializedInput& input) {
+    return outputRequiredBarrier(
         folly::IOBuf::wrapBufferAsValue(
             input.serialized.data(), input.serialized.size()));
   };
@@ -2852,8 +3221,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         &regularDataNulls}) {
     SCOPED_TRACE(input->name);
     EXPECT_EQ(
-        inputRequiresNullBarrier(*input),
-        input->expectedInputRequiresNullBarrier);
+        inputRequiredBarrier(*input), input->expectedInputRequiredBarrier);
   }
 
   auto rootNullResult = deserialize(
@@ -2865,7 +3233,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
     std::string_view name;
     const SerializedInput* input;
     std::vector<common::Subfield> subfields;
-    bool expectedRequiresNullBarrier;
+    bool expectedRequiredBarrier;
   };
   std::vector<TestCase> testCases;
   testCases.reserve(10);
@@ -2873,61 +3241,61 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
       .name = "nestedRowNoNulls",
       .input = &nestedRowNoNulls,
       .subfields = makeSubfields({"profile.score"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "nestedRowHasNullsScalarOnly",
       .input = &nestedRowHasNulls,
       .subfields = makeSubfields({"id"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "nestedRowHasNulls",
       .input = &nestedRowHasNulls,
       .subfields = makeSubfields({"profile.score"}),
-      .expectedRequiresNullBarrier = true,
+      .expectedRequiredBarrier = true,
   });
   testCases.push_back({
       .name = "topLevelRowHasNulls",
       .input = &topLevelRowHasNulls,
       .subfields = makeSubfields({"id"}),
-      .expectedRequiresNullBarrier = true,
+      .expectedRequiredBarrier = true,
   });
   testCases.push_back({
       .name = "flatMapRowNoNulls",
       .input = &flatMapRowNoNulls,
       .subfields = makeSubfields({"features[\"a\"].score"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "flatMapRowHasNullsScalarOnly",
       .input = &flatMapRowHasNulls,
       .subfields = makeSubfields({"id"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "flatMapRowHasNulls",
       .input = &flatMapRowHasNulls,
       .subfields = makeSubfields({"features[\"a\"].score"}),
-      .expectedRequiresNullBarrier = true,
+      .expectedRequiredBarrier = true,
   });
   testCases.push_back({
       .name = "regularScalarNulls",
       .input = &regularDataNulls,
       .subfields = makeSubfields({"nullable_score"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "regularArrayNulls",
       .input = &regularDataNulls,
       .subfields = makeSubfields({"items"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
   testCases.push_back({
       .name = "regularMapNulls",
       .input = &regularDataNulls,
       .subfields = makeSubfields({"attrs"}),
-      .expectedRequiresNullBarrier = false,
+      .expectedRequiredBarrier = false,
   });
 
   for (const auto& testCase : testCases) {
@@ -2950,8 +3318,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
             projector.project(std::string_view(testCase.input->serialized));
       }
       EXPECT_EQ(
-          outputRequiresNullBarrier(projected),
-          testCase.expectedRequiresNullBarrier);
+          outputRequiredBarrier(projected), testCase.expectedRequiredBarrier);
       auto result =
           deserialize(toString(projected), projector.projectedSchema(), {});
       ASSERT_EQ(result->size(), kRows);
@@ -2999,8 +3366,8 @@ TEST_F(ProjectorTest, projectedRowNullMixedBatchPreserveNulls) {
       projectInput(projector, noNullBatch, /*useIOBuf=*/false);
   auto projectedWithNull =
       projectInput(projector, nullBatch, /*useIOBuf=*/false);
-  EXPECT_FALSE(outputRequiresNullBarrier(projectedNoNull));
-  EXPECT_TRUE(outputRequiresNullBarrier(projectedWithNull));
+  EXPECT_FALSE(outputRequiredBarrier(projectedNoNull));
+  EXPECT_TRUE(outputRequiredBarrier(projectedWithNull));
 
   const auto projectedNoNullString = toString(projectedNoNull);
   const auto projectedWithNullString = toString(projectedWithNull);
@@ -3070,8 +3437,8 @@ TEST_F(ProjectorTest, projectedNestedRowNullsMixedBatchPreserveNulls) {
       projectInput(projector, noNullBatch, /*useIOBuf=*/false);
   auto projectedWithNull =
       projectInput(projector, nullBatch, /*useIOBuf=*/false);
-  EXPECT_FALSE(outputRequiresNullBarrier(projectedNoNull));
-  EXPECT_TRUE(outputRequiresNullBarrier(projectedWithNull));
+  EXPECT_FALSE(outputRequiredBarrier(projectedNoNull));
+  EXPECT_TRUE(outputRequiredBarrier(projectedWithNull));
 
   const auto projectedNoNullString = toString(projectedNoNull);
   const auto projectedWithNullString = toString(projectedWithNull);
@@ -3165,8 +3532,8 @@ TEST_F(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
       projectInput(projector, noNullBatch, /*useIOBuf=*/false);
   auto projectedWithNull =
       projectInput(projector, nullBatch, /*useIOBuf=*/false);
-  EXPECT_FALSE(outputRequiresNullBarrier(projectedNoNull));
-  EXPECT_TRUE(outputRequiresNullBarrier(projectedWithNull));
+  EXPECT_FALSE(outputRequiredBarrier(projectedNoNull));
+  EXPECT_TRUE(outputRequiredBarrier(projectedWithNull));
 
   const auto projectedNoNullString = toString(projectedNoNull);
   const auto projectedWithNullString = toString(projectedWithNull);
@@ -3238,7 +3605,7 @@ TEST_F(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
 
   auto serialized = serialize(input, type, serOpts);
   auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
-  EXPECT_FALSE(outputRequiresNullBarrier(projected));
+  EXPECT_FALSE(outputRequiredBarrier(projected));
 
   const auto projectedString = toString(projected);
   std::vector<std::string_view> batches{projectedString};
@@ -3728,7 +4095,7 @@ TEST_F(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
       const auto hasNulls = batch % 2 == 1;
       auto projected =
           projectInput(projector, serializedBatches[batch], /*useIOBuf=*/false);
-      EXPECT_EQ(outputRequiresNullBarrier(projected), hasNulls);
+      EXPECT_EQ(outputRequiredBarrier(projected), hasNulls);
       projectedStrings.push_back(toString(projected));
     }
 

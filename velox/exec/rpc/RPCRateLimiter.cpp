@@ -17,8 +17,11 @@
 #include "velox/exec/rpc/RPCRateLimiter.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 #include <vector>
+
+#include "velox/common/testutil/TestValue.h"
 
 #define RPC_RATE_LIMITER_LOG(severity) LOG(severity) << "[RPC_RATE_LIMITER] "
 #define RPC_RATE_LIMITER_VLOG(level) VLOG(level) << "[RPC_RATE_LIMITER] "
@@ -31,6 +34,18 @@ namespace {
 std::atomic<int64_t>& defaultCapacityRef() {
   static std::atomic<int64_t> capacity{20};
   return capacity;
+}
+
+// Reports a contained teardown failure without allowing diagnostics to escape
+// the noexcept token-release path.
+void logReleaseFailure(
+    std::string_view admissionKey,
+    std::string_view stage) noexcept {
+  try {
+    RPC_RATE_LIMITER_LOG(ERROR)
+        << "release[" << admissionKey << "] failed during " << stage;
+  } catch (...) {
+  }
 }
 } // namespace
 
@@ -48,7 +63,7 @@ RPCRateLimiter::Token& RPCRateLimiter::Token::operator=(
   return *this;
 }
 
-RPCRateLimiter::Token::~Token() {
+RPCRateLimiter::Token::~Token() noexcept {
   if (owner_ != nullptr) {
     owner_->release();
   }
@@ -206,7 +221,7 @@ RPCRateLimiter::Token RPCRateLimiter::acquire() {
   notePeakPending(pending);
   RPC_RATE_LIMITER_VLOG(2) << "acquire[" << admissionKey_
                            << "]: pending=" << pending;
-  return Token{this};
+  return Token{tokenConstructionKey_, this};
 }
 
 std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
@@ -246,7 +261,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
   for (int64_t i = 0; i < take; ++i) {
     // One token per slot: each releases exactly one on destruction, so the
     // bulk grant unwinds row by row as the requests complete.
-    granted.emplace_back(this);
+    granted.emplace_back(tokenConstructionKey_, this);
   }
   return granted;
 }
@@ -348,7 +363,7 @@ void RPCRateLimiter::onSuccess(int64_t units) {
   }
 }
 
-void RPCRateLimiter::release() {
+void RPCRateLimiter::release() noexcept {
   // Saturate at zero. A token can outlive testingReset(), which zeroes the
   // count; without the floor its release would drive pending_ negative and
   // make available() report more capacity than exists.
@@ -356,17 +371,19 @@ void RPCRateLimiter::release() {
   while (pending > 0 && !pending_.compare_exchange_weak(pending, pending - 1)) {
   }
   pending = std::max<int64_t>(0, pending - 1);
-  RPC_RATE_LIMITER_VLOG(2) << "release[" << admissionKey_
-                           << "]: pending=" << pending;
-
-  // Hold the lock across check-and-dequeue. Otherwise a waiter parked by
-  // admitOrWait() between the capacity read and the dequeue would be missed:
-  // with the lock held it is either already queued and gets this slot, or it
-  // observes the decremented count and never parks.
-  //
-  // One waiter per release (FIFO), to avoid a thundering herd.
   std::optional<ContinuePromise> toNotify;
-  {
+  try {
+    RPC_RATE_LIMITER_VLOG(2)
+        << "release[" << admissionKey_ << "]: pending=" << pending;
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::rpc::RPCRateLimiter::release", this);
+
+    // Hold the lock across check-and-dequeue. Otherwise a waiter parked by
+    // admitOrWait() between the capacity read and the dequeue would be missed:
+    // with the lock held it is either already queued and gets this slot, or it
+    // observes the decremented count and never parks.
+    //
+    // One waiter per release (FIFO), to avoid a thundering herd.
     std::lock_guard<std::mutex> l(mutex_);
     if (pending < capacityLocked() && !waiters_.empty()) {
       RPC_RATE_LIMITER_VLOG(1)
@@ -375,9 +392,16 @@ void RPCRateLimiter::release() {
       toNotify = std::move(waiters_.front());
       waiters_.pop_front();
     }
+  } catch (...) {
+    logReleaseFailure(admissionKey_, "waiter selection");
+    return;
   }
   if (toNotify.has_value()) {
-    toNotify->setValue();
+    try {
+      toNotify->setValue();
+    } catch (...) {
+      logReleaseFailure(admissionKey_, "waiter notification");
+    }
   }
 }
 

@@ -127,6 +127,7 @@ void registerMapUnionAggregate(
 
         return createMapAggregate<MapUnionAggregate>(resultType);
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

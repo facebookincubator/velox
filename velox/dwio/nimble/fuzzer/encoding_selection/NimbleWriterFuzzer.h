@@ -303,9 +303,12 @@ class NimbleWriterFuzzer {
  private:
   // Counts physical stream and metadata shapes validated during the run.
   struct ChunkStatsVerificationCoverage {
-    // Counts files whose chunk stats were enabled or disabled.
-    uint64_t numIndexedFiles{0};
+    // Counts files whose V2 chunk stats were enabled or disabled.
+    uint64_t numV2IndexedFiles{0};
     uint64_t numUnindexedFiles{0};
+    // Counts V2 indexes and chunks carrying min/max bounds.
+    uint64_t numV2IndexedStreams{0};
+    uint64_t numV2BoundedChunks{0};
     // Counts indexed groups and stripes.
     uint64_t numStripeGroups{0};
     uint64_t numStripes{0};
@@ -340,7 +343,8 @@ class NimbleWriterFuzzer {
   // physical chunks, and records which metadata shapes were exercised.
   void verifyChunkStatsMetadata(
       const std::string& file,
-      bool chunkStatsEnabled);
+      bool chunkStatsEnabled,
+      uint32_t maxStringStatSize);
 
   // Verifies file-level column statistics (value count, null count, min, max)
   // against the data that was actually written.

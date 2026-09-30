@@ -59,6 +59,12 @@ class TableEvolutionFuzzer {
     int64_t skippedSplitBytes{0};
     int64_t skippedStrides{0};
     int64_t processedStrides{0};
+    // Tracks chunk-level pruning. Conditional row totals include only queries
+    // where chunk statistics skipped at least one row.
+    int64_t chunkSkippedRows{0};
+    int64_t processedRows{0};
+    int64_t numQueriesWithChunkSkipping{0};
+    int64_t processedRowsWithChunkSkipping{0};
 
     int64_t numStripeLoads{0};
     int64_t numIndexFilterConversions{0};
@@ -268,6 +274,10 @@ class TableEvolutionFuzzer {
     /// execution, and verification details are available. Called before an
     /// execution or verification failure is rethrown.
     std::function<void(const QueryCoverage&)> queryCoverageObserver;
+
+    /// Validates all files produced by one run before scans begin. Called once
+    /// with a deduplicated list. Exceptions fail the run.
+    std::function<void(const std::vector<InputFile>&)> generatedFilesValidator;
 
     /// Logs file-format-specific metrics within comprehensive coverage
     /// reports. Unset when the caller has no additional metrics.

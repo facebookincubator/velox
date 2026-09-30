@@ -26,6 +26,7 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
@@ -181,6 +182,10 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
         result.skippedSplitBytes += runtimeStatSum(op, "skippedSplitBytes");
         result.skippedStrides += runtimeStatSum(op, "skippedStrides");
         result.processedStrides += runtimeStatSum(op, "processedStrides");
+        result.chunkSkippedRows +=
+            runtimeStatSum(op, dwio::common::kChunkSkippedRows);
+        result.processedRows +=
+            runtimeStatSum(op, dwio::common::kProcessedRows);
 
         result.numStripeLoads += runtimeStatSum(op, "numStripeLoads");
         result.numIndexFilterConversions +=
@@ -221,6 +226,10 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
   result.numQueriesWithRemainingFilterEvaluation = remainingFilterEvaluated;
   result.numQueriesWithLazyIo = result.dataSourceLazyInputBytes > 0 ||
       result.dataSourceLazyCpuNanos > 0 || result.dataSourceLazyWallNanos > 0;
+  result.numQueriesWithChunkSkipping = result.chunkSkippedRows > 0;
+  if (result.numQueriesWithChunkSkipping > 0) {
+    result.processedRowsWithChunkSkipping = result.processedRows;
+  }
   return result;
 }
 
@@ -238,6 +247,11 @@ void addScanStats(
   coverage.skippedSplitBytes += stats.skippedSplitBytes;
   coverage.skippedStrides += stats.skippedStrides;
   coverage.processedStrides += stats.processedStrides;
+  coverage.chunkSkippedRows += stats.chunkSkippedRows;
+  coverage.processedRows += stats.processedRows;
+  coverage.numQueriesWithChunkSkipping += stats.numQueriesWithChunkSkipping;
+  coverage.processedRowsWithChunkSkipping +=
+      stats.processedRowsWithChunkSkipping;
 
   coverage.numStripeLoads += stats.numStripeLoads;
   coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
@@ -276,7 +290,9 @@ void logScanStats(
           << "] pruning: skippedSplits=" << stats.skippedSplits
           << " skippedSplitBytes=" << stats.skippedSplitBytes
           << " skippedStrides=" << stats.skippedStrides
-          << " processedStrides=" << stats.processedStrides;
+          << " processedStrides=" << stats.processedStrides
+          << " chunkSkippedRows=" << stats.chunkSkippedRows
+          << " processedRows=" << stats.processedRows;
   VLOG(1) << "ScanCoverage[" << label
           << "] nimble: stripeLoads=" << stats.numStripeLoads
           << " indexFilterConv=" << stats.numIndexFilterConversions
@@ -1545,6 +1561,36 @@ void TableEvolutionFuzzer::run() {
 
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
+
+  if (config_.generatedFilesValidator) {
+    auto [actualSplits, expectedSplits] = createScanSplitsFromWriteResults(
+        writeResults,
+        testSetups,
+        bucketColumnIndices,
+        /*selectedBucket=*/std::nullopt);
+    auto generatedFiles = extractInputFiles(actualSplits);
+    auto expectedFiles = extractInputFiles(expectedSplits);
+    generatedFiles.insert(
+        generatedFiles.end(), expectedFiles.begin(), expectedFiles.end());
+    std::sort(
+        generatedFiles.begin(),
+        generatedFiles.end(),
+        [](const auto& lhs, const auto& rhs) {
+          if (lhs.path != rhs.path) {
+            return lhs.path < rhs.path;
+          }
+          return lhs.format < rhs.format;
+        });
+    generatedFiles.erase(
+        std::unique(
+            generatedFiles.begin(),
+            generatedFiles.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.path == rhs.path && lhs.format == rhs.format;
+            }),
+        generatedFiles.end());
+    config_.generatedFilesValidator(generatedFiles);
+  }
 
   // Merge the final setup's batches into one vector, once, just before the
   // query-shape loop that uses it to generate subfield filters over every row.
@@ -3215,12 +3261,33 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     return entries.empty() ? std::string{"      none"}
                            : folly::join("\n", entries);
   };
+  const auto formatChunkSkipping = [](const ScanPlanCoverage& coverage) {
+    const auto numQueries = coverage.numQueriesWithChunkSkipping;
+    const double averageSkippedRows = numQueries == 0
+        ? 0.0
+        : static_cast<double>(coverage.chunkSkippedRows) / numQueries;
+    const double averageProcessedRows = numQueries == 0
+        ? 0.0
+        : static_cast<double>(coverage.processedRowsWithChunkSkipping) /
+            numQueries;
+    return fmt::format(
+        "queriesWithChunkSkippedRows={} avgChunkSkippedRows={:.1f} avgProcessedRows={:.1f}",
+        numQueries,
+        averageSkippedRows,
+        averageProcessedRows);
+  };
   const auto& filters = stats.queryShapes.filters;
   const auto& aggregations = stats.queryShapes.aggregations;
   logCoverageProgress();
   if (config_.fileFormatCoverageLogger) {
     config_.fileFormatCoverageLogger();
   }
+  LOG(WARNING) << fmt::format(
+      "\nChunkStatsFilterCoverage:\n"
+      "  pushdown: {}\n"
+      "  reference: {}",
+      formatChunkSkipping(stats.pushdown),
+      formatChunkSkipping(stats.reference));
   LOG(WARNING) << fmt::format(
       "\nQueryShapeCoverage:\n"
       "  filters:\n"
