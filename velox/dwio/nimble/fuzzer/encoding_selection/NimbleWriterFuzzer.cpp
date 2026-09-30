@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -61,6 +62,7 @@
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
+#include "velox/type/Filter.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::nimble::fuzzer {
@@ -1865,6 +1867,122 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
       options_.seed);
 }
 
+namespace {
+
+// Reads `file` through the selective reader with a filter on some integer
+// columns and checks the rows that come back. A range over the whole type that
+// admits nulls keeps every row but makes the reader take its filtered paths,
+// where a nullable column must still return its nulls; IsNotNull drops the
+// rows whose value is null. AlwaysTrue cannot stand in for the first: the
+// column visitors treat it as no filter and record no passing rows, so a
+// scan spec that carries it returns no rows at all.
+void verifyFilteredSelectiveRead(
+    const std::string& file,
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches,
+    bool zeroCopyStrings,
+    velox::memory::MemoryPool& pool,
+    FuzzerGenerator& rng,
+    const std::function<std::string()>& context) {
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*schema);
+  std::vector<velox::column_index_t> notNullColumns;
+  bool anyFilter{false};
+  for (velox::column_index_t column = 0; column < schema->size(); ++column) {
+    if (!isIntegerKind(schema->childAt(column)->kind())) {
+      continue;
+    }
+    auto* childSpec = scanSpec->childByName(schema->nameOf(column));
+    switch (folly::Random::rand32(3, rng)) {
+      case 0:
+        break;
+      case 1:
+        childSpec->setFilter(
+            std::make_shared<velox::common::BigintRange>(
+                std::numeric_limits<int64_t>::min(),
+                std::numeric_limits<int64_t>::max(),
+                /*nullAllowed=*/true));
+        anyFilter = true;
+        break;
+      default:
+        childSpec->setFilter(std::make_shared<velox::common::IsNotNull>());
+        notNullColumns.push_back(column);
+        anyFilter = true;
+        break;
+    }
+  }
+  if (!anyFilter) {
+    return;
+  }
+
+  // The rows the filters keep, in file order, as (batch, row) pairs.
+  std::vector<std::pair<size_t, velox::vector_size_t>> expectedRows;
+  for (size_t batch = 0; batch < batches.size(); ++batch) {
+    const auto* row = batches[batch]->asUnchecked<velox::RowVector>();
+    for (velox::vector_size_t i = 0; i < row->size(); ++i) {
+      const bool kept = std::none_of(
+          notNullColumns.begin(),
+          notNullColumns.end(),
+          [&](velox::column_index_t column) {
+            return row->childAt(column)->isNullAt(i);
+          });
+      if (kept) {
+        expectedRows.emplace_back(batch, i);
+      }
+    }
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto factory = velox::dwio::common::getReaderFactory(
+      velox::dwio::common::FileFormat::NIMBLE);
+  velox::dwio::common::ReaderOptions readerOptions(&pool);
+  readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
+  readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+  readerOptions.setScanSpec(scanSpec);
+  auto reader = factory->createReader(
+      std::make_unique<velox::dwio::common::BufferedInput>(readFile, pool),
+      readerOptions);
+
+  velox::dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  rowOptions.setRequestedType(schema);
+  rowOptions.setStringDecoderZeroCopy(zeroCopyStrings);
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  // Unlike the unfiltered read, 97 rows scanned may return fewer rows.
+  constexpr uint64_t kReadSize = 97;
+  size_t expectedIndex{0};
+  auto result = velox::BaseVector::create(schema, 0, &pool);
+  while (rowReader->next(kReadSize, result) > 0) {
+    for (velox::vector_size_t i = 0; i < result->size(); ++i) {
+      NIMBLE_CHECK_LT(
+          expectedIndex,
+          expectedRows.size(),
+          "Filtered read returned more rows than pass the filters ({}).",
+          context());
+      const auto [batch, row] = expectedRows[expectedIndex];
+      const auto& expected = batches[batch];
+      if (!expected->equalValueAt(result.get(), row, i)) {
+        NIMBLE_FAIL(
+            "Filtered round-trip mismatch ({}, batch {}, row {}). Expected: {} Actual: {}",
+            context(),
+            batch,
+            row,
+            expected->toString(row),
+            result->toString(i));
+      }
+      ++expectedIndex;
+    }
+  }
+  NIMBLE_CHECK_EQ(
+      expectedIndex,
+      expectedRows.size(),
+      "Filtered read returned fewer rows than pass the filters ({}).",
+      context());
+}
+
+} // namespace
+
 void NimbleWriterFuzzer::readAndVerify(
     const std::string& file,
     const RowTypePtr& schema,
@@ -1974,6 +2092,24 @@ void NimbleWriterFuzzer::readAndVerify(
       verifyBatch(result);
       rowsRead += result->size();
     }
+
+    FuzzerGenerator filterRng(
+        folly::hash::hash_combine(
+            options_.seed, selectionContext, std::string_view{"filtered"}));
+    verifyFilteredSelectiveRead(
+        file,
+        schema,
+        batches,
+        readerPath == ReaderPath::kSelectiveDefaultDispatch,
+        *leafPool_,
+        filterRng,
+        [&]() {
+          return fmt::format(
+              "seed {}, {}, reader {}",
+              options_.seed,
+              selectionContext,
+              toString(readerPath));
+        });
   }
 
   NIMBLE_CHECK_EQ(
