@@ -49,8 +49,8 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     const char* position = data.data() + this->dataOffset_;
     const auto numSections = encoding::read<uint8_t>(position);
     // Every flag changes how the sections map back to values, and this view
-    // interprets none of them. createEncodingView sends delta streams to
-    // DecodedFallbackEncodingView instead.
+    // interprets none of them. createEncodingView sends any stream with a
+    // flag set to DecodedFallbackEncodingView instead.
     const auto flags = encoding::read<uint8_t>(position);
     NIMBLE_CHECK_FILE(
         flags == 0,
