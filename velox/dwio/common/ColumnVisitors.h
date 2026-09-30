@@ -410,6 +410,7 @@ class ColumnVisitor {
 
   /// Processes a run of values. Dense deterministic filters append matches to
   /// the supplied buffers and update numValues, using SIMD where supported.
+  /// Requires dense rows, a deterministic filter, and no hook or scatter.
   template <bool hasFilter, bool hasHook, bool scatter>
   FOLLY_ALWAYS_INLINE void processRun(
       const T* input,
@@ -467,13 +468,7 @@ class ColumnVisitor {
       rowIndex_ += numInput;
       return;
     }
-    bool atEnd = false;
-    for (int32_t i = 0; i < numInput; ++i) {
-      process(input[i], atEnd);
-      if (atEnd) {
-        return;
-      }
-    }
+    VELOX_UNREACHABLE("Unsupported ColumnVisitor::processRun configuration");
   }
 
   const TFilter& filter() {

@@ -17,6 +17,7 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/type/Filter.h"
@@ -255,6 +256,22 @@ TEST_F(DecoderUtilTest, columnVisitorSmallintRowIndices) {
     EXPECT_EQ(hits[i], i) << "lane " << i;
     EXPECT_EQ(values[i], i + 1) << "lane " << i;
   }
+}
+
+TEST_F(DecoderUtilTest, columnVisitorSparseRunUnsupported) {
+  raw_vector<int32_t> rows(1);
+  rows[0] = 1;
+  const common::AlwaysTrue filter;
+  ColumnVisitor<int32_t, common::AlwaysTrue, DropValues, false> visitor(
+      filter, nullptr, rows, DropValues{});
+  int32_t value = 42;
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      (visitor.processRun<false, false, false>(
+          &value, 1, nullptr, nullptr, &value, numValues)),
+      "Unsupported ColumnVisitor::processRun configuration");
+  EXPECT_EQ(visitor.rowIndex(), 0);
+  EXPECT_EQ(numValues, 0);
 }
 
 TEST_F(DecoderUtilTest, columnVisitorInt128Run) {
