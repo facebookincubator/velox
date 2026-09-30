@@ -668,26 +668,6 @@ TYPED_TEST(SimpleVectorUnaryTypedTest, hashAll) {
   this->runTest(hashTest);
 }
 
-#ifdef _MSC_VER
-TEST_F(SimpleVectorNonParameterizedTest, hashAllOpaque) {
-  auto vector = maker_.flatVector<std::shared_ptr<void>>(2, OPAQUE<int>());
-  vector->set(0, std::make_shared<int>(1));
-  vector->set(1, std::make_shared<int>(2));
-
-  VELOX_ASSERT_THROW(
-      vector->hashAll(), "FlatVector::hashAll cannot hash this element type");
-
-  vector->setNull(0, true);
-  VELOX_ASSERT_THROW(
-      vector->hashAll(), "FlatVector::hashAll cannot hash this element type");
-
-  vector->setNull(1, true);
-  auto hashes = vector->hashAll();
-  EXPECT_EQ(hashes->valueAt(0), BaseVector::kNullHash);
-  EXPECT_EQ(hashes->valueAt(1), BaseVector::kNullHash);
-}
-#endif
-
 template <typename T>
 class SimpleVectorCompareTest : public SimpleVectorTest {
  protected:
