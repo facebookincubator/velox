@@ -284,6 +284,11 @@ class TabletReader {
         chunkStats_->groupMetadata(stripeGroupIndex).size() > 0;
   }
 
+  /// Returns true when this file's chunk statistics support read pruning.
+  bool supportsChunkStatsPruning() const {
+    return chunkStats_ != nullptr && chunkStats_->supportsChunkStatsPruning();
+  }
+
   // Returns the cluster index if available, nullptr otherwise.
   const ClusterIndex* clusterIndex() const {
     return clusterIndex_.get();
