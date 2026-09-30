@@ -65,6 +65,7 @@ add_library(
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
   views/EncodingView.cpp
+  views/DecodedFallbackEncodingView.h
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
