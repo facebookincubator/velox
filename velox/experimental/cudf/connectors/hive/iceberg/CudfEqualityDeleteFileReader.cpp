@@ -112,7 +112,10 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   // deleteKeyTable_ using cuDF
   if (deleteFile.fileFormat == dwio::common::FileFormat::PARQUET) {
     directReadEqualityDeleteFile(
-        deleteFile, std::move(deleteFileInput), equalityColumnTypes);
+        deleteFile,
+        std::move(deleteFileInput),
+        equalityColumnTypes,
+        deleteReaderOpts.fileColumnNamesReadAsLowerCase());
     return;
   }
 
@@ -163,7 +166,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
 void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
     const velox_iceberg::IcebergDeleteFile& deleteFile,
     std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
-    const std::vector<TypePtr>& equalityColumnTypes) {
+    const std::vector<TypePtr>& equalityColumnTypes,
+    bool caseInsensitiveColumnNames) {
   using cudf_velox::connector::hive::BufferedInputDataSource;
 
   // Create a cuDF data source
@@ -179,7 +183,9 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
 
   // Read the equality delete file
   auto options =
-      cudf::io::parquet_reader_options::builder(std::move(sourceInfo)).build();
+      cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
+          .case_sensitive_names(not caseInsensitiveColumnNames)
+          .build();
   options.set_column_names(equalityColumnNames_);
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();

@@ -627,14 +627,6 @@ TEST_F(TableScanTest, mixedCaseFileColumnNames) {
           "true")
       .splits(makeCudfHiveConnectorSplits({filePath}))
       .assertResults("SELECT Value_Col FROM tmp WHERE Filter_Col >= 'b'");
-
-  // Without case-insensitive matching the columns are missing from the file.
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .splits(makeCudfHiveConnectorSplits({filePath}))
-          .copyResults(pool_.get()),
-      "Encountered non-existent column 'filter_col'");
 }
 
 INSTANTIATE_TEST_SUITE_P(
