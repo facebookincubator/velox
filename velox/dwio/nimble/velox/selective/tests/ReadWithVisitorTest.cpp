@@ -229,6 +229,34 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
       memPool, encoded, [](uint32_t) { return nullptr; }, options, tuning);
 }
 
+// Builds the same encoding with a key-derived permutation applied, producing a
+// SubIntSplitReordered stream whose sections hold transformed values. Forced on
+// rather than left to the size comparison, which would decline it on data this
+// small.
+template <typename T>
+std::unique_ptr<SubIntSplitEncoding<T>> makeReorderedSubIntSplitEncoding(
+    const std::vector<T>& data,
+    Buffer& buffer,
+    velox::memory::MemoryPool& memPool) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  auto span = std::span<const PhysicalType>(
+      reinterpret_cast<const PhysicalType*>(data.data()), data.size());
+  EncodingSelection<PhysicalType> selection{
+      {.encodingType = EncodingType::SubIntSplit},
+      Statistics<PhysicalType>::create(span),
+      std::make_unique<NonRecursiveSubIntSplitPolicy<T>>()};
+  Encoding::Options options;
+  auto optionsTuning = subintsplit::kDefaultTuningConfig;
+  optionsTuning.transform =
+      static_cast<uint8_t>(subintsplit::TransformId::KeyDerived);
+  optionsTuning.keySection = 0;
+  optionsTuning.forceApply = true;
+  auto encoded = SubIntSplitEncoding<T>::encode(
+      selection, span, buffer, options, optionsTuning);
+  return std::make_unique<SubIntSplitEncoding<T>>(
+      memPool, encoded, [](uint32_t) { return nullptr; }, options);
+}
+
 // Packed IDs that follow a line through their rows: a tag that ignores the
 // rows, a counter, and a field within 15 of the counter. Long enough for
 // SubIntSplit to fit a row frame, so a read has to add the line back. `row` is
@@ -5827,6 +5855,72 @@ TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitAlwaysTrueDense) {
 }
 
 // ---------------------------------------------------------------------------
+// SubIntSplitEncoding<int64_t>, reordered, + hook + dense -> SLOW PATH.
+//
+// A hook makes the visitor's Extract something other than ExtractToReader, so
+// readWithVisitor's constexpr fast-path branch is not taken and the slow path
+// runs whatever the machine's AVX2 support. That matters because the fast path
+// decodes through materialize(), which undoes the transform, while the slow
+// path reassembles values from the sections directly -- which for a reordered
+// stream are the transformed values, not the originals. The same slow path is
+// reached in production by a non-deterministic filter or a build without AVX2,
+// so this would be silently wrong data rather than an error.
+// ---------------------------------------------------------------------------
+TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitReorderedHookSlowPath) {
+  constexpr int kRows = 500;
+
+  std::vector<int64_t> data(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    data[i] = static_cast<int64_t>(0x1234560000000000LL + i);
+  }
+
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      kRows, [](auto i) { return 0x1234560000000000LL + i; })});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::AlwaysTrue>());
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  RowSet rows(rowVec.data(), rowVec.size());
+
+  reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+  Buffer buffer(*pool());
+  auto encoding =
+      makeReorderedSubIntSplitEncoding<int64_t>(data, buffer, *pool());
+
+  common::AlwaysTrue filter;
+  RecordingValueHook hook;
+  dwio::common::ExtractToGenericHook extractValues(&hook);
+  constexpr bool kIsDense = true;
+  DecoderVisitor<
+      int64_t,
+      common::AlwaysTrue,
+      dwio::common::ExtractToGenericHook,
+      kIsDense>
+      visitor(filter, reader, rows, extractValues);
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+
+  encoding->readWithVisitor(visitor, params);
+
+  ASSERT_EQ(hook.values.size(), kRows);
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_EQ(hook.values[i], data[i]) << "row " << i;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SubIntSplitEncoding<int64_t> with a row frame, through each visitor path.
 // The frame is added back only by materialize(), so each path that reaches
 // values has to go through it: the dense fast path, the sparse fast path that
@@ -6204,6 +6298,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitDeltaVisitor) {
   reader->doPrepareRead<int64_t>(0, rows, nullptr);
 
   Encoding::Options options;
+
   options.subIntSplitDeltaPreTransform = true;
   Buffer buffer(*pool());
   auto encoding =

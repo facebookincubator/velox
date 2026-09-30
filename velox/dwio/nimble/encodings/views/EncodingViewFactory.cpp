@@ -153,17 +153,19 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
         // Only a stream with no flag set is read positionally. A delta stream
         // requires every prior value to reconstruct a given index, and a row
-        // frame is added back by the encoding, so those streams are decoded
-        // once and served from the decoded values.
-        if (subintsplit::streamFlags(
+        // frame or a section transform is undone by the encoding, so those
+        // streams are decoded once and served from the decoded values.
+        if (encodingType == EncodingType::SubIntSplitReordered ||
+            subintsplit::streamFlags(
                 data,
                 EncodingPrefix::prefixSize(data, options.useVarintRowCount)) !=
-            0) {
+                0) {
           return std::make_unique<DecodedFallbackEncodingView<T>>(
               data, pool, options);
         }
@@ -223,7 +225,8 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
-      EncodingType::SubIntSplit};
+      EncodingType::SubIntSplit,
+      EncodingType::SubIntSplitReordered};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),

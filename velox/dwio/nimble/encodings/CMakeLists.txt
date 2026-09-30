@@ -52,6 +52,8 @@ add_library(
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
   subintsplit/SectionMetrics.h
+  subintsplit/SectionTransform.h
+  subintsplit/SectionTransforms.cpp
   subintsplit/SplitBoundaries.cpp
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp

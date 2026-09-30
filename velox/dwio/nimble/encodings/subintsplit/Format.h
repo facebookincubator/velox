@@ -30,8 +30,10 @@
 /// prefix:
 ///
 ///   [1 byte]  numSections (1..64)
-///   [1 byte]  flags: kFlagDelta, kFlagRowFrame
+///   [1 byte]  flags: kFlagDelta, kFlagRowFrame, kFlagTransforms
 ///   [17 bytes, only with kFlagRowFrame]  {guard(1B), slope(8B), base(8B)}
+///   [transform block, only with kFlagTransforms]
+///     {keySection(1B), transformId(1B) per section}
 ///   [numSections × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
 ///   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
 ///
@@ -57,10 +59,14 @@ namespace facebook::nimble::subintsplit {
 inline constexpr uint8_t kFlagDelta = 1u << 0;
 /// A row frame block follows the flag byte; see RowFrame.
 inline constexpr uint8_t kFlagRowFrame = 1u << 1;
+/// A section transform block follows the row frame block; see TransformInfo.
+/// Only a SubIntSplitReordered stream sets it.
+inline constexpr uint8_t kFlagTransforms = 1u << 2;
 /// Every flag this reader understands. A stream carrying any other bit was
 /// written by a newer writer, and reading it as if the bit were absent would
 /// return wrong values with no error.
-inline constexpr uint8_t kKnownFlags = kFlagDelta | kFlagRowFrame;
+inline constexpr uint8_t kKnownFlags =
+    kFlagDelta | kFlagRowFrame | kFlagTransforms;
 
 /// Bytes preceding the section header entries.
 inline constexpr uint32_t kStreamHeaderSize = 2;
@@ -69,7 +75,8 @@ inline constexpr uint32_t kStreamHeaderSize = 2;
 inline constexpr uint32_t kSectionHeaderSize = 6;
 
 /// Bytes the SubIntSplit-specific header occupies, excluding the optional row
-/// frame block, the section payloads and the standard Encoding prefix.
+/// frame and transform blocks, the section payloads and the standard Encoding
+/// prefix.
 constexpr uint32_t specificHeaderSize(uint8_t numSections) noexcept {
   return kStreamHeaderSize +
       static_cast<uint32_t>(numSections) * kSectionHeaderSize;
@@ -79,6 +86,40 @@ constexpr uint32_t specificHeaderSize(uint8_t numSections) noexcept {
 /// that such a stream is byte-identical to one written before frames existed.
 inline uint32_t rowFrameHeaderSize(const RowFrame& frame) noexcept {
   return frame.active() ? kRowFrameHeaderSize : 0;
+}
+
+/// Per-section transform metadata, as the header carries it.
+///
+/// A section is transformed only where it pays for itself, so the ids are per
+/// section rather than one for the stream, letting each section decline.
+struct TransformInfo {
+  /// Index of the section the key-derived permutation sorts by. That section
+  /// is stored unpermuted, since it is what rebuilds the order. kNoKeySection
+  /// when no section is used as a key.
+  static constexpr uint8_t kNoKeySection = 0xFF;
+  uint8_t keySection{kNoKeySection};
+  /// Transform id per section, 0 where the section was left alone.
+  std::vector<uint8_t> transformIds;
+
+  bool anyTransform() const {
+    for (uint8_t id : transformIds) {
+      if (id != 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+/// Bytes the transform block occupies for `info`, zero when nothing is
+/// transformed so that an untransformed stream is byte-identical to one written
+/// before transforms existed.
+inline uint32_t transformHeaderSize(const TransformInfo& info) {
+  if (!info.anyTransform()) {
+    return 0;
+  }
+  // The key section, then one id per section.
+  return 1 + static_cast<uint32_t>(info.transformIds.size());
 }
 
 /// The two bytes preceding the section headers.
@@ -159,21 +200,23 @@ struct StoredSection {
 };
 
 /// Walks the SubIntSplit header: numSections, the flag byte, the row frame
-/// block when the flag byte announces one, one {bitStart, bitEnd, encodedSize}
-/// triple per section, then the section payloads back to back in LSB-first
-/// order.
+/// block when the flag byte announces one, the transform block when it
+/// announces that, one {bitStart, bitEnd, encodedSize} triple per section, then
+/// the section payloads back to back in LSB-first order.
 ///
 /// Shared by the encoding and the view so a wire format change cannot reach
 /// only one of them. `data` is the whole stream, `dataOffset` its prefix size.
 /// Rejects a flag it does not know, since skipping it would read the stream
 /// wrongly with no error. `flags`, when not null, receives the flag byte, and
 /// `rowFrame`, when not null, the row frame (inactive when the stream has
-/// none).
+/// none), and `transformInfo`, when not null, the per-section transform ids
+/// (all zero when the stream has none).
 inline std::vector<StoredSection> parseSections(
     std::string_view data,
     uint32_t dataOffset,
     uint8_t* flags = nullptr,
-    RowFrame* rowFrame = nullptr) {
+    RowFrame* rowFrame = nullptr,
+    TransformInfo* transformInfo = nullptr) {
   const char* pos = data.data() + dataOffset;
   // Every field below comes off the wire as arbitrary bytes; without these
   // checks a bad length walks pos past the buffer, a bad entry count resizes
@@ -201,10 +244,12 @@ inline std::vector<StoredSection> parseSections(
       (header.flags & ~kKnownFlags) == 0,
       "SubIntSplit stream has unsupported flags.");
   // Delta residuals are undone by the running sum over every earlier row, so
-  // a frame, which is undone per row, cannot be layered under them.
+  // neither a frame nor a transform, both of which undo per row or per
+  // column, can be layered under them.
   NIMBLE_CHECK_FILE(
-      (header.flags & kFlagDelta) == 0 || (header.flags & kFlagRowFrame) == 0,
-      "SubIntSplit delta streams carry no row frame.");
+      (header.flags & kFlagDelta) == 0 ||
+          (header.flags & (kFlagRowFrame | kFlagTransforms)) == 0,
+      "SubIntSplit delta streams carry no row frame or transforms.");
   if (flags != nullptr) {
     *flags = header.flags;
   }
@@ -221,6 +266,28 @@ inline std::vector<StoredSection> parseSections(
   }
   if (rowFrame != nullptr) {
     *rowFrame = parsedFrame;
+  }
+
+  if ((header.flags & kFlagTransforms) != 0) {
+    TransformInfo parsed;
+    requireBytes(1 + numSections, "SubIntSplit transform block is truncated.");
+    parsed.keySection = encoding::read<uint8_t>(pos);
+    // The key section is indexed directly when a transform inverts, so a bad
+    // value here would read outside the section vector.
+    NIMBLE_CHECK_FILE(
+        parsed.keySection == TransformInfo::kNoKeySection ||
+            parsed.keySection < numSections,
+        "SubIntSplit stream names a key section that does not exist.");
+    parsed.transformIds.resize(numSections);
+    for (uint8_t s = 0; s < numSections; ++s) {
+      parsed.transformIds[s] = encoding::read<uint8_t>(pos);
+    }
+    if (transformInfo != nullptr) {
+      *transformInfo = std::move(parsed);
+    }
+  } else if (transformInfo != nullptr) {
+    transformInfo->keySection = TransformInfo::kNoKeySection;
+    transformInfo->transformIds.assign(numSections, 0);
   }
 
   std::vector<StoredSection> sections(numSections);

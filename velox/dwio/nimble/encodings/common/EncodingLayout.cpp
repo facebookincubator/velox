@@ -224,7 +224,11 @@ EncodingLayout EncodingLayoutCapture::capture(
           encodingConfig);
       break;
     }
-    case EncodingType::SubIntSplit: {
+    // The captured type is the one the stream carries: reporting a reordered
+    // stream as plain SubIntSplit would describe a layout that decodes to
+    // different values than the stream it came from.
+    case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered: {
       // Walked by the shared parser rather than a local header walk, so the
       // flag byte and the row frame block it announces are read the same way
       // the encoding reads them.

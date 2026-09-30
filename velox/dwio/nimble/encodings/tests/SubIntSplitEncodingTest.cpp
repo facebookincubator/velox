@@ -982,6 +982,130 @@ TEST(SubIntSplitEncodingTests, rowFrameHeaderCorruptionThrows) {
   EXPECT_THROW(decodeAll<uint64_t>(badGuard, *pool), nimble::NimbleException);
 }
 
+// The gate that decides whether a section is worth keying a permutation on
+// asks whether sorting by it would produce groups of at least four rows,
+// counted over the whole column. A distinct count taken from a sample would
+// saturate near the sample size long before the column reaches the density
+// the threshold is written in terms of: a 4096-row sample of a column with
+// 4096 distinct values holds about 2590 of them.
+//
+// The key below has 16 rows per distinct value, four times what the gate asks
+// for, and must be admitted.
+TEST(SubIntSplitEncodingTests, keyWithLargeGroupsIsNotRefusedByCardinality) {
+  constexpr size_t kRows = 65536;
+  constexpr uint64_t kDistinct = 4096;
+
+  std::mt19937_64 rng{7};
+  std::vector<uint64_t> key(kRows);
+  for (auto& v : key) {
+    v = rng() % kDistinct;
+  }
+
+  // 65536 rows over 4096 distinct values is 16 rows per group.
+  // A bound that already fits, so the tightening pass is skipped.
+  EXPECT_TRUE(nimble::groupsEnoughToKey(key, /*boundBits=*/12));
+}
+
+// The other side of the same threshold, so a fix cannot simply return true.
+// One distinct value per row groups nothing, whatever the column length.
+TEST(SubIntSplitEncodingTests, keyWithNoRepeatsIsRefused) {
+  constexpr size_t kRows = 65536;
+  std::vector<uint64_t> key(kRows);
+  std::iota(key.begin(), key.end(), uint64_t{0});
+  EXPECT_FALSE(nimble::groupsEnoughToKey(key, /*boundBits=*/16));
+}
+
+// The same two answers reached through the other counting path. A key whose
+// values span the whole word is too wide for a bitmap to address, so it falls
+// back to hashing, and the early exit has to hold there too.
+TEST(SubIntSplitEncodingTests, wideKeysAreJudgedTheSameWayAsNarrowOnes) {
+  constexpr size_t kRows = 65536;
+  constexpr size_t kDistinct = 4096;
+  std::mt19937_64 rng{11};
+
+  // Every value carries the top bit, so the range covers the whole word and no
+  // bitmap can hold one entry per value.
+  std::vector<uint64_t> alphabet(kDistinct);
+  for (auto& v : alphabet) {
+    v = rng() | (uint64_t{1} << 63);
+  }
+  std::vector<uint64_t> grouping(kRows);
+  for (size_t i = 0; i < kRows; ++i) {
+    grouping[i] = alphabet[i % kDistinct];
+  }
+  EXPECT_TRUE(nimble::groupsEnoughToKey(grouping, /*boundBits=*/64));
+
+  std::vector<uint64_t> distinctPerRow(kRows);
+  for (auto& v : distinctPerRow) {
+    v = rng() | (uint64_t{1} << 63);
+  }
+  EXPECT_FALSE(nimble::groupsEnoughToKey(distinctPerRow, /*boundBits=*/64));
+}
+
+// The gate accepts a quarter of the rows as distinct values and refuses one
+// more. Counting now stops as soon as the limit is passed rather than running
+// to the end, so the boundary is where an off-by-one in the stopping condition
+// would show and nowhere else.
+TEST(SubIntSplitEncodingTests, keyIsRefusedExactlyPastAQuarterOfTheRows) {
+  constexpr size_t kRows = 65536;
+  const auto keyWithDistinct = [](size_t distinct) {
+    std::vector<uint64_t> key(kRows);
+    for (size_t i = 0; i < kRows; ++i) {
+      key[i] = i % distinct;
+    }
+    return key;
+  };
+  // A bound of 64 forces the tightening pass, which finds 15 bits and
+  // lands back on the bitmap.
+  EXPECT_TRUE(nimble::groupsEnoughToKey(keyWithDistinct(kRows / 4), 64));
+  EXPECT_FALSE(nimble::groupsEnoughToKey(keyWithDistinct(kRows / 4 + 1), 64));
+}
+
+// The key search abandons a candidate as soon as its running total stops
+// improving on the best complete plan so far. That is only sound because the
+// abandon test and the selection test are the same test: a plan is kept when it
+// is strictly smaller, so the first candidate to reach the minimum keeps it,
+// and a plan abandoned on reaching the incumbent could never have displaced it.
+//
+// Pinned here rather than left to a comment, because the two live two hundred
+// lines apart in the encoder and the invariant is invisible from either end.
+// Loosening this to accept a tie would hand a tie to the last candidate rather
+// than the first, changing which section a stream is keyed on and so changing
+// the bytes, while every round-trip test kept passing.
+TEST(SubIntSplitEncodingTests, aTieDoesNotDisplaceTheIncumbentPlan) {
+  EXPECT_TRUE(nimble::improvesOnBest(9, 10));
+  EXPECT_FALSE(nimble::improvesOnBest(10, 10));
+  EXPECT_FALSE(nimble::improvesOnBest(11, 10));
+
+  // The first candidate faces no incumbent, so it must always be priced to the
+  // end whatever it costs.
+  EXPECT_TRUE(
+      nimble::improvesOnBest(
+          std::numeric_limits<size_t>::max() - 1,
+          std::numeric_limits<size_t>::max()));
+}
+
+// The bound the caller supplies is an upper bound on the key's width, so
+// loosening it may cost a pass but must never change the answer.
+TEST(SubIntSplitEncodingTests, aLooserWidthBoundReachesTheSameVerdict) {
+  constexpr size_t kRows = 65536;
+  std::vector<uint64_t> grouping(kRows);
+  for (size_t i = 0; i < kRows; ++i) {
+    grouping[i] = i % 512;
+  }
+  std::vector<uint64_t> distinctPerRow(kRows);
+  std::iota(distinctPerRow.begin(), distinctPerRow.end(), uint64_t{0});
+
+  for (const int boundBits : {9, 16, 32, 64}) {
+    EXPECT_TRUE(nimble::groupsEnoughToKey(grouping, boundBits))
+        << "bound " << boundBits;
+  }
+  for (const int boundBits : {16, 32, 64}) {
+    EXPECT_FALSE(nimble::groupsEnoughToKey(distinctPerRow, boundBits))
+        << "bound " << boundBits;
+  }
+}
+
 TYPED_TEST(SubIntSplitEncodingTest, preserveRoundTripExplicitBoundaries) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();
