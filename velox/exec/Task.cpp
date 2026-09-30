@@ -34,6 +34,7 @@
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -3882,15 +3883,13 @@ bool Task::pauseRequested(ContinueFuture* future) {
 }
 
 namespace {
-// Returns the exchange transport 'planNode' names. Custom leaf plan nodes that
-// require an exchange client but do not derive from core::ExchangeNode carry no
-// transport of their own, so they use the built-in in-memory transport.
-std::string exchangeTransportKindOf(const core::PlanNodePtr& planNode) {
-  if (const auto exchangeNode =
-          std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
-    return exchangeNode->transportKind();
-  }
-  return std::string{core::TransportKind::kInMemory};
+// Returns the built-in in-memory transport entry. Custom leaf plan nodes that
+// require an exchange client but are not core::ExchangeNodes name no transport,
+// and their operators take an InMemoryExchangeClient. They use this entry
+// regardless of what a query registers under the in-memory transport id.
+const std::shared_ptr<ExchangeTransportEntry>& builtinInMemoryTransport() {
+  static const auto entry = InMemoryExchangeClient::makeDefaultTransportEntry();
+  return entry;
 }
 } // namespace
 
@@ -3909,15 +3908,19 @@ void Task::createExchangeClientLocked(
       "Exchange client has been created for planNode: {}",
       planNodeId);
 
-  const auto transport = exchangeTransportKindOf(planNode);
-  auto entry = ExchangeTransportRegistry::tryGet(*queryCtx_, transport);
+  const auto* exchangeNode = planNode->as<core::ExchangeNode>();
+  const std::string transport = exchangeNode != nullptr
+      ? exchangeNode->transportKind()
+      : std::string{core::TransportKind::kInMemory};
+  auto entry = exchangeNode != nullptr
+      ? ExchangeTransportRegistry::tryGet(*queryCtx_, transport)
+      : builtinInMemoryTransport();
   // Naming a transport no one registered in this process, or one that cannot
   // carry a merge exchange, is a configuration mistake and not an engine bug:
   // the plan comes from the coordinator, so these are user errors.
   VELOX_USER_CHECK_NOT_NULL(
       entry, "No exchange client registered for transport '{}'", transport);
-  if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode) !=
-      nullptr) {
+  if (planNode->is<core::MergeExchangeNode>()) {
     VELOX_USER_CHECK(
         entry->makeMergeExchangeOperator != nullptr,
         "Exchange transport does not support merge exchange: {}",

@@ -1219,11 +1219,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
-  // Creates an exchange client for the leaf plan node of a given pipeline.
-  // Resolves the transport 'planNode' names in ExchangeTransportRegistry and
-  // creates the client from that entry, keeping the entry so that the matching
-  // exchange operator can be built from it later. Must be called with 'mutex_'
-  // held. Fails if the transport is not registered.
+  // Creates an exchange client for the leaf plan node of a given pipeline. An
+  // ExchangeNode's transport is resolved in ExchangeTransportRegistry; any
+  // other leaf node that requires a client uses the built-in in-memory
+  // transport. Keeps the entry so that the matching exchange operator can be
+  // built from it later. Must be called with 'mutex_' held.
   void createExchangeClientLocked(
       int32_t pipelineId,
       const core::PlanNodePtr& planNode,

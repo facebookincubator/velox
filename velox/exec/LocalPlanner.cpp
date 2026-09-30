@@ -775,10 +775,9 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         // driver.
         VELOX_CHECK_NOT_NULL(exchangeClient);
         // A custom node reaches its operator through
-        // Operator::PlanNodeTranslator, which names the in-memory client. Such
-        // a node is not an ExchangeNode, so Task resolves the in-memory
-        // transport for it and the cast holds; check it rather than assume it,
-        // because a translator registered for an ExchangeNode would not.
+        // Operator::PlanNodeTranslator, which takes an InMemoryExchangeClient.
+        // Task creates the client of such a node from the built-in in-memory
+        // transport, so the cast holds.
         auto inMemoryExchangeClient =
             std::dynamic_pointer_cast<InMemoryExchangeClient>(exchangeClient);
         VELOX_CHECK_NOT_NULL(
