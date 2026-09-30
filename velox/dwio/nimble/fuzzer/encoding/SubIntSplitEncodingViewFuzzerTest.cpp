@@ -15,8 +15,8 @@
  */
 
 /// Fuzzes the EncodingView that createEncodingView returns for SubIntSplit
-/// streams, with the delta pre-transform both off and on, against the values
-/// that were encoded.
+/// streams, with the delta pre-transform both off and on, and for framed,
+/// reordered and transformed streams, against the values that were encoded.
 ///
 /// Configuration via CLI flags:
 ///   --sis_view_fuzzer_iterations=N  Iterations per type (default: 20)
@@ -30,14 +30,19 @@
 #include <algorithm>
 #include <bit>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 #include "folly/Random.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
+#include "velox/dwio/nimble/encodings/subintsplit/RowFrame.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SectionTransform.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TuningConfig.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
+#include "velox/dwio/nimble/fuzzer/encoding/SubIntSplitFuzzer.h"
 #include "velox/dwio/nimble/velox/RowRange.h"
 
 DEFINE_uint32(
@@ -191,7 +196,6 @@ void runSubIntSplitViewFuzzer(
   std::mt19937 rng(seed);
 
   uint32_t numDeltaStreams{0};
-  uint32_t numUnsupportedViews{0};
   for (uint32_t iter = 0; iter < iterations; ++iter) {
     const auto rowCount = 2 + folly::Random::rand32(rng) % maxRows;
     const bool realNestedSelection = folly::Random::oneIn(2, rng);
@@ -234,23 +238,7 @@ void runSubIntSplitViewFuzzer(
           ++numDeltaStreams;
         }
 
-        std::unique_ptr<EncodingView> view;
-        try {
-          view = createEncodingView(serialized, pool.get(), options);
-        } catch (const NimbleUserError& e) {
-          // The positional view opens a view per section, and some section
-          // encodings (Varint) have none. Only a stream without the delta
-          // flag takes that path.
-          if (e.errorCode() == error_code::NotSupported &&
-              !subintsplit::isDeltaStream(
-                  serialized,
-                  EncodingPrefix::prefixSize(
-                      serialized, options.useVarintRowCount))) {
-            ++numUnsupportedViews;
-            continue;
-          }
-          throw;
-        }
+        auto view = createEncodingView(serialized, pool.get(), options);
         ASSERT_NE(view, nullptr);
         verifyView<T>(rng, *pool, *view, data);
       }
@@ -259,8 +247,121 @@ void runSubIntSplitViewFuzzer(
   // Monotonic and sorted datasets encode smaller as deltas, so a run that
   // produced no delta stream did not test what this suite is for.
   EXPECT_GT(numDeltaStreams, 0);
-  LOG(INFO) << numDeltaStreams << " delta streams; " << numUnsupportedViews
-            << " streams with a section encoding that has no view";
+  LOG(INFO) << numDeltaStreams << " delta streams";
+}
+
+// base + slope * row plus up to 11 random low bits, long enough for a row
+// frame (kRowFrameMinStrides strides of kRowFrameStride rows). Unsigned
+// arithmetic, so a steep slope wraps.
+template <typename T>
+Vector<T> makeFramedLineData(
+    velox::memory::MemoryPool& pool,
+    std::mt19937& rng,
+    uint32_t extraRows) {
+  using UnsignedT = std::make_unsigned_t<T>;
+  const uint32_t rowCount =
+      subintsplit::kRowFrameMinStrides * subintsplit::kRowFrameStride + 1 +
+      extraRows;
+  const auto base = static_cast<UnsignedT>(folly::Random::rand64(rng));
+  const auto slope =
+      static_cast<UnsignedT>(1 + folly::Random::rand32(rng) % 1'000);
+  const uint32_t noiseBits = folly::Random::rand32(rng) % 12;
+  Vector<T> data(&pool);
+  data.reserve(rowCount);
+  for (uint32_t row = 0; row < rowCount; ++row) {
+    auto value = static_cast<UnsignedT>(base + slope * row);
+    if (noiseBits > 0) {
+      value += static_cast<UnsignedT>(
+          folly::Random::rand32(rng) & ((1u << noiseBits) - 1));
+    }
+    data.push_back(static_cast<T>(value));
+  }
+  return data;
+}
+
+// Framed, reordered and transformed streams under random settings, which
+// the positional view reads directly, next to delta streams, which it
+// decodes once.
+template <typename EncodingClass>
+void runSubIntSplitTransformedViewFuzzer(
+    uint32_t iterations,
+    uint32_t maxRows,
+    uint32_t seed) {
+  using T = typename EncodingClass::cppDataType;
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  auto dataBuffer = std::make_unique<Buffer>(*pool);
+  if (seed == 0) {
+    seed = folly::Random::rand32();
+  }
+  LOG(INFO) << "SubIntSplit transformed EncodingView fuzzer seed: " << seed
+            << " dtype: " << toString(TypeTraits<T>::dataType)
+            << " iterations: " << iterations << " maxRows: " << maxRows;
+  std::mt19937 rng(seed);
+
+  uint32_t numFramed{0};
+  uint32_t numReordered{0};
+  for (uint32_t iter = 0; iter < iterations; ++iter) {
+    const auto rowCount = 2 + folly::Random::rand32(rng) % maxRows;
+    auto datasets = makeDatasets<T>(*pool, rng, rowCount, dataBuffer.get());
+    // The other datasets are too short for a row frame, which only integer
+    // streams carry.
+    if constexpr (std::is_integral_v<T>) {
+      datasets.push_back(
+          makeFramedLineData<T>(
+              *pool, rng, folly::Random::rand32(rng) % maxRows));
+    }
+    for (const auto& data : datasets) {
+      if (data.empty()) {
+        continue;
+      }
+      subintsplit::TuningConfig tuning;
+      tuning.rowFrameForceApply = folly::Random::oneIn(2, rng);
+      switch (folly::Random::rand32(3, rng)) {
+        case 0:
+          break;
+        case 1:
+          tuning.autoTransform = true;
+          break;
+        default:
+          tuning.transform =
+              static_cast<uint8_t>(subintsplit::TransformId::KeyDerived);
+          tuning.forceApply = true;
+          break;
+      }
+      Encoding::Options options{
+          .useVarintRowCount = folly::Random::oneIn(2, rng)};
+      options.subIntSplitDeltaPreTransform = folly::Random::oneIn(4, rng);
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "seed=" << seed << " iter=" << iter << " rowCount=" << data.size()
+          << " rowFrameForceApply=" << tuning.rowFrameForceApply
+          << " autoTransform=" << tuning.autoTransform
+          << " forceApply=" << tuning.forceApply
+          << " delta=" << options.subIntSplitDeltaPreTransform);
+      Buffer encodeBuffer(*pool);
+      const auto serialized =
+          encodeSubIntSplit(data, encodeBuffer, options, tuning);
+      const auto flags = subintsplit::streamFlags(
+          serialized,
+          EncodingPrefix::prefixSize(serialized, options.useVarintRowCount));
+      numFramed += (flags & subintsplit::kFlagRowFrame) != 0;
+      numReordered += EncodingPrefix::encodingType(serialized) ==
+              EncodingType::SubIntSplitReordered ||
+          (flags & subintsplit::kFlagTransforms) != 0;
+      verifySubIntSplitView(rng, *pool, serialized, data, options);
+      if (::testing::Test::HasFatalFailure()) {
+        return;
+      }
+    }
+  }
+  LOG(INFO) << "SubIntSplit transformed EncodingView fuzzer framed streams: "
+            << numFramed << "; reordered or transformed: " << numReordered;
+  // A run without a framed or a reordered stream did not test the view's
+  // positional paths for them.
+  if constexpr (std::is_integral_v<T>) {
+    EXPECT_GT(numFramed, 0);
+  }
+  EXPECT_GT(numReordered, 0);
 }
 
 } // namespace
@@ -276,6 +377,13 @@ using SubIntSplitViewTypes = ::testing::Types<
 template <typename E>
 class SubIntSplitEncodingViewFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(SubIntSplitEncodingViewFuzzerTest, SubIntSplitViewTypes);
+
+TYPED_TEST(SubIntSplitEncodingViewFuzzerTest, transformedViewReadsMatchValues) {
+  runSubIntSplitTransformedViewFuzzer<TypeParam>(
+      FLAGS_sis_view_fuzzer_iterations,
+      FLAGS_sis_view_fuzzer_max_rows,
+      FLAGS_sis_view_fuzzer_seed);
+}
 
 TYPED_TEST(SubIntSplitEncodingViewFuzzerTest, viewReadsMatchValues) {
   runSubIntSplitViewFuzzer<TypeParam>(

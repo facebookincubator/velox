@@ -40,6 +40,32 @@
 
 namespace facebook::nimble {
 namespace detail {
+namespace {
+
+// Whether a SubIntSplit stream has a section that varies per row and that no
+// EncodingView can read. When such sections are the only varying ones, the
+// SubIntSplitEncodingView decodes each of them once and holds the values, so
+// it keeps as much memory as a full decode of the stream while paying for
+// reassembly on every read. Decided from the stream and section headers alone,
+// so choosing the view never decodes a section.
+bool allVaryingSectionsViewless(std::string_view data, uint32_t dataOffset) {
+  bool hasViewlessSection = false;
+  for (const auto& section : subintsplit::parseSections(data, dataOffset)) {
+    const auto sectionType = EncodingPrefix::encodingType(section.stream);
+    if (sectionType == EncodingType::Constant) {
+      continue;
+    }
+    if (supportsEncodingView(sectionType)) {
+      return false;
+    }
+    hasViewlessSection = true;
+  }
+  // A stream of Constant sections alone is read from bits folded at
+  // construction, which holds no values, so it stays on the positional view.
+  return hasViewlessSection;
+}
+
+} // namespace
 
 template <typename T>
 std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
@@ -157,15 +183,19 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
-        // Only a stream with no flag set is read positionally. A delta stream
-        // requires every prior value to reconstruct a given index, and a row
-        // frame or a section transform is undone by the encoding, so those
-        // streams are decoded once and served from the decoded values.
-        if (encodingType == EncodingType::SubIntSplitReordered ||
-            subintsplit::streamFlags(
-                data,
-                EncodingPrefix::prefixSize(data, options.useVarintRowCount)) !=
-                0) {
+        // A delta stream requires every prior value to reconstruct a given
+        // index, so it is decoded once and served from the decoded values.
+        // A stream whose varying sections have no view of their own is decoded
+        // once as well: reading it positionally would hold the same decoded
+        // sections and add reassembly work to every read. The encoding applies
+        // the row frame and the section transforms while decoding, so the
+        // decoded values are already in row order. Every other stream,
+        // including reordered, framed and transformed ones, is read
+        // positionally.
+        const auto dataOffset =
+            EncodingPrefix::prefixSize(data, options.useVarintRowCount);
+        if (subintsplit::isDeltaStream(data, dataOffset) ||
+            allVaryingSectionsViewless(data, dataOffset)) {
           return std::make_unique<DecodedFallbackEncodingView<T>>(
               data, pool, options);
         }
