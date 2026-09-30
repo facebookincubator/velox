@@ -261,7 +261,8 @@ void QueryBenchmarkBase::shutdown() {
 
 namespace {
 // Parses the semicolon-separated key=value entries of -query_configs
-// into 'queryConfigs'.
+// into 'queryConfigs'. Surrounding whitespace is trimmed and empty
+// entries are skipped.
 void applyQueryConfigOverrides(
     std::unordered_map<std::string, std::string>& queryConfigs) {
   if (FLAGS_query_configs.empty()) {
@@ -269,7 +270,11 @@ void applyQueryConfigOverrides(
   }
   std::vector<std::string_view> entries;
   folly::split(";", FLAGS_query_configs, entries);
-  for (const auto& entry : entries) {
+  for (const auto& rawEntry : entries) {
+    const std::string_view entry = folly::trimWhitespace(rawEntry);
+    if (entry.empty()) {
+      continue;
+    }
     const auto equals = entry.find('=');
     VELOX_USER_CHECK_NE(
         equals,
