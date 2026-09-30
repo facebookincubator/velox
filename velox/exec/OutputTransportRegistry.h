@@ -41,10 +41,11 @@ namespace facebook::velox::exec {
 /// entries with make(), which binds the operator to this manager and rejects
 /// null halves.
 struct OutputTransportEntry {
-  std::shared_ptr<OutputBufferManager> manager;
+  /// Holds the output buffers of every task that uses this transport.
+  const std::shared_ptr<OutputBufferManager> manager;
 
   /// Builds this transport's output operator, binding 'manager'.
-  PartitionedOutputFactory makeOutputOperator;
+  const PartitionedOutputFactory makeOutputOperator;
 
   /// Preferred way to build an entry: pairs 'manager' with an operator builder
   /// that receives that same manager, so the operator can't be wired to a

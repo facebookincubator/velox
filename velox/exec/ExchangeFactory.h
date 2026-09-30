@@ -83,14 +83,17 @@ struct ExchangeClientContext {
   folly::Executor* executor;
 
   /// The running query's config, so a transport can honor session-level
-  /// exchange tuning beyond the fields above. It outlives the client.
+  /// exchange tuning beyond the fields above. Valid only during the factory
+  /// call; a client that needs a setting later keeps a copy of it.
   const core::QueryConfig& queryConfig;
 };
 
 /// Creates the transport's exchange client for one pipeline of one task.
 /// Invoked synchronously while the owning Task holds its mutex. Implementations
 /// must not perform blocking transport setup or call back into that Task;
-/// defer transport setup until remote task ids are added to the client.
+/// defer transport setup until remote task ids are added to the client. They
+/// also must not allocate from the context's 'pool': the Task requires its
+/// memory pool to be empty when it creates drivers.
 using ExchangeClientFactory = std::function<std::shared_ptr<ExchangeClient>(
     const ExchangeClientContext& context)>;
 

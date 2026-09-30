@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
@@ -37,6 +38,11 @@ namespace {
 using ::testing::Key;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
+
+// Entries are shared by every task that resolves the transport, and make()
+// validates their factories, so a registered entry must not be reassignable.
+static_assert(!std::is_copy_assignable_v<ExchangeTransportEntry>);
+static_assert(!std::is_move_assignable_v<ExchangeTransportEntry>);
 
 // Minimal control-plane-only client, standing in for a transport's client
 // without needing an ExchangeSource or an executor.

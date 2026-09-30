@@ -41,11 +41,11 @@ namespace facebook::velox::exec {
 /// concrete Task-level client type and rejects null halves.
 struct ExchangeTransportEntry {
   /// Creates this transport's exchange client for one pipeline of one task.
-  ExchangeClientFactory makeClient;
+  const ExchangeClientFactory makeClient;
 
   /// Builds this transport's Exchange operator, bound to a client from
   /// 'makeClient'.
-  ExchangeOperatorFactory makeExchangeOperator;
+  const ExchangeOperatorFactory makeExchangeOperator;
 
   /// Builds this transport's MergeExchange operator and receives the
   /// Task-level client from 'makeClient'. The client may be used for data or
@@ -53,7 +53,7 @@ struct ExchangeTransportEntry {
   /// built-in in-memory operator ignores it and creates one client per merge
   /// source. Null when the transport does not support merge exchange; Task
   /// fails fast if a MergeExchangeNode names such a transport.
-  ExchangeOperatorFactory makeMergeExchangeOperator;
+  const ExchangeOperatorFactory makeMergeExchangeOperator;
 
   /// Preferred way to build an entry: pairs a client factory with operator
   /// builders that receive the concrete client type that factory produces.

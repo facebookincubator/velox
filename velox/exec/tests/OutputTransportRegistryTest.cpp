@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
@@ -36,6 +37,11 @@ namespace {
 using ::testing::Key;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
+
+// Entries are shared by every task that resolves the transport, and make()
+// validates their factories, so a registered entry must not be reassignable.
+static_assert(!std::is_copy_assignable_v<OutputTransportEntry>);
+static_assert(!std::is_move_assignable_v<OutputTransportEntry>);
 
 class MockOutputBufferManager : public OutputBufferManager {
  public:
