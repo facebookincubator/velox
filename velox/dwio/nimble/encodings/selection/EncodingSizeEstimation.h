@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 
@@ -196,6 +197,20 @@ struct EncodingSizeEstimation {
           return std::nullopt;
         }
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::SubIntSplit: {
+        // Planned over the values: where the bit fields of a value sit, and
+        // how each behaves down the stream, is not in any summary of them.
+        if constexpr (
+            isNumericType<physicalType>() &&
+            (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+          return SubIntSplitEncoding<T>::estimateSize(
+              values.size(), values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return estimateNumericSize(
             encodingType, values.size(), statistics, options);
