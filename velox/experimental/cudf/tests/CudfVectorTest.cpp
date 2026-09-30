@@ -226,25 +226,23 @@ TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
   TestCudaStream consumerStream;
   RecordingAsyncDeviceResource resource;
   auto packedTable = makePackedTable(allocationStream.view(), resource);
-  const auto numRows = packedTable->table.num_rows();
+
+  // Model the intra-node UCX path: the producer allocated the packed buffer on
+  // its own stream, and the consumer wraps it with a different stream on which
+  // downstream operators read it. Dropping the vector must order the free after
+  // that work.
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW("c0", INTEGER()),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      consumerStream.view());
   resource.reset();
 
-  {
-    // Intra-node exchange finishes producing the packed buffer before handing
-    // it to a consumer that uses a different stream. Dropping the vector must
-    // order its free after that consumer's work, even without a later rebind.
-    CudfVector vector(
-        pool_.get(),
-        ROW("c0", INTEGER()),
-        numRows,
-        std::move(packedTable),
-        consumerStream.view());
-    EXPECT_EQ(vector.stream().get(), consumerStream.value());
-  }
+  vector.reset();
 
   EXPECT_EQ(resource.deallocationCount(), 1);
   EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
-  consumerStream.view().sync();
 }
 
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
@@ -264,9 +262,10 @@ TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   resource.reset();
 
   ASSERT_TRUE(vector->rebindStream(targetStream.view()));
+  EXPECT_EQ(vector->stream().get(), targetStream.value());
   vector.reset();
 
-  EXPECT_GT(resource.deallocationCount(), 0);
+  EXPECT_EQ(resource.deallocationCount(), 1);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 

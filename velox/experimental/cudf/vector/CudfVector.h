@@ -43,6 +43,9 @@ namespace facebook::velox::cudf_velox {
 class CudfVector : public RowVector {
  public:
   /// Constructs a CudfVector from an owned cudf::table.
+  /// 'stream' must be the stream the table's buffers were allocated on (or
+  /// last rebound to). They are freed there until rebindStream() moves them to
+  /// a different stream.
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
@@ -53,7 +56,8 @@ class CudfVector : public RowVector {
   /// Constructs a CudfVector from packed_table.
   /// The packed data is retained and tabView_ references the table view inside
   /// packed_table. This avoids copying the underlying GPU data.
-  /// Deallocation of the packed buffer is ordered on the supplied stream.
+  /// The packed buffer is freed on 'stream', or on the stream passed to a later
+  /// rebindStream().
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
@@ -74,10 +78,11 @@ class CudfVector : public RowVector {
   /// first (which copies the data).
   std::unique_ptr<cudf::table> release();
 
-  /// Rebinds owned table buffers to use 'stream' for future deallocation.
+  /// Rebinds the vector's device buffers (owned or packed) to use 'stream' for
+  /// future deallocation.
   /// This only changes future stream/deallocation association. It does not make
   /// 'stream' wait on the previous stream or any producer stream.
-  /// Returns false when the storage cannot be rebound without materializing.
+  /// Returns false if the storage was already taken by release().
   bool rebindStream(cuda::stream_ref stream);
 
   uint64_t estimateFlatSize() const override;
