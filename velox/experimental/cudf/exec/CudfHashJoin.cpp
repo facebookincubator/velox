@@ -571,17 +571,16 @@ void CudfHashJoinProbe::doNoMoreInput() {
     return;
   }
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
   // Only last driver collects all answers
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     return;
   }
 
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue from the barrier and finish.
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -604,12 +603,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
       if (lastProbeStream_.has_value()) {
         inputStreams.push_back(lastProbeStream_.value());
       }
-      for (auto& peer : peers) {
-        if (peer.get() == operatorCtx_->driver()) {
-          continue;
-        }
-        auto op = peer->findOperator(operatorCtx_->operatorId());
-        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+      for (const auto& peer : peerOperators) {
+        auto* probe = peer->as<CudfHashJoinProbe>();
         if (probe != nullptr && probe->lastProbeStream_.has_value()) {
           inputStreams.push_back(probe->lastProbeStream_.value());
         }
@@ -618,12 +613,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
         cudf::detail::join_streams(inputStreams, stream);
       }
 
-      for (auto& peer : peers) {
-        if (peer.get() == operatorCtx_->driver()) {
-          continue;
-        }
-        auto op = peer->findOperator(operatorCtx_->operatorId());
-        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+      for (const auto& peer : peerOperators) {
+        auto* probe = peer->as<CudfHashJoinProbe>();
         if (probe == nullptr) {
           continue;
         }
@@ -653,9 +644,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
 
   // Handling RightSemiFilterJoin
   // Collect results from peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(operatorCtx_->operatorId());
-    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+  for (const auto& peer : peerOperators) {
+    auto* probe = peer->as<CudfHashJoinProbe>();
     VELOX_CHECK_NOT_NULL(probe);
     inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
   }

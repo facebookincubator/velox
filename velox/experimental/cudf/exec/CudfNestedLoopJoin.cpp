@@ -332,19 +332,14 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
   }
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
-          &peerFuture_,
-          promises,
-          peers)) {
+  if (!operatorCtx_->allPeersFinished(&peerFuture_, promises, peerOperators)) {
     return;
   }
 
   SCOPE_EXIT {
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -366,12 +361,8 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
     if (lastProbeStream_.has_value()) {
       inputStreams.push_back(lastProbeStream_.value());
     }
-    for (auto& peer : peers) {
-      if (peer.get() == operatorCtx_->driver()) {
-        continue;
-      }
-      auto op = peer->findOperator(planNodeId());
-      auto* probe = dynamic_cast<CudfNestedLoopJoinProbe*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* probe = peer->as<CudfNestedLoopJoinProbe>();
       if (probe != nullptr && probe->lastProbeStream_.has_value()) {
         inputStreams.push_back(probe->lastProbeStream_.value());
       }
@@ -381,12 +372,8 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
     }
 
     // Merge buildMatchedFlags_ from all peers via BITWISE_OR.
-    for (auto& peer : peers) {
-      if (peer.get() == operatorCtx_->driver()) {
-        continue;
-      }
-      auto op = peer->findOperator(planNodeId());
-      auto* probe = dynamic_cast<CudfNestedLoopJoinProbe*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* probe = peer->as<CudfNestedLoopJoinProbe>();
       if (probe == nullptr) {
         continue;
       }

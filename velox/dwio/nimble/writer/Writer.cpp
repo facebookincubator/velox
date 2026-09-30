@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
@@ -73,6 +74,8 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -2801,6 +2804,11 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
+  // A reclaim-triggered flush must remain on the reclaiming thread. Dispatching
+  // executor tasks could enter memory arbitration recursively.
+  if (velox::memory::underMemoryArbitration()) {
+    return 1;
+  }
   const auto minStreamsPerEncodingTask =
       std::max(1u, options.minStreamsPerEncodingTask);
   const auto maxByStreams =
@@ -2934,41 +2942,56 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add(
-            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
-              velox::common::testutil::TestValue::adjust(
-                  "facebook::nimble::Writer::parallelEncodeTask",
-                  const_cast<uint32_t*>(&taskId));
-              const auto startCpuNanos = velox::process::threadCpuNanos();
-              while (true) {
-                const auto fetchIndex =
-                    nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (fetchIndex >= streamCount) {
-                  break;
-                }
-                const auto streamIndex = orderedIndices[fetchIndex];
-                auto& [nodeId, streamData] = streams[streamIndex];
-                uint64_t streamSize{0};
-                processStream(
-                    *streamData,
-                    encodingScratchBufferPool,
-                    encodingBufferPool,
-                    streamSize,
-                    chunkSize);
-                auto* statsCollector = context_->getStatsCollector(nodeId);
-                if (statsCollector) {
-                  statsCollector->addPhysicalSize(streamSize);
-                }
-              }
-              encodingCpuNanos.fetch_add(
-                  velox::process::threadCpuNanos() - startCpuNanos,
-                  std::memory_order_relaxed);
-            });
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool]() {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto fetchIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (fetchIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = orderedIndices[fetchIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            uint64_t streamSize{0};
+            processStream(
+                *streamData,
+                encodingScratchBufferPool,
+                encodingBufferPool,
+                streamSize,
+                chunkSize);
+            auto* statsCollector = context_->getStatsCollector(nodeId);
+            if (statsCollector) {
+              statsCollector->addPhysicalSize(streamSize);
+            }
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
       barrier.waitAll();
     } else {
@@ -3322,15 +3345,31 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool] {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
           const auto startCpuNanos = velox::process::threadCpuNanos();
           while (true) {
             const auto inputIndex =
@@ -3422,6 +3461,7 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
+    bool stopWhenPressureRelieved,
     FlushPolicy* flushPolicy) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
@@ -3429,10 +3469,10 @@ bool Writer::flushChunks(
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
     if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+        (stopWhenPressureRelieved && !shouldChunk(flushPolicy))) {
       return false;
     }
   }
@@ -3523,45 +3563,68 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
+  const auto& options = context_->options();
+  if (options.enableChunking) {
     const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
-    const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    // O(numStreams) plus an allocation, so it is called only from a branch
+    // that will act on the result.
+    const auto oversizedStreams = [&] {
+      const auto streamCount = streams.size();
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      std::vector<uint32_t> indices;
+      indices.reserve(streamCount);
+      for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          indices.push_back(streamIndex);
+        }
       }
+      return indices;
+    };
+
+    if (options.eagerChunking) {
+      // An oversized stream is capped on its own account, without waiting for
+      // the writer's total to come under pressure. See
+      // WriterOptions::eagerChunking. Stopping once pressure cleared would
+      // leave the streams after that point above the cap, so this walks all
+      // of them.
+      flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/false,
+          flushPolicy.get());
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
-      // Relieve memory pressure by chunking small streams.
-      // Sort streams for chunking based on raw memory usage.
-      // TODO(T240072104): Improve performance by bucketing the streams
-      // by size (by most significant bit) instead of sorting them.
-      // Only sort streams above minChunkSize.
-      streamIndices.resize(streams.size());
-      std::iota(streamIndices.begin(), streamIndices.end(), 0);
-      std::sort(
-          streamIndices.begin(),
-          streamIndices.end(),
-          [&](const uint32_t& a, const uint32_t& b) {
-            return streams[a].second->memoryUsed() >
-                streams[b].second->memoryUsed();
-          });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+    if (shouldChunk(flushPolicy.get())) {
+      // Soft chunking, bounded by maxChunkSize.
+      const bool continueChunking = flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/true,
+          flushPolicy.get());
+      // Hard chunking reaches below maxChunkSize: the escalation for when
+      // capping each stream was not enough.
+      if (continueChunking) {
+        // Sort streams for chunking based on raw memory usage.
+        // TODO(T240072104): Improve performance by bucketing the streams
+        // by size (by most significant bit) instead of sorting them.
+        // Only sort streams above minChunkSize.
+        std::vector<uint32_t> streamIndices(streams.size());
+        std::iota(streamIndices.begin(), streamIndices.end(), 0);
+        std::sort(
+            streamIndices.begin(),
+            streamIndices.end(),
+            [&](const uint32_t& a, const uint32_t& b) {
+              return streams[a].second->memoryUsed() >
+                  streams[b].second->memoryUsed();
+            });
+        flushChunks(
+            streamIndices,
+            /*ensureFullChunks=*/false,
+            /*stopWhenPressureRelieved=*/true,
+            flushPolicy.get());
+      }
     }
   }
 

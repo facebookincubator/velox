@@ -20,17 +20,24 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionMetrics.h"
 
-// Per-section cost models for the SubIntSplit DP selector.
-//
-// Each function estimates the compressed size in bits for storing `numValues`
-// items of a bit-range sub-stream of logical width `bitWidth`. The models
-// correspond to nimble's present encodings and are derived from the same
-// assumptions used in EncodingSizeEstimation.h (common prefix 6 bytes, nested
-// encoding overhead, etc.).
-//
-// Deliberately avoids HLL cardinality estimation, entropy, and frame-residual
-// tracking: the simplified SectionMetrics provides enough signal for the DP to
-// make directionally correct split decisions.
+/// Per-section cost models for the SubIntSplit DP selector.
+///
+/// Each function estimates the compressed size in bits for storing `numValues`
+/// items of a bit-range sub-stream of logical width `bitWidth`. The models
+/// correspond to nimble's present encodings and are derived from the same
+/// assumptions used in EncodingSizeEstimation.h (common prefix 6 bytes, nested
+/// encoding overhead, etc.).
+///
+/// Deliberately avoids HLL cardinality estimation, entropy, and frame-residual
+/// tracking: the simplified SectionMetrics provides enough signal for the DP to
+/// make directionally correct split decisions.
+///
+/// Planner context:
+///
+///   SectionMetrics -> [candidate cost models] -> cost + viability -> DP grid
+///
+/// Costs use bits for the complete nested stream, including headers. They guide
+/// planning only; full-data nested selection makes the final encoding choice.
 
 namespace facebook::nimble::subintsplit {
 

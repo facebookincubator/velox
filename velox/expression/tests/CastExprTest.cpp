@@ -2770,7 +2770,7 @@ TEST_F(CastExprTest, lazyInput) {
 
 TEST_F(CastExprTest, identicalTypes) {
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, folly::identity),
+      makeFlatIdentityVector<int64_t>(10),
   });
   auto result = evaluate("cast(c0 as bigint)", data);
   ASSERT_EQ(result.get(), data->childAt(0).get());

@@ -296,6 +296,17 @@ TEST(SchemaBuilderTest, hybridFlatMapStreamVisitorsShortCircuit) {
           map.groupAt(0).keyDescriptor.offset(),
           map.groupAt(0).inMapDescriptor.offset(),
           firstValueOffset}));
+
+  std::vector<std::pair<Kind, uint32_t>> visitedTypes;
+  auto visitType = [&visitedTypes](const Type& type, uint32_t level) {
+    visitedTypes.emplace_back(type.kind(), level);
+  };
+  auto visitStream = [](offset_size) { return false; };
+  EXPECT_FALSE(visitPresenceStreamOffsets(map, 0, visitType, visitStream));
+  EXPECT_EQ(
+      visitedTypes,
+      (std::vector<std::pair<Kind, uint32_t>>{
+          {Kind::HybridFlatMap, 0}, {Kind::Scalar, 1}, {Kind::Scalar, 1}}));
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
@@ -555,10 +566,20 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsTruncatedGroup) {
 TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
   {
     SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::String, /*projection=*/true);
+    hybridMap->addGroup(
+        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+    EXPECT_NO_THROW(builder.schemaNodes());
+  }
+
+  {
+    SchemaBuilder builder;
     builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Hybrid FlatMap requires at least two groups");
+        builder.schemaNodes(), "Hybrid FlatMap requires at least 2 group(s)");
   }
 
   {
@@ -570,7 +591,7 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Hybrid FlatMap requires at least two groups");
+        builder.schemaNodes(), "Hybrid FlatMap requires at least 2 group(s)");
   }
 
   {
@@ -667,6 +688,23 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
     hybridMap->addGroup(
+        1, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        {},
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+    NIMBLE_ASSERT_THROW(
+        builder.schemaNodes(),
+        "Hybrid FlatMap group IDs must be in ascending order");
+  }
+
+  {
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    hybridMap->addGroup(
         0, {}, builder.createScalarTypeBuilder(ScalarKind::Int64));
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
@@ -755,7 +793,7 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
   }
 }
 
-TEST(SchemaBuilderTest, hybridFlatMapReaderValidatesGroupMetadata) {
+TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
   const auto makeNodes = [](const HybridFlatMap& metadata) {
     std::vector<SchemaNode> nodes;
     nodes.emplace_back(
@@ -775,93 +813,35 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderValidatesGroupMetadata) {
 
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(HybridFlatMap{})),
-      "Hybrid FlatMap requires at least two groups");
+      "Hybrid FlatMap requires at least 1 group(s)");
+
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(
+          HybridFlatMap{.groups = {{.groupId = 7, .groupKeys = {}}}})),
+      "Hybrid FlatMap group must contain at least one key: 7");
 
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
           HybridFlatMap{
               .groups =
                   {
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
+                      {.groupId = 7, .groupKeys = {"b"}},
+                      {.groupId = 3, .groupKeys = {"a"}},
                   },
           })),
-      "Hybrid FlatMap requires at least two groups");
+      "Hybrid FlatMap group IDs must be in ascending order");
 
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {"a"}},
-                  },
-          })),
-      "Duplicate Hybrid FlatMap group ID: 4294967295");
-
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 0, .groupKeys = {"a"}},
-                      {.groupId = 1, .groupKeys = {"a"}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
-                  },
-          })),
-      "Duplicate Hybrid FlatMap key: 'a'");
-
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 0, .groupKeys = {"a"}},
-                      {.groupId = 0, .groupKeys = {"b"}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
-                  },
-          })),
-      "Duplicate Hybrid FlatMap group ID: 0");
-
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 0, .groupKeys = {"a"}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {"default"}},
-                  },
-          })),
-      "Hybrid FlatMap Default group cannot contain group keys");
-
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 0, .groupKeys = {}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {"a"}},
-                  },
-          })),
-      "Hybrid FlatMap group must contain at least one key: 0");
-
-  NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 0, .groupKeys = {""}},
-                      {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
-                  },
-          })),
-      "Hybrid FlatMap key cannot be empty");
+  const auto schema = SchemaReader::getSchema(makeNodes(
+      HybridFlatMap{
+          .groups =
+              {
+                  {.groupId = 7, .groupKeys = {"a"}},
+              },
+      }));
+  const auto& map = schema->asHybridFlatMap();
+  ASSERT_EQ(map.groupCount(), 1);
+  EXPECT_EQ(map.groupAt(0).groupId, 7);
+  EXPECT_EQ(map.groupAt(0).groupKeys, (std::vector<std::string>{"a"}));
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMismatchedValueShapes) {

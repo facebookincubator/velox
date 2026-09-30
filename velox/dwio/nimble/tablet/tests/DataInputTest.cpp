@@ -131,6 +131,30 @@ class CachedDataInputLocalFileTest
     : public DataInputTest,
       public ::testing::WithParamInterface<CachedLocalReadMode> {};
 
+TEST_F(DataInputTest, reportsCacheUsage) {
+  auto file = createFile("data");
+  {
+    DirectDataInput input{file.get(), makeOptions()};
+    EXPECT_FALSE(input.cached());
+  }
+
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "DataInputTest.reportsCacheUsage"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = cache.get(),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    EXPECT_TRUE(input.cached());
+  }
+  cache->shutdown();
+}
+
 TEST_P(DataInputParamTest, singleGroup) {
   // Use alignment-friendly size (multiple of 4096).
   std::string data(102'400, '\0');

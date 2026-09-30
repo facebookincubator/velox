@@ -28,8 +28,8 @@ namespace facebook::nimble {
 /// Serializer converts Velox vectors into a serialized nimble format.
 ///
 /// This class provides a lightweight serialization interface for converting
-/// Velox vectors to nimble encoded byte streams. It supports flat map encoding
-/// for specified columns via Serializer::Options::flatMapColumns.
+/// Velox vectors to nimble encoded byte streams. It supports FlatMap and
+/// Hybrid FlatMap encoding through SerializerOptions column configuration.
 class Serializer {
  public:
   using Options = SerializerOptions;

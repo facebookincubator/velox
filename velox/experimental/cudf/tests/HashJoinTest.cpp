@@ -6139,7 +6139,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   // Create probe data
   std::vector<RowVectorPtr> probeVectors{makeRowVector({
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
-      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -6214,8 +6214,8 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> rightProbe = {makeRowVector(
       {"aa", "bb"},
       {
-          makeFlatVector<int64_t>(10, folly::identity),
-          makeFlatVector<int64_t>(10, folly::identity),
+          makeFlatIdentityVector<int64_t>(10),
+          makeFlatIdentityVector<int64_t>(10),
       })};
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), rightProbe);
@@ -8571,7 +8571,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
         }
         injectedSpillOnce = true;
         EXPECT_EQ(
-            dynamic_cast<HashProbe*>(op)->testingState(),
+            op->as<HashProbe>()->testingState(),
             ProbeOperatorState::kWaitForPeers);
         testingRunArbitration(op->pool());
       }));
@@ -9691,7 +9691,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([&](Operator* op) {
         if (probeOp == nullptr && op->operatorType() == "HashProbe") {
-          probeOp = dynamic_cast<HashProbe*>(op);
+          probeOp = op->as<HashProbe>();
         }
       }));
 

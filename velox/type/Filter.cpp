@@ -1963,25 +1963,25 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         return other->mergeWith(this);
       }
       assert(this->lower() <= otherNegatedRange->lower());
-      if (this->upper() < std::numeric_limits<int64_t>::max() &&
+      if (!nonNegated_->upperUnbounded() &&
           this->upper() + 1 < otherNegatedRange->lower()) {
         std::vector<std::unique_ptr<common::BigintRange>> outRanges;
         int64_t smallLower = this->lower();
         int64_t smallUpper = this->upper();
         int64_t bigLower = otherNegatedRange->lower();
         int64_t bigUpper = otherNegatedRange->upper();
-        if (smallLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   std::numeric_limits<int64_t>::min(), smallLower - 1, false));
         }
-        if (smallUpper < std::numeric_limits<int64_t>::max() &&
-            bigLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->upperUnbounded() &&
+            !otherNegatedRange->nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   smallUpper + 1, bigLower - 1, false));
         }
-        if (bigUpper < std::numeric_limits<int64_t>::max()) {
+        if (!otherNegatedRange->nonNegated_->upperUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   bigUpper + 1, std::numeric_limits<int64_t>::max(), false));

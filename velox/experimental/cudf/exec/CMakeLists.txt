@@ -41,6 +41,7 @@ add_library(
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
+  GpuCapabilities.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp

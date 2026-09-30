@@ -17,6 +17,13 @@
 
 #include <charconv>
 
+// Configuration context:
+//
+//   text fields -> [parse and validate] -> replayable SectionPlan entries
+//
+// Parsing is intentionally strict because accepted text becomes planner state.
+// A successful boundary parse always tiles the complete physical width.
+
 namespace facebook::nimble::subintsplit {
 namespace {
 

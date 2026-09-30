@@ -40,7 +40,8 @@ RPCOperator::RPCOperator(
           rpcNode->id(),
           "RPC"),
       rpcNode_(std::move(rpcNode)),
-      state_(std::make_shared<RPCState>()),
+      state_(
+          std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
   // Configure RPCState with the streaming mode and the congestion-window
   // tunables. The two knobs are registered QueryConfig properties
@@ -53,6 +54,24 @@ RPCOperator::RPCOperator(
       queryConfig.rpcCongestionMinWindow(),
       queryConfig.rpcCongestionStepCoef(),
       queryConfig.rpcCongestionMaxWindow());
+}
+
+RPCOperator::~RPCOperator() {
+  if (state_ == nullptr) {
+    return;
+  }
+  // Runs before ~Task, so the pools the vectors came from are still alive.
+  // Nothing may escape: a throw out of a destructor terminates the worker,
+  // which is the crash this release exists to prevent.
+  try {
+    state_->releaseAllInputBatches();
+  } catch (...) {
+    try {
+      RPC_OP_LOG(ERROR) << "Failed to release input batches during teardown.";
+    } catch (...) {
+      // Logging allocates, and the throw above may have been bad_alloc.
+    }
+  }
 }
 
 void RPCOperator::initialize() {
@@ -125,8 +144,8 @@ void RPCOperator::initialize() {
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
-  *liveStatsSources_.wlock() =
-      LiveStatsSources{.state = state_, .limiter = limiter_};
+  *liveStatsSources_.wlock() = LiveStatsSources{
+      .state = state_, .limiter = limiter_, .function = function_};
 
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
@@ -155,8 +174,8 @@ void RPCOperator::initializeRateLimiter() {
 
   admissionKey_ = function_->admissionKey();
   limiter_ = &RPCRateLimiterRegistry::global().get(admissionKey_);
-  *liveStatsSources_.wlock() =
-      LiveStatsSources{.state = state_, .limiter = limiter_};
+  *liveStatsSources_.wlock() = LiveStatsSources{
+      .state = state_, .limiter = limiter_, .function = function_};
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   // The first query fixes this shared controller's configuration.
@@ -444,18 +463,22 @@ void checkNoFrameworkFailures(
     const std::string& functionName,
     const std::vector<RPCResponse>& responses) {
   for (const auto& response : responses) {
-    VELOX_CHECK(
-        response.errorKind() != velox::rpc::RPCErrorKind::kUnset,
-        "RPC function '{}' returned an unset response for row {}",
-        functionName,
-        response.rowId);
-    if (response.errorKind() == velox::rpc::RPCErrorKind::kInternalError) {
-      VELOX_FAIL(
-          "RPC function failed internally: function '{}', row {}, error: {}",
-          functionName,
-          response.rowId,
-          response.error().message);
+    const auto kind = response.errorKind();
+    if (velox::rpc::errorCategory(kind) !=
+        velox::rpc::RPCErrorCategory::kFramework) {
+      continue;
     }
+    if (kind == velox::rpc::RPCErrorKind::kUnset) {
+      VELOX_FAIL(
+          "RPC function '{}' returned an unset response for row {}",
+          functionName,
+          response.rowId);
+    }
+    VELOX_FAIL(
+        "RPC function failed internally: function '{}', row {}, error: {}",
+        functionName,
+        response.rowId,
+        response.error().message);
   }
 }
 
@@ -487,13 +510,16 @@ void RPCOperator::resolveLocalOnlyInput(
       const auto rowId = globalRowIdCounter_++;
       auto response = std::move(future).get();
       response.rowId = rowId;
-      claimedRows_.push_back(
-          RPCState::ReadyRow{
-              .rowId = rowId,
-              .location = {batchIndex, originalRowIndex},
-              .response = std::move(response),
-              .rttNs = 0,
-          });
+      RPCState::ReadyRow readyRow{
+          .rowId = rowId,
+          .location = {batchIndex, originalRowIndex},
+          .charge = {},
+          .response = std::move(response),
+          .rttNs = 0,
+      };
+      readyRow.charge =
+          state_->chargePayloadBytes(readyRow.response.retainedBytes());
+      claimedRows_.push_back(std::move(readyRow));
     }
     return;
   }
@@ -528,14 +554,19 @@ void RPCOperator::resolveLocalOnlyInput(
       0,
       "RPC function '{}' retained rows after flushing local-only input",
       function_->name());
-  claimedBatch_ = RPCState::ReadyBatch{
+  auto responses = scatterIntoBatchOrder(std::move(future).get(), rowIds);
+  RPCState::ReadyBatch readyBatch{
       .batchId = 0,
-      .responses = scatterIntoBatchOrder(std::move(future).get(), rowIds),
+      .charge = {},
+      .responses = std::move(responses),
       .error = std::nullopt,
       .admissionUnits = 0,
       .rowLocations = std::move(rowLocations),
       .rttNs = 0,
   };
+  readyBatch.charge = state_->chargePayloadBytes(
+      velox::rpc::totalResponseRetainedBytes(readyBatch.responses));
+  claimedBatch_ = std::move(readyBatch);
 }
 
 bool RPCOperator::flushBatchRequests(int32_t maxRows) {
@@ -822,6 +853,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   auto output = buildOutputVector(responses, locations);
   numResponsesReceived_ += numRows;
+  responses.clear();
   claimedRows_.clear();
   claimedRowsAreLocalOnly_ = false;
   return output;
@@ -1109,20 +1141,20 @@ void RPCOperator::close() {
   // callbacks (via shared_ptr capture), so dropping our reference is not enough
   // to free the input vectors: those belong to upstream operators' memory pools
   // and must be released here, on the driver thread, while those pools are
-  // still alive. Otherwise the retained reservation makes the arbitrator's
+  // still alive. Otherwise the retained external-memory charge makes the
   // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
   // worker, or a late callback frees into pools that are already gone.
   // Stop publishing to stats() first: the write blocks until any in-progress
   // sample has finished reading RPCState, so the reset below cannot free it
   // underneath the collector thread.
   *liveStatsSources_.wlock() = LiveStatsSources{};
+  claimedRows_.clear();
+  claimedBatch_.reset();
   if (state_ != nullptr) {
-    state_->releaseAllInputBatches();
+    state_->close();
   }
   state_.reset();
   function_.reset();
-  claimedRows_.clear();
-  claimedBatch_.reset();
   batchRowLocations_.clear();
   batchRowIds_.clear();
   reusableIndices_.reset();
@@ -1209,6 +1241,15 @@ void RPCOperator::addLiveProgressStats(
   const auto snapshot = sources->state->operatorSnapshot();
   stats.runtimeStats[kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
+  // The transport's retry ladder, which the two counters above cannot see: a
+  // retried request is dispatched once and completes once, however many
+  // attempts it takes in between. Published alongside them so a caller
+  // watching for liveness can tell a transport working through a backoff
+  // schedule from a backend that has stopped answering.
+  if (sources->function != nullptr) {
+    stats.runtimeStats[kRpcRetriesAttempted] =
+        RuntimeMetric(sources->function->numRetriesAttempted());
+  }
   // The backend's admission capacity trajectory: the capacity this operator
   // shares with every other driver dispatching to the same backend, as
   // distinct from the per-driver rpcCongestion* window. Emitted for every

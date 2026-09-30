@@ -38,8 +38,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <system_error>
 #include <thread>
 #include <vector>
+
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::exec::rpc {
 namespace {
@@ -72,6 +75,10 @@ void setAdaptive(
 
 class RPCRateLimiterTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    common::testutil::TestValue::enable();
+  }
+
   void SetUp() override {
     RPCRateLimiterRegistry::global().testingReset();
   }
@@ -91,6 +98,24 @@ TEST_F(RPCRateLimiterTest, acquireAndRelease) {
   }
   // Token destroyed — count should be back to 0.
   EXPECT_EQ(limiterFor(backend).stats().pending, 0);
+}
+
+TEST_F(RPCRateLimiterTest, tokenReleaseSurvivesSynchronizationFailure) {
+  auto& limiter = limiterFor("test.backend");
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCRateLimiter::release",
+      std::function<void(RPCRateLimiter*)>([](RPCRateLimiter* limiter) {
+        if (limiter != nullptr) {
+          throw std::system_error(std::make_error_code(std::errc::owner_dead));
+        }
+      }));
+
+  {
+    auto token = limiter.acquire();
+    EXPECT_EQ(limiter.stats().pending, 1);
+  }
+  EXPECT_EQ(limiter.stats().pending, 0);
 }
 
 TEST_F(RPCRateLimiterTest, multipleAcquires) {

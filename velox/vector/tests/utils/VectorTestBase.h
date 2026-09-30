@@ -203,6 +203,13 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(data, type);
   }
 
+  /// Returns a flat vector containing values from zero through 'size - 1'.
+  template <typename T>
+  FlatVectorPtr<EvalType<T>> makeFlatIdentityVector(vector_size_t size) {
+    return makeFlatVector<T>(
+        size, [](auto row) { return static_cast<T>(row); });
+  }
+
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeNullableFlatVector(
       const std::vector<std::optional<T>>& data,
