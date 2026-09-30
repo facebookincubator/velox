@@ -185,8 +185,8 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
   auto options =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
           .case_sensitive_names(not caseInsensitiveColumnNames)
+          .column_names(equalityColumnNames_)
           .build();
-  options.set_column_names(equalityColumnNames_);
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();
   deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
