@@ -588,20 +588,24 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
                 planNode)) {
-      // Task resolved the entry when it created the exchange client, so a null
-      // entry here is an engine bug rather than a misconfigured plan.
+      // Task resolved the entry and checked that it supports merge exchange
+      // when it created the exchange client, so a failure here is an engine
+      // bug rather than a misconfigured plan.
       VELOX_CHECK_NOT_NULL(
           exchangeTransportEntry,
           "No exchange transport entry was resolved for transport '{}'",
           mergeExchangeNode->transportKind());
-      // The transport lacking a merge builder is the same user error Task
-      // reports; keep the class and the wording identical.
-      VELOX_USER_CHECK(
+      VELOX_CHECK(
           exchangeTransportEntry->makeMergeExchangeOperator != nullptr,
           "Exchange transport does not support merge exchange: {}",
           mergeExchangeNode->transportKind());
-      operators.push_back(exchangeTransportEntry->makeMergeExchangeOperator(
-          id, ctx.get(), mergeExchangeNode, exchangeClient));
+      auto mergeExchange = exchangeTransportEntry->makeMergeExchangeOperator(
+          id, ctx.get(), mergeExchangeNode, exchangeClient);
+      VELOX_CHECK_NOT_NULL(
+          mergeExchange,
+          "Exchange transport built no operator for plan node: {}",
+          planNode->id());
+      operators.push_back(std::move(mergeExchange));
     } else if (
         auto exchangeNode =
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
@@ -611,8 +615,13 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           exchangeTransportEntry,
           "No exchange transport entry was resolved for transport '{}'",
           exchangeNode->transportKind());
-      operators.push_back(exchangeTransportEntry->makeExchangeOperator(
-          id, ctx.get(), exchangeNode, std::move(exchangeClient)));
+      auto exchange = exchangeTransportEntry->makeExchangeOperator(
+          id, ctx.get(), exchangeNode, std::move(exchangeClient));
+      VELOX_CHECK_NOT_NULL(
+          exchange,
+          "Exchange transport built no operator for plan node: {}",
+          planNode->id());
+      operators.push_back(std::move(exchange));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(

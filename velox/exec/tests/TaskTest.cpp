@@ -1218,6 +1218,39 @@ DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
   task->requestAbort().wait();
 }
 
+TEST_F(TaskTest, errorsOnNullExchangeOperator) {
+  // A transport whose operator builder returns no operator fails the task
+  // instead of handing a null operator to the driver.
+  const std::string transportKind{"null-operator-transport"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t,
+             DriverCtx*,
+             const std::shared_ptr<const core::ExchangeNode>&,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> { return nullptr; }));
+
+  auto task = Task::create(
+      "task-null-exchange-operator",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_THROW(
+      task->start(1, 1), "Exchange transport built no operator for plan node");
+}
+
 TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
   // A transport may register no merge exchange builder. A MergeExchangeNode
   // naming it must fail rather than fall back to another transport's operator.
