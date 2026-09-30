@@ -83,6 +83,29 @@ Serializer::Serializer(
     }
   }
 
+  if (!options_.hybridFlatMapColumns.empty()) {
+    context_.reserveHybridFlatMapNodes(options_.hybridFlatMapColumns.size());
+    for (const auto& [columnName, hybridMap] : options_.hybridFlatMapColumns) {
+      NIMBLE_USER_CHECK(
+          !options_.flatMapColumns.contains(columnName),
+          "Column '{}' cannot use both FlatMap and hybrid FlatMap options.",
+          columnName);
+      const auto childIndex =
+          type->as<velox::TypeKind::ROW>().getChildIdxIfExists(columnName);
+      NIMBLE_USER_CHECK(
+          childIndex.has_value(),
+          "Hybrid FlatMap column '{}' does not exist.",
+          columnName);
+      const auto& child = typeWithId->childAt(*childIndex);
+      NIMBLE_USER_CHECK_EQ(
+          child->type()->kind(),
+          velox::TypeKind::MAP,
+          "Hybrid FlatMap column '{}' must be a MAP.",
+          columnName);
+      context_.addHybridFlatMapNode(child->id(), hybridMap);
+    }
+  }
+
   typeWithId_ = typeWithId;
 
   // Register handler before creating the writer tree so both predefined and
@@ -131,7 +154,9 @@ std::string_view Serializer::serialize(
 void Serializer::validateSupportedInput(
     const velox::VectorPtr& vector,
     const OrderedRanges& ranges) const {
-  if (options_.flatMapColumns.empty() || !vector->mayHaveNulls()) {
+  if ((options_.flatMapColumns.empty() &&
+       options_.hybridFlatMapColumns.empty()) ||
+      !vector->mayHaveNulls()) {
     return;
   }
 
@@ -143,7 +168,7 @@ void Serializer::validateSupportedInput(
   });
   NIMBLE_CHECK(
       !hasNullRow,
-      "Top-level row nulls are not supported when serializing FlatMap columns.");
+      "Top-level row nulls are not supported when serializing FlatMap/Hybrid FlatMap columns.");
 }
 
 void Serializer::buildStreamEncodingLayouts() {
@@ -268,6 +293,24 @@ void Serializer::initEncodingLayouts(
         const auto it = keyEncodings.find(flatMapBuilder.nameAt(index));
         if (it != keyEncodings.end()) {
           initEncodingLayouts(*it->second, flatMapBuilder.childAt(index));
+        }
+      }
+      break;
+    }
+    case Kind::HybridFlatMap: {
+      NIMBLE_CHECK_EQ(
+          tree.schemaKind(),
+          Kind::HybridFlatMap,
+          "Incompatible encoding layout node. Expecting hybrid FlatMap node.");
+      const auto& hybridMap = typeBuilder.asHybridFlatMap();
+      addLayout(
+          hybridMap.nullsDescriptor().offset(),
+          EncodingLayoutTree::StreamIdentifiers::FlatMap::NullsStream);
+      if (tree.childrenCount() > 0) {
+        // Groups share one logical value type, so the same layout applies to
+        // each group's subtree.
+        for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+          initEncodingLayouts(tree.child(0), hybridMap.groupAt(i).valueType);
         }
       }
       break;

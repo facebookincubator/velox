@@ -228,7 +228,7 @@ TEST_F(TimestampColumnReaderTest, timestampSkipAndRead) {
   auto ts = makeFlatVector<Timestamp>(
       100, [](auto i) { return Timestamp(3000 + i, i * 123); }, nullEvery(11));
   // Add a filter column to force skipping of some rows.
-  auto filterCol = makeFlatVector<int64_t>(100, folly::identity);
+  auto filterCol = makeFlatIdentityVector<int64_t>(100);
   auto input = makeRowVector({ts, filterCol});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());

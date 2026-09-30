@@ -81,6 +81,36 @@ TEST_F(CountAggregationTest, count) {
       "SELECT c0 % 10, count(c7) FROM tmp GROUP BY 1");
 }
 
+TEST_F(CountAggregationTest, mergeNullIntermediates) {
+  // count_partial never emits a null, so a null intermediate reaches the merge
+  // path only through the count_merge companion. The nulls are set on a flat
+  // vector that keeps non-zero counts in its values buffer, so a merge that
+  // reads null rows instead of skipping them returns a visibly wrong count.
+  auto counts = makeFlatVector<int64_t>({10, 100, 5, 1'000, 7});
+  counts->setNull(1, true);
+  counts->setNull(2, true);
+  counts->setNull(4, true);
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+      counts,
+  });
+
+  testAggregations(
+      {input},
+      {"c0"},
+      {"count_merge(c1)"},
+      {makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 1'000, 0}),
+      })});
+
+  testAggregations(
+      {input},
+      {},
+      {"count_merge(c1)"},
+      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1'010})})});
+}
+
 TEST_F(CountAggregationTest, mask) {
   std::vector<RowVectorPtr> data;
   // Make batches where some batches have mask all true, some half and half and
@@ -203,7 +233,7 @@ TEST_F(CountAggregationTest, distinct) {
              .values({makeRowVector(ROW({"c0"}, {BIGINT()}), 0)})
              .singleAggregation({}, {"count(distinct c0)"})
              .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults("SELECT 0");
+  AssertQueryBuilder(plan).assertSingleResult<int64_t>(0);
 
   // Group by.
   auto testGroupBy = [&](const std::string& input) {

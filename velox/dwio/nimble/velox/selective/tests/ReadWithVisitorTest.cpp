@@ -1404,7 +1404,7 @@ TEST_P(ReadWithVisitorTest, denseNoFilterWithNulls) {
 // ===========================================================================
 TEST_P(ReadWithVisitorTest, sparseWithBigintRange) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -1744,7 +1744,7 @@ TEST_P(ReadWithVisitorTest, multipleColumnTypesWithFilters) {
 // ===========================================================================
 TEST_P(ReadWithVisitorTest, filterOnOneColumnInspectState) {
   constexpr int kRows = 300;
-  auto c0 = makeFlatVector<int64_t>(kRows, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(kRows);
   auto input = makeRowVector({c0});
   auto rowType = asRowType(input->type());
 
@@ -1785,7 +1785,7 @@ TEST_P(ReadWithVisitorTest, filterOnOneColumnInspectState) {
 // Explicit readWithVisitor: BigintRange filter, dense rows, ExtractToReader.
 TEST_P(ReadWithVisitorTest, explicitReadWithVisitorBigintRangeDense) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -1892,7 +1892,7 @@ TEST_P(ReadWithVisitorTest, explicitReadWithVisitorAlwaysTrueDense) {
 // Explicit readWithVisitor: BigintRange filter, sparse rows (non-dense).
 TEST_P(ReadWithVisitorTest, explicitReadWithVisitorBigintRangeSparse) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -2296,7 +2296,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelTrivialBigintRangeDense) {
   std::iota(data.begin(), data.end(), 0);
 
   // Write nimble file with the same data (for reader infrastructure).
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
   auto ctx = makeFileContext(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -2614,7 +2614,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelTrivialAlwaysTrueDenseSlowPath) {
   std::vector<int64_t> data(kRows);
   std::iota(data.begin(), data.end(), 0);
 
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
   auto ctx = makeFileContext(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
