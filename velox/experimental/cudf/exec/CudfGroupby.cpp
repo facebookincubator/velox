@@ -1248,7 +1248,8 @@ bool CudfGroupby::initializeStreamingGroupby(
   if (!config.streamingGroupbyEnabled || !incrementalAggregationEnabled_ ||
       aggregationNode_->step() != core::AggregationNode::Step::kFinal ||
       aggregationNode_->groupingKeys().empty() ||
-      aggregationNode_->aggregates().empty()) {
+      aggregationNode_->aggregates().empty() ||
+      groupingKeysNeedNormalization_) {
     return false;
   }
 

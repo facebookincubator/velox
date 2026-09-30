@@ -1300,6 +1300,44 @@ TEST_F(
 
 TEST_F(
     StreamingGroupbyAggregationTest,
+    timestampWithTimeZoneKeyUsesExistingGroupby) {
+  const int64_t millis = 1'623'758'400'000;
+  auto vectors = std::vector<RowVectorPtr>{
+      makeRowVector({makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE())}),
+      makeRowVector({makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Midway")),
+           pack(millis, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE())})};
+
+  core::PlanNodeId finalAggId;
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"count(1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode();
+
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "2")
+                    .config(QueryConfig::kMaxPartialAggregationMemory, "1")
+                    .copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_EQ(
+      unpackMillisUtc(
+          result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0)),
+      millis);
+  EXPECT_EQ(result->childAt(1)->as<SimpleVector<int64_t>>()->valueAt(0), 4);
+  EXPECT_FALSE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+}
+
+TEST_F(
+    StreamingGroupbyAggregationTest,
     unsupportedVariableWidthMinUsesExistingGroupby) {
   auto vectors = makeVectors(rowType_, 10, 20);
   createDuckDbTable(vectors);
