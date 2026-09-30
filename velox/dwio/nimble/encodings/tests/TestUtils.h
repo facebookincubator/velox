@@ -380,11 +380,20 @@ class Encoder {
       const std::function<void*(uint32_t)>& stringBufferFactory,
       CompressionType compressionType = CompressionType::Uncompressed,
       const nimble::Encoding::Options& options = {}) {
-    return std::make_unique<E>(
-        buffer.getMemoryPool(),
-        encode(buffer, values, compressionType, options),
-        stringBufferFactory,
-        options);
+    // encode() may legitimately emit a different, cheaper encoding for some
+    // inputs (e.g. MainlyConstant falls back to Constant when every row is the
+    // common value, as slice() already does for an all-common range), so
+    // construct E only when that is what was actually written. Experimental
+    // encodings are not all registered with EncodingFactory, so the direct
+    // construction stays the default.
+    const auto encoded = encode(buffer, values, compressionType, options);
+    if (EncodingPrefix::encodingType(encoded) ==
+        EncodingTypeTraits<E>::encodingType) {
+      return std::make_unique<E>(
+          buffer.getMemoryPool(), encoded, stringBufferFactory, options);
+    }
+    return EncodingFactory{options}.create(
+        buffer.getMemoryPool(), encoded, stringBufferFactory);
   }
 
   static std::unique_ptr<nimble::Encoding> createNullableEncoding(

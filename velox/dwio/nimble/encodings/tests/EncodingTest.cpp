@@ -524,8 +524,19 @@ class EncodingTest : public ::testing::Test {
 
     nimble::Encoding::Options options{.useVarintRowCount = useVarint};
     auto encoded = C::encode(selection, physicalValues, *buffer_, options);
-    return std::make_unique<C>(
-        *this->pool_, encoded, stringBufferFactory, options);
+    // encode() may legitimately emit a different, cheaper encoding for some
+    // inputs (e.g. MainlyConstant falls back to Constant when every row is the
+    // common value, as slice() already does for an all-common range), so
+    // construct C only when that is what was actually written. Experimental
+    // encodings are not all registered with EncodingFactory, so the direct
+    // construction stays the default.
+    if (nimble::EncodingPrefix::encodingType(encoded) ==
+        EncodingTypeGetter<C>::value) {
+      return std::make_unique<C>(
+          *this->pool_, encoded, stringBufferFactory, options);
+    }
+    return nimble::EncodingFactory{options}.create(
+        *this->pool_, encoded, stringBufferFactory);
   }
 
   // Each unit test runs on randomized data this many times before
