@@ -26,6 +26,7 @@
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/Validation.h"
 
 namespace facebook::nimble::mlidc {
 namespace {
@@ -43,29 +44,16 @@ int runSmoke(uint32_t n, uint64_t seed) {
   for (const auto& ds : datasets) {
     auto data = ds.generate(n, seed);
     for (const auto& enc : encoders) {
-      // Skip FPE/fpe_noindex validation (reorders without restoration index)
-      if (enc.variant == "fpe_noindex") {
-        continue;
-      }
-
       facebook::nimble::Encoding::Options opts;
       try {
-        auto target = enc.factory(data, opts);
-        std::vector<Elem> out(n);
-        target->materializeAll(out.data(), n);
-        bool ok = true;
-        for (uint32_t i = 0; i < n; ++i) {
-          // Exact equality is the right test even for float and double: the
-          // encodings preserve the bit pattern, and the generators produce no
-          // NaN, which would compare unequal to itself.
-          if (out[i] != data[i]) {
-            ok = false;
-            break;
-          }
-        }
-        if (!ok) {
+        auto target =
+            enc.factory(data, opts, subintsplit::kDefaultTuningConfig);
+        // FPE/fpe_noindex is checked as a permutation of the input, since it
+        // encodes the multiset rather than the sequence.
+        const auto mismatch = validateRoundTrip<Elem>(*target, enc, data);
+        if (mismatch.has_value()) {
           std::cerr << "FAIL: " << elemTypeName<Elem>() << " / " << enc.name
-                    << " / " << ds.name << "\n";
+                    << " / " << ds.name << ": " << *mismatch << "\n";
           ++failures;
         } else {
           std::cout << "  OK: " << enc.name << " / " << ds.name << "\n";

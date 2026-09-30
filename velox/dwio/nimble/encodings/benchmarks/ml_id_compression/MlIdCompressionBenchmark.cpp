@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 
-DEFINE_bool(validate, false, "Round-trip check after each encode");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
 constexpr std::string_view kDriver = "bench_compression";
@@ -74,6 +73,9 @@ int runBenchmark() {
       "encoding",
       "family",
       "variant",
+      "inventory",
+      "transform",
+      "input_order",
       "is_sequential",
       "N",
       "seed",
@@ -81,7 +83,8 @@ int runBenchmark() {
       "raw_bytes",
       "compression_ratio",
       "bits_per_elem",
-      "skipped"};
+      "skipped",
+      "validated"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_compression.csv"
                                                        : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
@@ -89,7 +92,7 @@ int runBenchmark() {
     writeRunManifest(FLAGS_mlidc_output_manifest);
   }
 
-  int validateFailures = 0;
+  ValidationLedger ledger;
 
   for (const auto& ds : context.datasets) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
@@ -108,36 +111,41 @@ int runBenchmark() {
           std::cout << "  --- " << enc.name << " encoding tree ---\n"
                     << tree << "\n";
         }
+        // The same tree again, one node per line and keyed by path. Emitted
+        // beside the readable form since the two have different readers.
+        auto nodes = target->describeTree();
+        if (!nodes.empty()) {
+          std::cout << "  --- " << enc.name << " encoding nodes ---\n" << nodes;
+        }
+        // Each node's cost against what its selection was quoted. Kept
+        // separate from the tree above because it decodes every node to
+        // recompute the estimate, which the plain tree does not need to do.
+        auto estimates = target->describeNodeEstimates();
+        if (!estimates.empty()) {
+          std::cout << "  --- " << enc.name << " node estimates ---\n"
+                    << estimates;
+        }
+        auto choices = target->describeSectionChoices();
+        if (!choices.empty()) {
+          std::cout << "  --- " << enc.name << " section choices ---\n"
+                    << choices;
+        }
       }
 
+      // The encoded bytes the target holds, not an estimate of them.
       const size_t payloadBytes = target->payloadSize();
       const double bpe = n > 0
           ? static_cast<double>(payloadBytes) * 8.0 / static_cast<double>(n)
           : 0.0;
 
-      if (FLAGS_validate && enc.variant != "fpe_noindex") {
-        std::vector<Elem> check(n);
-        target->materializeAll(check.data(), n);
-        bool ok = true;
-        for (uint32_t i = 0; i < n; ++i) {
-          if (check[i] != data[i]) {
-            ok = false;
-            break;
-          }
-        }
-        if (!ok) {
-          std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
-                    << "\n";
-          ++validateFailures;
-          csv.beginRow();
-          csv.set("driver", "bench_compression");
-          csv.set("dtype", elemTypeName<Elem>());
-          csv.set("dataset", ds.name);
-          csv.set("encoding", enc.name);
-          csv.set("skipped", int64_t{1});
-          csv.endRow();
-          continue;
-        }
+      // A size is only worth reporting for bytes that decode back to the
+      // column, so the whole column is round-tripped.
+      if (ledger.enabled() &&
+          !ledger.check(enc.name, ds.name, "materializeAll", [&] {
+            return validateRoundTrip<Elem>(*target, enc, data);
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [] {});
+        continue;
       }
 
       std::cout << "  " << enc.name << ": " << payloadBytes << " B, "
@@ -151,17 +159,14 @@ int runBenchmark() {
       csv.set("raw_bytes", static_cast<int64_t>(rawBytes));
       csv.set("bits_per_elem", bpe);
       csv.set("skipped", int64_t{0});
+      csv.set("validated", ledger.enabled() ? int64_t{1} : int64_t{0});
       csv.endRow();
     }
     csv.flush();
   }
 
   std::cout << "\nResults written to: " << csvPath << "\n";
-  if (validateFailures > 0) {
-    std::cerr << validateFailures << " validation failure(s)\n";
-    return 2;
-  }
-  return 0;
+  return ledger.exitCode();
 }
 
 } // namespace
