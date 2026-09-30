@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 #include <gtest/gtest.h>
+#include "velox/common/serialization/Serializable.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
 
 using namespace facebook::velox;
@@ -24,7 +26,13 @@ using namespace facebook::velox::connector::hive::delta;
 
 namespace {
 
-class HiveDeltaSplitTest : public ::testing::Test {};
+class HiveDeltaSplitTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    HiveConnectorSplit::registerSerDe();
+    HiveDeltaSplit::registerSerDe();
+  }
+};
 
 TEST_F(HiveDeltaSplitTest, basicConstruction) {
   auto split = std::make_shared<HiveDeltaSplit>(
@@ -315,7 +323,7 @@ TEST_F(HiveDeltaSplitTest, hasDeletionVectorDefaultsToFalse) {
   EXPECT_FALSE(split->hasDeletionVector);
 }
 
-TEST_F(HiveDeltaSplitTest, hasDeletionVectorRoundTrip) {
+TEST_F(HiveDeltaSplitTest, hasDeletionVectorSerdeRoundTrip) {
   auto split = std::make_shared<HiveDeltaSplit>(
       "test-connector",
       "/path/to/file.parquet",
@@ -325,13 +333,48 @@ TEST_F(HiveDeltaSplitTest, hasDeletionVectorRoundTrip) {
       /*partitionKeys=*/
       std::unordered_map<std::string, std::optional<std::string>>{},
       /*tableBucketNumber=*/std::nullopt,
-      /*customSplitInfo=*/std::unordered_map<std::string, std::string>{},
+      /*customSplitInfo=*/
+      std::unordered_map<std::string, std::string>{
+          {"table_format", "hive-delta"}},
       /*extraFileInfo=*/std::shared_ptr<std::string>{},
       /*cacheable=*/true,
       /*infoColumns=*/std::unordered_map<std::string, std::string>{},
       /*fileProperties=*/std::nullopt,
       /*hasDeletionVector=*/true);
   EXPECT_TRUE(split->hasDeletionVector);
+
+  // The base HiveConnectorSplit::serialize() would drop hasDeletionVector.
+  // Verify the Delta override preserves it, and that the type dispatch on
+  // 'name' returns a HiveDeltaSplit rather than a plain HiveConnectorSplit.
+  const auto obj = split->serialize();
+  EXPECT_EQ("HiveDeltaSplit", obj["name"].asString());
+
+  auto deserialized = ISerializable::deserialize<HiveConnectorSplit>(obj);
+  const auto* deserializedDelta =
+      dynamic_cast<const HiveDeltaSplit*>(deserialized.get());
+  ASSERT_NE(nullptr, deserializedDelta);
+  EXPECT_EQ("test-connector", deserializedDelta->connectorId);
+  EXPECT_EQ("/path/to/file.parquet", deserializedDelta->filePath);
+  EXPECT_EQ(dwio::common::FileFormat::PARQUET, deserializedDelta->fileFormat);
+  EXPECT_TRUE(deserializedDelta->hasDeletionVector);
+  ASSERT_EQ(1, deserializedDelta->customSplitInfo.count("table_format"));
+  EXPECT_EQ(
+      "hive-delta", deserializedDelta->customSplitInfo.at("table_format"));
+}
+
+TEST_F(HiveDeltaSplitTest, hasDeletionVectorSerdeDefaultsFalse) {
+  auto split = std::make_shared<HiveDeltaSplit>(
+      "test-connector",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET);
+  ASSERT_FALSE(split->hasDeletionVector);
+
+  const auto obj = split->serialize();
+  auto deserialized = ISerializable::deserialize<HiveConnectorSplit>(obj);
+  const auto* deserializedDelta =
+      dynamic_cast<const HiveDeltaSplit*>(deserialized.get());
+  ASSERT_NE(nullptr, deserializedDelta);
+  EXPECT_FALSE(deserializedDelta->hasDeletionVector);
 }
 
 } // namespace
