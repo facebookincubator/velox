@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -86,7 +87,7 @@ IcebergConnector::IcebergConnector(
 }
 
 void IcebergConnector::validateChangelogSubfieldFilters(
-    const IcebergTableHandle& handle) {
+    const common::SubfieldFilters& filters) {
   // Only the three constant changelog columns support subfield filter pushdown
   // (evaluated at split-skipping time before any I/O).  rowdata filters cannot
   // be pushed down because the row reader uses dataScanSpec (base-table column
@@ -99,7 +100,7 @@ void IcebergConnector::validateChangelogSubfieldFilters(
       kChangelogColOrdinal,
       kChangelogColSnapshotId,
   };
-  for (const auto& [subfield, filter] : handle.subfieldFilters()) {
+  for (const auto& [subfield, filter] : filters) {
     const auto& path = subfield.path();
     if (path.empty()) {
       continue;
@@ -127,7 +128,7 @@ std::unique_ptr<DataSource> IcebergConnector::createDataSource(
   auto* icebergHandle =
       dynamic_cast<const IcebergTableHandle*>(tableHandle.get());
   if (icebergHandle && icebergHandle->isChangelogQuery()) {
-    validateChangelogSubfieldFilters(*icebergHandle);
+    validateChangelogSubfieldFilters(icebergHandle->subfieldFilters());
   }
 
   return std::make_unique<IcebergDataSource>(
