@@ -77,8 +77,10 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   /// indices the filter references.
   struct BuildState {
     std::vector<std::shared_ptr<cudf::table>> tables;
-    std::vector<std::shared_ptr<cudf::hash_join>> joins;
     std::vector<std::shared_ptr<cudf::table>> normalizedBuildKeys;
+    // Members are destroyed in reverse declaration order. Keep joins last so
+    // their viewed build-key tables stay alive through hash_join destruction.
+    std::vector<std::shared_ptr<cudf::hash_join>> joins;
   };
   using hash_type = BuildState;
 

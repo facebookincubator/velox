@@ -469,8 +469,8 @@ void CudfHashJoinBuild::doNoMoreInput() {
       std::make_optional(
           CudfHashJoinBridge::BuildState{
               std::move(shared_tbls),
-              std::move(hashObjects),
-              std::move(normalizedBuildKeys)}));
+              std::move(normalizedBuildKeys),
+              std::move(hashObjects)}));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
