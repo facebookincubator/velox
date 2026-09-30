@@ -152,6 +152,17 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
+    /// When true, size estimates are tight enough to compare with another
+    /// encoding's bytes rather than only to rank candidates. FixedBitWidth
+    /// counts the slop bytes FixedBitArray reserves, MainlyConstant prices
+    /// its other values over their own range and against Trivial, RLE prices
+    /// its run values against Trivial and Dictionary and its run lengths with
+    /// the encodings nested selection would pick, and selection withholds
+    /// Trivial's read-factor discount where Trivial is larger than
+    /// FixedBitWidth. SubIntSplit sets this for its sections, whose sizes it
+    /// compares against each other; nothing else should.
+    bool sectionEstimatorRefinements{false};
+
     /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
     /// encoding selection. False by default; do not enable for production
     /// until ALP is production-ready.

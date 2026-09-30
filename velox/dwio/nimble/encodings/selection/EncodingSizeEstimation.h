@@ -24,9 +24,11 @@
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -113,6 +115,13 @@ struct EncodingSizeEstimation {
             entryCount, statistics, options);
       }
       case EncodingType::RLE: {
+        if (options.sectionEstimatorRefinements) {
+          return RLEEncoding<T>::estimateSize(
+              entryCount,
+              statistics,
+              estimateRunLengthsSize(statistics, options),
+              options);
+        }
         return RLEEncoding<T>::estimateSize(entryCount, statistics, options);
       }
       case EncodingType::Varint: {
@@ -148,6 +157,24 @@ struct EncodingSizeEstimation {
         return BlockBitPackingEncoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::Delta: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return DeltaEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FOR: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return std::nullopt;
       }
@@ -196,11 +223,44 @@ struct EncodingSizeEstimation {
           return std::nullopt;
         }
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::FOR: {
+        // Measured over the values rather than inferred from statistics: a
+        // frame's local range is a property of the values in position, not
+        // of any summary of them.
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return estimateNumericSize(
             encodingType, values.size(), statistics, options);
       }
     }
+  }
+
+  // Prices RLE's run-lengths stream with the encodings nested selection would
+  // pick for it, rather than only the flat FixedBitWidth RLE's own estimate
+  // uses; that flat price stays a candidate, so this never quotes above it.
+  static uint64_t estimateRunLengthsSize(
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    const uint64_t runCount = statistics.consecutiveRepeatCount();
+    uint64_t bestSize = FixedBitWidthEncoding<uint32_t>::estimateSize(
+        runCount, statistics.minRepeat(), statistics.maxRepeat(), options);
+    if (runCount < 2) {
+      return bestSize;
+    }
+    const auto& runLengths = statistics.runLengths();
+    const auto runLengthsStatistics = Statistics<uint32_t>::create(
+        std::span<const uint32_t>{runLengths.data(), runLengths.size()});
+    return std::min(
+        bestSize,
+        MainlyConstantEncoding<uint32_t>::estimateSize(
+            runCount, runLengthsStatistics, options));
   }
 
   static std::optional<uint64_t> estimateBoolSize(
