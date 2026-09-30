@@ -71,6 +71,32 @@ Mathematical Functions
 
     Returns the string representation of the long value ``x`` represented in binary.
 
+.. spark:function:: bround(x [, d]) -> [same as x]
+
+    Returns ``x`` rounded to ``d`` decimal places using HALF_EVEN rounding.
+    Values exactly halfway between two results round to the nearest even value.
+    Supported input types are integral and floating-point types. If ``d`` is
+    omitted, it defaults to zero. Decimal inputs use ``decimal_bround``.
+
+    Floating-point inputs use the decimal digits produced by OpenJDK 17
+    ``Double.toString``, matching Spark running on Java 17. Spark running on
+    Java 19 or later can produce different results for representation-sensitive
+    inputs. NaN and infinity are returned unchanged.
+
+    Integral overflow follows Spark's non-ANSI two's-complement wraparound.
+    Nonzero values raise an error when the requested scale would require a
+    Java ``BigInteger`` power outside its supported range.
+
+    See `Spark's BRound expression
+    <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+
+    ::
+
+        SELECT bround(2.5);     -- 2.0
+        SELECT bround(3.5);     -- 4.0
+        SELECT bround(2.55, 1); -- 2.6
+        SELECT bround(1.245, 2); -- 1.24
+
 .. spark:function:: cbrt(x) -> double
 
     Returns the cube root of ``x``.
