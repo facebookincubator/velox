@@ -95,7 +95,6 @@ velox_link_libraries(
     velox_hive_partition_function
     velox_key_encoder
     velox_presto_types
-  PUBLIC velox_hive_delta_splitreader
 )
 
 if(VELOX_ENABLE_PARQUET)

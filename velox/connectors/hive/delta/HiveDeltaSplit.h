@@ -59,6 +59,12 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
       std::optional<FileProperties> fileProperties = std::nullopt,
       bool hasDeletionVector = false);
 
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<HiveDeltaSplit> create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
   /// Whether this file has a deletion vector. Currently rejected by the
   /// reader; see the constructor doc.
   bool hasDeletionVector{false};
