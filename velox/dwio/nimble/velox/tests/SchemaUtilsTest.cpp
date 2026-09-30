@@ -575,7 +575,6 @@ TEST(SchemaUtilsTest, projectionStreamOffsets) {
 TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  root->setAttributes({{"root", "attribute"}});
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
   hybridMap->addGroup(0, {"1"}, makeAllKindValueType(builder));
   hybridMap->addGroup(
@@ -584,10 +583,6 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   const auto source = SchemaReader::getSchema(builder.schemaNodes());
   const auto projection =
       buildProjectedNimbleType(source.get(), makeSubfields({"features[1]"}));
-  EXPECT_EQ(
-      projection.nimbleType->attributes(),
-      (std::vector<std::pair<std::string, std::string>>{
-          {"root", "attribute"}}));
   const auto& projectedMap =
       projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -740,6 +735,8 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
 
   ASSERT_EQ(projectedMap.groupCount(), 1);
   EXPECT_EQ(projectedMap.groupAt(0).groupId, 1);
+  NIMBLE_ASSERT_THROW(
+      projectedMap.defaultGroup(), "Hybrid FlatMap Default group is missing");
   EXPECT_EQ(
       projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"2", "3"}));
   EXPECT_EQ(

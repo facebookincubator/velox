@@ -28,8 +28,8 @@ namespace facebook::nimble {
 /// Serializer converts Velox vectors into a serialized nimble format.
 ///
 /// This class provides a lightweight serialization interface for converting
-/// Velox vectors to nimble encoded byte streams. It supports flat map encoding
-/// for specified columns via Serializer::Options::flatMapColumns.
+/// Velox vectors to nimble encoded byte streams. It supports FlatMap and
+/// Hybrid FlatMap encoding through SerializerOptions column configuration.
 class Serializer {
  public:
   using Options = SerializerOptions;
@@ -116,9 +116,9 @@ void Serializer::serialize(
       // Omit any null stream that carries no actual nulls, even when a
       // validity bitmap was allocated (hasNulls() true but all-true). Such
       // streams are reconstructed as all-true on read. This must match the
-      // null-barrier flag (computed from hasNullValues()): writing an all-true
-      // null stream would make it present in only some batches of a dense
-      // concat run, which the reader cannot stitch.
+      // required-barrier flag (computed from hasNullValues()): writing an
+      // all-true null stream would make it present in only some batches of a
+      // dense concat run, which the reader cannot stitch.
       if (!streamData->hasNullValues()) {
         continue;
       }

@@ -157,8 +157,19 @@ uint32_t maxStreamOffset(const Type& type) {
       }
       return offset;
     }
-    case Kind::HybridFlatMap:
-      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
+    case Kind::HybridFlatMap: {
+      const auto& hybridFlatMap = type.asHybridFlatMap();
+      uint32_t offset = maxStreamOffset(hybridFlatMap.nullsDescriptor());
+      for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
+        const auto& group = hybridFlatMap.groupAt(i);
+        offset = std::max(
+            {offset,
+             maxStreamOffset(group.keyDescriptor),
+             maxStreamOffset(group.inMapDescriptor),
+             maxStreamOffset(*group.valueType)});
+      }
+      return offset;
+    }
     case Kind::ArrayWithOffsets:
       return std::max(
           {maxStreamOffset(type.asArrayWithOffsets().offsetsDescriptor()),
@@ -340,7 +351,7 @@ folly::IOBuf StreamSlicer::slice(
   const auto flagsOffset = writeSerializationHeader(
       headerBuffer_, SerializationVersion::kProjection, length);
   headerBuffer_[flagsOffset] = static_cast<char>(detail::makeFlagsByte(
-      slicedStreams.requiresNullBarrier,
+      slicedStreams.requiredBarrier,
       parser.streamEncodingUsesVarintRowCount(),
       /*streamHasChunkHeader=*/false));
 
@@ -611,7 +622,8 @@ void StreamSlicer::sliceType(
       return;
     }
     case Kind::HybridFlatMap:
-      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
+      NIMBLE_UNSUPPORTED(
+          "StreamSlicer cannot row-slice key-major Hybrid FlatMap streams.");
     default:
       NIMBLE_UNSUPPORTED(
           "StreamSlicer does not support slicing {} yet", type.kind());
@@ -642,12 +654,11 @@ void StreamSlicer::sliceDescriptor(
   outputStreams.streams[descriptor.offset()] = sliced;
   if (isRowOrFlatMapNullStream) {
     NIMBLE_CHECK(!sliced.empty(), "Sliced null stream must not be empty");
-    outputStreams.requiresNullBarrier |=
-        countTrue(
-            sliced,
-            {.offset = 0, .length = range.length},
-            outputBuffer,
-            encodingOptions) < range.length;
+    outputStreams.requiredBarrier |= countTrue(
+                                         sliced,
+                                         {.offset = 0, .length = range.length},
+                                         outputBuffer,
+                                         encodingOptions) < range.length;
   }
 }
 

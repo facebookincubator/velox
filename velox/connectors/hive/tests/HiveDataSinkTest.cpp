@@ -2177,7 +2177,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
       }));
 
   dataSink->appendData(makeRowVector({
-      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatIdentityVector<int64_t>(200),
       makeFlatVector<StringView>(
           200, [](auto row) { return row % 2 == 0 ? "part_0" : "part_1"; }),
   }));

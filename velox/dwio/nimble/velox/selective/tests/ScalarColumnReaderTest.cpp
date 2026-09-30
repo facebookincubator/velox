@@ -449,7 +449,7 @@ TEST_P(ScalarColumnReaderTest, integerAllNulls) {
 TEST_P(ScalarColumnReaderTest, integerSkipAndRead) {
   const bool stringDecoderZeroCopy = GetParam();
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatIdentityVector<int32_t>(100),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());

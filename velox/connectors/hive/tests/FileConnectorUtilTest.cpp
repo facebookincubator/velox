@@ -473,8 +473,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
 
 TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -493,8 +492,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -531,8 +529,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -571,8 +568,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
 // The reader built from the scan spec has no 'typeWithId()' subtree for it, so
 // reading its statistics dereferences null.
 TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
 
   // Tests 'filter' on a scan that returns 'constant' for 'c0'.
@@ -618,8 +614,7 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
 // downstream re-checks them: testFilterOnConstant() accepts any non-null
 // constant.
 TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -665,8 +660,7 @@ TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
 
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -703,8 +697,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
 
 TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -760,8 +753,7 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
 
 TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 

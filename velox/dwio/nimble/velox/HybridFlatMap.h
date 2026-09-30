@@ -44,6 +44,14 @@ class HybridFlatMap {
   static constexpr uint32_t kDefaultGroupId =
       std::numeric_limits<uint32_t>::max();
 
+  /// Returns whether `groupId` identifies the reserved Default group.
+  static constexpr bool isDefaultGroup(uint32_t groupId) {
+    return groupId == kDefaultGroupId;
+  }
+
+  /// Returns the logical group with `groupId`. Fails when it is absent.
+  const Group& groupById(uint32_t groupId) const;
+
   /// Reserved schema attribute containing serialized group metadata.
   static constexpr std::string_view kAttributeName{"hybridFlatMap"};
 
@@ -111,7 +119,7 @@ void validateHybridFlatMapGroups(
           groupId,
           "Hybrid FlatMap group IDs must be in ascending order.");
     }
-    if (groupId == HybridFlatMap::kDefaultGroupId) {
+    if (HybridFlatMap::isDefaultGroup(groupId)) {
       foundDefault = true;
       NIMBLE_CHECK(
           groupKeys.empty(),
