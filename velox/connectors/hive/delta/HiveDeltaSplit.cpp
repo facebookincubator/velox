@@ -16,9 +16,35 @@
 
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/serialization/Serializable.h"
 
 namespace facebook::velox::connector::hive::delta {
+
+std::string_view toString(DeltaColumnMappingMode mode) {
+  switch (mode) {
+    case DeltaColumnMappingMode::kNone:
+      return "none";
+    case DeltaColumnMappingMode::kName:
+      return "name";
+    case DeltaColumnMappingMode::kId:
+      return "id";
+  }
+  VELOX_UNREACHABLE();
+}
+
+DeltaColumnMappingMode deltaColumnMappingModeFromString(std::string_view name) {
+  if (name == "none") {
+    return DeltaColumnMappingMode::kNone;
+  }
+  if (name == "name") {
+    return DeltaColumnMappingMode::kName;
+  }
+  if (name == "id") {
+    return DeltaColumnMappingMode::kId;
+  }
+  VELOX_USER_FAIL("Unknown Delta column mapping mode: {}", name);
+}
 
 HiveDeltaSplit::HiveDeltaSplit(
     const std::string& connectorId,
@@ -34,7 +60,8 @@ HiveDeltaSplit::HiveDeltaSplit(
     bool cacheable,
     const std::unordered_map<std::string, std::string>& infoColumns,
     std::optional<FileProperties> fileProperties,
-    bool hasDeletionVector)
+    bool hasDeletionVector,
+    DeltaColumnMappingMode columnMappingMode)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -52,12 +79,18 @@ HiveDeltaSplit::HiveDeltaSplit(
           std::move(fileProperties),
           std::nullopt,
           std::nullopt),
-      hasDeletionVector(hasDeletionVector) {}
+      hasDeletionVector(hasDeletionVector),
+      columnMappingMode(columnMappingMode) {}
 
 folly::dynamic HiveDeltaSplit::serialize() const {
   folly::dynamic obj = HiveConnectorSplit::serialize();
   obj["name"] = "HiveDeltaSplit";
   obj["hasDeletionVector"] = hasDeletionVector;
+  // Key is namespaced to avoid clashing with HiveConnectorSplit's own
+  // 'columnMappingMode' field, which uses dwio::common::ColumnMappingMode
+  // names (kPosition, kParquetFieldId, ...) not the Delta names.
+  obj["deltaColumnMappingMode"] =
+      std::string(delta::toString(columnMappingMode));
   return obj;
 }
 
@@ -70,8 +103,13 @@ std::shared_ptr<HiveDeltaSplit> HiveDeltaSplit::create(
   // rowIdProperties, bucketConversion) that HiveDeltaSplit's constructor does
   // not currently accept, so they cannot be preserved via the current API;
   // that is intentional -- Delta splits produced by the Presto coordinator
-  // only exercise the parameters listed below plus hasDeletionVector.
+  // only exercise the parameters listed below plus hasDeletionVector and the
+  // Delta columnMappingMode.
   auto base = HiveConnectorSplit::create(obj);
+  DeltaColumnMappingMode mode = DeltaColumnMappingMode::kNone;
+  if (auto it = obj.find("deltaColumnMappingMode"); it != obj.items().end()) {
+    mode = deltaColumnMappingModeFromString(it->second.asString());
+  }
   return std::make_shared<HiveDeltaSplit>(
       base->connectorId,
       base->filePath,
@@ -85,7 +123,8 @@ std::shared_ptr<HiveDeltaSplit> HiveDeltaSplit::create(
       base->cacheable,
       base->infoColumns,
       base->properties,
-      obj.getDefault("hasDeletionVector", false).asBool());
+      obj.getDefault("hasDeletionVector", false).asBool(),
+      mode);
 }
 
 // static

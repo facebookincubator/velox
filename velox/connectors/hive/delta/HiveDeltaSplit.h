@@ -21,6 +21,36 @@
 
 namespace facebook::velox::connector::hive::delta {
 
+/// Delta Lake column-mapping mode
+/// (https://docs.delta.io/latest/delta-column-mapping.html).
+///
+/// Records the source table's column-mapping mode; the field is metadata
+/// carried alongside the split, not a directive that changes how the worker
+/// reads today. The Presto coordinator resolves each column to its physical
+/// name on the HiveColumnHandle before the split is sent (see
+/// DeltaPrestoToVeloxConnector::sourceName() on the coordinator side), so
+/// the worker reads by name in every mode. This matches the spec's read
+/// requirement for kName ("resolve by physicalName") and works in practice
+/// for kId against delta.io writers (they stamp physicalName as the Parquet
+/// column name alongside field_id). It is not strictly spec-compliant for
+/// kId against a spec-only-field_id writer; see the TODO in
+/// DeltaSplitReader::prepareSplit for the follow-up that routes kId through
+/// dwio::common::ColumnMappingMode::kParquetFieldId once field_ids are on
+/// the wire.
+enum class DeltaColumnMappingMode {
+  /// No column mapping. Logical column names match Parquet physical names.
+  kNone,
+
+  /// Column mapping by name. Physical Parquet column names are opaque IDs
+  /// (col-<uuid>). The coordinator provides those physical names on
+  /// HiveColumnHandle; the worker reads by name.
+  kName,
+
+  /// Column mapping by id. Same coordinator-side name resolution as kName;
+  /// spec-strict field_id resolution is a follow-up (see enum doc).
+  kId,
+};
+
 /// Represents a Delta Lake data file to read. Extends HiveConnectorSplit to
 /// reuse the existing Hive file reading infrastructure.
 struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
@@ -43,6 +73,11 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
   /// supported: the split reader rejects it rather than silently returning
   /// logically deleted rows. When support is added, the descriptor itself
   /// (path, offset, cardinality, ...) will be added alongside this flag.
+  /// @param columnMappingMode Delta column-mapping mode of the source table.
+  /// Informational only today: the worker reads by name in every mode
+  /// because the coordinator resolves physical names on the column
+  /// handles. See the enum doc for the follow-up that will make id mode
+  /// spec-strict.
   HiveDeltaSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -57,7 +92,8 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      bool hasDeletionVector = false);
+      bool hasDeletionVector = false,
+      DeltaColumnMappingMode columnMappingMode = DeltaColumnMappingMode::kNone);
 
   folly::dynamic serialize() const override;
 
@@ -68,6 +104,18 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
   /// Whether this file has a deletion vector. Currently rejected by the
   /// reader; see the constructor doc.
   bool hasDeletionVector{false};
+
+  /// Delta column-mapping mode of the source table. See the enum doc; only
+  /// kNone is accepted by the reader today.
+  DeltaColumnMappingMode columnMappingMode{DeltaColumnMappingMode::kNone};
 };
+
+/// Serializes a DeltaColumnMappingMode to its canonical string form
+/// ("none", "name", "id").
+std::string_view toString(DeltaColumnMappingMode mode);
+
+/// Parses a canonical DeltaColumnMappingMode string. Throws
+/// VeloxUserError on any unknown value.
+DeltaColumnMappingMode deltaColumnMappingModeFromString(std::string_view name);
 
 } // namespace facebook::velox::connector::hive::delta
