@@ -1161,6 +1161,63 @@ DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
   }
 }
 
+DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
+  // A grouped split can arrive after start() has planned the drivers but
+  // before it has created the exchange clients and driver slots. The split
+  // group must wait for them and then run.
+  const std::string transportKind{"test-grouped-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  std::atomic_int32_t numOperatorsBuilt{0};
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [&numOperatorsBuilt](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            ++numOperatorsBuilt;
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+  plan.numSplitGroups = 1;
+  auto task = Task::create(
+      "task-grouped-split-during-startup",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::initializePartitionOutput",
+      std::function<void(Task*)>([&](Task* startingTask) {
+        startingTask->addSplit(
+            exchangeNodeId,
+            exec::Split(
+                std::make_shared<RemoteConnectorSplit>("remote-task"),
+                /*groupId=*/0));
+      }));
+
+  task->start(1, 1);
+  EXPECT_EQ(numOperatorsBuilt, 1);
+  EXPECT_EQ(task->numRunningDrivers(), 1);
+  task->requestAbort().wait();
+}
+
 TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
   // A transport may register no merge exchange builder. A MergeExchangeNode
   // naming it must fail rather than fall back to another transport's operator.
