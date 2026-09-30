@@ -52,12 +52,12 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.pinIndex(emptySession.get()));
   EXPECT_FALSE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
-      config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+      config.nimbleFooterSpeculativeIoSize(emptySession.get()), 2UL << 20);
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_FALSE(
       config.nimbleIntegerDictionaryAwareFiltering(emptySession.get()));
-  EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
   EXPECT_FALSE(config.directBufferedInputSharedAllocation(emptySession.get()));
 }
 

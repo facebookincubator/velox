@@ -1183,14 +1183,14 @@ Nimble Options (prefix ``hive.nimble.``)
      - Description
    * - ``footer-speculative-io-size``
      - integer
-     - 8MB
+     - 2MB
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode. Configure as ``nimble.footer-speculative-io-size``; do not prepend ``hive.``.
        Session: ``nimble_footer_speculative_io_size``.
    * - ``lazy-column-io``
      - boolean
-     - false
+     - true
      - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
        Lazy IO columns are loaded through a separate buffered input other than the one used by early
        materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will

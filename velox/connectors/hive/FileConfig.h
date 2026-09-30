@@ -83,7 +83,7 @@ class FileConfig {
       "nimble_footer_speculative_io_size",
       "nimble.footer-speculative-io-size",
       uint64_t,
-      8UL << 20,
+      2UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
 
   VELOX_HIVE_CONFIG_LEGACY(
@@ -138,7 +138,7 @@ class FileConfig {
       "nimble_lazy_column_io",
       "nimble.lazy-column-io",
       bool,
-      false,
+      true,
       "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
   // --- VELOX_HIVE_CONFIG properties ---
