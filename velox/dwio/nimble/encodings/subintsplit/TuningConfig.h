@@ -17,6 +17,10 @@
 
 #include <cstdint>
 
+namespace folly {
+class Executor;
+} // namespace folly
+
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 
@@ -71,6 +75,23 @@ struct TuningConfig {
   /// candidate key forces the transform on every other section, and the
   /// smallest of those forced attempts is kept. Never set in a writer.
   bool forceApply{false};
+
+  /// Chooses split boundaries with the hybrid planner instead of trusting the
+  /// split DP's argmin. The DP serves as a shortlister; a small set of
+  /// candidate plans is re-priced with section selection's own estimators and
+  /// the winner is refined locally. Costs roughly twice the planning time.
+  bool hybridPlanner{false};
+
+  /// The most encoded size, as a fraction, that decode weighting
+  /// (selector.decodeWeighting) may give up against what size-only selection
+  /// would have chosen. Enforced wherever a decode-weighted choice is made:
+  /// the split planner, the hybrid planner and a section's encoding
+  /// selection. Inert at the default decode weight of zero.
+  double maxSizeRegression{0.05};
+
+  /// Executor sections are encoded on concurrently. Null encodes them one
+  /// after another on the calling thread.
+  folly::Executor* sectionExecutor{nullptr};
 
   /// Encodings the planner may cost a section against. Empty means every
   /// encoding. A restricted set only narrows what the planner considers; it

@@ -194,7 +194,37 @@ normal nested selection.
 
 The outer stream is assembled only after all child payloads have been produced.
 Temporary section buffers can use `Encoding::Options::bufferPool` so repeated
-encodes reuse allocation capacity.
+encodes reuse allocation capacity. With `TuningConfig::sectionExecutor` set,
+sections are encoded concurrently, each into its own buffer.
+
+### 5. Hold the plan to a whole-value floor
+
+A written stream is never larger than one whole-value section. After planning,
+`WholeValueFloor` compares the plan with FixedBitWidth's exact size and with
+section selection's pick for the whole value, priced on eight spread sample
+blocks. A candidate is encoded only when its estimate, divided by a
+per-encoding slack for estimators known to over-quote, undercuts the plan.
+The pick is never Delta or Varint, which replay every earlier row to reach
+one, except that a plan whose sections are all constant but one stored in
+Delta or Varint is also compared with the whole value in that encoding.
+When the sample's quote is well under the planner's own estimate, the
+fallback is priced first and the plan is abandoned at the first section whose
+written bytes already lose. Replayed (preserve-mode) layouts are left alone.
+
+### Decode costs and the hybrid planner
+
+Both are off by default and leave the plan unchanged at their defaults.
+
+- `TuningConfig::selector.decodeWeighting` adds a per-encoding decode cost from
+  `DecodeCost.h`, for its access pattern and read path, to the planner's DP.
+  `sectionEncodingOptions` carries the same weighting to each section's own
+  encoding selection through `Encoding::Options::subIntSplit`. Every
+  decode-weighted choice is bounded on size by `TuningConfig::maxSizeRegression`
+  against the size-only choice, and the whole-value floor admits the same
+  regression.
+- `TuningConfig::hybridPlanner` uses the DP only as a shortlister: it re-prices
+  the best plans with section selection's estimators on the planner sample
+  (`PlanRefiner`), then moves boundaries locally while the price improves.
 
 ## On-disk format
 
@@ -446,14 +476,44 @@ takes precedence for streams configured by both mechanisms.
 
 ### Selection status
 
-The production path in this stack is explicit serde routing. SubIntSplit is a
-registered encoding type, while the current default selection factors do not
-choose it automatically. The global-candidate benchmark is an experiment used
-to compare policies; it is not the rollout behavior documented here.
+SubIntSplit is not in `defaultEncodingReadFactors()`, so default selection
+never chooses it. A writer opts in by adding SubIntSplit to its read factors;
+selection then prices it with the estimate below and can screen it with the
+admission gate. Making it a default waits for reader coverage of every
+encoding a section can take: `EncodingView` support for Varint, Delta and
+FrequencyPartition, and a SubIntSplit case in the legacy encoding factory.
+Explicit serde routing works as before.
 
 Explicit routing may produce a one-section encoding when the configured stream
 has no profitable split. Benchmark each routed stream because the wrapper adds
 metadata without decomposing the value in that case.
+
+### Admission into default selection
+
+`SubIntSplitEncoding::estimateSize()` runs the same split DP as the encoder
+over a smaller sample (512 values in 64-row blocks), on size alone, and adds
+the header bytes of the plan it finds, under the production `TuningConfig`.
+With `TuningConfig::rowFrame` it also plans the sample less a row frame fitted
+to the whole column, and keeps the smaller. The answer is floored at
+FixedBitWidth's exact estimate, which the whole-value floor guarantees a
+written stream never exceeds, and is that floor when no plan can be priced. It
+returns nothing, so selection skips the candidate, when the policy's streams
+go to a substream compressor and `subIntSplit.estimateCompressionGuard` is set,
+since the estimate counts uncompressed bytes. With
+`subIntSplit.estimateBitFlipScreen`, `estimateSizeLowerBound()` answers the
+floor without planning where the bit-flip gradient gate finds no field
+boundary, which lets selection skip the DP for a stream that cannot win.
+
+`subIntSplit.admission` can put a cheap screen in front of the estimate. The
+screen is a bit-flip profile: per bit position, how often that bit differs
+between consecutive values, over `subIntSplit.admissionProfilePairs` strided
+pairs. `kBitFlip` offers SubIntSplit as a candidate only when the profile's
+gradient shows a field boundary (`bitFlipGradientGate()`); `kBitFlipEntropy`
+also requires the flipping bits to be less than random. An admitted stream
+still has to win on size unless `subIntSplit.admissionForces` is set, which
+selects an admitted stream without pricing it.
+`subIntSplit.inNestedStreams = false` keeps nested streams such as RLE run
+values from choosing SubIntSplit.
 
 ## Tuning options
 
@@ -482,6 +542,10 @@ They are internal to SubIntSplit instead of fields on the generic
 | `autoTransform` | `false` | Offer the key-derived permutation per section |
 | `keySection` | `0xFF` | Key section; 0xFF searches every section |
 | `forceApply` | `false` | Ablation only: apply the transform to every eligible section |
+| `selector.decodeWeighting` | weight `0.0`, `Bulk`, `Cursor` | Decode cost charged to sections, and the read shape and reader it is priced for |
+| `maxSizeRegression` | `0.05` | Size a decode-weighted choice may give up |
+| `hybridPlanner` | `false` | Re-price a DP shortlist and refine the winner |
+| `sectionExecutor` | null | Encode sections concurrently |
 
 Benchmarks and focused tests can pass an alternate `TuningConfig` directly to
 `SubIntSplitEncoding`. Normal writer and reader paths always use the constant
@@ -490,6 +554,22 @@ decode settings do not alter the format.
 
 `Encoding::Options::subIntSplitDeltaPreTransform` remains separate because it
 is a runtime rollout gate that changes the stream representation.
+`Encoding::Options::subIntSplit` is not a setting either: it carries the
+decode weighting SubIntSplit gives its sections' own encoding selection, and
+callers leave it unset.
+
+Top-level selection's SubIntSplit settings stay on
+`Encoding::Options::subIntSplit` (`subintsplit::Options`), since selection sees
+only those options:
+
+| Setting | Default | Effect |
+|---|---:|---|
+| `subIntSplit.admission` | `kEstimate` | Screen candidacy with the bit-flip profile |
+| `subIntSplit.admissionForces` | `false` | Let an admitted stream skip the size comparison |
+| `subIntSplit.admissionProfilePairs` | `1024` | Pairs the admission profile samples; zero is every pair |
+| `subIntSplit.inNestedStreams` | `true` | Let nested streams choose SubIntSplit |
+| `subIntSplit.estimateCompressionGuard` | `true` | Decline to estimate under substream compression |
+| `subIntSplit.estimateBitFlipScreen` | `false` | Bound the estimate from the bit-flip gradient gate before planning |
 
 Treat these as benchmark controls rather than table-level contracts. Changing
 planner options can change section boundaries and encoded bytes. Reader-only
@@ -565,13 +645,17 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 
 | File | Execution context | Inputs and outputs | Contract to preserve |
 |---|---|---|---|
+| `BitFlipProfile.h` | Admission statistics | Integral values; produces per-bit flip probabilities, their variance and gradient, and optionally the varying bits | Sampled pairs keep adjacency; the scalar and AVX2 counters agree |
 | `BitSection.h` | Shared planner/encoder vocabulary | Inclusive first and last bits; produces section ranges and `SectionPlan` entries | Ranges use physical bit positions, remain ordered least-significant first, and report exact widths |
 | `CostModel.h` | Planner cost models | Section metrics, width, and value count; exposes candidate costs and pruning decisions | Each model mirrors selection's size estimator for its encoding; costs use bits consistently and impossible candidates remain distinguishable from expensive ones |
 | `DecodeCost.h` | Planner decode-cost weighting | Section encodings and access pattern; produces per-section read costs | Zero weight reproduces size-only planning exactly |
 | `DeltaTransform.h` | Optional write transform and sequential read recovery | Physical values ↔ first value plus zigzag residuals | Arithmetic is bit-preserving for signed extrema; transformed streams require decoding from row zero |
+| `Estimator.h` | Benchmark and test helper | Values and gate config; returns the gate decision and an ungated DP cost | Not used by production selection |
 | `Format.h` | Persistent write/read boundary | Section count, flags, ranges, child sizes, and payload offsets; `parseSections()` validates them | Header sizes and field order remain compatible with stored data; malformed headers fail with `NIMBLE_CHECK_FILE` |
 | `TuningConfig.h` | Planner and decoder tuning | `TuningConfig`, `kDefaultTuningConfig` | Defaults preserve standard behavior |
 | `RowFrame.h` | Optional write transform and per-row read recovery | Physical values ↔ residuals from a fitted `slope * row + base` | Arithmetic is modular in the physical width; a read adds the frame back from the row index alone |
+| `Options.h` | Section selection plumbing | `subintsplit::Options`, held by `Encoding::Options::subIntSplit` and set by `sectionEncodingOptions` | Callers leave it unset |
+| `PlanRefiner.h`, `PlanRefiner.cpp` | Hybrid planner | Planner sample, DP shortlist, and a section's options; returns the refined plan and its estimated size | Prices ranges as `ManualEncodingSelectionPolicy::select` would; kept in step with it by hand |
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
 | `SectionAccumulator.h` | Full and selective decode hot path | Decoded unsigned section values, range masks, shifts, and an output span | Scalar and AVX2 paths produce identical physical bits and never leak bits outside a section width |
 | `SectionMetrics.h` | Planner statistics | Candidate-range samples and reusable frequency storage; produces the range, run, cardinality, and dominant-value measurements the cost models read | Metrics describe extracted section values; exact distinct counts stop at the configured cap and scratch state is reset between ranges |
@@ -581,6 +665,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `SplitBoundaries.cpp` | Preserved-layout parsing and validation | Text configs ↔ section plans | Rejects gaps, overlaps, malformed endpoints, out-of-range bits, and exclusion-count mismatches |
 | `SplitSelector.h` | Planner entry point and dynamic program | Samples, physical width, full row count, and `SelectorConfig`; returns `SelectorResult` | Sentinel defaults preserve standard planning, reported total cost matches the returned plan, and output covers the full width |
 | `SplitSelector.cpp` | Boundary search | Active-bit statistics; produces retained boundaries and the grid layout | Both active-range edges remain candidates and configured caps remain hard limits |
+| `TopLevelPolicy.h` | Admission gates | `BitFlipProfile` and `TopLevelPolicyConfig`; decides whether SubIntSplit is a candidate | `kEstimate` always admits; gates only decide candidacy unless forcing is asked for |
 
 ### Registration, selection, and writer configuration
 

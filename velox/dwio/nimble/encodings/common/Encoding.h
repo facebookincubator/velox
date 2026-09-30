@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Options.h"
 
 #include <memory>
 #include <string_view>
@@ -182,6 +183,10 @@ class Encoding {
     /// or section transforms. Do not enable for production until restatement
     /// points are added.
     bool subIntSplitDeltaPreTransform{false};
+
+    /// What SubIntSplit tells the encoding selection of its own sections; see
+    /// subintsplit::Options. Callers leave it unset.
+    subintsplit::Options subIntSplit{};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;

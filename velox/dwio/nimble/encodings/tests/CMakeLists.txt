@@ -90,6 +90,7 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
       SubIntSplitCostModelsTest.cpp
       SubIntSplitEncodingViewTest.cpp
       SubIntSplitSelectorTest.cpp
+      EstimatorAccuracyTest.cpp
       SubIntSplitDecodeOptionsTest.cpp
       SubIntSplitPlannerOptionsTest.cpp
       SubIntSplitDeltaTest.cpp
