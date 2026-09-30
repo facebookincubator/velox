@@ -24,9 +24,12 @@
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -84,8 +87,9 @@ struct EncodingSizeEstimation {
 
   /// A size estimateSize never quotes below for `encodingType`, for encodings
   /// whose estimate counts the stream's distinct values but where a bound can
-  /// be had without counting them (MainlyConstant and Dictionary on a
-  /// too-wide-to-table integer stream). nullopt otherwise.
+  /// be had without counting them (MainlyConstant, Dictionary and
+  /// FrequencyPartition on a too-wide-to-table integer stream), and for
+  /// SubIntSplit from its bit-flip profile. nullopt otherwise.
   static std::optional<uint64_t> estimateSizeLowerBound(
       const EncodingType encodingType,
       std::span<const physicalType> values,
@@ -96,8 +100,24 @@ struct EncodingSizeEstimation {
         isBoolType<physicalType>()) {
       return std::nullopt;
     } else {
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      // Bounded from the bit-flip profile rather than from a distinct count,
+      // so it is answered before the preamble below.
+      if (encodingType == EncodingType::SubIntSplit) {
+        if constexpr (sizeof(physicalType) == 4 || sizeof(physicalType) == 8) {
+          return SubIntSplitEncoding<T>::estimateSizeLowerBound(
+              values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       if (encodingType != EncodingType::MainlyConstant &&
-          encodingType != EncodingType::Dictionary) {
+          encodingType != EncodingType::Dictionary
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+          && encodingType != EncodingType::FrequencyPartition
+#endif
+      ) {
         return std::nullopt;
       }
       // Below this range Statistics counts distinct values in a table, which
@@ -110,17 +130,29 @@ struct EncodingSizeEstimation {
         return std::nullopt;
       }
       const uint64_t distinctLowerBound = statistics.distinctLowerBound();
-      if (encodingType == EncodingType::Dictionary) {
-        // Grows with the distinct count and reads nothing else of the counts.
-        return DictionaryEncoding<T>::estimateIntegralSize(
-            rowCount,
-            distinctLowerBound,
-            statistics.min(),
-            statistics.max(),
-            options);
+      switch (encodingType) {
+        case EncodingType::Dictionary: {
+          // Grows with the distinct count and reads nothing else of the
+          // counts.
+          return DictionaryEncoding<T>::estimateIntegralSize(
+              rowCount,
+              distinctLowerBound,
+              statistics.min(),
+              statistics.max(),
+              options);
+        }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+        case EncodingType::FrequencyPartition: {
+          return FrequencyPartitionEncoding<physicalType>::
+              estimateSizeLowerBound(
+                  rowCount, distinctLowerBound, statistics, options);
+        }
+#endif
+        default: {
+          return mainlyConstantSizeLowerBound(
+              values, statistics, distinctLowerBound, options);
+        }
       }
-      return mainlyConstantSizeLowerBound(
-          values, statistics, distinctLowerBound, options);
     }
   }
 
@@ -196,6 +228,13 @@ struct EncodingSizeEstimation {
             entryCount, statistics, options);
       }
       case EncodingType::RLE: {
+        if (options.subIntSplit.sectionEstimatorRefinements) {
+          return RLEEncoding<T>::estimateSize(
+              entryCount,
+              statistics,
+              estimateRunLengthsSize(statistics, options),
+              options);
+        }
         return RLEEncoding<T>::estimateSize(entryCount, statistics, options);
       }
       case EncodingType::Varint: {
@@ -231,6 +270,34 @@ struct EncodingSizeEstimation {
         return BlockBitPackingEncoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::Delta: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return DeltaEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FOR: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FrequencyPartition: {
+        if constexpr (isIntegralType<physicalType>()) {
+          // Options carry the index type, which is a large part of what a
+          // FrequencyPartition encode costs and is not visible from statistics.
+          return FrequencyPartitionEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return std::nullopt;
       }
@@ -292,12 +359,50 @@ struct EncodingSizeEstimation {
           return std::nullopt;
         }
       }
+      case EncodingType::FOR: {
+        // Measured over the values rather than inferred from statistics: a
+        // frame's local range is a property of the values in position, not
+        // of any summary of them.
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
 #endif
       default: {
         return estimateNumericSize(
             encodingType, values.size(), statistics, options);
       }
     }
+  }
+
+  // Prices RLE's run-lengths stream with the encodings nested selection would
+  // pick for it, rather than only the flat FixedBitWidth RLE's own estimate
+  // uses; that flat price stays a candidate, so this never quotes above it.
+  static uint64_t estimateRunLengthsSize(
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    const uint64_t runCount = statistics.consecutiveRepeatCount();
+    uint64_t bestSize = FixedBitWidthEncoding<uint32_t>::estimateSize(
+        runCount, statistics.minRepeat(), statistics.maxRepeat(), options);
+    if (runCount < 2) {
+      return bestSize;
+    }
+    const auto& runLengths = statistics.runLengths();
+    const auto runLengthsStatistics = Statistics<uint32_t>::create(
+        std::span<const uint32_t>{runLengths.data(), runLengths.size()});
+    bestSize = std::min(
+        bestSize,
+        MainlyConstantEncoding<uint32_t>::estimateSize(
+            runCount, runLengthsStatistics, options));
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    bestSize = std::min(
+        bestSize,
+        FrequencyPartitionEncoding<uint32_t>::estimateSize(
+            runCount, runLengthsStatistics, options));
+#endif
+    return bestSize;
   }
 
   static std::optional<uint64_t> estimateBoolSize(

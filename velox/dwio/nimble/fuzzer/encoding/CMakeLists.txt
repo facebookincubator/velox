@@ -272,3 +272,24 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
     --sis_admission_fuzzer_max_rows=512
   )
 endif()
+
+add_executable(nimble_estimator_refinement_fuzzer_tests EstimatorRefinementFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_encodings_tests_utils
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+  velox_memory
+)
+
+add_test(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_estimator_refinement_fuzzer_tests
+  --estimator_fuzzer_iterations=2
+  --estimator_fuzzer_max_rows=1024
+)

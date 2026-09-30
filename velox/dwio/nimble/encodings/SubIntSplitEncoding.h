@@ -104,7 +104,7 @@ inline Encoding::Options sectionEncodingOptions(
   sectionOptions.fixedBitWidthUseExactBits = true;
   // Sections are priced against each other, so their estimates must track
   // the bytes an encoding really writes rather than only rank candidates.
-  sectionOptions.sectionEstimatorRefinements = true;
+  sectionOptions.subIntSplit.sectionEstimatorRefinements = true;
   // NoIndex would output values in tier-reordered order, desyncing this
   // section from siblings at decode time, so a section always carries an
   // index.
