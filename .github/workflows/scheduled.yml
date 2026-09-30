@@ -2018,7 +2018,9 @@ jobs:
             /tmp/spatial_join_fuzzer_repro
 
   linux-clang:
-    if: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch') }}
+    # TODO: Remove the pull_request clause. Temporary, so this pull
+    # request compiles with Clang and proves the fix.
+    if: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request') }}
     name: Build with Clang
     uses: ./.github/workflows/linux-build-base.yml
     with:
