@@ -292,6 +292,39 @@ bit representation remains correct. With `TuningConfig::visitorBlockBuffer`, on 
 default, the slow path refills a small block instead of calling every child
 decoder once per value.
 
+### Random access through the view
+
+`createEncodingView` returns `SubIntSplitEncodingView` for `SubIntSplit` and
+`SubIntSplitReordered` streams, framed or not. Only a delta stream goes to
+`DecodedFallbackEncodingView`, which decodes it once, since a delta value depends
+on every row before it. The view holds one `EncodingView` per non-constant
+section, falling back to a decoded copy for a section whose encoding has no
+view, and folds constant sections into one shifted value.
+
+- A point read ORs one probe per section and adds the row frame back.
+- A range read decodes each section in chunks of 1,024 rows into stack
+  scratch and accumulates it into the output, so a view keeps no mutable state
+  and can be read from several threads.
+- A range-list read groups ranges whose gaps cost less than a separate probe
+  per row and decodes each group's covering span once. Section views receive
+  their own range lists through the checked `EncodingView::read`.
+
+A reordered stream needs, for each row, the position its permuted sections
+stored it at. The view builds that position map once per view and caches it
+per thread, keyed on an id no later view reuses. It reads the key section in
+one bulk call and numbers the key's distinct values through a table indexed
+by value when the key is at most 20 bits wide. A wider key leaves the
+numbering to the transform, which hashes. With the map, a read picks one of
+three plans by length:
+
+- Below 24 rows, the permuted sections are probed through the map.
+- Up to half the column, the requested rows' source positions are radix-sorted
+  so each section is read as one ascending range list.
+- Beyond that, the column is decoded once and the rows are copied out.
+
+A range list is priced range by range against the same three plans, and the
+whole list either takes the span plan or decodes the column once.
+
 ### Delta pre-transform
 
 The experimental delta mode encodes the first value verbatim and subsequent
@@ -340,8 +373,8 @@ Reads add the frame back after the sections are reassembled, one add per row,
 from the row's position in the stream. `skip()` only moves the cursor, so a
 framed stream keeps random access. The visitor fast path already decodes
 through `materialize()`, and the slow path defers to `materialize()` for a
-framed stream. `createEncodingView` serves any stream with a flag set through
-a full-decode view, since the positional view does not add the frame back.
+framed stream. `SubIntSplitEncodingView` adds the frame back on every read
+path, so a framed stream keeps positional random access through the view.
 
 ### Section transforms
 
@@ -373,8 +406,9 @@ The writer applies it only on request:
 
 A transform is undone over the whole column, so a reordered stream decodes the
 column once and serves partial reads from a cache. `skip()` only moves the
-cursor. The visitor slow path defers to `materialize()`, and
-`createEncodingView` serves reordered streams through the full-decode view.
+cursor. The visitor slow path defers to `materialize()`. `SubIntSplitEncodingView`
+reads reordered streams positionally; see
+[Random access through the view](#random-access-through-the-view).
 
 ## Selection and configuration
 
@@ -557,7 +591,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `encodings/selection/EncodingSelectionPolicy.h` | `nestedEncodingReadFactors()` decides the candidates a section is selected from. Change it together with the planner's cost models. |
 | `encodings/common/EncodingFactory.cpp` | Constructs typed SubIntSplit decoders on the normal factory path. |
 | `encodings/legacy/EncodingFactory.cpp` | Constructs the same physical types through the legacy visitor dispatch path. |
-| `encodings/views/SubIntSplitEncodingView.h` | Implements random access over supported nested section encodings. Change it when adding a view-capable child or adjusting per-row reconstruction. |
+| `encodings/views/SubIntSplitEncodingView.h` | Implements random access over supported nested section encodings, including row frames and key-derived reordering. Change it when adding a view-capable child or adjusting per-row reconstruction. |
 | `encodings/views/EncodingViewFactory.cpp` | Registers SubIntSplit with the random-access view factory. A new supported physical type must be wired here as well as in both decoder factories. |
 | `encodings/selection/EncodingSelectionPolicy.cpp` | Lists SubIntSplit among registered encoding types. The production defaults in this stack leave selection to explicit writer routing. |
 | `writer/WriterOptions.h` | Carries resolved SubIntSplit schema targets into the writer. |

@@ -122,8 +122,7 @@ void verifySubIntSplitReads(
 
 /// Reads `encoded` back through the EncodingView createEncodingView returns:
 /// random point reads, one gather, one contiguous range and one list of
-/// ordered, disjoint row ranges. A stream the view does not support is
-/// skipped.
+/// ordered, disjoint row ranges.
 template <typename T>
 void verifySubIntSplitView(
     std::mt19937& rng,
@@ -132,17 +131,7 @@ void verifySubIntSplitView(
     const Vector<T>& data,
     const Encoding::Options& options) {
   const auto rowCount = static_cast<uint32_t>(data.size());
-  std::unique_ptr<EncodingView> view;
-  try {
-    view = createEncodingView(encoded, &pool, options);
-  } catch (const NimbleUserError& e) {
-    // The positional view opens a view per section, and a section encoding
-    // without one (Varint) makes the whole view unsupported.
-    if (e.errorCode() == error_code::NotSupported) {
-      return;
-    }
-    throw;
-  }
+  auto view = createEncodingView(encoded, &pool, options);
   ASSERT_NE(view, nullptr);
   ASSERT_EQ(view->rowCount(), rowCount);
 
