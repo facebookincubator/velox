@@ -48,6 +48,9 @@ add_library(
   subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
   subintsplit/Format.h
+  subintsplit/Options.h
+  subintsplit/PlanRefiner.cpp
+  subintsplit/PlanRefiner.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
   subintsplit/SectionMetrics.h
