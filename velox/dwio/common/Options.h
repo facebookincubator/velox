@@ -999,6 +999,17 @@ class ReaderOptions : public io::ReaderOptions {
     preloadIndex_ = value;
   }
 
+  /// Whether to verify each stream read against the per-stream checksum the
+  /// file records. Currently only supported by the Nimble index projector path.
+  /// Default false.
+  bool verifyStreamChecksums() const {
+    return verifyStreamChecksums_;
+  }
+
+  void setVerifyStreamChecksums(bool value) {
+    verifyStreamChecksums_ = value;
+  }
+
   /// Whether to load and initialize the chunk stats during file open.
   /// When true, the chunk stats section is preloaded and the structured
   /// ChunkStats object is created. Default true.
@@ -1071,6 +1082,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
+  bool verifyStreamChecksums_{false};
   bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};

@@ -212,7 +212,8 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       createDataInput(fileHandle, options),
       std::move(projection),
       &options.memoryPool(),
-      options.dataIoStats()));
+      options.dataIoStats(),
+      options.verifyStreamChecksums()));
 }
 
 NimbleIndexProjector::NimbleIndexProjector(
@@ -221,7 +222,8 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::unique_ptr<DataInput> dataInput,
     std::shared_ptr<const NimbleTypeProjection> projection,
     velox::memory::MemoryPool* pool,
-    std::shared_ptr<velox::io::IoStatistics> ioStats)
+    std::shared_ptr<velox::io::IoStatistics> ioStats,
+    bool verifyStreamChecksums)
     : file_{std::move(file)},
       tablet_{std::move(tablet)},
       ioStats_{std::move(ioStats)},
@@ -245,11 +247,11 @@ NimbleIndexProjector::NimbleIndexProjector(
   NIMBLE_CHECK_GT(numStripes_, 0, "NimbleIndexProjector requires stripes");
   validateProjection();
 
-  // Left null for a file that records no checksums; only a request that asks
-  // to verify then fails. Per-stream checksums use the file's ChecksumType, the
-  // same one the postscript records for the whole-file checksum, so a type this
-  // binary cannot build is rejected outright by ChecksumFactory.
-  if (tablet_->properties().hasStreamChecksums()) {
+  // A file that records no checksums is read unverified. Per-stream checksums
+  // use the file's ChecksumType, the same one the postscript records for the
+  // whole-file checksum, so when verifying, a type this binary cannot build is
+  // rejected outright by ChecksumFactory.
+  if (verifyStreamChecksums && tablet_->properties().hasStreamChecksums()) {
     streamChecksum_ = ChecksumFactory::create(tablet_->checksumType());
   }
 
@@ -698,12 +700,7 @@ void NimbleIndexProjector::loadStripeStreams() {
 
   const auto numProjectedStreams = projection_->streamOffsets.size();
   ctx_.dataInputIndices.resize(numPlannedStripes * numProjectedStreams);
-  // Reported here rather than at create(), so opening a file that simply has
-  // no checksums never fails over a capability the caller may not use.
-  const bool verifyStreamChecksums = ctx_.options->verifyStreamChecksums;
-  NIMBLE_USER_CHECK(
-      !verifyStreamChecksums || streamChecksum_ != nullptr,
-      "Stream checksum verification requested, but the file carries no stream checksums.");
+  const bool verifyStreamChecksums = streamChecksum_ != nullptr;
   ctx_.expectedStreamChecksums.clear();
   if (verifyStreamChecksums) {
     ctx_.expectedStreamChecksums.reserve(totalStreams);
