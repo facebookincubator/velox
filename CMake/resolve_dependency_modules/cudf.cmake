@@ -40,12 +40,12 @@ set(
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 4393256 from 2026-09-29 (main branch)
+# kvikio commit e7c6c8c from 2026-09-30 (main branch)
 set(VELOX_kvikio_VERSION 26.12)
-set(VELOX_kvikio_COMMIT 439325642fe13e63366a01d00b0c2451d8dad6f9)
+set(VELOX_kvikio_COMMIT e7c6c8c4e24dff2cd641407f2dc18f16c2a7b212)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  472239cbc69d94544036e159fd710eae38515a5ceff29c5882e80a6c8d892619
+  0d17856f1645e9dd9ebffe1aeae5db81f4acb9e0e28626d04bc9cbe2642e587c
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 6bbcaed from 2026-09-29 (main branch)
+# cudf commit e45d601 from 2026-09-30 (main branch)
 set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 6bbcaedd6bdca0fcf9f065a5a2cc4005c2dd0ab2)
+set(VELOX_cudf_COMMIT e45d60141dbe7a5790ee28feb8d9d10c9e0186fc)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  d3cb056ec8387874f016f65c41c0957f4de01d6cc8c0ba2500eac7181abdc1da
+  64021c9dbcb307df35dc81409b7a3557da47c8bf1ca151369b4b05a4733424ec
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
