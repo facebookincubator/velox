@@ -284,15 +284,30 @@ void computeDeltas(
       }
     }
   } else {
-    for (uint32_t i = 1; i < values.size(); ++i) {
-      if (FOLLY_LIKELY(values[i] >= values[i - 1])) {
-        isRestatements->emplace_back(false);
-        deltas->emplace_back(values[i] - values[i - 1]);
-      } else {
-        isRestatements->emplace_back(true);
-        restatements->emplace_back(values[i]);
-      }
+    // Streams are sized once up front rather than grown by appends, and the
+    // restatements buffer is allocated for every row but written only up to
+    // its cursor, so pages past it are never touched.
+    const size_t size = values.size();
+    const size_t deltasStart = deltas->size();
+    const size_t restatementsStart = restatements->size();
+    const size_t flagsStart = isRestatements->size();
+    deltas->resize(deltasStart + size);
+    restatements->resize(restatementsStart + size);
+    isRestatements->resize(flagsStart + size);
+    auto* deltaCursor = deltas->data() + deltasStart;
+    auto* restatementCursor = restatements->data() + restatementsStart;
+    auto* flags = isRestatements->data() + flagsStart - 1;
+    for (size_t i = 1; i < size; ++i) {
+      const bool rising = values[i] >= values[i - 1];
+      *deltaCursor = values[i] - values[i - 1];
+      *restatementCursor = values[i];
+      flags[i] = !rising;
+      deltaCursor += rising;
+      restatementCursor += !rising;
     }
+    deltas->resize(deltaCursor - deltas->data());
+    restatements->resize(restatementCursor - restatements->data());
+    isRestatements->resize(flagsStart + size - 1);
   }
 }
 

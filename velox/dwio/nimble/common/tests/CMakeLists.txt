@@ -26,6 +26,7 @@ add_executable(
   ExceptionTests.cpp
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
+  RadixSortTests.cpp
   TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
@@ -41,6 +42,7 @@ target_link_libraries(
   nimble_common_tests
   nimble_common
   velox_common_base
+  gmock
   gtest
   gtest_main
   glog::glog

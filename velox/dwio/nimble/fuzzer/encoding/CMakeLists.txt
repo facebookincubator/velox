@@ -171,3 +171,21 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
     --sis_row_frame_fuzzer_max_rows=256
   )
 endif()
+
+add_executable(nimble_selection_statistics_fuzzer_tests SelectionStatisticsFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+)
+
+add_test(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_selection_statistics_fuzzer_tests
+  --selection_fuzzer_iterations=2
+)
