@@ -117,14 +117,11 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
-DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
-
 DEFINE_string(
     query_configs,
     "",
     "Semicolon-separated Velox query configs applied to every query, "
-    "e.g. 'key1=value1;key2=value2'. A same-key entry takes precedence "
-    "over the benchmark's own settings, e.g. -split_preload_per_driver.");
+    "e.g. 'key1=value1;key2=value2'.");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -264,9 +261,7 @@ void QueryBenchmarkBase::shutdown() {
 
 namespace {
 // Parses the semicolon-separated key=value entries of -query_configs
-// into 'queryConfigs'. A same-key entry overwrites what the benchmark
-// put in earlier (per-query configs, the -split_preload_per_driver
-// injection).
+// into 'queryConfigs'.
 void applyQueryConfigOverrides(
     std::unordered_map<std::string, std::string>& queryConfigs) {
   if (FLAGS_query_configs.empty()) {
@@ -298,8 +293,6 @@ QueryBenchmarkBase::run(
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
       params.queryConfigs = queryConfigs;
-      params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
-          std::to_string(FLAGS_split_preload_per_driver);
       applyQueryConfigOverrides(params.queryConfigs);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
