@@ -90,14 +90,15 @@ InMemoryExchangeClient::makeDefaultTransportEntry() {
   return ExchangeTransportEntry::make<InMemoryExchangeClient>(
       [](const ExchangeClientContext& context) {
         // The two byte limits come from the Task-supplied context rather than
-        // being re-derived by the transport.
+        // being re-derived by the transport. Low-water mark for filling the
+        // exchange queue is 1/2 of the per worker buffer size of the
+        // producers.
         const auto& queryConfig = context.queryConfig;
         VELOX_USER_CHECK_LE(
             context.maxExchangeBufferSize,
             static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-            "{} must not exceed {} bytes",
-            core::QueryConfig::kMaxExchangeBufferSize,
-            std::numeric_limits<int64_t>::max());
+            "Exchange buffer size must fit in int64_t: {}",
+            core::QueryConfig::kMaxExchangeBufferSize);
         return std::make_shared<InMemoryExchangeClient>(
             context.taskId,
             context.destination,
@@ -122,10 +123,8 @@ InMemoryExchangeClient::makeDefaultTransportEntry() {
          const std::shared_ptr<const core::ExchangeNode>& node,
          const std::shared_ptr<InMemoryExchangeClient>& /*client*/)
           -> std::unique_ptr<Operator> {
-        // The stock MergeExchange creates one InMemoryExchangeClient per
-        // source to preserve independently ordered inputs. The Task-level
-        // client is used only to abort late splits after the Task stops, so the
-        // operator intentionally does not consume it.
+        // MergeExchange keeps one client per source to preserve each
+        // source's order, so it does not take the Task-level client.
         const auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(node);
         VELOX_CHECK_NOT_NULL(
@@ -420,9 +419,9 @@ InMemoryExchangeClient::pickSourcesToRequestLocked() {
     //    transfer. Let the transfer happen in this case to avoid getting stuck.
     //
     // 2. We have some data in the queue that is not big enough for consumers,
-    //    and it is big enough to not allow ExchangeClient to initiate request
-    //    for more data. Let transfer happen in this case to avoid this deadlock
-    //    situation.
+    //    and it is big enough to not allow InMemoryExchangeClient to initiate
+    //    request for more data. Let transfer happen in this case to avoid this
+    //    deadlock situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes

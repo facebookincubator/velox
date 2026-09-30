@@ -1223,7 +1223,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // ExchangeNode's transport is resolved in ExchangeTransportRegistry; any
   // other leaf node that requires a client uses the built-in in-memory
   // transport. Keeps the entry so that the matching exchange operator can be
-  // built from it later. Must be called with 'mutex_' held.
+  // built from it later. Must be called with 'mutex_' held. Throws a user
+  // error if an ExchangeNode names an unregistered transport, or a
+  // MergeExchangeNode names a transport without merge support.
   void createExchangeClientLocked(
       int32_t pipelineId,
       const core::PlanNodePtr& planNode,

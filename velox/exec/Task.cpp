@@ -3927,9 +3927,6 @@ void Task::createExchangeClientLocked(
         transport);
   }
 
-  // A plain exchange consumes the whole node's output, so it is sized straight
-  // from the session config. Low-water mark for filling the exchange queue is
-  // 1/2 of the per worker buffer size of the producers.
   const auto& queryConfig = queryCtx()->queryConfig();
   ExchangeClientContext context{
       .taskId = taskId_,

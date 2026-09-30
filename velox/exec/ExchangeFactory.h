@@ -57,8 +57,8 @@ using ExchangeOperatorFactory = std::function<std::unique_ptr<Operator>(
 /// 'minExchangeOutputBatchBytes' from 'queryConfig'. These limits do not
 /// describe any per-source clients that a merge operator creates itself.
 ///
-/// Always construct with designated initialisers. Five of the fields are
-/// adjacent integers and pointers that a reorder would silently transpose.
+/// Always construct with designated initializers. Several fields share a type,
+/// so positional initialization could silently swap them.
 struct ExchangeClientContext {
   /// Id of the consuming task, for logging.
   std::string taskId;

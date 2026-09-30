@@ -38,7 +38,8 @@ namespace facebook::velox::exec {
 /// Registry value pairing a Task-level exchange client factory with the
 /// factories that build operators for the same transport, keyed by transport
 /// id. Build entries with make(), which gives the operator builders the
-/// concrete Task-level client type and rejects null halves.
+/// concrete Task-level client type and rejects a null client factory or
+/// exchange operator builder.
 struct ExchangeTransportEntry {
   /// Creates this transport's exchange client for one pipeline of one task.
   const ExchangeClientFactory makeClient;
@@ -49,14 +50,15 @@ struct ExchangeTransportEntry {
 
   /// Builds this transport's MergeExchange operator and receives the
   /// Task-level client from 'makeClient'. The client may be used for data or
-  /// only for control, depending on the transport's merge implementation. The
-  /// built-in in-memory operator ignores it and creates one client per merge
-  /// source. Null when the transport does not support merge exchange; Task
-  /// fails fast if a MergeExchangeNode names such a transport.
+  /// only for control, depending on the transport's merge implementation; see
+  /// InMemoryExchangeClient::makeDefaultTransportEntry() for the built-in one.
+  /// Null when the transport does not support merge exchange; Task fails fast
+  /// if a MergeExchangeNode names such a transport.
   const ExchangeOperatorFactory makeMergeExchangeOperator;
 
-  /// Preferred way to build an entry: pairs a client factory with operator
-  /// builders that receive the concrete client type that factory produces.
+  /// Builds an entry, the only way to create one: pairs a client factory with
+  /// operator builders that receive the concrete client type that factory
+  /// produces.
   /// Pass 'buildMergeExchange' as nullptr when the transport cannot merge.
   template <typename TClient>
   static std::shared_ptr<ExchangeTransportEntry> make(

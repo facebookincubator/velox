@@ -47,7 +47,8 @@ struct OutputTransportEntry {
   /// Builds this transport's output operator, binding 'manager'.
   const PartitionedOutputFactory makeOutputOperator;
 
-  /// Preferred way to build an entry: pairs 'manager' with an operator builder
+  /// Builds an entry, the only way to create one: pairs 'manager' with an
+  /// operator builder
   /// that receives that same manager, so the operator can't be wired to a
   /// different one than the entry stores. The manager is captured weakly (the
   /// entry owns it) and locked when building, honoring the
