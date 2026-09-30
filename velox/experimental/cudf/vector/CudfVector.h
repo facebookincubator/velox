@@ -53,6 +53,7 @@ class CudfVector : public RowVector {
   /// Constructs a CudfVector from packed_table.
   /// The packed data is retained and tabView_ references the table view inside
   /// packed_table. This avoids copying the underlying GPU data.
+  /// Deallocation of the packed buffer is ordered on the supplied stream.
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,

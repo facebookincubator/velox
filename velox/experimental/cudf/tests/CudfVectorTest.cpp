@@ -221,23 +221,46 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
+TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream consumerStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+  const auto numRows = packedTable->table.num_rows();
+  resource.reset();
+
+  {
+    // Intra-node exchange finishes producing the packed buffer before handing
+    // it to a consumer that uses a different stream. Dropping the vector must
+    // order its free after that consumer's work, even without a later rebind.
+    CudfVector vector(
+        pool_.get(),
+        ROW("c0", INTEGER()),
+        numRows,
+        std::move(packedTable),
+        consumerStream.view());
+    EXPECT_EQ(vector.stream().get(), consumerStream.value());
+  }
+
+  EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
+  consumerStream.view().sync();
+}
+
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
   RecordingAsyncDeviceResource resource;
   auto packedTable = makePackedTable(allocationStream.view(), resource);
 
-  // Model the intra-node UCX path: the packed buffer was allocated on
-  // allocationStream, but downstream work is associated with targetStream.
-  // The CudfVector logical stream is already targetStream, but the packed
-  // buffer's deallocation stream is still allocationStream. rebindStream must
-  // update the packed buffer even when stream_ already matches targetStream.
+  // Rebinding after construction must move the packed buffer's deallocation
+  // to the new consumer stream.
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
       ROW({"c0"}, {INTEGER()}),
       packedTable->table.num_rows(),
       std::move(packedTable),
-      targetStream.view());
+      allocationStream.view());
   resource.reset();
 
   ASSERT_TRUE(vector->rebindStream(targetStream.view()));
