@@ -205,7 +205,7 @@ inline std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors(
 /// stream to FixedBitWidth if some other candidate's own factor beats it.
 ///
 /// select() applies it only under
-/// Encoding::Options::sectionEstimatorRefinements. A free function because
+/// subintsplit::Options::sectionEstimatorRefinements. A free function because
 /// anything modelling selection, such as the oracle harness, must reach the
 /// same answer or silently drift from it.
 inline float effectiveReadFactor(
@@ -245,14 +245,14 @@ bool candidateCannotWin(
 
 /// FixedBitWidth's estimate when it is among `candidates` and
 /// effectiveReadFactor needs it, that is under
-/// Encoding::Options::sectionEstimatorRefinements; otherwise nothing.
+/// subintsplit::Options::sectionEstimatorRefinements; otherwise nothing.
 template <typename T>
 std::optional<uint64_t> fixedBitWidthSizeForReadFactors(
     std::span<const std::pair<EncodingType, float>> candidates,
     std::span<const typename TypeTraits<T>::physicalType> values,
     const Statistics<typename TypeTraits<T>::physicalType>& statistics,
     const Encoding::Options& options) {
-  if (!options.sectionEstimatorRefinements ||
+  if (!options.subIntSplit.sectionEstimatorRefinements ||
       std::none_of(candidates.begin(), candidates.end(), [](const auto& entry) {
         return entry.first == EncodingType::FixedBitWidth;
       })) {

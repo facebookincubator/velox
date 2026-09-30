@@ -36,8 +36,8 @@ class ScanSpecTest : public testing::Test, public test::VectorTestBase {
 
 TEST_F(ScanSpecTest, applyFilter) {
   auto rowVector = makeRowVector({
-      makeFlatVector<int64_t>(64, folly::identity),
-      makeFlatVector<int64_t>(128, folly::identity),
+      makeFlatIdentityVector<int64_t>(64),
+      makeFlatIdentityVector<int64_t>(128),
   });
   ASSERT_EQ(rowVector->size(), 64);
   ScanSpec scanSpec("<root>");
@@ -51,8 +51,8 @@ TEST_F(ScanSpecTest, applyFilter) {
       *rowVector->childAt("c1"), rowVector->size(), &result);
   ASSERT_EQ(result, 1ull << 63);
   rowVector = makeRowVector({
-      makeFlatVector<int64_t>(128, folly::identity),
-      makeFlatVector<int64_t>(64, folly::identity),
+      makeFlatIdentityVector<int64_t>(128),
+      makeFlatIdentityVector<int64_t>(64),
   });
   ASSERT_THROW(
       scanSpec.applyFilter(*rowVector, rowVector->size(), &result),
@@ -61,8 +61,8 @@ TEST_F(ScanSpecTest, applyFilter) {
 
 TEST_F(ScanSpecTest, setFilterResetsHasFilter) {
   auto rowVector = makeRowVector({
-      makeFlatVector<int64_t>(64, folly::identity),
-      makeFlatVector<int64_t>(64, folly::identity),
+      makeFlatIdentityVector<int64_t>(64),
+      makeFlatIdentityVector<int64_t>(64),
   });
 
   ScanSpec scanSpec("<root>");
@@ -294,7 +294,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(TypedScanSpecTest, applyFilterSchemaEvolution) {
   auto rowVector = makeRowVector({
-      makeFlatVector<int64_t>(64, folly::identity),
+      makeFlatIdentityVector<int64_t>(64),
       makeConstNullVector(GetParam(), 64),
   });
   ASSERT_EQ(rowVector->size(), 64);

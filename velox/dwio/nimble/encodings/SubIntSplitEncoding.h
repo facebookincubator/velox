@@ -104,7 +104,7 @@ inline Encoding::Options sectionEncodingOptions(
   sectionOptions.fixedBitWidthUseExactBits = true;
   // Sections are priced against each other, so their estimates must track
   // the bytes an encoding really writes rather than only rank candidates.
-  sectionOptions.sectionEstimatorRefinements = true;
+  sectionOptions.subIntSplit.sectionEstimatorRefinements = true;
   // NoIndex would output values in tier-reordered order, desyncing this
   // section from siblings at decode time, so a section always carries an
   // index.
@@ -1009,36 +1009,8 @@ void SubIntSplitEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation, and
-  // hook forwarding. For non-hook paths it operates in place on the reader's
-  // rawValues; for hooks, values stays as the staged buffer.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 

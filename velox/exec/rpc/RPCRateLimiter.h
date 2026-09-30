@@ -52,6 +52,9 @@ namespace facebook::velox::exec::rpc {
 /// adapts (AIMD) to overload reported by the caller. Occupancy is held as a
 /// pending count plus a FIFO queue of parked drivers.
 class RPCRateLimiter {
+  // Restricts owner-backed token construction without using friendship.
+  struct TokenConstructionKey {};
+
  public:
   /// Tuning for one backend. One field per user-facing session property, kept
   /// deliberately literal so the mapping is checkable by eye.
@@ -122,21 +125,20 @@ class RPCRateLimiter {
    public:
     Token() = default;
 
-    /// Takes ownership of one slot already claimed on 'owner'. Prefer
-    /// RPCRateLimiter::acquire(); this is public only to avoid a friend
-    /// declaration.
-    explicit Token(RPCRateLimiter* owner) : owner_{owner} {}
-
     Token(Token&& other) noexcept : owner_{other.owner_} {
       other.owner_ = nullptr;
     }
 
     Token& operator=(Token&& other) noexcept;
 
-    ~Token();
+    ~Token() noexcept;
 
     Token(const Token&) = delete;
     Token& operator=(const Token&) = delete;
+
+    /// Takes ownership of one slot already claimed on 'owner'. The passkey
+    /// restricts direct construction to RPCRateLimiter.
+    Token(TokenConstructionKey&, RPCRateLimiter* owner) : owner_{owner} {}
 
    private:
     // Null means moved-from or default-constructed: no slot is held.
@@ -275,7 +277,7 @@ class RPCRateLimiter {
 
   // Called by Token on destruction; releases the slot and hands it to the
   // longest-waiting parked driver, if any.
-  void release();
+  void release() noexcept;
 
   // Identifies the backend this limiter admits for. Composed by the transport
   // from whatever distinguishes one deployment from another, so two
@@ -322,6 +324,9 @@ class RPCRateLimiter {
   // Drivers parked waiting for a slot, oldest first. Woken FIFO, one per
   // release, so a burst of returning slots does not stampede.
   std::deque<ContinuePromise> waiters_;
+
+  // Prevents callers from constructing owner-backed tokens directly.
+  [[no_unique_address]] TokenConstructionKey tokenConstructionKey_;
 };
 
 /// Owns one process-scoped RPCRateLimiter per admission key.

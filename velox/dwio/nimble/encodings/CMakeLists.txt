@@ -51,6 +51,7 @@ add_library(
   subintsplit/DeltaTransform.h
   subintsplit/Estimator.h
   subintsplit/Format.h
+  subintsplit/Options.h
   subintsplit/PlanRefiner.cpp
   subintsplit/PlanRefiner.h
   subintsplit/RowFrame.h

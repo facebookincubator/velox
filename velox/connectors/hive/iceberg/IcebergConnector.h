@@ -17,8 +17,11 @@
 
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+class IcebergTableHandle;
 
 /// Provides Iceberg table format support.
 /// - Creates IcebergDataSource instances for reading Iceberg tables with
@@ -63,6 +66,23 @@ class IcebergConnector final : public HiveConnector {
       CommitStrategy commitStrategy) override;
 
   static void registerSerDe();
+
+  /// Validates that every subfield filter in 'filters' is rooted on one of the
+  /// three supported constant changelog columns (operation/ordinal/snapshotid).
+  /// Throws VeloxUserError for filters on rowdata or any unknown column.
+  ///
+  /// Called twice for changelog queries:
+  ///  1. Pre-construction in IcebergConnector::createDataSource(), against the
+  ///     table handle's subfieldFilters(), to prevent a confusing "Field not
+  ///     found" crash inside FileDataSource::makeScanSpec.
+  ///  2. Post-construction in IcebergDataSource constructor, against filters_
+  ///     (which includes entries extracted from remainingFilter by
+  ///     extractFiltersFromRemainingFilter), to catch predicates like
+  ///     "rowdata.id > 5" expressed as a remainingFilter that would otherwise
+  ///     be silently dropped (extracted to filters_ but ignored by
+  ///     applyChangelogFilters which only checks operation/ordinal/snapshotid).
+  static void validateChangelogSubfieldFilters(
+      const common::SubfieldFilters& filters);
 
  private:
   const std::shared_ptr<IcebergConfig> icebergConfig_;

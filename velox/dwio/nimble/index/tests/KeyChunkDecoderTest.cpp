@@ -78,6 +78,12 @@ class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
         blockSize);
   }
 
+  std::shared_ptr<DecodedKeyChunk> decode(
+      std::unique_ptr<SeekableArrayInputStream> stream) {
+    return decodeKeyChunk(
+        std::move(stream), createFlatKeyReader, dataBuffer_, leafPool_.get());
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
   velox::BufferPtr dataBuffer_;
@@ -87,12 +93,13 @@ TEST_P(KeyChunkDecoderTest, decodeAndMaterialize) {
   std::vector<std::string_view> keys = {"apple", "banana", "cherry"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decodeKeyChunk(makeStream(chunkData), *leafPool_, dataBuffer_);
+  auto result = decode(makeStream(chunkData));
   ASSERT_NE(result, nullptr);
-  ASSERT_NE(result->encoding, nullptr);
-  EXPECT_EQ(result->encoding->rowCount(), 3);
+  ASSERT_NE(result->reader, nullptr);
+  EXPECT_NE(dynamic_cast<FlatKeyReader*>(result->reader.get()), nullptr);
+  EXPECT_EQ(result->reader->rowCount(), 3);
 
-  auto materialized = result->encoding->materialize(0, 3);
+  auto materialized = result->reader->materialize(0, 3);
   EXPECT_EQ(materialized[0], "apple");
   EXPECT_EQ(materialized[1], "banana");
   EXPECT_EQ(materialized[2], "cherry");
@@ -102,15 +109,15 @@ TEST_P(KeyChunkDecoderTest, seekAndSelectiveMaterialize) {
   std::vector<std::string_view> keys = {"aaa", "bbb", "ccc", "ddd", "eee"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decodeKeyChunk(makeStream(chunkData), *leafPool_, dataBuffer_);
+  auto result = decode(makeStream(chunkData));
   ASSERT_NE(result, nullptr);
-  ASSERT_NE(result->encoding, nullptr);
+  ASSERT_NE(result->reader, nullptr);
 
-  auto pos = result->encoding->seek("ccc", /*inclusive=*/true);
+  auto pos = result->reader->seek("ccc", /*inclusive=*/true);
   ASSERT_TRUE(pos.has_value());
   EXPECT_EQ(pos.value(), 2);
 
-  auto entries = result->encoding->materialize(2, 2);
+  auto entries = result->reader->materialize(2, 2);
   EXPECT_EQ(entries[0], "ccc");
   EXPECT_EQ(entries[1], "ddd");
 }
@@ -119,12 +126,12 @@ TEST_P(KeyChunkDecoderTest, singleEntry) {
   std::vector<std::string_view> keys = {"only"};
   auto chunkData = encodeChunk(keys);
 
-  auto result = decodeKeyChunk(makeStream(chunkData), *leafPool_, dataBuffer_);
+  auto result = decode(makeStream(chunkData));
   ASSERT_NE(result, nullptr);
-  ASSERT_NE(result->encoding, nullptr);
-  EXPECT_EQ(result->encoding->rowCount(), 1);
+  ASSERT_NE(result->reader, nullptr);
+  EXPECT_EQ(result->reader->rowCount(), 1);
 
-  auto materialized = result->encoding->materialize(0, 1);
+  auto materialized = result->reader->materialize(0, 1);
   EXPECT_EQ(materialized[0], "only");
 }
 
@@ -134,14 +141,13 @@ TEST_P(KeyChunkDecoderTest, materializeAfterMove) {
 
   std::shared_ptr<DecodedKeyChunk> moved;
   {
-    auto decoded =
-        decodeKeyChunk(makeStream(chunkData), *leafPool_, dataBuffer_);
+    auto decoded = decode(makeStream(chunkData));
     moved = std::move(decoded);
   }
 
-  ASSERT_NE(moved->encoding, nullptr);
+  ASSERT_NE(moved->reader, nullptr);
 
-  auto materialized = moved->encoding->materialize(0, 3);
+  auto materialized = moved->reader->materialize(0, 3);
   EXPECT_FALSE(moved->stringBuffers.empty());
   EXPECT_EQ(materialized[0], "foo");
   EXPECT_EQ(materialized[1], "bar");
@@ -154,13 +160,13 @@ TEST_P(KeyChunkDecoderTest, materializeAfterMoveAssign) {
   auto chunkData1 = encodeChunk(keys1);
   auto chunkData2 = encodeChunk(keys2);
 
-  auto holder = decodeKeyChunk(makeStream(chunkData1), *leafPool_, dataBuffer_);
-  holder = decodeKeyChunk(makeStream(chunkData2), *leafPool_, dataBuffer_);
+  auto holder = decode(makeStream(chunkData1));
+  holder = decode(makeStream(chunkData2));
 
-  ASSERT_NE(holder->encoding, nullptr);
-  EXPECT_EQ(holder->encoding->rowCount(), 3);
+  ASSERT_NE(holder->reader, nullptr);
+  EXPECT_EQ(holder->reader->rowCount(), 3);
 
-  auto materialized = holder->encoding->materialize(0, 3);
+  auto materialized = holder->reader->materialize(0, 3);
   EXPECT_FALSE(holder->stringBuffers.empty());
   EXPECT_EQ(materialized[0], "gamma");
   EXPECT_EQ(materialized[1], "delta");
@@ -201,15 +207,13 @@ TEST_P(KeyChunkDecoderTest, roundTripsCompressedKeyChunk) {
     // branch: releases the staging copy from stringBuffers).
     for (const uint64_t blockSize : {uint64_t{0}, uint64_t{64}}) {
       SCOPED_TRACE(fmt::format("blockSize={}", blockSize));
-      auto result = decodeKeyChunk(
-          makeStream(chunkData, blockSize), *leafPool_, dataBuffer_);
+      auto result = decode(makeStream(chunkData, blockSize));
       ASSERT_NE(result, nullptr);
-      ASSERT_NE(result->encoding, nullptr);
-      ASSERT_EQ(
-          result->encoding->rowCount(), static_cast<uint32_t>(keys.size()));
+      ASSERT_NE(result->reader, nullptr);
+      ASSERT_EQ(result->reader->rowCount(), static_cast<uint32_t>(keys.size()));
 
       auto materialized =
-          result->encoding->materialize(0, static_cast<uint32_t>(keys.size()));
+          result->reader->materialize(0, static_cast<uint32_t>(keys.size()));
       for (size_t i = 0; i < keys.size(); ++i) {
         EXPECT_EQ(materialized[i], keys[i]);
       }
@@ -226,8 +230,7 @@ TEST_P(KeyChunkDecoderTest, rejectsUnsupportedChunkCompression) {
       static_cast<char>(CompressionType::MetaInternal);
 
   NIMBLE_ASSERT_THROW(
-      decodeKeyChunk(makeStream(chunkData), *leafPool_, dataBuffer_),
-      "Unsupported key chunk compression type");
+      decode(makeStream(chunkData)), "Unsupported key chunk compression type");
 }
 
 INSTANTIATE_TEST_SUITE_P(

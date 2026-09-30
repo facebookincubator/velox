@@ -899,7 +899,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
     const vector_size_t vectorSize = 1'000;
     auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
       return makeRowVector(
-          {makeFlatVector<int32_t>(vectorSize, folly::identity),
+          {makeFlatIdentityVector<int32_t>(vectorSize),
            makeFlatVector<int64_t>(
                vectorSize, [](auto row) { return row % 23; }),
            makeFlatVector<int32_t>(

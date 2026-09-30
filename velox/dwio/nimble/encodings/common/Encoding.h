@@ -106,6 +106,10 @@ struct ReadWithVisitorParams {
   // Number of rows scanned so far.  Contains rows scanned in previous chunks
   // during this read call as well.
   vector_size_t numScanned;
+
+  // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
+  // instead of the two-pass DictionaryIndicesHook fallback.
+  bool dictionaryAwareReads{false};
 };
 
 class Encoding {
@@ -159,17 +163,6 @@ class Encoding {
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
-
-    /// When true, size estimates are tight enough to compare with another
-    /// encoding's bytes rather than only to rank candidates. FixedBitWidth
-    /// counts the slop bytes FixedBitArray reserves, MainlyConstant prices
-    /// its other values over their own range and against Trivial, RLE prices
-    /// its run values against Trivial and Dictionary and its run lengths with
-    /// the encodings nested selection would pick, and selection withholds
-    /// Trivial's read-factor discount where Trivial is larger than
-    /// FixedBitWidth. SubIntSplit sets this for its sections, whose sizes it
-    /// compares against each other; nothing else should.
-    bool sectionEstimatorRefinements{false};
 
     /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
     /// encoding selection. False by default; do not enable for production
@@ -843,6 +836,51 @@ void readWithVisitorFast(
         innerRows.size(),
         outerRows.data());
     encoding.skip(tailSkip);
+  }
+}
+
+// Post-decode fast path: filters decoded values and routes them to the output.
+//
+// Non-hook paths (ExtractToReader / DropValues):
+//   - Redirects 'values' to the reader's rawValues buffer.
+//   - With filter: SIMD-tests values, compacts passing values and rows.
+//   - Without filter: all rows pass.
+//   - Advances numValues via addNumValues.
+//
+// Hook paths (ExtractToHook / ExtractToGenericHook):
+//   - 'values' stays as the caller's staging buffer (not rawValues).
+//   - Forwards decoded values to hook.addValues().
+//   - Does NOT call addNumValues (hook manages its own output).
+template <bool kScatter, typename T, typename V>
+void applyFixedWidthRun(
+    V& visitor,
+    const vector_size_t* selectedRows,
+    vector_size_t numSelected,
+    const vector_size_t* scatterRows,
+    T* values,
+    vector_size_t numRows) {
+  if constexpr (!V::kHasHook) {
+    values = reinterpret_cast<T*>(visitor.reader().rawValues());
+  }
+  auto numValues = visitor.reader().numValues();
+  int32_t* filterHits = nullptr;
+  if constexpr (V::kHasFilter) {
+    filterHits = visitor.outputRows(numSelected) - numValues;
+  }
+  velox::dwio::common::
+      processFixedWidthRun<T, V::kFilterOnly, kScatter, V::dense>(
+          velox::RowSet(selectedRows, numSelected),
+          0,
+          numSelected,
+          scatterRows,
+          values,
+          filterHits,
+          numValues,
+          visitor.filter(),
+          visitor.hook());
+  if constexpr (!V::kHasHook) {
+    visitor.addNumValues(
+        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
   }
 }
 

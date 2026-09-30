@@ -17,7 +17,9 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/FilterProject.h"
@@ -343,4 +345,35 @@ TEST_F(AdapterOperatorTest, keptOperatorGetsAppendedOperators) {
   EXPECT_EQ(projStats.operatorStats.count("FilterProject"), 1);
   EXPECT_EQ(projStats.operatorStats.count("CudfFromVelox"), 1);
   EXPECT_EQ(projStats.operatorStats.count("CudfToVelox"), 1);
+}
+
+TEST_F(AdapterOperatorTest, fromVeloxRejectsDeviceInput) {
+  // Values is classified as a CPU operator, so compile() places CudfFromVelox
+  // after it. A device-resident batch arriving there means the upstream
+  // operator was misclassified.
+  auto uploadToDevice = [this](const RowVectorPtr& input) -> RowVectorPtr {
+    auto stream = cudf::get_default_stream();
+    auto table = cudf_velox::with_arrow::toCudfTable(
+        input, pool(), stream, cudf::get_current_device_resource_ref());
+    const auto numRows = table->num_rows();
+    return std::make_shared<cudf_velox::CudfVector>(
+        pool(), asRowType(input->type()), numRows, std::move(table), stream);
+  };
+  auto deviceBatch = uploadToDevice(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+  auto plan =
+      PlanBuilder().values({deviceBatch}).project({"c0 + 1 as x"}).planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "CudfFromVelox received a device-resident CudfVector");
+
+  // The check applies to every input, not only the first one.
+  auto hostBatch = makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})});
+  plan = PlanBuilder()
+             .values({hostBatch, deviceBatch})
+             .project({"c0 + 1 as x"})
+             .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "CudfFromVelox received a device-resident CudfVector");
 }

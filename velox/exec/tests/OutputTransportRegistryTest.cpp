@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
+#include <type_traits>
 
+#include <folly/ScopeGuard.h>
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -34,6 +39,10 @@ namespace {
 using ::testing::Key;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
+
+// Keep entries immutable because tasks may share them.
+static_assert(!std::is_copy_assignable_v<OutputTransportEntry>);
+static_assert(!std::is_move_assignable_v<OutputTransportEntry>);
 
 class MockOutputBufferManager : public OutputBufferManager {
  public:
@@ -89,14 +98,43 @@ class MockOutputBufferManager : public OutputBufferManager {
   }
 };
 
+class BlockingDestructionOutputBufferManager : public MockOutputBufferManager {
+ public:
+  BlockingDestructionOutputBufferManager(
+      folly::Baton<>& destructionStarted,
+      folly::Baton<>& continueDestruction)
+      : destructionStarted_{destructionStarted},
+        continueDestruction_{continueDestruction} {}
+
+  BlockingDestructionOutputBufferManager(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager(
+      BlockingDestructionOutputBufferManager&&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      BlockingDestructionOutputBufferManager&&) = delete;
+
+  ~BlockingDestructionOutputBufferManager() override {
+    destructionStarted_.post();
+    continueDestruction_.wait();
+  }
+
+ private:
+  folly::Baton<>& destructionStarted_;
+  folly::Baton<>& continueDestruction_;
+};
+
 std::shared_ptr<OutputTransportEntry> makeEntry(
-    std::shared_ptr<OutputBufferManager> manager) {
-  return std::make_shared<OutputTransportEntry>(
+    std::shared_ptr<MockOutputBufferManager> manager) {
+  return OutputTransportEntry::make<MockOutputBufferManager>(
       std::move(manager),
       [](int32_t,
          DriverCtx*,
          const std::shared_ptr<const core::PartitionedOutputNode>&,
-         bool) -> std::unique_ptr<Operator> { return nullptr; });
+         bool,
+         const std::shared_ptr<MockOutputBufferManager>&)
+          -> std::unique_ptr<Operator> { return nullptr; });
 }
 
 TEST(OutputTransportRegistryTest, registryOperations) {
@@ -115,7 +153,7 @@ TEST(OutputTransportRegistryTest, registryOperations) {
   }
   EXPECT_EQ(OutputTransportRegistry::tryGet("nonexistent"), nullptr);
 
-  // getAll() also lists the always-available built-in in-memory default.
+  // Account for the built-in in-memory transport.
   auto all = OutputTransportRegistry::getAll();
   EXPECT_THAT(all, SizeIs(numManagers + 1));
 
@@ -126,14 +164,40 @@ TEST(OutputTransportRegistryTest, registryOperations) {
 }
 
 TEST(OutputTransportRegistryTest, defaultTransportResolves) {
-  // The built-in in-memory transport is seeded into the registry and resolves
-  // to the default manager singleton.
+  // The built-in entry resolves to the default manager singleton.
   auto instance = DefaultOutputBufferManager::getInstanceRef();
 
   auto defaultEntry = OutputTransportRegistry::tryGet(
       std::string(core::TransportKind::kInMemory));
   ASSERT_NE(defaultEntry, nullptr);
   EXPECT_EQ(defaultEntry->manager, instance);
+}
+
+TEST(OutputTransportRegistryTest, defaultTransportSurvivesReset) {
+  OutputTransportRegistry::unregisterAll();
+
+  folly::Baton<> destructionStarted;
+  folly::Baton<> continueDestruction;
+  auto manager = std::make_shared<BlockingDestructionOutputBufferManager>(
+      destructionStarted, continueDestruction);
+  OutputTransportRegistry::global().insert("blocking", makeEntry(manager));
+  manager.reset();
+
+  std::thread reset([] { OutputTransportRegistry::unregisterAll(); });
+  bool destructionReleased{false};
+  SCOPE_EXIT {
+    if (!destructionReleased) {
+      continueDestruction.post();
+    }
+    reset.join();
+  };
+  ASSERT_TRUE(destructionStarted.try_wait_for(std::chrono::seconds(5)));
+  auto defaultEntry = OutputTransportRegistry::tryGet(
+      std::string(core::TransportKind::kInMemory));
+  destructionReleased = true;
+  continueDestruction.post();
+
+  EXPECT_NE(defaultEntry, nullptr);
 }
 
 class OutputTransportRegistryFixture : public testing::Test {
@@ -217,7 +281,6 @@ TEST_F(OutputTransportRegistryFixture, queryScopedGetAll) {
       "shared", makeEntry(std::make_shared<MockOutputBufferManager>()));
   auto queryCtx = queryCtxWithRegistry(queryRegistry);
 
-  // getAll() also lists the always-available built-in in-memory default.
   const std::string inMemory{core::TransportKind::kInMemory};
   EXPECT_THAT(
       OutputTransportRegistry::getAll(*queryCtx),
@@ -229,9 +292,7 @@ TEST_F(OutputTransportRegistryFixture, queryScopedGetAll) {
 }
 
 TEST_F(OutputTransportRegistryFixture, isolatedQueryHasNoDefault) {
-  // Isolation mode (create(nullptr)) has no parent fallback, so not even the
-  // built-in default is visible; an isolated query must register every
-  // transport it uses.
+  // An isolated registry does not inherit the built-in transport.
   auto queryCtx =
       queryCtxWithRegistry(OutputTransportRegistry::create(nullptr));
 

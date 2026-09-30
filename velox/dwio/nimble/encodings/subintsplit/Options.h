@@ -42,6 +42,18 @@ enum class SubIntSplitAdmission : uint8_t {
 /// (filled in by sectionEncodingOptions from its TuningConfig). SubIntSplit's
 /// own planner and decoder settings live in TuningConfig.
 struct Options {
+  /// When true, size estimates are tight enough to compare with another
+  /// encoding's bytes rather than only to rank candidates. FixedBitWidth
+  /// counts the slop bytes FixedBitArray reserves and its row count at the
+  /// width the prefix stores it, MainlyConstant prices its other values
+  /// over their own range and against Trivial, RLE prices
+  /// its run values against Trivial and Dictionary and its run lengths with
+  /// the encodings nested selection would pick, and selection withholds
+  /// Trivial's read-factor discount where Trivial is larger than
+  /// FixedBitWidth. SubIntSplit sets this for its sections, whose sizes it
+  /// compares against each other; nothing else should.
+  bool sectionEstimatorRefinements{false};
+
   /// Whether these options are the ones a SubIntSplit section is being
   /// encoded with, rather than a column's own options. Marks the whole
   /// subtree below a section, so a nested stream is priced on decode too.

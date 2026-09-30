@@ -377,6 +377,45 @@ void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populateAdjacentPairStats() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  AdjacentPairStats stats;
+  // Compared in the unsigned physical domain, which is the domain the
+  // encodings that read this store their deltas in; a signed comparison here
+  // would report steps no delta stream can hold.
+  using unsignedType = typename std::make_unsigned<T>::type;
+  // Written to avoid a conditional on each step's direction: a falling step
+  // is masked to zero rather than branched around.
+  constexpr size_t kBlock{4'096};
+  const size_t size = data_.size();
+  for (size_t start = 1; start < size; start += kBlock) {
+    const size_t end = std::min(size, start + kBlock);
+    uint64_t blockSum{0};
+    uint32_t blockNonDecreasing{0};
+    unsignedType blockMaxIncrease{0};
+    for (size_t i = start; i < end; ++i) {
+      const auto previous = static_cast<unsignedType>(data_[i - 1]);
+      const auto value = static_cast<unsignedType>(data_[i]);
+      const auto larger = std::max(value, previous);
+      const auto delta =
+          static_cast<unsignedType>(larger - std::min(value, previous));
+      const auto rising = static_cast<unsignedType>(larger == value);
+      blockSum += delta;
+      blockNonDecreasing += rising;
+      blockMaxIncrease = std::max(
+          blockMaxIncrease,
+          static_cast<unsignedType>(
+              delta & static_cast<unsignedType>(unsignedType{0} - rising)));
+    }
+    stats.sumAbsoluteDelta += blockSum;
+    stats.nonDecreasingCount += blockNonDecreasing;
+    stats.maxIncrease = std::max<uint64_t>(stats.maxIncrease, blockMaxIncrease);
+  }
+  adjacentPairStats_ = stats;
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateUniques() const {
   MapType<T, InputType> uniqueCounts;
   if constexpr (nimble::isBoolType<T>()) {
@@ -677,6 +716,15 @@ template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
     const noexcept;
 template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
     const noexcept;
+
+template void Statistics<int8_t>::populateAdjacentPairStats() const;
+template void Statistics<uint8_t>::populateAdjacentPairStats() const;
+template void Statistics<int16_t>::populateAdjacentPairStats() const;
+template void Statistics<uint16_t>::populateAdjacentPairStats() const;
+template void Statistics<int32_t>::populateAdjacentPairStats() const;
+template void Statistics<uint32_t>::populateAdjacentPairStats() const;
+template void Statistics<int64_t>::populateAdjacentPairStats() const;
+template void Statistics<uint64_t>::populateAdjacentPairStats() const;
 
 // populateMinMaxBlocks is used through the estimation path where T is always
 // the unsigned physicalType.

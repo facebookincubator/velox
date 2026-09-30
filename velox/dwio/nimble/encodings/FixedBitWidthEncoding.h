@@ -116,10 +116,18 @@ class FixedBitWidthEncoding final
       uint64_t minValue,
       uint64_t maxValue,
       const Encoding::Options& options) {
-    const uint64_t outerEncodingSize =
-        EncodingPrefix::kFixedPrefixSize + kPrefixSize;
+    // Refined, the row count is priced at the width the prefix stores it.
+    const uint64_t outerEncodingSize = kPrefixSize +
+        (options.subIntSplit.sectionEstimatorRefinements
+             ? EncodingPrefix::serializedSize(
+                   static_cast<uint32_t>(rowCount), options.useVarintRowCount)
+             : EncodingPrefix::kFixedPrefixSize);
     const uint64_t payloadSize = bitPackedBytes(
-        minValue, maxValue, rowCount, options.fixedBitWidthUseExactBits);
+        minValue,
+        maxValue,
+        rowCount,
+        options.fixedBitWidthUseExactBits,
+        options.subIntSplit.sectionEstimatorRefinements);
     return outerEncodingSize + payloadSize;
   }
 
@@ -128,16 +136,28 @@ class FixedBitWidthEncoding final
  private:
   static constexpr int kPrefixSize = 2 + sizeof(T);
 
+  // Bytes the packed payload occupies in the stream. With `includeSlop`, this
+  // is what FixedBitArray::bufferSize reserves and what encode() writes,
+  // including the slop bytes bufferSize adds so decoding can read whole
+  // machine words past the last value. Omitting that slop understates the
+  // size on small streams, where the estimate is too small to separate
+  // candidates and a wrong estimate can pick among encodings with very
+  // different decode costs.
   static uint64_t bitPackedBytes(
       uint64_t minValue,
       uint64_t maxValue,
       uint64_t count,
-      bool useExactBitWidth) {
+      bool useExactBitWidth,
+      bool includeSlop) {
+    // Keep in step with FixedBitArray::bufferSize, which is where encode() gets
+    // the number it actually reserves.
+    constexpr uint64_t kFixedBitArraySlopBytes = 7;
     auto bitWidth = velox::bits::bitsRequired(maxValue - minValue);
     if (!useExactBitWidth) {
       bitWidth = velox::bits::roundUp(bitWidth, 8);
     }
-    return velox::bits::nbytes(bitWidth * count);
+    return velox::bits::nbytes(bitWidth * count) +
+        (includeSlop ? kFixedBitArraySlopBytes : 0);
   }
 
   int bitWidth_;
@@ -319,37 +339,8 @@ void FixedBitWidthEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation,
-  // and hook forwarding. For non-hook paths, values points to the reader's
-  // output buffer (rawValues). For hooks, values stays as the local decode
-  // buffer since hook.addValue() consumes values without writing to the reader.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 

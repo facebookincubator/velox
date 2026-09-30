@@ -51,6 +51,35 @@ namespace facebook::velox::exec::rpc {
 
 using namespace facebook::velox::exec::test;
 
+namespace {
+
+memory::MemoryPool::Stats rpcOperatorMemoryStats(
+    const std::shared_ptr<Task>& task,
+    const core::PlanNodeId& rpcNodeId) {
+  memory::MemoryPool* nodePool{nullptr};
+  task->pool()->visitChildren([&](memory::MemoryPool* childPool) {
+    if (childPool->name() == fmt::format("node.{}", rpcNodeId)) {
+      VELOX_CHECK_NULL(nodePool, "Expected one RPC plan-node memory pool");
+      nodePool = childPool;
+    }
+    return true;
+  });
+  VELOX_CHECK_NOT_NULL(nodePool, "RPC plan-node memory pool was not found");
+
+  memory::MemoryPool* rpcPool{nullptr};
+  nodePool->visitChildren([&](memory::MemoryPool* childPool) {
+    if (childPool->isLeaf() && childPool->name().ends_with(".RPC")) {
+      VELOX_CHECK_NULL(rpcPool, "Expected one RPC operator memory pool");
+      rpcPool = childPool;
+    }
+    return true;
+  });
+  VELOX_CHECK_NOT_NULL(rpcPool, "RPC operator memory pool was not found");
+  return rpcPool->stats();
+}
+
+} // namespace
+
 class FanOutBatchRPCFunction : public DemoBatchRPCFunction {
  public:
   static std::vector<int32_t>& flushSizes() {
@@ -902,7 +931,9 @@ TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
       PlanBuilder().values(inputs).planNode(),
       {"prompt"},
       "deferred_admission_rpc");
-  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
 
   ASSERT_EQ(result->size(), 3);
   auto* prompts = result->childAt(0)->asFlatVector<StringView>();
@@ -931,6 +962,34 @@ TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
           .peakPending,
       1);
   EXPECT_EQ(DeferredAdmissionRPCFunction::numCongestionEvaluations(), 1);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
+  DeferredAdmissionRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeNullableFlatVector<StringView>(
+          {std::nullopt, StringView("local error")})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 2);
+  const auto& responses = result->childAt(1);
+  EXPECT_EQ(BaseVector::countNulls(responses->nulls(), responses->size()), 2);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
 }
 
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
@@ -947,7 +1006,9 @@ TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
       PlanBuilder().values(inputs).planNode(),
       {"prompt"},
       "deferred_admission_batch_rpc");
-  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
 
   ASSERT_EQ(result->size(), 3);
   auto* prompts = result->childAt(0)->asFlatVector<StringView>();
@@ -977,6 +1038,33 @@ TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
           .peakPending,
       1);
   EXPECT_EQ(DeferredAdmissionBatchRPCFunction::numCongestionEvaluations(), 1);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyBatchPayloadMemoryIsAccounted) {
+  DeferredAdmissionBatchRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeNullableFlatVector<StringView>({std::nullopt, std::nullopt})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_batch_rpc");
+
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 2);
+  const auto& responses = result->childAt(1);
+  EXPECT_EQ(BaseVector::countNulls(responses->nulls(), responses->size()), 2);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
 }
 
 // Dispatch must respect the backend's admission cap, not only the per-driver
