@@ -217,3 +217,31 @@ if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
     --sis_reorder_fuzzer_max_rows=256
   )
 endif()
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_planner_fuzzer_tests SubIntSplitPlannerFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_planner_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_planner_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_planner_fuzzer_tests
+    nimble_subintsplit_planner_fuzzer_tests
+    --sis_planner_fuzzer_iterations=1
+    --sis_planner_fuzzer_max_rows=256
+  )
+endif()

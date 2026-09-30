@@ -21,7 +21,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <functional>
+#include <latch>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -30,6 +32,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "folly/Executor.h"
 #include "folly/container/F14Set.h"
 
 #include "velox/common/base/BitUtil.h"
@@ -39,6 +42,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -47,14 +51,17 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/DecodeCost.h"
 #include "velox/dwio/nimble/encodings/subintsplit/DeltaTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
+#include "velox/dwio/nimble/encodings/subintsplit/PlanRefiner.h"
 #include "velox/dwio/nimble/encodings/subintsplit/RowFrame.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TopLevelPolicy.h"
 #include "velox/dwio/nimble/encodings/subintsplit/TuningConfig.h"
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -74,26 +81,30 @@
 // sections under e.g. Dictionary or Trivial encoding.
 //
 // The pieces live in encodings/subintsplit/: SplitSelector plans the bit
-// ranges over a cost grid priced by CostModel, RowFrame subtracts a
-// predictor from the values, SectionTransform reorders sections, and Format.h
-// documents the binary layout.
+// ranges over a cost grid priced by CostModel, PlanRefiner re-prices a
+// shortlist, RowFrame subtracts a predictor from the values, SectionTransform
+// reorders sections, and Format.h documents the binary layout.
 
 namespace facebook::nimble::subintsplit {
 
 /// Options one SubIntSplit section is encoded under, derived from the
 /// enclosing column's options.
 ///
-/// A section overrides two of the column's options, changing encoded size,
+/// A section overrides several of the column's options, changing encoded size,
 /// so anything pricing a section's cost must derive options from here
 /// rather than restate them.
 inline Encoding::Options sectionEncodingOptions(
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    const TuningConfig& tuning = kDefaultTuningConfig) {
   Encoding::Options sectionOptions = options;
   // Pack each section at its exact bit width instead of rounding up to a
   // byte; sections dominate encoded size for multi-field values, so byte
   // rounding there is costly. FixedBitWidth records its own bit width, so
   // decode is unaffected.
   sectionOptions.fixedBitWidthUseExactBits = true;
+  // Sections are priced against each other, so their estimates must track
+  // the bytes an encoding really writes rather than only rank candidates.
+  sectionOptions.sectionEstimatorRefinements = true;
   // NoIndex would output values in tier-reordered order, desyncing this
   // section from siblings at decode time, so a section always carries an
   // index.
@@ -107,7 +118,37 @@ inline Encoding::Options sectionEncodingOptions(
   // point-read-heavy workload would want the other choice.
   sectionOptions.frequencyPartitionIndex =
       2u; // FreqPartIndexType::TierTagArray
+  // Marks these as a section's options so subIntSplit.decodeWeight applies to
+  // the section's own encoding candidates, not just the planner.
+  sectionOptions.subIntSplit.sectionSelection = true;
+  sectionOptions.subIntSplit.decodeWeight =
+      tuning.selector.decodeWeighting.weight;
+  sectionOptions.subIntSplit.decodeAccessPattern =
+      tuning.selector.decodeWeighting.accessPattern;
+  sectionOptions.subIntSplit.decodeReadPath =
+      tuning.selector.decodeWeighting.readPath;
+  sectionOptions.subIntSplit.maxSizeRegression = tuning.maxSizeRegression;
   return sectionOptions;
+}
+
+/// How far above a plan's bytes selection's estimate of a whole-value
+/// encoding may be and still be worth encoding to check, since that
+/// estimate can overshoot what the encoding actually writes.
+///
+/// RLE and Dictionary/FrequencyPartition estimates overshoot their actual
+/// encoded size by different margins, and bit-packing estimates are exact,
+/// so each gets its own slack rather than one shared value.
+inline double wholeValueEstimateSlack(EncodingType encodingType) {
+  switch (encodingType) {
+    case EncodingType::RLE:
+      return 2.5;
+    case EncodingType::Dictionary:
+    case EncodingType::FrequencyPartition:
+    case EncodingType::MainlyConstant:
+      return 1.25;
+    default:
+      return 1.0;
+  }
 }
 
 } // namespace facebook::nimble::subintsplit
@@ -169,6 +210,35 @@ class SubIntSplitEncoding
       const subintsplit::TuningConfig& tuning =
           subintsplit::kDefaultTuningConfig);
 
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Estimates what a split would store `values` in by running the same
+  /// split DP the encoder uses, over a smaller sample and priced on size
+  /// alone. The answer is floored at FixedBitWidth's exact estimate, which
+  /// the encoder guarantees a split never exceeds. nullopt when the streams
+  /// will be handed to a substream compressor and
+  /// subintsplit::Options::estimateCompressionGuard is set.
+  static std::optional<uint64_t> estimateSize(
+      uint64_t rowCount,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options);
+
+  /// Bounds estimateSize() from below without planning a split, for a caller
+  /// that only needs to know whether one can win. Returns FixedBitWidth's
+  /// exact estimate when the bit-flip gradient gate finds no heterogeneity
+  /// in `values` to split on; nullopt otherwise, and always nullopt unless
+  /// subintsplit::Options::estimateBitFlipScreen is set.
+  ///
+  /// The bound is the gate's prediction, not a proof: it holds only where
+  /// the gate is right that a rejected stream has nothing to exploit, so it
+  /// can cost a false-reject column its SubIntSplit in exchange for
+  /// skipping the split DP elsewhere.
+  static std::optional<uint64_t> estimateSizeLowerBound(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options);
+#endif
+
   std::string debugString(int offset) const final;
 
  private:
@@ -197,6 +267,17 @@ class SubIntSplitEncoding
   // Whether nested selection can estimate `type`, and so could ever choose
   // it for a section.
   static bool sectionSelectionEstimates(EncodingType type);
+
+  // The sample estimateSize plans over. Smaller than the encoder's, because
+  // the estimate only has to rank a split against the other candidates, not
+  // choose the boundaries the encoder will use, and the DP is linear in the
+  // sample: see estimateSize for what the difference costs and buys.
+  static subintsplit::SamplerConfig estimatorSamplerConfig();
+
+  // Bytes a split's header costs beyond its sections: the outer prefix and
+  // compression type, plus a prefix and a relative offset per section.
+  static constexpr uint64_t kOuterOverheadBytes{6u + 2u};
+  static constexpr uint64_t kPerSectionOverheadBytes{6u + 8u};
 
   // A column's planner sample and the split grid costed over it. Costing the
   // grid is most of what planning costs, so the row frame decision, which has
@@ -228,6 +309,9 @@ class SubIntSplitEncoding
   // add it back. `planning`, when not null, is the sample and grid already
   // costed for exactly these values. `extraFlags` goes into the header's flag
   // byte, for instance to record that `values` are zigzag deltas.
+  // `stepFrame`, when not null, is a step frame fitted to the same column, and
+  // `stepResiduals` the column with it subtracted: the whole-value floor may
+  // store those residuals as its one section instead.
   static std::string_view encodeResiduals(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
@@ -236,8 +320,88 @@ class SubIntSplitEncoding
       const subintsplit::TuningConfig& tuning,
       const subintsplit::RowFrame& rowFrame = {},
       PlanningSample* planning = nullptr,
-      uint8_t extraFlags = 0);
+      uint8_t extraFlags = 0,
+      const subintsplit::RowFrame* stepFrame = nullptr,
+      std::span<const physicalType> stepResiduals = {});
 
+  // What section selection's pick is quoted for storing `values` as one
+  // whole-value section, priced on contiguous blocks of them
+  // and scaled to all of them: the encoding, its quote, and the quote divided
+  // by how far that encoding's estimate has been measured above what it
+  // writes. Nothing when no such encoding can be priced.
+  struct SampledWholeValue {
+    EncodingType encoding;
+    double estimatedBytes;
+    double lowerBoundBytes;
+  };
+  static std::optional<SampledWholeValue> sampleWholeValue(
+      EncodingSelectionPolicy<physicalType>& sectionPolicy,
+      std::span<const physicalType> values,
+      const Encoding::Options& sectionOptions);
+
+  // The whole-value sections a plan is held against: FixedBitWidth's exact
+  // estimate, and, unless the plan is already one section, section
+  // selection's sampled pick for the whole value.
+  //
+  // A class rather than one call so the fallback can be priced before the
+  // plan is encoded, letting a losing plan's encode be abandoned partway
+  // instead of finished and thrown away; each candidate is still encoded at
+  // most once however many times it is asked for.
+  class WholeValueFloor {
+   public:
+    WholeValueFloor(
+        EncodingSelection<physicalType>& selection,
+        std::span<const physicalType> values,
+        Buffer& sectionBuffer,
+        const Encoding::Options& sectionOptions,
+        bool planIsWholeValue,
+        bool valuesAreColumn);
+
+    // Whether a policy narrowed to a single encoding could be had at all,
+    // without which there is no fallback to offer.
+    bool usable() const {
+      return sectionPolicy_ != nullptr;
+    }
+
+    // The sample's quote, or nothing when no candidate could be priced.
+    const std::optional<SampledWholeValue>& quote();
+
+    // The smallest whole-value section that stores `values` in fewer than
+    // `bytesToBeat` bytes, or nothing. Encodes a candidate the first time the
+    // bound admits it and reuses it afterwards. `replayingEncoding` is the
+    // Delta or Varint a plan's only varying section is stored in, which the
+    // whole value may then be stored in too.
+    std::optional<std::string_view> under(
+        uint64_t bytesToBeat,
+        std::optional<EncodingType> replayingEncoding);
+
+    // Bytes a plan has to come in under for `under` to be answering the same
+    // question at every bound above it: past this, every candidate is admitted
+    // and the answer is the smallest of them. Only meaningful once `under` has
+    // been called with no bound.
+    uint64_t decidedAbove() const {
+      return decidedAbove_;
+    }
+
+   private:
+    std::string_view encodeAs(EncodingType encodingType);
+
+    EncodingSelection<physicalType>& selection_;
+    std::span<const physicalType> values_;
+    Buffer& sectionBuffer_;
+    const Encoding::Options& sectionOptions_;
+    const bool planIsWholeValue_;
+    const bool valuesAreColumn_;
+    std::unique_ptr<EncodingSelectionPolicy<physicalType>> sectionPolicy_;
+
+    bool quoted_{false};
+    std::optional<SampledWholeValue> quote_;
+    std::optional<std::string_view> sampledEncoded_;
+    std::optional<uint64_t> fixedBitWidthEstimate_;
+    std::optional<std::string_view> fixedBitWidthEncoded_;
+    std::optional<std::string_view> replayingEncoded_;
+    uint64_t decidedAbove_{0};
+  };
   // Predictor the encoder subtracted before planning, inactive when it did
   // not. Every value leaving this class has it added back.
   subintsplit::RowFrame rowFrame_;
@@ -411,9 +575,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
         parsed[s].stream.size() >= EncodingPrefix::kRowCountOffset,
         "SubIntSplit section encoding prefix is truncated.");
     const auto expectedDataType = subintsplit::dispatchStorageType(
-        sec.storageBytes, []<typename StorageType>() {
-          return TypeTraits<StorageType>::dataType;
-        });
+        sec.storageBytes,
+        []<typename StorageType>() { return TypeTraits<StorageType>::dataType; });
     NIMBLE_CHECK_FILE(
         EncodingPrefix::dataType(parsed[s].stream) == expectedDataType,
         "SubIntSplit section data type does not match its bit width.");
@@ -1295,19 +1458,62 @@ std::string_view SubIntSplitEncoding<T>::encodeValues(
   }
 
   // A step frame produces runs of whole values, which the planner's run
-  // models can misprice, so both streams are encoded, into a scratch buffer
-  // so the loser takes no space in the stream, and the smaller is kept.
+  // models can misprice, so the two streams are first compared on the
+  // whole-value quotes the floor uses, from a sample. Where one is decisively
+  // cheaper only it is planned and encoded, and the residuals are still
+  // offered to the floor as one whole-value section when the values are
+  // planned. Encoding both in full on every such column is several times the
+  // base encode time.
   if (stepFrame) {
-    Buffer scratch{buffer.getMemoryPool()};
-    const auto framed = encodeResiduals(
-        selection, residuals, scratch, options, tuning, rowFrame);
-    const auto unframed =
-        encodeResiduals(selection, values, scratch, options, tuning);
-    const std::string_view smaller =
-        framed.size() < unframed.size() ? framed : unframed;
-    char* reserved = buffer.reserve(smaller.size());
-    std::memcpy(reserved, smaller.data(), smaller.size());
-    return {reserved, smaller.size()};
+    auto sectionPolicy = std::unique_ptr<EncodingSelectionPolicy<physicalType>>(
+        static_cast<EncodingSelectionPolicy<physicalType>*>(
+            selection
+                .template createNestedPolicy<physicalType>(
+                    selection.encodingType(), NestedEncodingIdentifier{0})
+                .release()));
+    const auto sectionOptions =
+        subintsplit::sectionEncodingOptions(options, tuning);
+    const auto framedQuote =
+        sampleWholeValue(*sectionPolicy, residuals, sectionOptions);
+    const auto valuesQuote =
+        sampleWholeValue(*sectionPolicy, values, sectionOptions);
+    // Where the quotes are within a factor of two of each other the sample
+    // cannot tell the streams apart, and both are encoded, into a scratch
+    // buffer so the loser takes no space in the stream. Deciding within that
+    // factor risks a measurable loss on run-heavy values.
+    constexpr double kDecisiveQuoteRatio{2.0};
+    const bool decisive = framedQuote.has_value() && valuesQuote.has_value() &&
+        std::max(framedQuote->lowerBoundBytes, valuesQuote->lowerBoundBytes) >=
+            kDecisiveQuoteRatio *
+                std::min(
+                    framedQuote->lowerBoundBytes, valuesQuote->lowerBoundBytes);
+    if (!decisive) {
+      Buffer scratch{buffer.getMemoryPool()};
+      const auto framed = encodeResiduals(
+          selection, residuals, scratch, options, tuning, rowFrame);
+      const auto unframed =
+          encodeResiduals(selection, values, scratch, options, tuning);
+      const std::string_view smaller =
+          framed.size() < unframed.size() ? framed : unframed;
+      char* reserved = buffer.reserve(smaller.size());
+      std::memcpy(reserved, smaller.data(), smaller.size());
+      return {reserved, smaller.size()};
+    }
+    if (framedQuote->lowerBoundBytes < valuesQuote->lowerBoundBytes) {
+      return encodeResiduals(
+          selection, residuals, buffer, options, tuning, rowFrame);
+    }
+    return encodeResiduals(
+        selection,
+        values,
+        buffer,
+        options,
+        tuning,
+        subintsplit::RowFrame{},
+        /*planning=*/nullptr,
+        /*extraFlags=*/0,
+        &rowFrame,
+        residuals);
   }
 
   // Fitting only says the column follows a line, not that sections encode
@@ -1408,6 +1614,134 @@ bool SubIntSplitEncoding<T>::sectionSelectionEstimates(EncodingType type) {
 }
 
 template <typename T>
+subintsplit::SamplerConfig SubIntSplitEncoding<T>::estimatorSamplerConfig() {
+  // A quarter of the encoder's sample, in blocks half as long. The DP is
+  // O(kBits^2 * sampleSize), so this is the term that decides what the
+  // estimate costs; halving the block keeps the same number of distinct
+  // stretches of the stream in a smaller sample, which is what the run-length
+  // and frame-residual models in the cost grid read.
+  //
+  // Halving it again does not pay: fitting the row frame and drawing the
+  // sample are passes over the whole column, so the DP is not all of the
+  // cost, while the estimate/actual ratio worsens enough to lose selections.
+  return subintsplit::SamplerConfig{.maxSamples = 512, .blockSize = 64};
+}
+
+template <typename T>
+std::optional<uint64_t> SubIntSplitEncoding<T>::estimateSize(
+    uint64_t rowCount,
+    std::span<const physicalType> values,
+    const Statistics<physicalType>& statistics,
+    const Encoding::Options& options) {
+  // Priced under the production tuning, which is what the encoder will run
+  // with when selection's call reaches it.
+  const auto& tuning = subintsplit::kDefaultTuningConfig;
+  constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
+  // Exact, and an upper bound on what a split writes: the encoder's
+  // WholeValueFloor stores the values as one FixedBitWidth section rather than
+  // let a plan come in above it. Every path below therefore falls back to it
+  // rather than to nullopt, so that a stream a plan cannot be costed for is
+  // still costed as the split that would be written for it.
+  const uint64_t fixedBitWidthEstimate =
+      FixedBitWidthEncoding<physicalType>::estimateSize(
+          rowCount, statistics, options);
+  if (values.empty()) {
+    return fixedBitWidthEstimate;
+  }
+
+  // A split is ranked here on uncompressed bytes, and where a substream
+  // compressor follows the encode those are not the bytes on disk. See
+  // subintsplit::Options::estimateCompressionGuard. Declined rather than
+  // priced at the floor: SubIntSplit's read factor can be below
+  // FixedBitWidth's, so a split priced at the floor would still win.
+  if (options.subIntSplit.substreamCompression &&
+      options.subIntSplit.estimateCompressionGuard) {
+    return std::nullopt;
+  }
+
+  std::vector<uint64_t> samples;
+  std::vector<size_t> sampleRows;
+  subintsplit::sampleIntoU64WithRows<physicalType>(
+      values, samples, &sampleRows, estimatorSamplerConfig());
+  if (samples.empty()) {
+    return fixedBitWidthEstimate;
+  }
+
+  // Priced on size alone. The planner's objective carries a per-boundary
+  // penalty and, when a caller asks for it, a decode term; neither is bytes on
+  // disk, and selection is comparing bytes here.
+  auto selectorConfig = plannerSelectorConfig(tuning, rowCount);
+  selectorConfig.decodeWeighting = subintsplit::DecodeCostWeighting{};
+  const auto planBytes =
+      [&](const std::vector<uint64_t>& planSamples) -> std::optional<uint64_t> {
+    const auto plan = subintsplit::selectSplitsRestricted(
+        planSamples, kBits, rowCount, tuning.allowedEncodings, selectorConfig);
+    if (!std::isfinite(plan.totalSizeBits) || plan.sections.empty()) {
+      return std::nullopt;
+    }
+    return static_cast<uint64_t>(std::ceil(plan.totalSizeBits / 8.0)) +
+        kOuterOverheadBytes + plan.sections.size() * kPerSectionOverheadBytes;
+  };
+
+  uint64_t estimated = fixedBitWidthEstimate;
+  if (const auto valueBytes = planBytes(samples)) {
+    estimated = std::min(estimated, *valueBytes);
+  }
+
+  // The encoder fits a row frame and plans over the residuals as well as
+  // the values, keeping whichever costs less. Estimating only the values
+  // can put a monotone column far above what the encoder actually writes
+  // for it, because block-stratified sampling breaks monotonicity and the
+  // models see the jumps between blocks rather than the line through them.
+  // The frame is fitted over the whole column, as the encoder fits it, and
+  // then subtracted from the sample alone, which is all the DP reads.
+  if (tuning.rowFrame) {
+    auto frame = subintsplit::fitRowFrame<physicalType>(values);
+    if (!frame.active()) {
+      frame = subintsplit::fitStepFrame<physicalType>(values);
+    }
+    if (frame.active()) {
+      constexpr uint64_t kWidthMask =
+          kBits >= 64 ? ~uint64_t{0} : (uint64_t{2} << (kBits - 1)) - 1;
+      std::vector<uint64_t> residualSamples(samples.size());
+      for (size_t i = 0; i < samples.size(); ++i) {
+        residualSamples[i] =
+            (samples[i] - (frame.slope * sampleRows[i] + frame.base)) &
+            kWidthMask;
+      }
+      if (const auto residualBytes = planBytes(residualSamples)) {
+        estimated = std::min(
+            estimated, *residualBytes + subintsplit::kRowFrameHeaderSize);
+      }
+    }
+  }
+  return estimated;
+}
+
+template <typename T>
+std::optional<uint64_t> SubIntSplitEncoding<T>::estimateSizeLowerBound(
+    std::span<const physicalType> values,
+    const Statistics<physicalType>& statistics,
+    const Encoding::Options& options) {
+  if (!options.subIntSplit.estimateBitFlipScreen || values.size() < 2) {
+    return std::nullopt;
+  }
+  // The gradient gate only, whatever admission mode the caller runs: the
+  // entropy guard's whole-stream varying-bit pass costs more than the bound
+  // saves on the columns it would change.
+  const auto profile = subintsplit::bitFlipAdmissionProfile(
+      values,
+      subintsplit::SubIntSplitAdmission::kBitFlip,
+      options.subIntSplit.admissionProfilePairs);
+  if (subintsplit::bitFlipGradientGate(
+          profile, subintsplit::TopLevelPolicyConfig{})) {
+    return std::nullopt;
+  }
+  return FixedBitWidthEncoding<physicalType>::estimateSize(
+      values.size(), statistics, options);
+}
+
+template <typename T>
 std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
@@ -1416,7 +1750,12 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     const subintsplit::TuningConfig& tuning,
     const subintsplit::RowFrame& rowFrame,
     PlanningSample* planning,
-    uint8_t extraFlags) {
+    uint8_t extraFlags,
+    const subintsplit::RowFrame* stepFrame,
+    std::span<const physicalType> stepResiduals) {
+  // The frame the stream records: `rowFrame`, unless the floor stores the step
+  // frame's residuals instead.
+  subintsplit::RowFrame writtenFrame = rowFrame;
   const bool useVarint = options.useVarintRowCount;
   const uint32_t valueCount = static_cast<uint32_t>(values.size());
 
@@ -1427,6 +1766,11 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
 
   std::vector<subintsplit::SectionPlan> segments;
+  // What the planner thinks its own plan stores the column in. Infinite for a
+  // replayed layout, which was not planned here and so was never priced. Read
+  // only to decide whether the whole-value fallback is worth pricing before
+  // the plan is encoded; nothing is chosen on it.
+  double planEstimatedBits{std::numeric_limits<double>::infinity()};
   const auto modeConfig =
       selection.getConfig(std::string(subintsplit::kSplitModeConfigKey));
   if (modeConfig.has_value() &&
@@ -1441,26 +1785,116 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     segments = std::move(parsed.value());
   } else {
     // Default behavior: recompute the split boundaries from the sampled data.
-    const auto selectorConfig = plannerSelectorConfig(tuning, valueCount);
-    subintsplit::SelectorResult selectorResult;
+    std::vector<uint64_t> sampleBuf;
     if (planning != nullptr) {
-      selectorResult = subintsplit::selectSplitsOverGrid(
-          planning->grid, kBits, selectorConfig);
+      sampleBuf = std::move(planning->sample);
     } else {
-      std::vector<uint64_t> sampleBuf;
       subintsplit::sampleIntoU64<physicalType>(
           values, sampleBuf, tuning.sampler);
-
-      // An empty allowed set costs every encoding, so this is the production
-      // path unless a caller has deliberately narrowed the inventory.
-      selectorResult = subintsplit::selectSplitsRestricted(
-          sampleBuf,
-          kBits,
-          valueCount,
-          tuning.allowedEncodings,
-          selectorConfig);
     }
-    segments = std::move(selectorResult.sections);
+
+    // An empty allowed set costs every encoding, so this is the production
+    // path unless a caller has deliberately narrowed the inventory.
+    const auto selectorConfig = plannerSelectorConfig(tuning, valueCount);
+    // The hybrid planner replaces the DP's argmin with a shortlist re-priced
+    // by section selection's own estimators and refined, bounded on size by
+    // the same cap. See subintsplit::TuningConfig::hybridPlanner. It costs
+    // the grid once and takes the DP's own plan as the first of its shortlist,
+    // so it replaces the call below rather than adding to it.
+    bool planned = false;
+    if constexpr (
+        std::is_same_v<physicalType, uint32_t> ||
+        std::is_same_v<physicalType, uint64_t>) {
+      if (tuning.hybridPlanner) {
+        // Bit-flip gradient boundaries nominate plans and bound where
+        // refinement splits a segment. They do not constrain the DP itself,
+        // since doing so measurably worsened plan quality.
+        const auto profile = subintsplit::computeBitFlipProfile<uint64_t>(
+            std::span<const uint64_t>(sampleBuf.data(), sampleBuf.size()));
+        std::vector<bool> cuts(kBits + 1, false);
+        cuts[0] = true;
+        cuts[kBits] = true;
+        for (const int boundary : subintsplit::bitFlipGradientBoundaries(
+                 profile, subintsplit::TopLevelPolicyConfig{})) {
+          if (boundary > 0 && boundary < kBits) {
+            cuts[boundary] = true;
+          }
+        }
+        const auto shortlist = planning != nullptr
+            ? subintsplit::shortlistSplitsOverGrid(
+                  planning->grid,
+                  kBits,
+                  selectorConfig,
+                  subintsplit::kHybridShortlist,
+                  cuts)
+            : subintsplit::shortlistSplitsRestricted(
+                  sampleBuf,
+                  kBits,
+                  valueCount,
+                  tuning.allowedEncodings,
+                  selectorConfig,
+                  subintsplit::kHybridShortlist,
+                  cuts);
+        auto refined =
+            subintsplit::SubIntSplitPlanRefiner::refine<physicalType>(
+                values,
+                kBits,
+                shortlist,
+                cuts,
+                selectorConfig,
+                subintsplit::sectionEncodingOptions(options, tuning));
+        if (!refined.sections.empty()) {
+          segments = std::move(refined.sections);
+          planEstimatedBits = refined.sizeBits;
+          planned = true;
+        }
+      }
+    }
+
+    if (!planned) {
+      auto selectorResult = planning != nullptr
+          ? subintsplit::selectSplitsOverGrid(
+                planning->grid, kBits, selectorConfig)
+          : subintsplit::selectSplitsRestricted(
+                sampleBuf,
+                kBits,
+                valueCount,
+                tuning.allowedEncodings,
+                selectorConfig);
+
+      // What the weighted plan gave up in bytes, bounded against what size
+      // alone would have stored the column in. The DP minimises size plus a
+      // decode term in the same units, so on a column with structure it will
+      // keep buying decode with bytes for as long as the weight makes that
+      // arithmetic work, and there is no point at which it stops on its own.
+      //
+      // Costed rather than estimated: the size-only plan is a second run of the
+      // same DP over the same sample, which is the only way to know what was
+      // given up, since the weighted plan's own totalSizeBits says what it
+      // stores and not what it could have stored. Paid only when the weight is
+      // on, and the sample is the same one already extracted.
+      if (selectorConfig.decodeWeighting.weight != 0.0) {
+        auto sizeOnlyConfig = selectorConfig;
+        sizeOnlyConfig.decodeWeighting = subintsplit::DecodeCostWeighting{};
+        auto sizeOnly = subintsplit::selectSplitsRestricted(
+            sampleBuf,
+            kBits,
+            valueCount,
+            tuning.allowedEncodings,
+            sizeOnlyConfig);
+        // Compared on estimated size alone, not on totalCost: bytes are what is
+        // being bounded, and totalCost is the objective that has just been
+        // shown not to bound them.
+        const double allowedSizeBits =
+            sizeOnly.totalSizeBits * (1.0 + tuning.maxSizeRegression);
+        if (selectorResult.totalSizeBits > allowedSizeBits) {
+          selectorResult = std::move(sizeOnly);
+        }
+      }
+
+      planEstimatedBits = selectorResult.totalSizeBits;
+      segments = std::move(selectorResult.sections);
+    }
   }
 
   NIMBLE_CHECK(
@@ -1482,7 +1916,17 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   // measuring section costs can ask for the same options instead of restating
   // them.
   const Encoding::Options sectionOptions =
-      subintsplit::sectionEncodingOptions(options);
+      subintsplit::sectionEncodingOptions(options, tuning);
+
+  // A replayed layout is an instruction, not a plan, so it is left alone.
+  const bool replayed =
+      modeConfig.has_value() && *modeConfig == subintsplit::kSplitModePreserve;
+  const uint64_t singleSectionHeader = subintsplit::specificHeaderSize(1);
+  // With the decode weight on, the plan may exceed the floor by as much as it
+  // may exceed the size-only plan, and no more.
+  const double allowedRegression = tuning.selector.decodeWeighting.weight != 0.0
+      ? 1.0 + tuning.maxSizeRegression
+      : 1.0;
 
   // Write context:
   //
@@ -1648,10 +2092,157 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   // make encode quadratic in the split count. With no transform to price,
   // nothing reads a section's 64-bit form after its plain encode, so it is
   // sliced straight into its storage width instead.
+
+  // A plan the whole value beats is encoded and then thrown away, which for
+  // some columns is the dominant cost of running SubIntSplit at all. So
+  // where the planner's own estimate is already above what a sample quotes
+  // one whole-value section at, the fallback is priced first and the plan's
+  // sections are then encoded against what the fallback really costs: the
+  // section that takes the plan past it ends the plan.
+  //
+  // This reorders the work and nothing else: the fallback still has to beat
+  // the plan on encoded bytes, WholeValueFloor::under applies the same tests
+  // whichever order candidates were priced in, and a plan is only abandoned
+  // once the bytes already written put the comparison beyond doubt. Only a
+  // multi-section plan with no transform to search and no step frame to
+  // offer qualifies, since the bytes a section has already cost bound the
+  // plan from below only while no transform can replace that section with a
+  // smaller one.
+  std::optional<WholeValueFloor> valuesFloor;
+  std::optional<std::string_view> earlyFloor;
+  if (!replayed && stepFrame == nullptr && splitCount > 1 &&
+      candidates.empty()) {
+    valuesFloor.emplace(
+        selection,
+        values,
+        sectionBuffer,
+        sectionOptions,
+        /*planIsWholeValue=*/false,
+        /*valuesAreColumn=*/!rowFrame.active());
+    // Reordering the plan's encode around the fallback is not free: sections
+    // stop being encoded concurrently, since a plan cannot be abandoned
+    // partway while every part is already in flight. So the quote must be
+    // far enough under the plan's estimate that the plan is expected to be
+    // abandoned after its first section or two; a quote merely below the
+    // estimate risks paying for the plan serially and still finishing it.
+    constexpr double kDecisiveQuoteRatio{2.0};
+    const double planEstimatedBytes = planEstimatedBits / 8.0;
+    if (valuesFloor->usable() && valuesFloor->quote().has_value() &&
+        kDecisiveQuoteRatio * valuesFloor->quote()->lowerBoundBytes <
+            planEstimatedBytes &&
+        planEstimatedBytes > static_cast<double>(singleSectionHeader)) {
+      earlyFloor = valuesFloor->under(
+          static_cast<uint64_t>(planEstimatedBytes / allowedRegression) -
+              singleSectionHeader,
+          /*replayingEncoding=*/std::nullopt);
+    }
+  }
+  // Plan bytes past which the fallback is certain to win, so that the plan can
+  // be abandoned at the first section that reaches them. Never reached when
+  // there is no fallback to abandon it for.
+  const uint64_t planAbandonBytes = earlyFloor.has_value()
+      ? static_cast<uint64_t>(std::ceil(
+            static_cast<double>(
+                valuesFloor->decidedAbove() + singleSectionHeader) *
+            allowedRegression))
+      : std::numeric_limits<uint64_t>::max();
   std::vector<std::vector<uint64_t>> sectionValues64(splitCount);
   std::vector<uint8_t> sectionStorage(splitCount);
   std::vector<std::string_view> plainEncoded(splitCount);
-  for (uint8_t s = 0; s < splitCount; ++s) {
+  // Each concurrent section writes into a buffer of its own, which outlives
+  // the loop because plainEncoded views into it, and draws no scratch from the
+  // encoding buffer pool, which is not thread-safe.
+  std::vector<std::unique_ptr<Buffer>> concurrentBuffers;
+  // Set once the sections encoded so far already cost more than the fallback,
+  // which is as much of the plan as there is any reason to encode.
+  bool planAbandoned = false;
+  // Whatever the sections encoded so far cost, plus the header every plan
+  // carries. A lower bound on the plan, since no section still to come can
+  // take bytes away from it, which is what makes abandoning on it sound.
+  uint64_t planBytesSoFar = subintsplit::specificHeaderSize(splitCount);
+  // The one section a plan with a priced fallback encodes before the rest.
+  // Abandoning needs a section's real bytes, and a plan whose every section is
+  // already in flight cannot be abandoned at all, so the widest one -- the
+  // likeliest to take the plan past the fallback on its own -- is encoded
+  // first and the rest still go to the executor. A plan that survives the
+  // probe pays for one section serially instead of for all of them.
+  constexpr uint8_t kNoProbeSection = 0xFF;
+  uint8_t probeSection = kNoProbeSection;
+  if (earlyFloor.has_value() && splitCount > 1) {
+    probeSection = 0;
+    for (uint8_t s = 1; s < splitCount; ++s) {
+      if (segments[s].bitEnd - segments[s].bitStart >
+          segments[probeSection].bitEnd - segments[probeSection].bitStart) {
+        probeSection = s;
+      }
+    }
+    const auto& seg = segments[probeSection];
+    const int width = seg.bitEnd - seg.bitStart + 1;
+    sectionStorage[probeSection] = sectionStorageBytes(width);
+    const uint64_t mask = subintsplit::widthMask(width);
+    plainEncoded[probeSection] = encodeSectionFrom(
+        probeSection,
+        sectionStorage[probeSection],
+        [&values, &seg, mask](uint32_t i) {
+          uint64_t value = 0;
+          __builtin_memcpy(&value, &values[i], sizeof(physicalType));
+          return (value >> seg.bitStart) & mask;
+        });
+    planBytesSoFar += plainEncoded[probeSection].size();
+    planAbandoned = planBytesSoFar >= planAbandonBytes;
+  }
+  // Transformed attempts read each section's 64-bit form, which only the
+  // serial loop below extracts.
+  if (!planAbandoned && candidates.empty() &&
+      tuning.sectionExecutor != nullptr && splitCount > 1) {
+    Encoding::Options concurrentOptions = sectionOptions;
+    concurrentOptions.encodingBufferPool = nullptr;
+    concurrentBuffers.resize(splitCount);
+    std::vector<std::exception_ptr> failures(splitCount);
+    std::latch remaining(
+        splitCount - (probeSection == kNoProbeSection ? 0 : 1));
+    for (uint8_t s = 0; s < splitCount; ++s) {
+      if (s == probeSection) {
+        continue;
+      }
+      const int width = segments[s].bitEnd - segments[s].bitStart + 1;
+      sectionStorage[s] = sectionStorageBytes(width);
+      concurrentBuffers[s] = std::make_unique<Buffer>(*sectionPool);
+      tuning.sectionExecutor->add([&, s, width]() {
+        try {
+          const auto& segment = segments[s];
+          const uint64_t mask = subintsplit::widthMask(width);
+          plainEncoded[s] = encodeSectionInto(
+              s,
+              sectionStorage[s],
+              [&values, &segment, mask](uint32_t i) {
+                uint64_t value = 0;
+                __builtin_memcpy(&value, &values[i], sizeof(physicalType));
+                return (value >> segment.bitStart) & mask;
+              },
+              *concurrentBuffers[s],
+              concurrentOptions);
+        } catch (...) {
+          failures[s] = std::current_exception();
+        }
+        remaining.count_down();
+      });
+    }
+    remaining.wait();
+    for (const auto& failure : failures) {
+      if (failure) {
+        std::rethrow_exception(failure);
+      }
+    }
+  }
+  for (uint8_t s = 0; s < splitCount && concurrentBuffers.empty(); ++s) {
+    if (s == probeSection) {
+      continue;
+    }
+    if (planAbandoned || planBytesSoFar >= planAbandonBytes) {
+      planAbandoned = true;
+      break;
+    }
     const auto& seg = segments[s];
     const int width = seg.bitEnd - seg.bitStart + 1;
     sectionStorage[s] = sectionStorageBytes(width);
@@ -1663,10 +2254,15 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
             __builtin_memcpy(&value, &values[i], sizeof(physicalType));
             return (value >> seg.bitStart) & mask;
           });
+      planBytesSoFar += plainEncoded[s].size();
       continue;
     }
     sectionValues64[s] = extractSection(seg);
     plainEncoded[s] = encodeSection(s, sectionStorage[s], sectionValues64[s]);
+    planBytesSoFar += plainEncoded[s].size();
+  }
+  if (planBytesSoFar >= planAbandonBytes) {
+    planAbandoned = true;
   }
 
   // One choice of key section, priced. kNoKeySection means the transform does
@@ -1675,6 +2271,11 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     std::vector<std::string_view> sections;
     subintsplit::TransformInfo info;
     size_t totalBytes{0};
+    // What the search minimises: the attempt's bytes plus the size-equivalent
+    // of the decode a row-permuting transform adds. Equal to totalBytes at the
+    // default decode weight of zero, so the plan chosen is the one size alone
+    // would choose unless a caller asks for decode to count.
+    size_t costBytes{0};
   };
   // Returns nothing when the plan being built has already grown past
   // `bound`: a plan only grows as sections are added, so it cannot come back
@@ -1693,12 +2294,26 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
     const std::vector<uint64_t>& keyValues =
         hasKey ? sectionValues64[candidateKey] : noKey;
     bool keyGroups = true;
+    // Distinct values in the candidate key, which is what the reader's merge
+    // rotates through and so what the transform costs per row to undo. Zero
+    // where there is no key, where the penalty is not charged at all.
+    size_t keyDistinct = 0;
     if (hasKey) {
       attempt.info.keySection = candidateKey;
       const auto& keySegment = segments[candidateKey];
       keyGroups = groupsEnoughToKey(
-          keyValues, keySegment.bitEnd - keySegment.bitStart + 1);
+          keyValues, keySegment.bitEnd - keySegment.bitStart + 1, &keyDistinct);
     }
+
+    // Priced per candidate key rather than once for the column, since two
+    // keys over the same sections can cost the reader very differently.
+    // Zero at the default weight, leaving the transform chosen on size.
+    const size_t keyDerivedDecodePenaltyBytes = static_cast<size_t>(
+        subintsplit::decodeCostBits(
+            subintsplit::keyDerivedTransformNanosPerRow(keyDistinct),
+            valueCount,
+            tuning.selector.decodeWeighting.weight) /
+        8.0);
 
     // The permutation a key-derived transform gathers by depends only on the
     // candidate key, so it is built once here instead of once per section.
@@ -1726,8 +2341,9 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
       }
       attempt.sections[s] = plainEncoded[s];
       attempt.totalBytes += plainEncoded[s].size();
+      attempt.costBytes += plainEncoded[s].size();
     }
-    if (!improvesOnBest(attempt.totalBytes, bound)) {
+    if (!improvesOnBest(attempt.costBytes, bound)) {
       return std::nullopt;
     }
 
@@ -1750,10 +2366,11 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
       const int width = seg.bitEnd - seg.bitStart + 1;
       const std::string_view plain = plainEncoded[s];
 
-      // Plain is the incumbent: a candidate must be strictly smaller, margin
+      // Plain is the incumbent: a candidate must be strictly cheaper, margin
       // included, to displace it, so the untransformed result is the default
       // whenever a transform does not pay.
       size_t bestBytes = plain.size();
+      size_t bestCost = plain.size();
       std::string_view bestEncoded = plain;
       const subintsplit::SectionTransform* bestTransform = nullptr;
       for (const auto* candidate : candidates) {
@@ -1772,8 +2389,13 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
         const std::string_view alternative =
             encodeSection(s, sectionStorage[s], transformed);
         const size_t total = alternative.size() + kTransformMarginBytes;
-        if (total < bestBytes || tuning.forceApply) {
+        // Only a transform that keys on another section moves rows, and only
+        // moving rows costs the reader the scatter back.
+        const size_t cost = total +
+            (candidate->needsKeySection() ? keyDerivedDecodePenaltyBytes : 0);
+        if (cost < bestCost || tuning.forceApply) {
           bestBytes = total;
+          bestCost = cost;
           bestEncoded = alternative;
           bestTransform = candidate;
         }
@@ -1781,11 +2403,12 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
 
       attempt.sections[s] = bestEncoded;
       attempt.totalBytes += bestBytes;
+      attempt.costBytes += bestCost;
       if (bestTransform != nullptr) {
         attempt.info.transformIds[s] =
             static_cast<uint8_t>(bestTransform->id());
       }
-      if (!improvesOnBest(attempt.totalBytes, bound)) {
+      if (!improvesOnBest(attempt.costBytes, bound)) {
         return std::nullopt;
       }
     }
@@ -1797,7 +2420,25 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   // blame the transform for what was really a bad guess.
   constexpr size_t kNoBound = std::numeric_limits<size_t>::max();
   std::optional<Attempt> best;
-  if (anyCandidateNeedsKey) {
+  // The smallest attempt on bytes alone, which is what the cost-minimal
+  // attempt is held against. Tracked only while the decode weight is on,
+  // since without it the two are the same attempt and the copy would be
+  // waste.
+  const bool boundTransformSize = tuning.selector.decodeWeighting.weight != 0.0;
+  std::optional<Attempt> smallestAttempt;
+  const auto offerToSmallest = [&](const std::optional<Attempt>& attempt) {
+    if (!boundTransformSize || !attempt.has_value()) {
+      return;
+    }
+    if (!smallestAttempt.has_value() ||
+        attempt->totalBytes < smallestAttempt->totalBytes) {
+      smallestAttempt = attempt;
+    }
+  };
+  if (planAbandoned) {
+    // Nothing to search: the plan these attempts would choose between has
+    // already lost to the fallback on bytes already written.
+  } else if (anyCandidateNeedsKey) {
     // The split is planned from the data, so a pinned key past its last
     // section names nothing and is inert: the key is searched as if unpinned.
     if (keySection < splitCount) {
@@ -1810,37 +2451,156 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
       if (!tuning.forceApply) {
         best =
             attemptWithKey(subintsplit::TransformInfo::kNoKeySection, kNoBound);
+        offerToSmallest(best);
       }
       for (uint8_t candidate = 0; candidate < splitCount; ++candidate) {
         // Bounded by the incumbent, so an attempt that comes back has
         // already beaten it: anything that would not have displaced the
-        // incumbent was abandoned rather than finished.
+        // incumbent was abandoned rather than finished. Bounding on cost,
+        // though, can prune an attempt that stores the column better but
+        // reads it worse, which is exactly the attempt the size cap may need
+        // as a fallback. So while the cap is live every candidate is priced
+        // to the end.
         auto attempt = attemptWithKey(
-            candidate, best.has_value() ? best->totalBytes : kNoBound);
-        if (attempt.has_value() &&
-            (!best.has_value() || attempt->totalBytes < best->totalBytes)) {
-          best = std::move(attempt);
+            candidate,
+            boundTransformSize
+                ? kNoBound
+                : (best.has_value() ? best->costBytes : kNoBound));
+        if (attempt.has_value()) {
+          offerToSmallest(attempt);
+          if (!best.has_value() || attempt->costBytes < best->costBytes) {
+            best = std::move(attempt);
+          }
         }
       }
     }
   } else {
     best = attemptWithKey(subintsplit::TransformInfo::kNoKeySection, kNoBound);
   }
-  NIMBLE_CHECK(best.has_value(), "SubIntSplit transform search found no plan.");
 
-  sectionData = std::move(best->sections);
-  subintsplit::TransformInfo transformInfo = std::move(best->info);
-  // A key section is only worth holding back if some other section was
-  // actually keyed on it.
-  if (!transformInfo.anyTransform()) {
-    transformInfo.keySection = subintsplit::TransformInfo::kNoKeySection;
+  // The transform is bounded on size for the same reason the split is: a
+  // decode penalty charged in bytes can always be made to outweigh bytes.
+  // Where the weighted search's pick stores the column worse than the
+  // smallest attempt by more than the caller allowed, the smallest attempt
+  // is what gets written.
+  if (smallestAttempt.has_value() && best.has_value()) {
+    const double allowedBytes =
+        static_cast<double>(smallestAttempt->totalBytes) *
+        (1.0 + tuning.maxSizeRegression);
+    if (static_cast<double>(best->totalBytes) > allowedBytes) {
+      best = std::move(smallestAttempt);
+    }
+  }
+
+  subintsplit::TransformInfo transformInfo;
+  if (!planAbandoned) {
+    NIMBLE_CHECK(
+        best.has_value(), "SubIntSplit transform search found no plan.");
+    sectionData = std::move(best->sections);
+    transformInfo = std::move(best->info);
+    // A key section is only worth holding back if some other section was
+    // actually keyed on it.
+    if (!transformInfo.anyTransform()) {
+      transformInfo.keySection = subintsplit::TransformInfo::kNoKeySection;
+    }
+  }
+
+  // The plan is chosen on estimates, and a whole-value encoding it priced
+  // wrongly can beat it outright, including storing the column worse than
+  // raw. Holding the plan to what one whole-value section actually encodes
+  // to makes that impossible. With the decode weight on, the plan may
+  // exceed the floor by as much as it may exceed the size-only plan, and no
+  // more.
+  {
+    std::optional<std::string_view> floor;
+    uint64_t bytesToBeat = 0;
+    if (planAbandoned) {
+      // The plan crossed what the fallback costs while being encoded, and
+      // decidedAbove is the point past which every candidate is admitted,
+      // so the answer is just the smallest candidate: `earlyFloor`.
+      floor = earlyFloor;
+    } else {
+      uint64_t planBytes = subintsplit::specificHeaderSize(splitCount) +
+          subintsplit::transformHeaderSize(transformInfo);
+      for (const auto& section : sectionData) {
+        planBytes += section.size();
+      }
+      bytesToBeat = static_cast<uint64_t>(
+          static_cast<double>(planBytes) / allowedRegression);
+      if (!replayed && bytesToBeat > singleSectionHeader) {
+        if (!valuesFloor.has_value()) {
+          valuesFloor.emplace(
+              selection,
+              values,
+              sectionBuffer,
+              sectionOptions,
+              /*planIsWholeValue=*/splitCount == 1 &&
+                  !transformInfo.anyTransform(),
+              /*valuesAreColumn=*/!rowFrame.active());
+        }
+        // A plan whose sections are constant but for one stored in Delta or
+        // Varint already replays every earlier row to reach one, so the whole
+        // value gives nothing up by being stored the same way, and saves the
+        // constant sections and their headers.
+        std::optional<EncodingType> replayingEncoding;
+        if (splitCount > 1 && !transformInfo.anyTransform()) {
+          size_t numVarying{0};
+          EncodingType varyingEncoding{EncodingType::Constant};
+          for (const auto& section : sectionData) {
+            const auto encodingType = EncodingPrefix::encodingType(section);
+            if (encodingType != EncodingType::Constant) {
+              ++numVarying;
+              varyingEncoding = encodingType;
+            }
+          }
+          if (numVarying == 1 &&
+              (varyingEncoding == EncodingType::Delta ||
+               varyingEncoding == EncodingType::Varint)) {
+            replayingEncoding = varyingEncoding;
+          }
+        }
+        floor = valuesFloor->under(
+            bytesToBeat - singleSectionHeader, replayingEncoding);
+      }
+    }
+    // The step frame's residuals pay for the frame block on top of the
+    // section, and have to beat whatever the values' floor already reached.
+    const uint64_t framedHeader =
+        singleSectionHeader + subintsplit::kRowFrameHeaderSize;
+    const uint64_t framedBytesToBeat =
+        floor.has_value() ? floor->size() + singleSectionHeader : bytesToBeat;
+    if (!replayed && stepFrame != nullptr && framedBytesToBeat > framedHeader) {
+      WholeValueFloor framedValuesFloor{
+          selection,
+          stepResiduals,
+          sectionBuffer,
+          sectionOptions,
+          /*planIsWholeValue=*/false,
+          /*valuesAreColumn=*/false};
+      const auto framedFloor = framedValuesFloor.under(
+          framedBytesToBeat - framedHeader,
+          /*replayingEncoding=*/std::nullopt);
+      if (framedFloor.has_value()) {
+        floor = framedFloor;
+        writtenFrame = *stepFrame;
+      }
+    }
+    if (floor.has_value()) {
+      segments.assign(1, {.bitStart = 0, .bitEnd = kBits - 1});
+      splitCount = 1;
+      sectionData.assign(1, *floor);
+      transformInfo = subintsplit::TransformInfo{};
+    }
+    NIMBLE_CHECK(
+        !sectionData.empty(),
+        "SubIntSplitEncoding: a plan was abandoned with no fallback to write.");
   }
 
   // Write final encoding to main buffer.
   const uint32_t prefixSize =
       Encoding::serializePrefixSize(valueCount, useVarint);
   const uint32_t specificHeader = subintsplit::specificHeaderSize(splitCount) +
-      subintsplit::rowFrameHeaderSize(rowFrame) +
+      subintsplit::rowFrameHeaderSize(writtenFrame) +
       subintsplit::transformHeaderSize(transformInfo);
   uint32_t sectionsSize = 0;
   for (const auto& sv : sectionData) {
@@ -1866,14 +2626,14 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
 
   encoding::write<uint8_t>(splitCount, pos);
   const uint8_t flags = extraFlags |
-      (rowFrame.active() ? subintsplit::kFlagRowFrame : uint8_t{0}) |
+      (writtenFrame.active() ? subintsplit::kFlagRowFrame : uint8_t{0}) |
       (transformed ? subintsplit::kFlagTransforms : uint8_t{0});
   encoding::write<uint8_t>(flags, pos);
 
-  if (rowFrame.active()) {
+  if (writtenFrame.active()) {
     encoding::write<uint8_t>(subintsplit::kRowFrameGuard, pos);
-    encoding::write<uint64_t>(rowFrame.slope, pos);
-    encoding::write<uint64_t>(rowFrame.base, pos);
+    encoding::write<uint64_t>(writtenFrame.slope, pos);
+    encoding::write<uint64_t>(writtenFrame.base, pos);
   }
 
   if (transformed) {
@@ -1899,6 +2659,192 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
       "SubIntSplitEncoding: encoding size mismatch");
 
   return {reserved, encodingSize};
+}
+
+template <typename T>
+std::optional<typename SubIntSplitEncoding<T>::SampledWholeValue>
+SubIntSplitEncoding<T>::sampleWholeValue(
+    EncodingSelectionPolicy<physicalType>& sectionPolicy,
+    std::span<const physicalType> values,
+    const Encoding::Options& sectionOptions) {
+  // Priced on contiguous blocks spread over the column rather than on the
+  // whole column, since pricing distinct values and runs over every row
+  // costs as much as the rest of the encode. The planner's own sample is
+  // too small for these estimates, whose alphabet overhead does not scale
+  // with rows.
+  constexpr size_t kSampleBlocks{8};
+  constexpr size_t kSampleBlockRows{8'192};
+  std::vector<physicalType> sample;
+  std::span<const physicalType> priced = values;
+  if (values.size() > 2 * kSampleBlocks * kSampleBlockRows) {
+    sample = sampleSpreadBlocks(values, kSampleBlocks, kSampleBlockRows);
+    priced = sample;
+  }
+  const auto sampleStatistics = Statistics<physicalType>::create(priced);
+  // Every encoding a section may take is priced, as section selection would
+  // price the whole value, except RLE where the sample averages fewer than
+  // two rows a run: without runs an RLE stream is its values stream plus
+  // lengths, and its quoted slack admits trials that always lose. Narrowing
+  // the candidate set further was tried and rejected: it can miss a
+  // whole-value encoding that beats the plan outright.
+  const bool hasRuns =
+      2 * sampleStatistics.consecutiveRepeatCount() <= priced.size();
+  const auto trialPolicy =
+      sectionPolicy.narrowed([hasRuns](EncodingType encodingType) {
+        return encodingType != EncodingType::RLE || hasRuns;
+      });
+  if (trialPolicy == nullptr) {
+    return std::nullopt;
+  }
+  const auto picked =
+      trialPolicy->select(priced, sampleStatistics, sectionOptions);
+  if (!picked.estimatedSize.has_value()) {
+    return std::nullopt;
+  }
+  const double estimatedBytes = static_cast<double>(*picked.estimatedSize) *
+      static_cast<double>(values.size()) / static_cast<double>(priced.size());
+  return SampledWholeValue{
+      .encoding = picked.encodingType,
+      .estimatedBytes = estimatedBytes,
+      .lowerBoundBytes = estimatedBytes /
+          subintsplit::wholeValueEstimateSlack(picked.encodingType)};
+}
+
+template <typename T>
+SubIntSplitEncoding<T>::WholeValueFloor::WholeValueFloor(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& sectionBuffer,
+    const Encoding::Options& sectionOptions,
+    bool planIsWholeValue,
+    bool valuesAreColumn)
+    : selection_{selection},
+      values_{values},
+      sectionBuffer_{sectionBuffer},
+      sectionOptions_{sectionOptions},
+      planIsWholeValue_{planIsWholeValue},
+      valuesAreColumn_{valuesAreColumn} {
+  // A whole-value section is stored at the physical type's own width, so the
+  // section's values are the column's values and need no slicing. Its
+  // candidates, their read factors, their compression and their children's
+  // candidates are the ones a section would be offered, taken from the policy
+  // a section is selected by. A policy that cannot be narrowed to one encoding
+  // gets no floor, which `usable` reports.
+  sectionPolicy_ = std::unique_ptr<EncodingSelectionPolicy<physicalType>>(
+      static_cast<EncodingSelectionPolicy<physicalType>*>(
+          selection
+              .template createNestedPolicy<physicalType>(
+                  selection.encodingType(), NestedEncodingIdentifier{0})
+              .release()));
+  if (sectionPolicy_ != nullptr &&
+      sectionPolicy_->narrowed([](EncodingType candidate) {
+        return candidate == EncodingType::FixedBitWidth;
+      }) == nullptr) {
+    sectionPolicy_.reset();
+  }
+}
+
+template <typename T>
+std::string_view SubIntSplitEncoding<T>::WholeValueFloor::encodeAs(
+    EncodingType encodingType) {
+  return EncodingFactory::encode<physicalType>(
+      sectionPolicy_->narrowed([encodingType](EncodingType candidate) {
+        return candidate == encodingType;
+      }),
+      values_,
+      sectionBuffer_,
+      sectionOptions_);
+}
+
+template <typename T>
+const std::optional<typename SubIntSplitEncoding<T>::SampledWholeValue>&
+SubIntSplitEncoding<T>::WholeValueFloor::quote() {
+  if (!quoted_) {
+    quoted_ = true;
+    // The candidates sampleWholeValue prices, and why only those, are
+    // documented there.
+    if (!planIsWholeValue_) {
+      quote_ = sampleWholeValue(*sectionPolicy_, values_, sectionOptions_);
+      // Delta and Varint are never quoted: a whole column in either replays
+      // every earlier row to reach one. `under` offers them only to a plan
+      // that already does.
+      if (quote_.has_value() &&
+          (quote_->encoding == EncodingType::Delta ||
+           quote_->encoding == EncodingType::Varint)) {
+        quote_.reset();
+      }
+    }
+  }
+  return quote_;
+}
+
+template <typename T>
+std::optional<std::string_view> SubIntSplitEncoding<T>::WholeValueFloor::under(
+    uint64_t bytesToBeat,
+    std::optional<EncodingType> replayingEncoding) {
+  if (!usable()) {
+    return std::nullopt;
+  }
+  std::optional<std::string_view> floor;
+  uint64_t budget = bytesToBeat;
+  // Encoded only where the quote, scaled down by wholeValueEstimateSlack's
+  // margin, still undercuts the plan.
+  if (quote().has_value() &&
+      quote_->lowerBoundBytes < static_cast<double>(budget)) {
+    decidedAbove_ = std::max<uint64_t>(
+        decidedAbove_, static_cast<uint64_t>(quote_->lowerBoundBytes) + 1);
+    if (!sampledEncoded_.has_value()) {
+      sampledEncoded_ = encodeAs(quote_->encoding);
+    }
+    decidedAbove_ =
+        std::max<uint64_t>(decidedAbove_, sampledEncoded_->size() + 1);
+    if (sampledEncoded_->size() < budget) {
+      floor = sampledEncoded_;
+      budget = sampledEncoded_->size();
+    }
+  }
+
+  if (replayingEncoding.has_value() && !replayingEncoded_.has_value()) {
+    auto replayingPolicy = sectionPolicy_->narrowed(
+        [encodingType = *replayingEncoding](EncodingType candidate) {
+          return candidate == encodingType;
+        });
+    if (replayingPolicy != nullptr) {
+      replayingEncoded_ = EncodingFactory::encode<physicalType>(
+          std::move(replayingPolicy), values_, sectionBuffer_, sectionOptions_);
+    }
+  }
+  if (replayingEncoding.has_value() && replayingEncoded_.has_value() &&
+      replayingEncoded_->size() < budget) {
+    floor = replayingEncoded_;
+    budget = replayingEncoded_->size();
+  }
+
+  // FixedBitWidth's size is exact and needs only the range, which the column's
+  // statistics already hold when these are its values.
+  if (!fixedBitWidthEstimate_.has_value()) {
+    std::optional<Statistics<physicalType>> residualStatistics;
+    if (!valuesAreColumn_) {
+      residualStatistics.emplace(Statistics<physicalType>::create(values_));
+    }
+    const auto& statistics =
+        valuesAreColumn_ ? selection_.statistics() : *residualStatistics;
+    fixedBitWidthEstimate_ = FixedBitWidthEncoding<physicalType>::estimateSize(
+        values_.size(), statistics, sectionOptions_);
+  }
+  if (*fixedBitWidthEstimate_ < budget) {
+    decidedAbove_ =
+        std::max<uint64_t>(decidedAbove_, *fixedBitWidthEstimate_ + 1);
+    if (!fixedBitWidthEncoded_.has_value()) {
+      fixedBitWidthEncoded_ = encodeAs(EncodingType::FixedBitWidth);
+    }
+    decidedAbove_ =
+        std::max<uint64_t>(decidedAbove_, fixedBitWidthEncoded_->size() + 1);
+    if (fixedBitWidthEncoded_->size() < budget) {
+      floor = fixedBitWidthEncoded_;
+    }
+  }
+  return floor;
 }
 
 template <typename T>
