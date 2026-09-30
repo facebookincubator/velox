@@ -23,11 +23,14 @@
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <gflags/gflags.h>
@@ -35,6 +38,7 @@
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/AblationPolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/Validation.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -74,6 +78,38 @@ std::string formatPlan(const std::vector<SectionPlan>& segments) {
         << encodingTypeName(segments[i].encoding);
   }
   return oss.str();
+}
+
+// This driver encodes nothing, so there is no decoded output to compare
+// with the input. What it can check is that the plan it reports is one a
+// SubIntSplit encoding could be built from: non-empty sections that are
+// contiguous within the 64-bit word, each using an encoding the rung allows,
+// at a finite non-negative cost.
+std::optional<std::string> validatePlan(
+    const SelectorResult& result,
+    const std::unordered_set<EncodingType>& allowed) {
+  if (result.sections.empty()) {
+    return std::string("plan has no sections");
+  }
+  if (!std::isfinite(result.totalCost) || result.totalCost < 0.0) {
+    return fmt::format("plan cost is not a size: {}", result.totalCost);
+  }
+  int nextBit = result.sections.front().bitStart;
+  for (const auto& section : result.sections) {
+    if (section.bitStart != nextBit || section.bitEnd < section.bitStart ||
+        section.bitStart < 0 || section.bitEnd >= 64) {
+      return fmt::format(
+          "sections are not contiguous within 64 bits: {}",
+          formatPlan(result.sections));
+    }
+    if (!allowed.contains(section.encoding)) {
+      return fmt::format(
+          "section uses an encoding the rung withholds: {}",
+          formatPlan(result.sections));
+    }
+    nextBit = section.bitEnd + 1;
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -126,7 +162,8 @@ int runBenchmark() {
       "worst_access_class",
       "cost_model_consistent",
       "segment_plan",
-      "skipped"};
+      "skipped",
+      "validated"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_ablation.csv"
                                                        : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
@@ -134,6 +171,7 @@ int runBenchmark() {
     writeRunManifest(FLAGS_mlidc_output_manifest);
   }
 
+  ValidationLedger ledger;
   SamplerConfig samplerCfg = defaultSamplerConfig();
   SelectorConfig selectorCfg = defaultSelectorConfig();
 
@@ -184,6 +222,22 @@ int runBenchmark() {
         continue;
       }
 
+      if (ledger.enabled() && !ledger.check(rung.name, ds.name, "plan", [&] {
+            return validatePlan(result, rung.allowed);
+          })) {
+        csv.beginRow();
+        csv.set("driver", "bench_ablation");
+        csv.set("dtype", elemTypeName<Elem>());
+        csv.set("dataset", ds.name);
+        csv.set("rung_name", rung.name);
+        csv.set("rung_index", static_cast<int64_t>(ri));
+        csv.set("segment_plan", formatPlan(result.sections));
+        csv.set("skipped", int64_t{1});
+        csv.set("validated", int64_t{0});
+        csv.endRow();
+        continue;
+      }
+
       const double bpe = n > 0 ? result.totalCost / static_cast<double>(n) : 0;
 
       AccessClass worst = AccessClass::PureRA;
@@ -219,13 +273,14 @@ int runBenchmark() {
           rung.costModelConsistent ? int64_t{1} : int64_t{0});
       csv.set("segment_plan", formatPlan(result.sections));
       csv.set("skipped", int64_t{0});
+      csv.set("validated", ledger.enabled() ? int64_t{1} : int64_t{0});
       csv.endRow();
     }
     csv.flush();
   }
 
   std::cout << "\nResults written to: " << csvPath << "\n";
-  return 0;
+  return ledger.exitCode();
 }
 
 } // namespace
