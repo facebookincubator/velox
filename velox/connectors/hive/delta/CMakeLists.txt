@@ -21,7 +21,12 @@ velox_add_library(
   HiveDeltaSplit.h
 )
 
-velox_link_libraries(velox_hive_delta_splitreader velox_connector velox_core Folly::folly)
+velox_link_libraries(
+  velox_hive_delta_splitreader
+  velox_connector
+  velox_core
+  velox_hive_connector
+  Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

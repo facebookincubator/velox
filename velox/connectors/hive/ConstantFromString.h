@@ -37,9 +37,7 @@ namespace facebook::velox::connector::hive {
 ///
 /// Parsing is shared with the partition filter path through
 /// PartitionValue::fromString, so a partition value and a filter on it always
-/// agree. TIMESTAMP WITH TIME ZONE is handled here rather than in
-/// PartitionValue because its packed millis-plus-zone-key encoding is specific
-/// to the vector representation.
+/// agree.
 ///
 /// @param type The target Velox type for the constant vector. Supports all
 /// scalar types including primitives, dates, timestamps, decimals and
