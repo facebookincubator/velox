@@ -530,104 +530,112 @@ class IndexSource {
 /// responsibility of the caller.
 class ConnectorQueryCtx {
  public:
-  /// Constructs a connector context using named settings. Raw pointer settings
-  /// are borrowed and must outlive the context. Call build() once per builder.
+  /// Builder pattern for constructing ConnectorQueryCtx instances.
+  ///
+  /// Provides a fluent interface for setting context parameters by name. Prefer
+  /// this over the positional constructor, especially when configuring only a
+  /// subset of the optional parameters. Session properties are required.
+  /// The scan ID is derived from the task and plan node IDs.
+  /// Raw pointers are borrowed and must outlive the context; the expression
+  /// evaluator is owned by the context and the token provider is shared.
+  ///
+  /// Example:
+  /// @code
+  ///   auto ctx = ConnectorQueryCtx::Builder()
+  ///                  .operatorPool(operatorPool)
+  ///                  .connectorPool(connectorPool)
+  ///                  .sessionProperties(sessionProperties)
+  ///                  .queryId("query-123")
+  ///                  .taskId("task-123")
+  ///                  .planNodeId("scan-1")
+  ///                  .build();
+  /// @endcode
+  ///
+  /// Each builder can be used for one context: build() consumes its owned
+  /// settings.
   class Builder {
    public:
-    /// Sets the operator's leaf memory pool for connector allocations.
     Builder& operatorPool(memory::MemoryPool* operatorPool) {
       operatorPool_ = operatorPool;
       return *this;
     }
 
-    /// Sets the connector's aggregate memory pool.
     Builder& connectorPool(memory::MemoryPool* connectorPool) {
       connectorPool_ = connectorPool;
       return *this;
     }
 
-    /// Sets the required connector session properties.
     Builder& sessionProperties(const config::ConfigBase* sessionProperties) {
       sessionProperties_ = sessionProperties;
       return *this;
     }
 
-    /// Sets the optional spill configuration.
     Builder& spillConfig(const common::SpillConfig* spillConfig) {
       spillConfig_ = spillConfig;
       return *this;
     }
 
-    /// Sets the prefix-sort configuration stored in the context.
     Builder& prefixSortConfig(common::PrefixSortConfig prefixSortConfig) {
       prefixSortConfig_ = std::move(prefixSortConfig);
       return *this;
     }
 
-    /// Transfers ownership of the expression evaluator to the context.
     Builder& expressionEvaluator(
         std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator) {
       expressionEvaluator_ = std::move(expressionEvaluator);
       return *this;
     }
 
-    /// Sets the optional async data cache.
     Builder& asyncDataCache(cache::AsyncDataCache* cache) {
       cache_ = cache;
       return *this;
     }
 
-    /// Sets the query identifier.
     Builder& queryId(std::string queryId) {
       queryId_ = std::move(queryId);
       return *this;
     }
 
-    /// Sets the task identifier used to derive the scan identifier.
     Builder& taskId(std::string taskId) {
       taskId_ = std::move(taskId);
       return *this;
     }
 
-    /// Sets the plan node identifier used to derive the scan identifier.
     Builder& planNodeId(std::string planNodeId) {
       planNodeId_ = std::move(planNodeId);
       return *this;
     }
 
-    /// Sets the driver identifier.
     Builder& driverId(int driverId) {
       driverId_ = driverId;
       return *this;
     }
 
-    /// Sets the session timezone used when reading timestamps.
     Builder& sessionTimezone(std::string sessionTimezone) {
       sessionTimezone_ = std::move(sessionTimezone);
       return *this;
     }
 
-    /// Sets whether timestamps are adjusted to the session timezone.
     Builder& adjustTimestampToTimezone(bool adjustTimestampToTimezone) {
       adjustTimestampToTimezone_ = adjustTimestampToTimezone;
       return *this;
     }
 
-    /// Sets the task's cancellation token.
     Builder& cancellationToken(folly::CancellationToken cancellationToken) {
       cancellationToken_ = std::move(cancellationToken);
       return *this;
     }
 
-    /// Shares the filesystem token provider with the context.
     Builder& tokenProvider(
         std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
       tokenProvider_ = std::move(tokenProvider);
       return *this;
     }
 
-    /// Constructs a ConnectorQueryCtx and transfers its owned settings.
-    /// Do not call build() more than once on this builder.
+    /// Constructs a ConnectorQueryCtx with the configured parameters.
+    ///
+    /// Consumes owned settings; do not call build() more than once.
+    /// @return Unique pointer to the newly created ConnectorQueryCtx.
     std::unique_ptr<ConnectorQueryCtx> build();
 
    private:
