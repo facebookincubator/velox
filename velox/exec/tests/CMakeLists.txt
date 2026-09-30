@@ -52,8 +52,7 @@ target_link_libraries(
 #   MergeJoinTest 111s, AggregationTest 105s,
 #   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
 #   OrderByTest 71s, TopNRowNumberTest 64s,
-#   HashTableTest 60s, StreamingAggregationTest 58s,
-#   InMemoryExchangeClientTest 54s,
+#   HashTableTest 60s, StreamingAggregationTest 58s, InMemoryExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
 # Max group ~784s (bounded by IndexLookupJoinTest.cpp).
