@@ -401,6 +401,8 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     return files.size();
   };
 
+  // Each batch compresses to under 1KB, so the threshold must stay below one
+  // batch's written size for every batch to start a new file.
   ASSERT_EQ(writeAndRead("512B"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
 }
