@@ -378,7 +378,7 @@ const HybridFlatMapType::Group& HybridFlatMapType::groupAt(size_t index) const {
 const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
   const auto iterator =
       std::find_if(groups_.begin(), groups_.end(), [](const auto& group) {
-        return group.groupId == HybridFlatMap::kDefaultGroupId;
+        return HybridFlatMap::isDefaultGroup(group.groupId);
       });
   NIMBLE_CHECK(
       iterator != groups_.end(), "Hybrid FlatMap Default group is missing.");
@@ -387,7 +387,7 @@ const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
 
 std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
   for (size_t i = 0; i < groups_.size(); ++i) {
-    if (groups_[i].groupId == HybridFlatMap::kDefaultGroupId) {
+    if (HybridFlatMap::isDefaultGroup(groups_[i].groupId)) {
       continue;
     }
     if (std::binary_search(

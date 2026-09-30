@@ -24,15 +24,23 @@
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
+#include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
+#include "velox/dwio/nimble/serializer/StreamDataParser.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
+#include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/BatchReader.h"
+#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
@@ -91,6 +99,19 @@ std::optional<std::string> readEmbeddedResumeKey(const folly::IOBuf& slice) {
 // — no over-fetch.
 folly::IOBuf coalesceChunkSlice(const folly::IOBuf& slice) {
   return slice.cloneCoalescedAsValue();
+}
+
+HybridFlatMap makeHybridFlatMapConfig(
+    const std::vector<std::vector<std::string>>& explicitGroups) {
+  HybridFlatMap hybridMap;
+  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
+    hybridMap.groups.push_back(
+        {.groupId = groupId, .groupKeys = explicitGroups[groupId]});
+  }
+  hybridMap.groups.push_back(
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+  return hybridMap;
 }
 
 } // namespace
@@ -2080,7 +2101,7 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
           std::string_view subfield,
           const folly::F14FastMap<std::string, std::set<std::string>>&
               flatMapColumns,
-          bool expectedRequiresNullBarrier) {
+          bool expectedRequiredBarrier) {
         writeData(
             {batch},
             {"key"},
@@ -2098,8 +2119,8 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
         ASSERT_EQ(result.responses[0].slices.size(), 1);
         EXPECT_EQ(
             readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                .requiresNullBarrier,
-            expectedRequiresNullBarrier);
+                .requiredBarrier,
+            expectedRequiredBarrier);
       };
 
   const auto nestedNoNulls = makeNestedBatch(false);
@@ -2131,6 +2152,155 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
       "features[\"a\"]",
       {{"features", {}}},
       true);
+}
+
+TEST_P(
+    NimbleIndexProjectorTest,
+    hybridFlatMapProjectionPreservesBatchBoundaries) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  constexpr vector_size_t kRowsPerBatch = 2;
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(INTEGER(), BIGINT())}});
+  const auto makeBatch = [&](int64_t keyBase,
+                             const std::vector<std::vector<Entry>>& maps) {
+    return vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerBatch, [keyBase](auto row) { return keyBase + row; }),
+         vectorMaker_->mapVector<int32_t, int64_t>(maps)});
+  };
+  const std::vector<RowVectorPtr> batches{
+      makeBatch(0, {{{1, 10}, {2, 20}}, {{1, 11}}}),
+      makeBatch(2, {{{1, 12}}, {{2, 23}}}),
+  };
+
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMapConfig({{"1", "2"}})}},
+      },
+      rowType,
+      leafPool_.get()};
+  index::test::TestClusterIndexMetadataWriter indexWriter{
+      *leafPool_,
+      {"key"},
+      {SortOrder{.ascending = true}},
+      /*enforceKeyOrder=*/true,
+      /*noDuplicateKey=*/true};
+  auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
+  auto* writeFilePtr = writeFile.get();
+  auto tabletWriter = TabletWriter::create(
+      writeFilePtr,
+      *leafPool_,
+      {
+          .metadataFlushThreshold = 1 << 20,
+          .streamDeduplicationEnabled = false,
+          .stripeGroupFlushCallback =
+              indexWriter.createStripeGroupFlushCallback(),
+          .closeCallback = indexWriter.createCloseCallback(),
+      });
+
+  for (size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+    const auto& batch = batches[batchIndex];
+    const std::string serialized{
+        serializer.serialize(batch, OrderedRanges::of(0, batch->size()))};
+    serde::StreamDataParser parser{leafPool_.get()};
+    ASSERT_EQ(parser.initialize(serialized), kRowsPerBatch);
+    ASSERT_TRUE(parser.requiredBarrier());
+
+    std::vector<std::unique_ptr<Buffer>> chunkBuffers;
+    std::vector<Stream> streams;
+    parser.iterateStreams([&](uint32_t streamOffset,
+                              std::string_view streamData) {
+      auto chunkBuffer = std::make_unique<Buffer>(*leafPool_);
+      ChunkedStreamWriter chunkWriter{*chunkBuffer};
+      auto content = chunkWriter.encode(streamData);
+      streams.push_back(
+          {.offset = streamOffset,
+           .chunks = {
+               {.rowCount = kRowsPerBatch, .content = std::move(content)}}});
+      chunkBuffers.push_back(std::move(chunkBuffer));
+    });
+
+    std::vector<index::test::KeyChunkSpec> keyChunks;
+    keyChunks.reserve(kRowsPerBatch);
+    for (vector_size_t row = 0; row < kRowsPerBatch; ++row) {
+      auto key = makePointLookup(
+          rowType,
+          {"key"},
+          static_cast<int64_t>(batchIndex * kRowsPerBatch + row));
+      ASSERT_TRUE(key.lowerKey.has_value());
+      keyChunks.push_back({.rowCount = 1, .key = *key.lowerKey});
+    }
+    indexWriter.addStripe(keyChunks);
+    tabletWriter->writeStripe(kRowsPerBatch, std::move(streams));
+  }
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  SchemaSerializer schemaSerializer;
+  tabletWriter->writeOptionalSection(
+      std::string{kSchemaSection}, schemaSerializer.serialize(*schema));
+  tabletWriter->writeOptionalSection(
+      std::string{kPropertiesSection},
+      FileProperties(
+          /*compactRowCountEncoding=*/true,
+          /*clusterIndexKeyColumnStorageOmitted=*/false,
+          /*clusterIndexKeyColumnsWithOmittedStorage=*/{})
+          .serialize());
+  tabletWriter->close();
+  writeFile->close();
+
+  TabletReaderCache::testingReset();
+  tabletReaderCache_.reset();
+  keyEncoder_.reset();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[1]");
+  auto projector = createProjector(subfields);
+  const auto& projectedMap =
+      projector->projectedNimbleType()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(
+      projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1", "2"}));
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 1, 3)};
+  NimbleIndexProjector::Options options;
+  options.maxOverfetchRowsRatio = 0;
+  auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 1);
+  ASSERT_EQ(result.responses[0].slices.size(), batches.size());
+  EXPECT_EQ(projector->stats().numSlicedStripes, 0);
+  std::vector<folly::IOBuf> owned;
+  std::vector<std::string_view> projectedBatches;
+  owned.reserve(result.responses[0].slices.size());
+  projectedBatches.reserve(result.responses[0].slices.size());
+  const std::array<RowRange, 2> expectedRanges{RowRange{1, 2}, RowRange{0, 1}};
+  for (size_t i = 0; i < result.responses[0].slices.size(); ++i) {
+    const auto& slice = result.responses[0].slices[i];
+    EXPECT_TRUE(readEmbeddedTabletChunkHeader(slice).requiredBarrier);
+    EXPECT_EQ(readEmbeddedRowRange(slice), expectedRanges[i]);
+    owned.push_back(coalesceChunkSlice(slice));
+    projectedBatches.emplace_back(
+        reinterpret_cast<const char*>(owned.back().data()),
+        owned.back().length());
+  }
+
+  Deserializer deserializer{
+      projector->projectedNimbleType(),
+      subfields,
+      leafPool_.get(),
+      DeserializerOptions{}};
+  VectorPtr output;
+  deserializer.deserialize(projectedBatches, output);
+  auto expected = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          std::vector<std::vector<Entry>>{{{1, 11}}, {{1, 12}}})});
+  expectVectorRows(output, expected);
 }
 
 TEST_P(
@@ -2181,11 +2351,11 @@ TEST_P(
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 3);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
   EXPECT_TRUE(readEmbeddedTabletChunkHeader(result.responses[0].slices[1])
-                  .requiresNullBarrier);
+                  .requiredBarrier);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[2])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
 
   std::vector<folly::IOBuf> owned;
   std::vector<std::string_view> batches;
@@ -2257,7 +2427,7 @@ TEST_P(
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
 
   auto output =
       deserializeProjectedSlice(*projector, result.responses[0].slices[0]);
@@ -2670,7 +2840,7 @@ TEST_P(NimbleIndexProjectorTest, projectedComplexNullFuzzer) {
       const auto& slice = result.responses[0].slices[batchIndex];
       EXPECT_EQ(readEmbeddedRowRange(slice), RowRange(0, kRowsPerBatch));
       EXPECT_EQ(
-          readEmbeddedTabletChunkHeader(slice).requiresNullBarrier,
+          readEmbeddedTabletChunkHeader(slice).requiredBarrier,
           batchIndex % 2 == 1);
     }
 
@@ -2781,7 +2951,7 @@ TEST_P(NimbleIndexProjectorTest, deserializerRangeFullStripe) {
 #undef RUN_DESERIALIZER_RANGE_TEST
 
 // Barrier + windowed kTablet + caller rowRange together. The projector marks a
-// slice `requiresNullBarrier` whenever a Row/FlatMap null stream is physically
+// slice `requiredBarrier` whenever a Row/FlatMap null stream is physically
 // present, so this combination is production-shaped rather than synthetic.
 TEST_P(NimbleIndexProjectorTest, deserializerRowRangeOnBarrierWindowedSlice) {
   auto nestedType = ROW({"b"}, {INTEGER()});
@@ -2824,7 +2994,7 @@ TEST_P(NimbleIndexProjectorTest, deserializerRowRangeOnBarrierWindowedSlice) {
   ASSERT_EQ(header.rowRange.startRow, kWindowStart);
   ASSERT_EQ(header.rowRange.endRow, kWindowEnd);
   // Without this the test would silently cover only the ordinary path.
-  ASSERT_TRUE(header.requiresNullBarrier);
+  ASSERT_TRUE(header.requiredBarrier);
 
   // Caller [0, 10) narrows the [30, 60) window to stripe rows [30, 40), which
   // spans the null at row 32. Compare against the unranged decode sliced the

@@ -131,7 +131,8 @@ class NimbleIndexProjector {
     uint64_t maxRowsPerRequest{0};
     /// Maximum tolerated avoidable row overfetch per stripe before stream
     /// slicing is applied. 0.0 slices whenever any overfetch can be removed;
-    /// 1.0 disables slicing.
+    /// 1.0 disables slicing. Hybrid FlatMap projections always retain the
+    /// full stripe because their streams use a key-major layout.
     double maxOverfetchRowsRatio{1.0};
     /// When set, every request whose results were cut short by a limit
     /// (maxRows, maxBytes, or maxRowsPerRequest) is given a resume key so the
@@ -330,8 +331,8 @@ class NimbleIndexProjector {
     std::vector<uint32_t> stripeIndices;
     // Total rows in each planned stripe.
     std::vector<uint32_t> numRows;
-    // Whether each planned stripe needs the Row/FlatMap null-barrier path.
-    std::vector<bool> requiresNullBarriers;
+    // Whether each planned stripe must be decoded independently.
+    std::vector<bool> requiredBarriers;
     // Number of projected streams present in each planned stripe.
     std::vector<uint32_t> numStreams;
     // Total logical bytes across all projected streams in each planned stripe.
@@ -364,7 +365,7 @@ class NimbleIndexProjector {
   struct StripeStreams {
     uint32_t numStreams{0};
     uint64_t projectedBytes{0};
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
   };
 
   // Locates this stripe's projected streams, staging them at the tail of
@@ -382,7 +383,8 @@ class NimbleIndexProjector {
       const StripeStreams& streams);
 
   // Computes the stripe-relative body range based on request row ranges and
-  // Options::maxOverfetchRowsRatio.
+  // Options::maxOverfetchRowsRatio. Hybrid FlatMap projections always retain
+  // the full stripe because their physical streams are key-major.
   RowRange stripeRowRangeToPack(size_t stripeOffset) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
@@ -478,7 +480,7 @@ class NimbleIndexProjector {
   struct PackedStripe {
     folly::IOBuf body;
     RowRange rowRange;
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
     bool streamHasChunkHeader{false};
   };
 
@@ -521,6 +523,9 @@ class NimbleIndexProjector {
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
+  // True when every emitted slice must preserve a native HFM batch boundary,
+  // even if the selected group has no physical stream in a stripe.
+  const bool hasProjectedHybridFlatMaps_{false};
   // Verifies a stream read from storage against the checksum recorded in its
   // stripe group. Built for any file that records a checksum type, and null
   // only when the file records none; whether a given project() call uses it is
