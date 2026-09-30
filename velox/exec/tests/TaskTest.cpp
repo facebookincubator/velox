@@ -18,6 +18,8 @@
 
 #include <functional>
 
+#include <gmock/gmock.h>
+
 #include "folly/OperationCancelled.h"
 #include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
@@ -1041,6 +1043,158 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   task.reset();
   waitForAllTasksToBeDeleted();
   EXPECT_TRUE(transportStateReference.expired());
+}
+
+TEST_F(TaskTest, customExchangeTransportMergeUsesTaskClient) {
+  // A transport's merge builder receives the Task-level client that its own
+  // factory created for the MergeExchangeNode's pipeline, and that client
+  // still receives remote splits that arrive after the task stops.
+  const std::string transportKind{"test-merge-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInMergeBuilder{nullptr};
+  std::vector<std::string> remoteTaskIds;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext&) {
+            auto client = std::make_shared<TestExchangeClient>(
+                TestExchangeClientCallbacks{
+                    .onAddRemoteTaskId =
+                        [&remoteTaskIds](std::string_view remoteTaskId) {
+                          remoteTaskIds.emplace_back(remoteTaskId);
+                        },
+                });
+            clientFromFactory = client.get();
+            return client;
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          },
+          [&clientInMergeBuilder](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientInMergeBuilder = client.get();
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
+          .planFragment();
+  const auto mergeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-merge-exchange",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(1, 1);
+  ASSERT_NE(clientFromFactory, nullptr);
+  EXPECT_EQ(clientInMergeBuilder, clientFromFactory);
+
+  task->requestAbort().wait();
+  task->addSplit(
+      mergeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_THAT(remoteTaskIds, ::testing::ElementsAre("late-remote-task"));
+}
+
+TEST_F(TaskTest, customExchangeTransportContext) {
+  // Task creates one client per pipeline, sized from the session config, and
+  // shares it among the pipeline's drivers.
+  const std::string transportKind{"test-exchange-context"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({
+          {core::QueryConfig::kMaxExchangeBufferSize, "12345678"},
+          {core::QueryConfig::kMinExchangeOutputBatchBytes, "4321"},
+      }));
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  // Copies of the context fields, since the context is valid only during the
+  // factory call.
+  struct ObservedContext {
+    std::string taskId;
+    int destination{-1};
+    int32_t numberOfConsumers{0};
+    uint64_t maxExchangeBufferSize{0};
+    uint64_t minExchangeOutputBatchBytes{0};
+    memory::MemoryPool* pool{nullptr};
+    folly::Executor* executor{nullptr};
+  };
+  ObservedContext observed;
+  int32_t numClientsCreated{0};
+  TestExchangeClient* clientFromFactory{nullptr};
+  std::vector<TestExchangeClient*> clientsInOperators;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext& context) {
+            ++numClientsCreated;
+            observed = {
+                .taskId = context.taskId,
+                .destination = context.destination,
+                .numberOfConsumers = context.numberOfConsumers,
+                .maxExchangeBufferSize = context.maxExchangeBufferSize,
+                .minExchangeOutputBatchBytes =
+                    context.minExchangeOutputBatchBytes,
+                .pool = context.pool,
+                .executor = context.executor,
+            };
+            auto client = std::make_shared<TestExchangeClient>();
+            clientFromFactory = client.get();
+            return client;
+          },
+          [&clientsInOperators](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientsInOperators.push_back(client.get());
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto task = Task::create(
+      "task-exchange-context",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      /*destination=*/2,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(3, 1);
+  EXPECT_EQ(numClientsCreated, 1);
+  EXPECT_THAT(
+      clientsInOperators,
+      ::testing::ElementsAre(
+          clientFromFactory, clientFromFactory, clientFromFactory));
+  EXPECT_EQ(observed.taskId, "task-exchange-context");
+  EXPECT_EQ(observed.destination, 2);
+  EXPECT_EQ(observed.numberOfConsumers, 3);
+  EXPECT_EQ(observed.maxExchangeBufferSize, 12'345'678);
+  EXPECT_EQ(observed.minExchangeOutputBatchBytes, 4'321);
+  EXPECT_NE(observed.pool, nullptr);
+  EXPECT_EQ(observed.executor, driverExecutor_.get());
+  task->requestAbort().wait();
 }
 
 TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {

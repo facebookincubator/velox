@@ -21,6 +21,7 @@
 #include <thread>
 #include <type_traits>
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -190,24 +191,36 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
   EXPECT_TRUE(defaultEntry->makeMergeExchangeOperator != nullptr);
 }
 
-TEST_F(ExchangeTransportRegistryTest, defaultTransportRejectsOversizedBuffer) {
+TEST_F(ExchangeTransportRegistryTest, defaultTransportBufferSizeBoundary) {
+  // The in-memory client keeps the buffer size as int64_t, so the largest
+  // int64_t is accepted and anything above it is a user error.
   auto defaultEntry = ExchangeTransportRegistry::tryGet(
       std::string(core::TransportKind::kInMemory));
   ASSERT_NE(defaultEntry, nullptr);
   const core::QueryConfig queryConfig{
       std::unordered_map<std::string, std::string>{}};
+  auto pool = memory::memoryManager()->addLeafPool();
+  folly::CPUThreadPoolExecutor executor(1);
+  const auto makeContext = [&](uint64_t maxExchangeBufferSize) {
+    return ExchangeClientContext{
+        .taskId = "task",
+        .destination = 0,
+        .numberOfConsumers = 1,
+        .maxExchangeBufferSize = maxExchangeBufferSize,
+        .minExchangeOutputBatchBytes = 0,
+        .pool = pool.get(),
+        .executor = &executor,
+        .queryConfig = queryConfig};
+  };
+  constexpr auto kMaxBufferSize =
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+
+  auto client = defaultEntry->makeClient(makeContext(kMaxBufferSize));
+  ASSERT_NE(client, nullptr);
+  client->close();
 
   VELOX_ASSERT_USER_THROW(
-      defaultEntry->makeClient(
-          ExchangeClientContext{
-              .taskId = "task",
-              .destination = 0,
-              .numberOfConsumers = 1,
-              .maxExchangeBufferSize = std::numeric_limits<uint64_t>::max(),
-              .minExchangeOutputBatchBytes = 0,
-              .pool = nullptr,
-              .executor = nullptr,
-              .queryConfig = queryConfig}),
+      defaultEntry->makeClient(makeContext(kMaxBufferSize + 1)),
       core::QueryConfig::kMaxExchangeBufferSize);
 }
 
@@ -261,6 +274,7 @@ TEST_F(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
   // transport's own factory produces, so a client from another transport is
   // rejected rather than silently reinterpreted.
   bool built{false};
+  bool builtMerge{false};
   auto entry = ExchangeTransportEntry::make<MockExchangeClient>(
       makeMockClient,
       [&built](
@@ -271,6 +285,16 @@ TEST_F(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
           -> std::unique_ptr<Operator> {
         EXPECT_NE(client, nullptr);
         built = true;
+        return nullptr;
+      },
+      [&builtMerge](
+          int32_t,
+          DriverCtx*,
+          const std::shared_ptr<const core::ExchangeNode>&,
+          const std::shared_ptr<MockExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        EXPECT_NE(client, nullptr);
+        builtMerge = true;
         return nullptr;
       });
 
@@ -293,6 +317,14 @@ TEST_F(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
 
   VELOX_ASSERT_THROW(
       entry->makeExchangeOperator(
+          0, nullptr, nullptr, std::make_shared<UnrelatedExchangeClient>()),
+      "Exchange client was not created by this transport's client factory");
+
+  EXPECT_TRUE(
+      entry->makeMergeExchangeOperator(0, nullptr, nullptr, client) == nullptr);
+  EXPECT_TRUE(builtMerge);
+  VELOX_ASSERT_THROW(
+      entry->makeMergeExchangeOperator(
           0, nullptr, nullptr, std::make_shared<UnrelatedExchangeClient>()),
       "Exchange client was not created by this transport's client factory");
 }
