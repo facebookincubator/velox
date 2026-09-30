@@ -377,4 +377,69 @@ TEST_F(HiveDeltaSplitTest, hasDeletionVectorSerdeDefaultsFalse) {
   EXPECT_FALSE(deserializedDelta->hasDeletionVector);
 }
 
+TEST_F(HiveDeltaSplitTest, columnMappingModeDefaultsToNone) {
+  auto split = std::make_shared<HiveDeltaSplit>(
+      "test-connector",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET);
+  EXPECT_EQ(DeltaColumnMappingMode::kNone, split->columnMappingMode);
+}
+
+TEST_F(HiveDeltaSplitTest, columnMappingModeToString) {
+  EXPECT_EQ("none", toString(DeltaColumnMappingMode::kNone));
+  EXPECT_EQ("name", toString(DeltaColumnMappingMode::kName));
+  EXPECT_EQ("id", toString(DeltaColumnMappingMode::kId));
+}
+
+TEST_F(HiveDeltaSplitTest, columnMappingModeFromString) {
+  EXPECT_EQ(
+      DeltaColumnMappingMode::kNone, deltaColumnMappingModeFromString("none"));
+  EXPECT_EQ(
+      DeltaColumnMappingMode::kName, deltaColumnMappingModeFromString("name"));
+  EXPECT_EQ(
+      DeltaColumnMappingMode::kId, deltaColumnMappingModeFromString("id"));
+  // Anything else fails loudly rather than silently defaulting to a mode. The
+  // Presto->Velox converter handles the empty-string case explicitly (older
+  // splits and coordinators that have not yet been updated to send the field
+  // produce empty strings), so this helper does not need to.
+  EXPECT_THROW(deltaColumnMappingModeFromString(""), VeloxUserError);
+  EXPECT_THROW(deltaColumnMappingModeFromString("unknown"), VeloxUserError);
+  EXPECT_THROW(deltaColumnMappingModeFromString("NONE"), VeloxUserError);
+}
+
+TEST_F(HiveDeltaSplitTest, columnMappingModeSerdeRoundTrip) {
+  for (const auto mode :
+       {DeltaColumnMappingMode::kNone,
+        DeltaColumnMappingMode::kName,
+        DeltaColumnMappingMode::kId}) {
+    auto split = std::make_shared<HiveDeltaSplit>(
+        "test-connector",
+        "/path/to/file.parquet",
+        dwio::common::FileFormat::PARQUET,
+        /*start=*/0,
+        /*length=*/std::numeric_limits<uint64_t>::max(),
+        /*partitionKeys=*/
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        /*tableBucketNumber=*/std::nullopt,
+        /*customSplitInfo=*/std::unordered_map<std::string, std::string>{},
+        /*extraFileInfo=*/std::shared_ptr<std::string>{},
+        /*cacheable=*/true,
+        /*infoColumns=*/std::unordered_map<std::string, std::string>{},
+        /*fileProperties=*/std::nullopt,
+        /*hasDeletionVector=*/false,
+        /*columnMappingMode=*/mode);
+
+    const auto obj = split->serialize();
+    EXPECT_EQ(
+        std::string(toString(mode)),
+        obj["deltaColumnMappingMode"].asString());
+
+    auto deserialized = ISerializable::deserialize<HiveConnectorSplit>(obj);
+    const auto* deserializedDelta =
+        dynamic_cast<const HiveDeltaSplit*>(deserialized.get());
+    ASSERT_NE(nullptr, deserializedDelta);
+    EXPECT_EQ(mode, deserializedDelta->columnMappingMode);
+  }
+}
+
 } // namespace
