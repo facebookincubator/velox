@@ -134,6 +134,13 @@ class Encoding {
     /// 2 = TierTagArray, 3 = EliasFano.
     uint8_t frequencyPartitionIndex = 0;
 
+    /// When true, TierTagArray builds a per-tier `resolvedValues` vector at
+    /// decode construction so point/range/bulk decode read the decoded value
+    /// directly instead of chasing `dictionary[indices[rank]]`. Trades extra
+    /// resident memory (up to |T| bytes per row versus 4 for indices) for
+    /// fewer dependent loads on the hot path.
+    bool frequencyPartitionResolveTierValues = true;
+
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader
     /// reads it back from the stream (self-describing).
@@ -152,6 +159,17 @@ class Encoding {
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
+
+    /// When true, size estimates are tight enough to compare with another
+    /// encoding's bytes rather than only to rank candidates. FixedBitWidth
+    /// counts the slop bytes FixedBitArray reserves, MainlyConstant prices
+    /// its other values over their own range and against Trivial, RLE prices
+    /// its run values against Trivial and Dictionary and its run lengths with
+    /// the encodings nested selection would pick, and selection withholds
+    /// Trivial's read-factor discount where Trivial is larger than
+    /// FixedBitWidth. SubIntSplit sets this for its sections, whose sizes it
+    /// compares against each other; nothing else should.
+    bool sectionEstimatorRefinements{false};
 
     /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
     /// encoding selection. False by default; do not enable for production
@@ -184,9 +202,13 @@ class Encoding {
     /// points are added.
     bool subIntSplitDeltaPreTransform{false};
 
-    /// What SubIntSplit tells the encoding selection of its own sections; see
-    /// subintsplit::Options. Callers leave it unset.
+    /// SubIntSplit planner and decoder settings; see subintsplit::Options.
     subintsplit::Options subIntSplit{};
+
+    /// Prices a Huffman tree deeper than HuffmanEncoding::kMaxCodeBits at its
+    /// Shannon bound instead of declining it. encode() length-limits such a
+    /// tree, so it remains encodable. On by default.
+    bool huffmanPriceLengthLimited{true};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
@@ -731,11 +753,16 @@ void readWithVisitorFast(
   // accelerate multi-chunk decoding.
   const auto numNonNullsSoFar =
       velox::bits::countNonNulls(nulls, 0, params.numScanned);
-  if constexpr (V::dense) {
-    if constexpr (kOutputNulls) {
-      NIMBLE_DCHECK(
-          !visitor.reader().hasNulls() || visitor.reader().returnReaderNulls());
-    }
+  // The dense path writes no result nulls: it is only correct when the reader
+  // returns its own nulls. setReturnNullsMode() declines that whenever the scan
+  // spec carries a filter, AlwaysTrue included, even though the visitor then
+  // has no filter to apply and still outputs nulls. Such a read takes the
+  // general path below, which builds the result nulls itself.
+  bool takeDensePath = V::dense;
+  if constexpr (V::dense && kOutputNulls) {
+    takeDensePath = visitor.reader().returnReaderNulls();
+  }
+  if (takeDensePath) {
     outerRows.resize(numRows);
     auto numNonNulls = velox::simd::indicesOfSetBits(
         nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());
