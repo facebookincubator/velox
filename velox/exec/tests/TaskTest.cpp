@@ -921,7 +921,7 @@ TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
   ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
 
   auto plan = PlanBuilder()
-                  .exchange(ROW({"a"}, {BIGINT()}), "Presto", transportKind)
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
                   .planFragment();
 
   auto task = Task::create(
@@ -1001,7 +1001,7 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   queryRegistry->insert(transportKind, entry);
 
   auto plan = PlanBuilder()
-                  .exchange(ROW({"a"}, {BIGINT()}), "Presto", transportKind)
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
                   .planFragment();
   const auto exchangeNodeId = plan.planNode->id();
   auto task = Task::create(
@@ -1430,7 +1430,7 @@ TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
 
   auto plan =
       PlanBuilder()
-          .mergeExchange(ROW({"a"}, {BIGINT()}), {"a"}, "Presto", transportKind)
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
           .planFragment();
 
   auto task = Task::create(

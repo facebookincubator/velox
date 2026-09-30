@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string>
@@ -21,6 +22,7 @@
 #include <thread>
 #include <type_traits>
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
@@ -46,8 +48,10 @@ static_assert(!std::is_copy_assignable_v<ExchangeTransportEntry>);
 static_assert(!std::is_move_assignable_v<ExchangeTransportEntry>);
 
 // Minimal control-plane-only client, standing in for a transport's client
-// without needing an ExchangeSource or an executor.
-class MockExchangeClient : public ExchangeClient {
+// without needing an ExchangeSource or an executor. Each 'Tag' yields an
+// unrelated client type, as the clients of two different transports are.
+template <typename Tag>
+class NoOpExchangeClient : public ExchangeClient {
  public:
   void addRemoteTaskId(std::string_view /*remoteTaskId*/) override {}
 
@@ -60,7 +64,7 @@ class MockExchangeClient : public ExchangeClient {
   }
 
   std::string toString() const override {
-    return "mock";
+    return "no-op";
   }
 
   folly::dynamic toJson() const override {
@@ -68,28 +72,10 @@ class MockExchangeClient : public ExchangeClient {
   }
 };
 
-// Client of a different transport: unrelated to MockExchangeClient, so a cast
-// from one to the other must fail.
-class UnrelatedExchangeClient : public ExchangeClient {
- public:
-  void addRemoteTaskId(std::string_view /*remoteTaskId*/) override {}
+using MockExchangeClient = NoOpExchangeClient<struct MockTag>;
 
-  void noMoreRemoteTasks() override {}
-
-  void close() override {}
-
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const override {
-    return {};
-  }
-
-  std::string toString() const override {
-    return "unrelated";
-  }
-
-  folly::dynamic toJson() const override {
-    return folly::dynamic::object;
-  }
-};
+// Client of another transport, so a cast from MockExchangeClient must fail.
+using UnrelatedExchangeClient = NoOpExchangeClient<struct UnrelatedTag>;
 
 class BlockingDestructionState {
  public:
@@ -156,8 +142,6 @@ class ExchangeTransportRegistryTest : public testing::Test {
 };
 
 TEST_F(ExchangeTransportRegistryTest, registryOperations) {
-  ExchangeTransportRegistry::unregisterAll();
-
   const int32_t numTransports = 5;
   for (int32_t i = 0; i < numTransports; i++) {
     ExchangeTransportRegistry::global().insert(
@@ -225,8 +209,6 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportBufferSizeBoundary) {
 }
 
 TEST_F(ExchangeTransportRegistryTest, defaultTransportSurvivesReset) {
-  ExchangeTransportRegistry::unregisterAll();
-
   const std::string inMemory{core::TransportKind::kInMemory};
   folly::Baton<> destructionStarted;
   folly::Baton<> continueDestruction;
@@ -242,10 +224,17 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportSurvivesReset) {
   entry.reset();
 
   std::thread reset([] { ExchangeTransportRegistry::unregisterAll(); });
-  destructionStarted.wait();
+  bool destructionReleased{false};
+  SCOPE_EXIT {
+    if (!destructionReleased) {
+      continueDestruction.post();
+    }
+    reset.join();
+  };
+  ASSERT_TRUE(destructionStarted.try_wait_for(std::chrono::seconds(5)));
   auto defaultEntry = ExchangeTransportRegistry::tryGet(inMemory);
+  destructionReleased = true;
   continueDestruction.post();
-  reset.join();
 
   EXPECT_NE(defaultEntry, nullptr);
   EXPECT_THAT(

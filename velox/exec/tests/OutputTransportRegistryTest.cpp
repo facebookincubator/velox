@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <type_traits>
 
+#include <folly/ScopeGuard.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -184,11 +186,18 @@ TEST(OutputTransportRegistryTest, defaultTransportSurvivesReset) {
   manager.reset();
 
   std::thread reset([] { OutputTransportRegistry::unregisterAll(); });
-  destructionStarted.wait();
+  bool destructionReleased{false};
+  SCOPE_EXIT {
+    if (!destructionReleased) {
+      continueDestruction.post();
+    }
+    reset.join();
+  };
+  ASSERT_TRUE(destructionStarted.try_wait_for(std::chrono::seconds(5)));
   auto defaultEntry = OutputTransportRegistry::tryGet(
       std::string(core::TransportKind::kInMemory));
+  destructionReleased = true;
   continueDestruction.post();
-  reset.join();
 
   EXPECT_NE(defaultEntry, nullptr);
 }
