@@ -38,6 +38,18 @@ class TestTransportBufferManager : public DefaultOutputBufferManager {
   TestTransportBufferManager() : DefaultOutputBufferManager(Options{}) {}
 };
 
+// Test transport manager that counts removeTask() calls, which the manager
+// contract allows once per task.
+class CountingRemoveTaskBufferManager : public TestTransportBufferManager {
+ public:
+  void removeTask(const std::string& taskId) override {
+    ++numRemoveTaskCalls;
+    TestTransportBufferManager::removeTask(taskId);
+  }
+
+  std::atomic_int32_t numRemoveTaskCalls{0};
+};
+
 class OutputTransportTest : public HiveConnectorTestBase {};
 
 TEST_F(OutputTransportTest, usesDefaultAfterRegistryClear) {
@@ -141,6 +153,42 @@ TEST_F(OutputTransportTest, selectsOperatorByTransportKind) {
   task->requestCancel();
   waitForTaskCompletion(task.get());
   OutputTransportRegistry::unregisterAll();
+}
+
+TEST_F(OutputTransportTest, removesTaskOnceWhenStartFails) {
+  // start() fails after the task's output buffer was created. Task terminates
+  // and must remove the task from the output buffer manager exactly once.
+  const std::string transportType{TestTransportBufferManager::kTransport};
+  auto manager = std::make_shared<CountingRemoveTaskBufferManager>();
+  auto queryRegistry = OutputTransportRegistry::create();
+  queryRegistry->insert(
+      transportType,
+      OutputTransportEntry::make<CountingRemoveTaskBufferManager>(
+          manager,
+          [](int32_t,
+             DriverCtx*,
+             const std::shared_ptr<const core::PartitionedOutputNode>&,
+             bool,
+             const std::shared_ptr<CountingRemoveTaskBufferManager>&)
+              -> std::unique_ptr<Operator> {
+            VELOX_FAIL("Output operator construction failed");
+          }));
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(OutputTransportRegistry::kRegistryKey, queryRegistry);
+
+  auto task = Task::create(
+      "task-output-start-failure",
+      PlanBuilder()
+          .tableScan(ROW("c0", BIGINT()))
+          .partitionedOutputBroadcast({}, "Presto", transportType)
+          .planFragment(),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_THROW(task->start(1, 1), "Output operator construction failed");
+  EXPECT_EQ(manager->numRemoveTaskCalls, 1);
 }
 
 } // namespace

@@ -1228,12 +1228,18 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
         !createAndStartDrivers(concurrentSplitGroups)) {
       LOG(WARNING) << "Task " << taskId_
                    << " was terminated while starting: " << errorMessage();
+      // The concurrent termination may have run before this start() created
+      // the output buffer.
+      maybeRemoveFromOutputBufferManager();
       finishUnstartedDrivers();
       return;
     }
   } catch (const std::exception&) {
     if (isRunning()) {
+      // Terminates the task, which removes it from the output buffer manager.
       setError(std::current_exception());
+    } else {
+      maybeRemoveFromOutputBufferManager();
     }
     finishUnstartedDrivers();
     throw;
@@ -1241,7 +1247,6 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
 }
 
 void Task::finishUnstartedDrivers() {
-  maybeRemoveFromOutputBufferManager();
   std::lock_guard<std::timed_mutex> l(mutex_);
   // An enqueued driver counts itself as finished when it leaves. Reconcile only
   // if no driver is running or has finished yet, which holds when start()
