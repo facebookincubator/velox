@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 
 #include "velox/common/io/Options.h"
-#include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/index/KeyReader.h"
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/nimble/index/HierarchicalKeyReader.h"
 
 namespace facebook::nimble::index {
 
-std::unique_ptr<ClusterIndex> ClusterIndex::create(
+std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
     Section rootSection,
     velox::memory::MemoryPool* pool,
     const Options& options) {
@@ -31,10 +31,11 @@ std::unique_ptr<ClusterIndex> ClusterIndex::create(
   NIMBLE_CHECK_NOT_NULL(root);
   options.validate();
   NIMBLE_CHECK_EQ(
-      static_cast<const void*>(&options.ioOptions->memoryPool()),
+      static_cast<const void*>(
+          &velox::checkedNotNull(options.ioOptions)->memoryPool()),
       static_cast<const void*>(pool),
       "ioOptions pool must match the provided pool");
-  return std::unique_ptr<ClusterIndex>(new ClusterIndex(
+  return std::unique_ptr<HierarchicalClusterIndex>(new HierarchicalClusterIndex(
       std::move(rootSection),
       createIndexMetadataInput(options),
       createIndexDataInput(options),
@@ -43,7 +44,7 @@ std::unique_ptr<ClusterIndex> ClusterIndex::create(
       pool));
 }
 
-ClusterIndex::ClusterIndex(
+HierarchicalClusterIndex::HierarchicalClusterIndex(
     Section rootSection,
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
@@ -54,16 +55,11 @@ ClusterIndex::ClusterIndex(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
-          [](std::string_view encodedKeys,
-             std::function<void*(uint32_t)> stringBufferFactory,
-             velox::memory::MemoryPool* pool) {
-            return createFlatKeyReader(
-                encodedKeys, std::move(stringBufferFactory), pool);
-          },
+          createHierarchicalKeyReader,
           pinIndex,
           preloadIndex,
           pool) {}
 
-ClusterIndex::~ClusterIndex() = default;
+HierarchicalClusterIndex::~HierarchicalClusterIndex() = default;
 
 } // namespace facebook::nimble::index

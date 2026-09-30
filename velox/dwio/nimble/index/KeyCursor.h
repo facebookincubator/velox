@@ -15,30 +15,23 @@
  */
 #pragma once
 
-#include "velox/dwio/nimble/index/ClusterIndexBase.h"
+#include <string_view>
 
 namespace facebook::nimble::index {
 
-/// Cluster index backed by flat Prefix or Trivial encoded key chunks.
-class ClusterIndex final : public ClusterIndexBase {
+/// Forward cursor over encoded keys in row order.
+///
+/// The cursor is not thread-safe. Its source must outlive it.
+class KeyCursor {
  public:
-  static std::unique_ptr<ClusterIndex> create(
-      Section rootSection,
-      velox::memory::MemoryPool* pool,
-      const Options& options);
+  virtual ~KeyCursor() = default;
 
-  ~ClusterIndex() override;
+  /// Returns whether next() has another key to return.
+  virtual bool hasNext() const = 0;
 
- private:
-  ClusterIndex(
-      Section rootSection,
-      std::shared_ptr<MetadataInput> metadataInput,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
-      bool pinIndex,
-      bool preloadIndex,
-      velox::memory::MemoryPool* pool);
-
-  friend class test::ClusterIndexTestHelper;
+  /// Returns the current encoded key and advances by one row. The returned
+  /// view remains valid until the next next() call or cursor destruction.
+  virtual std::string_view next() = 0;
 };
 
 } // namespace facebook::nimble::index

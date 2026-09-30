@@ -19,26 +19,24 @@
 
 namespace facebook::nimble::index {
 
-/// Cluster index backed by flat Prefix or Trivial encoded key chunks.
-class ClusterIndex final : public ClusterIndexBase {
+/// Cluster index whose key chunks use HierarchicalKeyReader.
+class HierarchicalClusterIndex final : public ClusterIndexBase {
  public:
-  static std::unique_ptr<ClusterIndex> create(
+  static std::unique_ptr<HierarchicalClusterIndex> create(
       Section rootSection,
       velox::memory::MemoryPool* pool,
       const Options& options);
 
-  ~ClusterIndex() override;
+  ~HierarchicalClusterIndex() override;
 
  private:
-  ClusterIndex(
+  HierarchicalClusterIndex(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
       bool pinIndex,
       bool preloadIndex,
       velox::memory::MemoryPool* pool);
-
-  friend class test::ClusterIndexTestHelper;
 };
 
 } // namespace facebook::nimble::index

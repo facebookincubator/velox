@@ -316,12 +316,14 @@ std::string_view asView(const flatbuffers::FlatBufferBuilder& builder) {
 }
 
 const index::ClusterIndexConfig& clusterIndexConfig(
-    const WriterOptions& options) {
+    const index::IndexConfig& config) {
+  const auto* clusterConfig =
+      dynamic_cast<const index::ClusterIndexConfig*>(&config);
   NIMBLE_USER_CHECK_NOT_NULL(
-      options.clusterIndexConfig,
-      "Cluster index key column storage can only be omitted when cluster index is enabled");
-  return index::checkedIndexConfig<index::ClusterIndexConfig>(
-      *options.clusterIndexConfig);
+      clusterConfig,
+      "Cluster index configuration '{}' does not expose key columns.",
+      config.name);
+  return *clusterConfig;
 }
 
 bool omitClusterIndexKeyColumnStorage(const WriterOptions& options) {
@@ -345,10 +347,11 @@ std::vector<velox::column_index_t> storedInputColumnIndices(
   std::vector<velox::column_index_t> indices;
   indices.reserve(rowType->size());
 
-  const auto& indexOptions = clusterIndexConfig(options);
+  const auto& clusterConfig = clusterIndexConfig(
+      *velox::checkedNotNull(options.clusterIndexConfig.get()));
   std::unordered_set<std::string> keyColumns;
-  keyColumns.reserve(indexOptions.columns.size());
-  for (const auto& column : indexOptions.columns) {
+  keyColumns.reserve(clusterConfig.columns.size());
+  for (const auto& column : clusterConfig.columns) {
     NIMBLE_USER_CHECK(
         rowType->containsChild(column),
         "Cluster index key column '{}' not found in input schema: {}",
@@ -518,7 +521,7 @@ detail::WriterContext::Options prepareWriterContextOptions(
         ? TypeWithId::create(storedType)
         : std::move(inputSchema);
 
-    const std::vector<std::string>* clusterIndexKeyColumns{nullptr};
+    const index::ClusterIndexConfig* clusterConfig{nullptr};
     if (options.clusterIndexConfig != nullptr) {
       const auto& config = *options.clusterIndexConfig;
       NIMBLE_USER_CHECK_EQ(
@@ -526,25 +529,18 @@ detail::WriterContext::Options prepareWriterContextOptions(
           index::IndexFamily::Cluster,
           "Cluster index configuration must use the cluster family: {}",
           config.name);
-      const auto* builtInConfig =
-          dynamic_cast<const index::ClusterIndexConfig*>(&config);
-      NIMBLE_USER_CHECK_NOT_NULL(
-          builtInConfig,
-          "FSST subfields cannot be combined with custom cluster index "
-          "configuration '{}': key columns are unavailable.",
-          config.name);
-      clusterIndexKeyColumns = &builtInConfig->columns;
+      clusterConfig = &clusterIndexConfig(config);
     }
 
     fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
     for (const auto& fieldPath : options.fsstEncodingSubfields) {
       const auto subfield = parseValueStreamSubfield(fieldPath);
-      if (clusterIndexKeyColumns != nullptr) {
+      if (clusterConfig != nullptr) {
         NIMBLE_USER_CHECK(
             std::find(
-                clusterIndexKeyColumns->begin(),
-                clusterIndexKeyColumns->end(),
-                subfield.baseName()) == clusterIndexKeyColumns->end(),
+                clusterConfig->columns.begin(),
+                clusterConfig->columns.end(),
+                subfield.baseName()) == clusterConfig->columns.end(),
             "FSST subfield '{}' cannot target cluster index key column '{}'.",
             fieldPath,
             subfield.baseName());
@@ -2413,9 +2409,10 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   bool clusterIndexKeyColumnStorageOmitted{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage;
   if (omitClusterIndexKeyColumnStorage(context_->options())) {
-    const auto& indexOptions = clusterIndexConfig(context_->options());
     clusterIndexKeyColumnStorageOmitted = true;
-    clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
+    const auto& config = *context_->options().clusterIndexConfig;
+    clusterIndexKeyColumnsWithOmittedStorage =
+        clusterIndexConfig(config).columns;
   }
 
   // Read back from the tablet writer rather than from options, so the recorded
