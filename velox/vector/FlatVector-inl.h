@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/hash/Hash.h>
+#include <folly/lang/Assume.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -91,19 +92,17 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
 #ifdef _MSC_VER
-  // MSVC instantiates this method for every T (e.g. via the serializer), even
-  // for complex/opaque element types where folly::hasher is undefined and the
-  // method is never actually called. Guard those to keep the body well-formed;
-  // GCC instantiates lazily and only ever sees the scalar specializations.
-  // folly::hasher<int128_t>/<Timestamp> are provided by Velox, so the scalar
-  // path hashes identically to SimpleVector::hashValueAt.
+  // MSVC eagerly instantiates this method for unsupported element types.
+  // Only instantiate folly::hasher for supported scalar types.
   const auto hasher = [](T value) -> uint64_t {
     if constexpr (
         std::is_arithmetic_v<T> || std::is_same_v<T, StringView> ||
         std::is_same_v<T, Timestamp> || std::is_same_v<T, int128_t>) {
       return folly::hasher<T>()(value);
     } else {
-      return 0;
+      VELOX_UNREACHABLE("FlatVector::hashAll cannot hash this element type");
+      // MSVC does not infer noreturn through the templated exception helper.
+      folly::assume_unreachable();
     }
   };
 #else
