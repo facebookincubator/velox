@@ -27,6 +27,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector {
 namespace {
@@ -48,39 +49,6 @@ class TestConnector : public connector::Connector {
       ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
-    VELOX_NYI();
-  }
-};
-
-class UnusedExpressionEvaluator final : public core::ExpressionEvaluator {
- public:
-  std::unique_ptr<exec::ExprSet> compile(
-      const std::shared_ptr<const core::ITypedExpr>&) override {
-    VELOX_NYI();
-  }
-
-  std::unique_ptr<exec::ExprSet> compile(
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>&) override {
-    VELOX_NYI();
-  }
-
-  void evaluate(
-      exec::ExprSet*,
-      const SelectivityVector&,
-      const RowVector&,
-      VectorPtr&) override {
-    VELOX_NYI();
-  }
-
-  void evaluate(
-      exec::ExprSet*,
-      const SelectivityVector&,
-      const RowVector&,
-      std::vector<VectorPtr>&) override {
-    VELOX_NYI();
-  }
-
-  memory::MemoryPool* pool() override {
     VELOX_NYI();
   }
 };
@@ -129,23 +97,18 @@ TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
   EXPECT_EQ(context.driverId(), 3);
 }
 
-class ConnectorQueryCtxTest : public testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance({});
-  }
-};
-
-TEST_F(ConnectorQueryCtxTest, builderPreservesConfiguredFields) {
-  auto operatorPool = memory::memoryManager()->addLeafPool("builder-operator");
-  auto connectorPool =
-      memory::memoryManager()->addRootPool("builder-connector");
+TEST(ConnectorTest, builderPreservesConfiguredFields) {
+  memory::MemoryManager manager;
+  auto connectorPool = manager.addRootPool("builder-connector");
+  auto operatorPool = connectorPool->addLeafChild("builder-operator");
+  auto queryCtx = core::QueryCtx::Builder().pool(connectorPool).build();
   config::ConfigBase sessionProperties({});
   common::SpillConfig spillConfig{};
   const common::PrefixSortConfig prefixSortConfig{64, 16, 8};
-  auto evaluator = std::make_unique<UnusedExpressionEvaluator>();
+  auto evaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+      queryCtx.get(), operatorPool.get());
   auto* evaluatorPtr = evaluator.get();
-  cache::AsyncDataCache cache{memory::memoryManager()->allocator()};
+  cache::AsyncDataCache cache{manager.allocator()};
   folly::CancellationSource cancellationSource;
   auto tokenProvider =
       std::make_shared<filesystems::PlainUserNameTokenProvider>("test-user");
