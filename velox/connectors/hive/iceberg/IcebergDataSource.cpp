@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
@@ -45,6 +46,19 @@ IcebergDataSource::IcebergDataSource(
   if (!icebergTableHandle || !icebergTableHandle->isChangelogQuery()) {
     return;
   }
+
+  // Validate post-extraction subfield filters.  The pre-construction check in
+  // IcebergConnector::createDataSource validates handle.subfieldFilters()
+  // before FileDataSource's constructor runs.  However, FileDataSource's
+  // constructor calls extractFiltersFromRemainingFilter which can pull
+  // additional entries into filters_  (e.g. "rowdata.id < 50" expressed as a
+  // remainingFilter becomes Subfield("rowdata.id") in filters_).  Those
+  // extracted entries bypass the pre-construction check, and
+  // applyChangelogFilters only inspects operation/ordinal/snapshotid, so the
+  // predicate silently disappears and extra rows are returned.  Re-running the
+  // validation here against the fully-populated filters_ turns the silent miss
+  // into a loud error.
+  IcebergConnector::validateChangelogSubfieldFilters(filters_);
 
   // For changelog queries, build the ChangelogScanContext once so it is
   // reused across all splits.  This lets stats-based filter reordering and
@@ -131,6 +145,13 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
 
   if (changelogScanContext_.has_value()) {
+    // Pass readerOutputType_ (not outputType()) so that columns referenced
+    // only by the remainingFilter — which FileDataSource::constructor appended
+    // to readerOutputType_ but omitted from outputType_ — are present in the
+    // RowVector that evaluateRemainingFilter receives. FileDataSource::addSplit
+    // overwrites readerOutputType_ with splitReader_->readerOutputType() after
+    // createSplitReader() returns; passing the pre-overwrite value here ensures
+    // the shape matches what the compiled ExprSet expects.
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
@@ -143,7 +164,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
         ioStats_,
         fileHandleFactory_,
         ioExecutor_,
-        outputType(),
+        readerOutputType_,
         *columnHandles_,
         &filters_,
         &changelogDynamicFilters_);

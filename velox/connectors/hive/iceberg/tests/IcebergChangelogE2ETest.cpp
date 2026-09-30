@@ -21,6 +21,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -815,6 +816,114 @@ TEST_F(IcebergChangelogE2ETest, unknownColumnFilterIsRejected) {
           .copyResults(pool()),
       "Subfield filter pushdown on '$path' is not supported for changelog "
       "queries");
+}
+
+TEST_F(IcebergChangelogE2ETest, rowdataRemainingFilterSilentlyDropped) {
+  std::string dataFilePath = writeTestFile();
+  auto changelogSplit =
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kInsert, 1, 12'345);
+
+  // Compile "rowdata.id < 50" against the changelog output type so that
+  // extractFiltersFromRemainingFilter can parse it as a subfield filter.
+  auto parsedExpr =
+      parse::DuckSqlExpressionsParser().parseExpr("rowdata.id < 50");
+  auto typedExpr =
+      core::Expressions::inferTypes(parsedExpr, changelogOutputType_, pool());
+
+  // Build a changelog table handle that carries the expression as a
+  // remainingFilter (not a subfieldFilter), mimicking a scan-level pushdown.
+  auto handleWithRemainingFilter = std::make_shared<IcebergTableHandle>(
+      test::kIcebergConnectorId,
+      "test_table",
+      /*subfieldFilters=*/common::SubfieldFilters{},
+      /*remainingFilter=*/typedExpr,
+      /*dataColumns=*/dataRowType_,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      /*filterColumnHandles=*/std::vector<IcebergColumnHandlePtr>{},
+      /*sampleRate=*/1.0,
+      /*dbName=*/"",
+      /*dataColumnFieldIds=*/std::vector<int32_t>{},
+      /*isChangelogQuery=*/true,
+      test::IcebergTestBase::makeDataColumnHandles(dataRowType_));
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(handleWithRemainingFilter)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      exec::test::AssertQueryBuilder(plan)
+          .split(changelogSplit)
+          .copyResults(pool()),
+      "Subfield filter pushdown on 'rowdata' is not supported for changelog "
+      "queries");
+}
+
+TEST_F(IcebergChangelogE2ETest, filterOnlyColumnMissingFromReaderOutputType) {
+  std::string dataFilePath = writeTestFile();
+
+  // Two splits with distinct snapshotids; only snapshotid=200 should survive.
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kInsert, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::kDelete, 2, 200),
+  };
+
+  // Project only 'operation' — snapshotid is NOT in the output type.
+  auto opOnlyType = ROW({{"operation", VARCHAR()}});
+  auto opOnlyHandles =
+      ColumnHandleMap{{"operation", changelogColumnHandles_.at("operation")}};
+
+  // A non-extractable remaining filter that references snapshotid:
+  // cast(snapshotid as varchar) cannot be reduced to a simple subfield filter
+  // by ExprToSubfieldFilterParser, so it stays as a remainingFilter and causes
+  // FileDataSource to append snapshotid to readerOutputType_ as a filter-only
+  // column.
+  auto parsedExpr = parse::DuckSqlExpressionsParser().parseExpr(
+      "cast(snapshotid as varchar) = '200'");
+  auto typedExpr =
+      core::Expressions::inferTypes(parsedExpr, changelogOutputType_, pool());
+
+  auto handleWithRemainingFilter = std::make_shared<IcebergTableHandle>(
+      test::kIcebergConnectorId,
+      "test_table",
+      /*subfieldFilters=*/common::SubfieldFilters{},
+      /*remainingFilter=*/typedExpr,
+      /*dataColumns=*/dataRowType_,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      /*filterColumnHandles=*/std::vector<IcebergColumnHandlePtr>{},
+      /*sampleRate=*/1.0,
+      /*dbName=*/"",
+      /*dataColumnFieldIds=*/std::vector<int32_t>{},
+      /*isChangelogQuery=*/true,
+      test::IcebergTestBase::makeDataColumnHandles(dataRowType_));
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(opOnlyType)
+                  .tableHandle(handleWithRemainingFilter)
+                  .assignments(opOnlyHandles)
+                  .endTableScan()
+                  .planNode();
+
+  auto result =
+      exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  ASSERT_NE(result, nullptr);
+  // Only the DELETE split (snapshotid=200) passes cast(snapshotid as
+  // varchar)='200'.
+  ASSERT_EQ(result->size(), expectedRows());
+
+  auto operationVector = result->childAt(0)->as<SimpleVector<StringView>>();
+  for (auto i = 0; i < result->size(); i++) {
+    ASSERT_EQ(operationVector->valueAt(i), StringView(kChangelogOpDelete));
+  }
 }
 
 } // namespace

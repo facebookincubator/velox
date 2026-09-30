@@ -223,14 +223,15 @@ uint64_t IcebergChangelogSplitReader::next(uint64_t size, VectorPtr& output) {
   for (column_index_t i = 0; i < changelogOutputType_->size(); ++i) {
     const auto& outputColName = changelogOutputType_->nameOf(i);
 
-    // Resolve the physical field name via changelog column handles.
+    // Resolve the physical field name via changelog column handles.  For
+    // filter-only columns that are in readerOutputType_ but absent from the
+    // output assignments (changelogColumnHandles_), use the column name itself
+    // as the field name — changelog metadata columns always share the same
+    // output and physical names.
     auto it = changelogColumnHandles_.find(outputColName);
-    VELOX_CHECK(
-        it != changelogColumnHandles_.end(),
-        "No column handle found for changelog output column '{}'.",
-        outputColName);
-    const auto& fieldName =
-        static_cast<const FileColumnHandle*>(it->second.get())->name();
+    const auto& fieldName = (it != changelogColumnHandles_.end())
+        ? static_cast<const FileColumnHandle*>(it->second.get())->name()
+        : outputColName;
 
     changelogColumns.push_back(
         buildChangelogColumn(*dataRowVector, fieldName, i, positionCount));
