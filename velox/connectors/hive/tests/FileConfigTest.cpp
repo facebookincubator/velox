@@ -57,7 +57,6 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_FALSE(config.nimbleDictionaryAwareReads(emptySession.get()));
   EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
-
 }
 
 TEST(FileConfigTest, overrideConfig) {

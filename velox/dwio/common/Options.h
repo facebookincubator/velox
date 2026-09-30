@@ -608,6 +608,20 @@ class RowReaderOptions {
     return lazyColumnIo_;
   }
 
+  /// If true, columns the reader produces as LazyVectors are not enqueued
+  /// with their row group until the scan shows they are needed: a row passed
+  /// the filters (RowReader::hintLazyColumnsNeeded()) or the column was read.
+  /// Set per scan from the table parameter
+  /// TableParameter::kDeferLazyColumnPrefetch, see
+  /// connector::hive::configureRowReaderOptions().
+  bool deferLazyColumnPrefetch() const {
+    return deferLazyColumnPrefetch_;
+  }
+
+  void setDeferLazyColumnPrefetch(bool defer) {
+    deferLazyColumnPrefetch_ = defer;
+  }
+
   void setLazyColumnIo(bool lazyColumnIo) {
     lazyColumnIo_ = lazyColumnIo;
   }
@@ -706,6 +720,7 @@ class RowReaderOptions {
   bool nimbleDictionaryAwareReads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
+  bool deferLazyColumnPrefetch_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
   bool collectColumnCpuMetrics_{false};
 };
