@@ -470,4 +470,8 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
     "nimble.flatmap.skip_constant_in_map_streams",
     false);
+
+/* static */ Config::Entry<bool> Config::ENABLE_STREAM_CHECKSUMS(
+    "nimble.stream_checksums.enabled",
+    false);
 } // namespace facebook::nimble
