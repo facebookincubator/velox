@@ -76,9 +76,16 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // Writable encodings that this fuzzer target intentionally does not force.
 // The unfiltered random policy also omits these; this list keeps the repair
 // phase and coverage gate from adding them back. This is not a global
-// unsupported-encoding list.
+// unsupported-encoding list. SubIntSplit is forced where it is compiled in,
+// since its size estimate lets the random policy screen it like any other
+// candidate.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+constexpr auto kExcludedFuzzerCandidateEncodings =
+    std::to_array({EncodingType::Huffman});
+#else
 constexpr auto kExcludedFuzzerCandidateEncodings =
     std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
+#endif
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -206,11 +213,13 @@ constexpr uint64_t kMinPairFiles = 10;
 
 // Encodings EncodingSizeEstimation can decline on the values rather than on
 // the stream type alone: Constant needs a single-valued stream, DeltaBlock a
-// per-block non-decreasing one, Huffman an alphabet of at least two values.
+// per-block non-decreasing one, Huffman an alphabet of at least two values,
+// and SubIntSplit declines a stream the writer compresses afterwards.
 // Whether they land is therefore a property of the data draw rather than of
 // the schema, so unappliedPairs() reports them but does not demand them.
 bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
+      encodingType == EncodingType::SubIntSplit ||
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::Huffman;
@@ -245,6 +254,16 @@ EncodingSelectionPolicyCreator gateFloatingPointStreams(
 }
 
 CompressionType randomCompressionType(FuzzerGenerator& rng) {
+  // A build with DISABLE_META_INTERNAL_COMPRESSOR registers no MetaInternal
+  // compressor, so writing with it fails before anything is fuzzed.
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+  static constexpr std::array<CompressionType, 4> kCompressionTypes = {
+      CompressionType::Uncompressed,
+      CompressionType::Zstd,
+      CompressionType::Lz4,
+      CompressionType::OpenZL,
+  };
+#else
   static constexpr std::array<CompressionType, 5> kCompressionTypes = {
       CompressionType::Uncompressed,
       CompressionType::Zstd,
@@ -252,6 +271,7 @@ CompressionType randomCompressionType(FuzzerGenerator& rng) {
       CompressionType::Lz4,
       CompressionType::OpenZL,
   };
+#endif
   return kCompressionTypes[folly::Random::rand32(
       kCompressionTypes.size(), rng)];
 }
@@ -923,6 +943,10 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   // narrow integers are excluded while float and double are not -- their
   // physical types are integral and already 4 or 8 bytes wide.
   if (encodingType == EncodingType::Varint) {
+    return logicalTypeSize(dataType) >= 4;
+  }
+  // SubIntSplit splits 32- and 64-bit physical values only.
+  if (encodingType == EncodingType::SubIntSplit) {
     return logicalTypeSize(dataType) >= 4;
   }
   return isNumericCompatible(encodingType);
@@ -2037,7 +2061,20 @@ bool NimbleWriterFuzzer::verifyReaderPaths(
   recordForcedCoverage(file, encodingType);
   const auto selectionContext =
       fmt::format("encoding {}", toString(encodingType));
+  // The legacy factories do not dispatch SubIntSplit, so a file forced to it
+  // is read through the default factory's paths.
+  std::vector<ReaderPath> decodingPaths;
   for (const auto readerPath : readerPaths) {
+    if (encodingType != EncodingType::SubIntSplit ||
+        (readerPath != ReaderPath::kLegacyFactory &&
+         readerPath != ReaderPath::kSelectiveLegacyDispatch)) {
+      decodingPaths.push_back(readerPath);
+    }
+  }
+  if (decodingPaths.empty()) {
+    decodingPaths.push_back(ReaderPath::kSelectiveDefaultDispatch);
+  }
+  for (const auto readerPath : decodingPaths) {
     readAndVerify(file, schema, batches, selectionContext, readerPath);
   }
   return coverage_[encodingType].numChunksApplied > appliedBefore;

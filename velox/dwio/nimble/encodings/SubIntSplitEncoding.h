@@ -1627,6 +1627,7 @@ subintsplit::SamplerConfig SubIntSplitEncoding<T>::estimatorSamplerConfig() {
   return subintsplit::SamplerConfig{.maxSamples = 512, .blockSize = 64};
 }
 
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 template <typename T>
 std::optional<uint64_t> SubIntSplitEncoding<T>::estimateSize(
     uint64_t rowCount,
@@ -1740,6 +1741,7 @@ std::optional<uint64_t> SubIntSplitEncoding<T>::estimateSizeLowerBound(
   return FixedBitWidthEncoding<physicalType>::estimateSize(
       values.size(), statistics, options);
 }
+#endif
 
 template <typename T>
 std::string_view SubIntSplitEncoding<T>::encodeResiduals(
