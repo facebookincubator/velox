@@ -240,6 +240,12 @@ class NimbleIndexProjector {
     uint64_t numProjectedRows{0};
     /// Total serialized or vector-retained output bytes.
     uint64_t numOutputBytes{0};
+    /// Projected stream bytes charged against Options::maxBytes: the running
+    /// total that decides where a byte-limited projection stops.
+    uint64_t numPlannedBytes{0};
+    /// Number of projections that stopped with stripes left to read because
+    /// numPlannedBytes reached Options::maxBytes.
+    uint32_t numMaxBytesTruncations{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
