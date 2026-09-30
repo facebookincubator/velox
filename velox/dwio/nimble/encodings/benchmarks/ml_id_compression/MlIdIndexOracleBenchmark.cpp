@@ -236,7 +236,7 @@ int runBenchmark() {
             NimbleBenchTargetImpl<FrequencyPartitionEncoding<Elem>>>();
         facebook::nimble::Encoding::Options o;
         o.frequencyPartitionIndex = it.idx;
-        impl->target.encode(data, o);
+        impl->target.encode(data, o, subintsplit::kDefaultTuningConfig);
         target = std::unique_ptr<NimbleBenchTargetBase<Elem>>(std::move(impl));
       } catch (const std::exception& ex) {
         std::cerr << "  [SKIP] " << it.name << ": " << ex.what() << "\n";
