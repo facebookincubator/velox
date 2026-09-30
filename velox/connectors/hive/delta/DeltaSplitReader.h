@@ -61,4 +61,10 @@ class DeltaSplitReader : public HiveSplitReader {
       const RowTypePtr& tableSchema) const override;
 };
 
+/// Registers DeltaSplitReader as the factory for the "hive-delta" table
+/// format on HiveSplitReader. Call once at process startup so
+/// HiveSplitReader::create() can dispatch Delta splits without the base
+/// Hive connector depending on Delta symbols directly. Idempotent.
+void registerHiveDeltaSplitReader();
+
 } // namespace facebook::velox::connector::hive::delta

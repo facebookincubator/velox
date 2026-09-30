@@ -31,6 +31,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"

@@ -18,11 +18,56 @@
 
 #include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/HiveSplitReader.h"
 #include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 
 using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox::connector::hive::delta {
+
+void registerHiveDeltaSplitReader() {
+  HiveSplitReader::registerFactory(
+      "hive-delta",
+      [](const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+         const FileTableHandlePtr& tableHandle,
+         const std::unordered_map<std::string, FileColumnHandlePtr>*
+             partitionKeys,
+         const ConnectorQueryCtx* connectorQueryCtx,
+         const std::shared_ptr<const FileConfig>& fileConfig,
+         const RowTypePtr& readerOutputType,
+         const std::shared_ptr<io::IoStatistics>& dataIoStats,
+         const std::shared_ptr<io::IoStatistics>& metadataIoStats,
+         const std::shared_ptr<IoStats>& ioStats,
+         FileHandleFactory* fileHandleFactory,
+         folly::Executor* ioExecutor,
+         const std::shared_ptr<common::ScanSpec>& scanSpec,
+         const std::unordered_map<std::string, FileColumnHandlePtr>*
+             infoColumns,
+         std::vector<column_index_t> bucketChannels,
+         const common::SubfieldFilters* subfieldFiltersForValidation)
+          -> std::unique_ptr<FileSplitReader> {
+        auto deltaSplit =
+            std::dynamic_pointer_cast<const HiveDeltaSplit>(hiveSplit);
+        VELOX_CHECK_NOT_NULL(
+            deltaSplit, "Expected HiveDeltaSplit for table_format=hive-delta");
+        return std::make_unique<DeltaSplitReader>(
+            deltaSplit,
+            tableHandle,
+            partitionKeys,
+            connectorQueryCtx,
+            fileConfig,
+            readerOutputType,
+            dataIoStats,
+            metadataIoStats,
+            ioStats,
+            fileHandleFactory,
+            ioExecutor,
+            scanSpec,
+            infoColumns,
+            std::move(bucketChannels),
+            subfieldFiltersForValidation);
+      });
+}
 
 DeltaSplitReader::DeltaSplitReader(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
@@ -68,19 +113,19 @@ void DeltaSplitReader::prepareSplit(
       deltaSplit == nullptr || !deltaSplit->hasDeletionVector,
       "Reading Delta files with a deletion vector is not supported.");
 
+  // Reads by logical column name. For Delta tables with column mapping mode
+  // 'name' or 'id', physical Parquet column names are opaque IDs
+  // (col-<uuid>) that do not match the logical names, so kName would silently
+  // read the wrong column. The coordinator is responsible for translating
+  // logical names to the physical names and sending the physical schema to
+  // the worker; this reader assumes that translation has already happened
+  // and does not attempt to resolve column mapping metadata itself.
   baseReaderOpts_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
-  createReader(fileReadOps);
-  if (emptySplit_) {
-    return;
-  }
-  auto rowType = getAdaptedRowType();
 
-  if (checkIfSplitIsEmpty(runtimeStats)) {
-    VELOX_CHECK(emptySplit_);
-    return;
-  }
-
-  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
+  // Delegate to the base Hive read path; adaptColumns() is virtual and picks
+  // up this class's override.
+  HiveSplitReader::prepareSplit(
+      std::move(metadataFilter), runtimeStats, fileReadOps);
 }
 
 uint64_t DeltaSplitReader::next(uint64_t size, VectorPtr& output) {
@@ -155,6 +200,11 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
       }
     }
   }
+
+  // The ScanSpec is reused across splits within a DataSource; the child specs
+  // above may have flipped between constant and non-constant, so invalidate
+  // the cached hasFilter_ derivation before the next split evaluates it.
+  scanSpec_->resetCachedValues(false);
 
   return columnTypes;
 }

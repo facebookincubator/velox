@@ -20,10 +20,25 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/delta/DeltaSplitReader.h"
-#include "velox/connectors/hive/delta/HiveDeltaSplit.h"
 
 namespace facebook::velox::connector::hive {
+
+namespace {
+// Registry keyed on customSplitInfo["table_format"]. See registerFactory().
+folly::F14FastMap<std::string, HiveSplitReader::SplitReaderFactory>&
+splitReaderFactories() {
+  static folly::F14FastMap<std::string, HiveSplitReader::SplitReaderFactory>
+      factories;
+  return factories;
+}
+} // namespace
+
+// static
+void HiveSplitReader::registerFactory(
+    std::string tableFormat,
+    SplitReaderFactory factory) {
+  splitReaderFactories()[std::move(tableFormat)] = std::move(factory);
+}
 
 std::unique_ptr<FileSplitReader> HiveSplitReader::create(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
@@ -41,16 +56,15 @@ std::unique_ptr<FileSplitReader> HiveSplitReader::create(
     const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
     std::vector<column_index_t> bucketChannels,
     const common::SubfieldFilters* subfieldFiltersForValidation) {
-  // Create the SplitReader based on hiveSplit->customSplitInfo["table_format"].
+  // Dispatch to a table-format-specific factory (registered by the format's
+  // own module) if customSplitInfo["table_format"] matches a known key.
   if (auto it = hiveSplit->customSplitInfo.find("table_format");
       it != hiveSplit->customSplitInfo.end()) {
-    if (it->second == "hive-delta") {
-      auto deltaSplit =
-          std::dynamic_pointer_cast<const delta::HiveDeltaSplit>(hiveSplit);
-      VELOX_CHECK_NOT_NULL(
-          deltaSplit, "Expected HiveDeltaSplit for table_format=hive-delta");
-      return std::make_unique<delta::DeltaSplitReader>(
-          deltaSplit,
+    const auto& factories = splitReaderFactories();
+    if (auto factoryIt = factories.find(it->second);
+        factoryIt != factories.end()) {
+      return factoryIt->second(
+          hiveSplit,
           tableHandle,
           partitionKeys,
           connectorQueryCtx,
@@ -68,7 +82,7 @@ std::unique_ptr<FileSplitReader> HiveSplitReader::create(
     }
   }
 
-  // Default to HiveSplitReader for regular Hive tables
+  // Default to HiveSplitReader for regular Hive tables.
   return std::make_unique<HiveSplitReader>(
       hiveSplit,
       tableHandle,
