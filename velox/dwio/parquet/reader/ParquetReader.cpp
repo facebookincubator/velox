@@ -1628,10 +1628,9 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
-    if (auto* root = dynamic_cast<StructColumnReader*>(columnReader_.get())) {
-      root->setDeferLazyColumnPrefetch(
-          readerBase_->options().deferLazyColumnPrefetch());
-    }
+    // The root of a Parquet column reader tree is always a StructColumnReader.
+    static_cast<StructColumnReader&>(*columnReader_)
+        .setDeferLazyColumnPrefetch(options_.deferLazyColumnPrefetch());
 
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
@@ -1793,9 +1792,7 @@ class ParquetRowReader::Impl {
   }
 
   void hintLazyColumnsNeeded() {
-    if (auto* root = dynamic_cast<StructColumnReader*>(columnReader_.get())) {
-      root->markAllLazyColumnsNeeded();
-    }
+    static_cast<StructColumnReader&>(*columnReader_).markAllLazyColumnsNeeded();
   }
 
   void resetFilterCaches() {

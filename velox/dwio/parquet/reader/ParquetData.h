@@ -17,6 +17,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
@@ -270,7 +271,7 @@ class ParquetData : public dwio::common::FormatData {
   // Lazily loaded column support. seekToRowGroup() on a row group whose
   // stream was not enqueued records it here; the stream and PageReader are
   // created on first use by ensureReader().
-  int64_t pendingRowGroup_{-1};
+  std::optional<uint32_t> pendingRowGroup_;
   std::function<void(uint32_t)> onLazyColumnNeeded_;
 
   void ensureReader();

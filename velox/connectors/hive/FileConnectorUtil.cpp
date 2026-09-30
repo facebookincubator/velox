@@ -82,18 +82,6 @@ dwio::common::ColumnMappingMode sessionColumnMappingMode(
 
 } // namespace
 
-bool deferLazyColumnPrefetch(const FileTableHandle& tableHandle) {
-  const auto& parameters = tableHandle.tableParameters();
-  const auto it =
-      parameters.find(dwio::common::TableParameter::kDeferLazyColumnPrefetch);
-  if (it == parameters.end() || !folly::to<bool>(it->second)) {
-    return false;
-  }
-  // Without a filter no row is ever eliminated, so nothing would be saved.
-  return !tableHandle.subfieldFilters().empty() ||
-      tableHandle.remainingFilter() != nullptr;
-}
-
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -107,9 +95,6 @@ void configureReaderOptions(
       fileSplit,
       tableHandle->tableParameters(),
       readerOptions);
-  // Decided per scan from the table handle's parameters and filters.
-  readerOptions.setDeferLazyColumnPrefetch(
-      deferLazyColumnPrefetch(*tableHandle));
 }
 
 void configureReaderOptions(
@@ -224,6 +209,16 @@ void configureRowReaderOptions(
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
+  }
+  // Deferring the prefetch of lazily loaded columns only pays when the scan's
+  // filters eliminate rows. Without a subfield filter and without a remaining
+  // filter every row survives, so the scan stays eager whatever the parameter
+  // says.
+  auto deferIt = tableParameters.find(
+      dwio::common::TableParameter::kDeferLazyColumnPrefetch);
+  if (deferIt != tableParameters.end() && folly::to<bool>(deferIt->second) &&
+      ((scanSpec && scanSpec->hasFilter()) || metadataFilter != nullptr)) {
+    rowReaderOptions.setDeferLazyColumnPrefetch(true);
   }
   rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setIOExecutor(ioExecutor);

@@ -144,7 +144,7 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
     pendingRowGroup_ = index;
     return dwio::common::PositionProvider(empty);
   }
-  pendingRowGroup_ = -1;
+  pendingRowGroup_.reset();
   createReader(index);
   return dwio::common::PositionProvider(empty);
 }
@@ -167,9 +167,9 @@ void ParquetData::ensureReader() {
   if (reader_) {
     return;
   }
-  VELOX_CHECK_GE(pendingRowGroup_, 0, "No row group selected for column");
-  const auto index = static_cast<uint32_t>(pendingRowGroup_);
-  pendingRowGroup_ = -1;
+  VELOX_CHECK(pendingRowGroup_.has_value(), "No row group selected for column");
+  const auto index = *pendingRowGroup_;
+  pendingRowGroup_.reset();
   if (!isRowGroupEnqueued(index)) {
     // No hint arrived before the first read: the owner enqueues and loads the
     // chunk now, and keeps enqueueing this column with the following row

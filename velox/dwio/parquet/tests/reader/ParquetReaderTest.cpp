@@ -2715,9 +2715,9 @@ class RecordingBufferedInput : public dwio::common::BufferedInput {
 
 } // namespace
 
-// Tests for ReaderOptions::deferLazyColumnPrefetch(). The file has kGroups row
-// groups of kRowsPerGroup rows and three columns: 'a' (even numbers) carries
-// the filter; 'b' and 'c' are projected without a filter, so the reader
+// Tests for RowReaderOptions::deferLazyColumnPrefetch(). The file has kGroups
+// row groups of kRowsPerGroup rows and three columns: 'a' (even numbers)
+// carries the filter; 'b' and 'c' are projected without a filter, so the reader
 // produces them as LazyVectors and, with the option on, does not enqueue their
 // chunks until they are needed.
 class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
@@ -2781,7 +2781,9 @@ class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
     return common::createBigintValues(values, false);
   }
 
+  // Records 'defer' for the row reader options; see makeRowReader().
   dwio::common::ReaderOptions makeReaderOptions(bool defer) {
+    defer_ = defer;
     auto options = makeDefaultReaderOptions();
     // Read chunks individually: a file smaller than either threshold would be
     // read whole up front and nothing would be deferred.
@@ -2789,7 +2791,6 @@ class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
     options.setFooterSpeculativeIoSize(1024);
     VELOX_CHECK_GT(fileData_->size(), 1024);
     options.setPrefetchRowGroups(1);
-    options.setDeferLazyColumnPrefetch(defer);
     return options;
   }
 
@@ -2810,6 +2811,7 @@ class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
     scanSpec->childByName("a")->setFilter(std::move(filterOnA));
     auto options = makeRowReaderOpts(rowType_);
     options.setScanSpec(scanSpec);
+    options.setDeferLazyColumnPrefetch(defer_);
     rowReader_ = reader.createRowReader(options);
     auto* parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader_.get());
     VELOX_CHECK_NOT_NULL(parquetRowReader);
@@ -2862,6 +2864,7 @@ class ParquetDeferLazyColumnPrefetchTest : public ParquetReaderTest {
 
   RowTypePtr rowType_;
   std::shared_ptr<std::string> fileData_;
+  bool defer_{false};
   std::shared_ptr<RecordingBufferedInput::Log> chunkLog_;
   std::unique_ptr<dwio::common::RowReader> rowReader_;
   VectorPtr result_;
