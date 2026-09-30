@@ -36,6 +36,17 @@ using namespace facebook::velox; // NOLINT(google-build-using-namespace)
 
 namespace {
 
+bool hasProjectedHybridFlatMaps(const NimbleTypeProjection& projection) {
+  const auto& root = projection.nimbleType->asRow();
+  for (size_t i = 0; i < root.childrenCount(); ++i) {
+    if (root.childAt(i)->isHybridFlatMap() &&
+        root.childAt(i)->asHybridFlatMap().groupCount() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void validateReaderOptions(const velox::dwio::common::ReaderOptions& options) {
   NIMBLE_CHECK_NOT_NULL(
       options.dataIoStats(),
@@ -219,6 +230,7 @@ NimbleIndexProjector::NimbleIndexProjector(
       clusterIndex_{tablet_->clusterIndex()},
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
+      hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
       streamSlicer_{std::make_unique<serde::StreamSlicer>(
           projection_->nimbleType,
           pool_,
@@ -360,7 +372,7 @@ void NimbleIndexProjector::prepareStripes() {
       static_cast<uint32_t>(ctx_.stripeRanges.resolvedStripes.size());
   ctx_.plan.stripeIndices.reserve(numResolvedStripes);
   ctx_.plan.numRows.reserve(numResolvedStripes);
-  ctx_.plan.requiresNullBarriers.reserve(numResolvedStripes);
+  ctx_.plan.requiredBarriers.reserve(numResolvedStripes);
   ctx_.plan.numStreams.reserve(numResolvedStripes);
   ctx_.plan.projectedBytes.reserve(numResolvedStripes);
   ctx_.plan.stripeFileOffsets.reserve(numResolvedStripes);
@@ -498,7 +510,7 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.stripeRanges.clear();
   ctx_.plan.stripeIndices.clear();
   ctx_.plan.numRows.clear();
-  ctx_.plan.requiresNullBarriers.clear();
+  ctx_.plan.requiredBarriers.clear();
   ctx_.plan.numStreams.clear();
   ctx_.plan.projectedBytes.clear();
   ctx_.plan.stripeFileOffsets.clear();
@@ -923,7 +935,7 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
   tablet_->streamLocations(
       stripeId, projection_->streamOffsets, projectedStreams);
 
-  StripeStreams streams;
+  StripeStreams streams{.requiredBarrier = hasProjectedHybridFlatMaps_};
   for (size_t i = 0; i < projectedStreams.size(); ++i) {
     const auto& stream = projectedStreams[i];
     if (stream.size == 0) {
@@ -932,8 +944,8 @@ NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
     ++streams.numStreams;
     streams.projectedBytes += stream.size;
     if (projection_->rowOrFlatMapNullStreams[i]) {
-      // A present Row/FlatMap null stream means the slice may carry nulls.
-      streams.requiresNullBarrier = true;
+      // A present barrier-sensitive stream also requires isolated decoding.
+      streams.requiredBarrier = true;
     }
   }
   return streams;
@@ -948,7 +960,7 @@ void NimbleIndexProjector::appendStripePlan(
   auto& plan = ctx_.plan;
   plan.stripeIndices.push_back(stripeIndex);
   plan.numRows.push_back(stripeRowCount(stripeIndex));
-  plan.requiresNullBarriers.push_back(streams.requiresNullBarrier);
+  plan.requiredBarriers.push_back(streams.requiredBarrier);
   plan.numStreams.push_back(streams.numStreams);
   plan.projectedBytes.push_back(streams.projectedBytes);
   plan.stripeFileOffsets.push_back(tablet_->stripeOffset(stripeIndex));
@@ -991,7 +1003,11 @@ NimbleIndexProjector::plannedStripeRanges(size_t stripeOffset) const {
 
 RowRange NimbleIndexProjector::stripeRowRangeToPack(size_t stripeOffset) const {
   const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
-  if (ctx_.options->maxOverfetchRowsRatio >= 1.0) {
+  // Hybrid FlatMap key catalogs, in-map bits, and values are key-major. They
+  // cannot be sliced as one contiguous row range, so retain the complete
+  // physical batch and let the kTablet row range restrict materialization.
+  if (hasProjectedHybridFlatMaps_ ||
+      ctx_.options->maxOverfetchRowsRatio >= 1.0) {
     return stripeRange;
   }
 
@@ -1142,7 +1158,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
   return {
       .body = std::move(*chain),
       .rowRange = stripeRange,
-      .requiresNullBarrier = ctx_.plan.requiresNullBarriers[stripeOffset],
+      .requiredBarrier = ctx_.plan.requiredBarriers[stripeOffset],
       .streamHasChunkHeader = true,
   };
 }
@@ -1278,7 +1294,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
   return {
       .body = std::move(*chain),
       .rowRange = packRange,
-      .requiresNullBarrier = sliced.requiresNullBarrier,
+      .requiredBarrier = sliced.requiredBarrier,
       .streamHasChunkHeader = false,
   };
 }
@@ -1351,7 +1367,7 @@ namespace {
 /// Builds a kTablet IOBuf chain: [header] -> [shared body+trailer].
 folly::IOBuf assembleStripeSlice(
     uint32_t numRows,
-    bool requiresNullBarrier,
+    bool requiredBarrier,
     bool streamEncodingUsesVarintRowCount,
     bool streamHasChunkHeader,
     RowRange rowRange,
@@ -1359,7 +1375,7 @@ folly::IOBuf assembleStripeSlice(
     std::optional<std::string> resumeKey = std::nullopt) {
   serde::TabletChunkHeader header{
       .rowCount = numRows,
-      .requiresNullBarrier = requiresNullBarrier,
+      .requiredBarrier = requiredBarrier,
       .streamEncodingUsesVarintRowCount = streamEncodingUsesVarintRowCount,
       .streamHasChunkHeader = streamHasChunkHeader,
       .rowRange = rowRange,
@@ -1412,7 +1428,7 @@ void NimbleIndexProjector::buildResult(SerializedResult& result) {
       auto& response = result.responses[range.requestIndex];
       response.slices.emplace_back(assembleStripeSlice(
           packedStripe.rowRange.numRows(),
-          packedStripe.requiresNullBarrier,
+          packedStripe.requiredBarrier,
           tablet_->properties().compactRowCountEncoding(),
           packedStripe.streamHasChunkHeader,
           packedRelativeRange,

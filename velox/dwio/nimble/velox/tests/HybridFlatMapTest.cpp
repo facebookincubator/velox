@@ -89,6 +89,24 @@ TEST(HybridFlatMapTest, supportedKeyKinds) {
   }
 }
 
+TEST(HybridFlatMapTest, identifiesDefaultGroup) {
+  EXPECT_TRUE(HybridFlatMap::isDefaultGroup(HybridFlatMap::kDefaultGroupId));
+  EXPECT_FALSE(HybridFlatMap::isDefaultGroup(0));
+  EXPECT_FALSE(
+      HybridFlatMap::isDefaultGroup(HybridFlatMap::kDefaultGroupId - 1));
+}
+
+TEST(HybridFlatMapTest, getsGroupById) {
+  const auto hybridMap = metadata();
+
+  EXPECT_EQ(hybridMap.groupById(7), hybridMap.groups[0]);
+  EXPECT_EQ(hybridMap.groupById(11), hybridMap.groups[1]);
+  EXPECT_EQ(
+      hybridMap.groupById(HybridFlatMap::kDefaultGroupId), hybridMap.groups[2]);
+  NIMBLE_ASSERT_THROW(
+      hybridMap.groupById(8), "Hybrid FlatMap group ID is missing: 8");
+}
+
 TEST(HybridFlatMapTest, metadataRoundTripPreservesFlattenedOrderAndBinaryKeys) {
   const auto expected = metadata();
   const auto serialized = expected.serialize();

@@ -127,6 +127,34 @@ TEST(ChunkedStreamDecoderTest, rejectsSelectedReads) {
       "ChunkedStreamDecoder does not support selective row decoding");
 }
 
+TEST(ChunkedStreamDecoderTest, rejectsReadingAllRows) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const nimble::MetricsLogger logger;
+  nimble::ChunkedStreamDecoder decoder{
+      *pool,
+      /*stream=*/nullptr,
+      [](velox::memory::MemoryPool&,
+         std::string_view,
+         const std::function<void*(uint32_t)>&) {
+        return std::unique_ptr<nimble::Encoding>{};
+      },
+      /*stringDecoderZeroCopy=*/true,
+      logger};
+  bool preparedOutput{false};
+  std::vector<velox::BufferPtr> stringBuffers;
+
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          [&](uint32_t) -> void* {
+            preparedOutput = true;
+            return nullptr;
+          },
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "ChunkedStreamDecoder does not support reading all rows");
+  EXPECT_FALSE(preparedOutput);
+}
+
 template <typename E>
 std::unique_ptr<nimble::StreamLoader> createStream(
     velox::memory::MemoryPool& memoryPool,
