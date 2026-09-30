@@ -208,6 +208,10 @@ only when flag bit one is set (row frame):
   uint8  guard, 0xFE
   uint64 slope
   uint64 base
+only when flag bit two is set (section transforms):
+  uint8  key section, or 0xFF for none
+  repeat number of sections times:
+    uint8  transform id, 0 for none
 repeat number of sections times:
   uint8  first bit, inclusive
   uint8  last bit, inclusive
@@ -223,8 +227,12 @@ row count, and encoding-specific bytes.
 
 Flag bit zero records the optional zigzag-delta pre-transform. Flag bit one
 records a row frame and announces the 17-byte frame block after the flags byte.
-A reader rejects any flag it does not know, and rejects a delta stream that
-also carries a frame. Streams written before the flags were introduced have a
+Flag bit two announces the transform block, and is set only on a stream written
+as `SubIntSplitReordered` (encoding type 27), so a reader without transform
+support fails in the factory instead of returning permuted values. A reader
+rejects any flag it does not know, an encoding type that disagrees with the
+transform block, an unknown transform id, and a delta stream that also carries
+a frame or transforms. Streams written before the flags were introduced have a
 zero flags byte and decode as raw values; a stream with no frame is
 byte-identical to one written before frames existed.
 
@@ -335,6 +343,39 @@ through `materialize()`, and the slow path defers to `materialize()` for a
 framed stream. `createEncodingView` serves any stream with a flag set through
 a full-decode view, since the positional view does not add the frame back.
 
+### Section transforms
+
+A section that compresses poorly in row order can compress well once its rows
+are sorted by another section's value, since sorting groups like values for RLE
+and MainlyConstant children. `SectionTransform.h` defines one such transform,
+the key-derived permutation (transform id 1). One section is the key and is
+stored in row order. Every section that takes the transform is stably sorted by
+the key's value before it is encoded. No permutation is stored: a reader
+decodes the key, rebuilds the same stable order with a radix sort, and gathers
+each permuted section back to row order while it assembles the values.
+
+The writer applies it only on request:
+
+- `TuningConfig::transform` names the transform, and `TuningConfig::autoTransform`
+  asks the encoder to consider the key-derived permutation on its own. Both
+  are off by default, so default streams are unchanged.
+- `TuningConfig::keySection` pins the key. At its default, 0xFF, the encoder
+  prices one attempt per candidate key, bounded by the best attempt so far,
+  and keeps the smallest. A pin past the stream's last section is searched the
+  same way, since the split depends on the data.
+- A key is refused when it has more than a quarter as many distinct values as
+  rows, since sorting by it would group almost nothing.
+- Each section keeps the transform only where its encoding, plus an 8-byte
+  margin, is strictly smaller than the section in row order.
+- `TuningConfig::forceApply` applies the transform to every eligible section
+  whatever it costs, still searching the key when none is pinned. It exists
+  for ablation only.
+
+A transform is undone over the whole column, so a reordered stream decodes the
+column once and serves partial reads from a cache. `skip()` only moves the
+cursor. The visitor slow path defers to `materialize()`, and
+`createEncodingView` serves reordered streams through the full-decode view.
+
 ## Selection and configuration
 
 ### Explicit writer routing
@@ -403,6 +444,10 @@ They are internal to SubIntSplit instead of fields on the generic
 | `visitorBlockBuffer` | `true` | Decode the visitor slow path a block at a time |
 | `rowFrame` | `true` | Fit a row frame and keep it where it encodes smaller |
 | `rowFrameForceApply` | `false` | Ablation only: keep any fitted row frame unpriced |
+| `transform` | `0` | Section transform to offer; 1 is the key-derived permutation |
+| `autoTransform` | `false` | Offer the key-derived permutation per section |
+| `keySection` | `0xFF` | Key section; 0xFF searches every section |
+| `forceApply` | `false` | Ablation only: apply the transform to every eligible section |
 
 Benchmarks and focused tests can pass an alternate `TuningConfig` directly to
 `SubIntSplitEncoding`. Normal writer and reader paths always use the constant
@@ -496,6 +541,8 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `Sampler.h` | Planner-only preprocessing | Full physical-value span and `SamplerConfig`; produces `uint64_t` samples | Sampling is bounded, deterministic, and block-stratified so local runs survive |
 | `SectionAccumulator.h` | Full and selective decode hot path | Decoded unsigned section values, range masks, shifts, and an output span | Scalar and AVX2 paths produce identical physical bits and never leak bits outside a section width |
 | `SectionMetrics.h` | Planner statistics | Candidate-range samples and reusable frequency storage; produces the range, run, cardinality, and dominant-value measurements the cost models read | Metrics describe extracted section values; exact distinct counts stop at the configured cap and scratch state is reset between ranges |
+| `SectionTransform.h` | Optional write transform and read recovery | Declares transforms, `TransformId`, and the key-order helpers | Transform ids are persisted and never renumbered; unknown ids fail as file errors |
+| `SectionTransforms.cpp` | Key-derived permutation | Key section values ↔ stable sort order and run bookkeeping | The order is a stable sort, rebuilt identically by writer and reader |
 | `SplitBoundaries.h` | Preserved-layout configuration interface | Declares config keys and parse/serialize APIs for ranges and candidate exclusions | Preserve mode describes a complete physical-width partition |
 | `SplitBoundaries.cpp` | Preserved-layout parsing and validation | Text configs ↔ section plans | Rejects gaps, overlaps, malformed endpoints, out-of-range bits, and exclusion-count mismatches |
 | `SplitSelector.h` | Planner entry point and dynamic program | Samples, physical width, full row count, and `SelectorConfig`; returns `SelectorResult` | Sentinel defaults preserve standard planning, reported total cost matches the returned plan, and output covers the full width |

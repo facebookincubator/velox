@@ -30,6 +30,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "folly/container/F14Set.h"
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/DecoderUtil.h"
@@ -50,6 +52,7 @@
 #include "velox/dwio/nimble/encodings/subintsplit/RowFrame.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SectionTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 #include "velox/dwio/nimble/encodings/subintsplit/TuningConfig.h"
@@ -72,7 +75,8 @@
 //
 // The pieces live in encodings/subintsplit/: SplitSelector plans the bit
 // ranges over a cost grid priced by CostModel, RowFrame subtracts a
-// predictor from the values, and Format.h documents the binary layout.
+// predictor from the values, SectionTransform reorders sections, and Format.h
+// documents the binary layout.
 
 namespace facebook::nimble::subintsplit {
 
@@ -238,6 +242,48 @@ class SubIntSplitEncoding
   // not. Every value leaving this class has it added back.
   subintsplit::RowFrame rowFrame_;
 
+  // Per-section transform metadata from the header. Empty ids mean the stream
+  // predates transforms, or chose none.
+  subintsplit::TransformInfo transformInfo_;
+  // Widened section values for the block being decoded, reused across
+  // blocks. Populated only for a section that needs a uint64 span: one that
+  // is itself transformed (invert() requires it) or that serves as another
+  // section's key (keySpan is handed to invert() the same way). Every other
+  // section decodes straight into sectionNative_ below and assembly reads it
+  // at its own width, so most streams never widen at all.
+  std::vector<std::vector<uint64_t>> sectionScratch_;
+  // Byte-packed decode buffer for a section sectionNeedsWide_ marks false, at
+  // the section's own storage width, one vector per section.
+  std::vector<std::vector<uint8_t>> sectionNative_;
+  // Whether section s must be widened to uint64: it carries a transform, or
+  // it is the key section another section's transform reads. Computed once
+  // at construction, since transformIds and keySection never change after.
+  std::vector<bool> sectionNeedsWide_;
+  // The row the sections stand at. Only meaningful for a transformed stream.
+  uint32_t sectionsAt_{0};
+  std::vector<physicalType> blockCache_;
+
+  // The key's run bookkeeping for the block currently being decoded, built
+  // once and shared by every section keyed on it instead of each one's
+  // invert() rebuilding it. Reused across blocks purely for capacity; every
+  // field is fully overwritten before being read.
+  subintsplit::KeyRunState keyRunState_;
+  // Working run-start cursor for the fused key-derived accumulate path
+  // (decodeTransformedColumn's assembly loop, not invert()), reused across
+  // sections and blocks.
+  std::vector<uint32_t> fusedCursor_;
+
+  // Decodes a stream whose sections carry a transform. A transform is undone
+  // over the whole column, so a partial read is served from blockCache_.
+  void materializeTransformed(uint32_t rowCount, physicalType* output);
+
+  // Decodes and inverts the whole column into blockCache_, or, when
+  // `directOutput` is not null, straight into it instead. Only a read of
+  // every row may pass a non-null directOutput: doing so leaves blockCache_
+  // untouched, so a later partial read or point probe decodes normally rather
+  // than reading stale cache contents.
+  void decodeTransformedColumn(physicalType* directOutput);
+
   // Persistent scratch buffer reused across materialize() calls. Grown to one
   // chunk of the current read, at most decodeChunkSize_ values of
   // sizeof(physicalType) bytes.
@@ -332,14 +378,27 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       pendingBuf_{&pool},
       decodeBuf_{&pool} {
   uint8_t flags{0};
-  const auto parsed =
-      subintsplit::parseSections(data, this->dataOffset(), &flags, &rowFrame_);
+  const auto parsed = subintsplit::parseSections(
+      data, this->dataOffset(), &flags, &rowFrame_, &transformInfo_);
   deltaEncoded_ = (flags & subintsplit::kFlagDelta) != 0;
   if (tuning.decodeChunkSize > 0) {
     decodeChunkSize_ = tuning.decodeChunkSize;
   }
   visitorBlockBuffer_ = tuning.visitorBlockBuffer;
   NIMBLE_CHECK(!parsed.empty(), "SubIntSplit stream has no sections.");
+  // Validate every id before decoding anything: a transform this reader does
+  // not know would otherwise be skipped, returning transformed values as
+  // though they were the originals.
+  for (uint8_t id : transformInfo_.transformIds) {
+    subintsplit::transformForRaw(id);
+  }
+  // Only the reordered type carries transforms, and a reordered stream must
+  // carry one, so the type and the header cannot disagree about whether the
+  // sections need undoing.
+  NIMBLE_CHECK_FILE(
+      transformInfo_.anyTransform() ==
+          (this->encodingType() == EncodingType::SubIntSplitReordered),
+      "SubIntSplit encoding type does not match its transform block.");
 
   sections_.resize(parsed.size());
   for (size_t s = 0; s < parsed.size(); ++s) {
@@ -362,13 +421,29 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
         *this->pool_, parsed[s].stream, stringBufferFactory, options);
   }
 
+  // A section needs a uint64 span only if invert() is called on it directly,
+  // or if it is handed to another section's invert() as the key. Every other
+  // section is assembled straight from its own storage width.
+  sectionNeedsWide_.assign(sections_.size(), false);
+  for (size_t s = 0; s < transformInfo_.transformIds.size(); ++s) {
+    if (transformInfo_.transformIds[s] != 0) {
+      sectionNeedsWide_[s] = true;
+    }
+  }
+  if (transformInfo_.keySection != subintsplit::TransformInfo::kNoKeySection &&
+      transformInfo_.keySection < sectionNeedsWide_.size()) {
+    sectionNeedsWide_[transformInfo_.keySection] = true;
+  }
+
   // A Constant section contributes the same bits to every row, so decoding it
   // materialises copies of one number to OR them in a row at a time. With the
-  // switch on it is read once here and left out of the chunk loop.
+  // switch on it is read once here and left out of the chunk loop. Only the
+  // untransformed path folds: a transformed stream assembles every section
+  // through the block cache, and a key section must stay decodable.
   dynamicSections_.reserve(sections_.size());
   for (uint32_t s = 0; s < sections_.size(); ++s) {
     const auto& sec = sections_[s];
-    if (tuning.foldConstantSections &&
+    if (tuning.foldConstantSections && !transformInfo_.anyTransform() &&
         sec.encoding->encodingType() == EncodingType::Constant) {
       // ConstantEncoding ignores the read position, so reading it here leaves
       // the cursor the decode path relies on where it was.
@@ -384,7 +459,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     }
     dynamicSections_.push_back(s);
   }
-  if (tuning.passThrough && dynamicSections_.size() == 1 && constantOr_ == 0) {
+  if (tuning.passThrough && dynamicSections_.size() == 1 && constantOr_ == 0 &&
+      !transformInfo_.anyTransform()) {
     const auto& only = sections_[dynamicSections_.front()];
     constexpr uint64_t kFullMask =
         ~uint64_t{0} >> (64 - sizeof(physicalType) * 8);
@@ -399,9 +475,14 @@ void SubIntSplitEncoding<T>::reset() {
     sec.encoding->reset();
   }
   row_ = 0;
+  sectionsAt_ = 0;
   deltaAccumulator_ = 0;
   pendingOffset_ = 0;
   pendingCount_ = 0;
+  // blockCache_ is deliberately kept. It holds decoded rows addressed by their
+  // absolute position, which rewinding the cursor does not invalidate, and a
+  // point read reaches this class by resetting before every probe: dropping it
+  // would make each probe decode the column again.
 }
 
 template <typename T>
@@ -423,6 +504,12 @@ void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
   pendingOffset_ += fromPending;
   row_ += fromPending;
   rowCount -= fromPending;
+  // A transformed stream is decoded as a whole column, so a skip only moves
+  // the logical position.
+  if (transformInfo_.anyTransform()) {
+    row_ += rowCount;
+    return;
+  }
   for (auto& sec : sections_) {
     sec.encoding->skip(rowCount);
   }
@@ -439,8 +526,14 @@ void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   }
   output += fromPending;
   const uint32_t firstRow = row_;
-  decodeUntransformed(rowCount, output);
-  row_ += rowCount;
+  // A transformed stream takes a separate path, because its sections have to
+  // be inverted before they are assembled.
+  if (transformInfo_.anyTransform()) {
+    materializeTransformed(rowCount, output);
+  } else {
+    decodeUntransformed(rowCount, output);
+    row_ += rowCount;
+  }
   if (rowFrame_.active()) {
     subintsplit::addRowFrame(rowFrame_, firstRow, output, rowCount);
   }
@@ -621,10 +714,12 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       params,
       [&](auto toSkip) { skip(toSkip); },
       [&] {
-        // A delta stream rebuilds each value from every earlier row, and a row
-        // frame is added back by the row a value sits at, both of which only
-        // materialize() tracks, so this path defers to it.
-        if (deltaEncoded_ || rowFrame_.active()) {
+        // A delta stream rebuilds each value from every earlier row, a row
+        // frame is added back by the row a value sits at, and reassembling a
+        // reordered stream from its sections returns the permuted values; only
+        // materialize() handles each, so this path defers to it.
+        if (deltaEncoded_ || rowFrame_.active() ||
+            transformInfo_.anyTransform()) {
           physicalType value = 0;
           materialize(1, &value);
           return value;
@@ -785,6 +880,336 @@ void SubIntSplitEncoding<T>::bulkScan(
 }
 
 template <typename T>
+void SubIntSplitEncoding<T>::materializeTransformed(
+    uint32_t rowCount,
+    physicalType* output) {
+  if (rowCount == 0) {
+    return;
+  }
+  // The cache exists so that a probe does not rebuild the column it has just
+  // rebuilt. It must not answer a read that asks for every row: that read is
+  // a decode, and serving it from a cache would report the cost of a copy in
+  // place of the cost of decoding.
+  if (rowCount >= this->rowCount()) {
+    decodeTransformedColumn(output);
+  } else {
+    if (blockCache_.empty()) {
+      decodeTransformedColumn(nullptr);
+    }
+    std::copy_n(blockCache_.data() + row_, rowCount, output);
+  }
+  row_ += rowCount;
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::decodeTransformedColumn(
+    physicalType* directOutput) {
+  // The sections decode forwards only, so decoding the column again means
+  // starting them over.
+  if (sectionsAt_ > 0) {
+    for (auto& sec : sections_) {
+      sec.encoding->reset();
+    }
+    sectionsAt_ = 0;
+  }
+
+  const uint32_t numRows = this->rowCount();
+
+  const uint32_t neededBytes =
+      numRows * static_cast<uint32_t>(sizeof(physicalType));
+  if (scratchBuf_.size() < neededBytes) [[unlikely]] {
+    scratchBuf_.resize(neededBytes);
+  }
+
+  // A section that carries a transform, or serves as another section's key,
+  // decodes into a widened uint64 scratch entry since invert() needs that
+  // span; other sections decode straight into their native-width buffer.
+  // Buffers are held across blocks rather than reallocated per block, since
+  // a bulk decode walks thousands of them.
+  sectionScratch_.resize(sections_.size());
+  sectionNative_.resize(sections_.size());
+  for (size_t s = 0; s < sections_.size(); ++s) {
+    auto& sec = sections_[s];
+    if (!sectionNeedsWide_[s] && sec.storageBytes != 8) {
+      auto& native = sectionNative_[s];
+      native.resize(numRows * sec.storageBytes);
+      switch (sec.storageBytes) {
+        case 1:
+          sec.encoding->materialize(numRows, native.data());
+          break;
+        case 2:
+          sec.encoding->materialize(
+              numRows, reinterpret_cast<uint16_t*>(native.data()));
+          break;
+        default:
+          sec.encoding->materialize(
+              numRows, reinterpret_cast<uint32_t*>(native.data()));
+          break;
+      }
+      continue;
+    }
+    auto& values = sectionScratch_[s];
+    values.resize(numRows);
+    if (sec.storageBytes == 8) {
+      // Already the target width: decode directly, skipping the
+      // narrow-to-wide copy entirely.
+      sec.encoding->materialize(numRows, values.data());
+      continue;
+    }
+    const uint32_t neededBytes =
+        numRows * static_cast<uint32_t>(sizeof(physicalType));
+    if (scratchBuf_.size() < neededBytes) [[unlikely]] {
+      scratchBuf_.resize(neededBytes);
+    }
+    switch (sec.storageBytes) {
+      case 1: {
+        auto* scratch = reinterpret_cast<uint8_t*>(scratchBuf_.data());
+        sec.encoding->materialize(numRows, scratch);
+        for (uint32_t i = 0; i < numRows; ++i) {
+          values[i] = scratch[i];
+        }
+        break;
+      }
+      case 2: {
+        auto* scratch = reinterpret_cast<uint16_t*>(scratchBuf_.data());
+        sec.encoding->materialize(numRows, scratch);
+        for (uint32_t i = 0; i < numRows; ++i) {
+          values[i] = scratch[i];
+        }
+        break;
+      }
+      default: {
+        auto* scratch = reinterpret_cast<uint32_t*>(scratchBuf_.data());
+        sec.encoding->materialize(numRows, scratch);
+        for (uint32_t i = 0; i < numRows; ++i) {
+          values[i] = scratch[i];
+        }
+        break;
+      }
+    }
+  }
+  sectionsAt_ = numRows;
+
+  // The key section is stored in original order precisely so it can order the
+  // sections that were permuted by it, so it is never itself transformed.
+  std::span<const uint64_t> keySpan;
+  if (transformInfo_.keySection != subintsplit::TransformInfo::kNoKeySection) {
+    keySpan =
+        std::span<const uint64_t>(sectionScratch_[transformInfo_.keySection]);
+  }
+
+  // Builds the key's run bookkeeping once, here, when at least one section
+  // in this block is keyed on it, and shares it with every such section
+  // instead of letting each one rebuild it.
+  bool haveSharedKeyRunState = false;
+  if (!keySpan.empty()) {
+    for (size_t s = 0; s < sections_.size(); ++s) {
+      const uint8_t id = transformInfo_.transformIds[s];
+      if (id != 0 &&
+          subintsplit::transformForRaw(id)->id() ==
+              subintsplit::TransformId::KeyDerived) {
+        haveSharedKeyRunState = true;
+        break;
+      }
+    }
+    if (haveSharedKeyRunState) {
+      subintsplit::buildKeyRunState(keySpan, keyRunState_);
+    }
+  }
+
+  // Accumulates one section at a time across the whole block, reusing the
+  // same SIMD kernel the untransformed path calls from materialize(), so
+  // width/widening dispatch happens once per section rather than once per
+  // (row, section). A section that was never widened accumulates straight
+  // from its native-width buffer; only a widened section reads through
+  // sectionScratch_.
+  //
+  // A whole-block bulk read hands its own output buffer in as directOutput,
+  // so assembly writes straight into it and blockCache_ is left untouched.
+  const bool direct = directOutput != nullptr;
+  if (!direct) {
+    blockCache_.resize(numRows);
+  }
+  physicalType* dst = direct ? directOutput : blockCache_.data();
+  for (size_t s = 0; s < sections_.size(); ++s) {
+    const auto& sec = sections_[s];
+    const int shift = sec.bitStart;
+    const uint64_t mask = sec.mask;
+    const bool isFirst = (s == 0);
+    const uint8_t id = transformInfo_.transformIds[s];
+    // Undoes the key-derived permutation and ORs its bits into dst in one
+    // pass, rather than invert() merging into a temporary buffer that
+    // accumulateSection would read back out of sectionScratch_.
+    if (id != 0 &&
+        subintsplit::transformForRaw(id)->id() ==
+            subintsplit::TransformId::KeyDerived) {
+      // A key-derived section is only ever written beside a key section.
+      NIMBLE_CHECK(
+          haveSharedKeyRunState,
+          "SubIntSplit key-derived section has no key section.");
+      fusedCursor_.assign(
+          keyRunState_.runStart.begin(), keyRunState_.runStart.end());
+      const uint64_t* src = sectionScratch_[s].data();
+      const uint32_t* runOfRow = keyRunState_.runOfRow.data();
+      const uint32_t* sortedRank = keyRunState_.sortedRank.data();
+      uint32_t* cursor = fusedCursor_.data();
+      if (isFirst) {
+        for (uint32_t i = 0; i < numRows; ++i) {
+          const uint64_t v = src[cursor[sortedRank[runOfRow[i]]]++];
+          dst[i] = static_cast<physicalType>((v & mask) << shift);
+        }
+      } else {
+        for (uint32_t i = 0; i < numRows; ++i) {
+          const uint64_t v = src[cursor[sortedRank[runOfRow[i]]]++];
+          dst[i] |= static_cast<physicalType>((v & mask) << shift);
+        }
+      }
+      continue;
+    }
+    if (sec.storageBytes == 8 || sectionNeedsWide_[s]) {
+      const auto* src = sectionScratch_[s].data();
+      if (isFirst) {
+        accumulateSection<uint64_t, true>(src, dst, numRows, mask, shift);
+      } else {
+        accumulateSection<uint64_t, false>(src, dst, numRows, mask, shift);
+      }
+      continue;
+    }
+    const uint8_t* native = sectionNative_[s].data();
+    switch (sec.storageBytes) {
+      case 1: {
+        if (isFirst) {
+          accumulateSection<uint8_t, true>(native, dst, numRows, mask, shift);
+        } else {
+          accumulateSection<uint8_t, false>(native, dst, numRows, mask, shift);
+        }
+        break;
+      }
+      case 2: {
+        const auto* src = reinterpret_cast<const uint16_t*>(native);
+        if (isFirst) {
+          accumulateSection<uint16_t, true>(src, dst, numRows, mask, shift);
+        } else {
+          accumulateSection<uint16_t, false>(src, dst, numRows, mask, shift);
+        }
+        break;
+      }
+      default: {
+        const auto* src = reinterpret_cast<const uint32_t*>(native);
+        if (isFirst) {
+          accumulateSection<uint32_t, true>(src, dst, numRows, mask, shift);
+        } else {
+          accumulateSection<uint32_t, false>(src, dst, numRows, mask, shift);
+        }
+        break;
+      }
+    }
+  }
+}
+
+/// Whether a plan of `candidateBytes` displaces the smallest found so far.
+///
+/// Strictly smaller, so the first candidate to reach the minimum keeps it,
+/// independent of try order.
+///
+/// The search also abandons a candidate the moment its running total stops
+/// satisfying this test, which is sound because a plan only grows as
+/// sections are added: an abandoned candidate could not have displaced the
+/// incumbent had it been finished. Loosening this to `<=` without loosening
+/// the abandon test the same way would silently make the search stop
+/// pricing plans it had just decided it wanted.
+inline bool improvesOnBest(size_t candidateBytes, size_t bestBytes) noexcept {
+  return candidateBytes < bestBytes;
+}
+
+// Whether sorting by these values would group anything.
+//
+// A key-derived permutation earns its keep by bringing like rows together;
+// a key with nearly as many values as there are rows has nothing to bring
+// together, and the decoder still carries the full apparatus for it: sorting
+// as many runs as there are rows and probing a table that large once per row.
+inline bool groupsEnoughToKey(
+    const std::vector<uint64_t>& key,
+    int boundBits,
+    size_t* distinctOut = nullptr) {
+  // Below this, a run averages fewer than four rows and there is little to
+  // gather.
+  constexpr size_t kMinRowsPerRun = 4;
+  if (key.empty()) {
+    return false;
+  }
+  const size_t rowCount = key.size();
+
+  // Counted exactly rather than estimated from a sample: cardinality cannot
+  // be estimated from a small sample within a constant factor, so a sampled
+  // count would misjudge which columns should be refused.
+  //
+  // Counted only up to the point where the answer stops being in doubt: the
+  // test is distinct * kMinRowsPerRun <= rowCount, so a key is refused once
+  // its distinct count passes a quarter of the rows, and nothing after that
+  // changes the outcome. This matters because the keys that would take
+  // longest to count fully are exactly the ones this early exit refuses.
+  const size_t distinctLimit = rowCount / kMinRowsPerRun;
+
+  // One bit per value the section can hold: no hashing, and stays cache
+  // resident for a key narrow enough to be worth keying on. Only used while
+  // the bitmap costs no more bytes than the key has rows.
+  const auto bitmapAffordable = [rowCount](int bits) {
+    return bits < 64 && (size_t{1} << bits) <= rowCount * 8;
+  };
+
+  // The caller's bound comes free from the section's bit range. ORing the
+  // values bounds them more tightly, but that is a pass over every row, so
+  // it is only worth taking where it might rescue a key the caller's bound
+  // would otherwise send to the hash.
+  int significantBits = std::min(boundBits, 64);
+  if (!bitmapAffordable(significantBits)) {
+    uint64_t orOfKeys = 0;
+    for (const uint64_t value : key) {
+      orOfKeys |= value;
+    }
+    significantBits = std::bit_width(orOfKeys);
+  }
+
+  size_t distinct = 0;
+  if (bitmapAffordable(significantBits)) {
+    std::vector<uint64_t> seen(
+        ((size_t{1} << significantBits) + 63) / 64, uint64_t{0});
+    for (const uint64_t value : key) {
+      uint64_t& word = seen[value >> 6];
+      const uint64_t bit = uint64_t{1} << (value & 63);
+      if ((word & bit) == 0) {
+        word |= bit;
+        if (++distinct > distinctLimit) {
+          return false;
+        }
+      }
+    }
+    if (distinctOut != nullptr) {
+      *distinctOut = distinct;
+    }
+    return true;
+  }
+
+  // Wide keys still hash, but the set is reserved for what the early exit
+  // allows rather than for the whole column, and it stops at the same point.
+  folly::F14FastSet<uint64_t> seen;
+  seen.reserve(std::min(rowCount, distinctLimit + 1));
+  for (const uint64_t value : key) {
+    if (seen.insert(value).second && ++distinct > distinctLimit) {
+      return false;
+    }
+  }
+  // Exact on every path that reaches here: the early exits above return
+  // false the moment the count passes the bound, so an admitted key was
+  // counted to completion.
+  if (distinctOut != nullptr) {
+    *distinctOut = distinct;
+  }
+  return true;
+}
+
+template <typename T>
 std::string_view SubIntSplitEncoding<T>::encode(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
@@ -802,15 +1227,19 @@ std::string_view SubIntSplitEncoding<T>::encode(
   Vector<physicalType> residuals{&buffer.getMemoryPool(), values.size()};
   subintsplit::encodeDeltas<physicalType>(
       values, {residuals.data(), residuals.size()});
-  // Deltas are undone by a running sum over every earlier row, which a frame
-  // cannot sit beneath, so the delta form plans its sections over the
-  // residuals alone.
+  // Deltas are undone by a running sum over every earlier row, which neither a
+  // frame nor a section transform can sit beneath, so the delta form plans its
+  // sections over the residuals alone.
+  auto deltaTuning = tuning;
+  deltaTuning.autoTransform = false;
+  deltaTuning.forceApply = false;
+  deltaTuning.transform = static_cast<uint8_t>(subintsplit::TransformId::None);
   const std::string_view delta = encodeResiduals(
       selection,
       std::span<const physicalType>(residuals.data(), residuals.size()),
       buffer,
       options,
-      tuning,
+      deltaTuning,
       subintsplit::RowFrame{},
       nullptr,
       subintsplit::kFlagDelta);
@@ -1135,28 +1564,284 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
         return encodeSectionInto(
             s, storageBytes, sectionValueAt, sectionBuffer, sectionOptions);
       };
+  // A section is extracted once into 64-bit form, transformed there, and only
+  // then narrowed to its storage width, so a transform never has to know which
+  // width it is working in.
+  const auto extractSection = [&](const auto& seg) {
+    const int width = seg.bitEnd - seg.bitStart + 1;
+    const uint64_t mask = subintsplit::widthMask(width);
+    // Appended rather than sized and then overwritten. Sizing it first would
+    // clear a buffer as long as the column, once per section, that the loop
+    // below writes over completely.
+    std::vector<uint64_t> out;
+    out.reserve(valueCount);
+    for (uint32_t i = 0; i < valueCount; ++i) {
+      uint64_t v = 0;
+      __builtin_memcpy(&v, &values[i], sizeof(physicalType));
+      out.push_back((v >> seg.bitStart) & mask);
+    }
+    return out;
+  };
+  const auto encodeSection = [&](uint8_t s,
+                                 uint8_t storageBytes,
+                                 const std::vector<uint64_t>& sectionU64) {
+    return encodeSectionFrom(
+        s, storageBytes, [&sectionU64](uint32_t i) { return sectionU64[i]; });
+  };
+
+  const auto requestedTransform =
+      static_cast<subintsplit::TransformId>(tuning.transform);
+  const auto* transform = subintsplit::transformFor(requestedTransform);
+  const uint8_t keySection = tuning.keySection;
+
+  // Transforms the per-section search may choose between when the caller asks
+  // for selection rather than naming one.
+  //
+  // There is one row order per stream -- every section is a bit-slice of the
+  // same rows -- so the key-derived permutation is built once per candidate
+  // key and sections opt into it individually.
+  std::vector<const subintsplit::SectionTransform*> candidates;
+  if (tuning.autoTransform) {
+    NIMBLE_CHECK(
+        !tuning.forceApply,
+        "subIntSplit.autoTransform and subIntSplit.forceApply are exclusive: "
+        "one asks the encoder to choose, the other to obey.");
+    candidates.push_back(
+        subintsplit::transformFor(subintsplit::TransformId::KeyDerived));
+  } else if (transform != nullptr) {
+    candidates.push_back(transform);
+  }
+  if (tuning.forceApply) {
+    NIMBLE_CHECK_NOT_NULL(
+        transform, "subIntSplit.forceApply requires a real transform.");
+  }
+  // Whether any candidate needs a key decides if the key search runs at all.
+  const bool anyCandidateNeedsKey = std::any_of(
+      candidates.begin(),
+      candidates.end(),
+      [](const subintsplit::SectionTransform* candidate) {
+        return candidate->needsKeySection();
+      });
+
+  // Rewrites one section with the transform. A transformed section costs one
+  // id byte on the wire; the margin it has to clear is larger, so that a
+  // transform has to save more than noise to be kept.
+  constexpr size_t kTransformMarginBytes{8};
+  const auto applyTransform =
+      [&](const subintsplit::SectionTransform* candidate,
+          int width,
+          const std::vector<uint64_t>& keyValues,
+          std::span<const uint32_t> keyOrder,
+          std::vector<uint64_t>& sectionU64) {
+        subintsplit::TransformState state;
+        subintsplit::TransformContext context{
+            .keySection = keyValues, .width = width, .keyOrder = keyOrder};
+        candidate->apply(sectionU64, context, state);
+        NIMBLE_CHECK(
+            state.codebook.empty(),
+            "A section transform has no wire field for its state.");
+      };
+
+  // Neither a section's extracted values nor its untransformed encoding
+  // depends on which section is being tried as the key, so both are done
+  // once per section here rather than once per candidate key, which would
+  // make encode quadratic in the split count. With no transform to price,
+  // nothing reads a section's 64-bit form after its plain encode, so it is
+  // sliced straight into its storage width instead.
+  std::vector<std::vector<uint64_t>> sectionValues64(splitCount);
   std::vector<uint8_t> sectionStorage(splitCount);
   std::vector<std::string_view> plainEncoded(splitCount);
   for (uint8_t s = 0; s < splitCount; ++s) {
     const auto& seg = segments[s];
     const int width = seg.bitEnd - seg.bitStart + 1;
     sectionStorage[s] = sectionStorageBytes(width);
-    const uint64_t mask = subintsplit::widthMask(width);
-    plainEncoded[s] = encodeSectionFrom(
-        s, sectionStorage[s], [&values, &seg, mask](uint32_t i) {
-          uint64_t value = 0;
-          __builtin_memcpy(&value, &values[i], sizeof(physicalType));
-          return (value >> seg.bitStart) & mask;
-        });
+    if (candidates.empty()) {
+      const uint64_t mask = subintsplit::widthMask(width);
+      plainEncoded[s] = encodeSectionFrom(
+          s, sectionStorage[s], [&values, &seg, mask](uint32_t i) {
+            uint64_t value = 0;
+            __builtin_memcpy(&value, &values[i], sizeof(physicalType));
+            return (value >> seg.bitStart) & mask;
+          });
+      continue;
+    }
+    sectionValues64[s] = extractSection(seg);
+    plainEncoded[s] = encodeSection(s, sectionStorage[s], sectionValues64[s]);
   }
 
-  sectionData = std::move(plainEncoded);
+  // One choice of key section, priced. kNoKeySection means the transform does
+  // not use a key, in which case every section is a candidate to transform.
+  struct Attempt {
+    std::vector<std::string_view> sections;
+    subintsplit::TransformInfo info;
+    size_t totalBytes{0};
+  };
+  // Returns nothing when the plan being built has already grown past
+  // `bound`: a plan only grows as sections are added, so it cannot come back
+  // under the bound, and improvesOnBest is the same test the finished plan
+  // would face, so abandoning here is not a heuristic.
+  const auto attemptWithKey = [&](uint8_t candidateKey,
+                                  size_t bound) -> std::optional<Attempt> {
+    Attempt attempt;
+    attempt.sections.assign(splitCount, std::string_view{});
+    attempt.info.transformIds.assign(splitCount, 0);
+    attempt.info.keySection = subintsplit::TransformInfo::kNoKeySection;
+
+    const std::vector<uint64_t> noKey;
+    const bool hasKey =
+        candidateKey != subintsplit::TransformInfo::kNoKeySection;
+    const std::vector<uint64_t>& keyValues =
+        hasKey ? sectionValues64[candidateKey] : noKey;
+    bool keyGroups = true;
+    if (hasKey) {
+      attempt.info.keySection = candidateKey;
+      const auto& keySegment = segments[candidateKey];
+      keyGroups = groupsEnoughToKey(
+          keyValues, keySegment.bitEnd - keySegment.bitStart + 1);
+    }
+
+    // The permutation a key-derived transform gathers by depends only on the
+    // candidate key, so it is built once here instead of once per section.
+    // Local to the attempt on purpose: a permutation left over from a
+    // previous candidate key would reorder rows by a key the stream does not
+    // name.
+    std::vector<uint32_t> keyPermutation;
+    if (hasKey && anyCandidateNeedsKey && (keyGroups || tuning.forceApply)) {
+      keyPermutation = subintsplit::buildKeyOrder(keyValues);
+    }
+
+    // A section that cannot be transformed contributes its plain size
+    // regardless, so those are settled first and already in the running
+    // total before any transform is priced against the bound. The key
+    // section is always one of them, since it rebuilds the order of the
+    // others and so is never itself transformed.
+    std::vector<uint8_t> transformable;
+    transformable.reserve(splitCount);
+    for (uint8_t s = 0; s < splitCount; ++s) {
+      const bool mayTransform = !candidates.empty() && s != candidateKey &&
+          (keyGroups || tuning.forceApply);
+      if (mayTransform) {
+        transformable.push_back(s);
+        continue;
+      }
+      attempt.sections[s] = plainEncoded[s];
+      attempt.totalBytes += plainEncoded[s].size();
+    }
+    if (!improvesOnBest(attempt.totalBytes, bound)) {
+      return std::nullopt;
+    }
+
+    // Biggest plain section first, so the running total climbs toward the
+    // bound fastest and a losing candidate is abandoned after fewer encodes.
+    // Results are written at their section's index, so this order only
+    // decides how soon the search gives up, never what a kept candidate is
+    // made of.
+    std::sort(
+        transformable.begin(),
+        transformable.end(),
+        [&plainEncoded](uint8_t a, uint8_t b) {
+          const size_t sizeA = plainEncoded[a].size();
+          const size_t sizeB = plainEncoded[b].size();
+          return sizeA != sizeB ? sizeA > sizeB : a < b;
+        });
+
+    for (const uint8_t s : transformable) {
+      const auto& seg = segments[s];
+      const int width = seg.bitEnd - seg.bitStart + 1;
+      const std::string_view plain = plainEncoded[s];
+
+      // Plain is the incumbent: a candidate must be strictly smaller, margin
+      // included, to displace it, so the untransformed result is the default
+      // whenever a transform does not pay.
+      size_t bestBytes = plain.size();
+      std::string_view bestEncoded = plain;
+      const subintsplit::SectionTransform* bestTransform = nullptr;
+      for (const auto* candidate : candidates) {
+        // A key-derived candidate has nothing to gather by when this attempt
+        // found no usable key.
+        if (candidate->needsKeySection() && keyPermutation.empty()) {
+          continue;
+        }
+        auto transformed = sectionValues64[s];
+        applyTransform(
+            candidate,
+            width,
+            keyValues,
+            std::span<const uint32_t>(keyPermutation),
+            transformed);
+        const std::string_view alternative =
+            encodeSection(s, sectionStorage[s], transformed);
+        const size_t total = alternative.size() + kTransformMarginBytes;
+        if (total < bestBytes || tuning.forceApply) {
+          bestBytes = total;
+          bestEncoded = alternative;
+          bestTransform = candidate;
+        }
+      }
+
+      attempt.sections[s] = bestEncoded;
+      attempt.totalBytes += bestBytes;
+      if (bestTransform != nullptr) {
+        attempt.info.transformIds[s] =
+            static_cast<uint8_t>(bestTransform->id());
+      }
+      if (!improvesOnBest(attempt.totalBytes, bound)) {
+        return std::nullopt;
+      }
+    }
+    return attempt;
+  };
+
+  // Which section to key on is a property of the data, not a constant, so
+  // every section is tried and the smallest encode wins; guessing wrong would
+  // blame the transform for what was really a bad guess.
+  constexpr size_t kNoBound = std::numeric_limits<size_t>::max();
+  std::optional<Attempt> best;
+  if (anyCandidateNeedsKey) {
+    // The split is planned from the data, so a pinned key past its last
+    // section names nothing and is inert: the key is searched as if unpinned.
+    if (keySection < splitCount) {
+      best = attemptWithKey(keySection, kNoBound);
+    } else {
+      // Keying on nothing is a real candidate, not the absence of one: it is
+      // the untransformed plan, priced first so it becomes the bound the keyed
+      // attempts have to beat. A forced search skips it, since every attempt
+      // it keeps must carry the transform.
+      if (!tuning.forceApply) {
+        best =
+            attemptWithKey(subintsplit::TransformInfo::kNoKeySection, kNoBound);
+      }
+      for (uint8_t candidate = 0; candidate < splitCount; ++candidate) {
+        // Bounded by the incumbent, so an attempt that comes back has
+        // already beaten it: anything that would not have displaced the
+        // incumbent was abandoned rather than finished.
+        auto attempt = attemptWithKey(
+            candidate, best.has_value() ? best->totalBytes : kNoBound);
+        if (attempt.has_value() &&
+            (!best.has_value() || attempt->totalBytes < best->totalBytes)) {
+          best = std::move(attempt);
+        }
+      }
+    }
+  } else {
+    best = attemptWithKey(subintsplit::TransformInfo::kNoKeySection, kNoBound);
+  }
+  NIMBLE_CHECK(best.has_value(), "SubIntSplit transform search found no plan.");
+
+  sectionData = std::move(best->sections);
+  subintsplit::TransformInfo transformInfo = std::move(best->info);
+  // A key section is only worth holding back if some other section was
+  // actually keyed on it.
+  if (!transformInfo.anyTransform()) {
+    transformInfo.keySection = subintsplit::TransformInfo::kNoKeySection;
+  }
 
   // Write final encoding to main buffer.
   const uint32_t prefixSize =
       Encoding::serializePrefixSize(valueCount, useVarint);
   const uint32_t specificHeader = subintsplit::specificHeaderSize(splitCount) +
-      subintsplit::rowFrameHeaderSize(rowFrame);
+      subintsplit::rowFrameHeaderSize(rowFrame) +
+      subintsplit::transformHeaderSize(transformInfo);
   uint32_t sectionsSize = 0;
   for (const auto& sv : sectionData) {
     sectionsSize += static_cast<uint32_t>(sv.size());
@@ -1166,8 +1851,14 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
 
+  // A stream with no transform keeps the original encoding type and header,
+  // so it stays readable by an older SubIntSplit reader. A transformed
+  // stream announces a type an older reader does not know, so it fails in
+  // the factory rather than decoding sections and skipping the inverse.
+  const bool transformed = transformInfo.anyTransform();
   Encoding::serializePrefix(
-      EncodingType::SubIntSplit,
+      transformed ? EncodingType::SubIntSplitReordered
+                  : EncodingType::SubIntSplit,
       TypeTraits<T>::dataType,
       valueCount,
       useVarint,
@@ -1175,13 +1866,21 @@ std::string_view SubIntSplitEncoding<T>::encodeResiduals(
 
   encoding::write<uint8_t>(splitCount, pos);
   const uint8_t flags = extraFlags |
-      (rowFrame.active() ? subintsplit::kFlagRowFrame : uint8_t{0});
+      (rowFrame.active() ? subintsplit::kFlagRowFrame : uint8_t{0}) |
+      (transformed ? subintsplit::kFlagTransforms : uint8_t{0});
   encoding::write<uint8_t>(flags, pos);
 
   if (rowFrame.active()) {
     encoding::write<uint8_t>(subintsplit::kRowFrameGuard, pos);
     encoding::write<uint64_t>(rowFrame.slope, pos);
     encoding::write<uint64_t>(rowFrame.base, pos);
+  }
+
+  if (transformed) {
+    encoding::write<uint8_t>(transformInfo.keySection, pos);
+    for (uint8_t s = 0; s < splitCount; ++s) {
+      encoding::write<uint8_t>(transformInfo.transformIds[s], pos);
+    }
   }
 
   for (uint8_t s = 0; s < splitCount; ++s) {
@@ -1207,6 +1906,11 @@ std::string SubIntSplitEncoding<T>::debugString(int offset) const {
   std::string indent(offset, ' ');
   std::string result = indent +
       "SubIntSplitEncoding sections=" + std::to_string(sections_.size());
+  // Which section the permutation sorts by, and which sections took a
+  // transform, since both decide what the plan costs to read.
+  if (transformInfo_.keySection != subintsplit::TransformInfo::kNoKeySection) {
+    result += " keySection=" + std::to_string(transformInfo_.keySection);
+  }
   if (rowFrame_.active()) {
     result += fmt::format(
         " rowFrame=(slope={:#x} base={:#x})", rowFrame_.slope, rowFrame_.base);
@@ -1220,6 +1924,13 @@ std::string SubIntSplitEncoding<T>::debugString(int offset) const {
     result += indent + "  [" + std::to_string(sec.bitStart) + ".." +
         std::to_string(sec.bitEnd) +
         "] storageBytes=" + std::to_string(sec.storageBytes);
+    if (s < transformInfo_.transformIds.size() &&
+        transformInfo_.transformIds[s] != 0) {
+      result += " transform=" +
+          subintsplit::toString(
+                    static_cast<subintsplit::TransformId>(
+                        transformInfo_.transformIds[s]));
+    }
     result += "\n";
     result += sec.encoding->debugString(offset + 4);
     result += "\n";

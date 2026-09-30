@@ -46,6 +46,32 @@ struct TuningConfig {
   /// frame fits. Never set in a writer.
   bool rowFrameForceApply{false};
 
+  /// Reversible transform applied to the sections, as a TransformId. Zero,
+  /// the default, applies none. The section named by keySection is always
+  /// left untransformed, since a key-derived permutation is rebuilt from it
+  /// at read time.
+  uint8_t transform{0};
+
+  /// Lets the encoder choose per section whether to apply the key-derived
+  /// transform, pricing it against the untransformed encoding and keeping the
+  /// smaller. Ignores transform and is exclusive with forceApply. Costs one
+  /// trial encode per candidate key per section. Off by default.
+  bool autoTransform{false};
+
+  /// Section whose values order a key-derived permutation, and which is
+  /// therefore stored unpermuted. 0xFF, the default, means the encoder tries
+  /// every section and keeps the one that encodes smallest, as does a section
+  /// past the last one the stream's split has.
+  uint8_t keySection{0xFF};
+
+  /// Test and ablation only: skips the cost comparison that keeps a
+  /// transform only where it encodes smaller, and applies transform to every
+  /// eligible section regardless. Requires transform to name a real
+  /// transform. With keySection at 0xFF the key is still searched: each
+  /// candidate key forces the transform on every other section, and the
+  /// smallest of those forced attempts is kept. Never set in a writer.
+  bool forceApply{false};
+
   /// Encodings the planner may cost a section against. Empty means every
   /// encoding. A restricted set only narrows what the planner considers; it
   /// does not change the format.
