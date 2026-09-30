@@ -29,8 +29,9 @@ namespace facebook::velox::exec {
 
 namespace {
 
-// Seeds 'registry' with the built-in in-memory transport, keeping it a
-// first-class entry so lookups and enumeration stay plain reads.
+// Returns the entries the global registry starts with: the built-in in-memory
+// transport, kept as a first-class entry so lookups and enumeration stay plain
+// reads.
 //
 // Backward-compat shim: kInMemory must resolve with zero registration to
 // preserve the pre-registry guarantee that the default output buffer manager is
@@ -38,11 +39,12 @@ namespace {
 // engine init like any other transport, which retires this seeding (and the
 // unregisterAll() re-seed) and leaves a plain map: unregisterAll() fully clears
 // and isolation is uniform.
-void registerBuiltinDefault(OutputTransportRegistry::Registry& registry) {
-  registry.insert(
+OutputTransportRegistry::Registry::Map builtinEntries() {
+  OutputTransportRegistry::Registry::Map entries;
+  entries.emplace(
       std::string{core::TransportKind::kInMemory},
-      DefaultOutputBufferManager::makeDefaultTransportEntry(),
-      /*overwrite=*/true);
+      DefaultOutputBufferManager::makeDefaultTransportEntry());
+  return entries;
 }
 
 // The process-wide root registry, seeded with the built-in in-memory transport
@@ -52,7 +54,7 @@ void registerBuiltinDefault(OutputTransportRegistry::Registry& registry) {
 ScopedRegistry<std::string, OutputTransportEntry>& outputTransports() {
   static ScopedRegistry<std::string, OutputTransportEntry> instance;
   [[maybe_unused]] static const bool seeded = [] {
-    registerBuiltinDefault(instance);
+    instance.replaceAll(builtinEntries());
     return true;
   }();
   return instance;
@@ -122,14 +124,10 @@ void OutputTransportRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
 void OutputTransportRegistry::unregisterAll() {
   // Reset to baseline: drop user registrations and restore the built-in
   // in-memory default. The re-seed is part of the backward-compat shim (see
-  // registerBuiltinDefault); with init-time registration this reduces to a
-  // plain clear(). Replace the contents under one lock so readers cannot
-  // observe the default transport as temporarily unregistered.
-  Registry::Map entries;
-  entries.emplace(
-      std::string{core::TransportKind::kInMemory},
-      DefaultOutputBufferManager::makeDefaultTransportEntry());
-  global().replaceAll(std::move(entries));
+  // builtinEntries()); with init-time registration this reduces to a plain
+  // clear(). Replace the contents under one lock so readers cannot observe the
+  // default transport as temporarily unregistered.
+  global().replaceAll(builtinEntries());
 }
 
 // static

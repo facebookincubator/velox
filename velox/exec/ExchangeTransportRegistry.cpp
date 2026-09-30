@@ -29,20 +29,19 @@ namespace facebook::velox::exec {
 
 namespace {
 
-// Seeds 'registry' with the built-in in-memory transport, keeping it a
-// first-class entry so lookups and enumeration stay plain reads.
+// Returns the entries the global registry starts with: the built-in in-memory
+// transport, kept as a first-class entry so lookups and enumeration stay plain
+// reads. kInMemory resolves with zero registration to preserve the
+// pre-registry guarantee that an exchange client is always available.
 //
-// Backward-compat shim: kInMemory must resolve with zero registration to
-// preserve the pre-registry guarantee that an exchange client is always
-// available. The target end state is to register kInMemory explicitly at engine
-// init like any other transport, which retires this seeding (and the
-// unregisterAll() re-seed) and leaves a plain map: unregisterAll() fully clears
-// and isolation is uniform.
-void registerBuiltinDefault(ExchangeTransportRegistry::Registry& registry) {
-  registry.insert(
+// TODO: Register kInMemory explicitly at engine init like any other transport.
+// Then this seeding goes away and unregisterAll() becomes a plain clear().
+ExchangeTransportRegistry::Registry::Map builtinEntries() {
+  ExchangeTransportRegistry::Registry::Map entries;
+  entries.emplace(
       std::string{core::TransportKind::kInMemory},
-      InMemoryExchangeClient::makeDefaultTransportEntry(),
-      /*overwrite=*/true);
+      InMemoryExchangeClient::makeDefaultTransportEntry());
+  return entries;
 }
 
 // The process-wide root registry, seeded with the built-in in-memory transport
@@ -52,7 +51,7 @@ void registerBuiltinDefault(ExchangeTransportRegistry::Registry& registry) {
 ScopedRegistry<std::string, ExchangeTransportEntry>& exchangeTransports() {
   static ScopedRegistry<std::string, ExchangeTransportEntry> instance;
   [[maybe_unused]] static const bool kSeeded = [] {
-    registerBuiltinDefault(instance);
+    instance.replaceAll(builtinEntries());
     return true;
   }();
   return instance;
@@ -121,16 +120,9 @@ void ExchangeTransportRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
 
 // static
 void ExchangeTransportRegistry::unregisterAll() {
-  // Reset to baseline: drop user registrations and restore the built-in
-  // in-memory default. The re-seed is part of the backward-compat shim (see
-  // registerBuiltinDefault); with init-time registration this reduces to a
-  // plain clear(). Replace the contents under one lock so readers cannot
-  // observe the default transport as temporarily unregistered.
-  Registry::Map entries;
-  entries.emplace(
-      std::string{core::TransportKind::kInMemory},
-      InMemoryExchangeClient::makeDefaultTransportEntry());
-  global().replaceAll(std::move(entries));
+  // Reset to the built-in entries under one lock so readers never observe the
+  // default transport as temporarily unregistered.
+  global().replaceAll(builtinEntries());
 }
 
 // static
