@@ -933,6 +933,10 @@ TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
   VELOX_ASSERT_USER_THROW(
       task->start(1, 1),
       "No exchange client registered for transport 'ucx-unregistered'");
+  // No driver was created, so start() must count the planned ones as
+  // finished; otherwise waiting for the task's drivers never ends.
+  ASSERT_GT(task->numTotalDrivers(), 0);
+  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
 }
 
 TEST_F(TaskTest, customExchangeTransportLifecycle) {
@@ -1100,55 +1104,61 @@ TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
-  auto task = Task::create(
-      "task-aborted-during-startup",
-      PlanBuilder().tableScan(ROW({"c0"}, {BIGINT()})).planFragment(),
-      0,
-      core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel,
-      exec::Consumer{});
+  // start() releases the task mutex before initializing pipeline-global state
+  // and again before creating drivers. An abort in either window must let
+  // start() return and must count every planned driver as finished.
+  for (const std::string_view startupStep :
+       {"facebook::velox::exec::Task::initializePartitionOutput",
+        "facebook::velox::exec::Task::createAndStartDrivers"}) {
+    SCOPED_TRACE(startupStep);
+    auto task = Task::create(
+        "task-aborted-during-startup",
+        PlanBuilder().tableScan(ROW("c0", BIGINT())).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
-  folly::Baton<> initializationStarted;
-  folly::Baton<> continueInitialization;
-  Task* initializingTask{nullptr};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Task::initializePartitionOutput",
-      std::function<void(Task*)>([&](Task* task) {
-        initializingTask = task;
-        initializationStarted.post();
-        continueInitialization.wait();
-      }));
+    folly::Baton<> stepStarted;
+    folly::Baton<> continueStep;
+    Task* startingTask{nullptr};
+    SCOPED_TESTVALUE_SET(
+        std::string(startupStep), std::function<void(Task*)>([&](Task* task) {
+          startingTask = task;
+          stepStarted.post();
+          continueStep.wait();
+        }));
 
-  std::exception_ptr startError;
-  std::thread startThread([&] {
-    try {
-      task->start(4, 1);
-    } catch (...) {
-      startError = std::current_exception();
-    }
-  });
-  bool initializationReleased{false};
-  SCOPE_EXIT {
-    if (!initializationReleased) {
-      continueInitialization.post();
-    }
-    if (startThread.joinable()) {
-      startThread.join();
-    }
-  };
+    std::exception_ptr startError;
+    std::thread startThread([&] {
+      try {
+        task->start(4, 1);
+      } catch (...) {
+        startError = std::current_exception();
+      }
+    });
+    bool stepReleased{false};
+    SCOPE_EXIT {
+      if (!stepReleased) {
+        continueStep.post();
+      }
+      if (startThread.joinable()) {
+        startThread.join();
+      }
+    };
 
-  ASSERT_TRUE(initializationStarted.try_wait_for(std::chrono::seconds(5)));
-  task->requestAbort().wait();
-  initializationReleased = true;
-  continueInitialization.post();
-  startThread.join();
+    ASSERT_TRUE(stepStarted.try_wait_for(std::chrono::seconds(5)));
+    task->requestAbort().wait();
+    stepReleased = true;
+    continueStep.post();
+    startThread.join();
 
-  EXPECT_EQ(initializingTask, task.get());
-  EXPECT_EQ(startError, nullptr);
-  EXPECT_EQ(task->numRunningDrivers(), 0);
-  ASSERT_GT(task->numTotalDrivers(), 0);
-  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
-  EXPECT_TRUE(waitForTaskDriversToFinish(task.get(), 0));
+    EXPECT_EQ(startingTask, task.get());
+    EXPECT_EQ(startError, nullptr);
+    EXPECT_EQ(task->numRunningDrivers(), 0);
+    ASSERT_GT(task->numTotalDrivers(), 0);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  }
 }
 
 TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {

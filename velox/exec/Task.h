@@ -946,8 +946,15 @@ class Task : public std::enable_shared_from_this<Task> {
   // initialization acquired 'mutex_'.
   bool initializePartitionOutput();
 
-  // Creates and starts drivers.
-  void createAndStartDrivers(uint32_t concurrentSplitGroups);
+  // Creates and starts drivers. Returns false if the task was terminated before
+  // this acquired 'mutex_'.
+  bool createAndStartDrivers(uint32_t concurrentSplitGroups);
+
+  // Removes the task from the output buffer manager and counts every planned
+  // driver as finished if no driver is running or has finished yet, so that
+  // waiting for the drivers ends. start() calls this when it stops because the
+  // task was terminated concurrently or startup failed.
+  void finishUnstartedDrivers();
 
   // Creates a bunch of drivers for the given split group.
   std::vector<std::shared_ptr<Driver>> createDriversLocked(

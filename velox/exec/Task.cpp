@@ -1223,32 +1223,33 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
       }
       createDriverFactoriesLocked(maxDrivers);
     }
-    if (!initializePartitionOutput()) {
-      std::lock_guard<std::timed_mutex> l(mutex_);
-      LOG(WARNING) << "Task " << taskId_ << " was terminated while starting: "
-                   << errorMessageLocked();
-      VELOX_CHECK_EQ(numRunningDrivers_, 0);
-      VELOX_CHECK_EQ(numFinishedDrivers_, 0);
-      numFinishedDrivers_ = numTotalDrivers_;
+    if (!initializePartitionOutput() ||
+        !createAndStartDrivers(concurrentSplitGroups)) {
+      LOG(WARNING) << "Task " << taskId_
+                   << " was terminated while starting: " << errorMessage();
+      finishUnstartedDrivers();
       return;
     }
-    createAndStartDrivers(concurrentSplitGroups);
   } catch (const std::exception&) {
     if (isRunning()) {
       setError(std::current_exception());
-    } else {
-      maybeRemoveFromOutputBufferManager();
-      {
-        // NOTE: the async task error might be triggered in the middle of task
-        // start processing, and we need to mark all the drivers have been
-        // finished.
-        std::unique_lock<std::timed_mutex> l(mutex_);
-        VELOX_CHECK_EQ(numRunningDrivers_, 0);
-        VELOX_CHECK_EQ(numFinishedDrivers_, 0);
-        numFinishedDrivers_ = numTotalDrivers_;
-      }
     }
+    finishUnstartedDrivers();
     throw;
+  }
+}
+
+void Task::finishUnstartedDrivers() {
+  maybeRemoveFromOutputBufferManager();
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  // An enqueued driver counts itself as finished when it leaves. Reconcile only
+  // if no driver is running or has finished yet, which holds when start()
+  // enqueued none.
+  // TODO: Track whether any driver was enqueued. terminate() resets the running
+  // count, so drivers still on their threads when startup fails can also pass
+  // this check and are then counted twice.
+  if (numRunningDrivers_ == 0 && numFinishedDrivers_ == 0) {
+    numFinishedDrivers_ = numTotalDrivers_;
   }
 }
 
@@ -1292,14 +1293,13 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
   validateGroupedExecutionLeafNodes();
 }
 
-void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
+bool Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
+  TestValue::adjust("facebook::velox::exec::Task::createAndStartDrivers", this);
   checkExecutionMode(Task::ExecutionMode::kParallel);
   std::unique_lock<std::timed_mutex> l(mutex_);
-  VELOX_CHECK(
-      isRunningLocked(),
-      "Task {} has already been terminated before start: {}",
-      taskId_,
-      errorMessageLocked());
+  if (!isRunningLocked()) {
+    return false;
+  }
   VELOX_CHECK(!driverFactories_.empty());
   VELOX_CHECK_EQ(concurrentSplitGroups_, 1);
   VELOX_CHECK(drivers_.empty());
@@ -1360,6 +1360,7 @@ void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   if (numDriversPerSplitGroup_ > 0) {
     ensureSplitGroupsAreBeingProcessedLocked();
   }
+  return true;
 }
 
 bool Task::initializePartitionOutput() {
