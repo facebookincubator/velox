@@ -274,12 +274,20 @@ class Encoder {
       // has gone: for a SubIntSplit parent it removes exactly what the erase
       // did, and it keeps the recursion bounded the same way.
       if (realNestedSelection_) {
+        auto readFactors = nimble::nestedEncodingReadFactors(
+            nimble::ManualEncodingSelectionPolicyFactory::
+                defaultEncodingReadFactors(),
+            parentEncodingType);
+#ifdef NIMBLE_ENCODINGS_LIBRARY_WITHOUT_EXPERIMENTAL
+        // This target is compiled with the experimental candidates, but the
+        // EncodingFactory it links cannot encode FrequencyPartition, so a
+        // section given one would fail to encode rather than test anything.
+        std::erase_if(readFactors, [](const auto& readFactor) {
+          return readFactor.first == nimble::EncodingType::FrequencyPartition;
+        });
+#endif
         return nimble::ManualEncodingSelectionPolicyFactory{
-            nimble::nestedEncodingReadFactors(
-                nimble::ManualEncodingSelectionPolicyFactory::
-                    defaultEncodingReadFactors(),
-                parentEncodingType),
-            std::nullopt}
+            std::move(readFactors), std::nullopt}
             .createPolicy(type);
       }
       UNIQUE_PTR_FACTORY(

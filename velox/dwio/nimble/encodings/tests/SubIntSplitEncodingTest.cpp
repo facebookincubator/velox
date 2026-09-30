@@ -587,9 +587,11 @@ TEST(SubIntSplitEncodingTests, rowFrameRoundTripsTreeIds) {
 
   {
     nimble::Encoding::Options options;
-    const auto encoded =
-        encodeSubIntSplit<NonRecursiveSubIntSplitPolicy<uint64_t>>(
-            ids, buffer, options);
+    const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+        std::make_unique<NonRecursiveSubIntSplitPolicy<uint64_t>>(),
+        ids,
+        buffer,
+        options);
     const auto frame = parseRowFrame(encoded);
     EXPECT_EQ(frame.slope, fitted.slope);
     EXPECT_EQ(frame.base, fitted.base);
@@ -706,8 +708,11 @@ TEST(SubIntSplitEncodingTests, stepFrameRoundTripsTimestampCounterIds) {
 
   {
     nimble::Encoding::Options options;
-    const auto encoded = encodeSubIntSplit<ExtendedSubIntSplitPolicy<uint64_t>>(
-        ids, buffer, options);
+    const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+        std::make_unique<ExtendedSubIntSplitPolicy<uint64_t>>(),
+        ids,
+        buffer,
+        options);
     auto withoutFrame = nimble::subintsplit::kDefaultTuningConfig;
     withoutFrame.rowFrame = false;
     const auto unframed =
@@ -760,9 +765,9 @@ TEST(SubIntSplitEncodingTests, forcedRowFrameIsKeptWhereItFits) {
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
   nimble::Buffer buffer{*pool};
   const auto encode = [&](const std::vector<uint64_t>& values,
-                          const nimble::Encoding::Options& options) {
+                          const nimble::subintsplit::TuningConfig& tuning) {
     return encodeSubIntSplit<ExtendedSubIntSplitPolicy<uint64_t>>(
-        values, buffer, options);
+        values, buffer, tuning);
   };
   auto forced = nimble::subintsplit::kDefaultTuningConfig;
   forced.rowFrameForceApply = true;
@@ -1191,7 +1196,8 @@ TEST(SubIntSplitEncodingTests, hybridRefinementSplitsAtACheaperBitFlipCut) {
           shortlist,
           cuts,
           nimble::subintsplit::defaultSelectorConfig(),
-          nimble::Encoding::Options{});
+          nimble::subintsplit::sectionEncodingOptions(
+              nimble::Encoding::Options{}));
 
   ASSERT_EQ(refined.sections.size(), 2);
   EXPECT_EQ(refined.sections[0].bitEnd, 47);
@@ -1213,7 +1219,8 @@ TEST(SubIntSplitEncodingTests, hybridRefinementRejectsPlansThatDoNotTile) {
           shortlist,
           {},
           nimble::subintsplit::defaultSelectorConfig(),
-          nimble::Encoding::Options{});
+          nimble::subintsplit::sectionEncodingOptions(
+              nimble::Encoding::Options{}));
 
   EXPECT_TRUE(refined.sections.empty());
 }
@@ -1837,8 +1844,8 @@ TEST(SubIntSplitEncodingTests, nestedStreamsCanWithholdSubIntSplit) {
   const std::vector<std::pair<nimble::EncodingType, float>> readFactors{
       {nimble::EncodingType::SubIntSplit, 0.01f},
       {nimble::EncodingType::Trivial, 1.0f}};
-  auto withheld = nimble::subintsplit::kDefaultTuningConfig;
-  withheld.inNestedStreams = false;
+  nimble::Encoding::Options withheld;
+  withheld.subIntSplit.inNestedStreams = false;
 
   nimble::ManualEncodingSelectionPolicy<uint64_t> topLevel{
       readFactors, std::nullopt, std::nullopt};

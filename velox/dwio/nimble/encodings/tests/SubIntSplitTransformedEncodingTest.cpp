@@ -29,7 +29,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
-#include "velox/dwio/nimble/encodings/tests/SubIntSplitRangeListReads.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 
@@ -658,7 +658,7 @@ TEST_F(TransformedEncodingTest, rangeListsAgreeWithTheSourceValues) {
         << toString(id) << " was not applied as requested";
 
     SubIntSplitEncodingView<uint64_t> view{encoded, pool_.get(), options};
-    test::SubIntSplitRangeListReads::expectReads(view, values);
+    test::expectRangeListReads(view, values);
   }
 }
 

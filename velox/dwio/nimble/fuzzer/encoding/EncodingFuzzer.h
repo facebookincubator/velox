@@ -912,6 +912,15 @@ class EncodingFuzzer {
       std::mt19937& rng,
       std::string_view encoded,
       const Vector<T>& expected) {
+#ifdef NIMBLE_ENCODINGS_LIBRARY_WITHOUT_EXPERIMENTAL
+    // The linked EncodingFactory cannot read a FrequencyPartition stream, so
+    // it cannot slice one; this target encodes them only because it is
+    // compiled with the experimental encodings.
+    if (EncodingPrefix::encodingType(encoded) ==
+        EncodingType::FrequencyPartition) {
+      return;
+    }
+#endif
     const auto rowCount = static_cast<uint32_t>(expected.size());
     const uint32_t offset = folly::Random::rand32(rng) % rowCount;
     const uint32_t length =

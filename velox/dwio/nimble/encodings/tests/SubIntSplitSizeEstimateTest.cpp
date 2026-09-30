@@ -239,6 +239,14 @@ TEST_F(SubIntSplitSizeEstimateTest, constantHeavyEstimateIsLooseUpward) {
       makeConstantHeavyStream(kNumRows), 1.0, 4.0, "constant heavy");
 }
 
+// The estimate plans the residuals of a row frame as the encoder does; without
+// that it would price a counter far above what is written. A framed counter
+// writes a few dozen bytes, where the estimate's flat header allowance can
+// fall a few bytes short.
+TEST_F(SubIntSplitSizeEstimateTest, counterEstimateIsLooseUpward) {
+  expectRatioWithin(makeCounterStream(kNumRows), 1.25, 50.0, "counter");
+}
+
 TEST_F(SubIntSplitSizeEstimateTest, splitIsNotPricedUnderSubstreamCompression) {
   // A counter is a stream the estimate does price a split for, through the
   // row frame, and a substream compressor is what makes that pricing wrong:
@@ -269,6 +277,88 @@ TEST_F(SubIntSplitSizeEstimateTest, splitIsNotPricedUnderSubstreamCompression) {
       SubIntSplitEncoding<uint64_t>::estimateSize(
           values.size(), span, statistics, compressed),
       priced);
+}
+
+TEST_F(SubIntSplitSizeEstimateTest, lowerBoundRulesOutStreamsWithoutFields) {
+  // The screen is off by default, so every case below asks for it.
+  // Over every pair. Uniform random is the case where the cap matters: a
+  // 1'024-pair profile of it clears the gradient floor on sampling noise, so
+  // the screen declines there and the split DP runs. The columns the screen
+  // does rule out at the cap -- record counters, a constant-heavy
+  // calculation -- have no gradient boundary at all, and no sample size
+  // changes that.
+  Encoding::Options options;
+  options.subIntSplit.estimateBitFlipScreen = true;
+  options.subIntSplit.admissionProfilePairs = 0;
+  // 300'000 rows, not kNumRows: a whole-stream flip probability taken from
+  // 65'535 pairs still carries 0.002 of standard error, which puts the
+  // largest of 63 adjacent differences at the gate's 0.005 floor, and this
+  // test is about the bound rather than about that boundary.
+  const auto random = makeUniformRandomStream(300'000);
+  const std::span<const uint64_t> randomSpan(random);
+  const auto randomStatistics = Statistics<uint64_t>::create(randomSpan);
+  const auto randomBound =
+      SubIntSplitEncoding<uint64_t>::estimateSizeLowerBound(
+          randomSpan, randomStatistics, options);
+  ASSERT_TRUE(randomBound.has_value());
+  EXPECT_EQ(
+      *randomBound,
+      FixedBitWidthEncoding<uint64_t>::estimateSize(
+          random.size(), randomStatistics, options));
+  // The bound is the gate's prediction, not a proof, and this stream is where
+  // that shows: the split DP prices a uniform-random column about 2% below
+  // FixedBitWidth, by taking the bits that never vary out into a constant
+  // section, so taking the bound gives up a win that small. It is why the
+  // screen is off by default.
+  EXPECT_LT(
+      *SubIntSplitEncoding<uint64_t>::estimateSize(
+          random.size(), randomSpan, randomStatistics, options),
+      *randomBound);
+
+  // A composite key has one, so the bound declines to answer and the estimate
+  // is what decides.
+  const auto composite = makeCompositeKeyStream(kNumRows);
+  const std::span<const uint64_t> compositeSpan(composite);
+  EXPECT_FALSE(
+      SubIntSplitEncoding<uint64_t>::estimateSizeLowerBound(
+          compositeSpan, Statistics<uint64_t>::create(compositeSpan), options)
+          .has_value());
+
+  // The sampled default declines on this stream, which is the screen's limit
+  // and not a bug: it costs a split DP that the estimate then prices out.
+  Encoding::Options sampled;
+  sampled.subIntSplit.estimateBitFlipScreen = true;
+  EXPECT_FALSE(
+      SubIntSplitEncoding<uint64_t>::estimateSizeLowerBound(
+          randomSpan, randomStatistics, sampled)
+          .has_value());
+
+  // Off, the screen never rules anything out.
+  Encoding::Options noScreen;
+  noScreen.subIntSplit.estimateBitFlipScreen = false;
+  noScreen.subIntSplit.admissionProfilePairs = 0;
+  EXPECT_FALSE(
+      SubIntSplitEncoding<uint64_t>::estimateSizeLowerBound(
+          randomSpan, randomStatistics, noScreen)
+          .has_value());
+}
+
+TEST_F(SubIntSplitSizeEstimateTest, estimateNeverExceedsFixedBitWidth) {
+  // The encoder's whole-value floor stores the values as one FixedBitWidth
+  // section rather than let a plan come in above it, so an estimate above
+  // FixedBitWidth's would be one selection could never see honoured.
+  for (const auto& values :
+       {makeCompositeKeyStream(kNumRows),
+        makeUniformRandomStream(kNumRows),
+        makeConstantHeavyStream(kNumRows),
+        makeCounterStream(kNumRows)}) {
+    const std::span<const uint64_t> span(values);
+    const auto statistics = Statistics<uint64_t>::create(span);
+    EXPECT_LE(
+        estimate(values),
+        FixedBitWidthEncoding<uint64_t>::estimateSize(
+            span.size(), statistics, Encoding::Options{}));
+  }
 }
 
 TEST_F(SubIntSplitSizeEstimateTest, selectionPicksSubIntSplitWhereItIsSmaller) {

@@ -44,6 +44,16 @@ target_compile_definitions(
   PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 )
 
+# The sources above are compiled with the experimental encodings whatever the
+# option says, but nimble_encodings follows the option, and its factories only
+# create FrequencyPartition when it is on.
+if(NOT NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  target_compile_definitions(
+    nimble_encoding_fuzzer_tests
+    PRIVATE NIMBLE_ENCODINGS_LIBRARY_WITHOUT_EXPERIMENTAL
+  )
+endif()
+
 target_link_libraries(
   nimble_encoding_fuzzer_tests
   nimble_encodings_tests_utils
