@@ -2197,20 +2197,7 @@ bool NimbleWriterFuzzer::verifyReaderPaths(
   recordForcedCoverage(file, encodingType);
   const auto selectionContext =
       fmt::format("encoding {}", toString(encodingType));
-  // The legacy factories do not dispatch SubIntSplit, so a file forced to it
-  // is read through the default factory's paths.
-  std::vector<ReaderPath> decodingPaths;
   for (const auto readerPath : readerPaths) {
-    if (encodingType != EncodingType::SubIntSplit ||
-        (readerPath != ReaderPath::kLegacyFactory &&
-         readerPath != ReaderPath::kSelectiveLegacyDispatch)) {
-      decodingPaths.push_back(readerPath);
-    }
-  }
-  if (decodingPaths.empty()) {
-    decodingPaths.push_back(ReaderPath::kSelectiveDefaultDispatch);
-  }
-  for (const auto readerPath : decodingPaths) {
     readAndVerify(file, schema, batches, selectionContext, readerPath);
   }
   return coverage_[encodingType].numChunksApplied > appliedBefore;

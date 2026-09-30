@@ -160,6 +160,9 @@ TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
 
   auto prohibitive = subintsplit::kDefaultTuningConfig;
   prohibitive.selector.decodeCostBitsPerValue = 1'000.0;
+  // A row frame fitted to the timestamp would change what the plan stores,
+  // and the plan's collapse is what this checks.
+  prohibitive.rowFrame = false;
   const auto encoded = encode(values, prohibitive);
 
   EXPECT_EQ(sectionCount(encoded), 1u);

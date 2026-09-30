@@ -18,7 +18,6 @@ add_library(
   ../selection/tests/RandomEncodingSelectionPolicy.cpp
   TestUtils.h
   SharedDictionaryEncodingTestUtils.h
-  SubIntSplitRangeListReads.h
 )
 target_link_libraries(nimble_encodings_tests_utils nimble_encodings fsst)
 

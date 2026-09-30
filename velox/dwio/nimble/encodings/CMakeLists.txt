@@ -45,7 +45,6 @@ add_library(
   TrivialEncoding.cpp
   subintsplit/BitFlipProfile.h
   subintsplit/BitSection.h
-  subintsplit/CostModel.cpp
   subintsplit/CostModel.h
   subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
@@ -57,8 +56,6 @@ add_library(
   subintsplit/RowFrame.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
-  subintsplit/SectionEncoder.h
-  subintsplit/SectionMetrics.cpp
   subintsplit/SectionMetrics.h
   subintsplit/SectionTransform.h
   subintsplit/SectionTransforms.cpp

@@ -30,7 +30,6 @@
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/encodings/tests/SubIntSplitRangeListReads.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 
 using namespace facebook;
@@ -208,7 +207,7 @@ class SubIntSplitEncodingViewTest : public nimble::test::EncodingViewTest {
       expectRangeRead(*view, values, rowCount - 3, 3);
       expectIndexedRead(*view, values, {});
       expectIndexedRead(*view, values, positions);
-      nimble::test::SubIntSplitRangeListReads::expectReads(*view, values);
+      nimble::test::expectRangeListReads(*view, values);
       expectSelectedRead(*view, values, {});
       expectSelectedRead(*view, values, positions);
     }
@@ -285,7 +284,7 @@ class SubIntSplitEncodingViewTest : public nimble::test::EncodingViewTest {
     auto view = nimble::createEncodingView(serialized, pool_.get(), {});
     ASSERT_NE(view, nullptr);
     ASSERT_EQ(view->encodingType(), nimble::EncodingType::SubIntSplit);
-    nimble::test::SubIntSplitRangeListReads::expectReads(*view, values);
+    nimble::test::expectRangeListReads(*view, values);
   }
 };
 
@@ -382,7 +381,7 @@ TEST_F(SubIntSplitEncodingViewTest, readsThroughRowFrame) {
           ASSERT_EQ(actual[i], values[offset + i]) << "row " << (offset + i);
         }
       }
-      nimble::test::SubIntSplitRangeListReads::expectReads(*view, values);
+      nimble::test::expectRangeListReads(*view, values);
     }
   }
 }
@@ -708,7 +707,7 @@ TEST_F(SubIntSplitEncodingViewTest, viewlessSectionsAreDecodedOnce) {
         ASSERT_EQ(actual[i], values[offset + i]) << "row " << (offset + i);
       }
     }
-    nimble::test::SubIntSplitRangeListReads::expectReads(*view, values);
+    nimble::test::expectRangeListReads(*view, values);
   }
 
   // The same values with sections chosen by the real nested selection, which

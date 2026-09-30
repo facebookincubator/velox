@@ -27,7 +27,6 @@
 
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 #include "velox/dwio/nimble/encodings/subintsplit/DecodeCost.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
@@ -92,10 +91,9 @@ class RangePricer {
   }
 
  private:
-  // Narrows the range to its storage type and mirrors
-  // ManualEncodingSelectionPolicy::select's candidate comparison. Kept in
-  // step with that function by hand; a divergence prices a plan section
-  // selection would not actually choose.
+  // Narrows the range to its storage type and prices it with select()'s own
+  // candidate comparison, so a plan section is priced at the encoding
+  // selection would actually choose for it.
   template <typename Storage>
   RangePrice priceNarrowed(int bitStart, uint64_t mask) {
     std::vector<Storage> narrowed(samples_.size());
@@ -104,59 +102,14 @@ class RangePricer {
     }
     const std::span<const Storage> values{narrowed};
     const auto statistics = Statistics<Storage>::create(values);
-    const auto& subIntSplitOptions = sectionOptions_.subIntSplit;
-    const double decodeWeight = subIntSplitOptions.sectionSelection
-        ? subIntSplitOptions.decodeWeight
-        : 0.0;
-
-    double minCost = std::numeric_limits<double>::max();
-    std::optional<uint64_t> selectedSize;
-    EncodingType selectedEncoding = EncodingType::Trivial;
-    double minSizeCost = std::numeric_limits<double>::max();
-    std::optional<uint64_t> sizeSelectedSize;
-    EncodingType sizeSelectedEncoding = EncodingType::Trivial;
-    for (const auto& [encodingType, readFactor] : candidates_) {
-      const auto estimatedSize =
-          nimble::detail::EncodingSizeEstimation<Storage>::estimateSize(
-              encodingType, values, statistics, sectionOptions_);
-      if (!estimatedSize.has_value()) {
-        continue;
-      }
-      const double sizeCost =
-          static_cast<double>(estimatedSize.value() * readFactor);
-      if (sizeCost < minSizeCost) {
-        minSizeCost = sizeCost;
-        sizeSelectedSize = estimatedSize;
-        sizeSelectedEncoding = encodingType;
-      }
-      double cost = sizeCost;
-      if (decodeWeight != 0.0) {
-        const double nanosPerRow = decodeNanosPerRow(
-            encodingType,
-            subIntSplitOptions.decodeAccessPattern,
-            subIntSplitOptions.decodeReadPath,
-            static_cast<double>(estimatedSize.value()) * 8.0,
-            values.size());
-        cost += decodeCostBits(nanosPerRow, values.size(), decodeWeight) / 8.0;
-      }
-      if (cost < minCost) {
-        minCost = cost;
-        selectedSize = estimatedSize;
-        selectedEncoding = encodingType;
-      }
-    }
-    if (decodeWeight != 0.0 && selectedSize.has_value() &&
-        sizeSelectedSize.has_value() &&
-        static_cast<double>(selectedSize.value()) >
-            static_cast<double>(sizeSelectedSize.value()) *
-                (1.0 + subIntSplitOptions.maxSizeRegression)) {
-      selectedSize = sizeSelectedSize;
-      selectedEncoding = sizeSelectedEncoding;
-    }
-    if (!selectedSize.has_value()) {
+    const auto selected = selectCandidate<Storage>(
+        candidates_, values, statistics, sectionOptions_);
+    if (!selected.estimatedSize.has_value()) {
       return {};
     }
-    return {static_cast<double>(selectedSize.value()) * 8.0, selectedEncoding};
+    return {
+        static_cast<double>(selected.estimatedSize.value()) * 8.0,
+        selected.encodingType};
   }
 
   const std::vector<uint64_t> samples_;

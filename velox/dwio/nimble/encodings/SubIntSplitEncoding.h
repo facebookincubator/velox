@@ -575,8 +575,9 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
         parsed[s].stream.size() >= EncodingPrefix::kRowCountOffset,
         "SubIntSplit section encoding prefix is truncated.");
     const auto expectedDataType = subintsplit::dispatchStorageType(
-        sec.storageBytes,
-        []<typename StorageType>() { return TypeTraits<StorageType>::dataType; });
+        sec.storageBytes, []<typename StorageType>() {
+          return TypeTraits<StorageType>::dataType;
+        });
     NIMBLE_CHECK_FILE(
         EncodingPrefix::dataType(parsed[s].stream) == expectedDataType,
         "SubIntSplit section data type does not match its bit width.");
