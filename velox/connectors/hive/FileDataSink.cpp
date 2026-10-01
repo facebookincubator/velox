@@ -123,7 +123,8 @@ FileDataSink::FileDataSink(
     uint64_t maxTargetFileBytes,
     bool partitionKeyAsLowerCase,
     const common::SpillConfig* spillConfig,
-    uint64_t sortWriterFinishTimeSliceLimitMs)
+    uint64_t sortWriterFinishTimeSliceLimitMs,
+    bool eagerlyCloseFiles)
     : inputType_(std::move(inputType)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
@@ -138,7 +139,11 @@ FileDataSink::FileDataSink(
       spillConfig_(spillConfig),
       sortWriterFinishTimeSliceLimitMs_(sortWriterFinishTimeSliceLimitMs),
       maxTargetFileBytes_(maxTargetFileBytes),
-      partitionKeyAsLowerCase_(partitionKeyAsLowerCase) {
+      partitionKeyAsLowerCase_(partitionKeyAsLowerCase),
+      eagerlyCloseFiles_(eagerlyCloseFiles) {
+  VELOX_CHECK(
+      !eagerlyCloseFiles_ || isPartitioned(),
+      "Eagerly closing files requires a partitioned write");
   fileSystemStats_ = std::make_unique<IoStats>();
 }
 
@@ -179,9 +184,45 @@ void FileDataSink::appendData(RowVectorPtr input) {
         : exec::wrap(partitionSize, partitionRows_[index], input);
     write(index, writerInput);
   }
+
+  closeCompletedPartitionWriters();
+}
+
+void FileDataSink::closeCompletedPartitionWriters() {
+  if (!eagerlyCloseFiles_ || partitionIds_.empty()) {
+    return;
+  }
+
+  const uint64_t startTimeMs = getCurrentTimeMs();
+  const auto openPartitionId = partitionIds_.back();
+  for (const auto& [writerId, index] : writerIndexMap_) {
+    // Keep the partition of the batch's last row open, since the next batch
+    // may continue it, and skip writers an earlier batch already closed.
+    if (writerId.partitionId.value() == openPartitionId ||
+        writers_[index] == nullptr) {
+      continue;
+    }
+    // Once this batch's sort time slice is used up, leave the remaining sort
+    // writers for the next batch or for when the sink finishes.
+    if (sortWrite() &&
+        getCurrentTimeMs() - startTimeMs > sortWriterFinishTimeSliceLimitMs_) {
+      continue;
+    }
+    WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
+    // A sort writer has to write out its sorted rows before it can close. If
+    // it runs out of time partway, it resumes on a later call.
+    if (sortWrite() && !writers_[index]->finish()) {
+      continue;
+    }
+    closeWriter(index);
+  }
 }
 
 void FileDataSink::write(size_t index, RowVectorPtr input) {
+  VELOX_CHECK(
+      !writerInfo_[index]->closed,
+      "Received input for a closed partition, the input is not sorted on the partition keys: {}",
+      writerInfo_[index]->writerParameters.partitionName().value());
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
   auto dataInput = makeDataInput(dataChannels_, input);
 
@@ -263,6 +304,18 @@ void FileDataSink::rotateWriter(size_t index) {
   writers_[index].reset();
 
   ++info->fileSequenceNumber;
+}
+
+void FileDataSink::closeWriter(size_t index) {
+  VELOX_CHECK_LT(index, writers_.size());
+  writers_[index]->close();
+  finalizeWriterFile(index);
+  mergeWriterStats(closedWriterStats_, writers_[index]->runtimeStats());
+  writers_[index].reset();
+  writerInfo_[index]->closed = true;
+  // The sort writer registered itself as the sort pool's reclaimer, so the
+  // pool must not outlive it.
+  writerInfo_[index]->sortPool.reset();
 }
 
 std::string FileDataSink::stateString(State state) {
@@ -383,6 +436,9 @@ bool FileDataSink::finish() {
 
   const uint64_t startTimeMs = getCurrentTimeMs();
   for (auto i = 0; i < writers_.size(); ++i) {
+    if (writers_[i] == nullptr) {
+      continue;
+    }
     WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
     if (!writers_[i]->finish()) {
       return false;

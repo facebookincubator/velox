@@ -198,6 +198,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param serdeParameters Table writer configuration parameters.
   /// @param ensureFiles When this option is set the HiveDataSink will always
   /// create a file even if there is no data.
+  /// @param inputSortedOnPartitionAndBucketKeys When set, the input arrives
+  /// ordered on the partition and bucket keys, so the data sink closes a
+  /// partition's writer once the input moves past that partition.
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,
@@ -213,7 +216,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
           nullptr,
       const bool ensureFiles = false,
       const std::unordered_map<std::string, std::string>& storageParameters =
-          {});
+          {},
+      const bool inputSortedOnPartitionAndBucketKeys = false);
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(

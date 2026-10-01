@@ -145,12 +145,14 @@ struct WriterInfo {
   // Memory pool for the file sink (serialization layer).
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   // Memory pool for sort buffers (nullptr if not a sorted write).
-  const std::shared_ptr<memory::MemoryPool> sortPool;
+  std::shared_ptr<memory::MemoryPool> sortPool;
   // Total rows written by this writer across all files.
   uint64_t numWrittenRows{0};
   // Rows written to the current file; reset to 0 when the file is finalized.
   uint64_t currentFileWrittenRows{0};
   uint64_t inputSizeInBytes{0};
+  // Set once the writer is closed for good. Any later write to it fails.
+  bool closed{false};
   /// File sequence number for tracking multiple files written due to size-based
   /// splitting. Incremented each time the writer rotates to a new file.
   /// Used to generate sequenced file names (e.g., file_1.orc, file_2.orc).
@@ -250,7 +252,8 @@ class FileDataSink : public DataSink {
       uint64_t maxTargetFileBytes,
       bool partitionKeyAsLowerCase,
       const common::SpillConfig* spillConfig,
-      uint64_t sortWriterFinishTimeSliceLimitMs);
+      uint64_t sortWriterFinishTimeSliceLimitMs,
+      bool eagerlyCloseFiles);
 
   void appendData(RowVectorPtr input) override;
 
@@ -317,6 +320,14 @@ class FileDataSink : public DataSink {
   // Returns the bytes written to the current file for the specified writer.
   uint64_t getCurrentFileBytes(size_t writerIndex) const;
 
+  // Closes the writers of every partition other than the one holding the last
+  // row of the current batch. Only meaningful when the input is ordered on the
+  // partition keys, which keeps each partition's rows contiguous. A sorted
+  // write stops once the sort writer finish time slice runs out, and the
+  // writers it leaves open are resumed on the next batch or when the sink
+  // finishes.
+  void closeCompletedPartitionWriters();
+
   // Compute the partition id and bucket id for each row in 'input'.
   virtual void computePartitionAndBucketIds(const RowVectorPtr& input) = 0;
 
@@ -370,6 +381,10 @@ class FileDataSink : public DataSink {
   // Rotates the writer at the given index to a new file.
   virtual void rotateWriter(size_t index);
 
+  // Closes the writer at the given index for good: finalizes its file without
+  // opening a successor, releases its sort pool, and marks it closed.
+  void closeWriter(size_t index);
+
   // Finalizes the current file for the writer at the given index.
   void finalizeWriterFile(size_t index);
 
@@ -397,6 +412,7 @@ class FileDataSink : public DataSink {
   const uint64_t sortWriterFinishTimeSliceLimitMs_{0};
   const uint64_t maxTargetFileBytes_{0};
   const bool partitionKeyAsLowerCase_;
+  const bool eagerlyCloseFiles_;
 
   /// Whether this sink uses sorted writes. Set by subclass after computing
   /// sort columns in its constructor.
