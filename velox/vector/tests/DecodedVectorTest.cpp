@@ -751,6 +751,208 @@ TEST_F(DecodedVectorTest, ownsNulls) {
   EXPECT_FALSE(decoded.ownsNulls());
 }
 
+TEST_F(DecodedVectorTest, nullsOfDictionaryOverNullableBase) {
+  // Gathering a base's nulls into row order builds the bitmap a word at a
+  // time when every row is decoded, so the rows to check are the word edges
+  // and the partial last word. 130 rows is two full words and a tail.
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) {
+    return row % 7 == 0 || row == 63 || row == 64 || row == 127 || row == 129;
+  };
+
+  // The indices reverse the base, so row i reads base row kSize - 1 - i.
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  std::vector<bool> expected(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    const auto baseRow = kSize - 1 - row;
+    if (!isRowNull(row)) {
+      baseValues[baseRow] = baseRow;
+    }
+    expected[row] = isRowNull(row);
+  }
+  auto base = makeNullableFlatVector<int64_t>(baseValues);
+  auto reversed = makeIndices(kSize, [](auto row) { return kSize - 1 - row; });
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, reversed, kSize, base);
+
+  const auto nullsOf = [&](const uint64_t* nulls) {
+    std::vector<bool> result(kSize);
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      result[row] = bits::isBitNull(nulls, row);
+    }
+    return result;
+  };
+
+  {
+    DecodedVector decoded(*dictionary);
+    ASSERT_NE(decoded.nulls(), nullptr);
+    EXPECT_EQ(nullsOf(decoded.nulls()), expected);
+  }
+
+  {
+    SelectivityVector rows(kSize);
+    DecodedVector decoded(*dictionary, rows);
+    ASSERT_NE(decoded.nulls(&rows), nullptr);
+    EXPECT_EQ(nullsOf(decoded.nulls(&rows)), expected);
+  }
+}
+
+TEST_F(DecodedVectorTest, nullsOfPartiallySelectedNestedDictionary) {
+  // A partial decode fills in indices for the selected rows only, and a
+  // reused DecodedVector keeps whatever an earlier decode left in the rest:
+  // here, indices past the end of the smaller base. Selected rows must come
+  // out right in a fully selected word, a partly selected one and an empty
+  // one.
+  constexpr vector_size_t kLargeSize = 10'000;
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) { return row % 5 == 0; };
+
+  // Two dictionary layers, so the indices are composed into storage the
+  // DecodedVector owns and reuses. A reversed outer layer leaves row i holding
+  // index size - 1 - i.
+  const auto makeNested = [&](vector_size_t size, bool reversed) {
+    std::vector<std::optional<int64_t>> baseValues(size);
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (!isRowNull(row)) {
+        baseValues[row] = row;
+      }
+    }
+    auto identity = [](auto row) { return row; };
+    auto inner = BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices(size, identity),
+        size,
+        makeNullableFlatVector<int64_t>(baseValues));
+    auto outer = reversed
+        ? makeIndices(size, [&](auto row) { return size - 1 - row; })
+        : makeIndices(size, identity);
+    return BaseVector::wrapInDictionary(nullptr, outer, size, inner);
+  };
+
+  // Both vectors outlive the decodes: DecodedVector borrows their buffers.
+  auto large = makeNested(kLargeSize, /*reversed=*/true);
+  auto small = makeNested(kSize, /*reversed=*/false);
+
+  DecodedVector decoded;
+  SelectivityVector largeRows(kLargeSize);
+  decoded.decode(*large, largeRows);
+  ASSERT_NE(decoded.nulls(&largeRows), nullptr);
+
+  // Rows 0-63 are all selected, 64-127 only the odd ones, 128-129 none: one
+  // word of each kind.
+  SelectivityVector rows(kSize, false);
+  for (vector_size_t row = 0; row < 128; ++row) {
+    if (row < 64 || row % 2 == 1) {
+      rows.setValid(row, true);
+    }
+  }
+  rows.updateBounds();
+  decoded.decode(*small, rows);
+  const auto* nulls = decoded.nulls(&rows);
+  ASSERT_NE(nulls, nullptr);
+
+  rows.applyToSelected([&](vector_size_t row) {
+    EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+  });
+}
+
+TEST_F(DecodedVectorTest, nullsAtSelectionEdges) {
+  // Where a selection starts and ends decides which rows of its first and last
+  // word count. Each case checks every row it selects.
+  const auto isRowNull = [](vector_size_t row) { return row % 3 == 0; };
+
+  // The indices reverse the base, so row i reads base row size - 1 - i.
+  const auto makeDictionary = [&](vector_size_t size) {
+    std::vector<std::optional<int64_t>> baseValues(size);
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (!isRowNull(row)) {
+        baseValues[size - 1 - row] = size - 1 - row;
+      }
+    }
+    return BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices(size, [size](auto row) { return size - 1 - row; }),
+        size,
+        makeNullableFlatVector<int64_t>(baseValues));
+  };
+
+  const auto expectNulls = [&](const VectorPtr& vector,
+                               const SelectivityVector& rows) {
+    DecodedVector decoded(*vector, rows);
+    const auto* nulls = decoded.nulls(&rows);
+    ASSERT_NE(nulls, nullptr);
+    rows.applyToSelected([&](vector_size_t row) {
+      EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+    });
+  };
+
+  {
+    // Starts and ends mid-word, before the vector's end, with a full word
+    // between.
+    SelectivityVector rows(130, false);
+    rows.setValidRange(10, 100, true);
+    rows.updateBounds();
+    expectNulls(makeDictionary(130), rows);
+  }
+
+  {
+    // Inside one word, partial at both ends.
+    SelectivityVector rows(130, false);
+    rows.setValidRange(5, 21, true);
+    rows.updateBounds();
+    expectNulls(makeDictionary(130), rows);
+  }
+
+  {
+    // Two whole words and no selection: no partial word at all.
+    constexpr vector_size_t kSize = 128;
+    auto dictionary = makeDictionary(kSize);
+    DecodedVector decoded(*dictionary);
+    const auto* nulls = decoded.nulls();
+    ASSERT_NE(nulls, nullptr);
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+    }
+  }
+}
+
+TEST_F(DecodedVectorTest, nullsOfSelectionEditedInPlace) {
+  // A caller may clear bits of 'rows' through asMutableRange() between
+  // nulls() calls without updating its bounds, as deselectRowsWithNulls does
+  // across join keys. isAllSelected() then still reports every row, and
+  // nulls() has to cover every row, as applyToSelected() does: a join reads
+  // the bitmap for rows it has just deselected.
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) { return row % 3 == 0; };
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    if (!isRowNull(row)) {
+      baseValues[kSize - 1 - row] = row;
+    }
+  }
+  auto dictionary = BaseVector::wrapInDictionary(
+      nullptr,
+      makeIndices(kSize, [](auto row) { return kSize - 1 - row; }),
+      kSize,
+      makeNullableFlatVector<int64_t>(baseValues));
+
+  SelectivityVector rows(kSize);
+  DecodedVector decoded(*dictionary, rows);
+  // Deselect every other row in place, leaving the bounds and the cached
+  // all-selected state as they were.
+  auto* bits = rows.asMutableRange().bits();
+  for (vector_size_t row = 0; row < kSize; row += 2) {
+    bits::clearBit(bits, row);
+  }
+  ASSERT_TRUE(rows.isAllSelected());
+
+  const auto* nulls = decoded.nulls(&rows);
+  ASSERT_NE(nulls, nullptr);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+  }
+}
+
 TEST_F(DecodedVectorTest, valueAtOpaqueDoesNotCopy) {
   using TOpaque = std::shared_ptr<void>;
   constexpr vector_size_t size = 100;
