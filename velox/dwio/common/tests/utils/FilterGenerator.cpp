@@ -42,10 +42,11 @@ vector_size_t batchRow(uint64_t position) {
   return position & 0xffffffff;
 }
 
-VectorPtr getChildBySubfield(
+VectorPtr getChildBySubfieldWithAncestorNulls(
     const RowVector* rowVector,
     const Subfield& subfield,
-    const RowTypePtr& rootType) {
+    const RowTypePtr& rootType,
+    std::vector<uint8_t>* ancestorNulls) {
   const Type* type = rootType ? rootType.get() : rowVector->type().get();
   auto& path = subfield.path();
   VELOX_CHECK(!path.empty());
@@ -57,31 +58,61 @@ VectorPtr getChildBySubfield(
   auto vector = rowVector->childAt(fieldIndex);
   for (int i = 1; i < path.size(); ++i) {
     switch (type->kind()) {
-      case TypeKind::ROW:
+      case TypeKind::ROW: {
         rowType = &type->asRow();
         field = dynamic_cast<const Subfield::NestedField*>(path[i].get());
         VELOX_CHECK(field);
         fieldIndex = rowType->getChildIdx(field->name());
         type = rowType->childAt(fieldIndex).get();
-        vector = vector->asUnchecked<RowVector>()->childAt(fieldIndex);
+        auto* parent = vector->asUnchecked<RowVector>();
+        // A null struct leaves its children's values undefined rather than
+        // marking them null, so the leaf's own null flags are not enough to
+        // decide what a reader will see for this subfield.
+        if (ancestorNulls != nullptr && parent->mayHaveNulls()) {
+          ancestorNulls->resize(parent->size(), 0);
+          for (vector_size_t row = 0; row < parent->size(); ++row) {
+            if (parent->isNullAt(row)) {
+              (*ancestorNulls)[row] = 1;
+            }
+          }
+        }
+        vector = parent->childAt(fieldIndex);
         break;
+      }
       case TypeKind::ARRAY:
         VELOX_CHECK(
             dynamic_cast<const Subfield::AllSubscripts*>(path[i].get()));
         type = type->childAt(0).get();
         vector = vector->asUnchecked<ArrayVector>()->elements();
+        // Positions in an elements vector are element indices, not row
+        // indices, so anything collected above no longer lines up with the
+        // rows the caller is iterating.
+        if (ancestorNulls != nullptr) {
+          ancestorNulls->clear();
+        }
         break;
       case TypeKind::MAP:
         VELOX_CHECK(
             dynamic_cast<const Subfield::AllSubscripts*>(path[i].get()));
         type = type->childAt(1).get();
         vector = vector->asUnchecked<MapVector>()->mapValues();
+        if (ancestorNulls != nullptr) {
+          ancestorNulls->clear();
+        }
         break;
       default:
         VELOX_FAIL();
     }
   }
   return vector;
+}
+
+VectorPtr getChildBySubfield(
+    const RowVector* rowVector,
+    const Subfield& subfield,
+    const RowTypePtr& rootType) {
+  return getChildBySubfieldWithAncestorNulls(
+      rowVector, subfield, rootType, nullptr);
 }
 
 template <>
@@ -374,25 +405,58 @@ SubfieldFilters FilterGenerator::cloneSubfieldFilters(
   return copy;
 }
 
+namespace {
+
+// ignore these types for filtering
+bool isFilterableKind(TypeKind kind) {
+  return kind != TypeKind::UNKNOWN && kind != TypeKind::FUNCTION &&
+      kind != TypeKind::OPAQUE && kind != TypeKind::VARBINARY &&
+      kind != TypeKind::TIMESTAMP && kind != TypeKind::INVALID;
+}
+
+// Nesting beyond this is left alone: the paths get long, the leaves get
+// sparse, and each extra level multiplies the candidate list that
+// makeFilterables then has to sample from.
+constexpr int32_t kMaxSubfieldDepth = 3;
+
+void collectFilterableSubFieldsAt(
+    const RowType& rowType,
+    const std::string& prefix,
+    int32_t depth,
+    std::vector<std::string>& subFields) {
+  for (int i = 0; i < rowType.size(); ++i) {
+    const auto& child = rowType.childAt(i);
+    if (!isFilterableKind(child->kind())) {
+      continue;
+    }
+    const auto& name = rowType.nameOf(i);
+    // A dot in a field name would make the path built below ambiguous when
+    // Subfield parses it back apart, so such a field is offered only at the
+    // level it sits at and never descended into.
+    if (name.find('.') != std::string::npos) {
+      if (prefix.empty()) {
+        subFields.push_back(name);
+      }
+      continue;
+    }
+    auto path = prefix.empty() ? name : fmt::format("{}.{}", prefix, name);
+    subFields.push_back(path);
+    // Only ROW is descended into. A path through an ARRAY or a MAP lands on
+    // the elements vector, whose positions are element indices rather than row
+    // indices, so the row-wise reference computation would read values that
+    // belong to other rows.
+    if (child->kind() == TypeKind::ROW && depth + 1 < kMaxSubfieldDepth) {
+      collectFilterableSubFieldsAt(child->asRow(), path, depth + 1, subFields);
+    }
+  }
+}
+
+} // namespace
+
 void FilterGenerator::collectFilterableSubFields(
     const RowType* rowType,
     std::vector<std::string>& subFields) {
-  for (int i = 0; i < rowType->size(); ++i) {
-    auto kind = rowType->childAt(i)->kind();
-    switch (kind) {
-      // ignore these types for filtering
-      case TypeKind::UNKNOWN:
-      case TypeKind::FUNCTION:
-      case TypeKind::OPAQUE:
-      case TypeKind::VARBINARY:
-      case TypeKind::TIMESTAMP:
-      case TypeKind::INVALID:
-        continue;
-
-      default:
-        subFields.push_back(rowType->nameOf(i));
-    }
-  }
+  collectFilterableSubFieldsAt(*rowType, "", 0, subFields);
 }
 
 std::vector<std::string> FilterGenerator::makeFilterables(
