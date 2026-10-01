@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
@@ -104,4 +106,82 @@ TEST(FilterGeneratorTest, rowGroupSkipNeverPairedWithNullKinds) {
   // Without this the test would pass with zero assertions run if the draw were
   // ever disabled again -- which is the bug this whole change fixes.
   EXPECT_GT(observed, 0);
+}
+
+namespace {
+
+class FilterGeneratorSeedTest : public testing::Test,
+                                public test::VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  std::vector<RowVectorPtr> makeBatches(const RowTypePtr& rowType) {
+    std::vector<RowVectorPtr> batches;
+    for (int32_t batch = 0; batch < 2; ++batch) {
+      batches.push_back(makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>(
+               kBatchRows, [&](auto row) { return row + batch * kBatchRows; }),
+           makeFlatVector<int32_t>(
+               kBatchRows, [&](auto row) { return (row * 7) % 101; })}));
+    }
+    return batches;
+  }
+
+  // Renders the generated filters into a stable string so two runs can be
+  // compared without depending on filter identity.
+  std::string generateFilterDescription(
+      const RowTypePtr& rowType,
+      uint32_t seed) {
+    auto type = rowType;
+    FilterGenerator generator(type, seed);
+    auto filterable = generator.makeFilterables(rowType->size(), 100);
+    auto specs = generator.makeRandomSpecs(filterable, 0);
+    auto batches = makeBatches(rowType);
+    std::vector<uint64_t> hitRows;
+    auto filters =
+        generator.makeSubfieldFilters(specs, batches, nullptr, hitRows);
+
+    std::vector<std::string> rendered;
+    for (const auto& [subfield, filter] : filters) {
+      rendered.push_back(
+          fmt::format("{}:{}", subfield.toString(), filter->toString()));
+    }
+    std::sort(rendered.begin(), rendered.end());
+    return folly::join(",", rendered);
+  }
+
+  static constexpr vector_size_t kBatchRows = 500;
+};
+
+} // namespace
+
+// Filter kind selection used to be driven by a process-global counter on
+// AbstractColumnStats rather than by the seed, so an unrelated generator run
+// earlier in the same process shifted the choice. A validation service whose
+// whole premise is "replay this failing seed" cannot afford that.
+TEST_F(FilterGeneratorSeedTest, filterKindIsIndependentOfEarlierGenerators) {
+  auto rowType = ROW({{"big", BIGINT()}, {"int", INTEGER()}});
+  const auto before = generateFilterDescription(rowType, /*seed=*/7);
+
+  // Run unrelated generators in between; with a shared global counter these
+  // perturb the next run's filter kinds.
+  for (uint32_t otherSeed = 100; otherSeed < 105; ++otherSeed) {
+    generateFilterDescription(rowType, otherSeed);
+  }
+
+  EXPECT_EQ(before, generateFilterDescription(rowType, /*seed=*/7));
+}
+
+TEST_F(FilterGeneratorSeedTest, differentSeedsProduceDifferentFilters) {
+  auto rowType = ROW({{"big", BIGINT()}, {"int", INTEGER()}});
+  std::set<std::string> descriptions;
+  for (uint32_t seed = 1; seed <= 20; ++seed) {
+    descriptions.insert(generateFilterDescription(rowType, seed));
+  }
+  // Not asserting all 20 differ -- collisions are legitimate -- only that the
+  // seed actually drives the outcome.
+  EXPECT_GT(descriptions.size(), 1);
 }
