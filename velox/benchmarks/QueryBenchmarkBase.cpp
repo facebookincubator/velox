@@ -175,9 +175,8 @@ void QueryBenchmarkBase::printResults(
 
 namespace {
 // Parses the semicolon-separated key=value entries of --query_configs into
-// 'queryConfigs'. Called from initialize() so that a bad entry fails once
-// at startup instead of inside every query's run. Whitespace around each
-// entry, key and value is trimmed; empty entries are skipped.
+// 'queryConfigs'. Whitespace around each entry, key and value is trimmed.
+// Empty entries are skipped.
 void applyQueryConfigOverrides(
     std::unordered_map<std::string, std::string>& queryConfigs) {
   if (FLAGS_query_configs.empty()) {
@@ -302,8 +301,6 @@ QueryBenchmarkBase::run(
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
       params.queryConfigs = queryConfigs;
-      // 'config_' (--query_configs and the 's-' lines of -test_flags_file)
-      // overrides the per-query configs.
       for (const auto& [key, value] : config_) {
         params.queryConfigs[key] = value;
       }
