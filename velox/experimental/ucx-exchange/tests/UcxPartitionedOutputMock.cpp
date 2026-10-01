@@ -52,7 +52,7 @@ void UcxPartitionedOutputMock::joinThreads() {
 void UcxPartitionedOutputMock::publishDataChunks() {
   // create numPartitions_ x numDataChunks_ data chunks and
   // push it into the destination queues identified by the taskId.
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
   for (size_t partition = 0; partition < numPartitions_; ++partition) {
     for (uint32_t dataChunk = 0; dataChunk < numDataChunks_; ++dataChunk) {
       VLOG(3)
@@ -74,7 +74,7 @@ void UcxPartitionedOutputMock::publishDataChunks() {
       // efficient. A better approach is to create an event and pass it along
       // the data through the queue and synchronize on the event before calling
       // into UCXX.
-      stream.synchronize();
+      stream.sync();
       queueManager_->enqueue(
           taskId_, partition, std::move(packedCols), numRowsPerChunk_);
     }

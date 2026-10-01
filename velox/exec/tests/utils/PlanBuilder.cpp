@@ -1153,7 +1153,8 @@ PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
-    const std::vector<std::vector<TypePtr>>& rawInputTypes) {
+    const std::vector<std::vector<TypePtr>>& rawInputTypes,
+    std::optional<bool> mayRetainInput) {
   auto aggregatesAndNames = createAggregateExpressionsAndNames(
       aggregates, masks, step, rawInputTypes);
 
@@ -1185,6 +1186,7 @@ PlanBuilder& PlanBuilder::aggregation(
       groupId,
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
+      mayRetainInput,
       planNode_);
   VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
@@ -1197,7 +1199,8 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
-    bool noGroupsSpanBatches) {
+    bool noGroupsSpanBatches,
+    std::optional<bool> mayRetainInput) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step);
   auto aggregationNode = std::make_shared<core::AggregationNode>(
@@ -1209,6 +1212,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
       noGroupsSpanBatches,
+      mayRetainInput,
       planNode_);
   VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);

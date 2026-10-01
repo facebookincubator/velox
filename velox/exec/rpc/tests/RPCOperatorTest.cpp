@@ -29,6 +29,7 @@
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
 #include "velox/exec/rpc/tests/DemoRPCFunction.h"
+#include "velox/exec/rpc/tests/TextOutput.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -37,13 +38,381 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 
+#include <atomic>
 #include <chrono>
+#include <optional>
+#include <string>
+#include <thread>
 
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec::rpc {
 
 using namespace facebook::velox::exec::test;
+
+namespace {
+
+memory::MemoryPool::Stats rpcOperatorMemoryStats(
+    const std::shared_ptr<Task>& task,
+    const core::PlanNodeId& rpcNodeId) {
+  memory::MemoryPool* nodePool{nullptr};
+  task->pool()->visitChildren([&](memory::MemoryPool* childPool) {
+    if (childPool->name() == fmt::format("node.{}", rpcNodeId)) {
+      VELOX_CHECK_NULL(nodePool, "Expected one RPC plan-node memory pool");
+      nodePool = childPool;
+    }
+    return true;
+  });
+  VELOX_CHECK_NOT_NULL(nodePool, "RPC plan-node memory pool was not found");
+
+  memory::MemoryPool* rpcPool{nullptr};
+  nodePool->visitChildren([&](memory::MemoryPool* childPool) {
+    if (childPool->isLeaf() && childPool->name().ends_with(".RPC")) {
+      VELOX_CHECK_NULL(rpcPool, "Expected one RPC operator memory pool");
+      rpcPool = childPool;
+    }
+    return true;
+  });
+  VELOX_CHECK_NOT_NULL(rpcPool, "RPC operator memory pool was not found");
+  return rpcPool->stats();
+}
+
+} // namespace
+
+class FanOutBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  static std::vector<int32_t>& flushSizes() {
+    static std::vector<int32_t> sizes;
+    return sizes;
+  }
+
+  int32_t admissionUnitsForBatch(int32_t numRows) const override {
+    return numRows;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushSizes().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
+
+class RecoveringFanOutBatchRPCFunction : public FanOutBatchRPCFunction {
+ public:
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    auto& limiter = RPCRateLimiterRegistry::global().get("");
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    return DemoBatchRPCFunction::evaluateCongestion(responses);
+  }
+};
+
+class InvalidAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  int32_t admissionUnitsForBatch(int32_t numRows) const override {
+    return numRows + 1;
+  }
+};
+
+enum class BatchContractViolation {
+  kDuplicateRowId,
+  kOutOfRangeRowId,
+  kUnsetResponse,
+};
+
+class MalformedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  explicit MalformedBatchRPCFunction(
+      BatchContractViolation violation,
+      bool failOnError = false)
+      : DemoBatchRPCFunction(
+            ResponseOrder::kInOrder,
+            {},
+            /*failWholeBatch=*/false,
+            failOnError),
+        violation_(violation) {}
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return std::move(DemoBatchRPCFunction::flushBatch(maxRows))
+        .deferValue([violation =
+                         violation_](std::vector<RPCResponse> responses) {
+          VELOX_CHECK_GE(responses.size(), 2);
+          switch (violation) {
+            case BatchContractViolation::kDuplicateRowId:
+              responses.at(1).rowId = responses.at(0).rowId;
+              break;
+            case BatchContractViolation::kOutOfRangeRowId:
+              responses.at(0).rowId = static_cast<int64_t>(responses.size());
+              break;
+            case BatchContractViolation::kUnsetResponse: {
+              const auto rowId = responses.at(0).rowId;
+              responses.at(0) = RPCResponse{};
+              responses.at(0).rowId = rowId;
+              break;
+            }
+          }
+          return responses;
+        });
+  }
+
+ private:
+  const BatchContractViolation violation_;
+};
+
+class UnsetPerRowRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& /*args*/) override {
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      futures.emplace_back(row, folly::makeSemiFuture(RPCResponse{}));
+    });
+    return futures;
+  }
+};
+
+class PreAdmissionKeyRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    prepared_ = false;
+    dispatchedAfterPrepare_ = false;
+  }
+
+  static bool dispatchedAfterPrepare() {
+    return dispatchedAfterPrepare_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) override {
+    admissionKey_ = "resolved-tier";
+    prepared_ = true;
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::string admissionKey() const override {
+    return admissionKey_;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    dispatchedAfterPrepare_ = prepared_;
+    return DemoAsyncRPCFunction::dispatchPerRow(rows, args);
+  }
+
+ private:
+  std::string admissionKey_{"provisional-tier"};
+  static inline bool prepared_{false};
+  static inline bool dispatchedAfterPrepare_{false};
+};
+
+class ConstantSetupRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    numPreparations_ = 0;
+  }
+
+  static int32_t numPreparations() {
+    return numPreparations_;
+  }
+
+  bool requiresRowInspectionBeforeAdmission() const override {
+    return false;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) override {
+    ++numPreparations_;
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+ private:
+  static inline int32_t numPreparations_{0};
+};
+
+class DeferredAdmissionRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    numCongestionEvaluations_ = 0;
+  }
+
+  static int32_t numCongestionEvaluations() {
+    return numCongestionEvaluations_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    bool hasDispatchableRow = false;
+    rows.applyToSelected([&](vector_size_t row) {
+      hasDispatchableRow = hasDispatchableRow ||
+          (!prompts->isNullAt(row) &&
+           prompts->valueAt(row) != StringView("local error"));
+    });
+    if (!hasDispatchableRow) {
+      return AdmissionPreparationResult::kLocalOnly;
+    }
+    admissionKey_ = "resolved-after-live-row";
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    SelectivityVector backendRows(rows.size(), false);
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        results;
+    rows.applyToSelected([&](vector_size_t row) {
+      if (prompts->isNullAt(row)) {
+        results.emplace_back(
+            row,
+            folly::makeSemiFuture(
+                RPCResponse::failed(
+                    0, velox::rpc::RPCErrorKind::kNullInput, "null_input")));
+      } else if (prompts->valueAt(row) == StringView("local error")) {
+        results.emplace_back(
+            row,
+            folly::makeSemiFuture(
+                RPCResponse::failed(
+                    0,
+                    velox::rpc::RPCErrorKind::kInvalidRequest,
+                    "local_error")));
+      } else {
+        backendRows.setValid(row, true);
+      }
+    });
+    backendRows.updateBounds();
+    auto backendResults =
+        DemoAsyncRPCFunction::dispatchPerRow(backendRows, args);
+    results.insert(
+        results.end(),
+        std::make_move_iterator(backendResults.begin()),
+        std::make_move_iterator(backendResults.end()));
+    return results;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    ++numCongestionEvaluations_;
+    for (const auto& response : responses) {
+      if (response.hasError()) {
+        return CongestionSignal::kNonOverloadError;
+      }
+    }
+    return DemoAsyncRPCFunction::evaluateCongestion(responses);
+  }
+
+  std::string admissionKey() const override {
+    return admissionKey_;
+  }
+
+ private:
+  std::string admissionKey_{"local-only-provisional-tier"};
+  static inline int32_t numCongestionEvaluations_{0};
+};
+
+class DeferredAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  static void reset() {
+    numCongestionEvaluations_ = 0;
+  }
+
+  static int32_t numCongestionEvaluations() {
+    return numCongestionEvaluations_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    bool hasDispatchableRow = false;
+    rows.applyToSelected([&](vector_size_t row) {
+      hasDispatchableRow = hasDispatchableRow || !prompts->isNullAt(row);
+    });
+    if (!hasDispatchableRow) {
+      return AdmissionPreparationResult::kLocalOnly;
+    }
+    admissionKey_ = "resolved-batch-after-live-row";
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::string admissionKey() const override {
+    return admissionKey_;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    ++numCongestionEvaluations_;
+    return DemoBatchRPCFunction::evaluateCongestion(responses);
+  }
+
+ private:
+  std::string admissionKey_{"batch-local-only-provisional-tier"};
+  static inline int32_t numCongestionEvaluations_{0};
+};
+
+class NoLatencySuccessBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& /*responses*/) const override {
+    return CongestionSignal::kSuccessNoLatency;
+  }
+};
+
+// Declares a per-request byte budget and reports a fixed number of rows that
+// fit it, so the operator must chunk a large backlog to keep each request
+// under the cap. Records every flush's row count so the test can assert no
+// flush exceeds the budget-derived limit and no rows are lost.
+class ByteBudgetedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  static constexpr int32_t kRowsPerBudget = 3;
+
+  // Flush chunk sizes observed across a query. Cleared at the start of the
+  // test.
+  static std::vector<int32_t>& flushChunks() {
+    static std::vector<int32_t> chunks;
+    return chunks;
+  }
+
+  // Report a fixed cap (>= 1), independent of any byte math — this test
+  // exercises the operator's clamp, not a function's estimator.
+  int32_t maxRowsPerFlush(int32_t desired) const override {
+    return std::min(desired, kRowsPerBudget);
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushChunks().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
+
+class InvalidMaxRowsBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  explicit InvalidMaxRowsBatchRPCFunction(bool returnZero)
+      : returnZero_(returnZero) {}
+
+  int32_t maxRowsPerFlush(int32_t desired) const override {
+    return returnZero_ ? 0 : desired + 1;
+  }
+
+ private:
+  const bool returnZero_;
+};
 
 class RPCOperatorTest : public OperatorTestBase {
  protected:
@@ -51,53 +420,200 @@ class RPCOperatorTest : public OperatorTestBase {
     OperatorTestBase::SetUpTestCase();
     registerRPCPlanNodeTranslator();
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_rpc", []() { return std::make_shared<DemoAsyncRPCFunction>(); });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_held", []() {
-      auto fn = std::make_shared<DemoBatchRPCFunction>();
-      fn->testingHoldFlushes();
-      return fn;
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
-      return std::make_shared<DemoBatchRPCFunction>();
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_reversed", []() {
-      return std::make_shared<DemoBatchRPCFunction>(
-          DemoBatchRPCFunction::ResponseOrder::kReversed);
-    });
+        "demo_rpc",
+        []() { return std::make_shared<DemoAsyncRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_partial_fail", []() {
+        "demo_batch_rpc_held",
+        []() {
+          auto fn = std::make_shared<DemoBatchRPCFunction>();
+          fn->testingHoldFlushes();
+          return fn;
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "fan_out_batch_rpc",
+        []() { return std::make_shared<FanOutBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "recovering_fan_out_batch_rpc",
+        []() { return std::make_shared<RecoveringFanOutBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "invalid_admission_batch_rpc",
+        []() { return std::make_shared<InvalidAdmissionBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "no_latency_success_batch_rpc",
+        []() { return std::make_shared<NoLatencySuccessBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc",
+        []() { return std::make_shared<DemoBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_reversed",
+        []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kReversed);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_partial_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{1, 3});
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail", []() {
+        "demo_batch_rpc_whole_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     // Whole-batch failure AND a fail-on-error policy (mimics
     // meta_ai_on_error='fail'): the query must still hard-fail, not degrade.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail_strict", []() {
+        "demo_batch_rpc_whole_fail_strict",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true,
               /*failOnError=*/true);
-        });
-    // Returns fewer responses than rows (function-contract violation): the
-    // operator's scatter must hard-fail on the count mismatch.
+        },
+        DemoBatchRPCFunction::signatures());
+    // Returns fewer responses than rows. The operator must fail the query
+    // rather than guess response placement.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_wrong_count", []() {
+        "demo_batch_rpc_wrong_count",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/false,
               /*failOnError=*/false,
               /*dropOneResponse=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_wrong_count_strict",
+        []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kInOrder,
+              std::unordered_set<int32_t>{},
+              /*failWholeBatch=*/false,
+              /*failOnError=*/true,
+              /*dropOneResponse=*/true);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_duplicate_row_id",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kDuplicateRowId);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_duplicate_row_id_strict",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kDuplicateRowId,
+              /*failOnError=*/true);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_out_of_range_row_id",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kOutOfRangeRowId);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_out_of_range_row_id_strict",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kOutOfRangeRowId,
+              /*failOnError=*/true);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_unset_response",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kUnsetResponse);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_unset_response_strict",
+        []() {
+          return std::make_shared<MalformedBatchRPCFunction>(
+              BatchContractViolation::kUnsetResponse,
+              /*failOnError=*/true);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_rpc_unset_response",
+        []() { return std::make_shared<UnsetPerRowRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "pre_admission_tier_rpc",
+        []() { return std::make_shared<PreAdmissionKeyRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "constant_setup_rpc",
+        []() { return std::make_shared<ConstantSetupRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "deferred_admission_rpc",
+        []() { return std::make_shared<DeferredAdmissionRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "deferred_admission_batch_rpc",
+        []() { return std::make_shared<DeferredAdmissionBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    // Fails asynchronous batch work with an internal error.
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_whole_fail_fatal",
+        []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kInOrder,
+              std::unordered_set<int32_t>{},
+              /*failWholeBatch=*/false,
+              /*failOnError=*/false,
+              /*dropOneResponse=*/false,
+              /*failWholeBatchFatal=*/true);
+        },
+        DemoBatchRPCFunction::signatures());
+    // Same on the per-row path, which completes through RPCState.
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_rpc_fatal",
+        []() {
+          auto function = std::make_shared<DemoAsyncRPCFunction>();
+          function->testingFailFatally();
+          return function;
+        },
+        DemoAsyncRPCFunction::signatures());
+    // Declares maxBatchBytes so the operator clamps each flush by the byte
+    // budget (see batchClampedByByteBudget).
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_byte_budgeted",
+        []() { return std::make_shared<ByteBudgetedBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_zero_flush_limit",
+        []() { return std::make_shared<InvalidMaxRowsBatchRPCFunction>(true); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_excessive_flush_limit",
+        []() {
+          return std::make_shared<InvalidMaxRowsBatchRPCFunction>(false);
+        },
+        DemoBatchRPCFunction::signatures());
   }
 
   static void TearDownTestCase() {
@@ -113,7 +629,7 @@ class RPCOperatorTest : public OperatorTestBase {
     OperatorTestBase::TearDown();
   }
 
-  // Drives a query whose tier is fully held by the test body until a
+  // Drives a query whose backend is fully held by the test body until a
   // background thread releases it. Defined below the fixture.
   void runContendedDrain(bool batchMode);
 
@@ -155,7 +671,8 @@ class RPCOperatorTest : public OperatorTestBase {
   /// argumentColumnNames specifies which source columns are RPC arguments.
   core::PlanNodePtr makeRPCNode(
       const core::PlanNodePtr& source,
-      const std::vector<std::string>& argumentColumnNames) {
+      const std::vector<std::string>& argumentColumnNames,
+      const std::string& functionName = "demo_rpc") {
     auto sourceType = source->outputType();
 
     std::vector<core::TypedExprPtr> callInputs;
@@ -167,7 +684,7 @@ class RPCOperatorTest : public OperatorTestBase {
               sourceType->findChild(colName), colName));
     }
     auto call = std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), std::move(callInputs), "demo_rpc");
+        VARCHAR(), std::move(callInputs), functionName);
 
     // Output type = all source columns + RPC result column.
     auto outputNames = sourceType->names();
@@ -177,7 +694,13 @@ class RPCOperatorTest : public OperatorTestBase {
     auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
 
     return std::make_shared<core::RPCNode>(
-        "rpc-0", source, std::move(call), "__rpc_result", outputType);
+        "rpc-0",
+        source,
+        std::move(call),
+        "__rpc_result",
+        outputType,
+        RPCStreamingMode::kPerRow,
+        0);
   }
 };
 
@@ -204,9 +727,9 @@ TEST_F(RPCOperatorTest, basicPerRow) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["hello world"], "Response for: hello world");
-  EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
-  EXPECT_EQ(rows["third row"], "Response for: third row");
+  EXPECT_EQ(rows["hello world"], "demo: hello world");
+  EXPECT_EQ(rows["test prompt"], "demo: test prompt");
+  EXPECT_EQ(rows["third row"], "demo: third row");
 }
 
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
@@ -252,7 +775,7 @@ TEST_F(RPCOperatorTest, nullInput) {
     } else {
       EXPECT_EQ(prompts->valueAt(i).str(), "valid prompt");
       EXPECT_FALSE(results->isNullAt(i));
-      EXPECT_EQ(results->valueAt(i).str(), "Response for: valid prompt");
+      EXPECT_EQ(results->valueAt(i).str(), "demo: valid prompt");
     }
   }
 }
@@ -287,12 +810,12 @@ TEST_F(RPCOperatorTest, multipleColumns) {
   auto i1 = rowIndex["question one"];
   EXPECT_EQ(ids->valueAt(i1), 100);
   EXPECT_EQ(extras->valueAt(i1), 1.5);
-  EXPECT_EQ(results->valueAt(i1).str(), "Response for: question one");
+  EXPECT_EQ(results->valueAt(i1).str(), "demo: question one");
 
   auto i2 = rowIndex["question two"];
   EXPECT_EQ(ids->valueAt(i2), 200);
   EXPECT_EQ(extras->valueAt(i2), 2.5);
-  EXPECT_EQ(results->valueAt(i2).str(), "Response for: question two");
+  EXPECT_EQ(results->valueAt(i2).str(), "demo: question two");
 }
 
 // ============================================================
@@ -354,18 +877,208 @@ TEST_F(RPCOperatorTest, backendIsConfiguredByTheFirstQueryOnly) {
   EXPECT_DOUBLE_EQ(config.decreaseFactor, 0.25);
 }
 
-// Dispatch must respect the tier's admission cap, not only the per-driver
-// window. Other drivers can exhaust the tier while this driver's window is
+TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
+  PreAdmissionKeyRPCFunction::reset();
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "pre_admission_tier_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_TRUE(PreAdmissionKeyRPCFunction::dispatchedAfterPrepare());
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global().get("resolved-tier").stats().peakPending,
+      1);
+}
+
+TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
+  ConstantSetupRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first input"})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"second input"})}),
+  };
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "constant_setup_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ(ConstantSetupRPCFunction::numPreparations(), 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
+  DeferredAdmissionRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"local error"})}),
+  };
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* responses = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t row = 0; row < result->size(); ++row) {
+    if (prompts->isNullAt(row)) {
+      EXPECT_TRUE(responses->isNullAt(row));
+    } else if (prompts->valueAt(row) == StringView("live prompt")) {
+      EXPECT_EQ(prompts->valueAt(row).str(), "live prompt");
+      EXPECT_EQ(responses->valueAt(row).str(), "demo: live prompt");
+    } else {
+      EXPECT_EQ(prompts->valueAt(row).str(), "local error");
+      EXPECT_TRUE(responses->isNullAt(row));
+    }
+  }
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("local-only-provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("resolved-after-live-row")
+          .stats()
+          .peakPending,
+      1);
+  EXPECT_EQ(DeferredAdmissionRPCFunction::numCongestionEvaluations(), 1);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
+  DeferredAdmissionRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeNullableFlatVector<StringView>(
+          {std::nullopt, StringView("local error")})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 2);
+  const auto& responses = result->childAt(1);
+  EXPECT_EQ(BaseVector::countNulls(responses->nulls(), responses->size()), 2);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
+  DeferredAdmissionBatchRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+  };
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "deferred_admission_batch_rpc");
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* responses = result->childAt(1)->asFlatVector<StringView>();
+  int32_t numNullInputs = 0;
+  for (vector_size_t row = 0; row < result->size(); ++row) {
+    if (prompts->isNullAt(row)) {
+      ++numNullInputs;
+      EXPECT_TRUE(responses->isNullAt(row));
+    } else {
+      EXPECT_EQ(prompts->valueAt(row).str(), "live prompt");
+      EXPECT_EQ(
+          responses->valueAt(row).str(), "Batch response for: live prompt");
+    }
+  }
+  EXPECT_EQ(numNullInputs, 2);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("batch-local-only-provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("resolved-batch-after-live-row")
+          .stats()
+          .peakPending,
+      1);
+  EXPECT_EQ(DeferredAdmissionBatchRPCFunction::numCongestionEvaluations(), 1);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyBatchPayloadMemoryIsAccounted) {
+  DeferredAdmissionBatchRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeNullableFlatVector<StringView>({std::nullopt, std::nullopt})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_batch_rpc");
+
+  std::shared_ptr<Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), 2);
+  const auto& responses = result->childAt(1);
+  EXPECT_EQ(BaseVector::countNulls(responses->nulls(), responses->size()), 2);
+  const auto memoryStats = rpcOperatorMemoryStats(task, plan->id());
+  EXPECT_GT(memoryStats.numExternalAllocs, 0);
+  EXPECT_EQ(memoryStats.numExternalAllocs, memoryStats.numExternalFrees);
+  EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
+}
+
+// Dispatch must respect the backend's admission cap, not only the per-driver
+// window. Other drivers can exhaust the backend while this driver's window is
 // still open, and an ungated flush loop then pushes pending past the cap.
-// The mock holds each flush open so several are genuinely in flight; the tier
-// ceiling is set below the BATCH window's starting value so the tier is the
-// binding constraint and the two gates are distinguishable.
-// Intake is bounded by accumulator depth, and BATCH flushes from isBlocked()
-// as well as addInput(). Both halves are needed: bounding intake without the
-// flush from isBlocked() lets a full accumulator sit forever once needsInput()
-// stops taking input, because BATCH has no other place to drain from -- the
-// query then hangs rather than fails. Feeds many input vectors so needsInput()
-// is actually consulted mid-stream, against a tier admitting one flush.
+// The mock holds each flush open so several are genuinely in flight; the
+// backend ceiling is set below the BATCH window's starting value so the backend
+// is the binding constraint and the two gates are distinguishable. Intake is
+// bounded by accumulator depth, and BATCH flushes from isBlocked() as well as
+// addInput(). Both halves are needed: bounding intake without the flush from
+// isBlocked() lets a full accumulator sit forever once needsInput() stops
+// taking input, because BATCH has no other place to drain from -- the query
+// then hangs rather than fails. Feeds many input vectors so needsInput() is
+// actually consulted mid-stream, against a backend admitting one flush.
 TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
   constexpr int64_t kCeiling = 1;
   constexpr int32_t kVectors = 8;
@@ -402,11 +1115,12 @@ TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
   EXPECT_LE(limiter.stats().peakPending, kCeiling);
 }
 
-// Contended admission: the tier's slots are held by someone else, so a refused
-// dispatch meets numInFlight() == 0 -- the state the other operator tests never
-// reach, since they run one driver against a tier nothing else holds. The test
-// body holds the ceiling itself and releases from a background thread, which is
-// the only way to produce a refusal this operator cannot resolve alone.
+// Contended admission: the backend's slots are held by someone else, so a
+// refused dispatch meets numInFlight() == 0 -- the state the other operator
+// tests never reach, since they run one driver against a backend nothing else
+// holds. The test body holds the ceiling itself and releases from a background
+// thread, which is the only way to produce a refusal this operator cannot
+// resolve alone.
 //
 // Coverage, not a regression guard for one defect: it exercises a state nothing
 // else does, and asserts the query neither hangs nor comes up short. Reverting
@@ -458,11 +1172,11 @@ void RPCOperatorTest::runContendedDrain(bool batchMode) {
   ASSERT_EQ(result->size(), kRows);
 }
 
-TEST_F(RPCOperatorTest, perRowDrainCompletesWhileTheTierIsHeld) {
+TEST_F(RPCOperatorTest, perRowDrainCompletesWhileTheBackendIsHeld) {
   runContendedDrain(/*batchMode=*/false);
 }
 
-TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheTierIsHeld) {
+TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheBackendIsHeld) {
   runContendedDrain(/*batchMode=*/true);
 }
 
@@ -490,7 +1204,159 @@ TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
       "Unknown RPC function");
 }
 
-TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
+// A standalone operator on a live DriverCtx reproduces the teardown that
+// skips close() without the race: the second RPCState reference stands in
+// for an in-flight callback, and the input vector's use count is what the
+// operator would otherwise still be holding at ~Task.
+TEST_F(RPCOperatorTest, retainedInputIsReleasedWhenCloseNeverRuns) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-release",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto retained = BaseVector::create(VARCHAR(), 3, pool());
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{retained}, /*rowCount=*/3);
+  ASSERT_GT(retained.use_count(), 1);
+  auto callbackRef = rpcOperator->testingState();
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(retained.use_count(), 1)
+      << "the operator was destroyed without close() and kept its input "
+         "vectors, which upstream pools would still be reserving at ~Task";
+  EXPECT_TRUE(callbackRef->getInputBatchColumns(0).empty());
+}
+
+// The reservation the arbitrator actually checks. The test above retains a
+// vector from VectorTestBase::pool(), which is rooted outside the Task, so
+// the Task's pools read zero whether or not the operator released -- it can
+// only observe a use count. The driver allocates input from an upstream
+// operator's pool, a leaf of the Task's tree, and those bytes reach the query
+// root: left there, ~Task drops the root with a live reservation and
+// SharedArbitrator::removePool fails pool->reservedBytes() == 0, taking the
+// worker down with SIGABRT.
+TEST_F(RPCOperatorTest, retainedInputReleasesTheTaskPoolReservation) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto rpcNode = std::dynamic_pointer_cast<const core::RPCNode>(plan);
+  ASSERT_TRUE(rpcNode != nullptr);
+
+  // Parallel mode so Task::init() compiles no drivers: a Driver would hold
+  // the Task alive through its DriverCtx and this Task would never be
+  // destroyed.
+  auto task = exec::Task::create(
+      "retained-input-reservation",
+      core::PlanFragment{plan},
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  exec::DriverCtx driverCtx{
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      /*splitGroupId=*/0,
+      /*partitionId=*/0};
+
+  auto rpcOperator =
+      std::make_unique<RPCOperator>(/*operatorId=*/0, &driverCtx, rpcNode);
+  auto* upstreamPool = driverCtx.addOperatorPool("values-0", "Values");
+  constexpr vector_size_t kRetainedRows{1 << 16};
+  rpcOperator->testingState()->storeInputBatch(
+      std::vector<VectorPtr>{
+          BaseVector::create(VARCHAR(), kRetainedRows, upstreamPool)},
+      kRetainedRows);
+  auto callbackRef = rpcOperator->testingState();
+  ASSERT_GT(task->pool()->reservedBytes(), 0)
+      << "the retained vector must reserve on the Task's tree, otherwise this "
+         "test cannot see the invariant it is about";
+
+  rpcOperator.reset();
+
+  EXPECT_EQ(task->pool()->reservedBytes(), 0)
+      << "the operator was destroyed without close() and left its input "
+         "vectors reserving on the Task's pools; ~Task would abort in "
+         "SharedArbitrator::removePool";
+  // Keep a regression from taking the whole binary down in ~Task.
+  callbackRef->releaseAllInputBatches();
+}
+
+// Claims VARCHAR at the plan level -- so RPCNode's own checks pass -- while
+// the function actually returns BIGINT. This is the disagreement the plan node
+// cannot see: it compares the CALL expression against the declared column, not
+// against the registered function.
+class MismatchedResultTypeRPCFunction : public AsyncRPCFunction {
+ public:
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode) override {}
+
+  std::string name() const override {
+    return "mismatched_result_type_rpc";
+  }
+
+  TypePtr resultType() const override {
+    return BIGINT();
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(const SelectivityVector&, const std::vector<VectorPtr>&)
+      override {
+    VELOX_UNREACHABLE("initialize() rejects this function before dispatch");
+  }
+
+  VectorPtr buildOutput(const std::vector<RPCResponse>&, memory::MemoryPool*)
+      const override {
+    VELOX_UNREACHABLE("initialize() rejects this function before output");
+  }
+};
+
+// The framework owns the destination type and the function owns the mapping
+// onto it. RPCNode checks the CALL expression against the declared column, but
+// nothing checked the registered function agrees with either -- so a function
+// returning a different type produced a RowVector whose child disagreed with
+// its own declared type, and the failure surfaced downstream.
+TEST_F(RPCOperatorTest, resultColumnTypeMustMatchTheFunction) {
+  AsyncRPCFunctionRegistry::registerFunction(
+      "mismatched_result_type_rpc",
+      []() { return std::make_shared<MismatchedResultTypeRPCFunction>(); },
+      DemoAsyncRPCFunction::signatures());
+
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "mismatched_result_type_rpc");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "RPC function 'mismatched_result_type_rpc' returns BIGINT but the plan "
+      "declares column '__rpc_result' as VARCHAR");
+}
+
+TEST_F(RPCOperatorTest, batchDispatchRespectsTheBackendCap) {
   constexpr int64_t kCeiling = 1;
   std::vector<std::string> storage;
   std::vector<StringView> prompts;
@@ -515,7 +1381,76 @@ TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
   ASSERT_EQ(result->size(), 64);
 
   EXPECT_LE(limiter.stats().peakPending, kCeiling)
-      << "dispatch admitted more than the tier cap";
+      << "dispatch admitted more than the backend cap";
+}
+
+TEST_F(RPCOperatorTest, batchFanOutIsClippedToGrantedAdmissionUnits) {
+  constexpr int64_t kCeiling = 2;
+  constexpr int32_t kRows = 8;
+  FanOutBatchRPCFunction::flushSizes().clear();
+
+  std::vector<StringView> prompts(kRows, StringView("prompt"));
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce(
+      [](RPCRateLimiter::Config& config) { config.ceiling = kCeiling; });
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "fan_out_batch_rpc",
+      /*dispatchBatchSize=*/kRows);
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), kRows);
+
+  for (const auto flushSize : FanOutBatchRPCFunction::flushSizes()) {
+    EXPECT_GE(flushSize, 1);
+    EXPECT_LE(flushSize, kCeiling);
+  }
+}
+
+TEST_F(RPCOperatorTest, batchFanOutRecoveryUsesReservedAdmissionUnits) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int32_t kRows = 8;
+
+  std::vector<StringView> prompts(kRows, StringView("prompt"));
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.ceiling = kCeiling;
+    config.adaptive = true;
+    config.floor = 1;
+    config.decreaseFactor = 0.5;
+  });
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "recovering_fan_out_batch_rpc",
+      /*dispatchBatchSize=*/kRows);
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), kRows);
+
+  const auto stats = limiter.stats();
+  ASSERT_EQ(stats.peakPending, kRows);
+  EXPECT_EQ(stats.capacity, 6);
+}
+
+TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"prompt"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "invalid_admission_batch_rpc",
+      /*dispatchBatchSize=*/1);
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "one admission unit");
 }
 
 // BATCH reserves one slot per flushBatch() regardless of row count, so its
@@ -575,6 +1510,41 @@ TEST_F(RPCOperatorTest, batchAimdRecoversPerBatchNotPerRow) {
       << " over " << kNumBatches
       << " successful batches; additive increase on a batch-denominated "
          "capacity must be one step per batch";
+}
+
+TEST_F(
+    RPCOperatorTest,
+    batchSuccessWithoutLatencyRecoversLimiterWithoutRttSample) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int64_t kRows = 8;
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.ceiling = kCeiling;
+    config.adaptive = true;
+    config.floor = 1;
+    config.decreaseFactor = 0.5;
+  });
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
+  ASSERT_EQ(limiter.stats().capacity, 4);
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>({"0", "1", "2", "3", "4", "5", "6", "7"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "no_latency_success_batch_rpc",
+      /*dispatchBatchSize=*/1);
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRows);
+
+  EXPECT_EQ(limiter.stats().capacity, kCeiling);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  EXPECT_EQ(customStats.count(RPCOperator::kRpcBaselineRttNanos), 0);
 }
 
 // The low-water capacity lands on every query, not only the ones where the
@@ -732,22 +1702,108 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
       "RPC call failed for row");
 }
 
-// A function that returns fewer responses than rows violates the batch
-// contract. After moving deferError before deferValue, the scatter's
-// count-mismatch check must STILL hard-fail the query (not be swallowed and
-// degraded to NULL rows).
-TEST_F(RPCOperatorTest, batchWrongResponseCountHardFails) {
+// A function that returns fewer responses than rows leaves the scatter no way
+// to say which response belongs to which row. The framework fails the query
+// before the function's row-error policy can run.
+TEST_F(RPCOperatorTest, batchWrongResponseCountFailsQuery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  for (const auto& functionName :
+       {"demo_batch_rpc_wrong_count", "demo_batch_rpc_wrong_count_strict"}) {
+    SCOPED_TRACE(functionName);
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "RPC batch response count (2) does not match row count (3)");
+  }
+}
+
+TEST_F(RPCOperatorTest, batchDuplicateRowIdFailsQuery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  for (const auto& functionName :
+       {"demo_batch_rpc_duplicate_row_id",
+        "demo_batch_rpc_duplicate_row_id_strict"}) {
+    SCOPED_TRACE(functionName);
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "RPC duplicate batch response rowId (0)");
+  }
+}
+
+TEST_F(RPCOperatorTest, batchOutOfRangeRowIdFailsQuery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  for (const auto& functionName :
+       {"demo_batch_rpc_out_of_range_row_id",
+        "demo_batch_rpc_out_of_range_row_id_strict"}) {
+    SCOPED_TRACE(functionName);
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "RPC batch response rowId (3) out of range [0, 3)");
+  }
+}
+
+TEST_F(RPCOperatorTest, batchUnsetResponseFailsQuery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  for (const auto& functionName :
+       {"demo_batch_rpc_unset_response",
+        "demo_batch_rpc_unset_response_strict"}) {
+    SCOPED_TRACE(functionName);
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "RPC function 'demo_batch_rpc' returned an unset response for row 0");
+  }
+}
+
+TEST_F(RPCOperatorTest, perRowUnsetResponseFailsQuery) {
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_rpc_unset_response");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "RPC function 'demo_rpc' returned an unset response for row 0");
+}
+
+TEST_F(RPCOperatorTest, perRowAsyncInternalFailureFailsQuery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc_fatal");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "simulated invariant failure");
+}
+
+TEST_F(RPCOperatorTest, batchAsyncInternalFailureFailsQuery) {
   auto input =
       makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
 
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
-      "demo_batch_rpc_wrong_count");
+      "demo_batch_rpc_whole_fail_fatal");
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
-      "does not match row count");
+      "simulated invariant failure");
 }
 
 // Null inputs in batch mode produce null results.
@@ -825,7 +1881,6 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   ASSERT_EQ(result->size(), 7);
-
   auto* results = result->childAt(1)->asFlatVector<StringView>();
   for (vector_size_t i = 0; i < result->size(); ++i) {
     EXPECT_FALSE(results->isNullAt(i));
@@ -843,11 +1898,6 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       std::chrono::milliseconds latency,
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
       : latency_(latency), executor_(std::move(executor)) {}
-
-  void initialize(
-      const core::QueryConfig&,
-      const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
 
   std::string name() const override {
     return "slow_batch_rpc";
@@ -884,7 +1934,7 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     for (int32_t i = 0; i < n; ++i) {
       RPCResponse response;
       response.rowId = i;
-      response.result = "ok";
+      response.setPayload(makeTextPayload("ok"));
       responses.push_back(std::move(response));
     }
     // Complete after `latency_` on the transport executor (NOT the driver
@@ -907,6 +1957,83 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
   const std::chrono::milliseconds latency_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   int32_t pending_{0};
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+};
+
+class ExecutionModeRecordingRPCFunction : public SlowBatchRPCFunction {
+ public:
+  using SlowBatchRPCFunction::SlowBatchRPCFunction;
+
+  std::string name() const override {
+    return "execution_mode_recording_rpc";
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    receivedExecutionMode_ = instruction;
+  }
+
+  RPCStreamingMode receivedExecutionMode() const {
+    return receivedExecutionMode_;
+  }
+
+ private:
+  RPCStreamingMode receivedExecutionMode_{RPCStreamingMode::kPerRow};
+};
+
+// Stands in for a transport climbing a retry ladder: while the base class's
+// batch is in flight the function reports a growing retry count, and only then
+// does the batch resolve. No dispatch and no completion happens in between, so
+// this is precisely the interval the operator's other live counters cannot
+// see.
+class RetryingBatchRPCFunction : public SlowBatchRPCFunction {
+ public:
+  static constexpr int32_t kNumRetries{3};
+
+  RetryingBatchRPCFunction(
+      std::chrono::milliseconds latency,
+      std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
+      : SlowBatchRPCFunction(latency, executor),
+        executor_(std::move(executor)),
+        // Held by shared_ptr rather than captured through 'this': the
+        // continuations below outlive an operator that closes early, and the
+        // operator drops the function at close().
+        numRetriesAttempted_(std::make_shared<std::atomic<int64_t>>(0)),
+        // Spaced so every bump lands inside the base class's latency window,
+        // i.e. strictly while the driver is parked on the batch.
+        retryInterval_(latency / (kNumRetries + 1)) {}
+
+  std::string name() const override {
+    return "retrying_batch_rpc";
+  }
+
+  int64_t numRetriesAttempted() const override {
+    return numRetriesAttempted_->load(std::memory_order_relaxed);
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    for (int32_t retry = 1; retry <= kNumRetries; ++retry) {
+      folly::futures::sleep(retryInterval_ * retry)
+          .via(executor_.get())
+          .thenValue([counter = numRetriesAttempted_](folly::Unit) {
+            counter->fetch_add(1, std::memory_order_relaxed);
+          });
+    }
+    return SlowBatchRPCFunction::flushBatch(maxRows);
+  }
+
+ private:
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
+  std::shared_ptr<std::atomic<int64_t>> numRetriesAttempted_;
+  const std::chrono::milliseconds retryInterval_;
 };
 
 } // namespace
@@ -929,9 +2056,11 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   constexpr std::chrono::milliseconds kLatency{200};
   auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
   AsyncRPCFunctionRegistry::registerFunction(
-      "slow_batch_rpc", [kLatency, rpcExecutor]() {
+      "slow_batch_rpc",
+      [kLatency, rpcExecutor]() {
         return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
-      });
+      },
+      DemoBatchRPCFunction::signatures());
 
   constexpr int kRows = 8;
   std::vector<RowVectorPtr> inputs;
@@ -967,8 +2096,309 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
       << "blockedWallNanos=" << blockedNs << " latencyNs=" << latencyNs;
 }
 
+// RPC progress must be observable from Task::taskStats() while the driver is
+// blocked, not only after the operator closes.
+//
+// While a driver is blocked on kWaitForRPC no operator counter advances:
+// inputVectors and outputVectors are frozen and the memory reservation is
+// already taken. Previously RPCOperator published its counters from close()
+// only, so a caller sampling Task::taskStats() saw identical stats for the
+// whole backend round trip. stats() now refreshes them on every sample.
+//
+// The plan runs a slow BATCH RPC and drives the task through a non-blocking
+// TaskCursor, sampling Task::taskStats() while the cursor reports itself
+// blocked. Without the stats() override rpcInFlight is absent from
+// runtimeStats for every sample and both assertions below fail.
+TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
+  constexpr std::chrono::milliseconds kLatency{500};
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  AsyncRPCFunctionRegistry::registerFunction(
+      "slow_batch_rpc_liveness",
+      [kLatency, rpcExecutor]() {
+        return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
+      },
+      DemoBatchRPCFunction::signatures());
+
+  constexpr int kRows = 4;
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    inputs.push_back(makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+  }
+
+  CursorParameters params;
+  params.planNode = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "slow_batch_rpc_liveness",
+      /*dispatchBatchSize=*/1);
+  params.maxDrivers = 1;
+
+  auto cursor = TaskCursor::create(params);
+  const auto task = cursor->task();
+
+  // Highest rpcInFlight and rpcCompletionsSignaled seen mid-run, i.e. strictly
+  // before the operator closes and publishes its final stats.
+  int64_t peakInFlightWhileRunning{0};
+  int64_t completionsWhileRunning{0};
+  const auto sampleLiveStats = [&]() {
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.operatorType != "RPC") {
+          continue;
+        }
+        const auto inFlight = op.runtimeStats.find(RPCOperator::kRpcInFlight);
+        if (inFlight != op.runtimeStats.end()) {
+          peakInFlightWhileRunning =
+              std::max(peakInFlightWhileRunning, inFlight->second.sum);
+        }
+        const auto completions =
+            op.runtimeStats.find(RPCOperator::kRpcCompletionsSignaled);
+        if (completions != op.runtimeStats.end()) {
+          completionsWhileRunning =
+              std::max(completionsWhileRunning, completions->second.sum);
+        }
+      }
+    }
+  };
+
+  int32_t numOutputRows{0};
+  while (true) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (cursor->moveNext(&future)) {
+      numOutputRows += cursor->current()->size();
+      continue;
+    }
+    if (!future.valid()) {
+      break;
+    }
+    // The cursor is parked on the in-flight batch. Sample repeatedly so the
+    // assertion does not depend on catching a single instant.
+    while (!future.isReady()) {
+      sampleLiveStats();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::move(future).wait();
+  }
+
+  EXPECT_EQ(numOutputRows, kRows);
+  EXPECT_GT(peakInFlightWhileRunning, 0)
+      << "rpcInFlight was never observed while the driver was blocked";
+  EXPECT_GT(completionsWhileRunning, 0)
+      << "rpcCompletionsSignaled did not advance mid-run";
+
+  // The in-flight gauge must not survive into the finished task's stats. Task
+  // accumulates a closed driver's stats permanently, so a leftover positive
+  // reading would report RPCs still in flight long after they completed. The
+  // monotonic counter, by contrast, is meaningful after the fact and is still
+  // published at close().
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType != "RPC") {
+        continue;
+      }
+      EXPECT_EQ(op.runtimeStats.count(RPCOperator::kRpcInFlight), 0)
+          << "in-flight gauge was frozen into the finished task's stats";
+      EXPECT_GT(
+          op.runtimeStats.at(RPCOperator::kRpcCompletionsSignaled).sum, 0);
+    }
+  }
+}
+
+// A transport retrying a request keeps the row open without resolving it, so
+// rpcRequestsDispatched and rpcCompletionsSignaled both stand still for as long
+// as the ladder runs. rpcRetriesAttempted is what separates that from a backend
+// that has stopped answering.
+//
+// The plan parks the driver on one slow batch whose function reports a growing
+// retry count while it is in flight, then samples Task::taskStats() throughout.
+// Dispatches and completions are asserted to stand still across the same window
+// the retries move in — without them the operator looks identical to a wedge.
+TEST_F(RPCOperatorTest, rpcRetriesAttemptedAdvancesWhileDriverIsParked) {
+  constexpr std::chrono::milliseconds kLatency{500};
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  AsyncRPCFunctionRegistry::registerFunction(
+      "retrying_batch_rpc_liveness",
+      [kLatency, rpcExecutor]() {
+        return std::make_shared<RetryingBatchRPCFunction>(
+            kLatency, rpcExecutor);
+      },
+      DemoBatchRPCFunction::signatures());
+
+  constexpr int kRows = 2;
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    inputs.push_back(makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+  }
+
+  CursorParameters params;
+  params.planNode = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "retrying_batch_rpc_liveness",
+      /*dispatchBatchSize=*/1);
+  params.maxDrivers = 1;
+
+  auto cursor = TaskCursor::create(params);
+  const auto task = cursor->task();
+
+  // Highest rpcRetriesAttempted seen mid-run, i.e. strictly before the operator
+  // closes and publishes its final stats.
+  int64_t retriesWhileParked{0};
+  // Set once a sample shows the retry counter moving between two consecutive
+  // readings whose dispatch and completion counters are identical: the interval
+  // the progress signal was blind to before this counter existed.
+  bool sawRetriesWithoutProgress{false};
+
+  struct Sample {
+    int64_t retries{0};
+    int64_t dispatched{0};
+    int64_t completions{0};
+  };
+  std::optional<Sample> previous;
+
+  const auto readStat = [](const auto& op, const std::string& name) {
+    const auto it = op.runtimeStats.find(name);
+    return it == op.runtimeStats.end() ? 0 : it->second.sum;
+  };
+  const auto sampleLiveStats = [&]() {
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.operatorType != "RPC") {
+          continue;
+        }
+        const Sample sample{
+            .retries = readStat(op, RPCOperator::kRpcRetriesAttempted),
+            .dispatched = readStat(op, RPCOperator::kRpcRequestsDispatched),
+            .completions = readStat(op, RPCOperator::kRpcCompletionsSignaled),
+        };
+        if (previous.has_value() && sample.retries > previous->retries &&
+            sample.dispatched == previous->dispatched &&
+            sample.completions == previous->completions) {
+          sawRetriesWithoutProgress = true;
+        }
+        retriesWhileParked = std::max(retriesWhileParked, sample.retries);
+        previous = sample;
+      }
+    }
+  };
+
+  int32_t numOutputRows{0};
+  while (true) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (cursor->moveNext(&future)) {
+      numOutputRows += cursor->current()->size();
+      continue;
+    }
+    if (!future.valid()) {
+      break;
+    }
+    while (!future.isReady()) {
+      sampleLiveStats();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::move(future).wait();
+  }
+
+  EXPECT_EQ(numOutputRows, kRows);
+  EXPECT_GT(retriesWhileParked, 0)
+      << "rpcRetriesAttempted never advanced while the driver was blocked";
+  EXPECT_TRUE(sawRetriesWithoutProgress)
+      << "retries only ever moved together with a dispatch or a completion, "
+         "so the new counter adds nothing the old two did not already show";
+
+  // Monotonic, so unlike the in-flight gauge it stays meaningful after the
+  // fact and is still published at close().
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType != "RPC") {
+        continue;
+      }
+      EXPECT_GE(
+          op.runtimeStats.at(RPCOperator::kRpcRetriesAttempted).sum,
+          retriesWhileParked);
+    }
+  }
+}
+
+TEST_F(RPCOperatorTest, demoBatchErrorSignalsOverload) {
+  DemoBatchRPCFunction function;
+  std::vector<RPCResponse> responses;
+  responses.push_back(
+      RPCResponse::failed(
+          0, velox::rpc::RPCErrorKind::kRateLimited, "simulated_overload"));
+
+  EXPECT_EQ(
+      function.evaluateCongestion(responses),
+      AsyncRPCFunction::CongestionSignal::kOverloaded);
+}
+
+TEST_F(RPCOperatorTest, demoBatchBackendErrorIsNotOverload) {
+  DemoBatchRPCFunction function;
+  std::vector<RPCResponse> responses;
+  responses.push_back(
+      RPCResponse::failed(
+          0, velox::rpc::RPCErrorKind::kBackendError, "simulated_failure"));
+
+  EXPECT_EQ(
+      function.evaluateCongestion(responses),
+      AsyncRPCFunction::CongestionSignal::kNonOverloadError);
+}
+
+// Per-flush row cap: the operator asks the function how many rows it will take
+// and chunks a backlog accordingly, so no single request exceeds what the
+// backend accepts while every row is still emitted. Uses the flush-all path
+// (dispatchBatchSize=0), which noMoreInput() must also chunk.
+TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
+  ByteBudgetedBatchRPCFunction::flushChunks().clear();
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_byte_budgeted",
+      /*dispatchBatchSize=*/0);
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // No rows lost.
+  ASSERT_EQ(result->size(), 7);
+  const auto& results = result->childAt(1);
+  EXPECT_EQ(BaseVector::countNulls(results->nulls(), results->size()), 0);
+
+  const std::vector<int32_t> expectedFlushChunks{3, 3, 1};
+  EXPECT_EQ(ByteBudgetedBatchRPCFunction::flushChunks(), expectedFlushChunks);
+}
+
+TEST_F(RPCOperatorTest, rejectsInvalidMaxRowsPerFlush) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"r0", "r1"})});
+
+  for (const auto& functionName : {
+           "demo_batch_rpc_zero_flush_limit",
+           "demo_batch_rpc_excessive_flush_limit",
+       }) {
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(),
+        {"prompt"},
+        functionName,
+        /*dispatchBatchSize=*/2);
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "expected a value in [1, 2]");
+  }
+}
+
 /// PER_ROW congestion path. On the function's overload verdict
-/// (evaluateCongestion -> kError) both AIMD controllers back off: the
+/// (evaluateCongestion -> kOverloaded) both AIMD controllers back off: the
 /// per-driver window (onUnitError) and the process-global rate limiter
 /// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
 /// the query still completes correctly through that path. The controllers'
@@ -976,8 +2406,9 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
-  // DemoAsyncRPCFunction::evaluateCongestion returns kError when a response
-  // result contains "OVERLOAD" (the mock echoes the prompt into the result).
+  // DemoAsyncRPCFunction::evaluateCongestion returns kOverloaded when a
+  // response result contains "OVERLOAD" (the mock echoes the prompt into the
+  // result).
   auto input = makeRowVector(
       {"prompt"},
       {makeFlatVector<StringView>(
@@ -996,9 +2427,35 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
-  EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
-  EXPECT_EQ(rows["normal three"], "Response for: normal three");
+  EXPECT_EQ(rows["OVERLOAD one"], "demo: OVERLOAD one");
+  EXPECT_EQ(rows["OVERLOAD two"], "demo: OVERLOAD two");
+  EXPECT_EQ(rows["normal three"], "demo: normal three");
+}
+
+TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  std::shared_ptr<ExecutionModeRecordingRPCFunction> function;
+  AsyncRPCFunctionRegistry::registerFunction(
+      "execution_mode_recording_rpc",
+      [&function, rpcExecutor]() {
+        function = std::make_shared<ExecutionModeRecordingRPCFunction>(
+            std::chrono::milliseconds{0}, rpcExecutor);
+        return function;
+      },
+      DemoBatchRPCFunction::signatures());
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "execution_mode_recording_rpc");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  ASSERT_NE(function, nullptr);
+  EXPECT_EQ(function->receivedExecutionMode(), RPCStreamingMode::kBatch);
 }
 
 } // namespace facebook::velox::exec::rpc

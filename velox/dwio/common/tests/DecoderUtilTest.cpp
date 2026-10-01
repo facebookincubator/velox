@@ -17,6 +17,7 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/type/Filter.h"
 
@@ -225,6 +226,118 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
       EXPECT_EQ(i * 2, hits[passedCount]);
       ++passedCount;
     }
+  }
+}
+
+TEST_F(DecoderUtilTest, columnVisitorSmallintRowIndices) {
+  // One SMALLINT SIMD batch needs two int32 row-index batches. Check that
+  // the second batch contains the next rows rather than repeating the first.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  raw_vector<int32_t> rows(kWidth);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::iota(values.begin(), values.end(), 1);
+  std::fill(hits.begin(), hits.end(), -1);
+  // Keep filtering enabled while all values pass, so processFixedFilter
+  // loads both row-index batches.
+  common::IsNotNull filter;
+
+  // The dense bulk path writes to the supplied buffers and needs no reader.
+  ColumnVisitor<int16_t, common::IsNotNull, ExtractToReader, true> visitor(
+      filter, nullptr, rows, ExtractToReader(nullptr));
+  int32_t numValues = 0;
+  visitor.processRun<true, false, false>(
+      values.data(), kWidth, nullptr, hits.data(), values.data(), numValues);
+  EXPECT_EQ(visitor.rowIndex(), kWidth);
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], i) << "lane " << i;
+    EXPECT_EQ(values[i], i + 1) << "lane " << i;
+  }
+}
+
+TEST_F(DecoderUtilTest, processFixedWidthRunSmallintRowIndices) {
+  // Verify that the second row-index batch advances by the int32 SIMD lane
+  // count when processing one full SMALLINT batch.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  // Initialize extra rows to test that underlying logic doesn't use hardcoded
+  // strides. (e.g. avx VL256 vs sve VL128 vs sve VL256). Only kWidth values
+  // are processed.
+  raw_vector<int32_t> rows(2 * kWidth);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::iota(values.begin(), values.end(), 1);
+  std::fill(hits.begin(), hits.end(), -1);
+  // Keep filtering enabled while all values pass, so processFixedFilter
+  // loads both row-index batches.
+  common::IsNotNull filter;
+  NoHook noHook;
+  int32_t numValues = 0;
+
+  processFixedWidthRun<int16_t, false, false, true>(
+      rows,
+      0,
+      kWidth,
+      nullptr,
+      values.data(),
+      hits.data(),
+      numValues,
+      filter,
+      noHook);
+
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], i) << "lane " << i;
+    EXPECT_EQ(values[i], i + 1) << "lane " << i;
+  }
+}
+
+TEST_F(DecoderUtilTest, fixedWidthScanSmallintRowIndices) {
+  // Verify that a sparse SMALLINT scan preserves row indices and values
+  // across both row-index SIMD batches.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  raw_vector<int32_t> rows(2 * kWidth);
+  for (int32_t i = 0; i < rows.size(); ++i) {
+    rows[i] = 2 * i;
+  }
+  raw_vector<int16_t> data(4 * kWidth);
+  std::iota(data.begin(), data.end(), 1);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::fill(values.begin(), values.end(), 0);
+  std::fill(hits.begin(), hits.end(), -1);
+
+  SeekableArrayInputStream input(
+      reinterpret_cast<const uint8_t*>(data.data()),
+      data.size() * sizeof(int16_t));
+  // Preload the buffer so the full batch enters the SIMD scan.
+  const void* buffer = nullptr;
+  int32_t bufferSize = 0;
+  ASSERT_TRUE(input.Next(&buffer, &bufferSize));
+  const char* bufferStart = static_cast<const char*>(buffer);
+  const char* bufferEnd = bufferStart + bufferSize;
+  // Keep all values passing through the filter to load both index batches.
+  common::IsNotNull filter;
+  NoHook noHook;
+  int32_t numValues = 0;
+  fixedWidthScan<int16_t, false, false>(
+      {rows.data(), kWidth},
+      nullptr,
+      values.data(),
+      hits.data(),
+      numValues,
+      input,
+      bufferStart,
+      bufferEnd,
+      filter,
+      noHook);
+
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], 2 * i) << "lane " << i;
+    EXPECT_EQ(values[i], 2 * i + 1) << "lane " << i;
   }
 }
 

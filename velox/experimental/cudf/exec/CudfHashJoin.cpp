@@ -24,7 +24,6 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/expression/ExprOptimizer.h"
@@ -202,11 +201,6 @@ void CudfHashJoinProbe::doClose() {
   tree_ = {};
 }
 
-void CudfHashJoinBuild::doClose() {
-  inputs_.clear();
-  Operator::close();
-}
-
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
   if (CudfConfig::getInstance().debugEnabled) {
@@ -273,93 +267,40 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : CudfOperatorBase(
+    : CudfJoinBuild(
           operatorId,
           driverCtx,
-          nullptr, // outputType
-          joinNode->id(),
+          joinNode,
           "CudfHashJoinBuild",
-          nvtx3::rgb{65, 105, 225}, // Royal Blue
-          NvtxMethodFlag::kAll,
-          std::nullopt, // spillConfig
-          joinNode),
+          NvtxMethodFlag::kAll),
       joinNode_(joinNode) {}
 
-void CudfHashJoinBuild::doAddInput(RowVectorPtr input) {
-  // Queue inputs, process all at once.
-  if (input->size() > 0) {
-    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudfInput);
-    // Count nulls in join key columns
-    auto [_, null_count] = cudf::bitmask_and(
-        cudfInput->getTableView(), cudfInput->stream(), get_temp_mr());
-    {
-      // Update statistics for null keys in join operator.
-      auto lockedStats = stats_.wlock();
-      lockedStats->numNullKeys += null_count;
-    }
-    inputs_.push_back(std::move(cudfInput));
+void CudfHashJoinBuild::recordInputStats(const CudfVector& input) {
+  auto [_, nullCount] =
+      cudf::bitmask_and(input.getTableView(), input.stream(), get_temp_mr());
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->numNullKeys += nullCount;
   }
 }
 
-bool CudfHashJoinBuild::needsInput() const {
-  return !noMoreInput_;
-}
-
-RowVectorPtr CudfHashJoinBuild::doGetOutput() {
-  return nullptr;
-}
-
-void CudfHashJoinBuild::doNoMoreInput() {
-  Operator::noMoreInput();
-  std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
-  // Only last driver collects all answers
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    return;
-  }
-  // Collect results from peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
-    VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(
-        inputs_.end(),
-        std::make_move_iterator(build->inputs_.begin()),
-        std::make_move_iterator(build->inputs_.end()));
-    build->inputs_.clear();
-    auto retainedInputBatches = build->inputs_.size();
-    common::testutil::TestValue::adjust(
-        "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
-        &retainedInputBatches);
-  }
-
-  SCOPE_EXIT {
-    // Realize the promises so that the other Drivers (which were not
-    // the last to finish) can continue from the barrier and finish.
-    peers.clear();
-    for (auto& promise : promises) {
-      promise.setValue();
-    }
-  };
-
+void CudfHashJoinBuild::buildAndPublish(std::vector<CudfVectorPtr> inputs) {
   if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs_.size();
-    if (!inputs_.empty()) {
+    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs.size();
+    if (!inputs.empty()) {
       VLOG(1) << "Build batches number of columns: "
-              << inputs_[0]->getTableView().num_columns();
+              << inputs[0]->getTableView().num_columns();
     }
-    for (auto i = 0; i < inputs_.size(); i++) {
+    for (auto i = 0; i < inputs.size(); i++) {
       VLOG(1) << "Build batch " << i
-              << ": number of rows: " << inputs_[i]->getTableView().num_rows();
+              << ": number of rows: " << inputs[i]->getTableView().num_rows();
     }
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      std::exchange(inputs_, {}),
+      std::move(inputs),
       joinNode_->sources()[1]->outputType(),
       stream,
       get_output_mr());
@@ -435,18 +376,6 @@ void CudfHashJoinBuild::doNoMoreInput() {
           std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
 
-exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
-  if (!future_.valid()) {
-    return exec::BlockingReason::kNotBlocked;
-  }
-  *future = std::move(future_);
-  return exec::BlockingReason::kWaitForJoinBuild;
-}
-
-bool CudfHashJoinBuild::isFinished() {
-  return !future_.valid() && noMoreInput_;
-}
-
 CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -504,8 +433,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   }
 
   auto outputType = joinNode_->outputType();
-  for (std::size_t i = 0; i < outputType->size(); ++i) {
-    if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfConfig::getInstance().debugEnabled) {
+    for (std::size_t i = 0; i < outputType->size(); ++i) {
       VLOG(1) << "Output column " << i << ": " << outputType->nameOf(i);
     }
   }
@@ -513,14 +442,16 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       probeType_, buildType_, outputType, joinNode_->joinType());
 
   if (CudfConfig::getInstance().debugEnabled) {
-    for (std::size_t i = 0; i < outputLayout_.probeColumnIndices.size(); i++) {
+    for (std::size_t i = 0; i < outputLayout_.probeColumnIndices().size();
+         i++) {
       VLOG(1) << "Left index to gather " << i << ": "
-              << outputLayout_.probeColumnIndices[i];
+              << outputLayout_.probeColumnIndices()[i];
     }
 
-    for (std::size_t i = 0; i < outputLayout_.buildColumnIndices.size(); i++) {
+    for (std::size_t i = 0; i < outputLayout_.buildColumnIndices().size();
+         i++) {
       VLOG(1) << "Right index to gather " << i << ": "
-              << outputLayout_.buildColumnIndices[i];
+              << outputLayout_.buildColumnIndices()[i];
     }
   }
 }
@@ -654,17 +585,16 @@ void CudfHashJoinProbe::doNoMoreInput() {
     return;
   }
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
   // Only last driver collects all answers
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     return;
   }
 
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue from the barrier and finish.
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -687,12 +617,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
       if (lastProbeStream_.has_value()) {
         inputStreams.push_back(lastProbeStream_.value());
       }
-      for (auto& peer : peers) {
-        if (peer.get() == operatorCtx_->driver()) {
-          continue;
-        }
-        auto op = peer->findOperator(operatorCtx_->operatorId());
-        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+      for (const auto& peer : peerOperators) {
+        auto* probe = peer->as<CudfHashJoinProbe>();
         if (probe != nullptr && probe->lastProbeStream_.has_value()) {
           inputStreams.push_back(probe->lastProbeStream_.value());
         }
@@ -701,12 +627,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
         cudf::detail::join_streams(inputStreams, stream);
       }
 
-      for (auto& peer : peers) {
-        if (peer.get() == operatorCtx_->driver()) {
-          continue;
-        }
-        auto op = peer->findOperator(operatorCtx_->operatorId());
-        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+      for (const auto& peer : peerOperators) {
+        auto* probe = peer->as<CudfHashJoinProbe>();
         if (probe == nullptr) {
           continue;
         }
@@ -736,9 +658,8 @@ void CudfHashJoinProbe::doNoMoreInput() {
 
   // Handling RightSemiFilterJoin
   // Collect results from peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(operatorCtx_->operatorId());
-    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+  for (const auto& peer : peerOperators) {
+    auto* probe = peer->as<CudfHashJoinProbe>();
     VELOX_CHECK_NOT_NULL(probe);
     inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
   }
@@ -773,8 +694,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   std::vector<std::unique_ptr<cudf::column>> joinedCols;
   auto const numRows = static_cast<vector_size_t>(
       std::max(leftIndicesCol.size(), rightIndicesCol.size()));
-  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices);
-  auto rightInput = rightTableView.select(outputLayout_.buildColumnIndices);
+  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices());
+  auto rightInput = rightTableView.select(outputLayout_.buildColumnIndices());
   auto leftResult = cudf::gather(
       leftInput,
       leftIndicesCol,
@@ -796,8 +717,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   auto leftCols = leftResult->release();
   auto rightCols = rightResult->release();
   joinedCols.resize(outputType_->names().size());
-  outputLayout_.scatterProbeColumns(joinedCols, leftCols);
-  outputLayout_.scatterBuildColumns(joinedCols, rightCols);
+  outputLayout_.scatterGatheredProbeColumns(joinedCols, leftCols);
+  outputLayout_.scatterGatheredBuildColumns(joinedCols, rightCols);
   if (buildStream_.has_value()) {
     // Ensure deallocation of build table happens after probe gathers
     cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
@@ -859,8 +780,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
 
   auto filteredjoinedCols =
       std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
-  outputLayout_.scatterProbeColumns(filteredjoinedCols, joinedCols, 0);
-  outputLayout_.scatterBuildColumns(
+  outputLayout_.scatterProbeInputColumns(filteredjoinedCols, joinedCols, 0);
+  outputLayout_.scatterBuildInputColumns(
       filteredjoinedCols, joinedCols, leftColsSize);
   joinedCols = std::move(filteredjoinedCols);
   if (buildStream_.has_value()) {
@@ -2002,7 +1923,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   outputCols.resize(outputType_->names().size());
 
   // Copy probe columns
-  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices);
+  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices());
   const auto& probeProjections = outputLayout_.probeProjections();
   for (size_t i = 0; i < probeProjections.size(); i++) {
     outputCols[probeProjections[i].outputChannel] =
@@ -2197,13 +2118,13 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         // channel indices)
         outputLayout_.fillNullProbeColumns(outCols, m, stream);
         // Right side - gather unmatched build columns if any
-        if (!outputLayout_.buildColumnIndices.empty()) {
+        if (!outputLayout_.buildColumnIndices().empty()) {
           auto rightInput =
-              rightTable->view().select(outputLayout_.buildColumnIndices);
+              rightTable->view().select(outputLayout_.buildColumnIndices());
           auto unmatchedRight = cudf::apply_retention_mask(
               rightInput, boolMask->view(), stream, get_output_mr());
           auto rightCols = unmatchedRight->release();
-          outputLayout_.scatterBuildColumns(outCols, rightCols);
+          outputLayout_.scatterGatheredBuildColumns(outCols, rightCols);
         }
         toConcat.push_back(std::make_unique<cudf::table>(std::move(outCols)));
       }

@@ -258,7 +258,7 @@ class Deserializer {
   // ascending and non-overlapping. An empty `rowRanges` selects the whole
   // exposed range.
   //
-  // If the batch requires a null barrier, `decodeRun` fires before and
+  // If the batch requires a barrier, `decodeRun` fires before and
   // after queuing so the barrier batch decodes standalone. Ranges apply
   // there too: a barrier batch is a one-batch run, which is exactly
   // the unit they narrow. Returns the number of rows this batch adds to
@@ -274,7 +274,7 @@ class Deserializer {
   void appendStreamSegments(
       uint32_t rowCount,
       uint32_t startRow,
-      bool requiresBarrier) const;
+      bool requiredBarrier) const;
 
   // Appends a decoded run to the accumulated output vector.
   void appendToOutput(velox::VectorPtr&& decoded, velox::VectorPtr& output)

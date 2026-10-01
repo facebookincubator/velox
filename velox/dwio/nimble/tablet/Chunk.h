@@ -16,10 +16,16 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <vector>
 
+#include "velox/dwio/nimble/common/Types.h"
+
 namespace facebook::nimble {
+
+/// Holds a per-chunk statistic in the stream's physical scalar type.
+using ChunkStatValue = VariantType;
 
 /// Represents a single chunk of encoded data within a stream.
 /// A stream may be divided into multiple chunks to control memory usage during
@@ -30,6 +36,12 @@ struct Chunk {
   /// Number of null values in this chunk. Only populated when chunk statistics
   /// are enabled; left at 0 otherwise.
   uint32_t nullCount{0};
+
+  /// Per-chunk min/max values for predicate pushdown. Values are absent for
+  /// all-null data, NaNs, oversized strings, unsupported types, or disabled
+  /// statistics.
+  std::optional<ChunkStatValue> minValue{};
+  std::optional<ChunkStatValue> maxValue{};
 
   /// The encoded and compressed data content of this chunk, stored as a vector
   /// of string views. Each string_view points to a buffer containing a portion

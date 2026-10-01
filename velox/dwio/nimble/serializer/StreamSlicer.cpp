@@ -107,13 +107,14 @@ std::string_view nullableNullsStream(
     const Encoding::Options& encodingOptions) {
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, encodingOptions.useVarintRowCount);
+  const char* const end = encoded.data() + encoded.size();
   const auto valuesSize = encoding::readUint32(pos);
   NIMBLE_CHECK_LE(
       valuesSize,
-      static_cast<size_t>(encoded.end() - pos),
+      static_cast<size_t>(end - pos),
       "Nullable values child exceeds encoding size");
   pos += valuesSize;
-  return {pos, encoded.end()};
+  return {pos, static_cast<size_t>(end - pos)};
 }
 
 uint32_t maxStreamOffset(const StreamDescriptor& descriptor) {
@@ -153,6 +154,19 @@ uint32_t maxStreamOffset(const Type& type) {
             {offset,
              maxStreamOffset(flatMap.inMapDescriptorAt(i)),
              maxStreamOffset(*flatMap.childAt(i))});
+      }
+      return offset;
+    }
+    case Kind::HybridFlatMap: {
+      const auto& hybridFlatMap = type.asHybridFlatMap();
+      uint32_t offset = maxStreamOffset(hybridFlatMap.nullsDescriptor());
+      for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
+        const auto& group = hybridFlatMap.groupAt(i);
+        offset = std::max(
+            {offset,
+             maxStreamOffset(group.keyDescriptor),
+             maxStreamOffset(group.inMapDescriptor),
+             maxStreamOffset(*group.valueType)});
       }
       return offset;
     }
@@ -301,8 +315,7 @@ folly::IOBuf StreamSlicer::slice(
     uint32_t offset,
     uint32_t length) const {
   const auto inputVersion = getInputVersion(input);
-  DeserializerOptions parserOptions{.hasHeader = true};
-  auto parser = StreamDataParser{pool_, parserOptions};
+  auto parser = StreamDataParser{pool_};
   const auto rowCount = parser.initialize(input);
   NIMBLE_CHECK_EQ(parser.version(), inputVersion, "Unexpected input version");
   NIMBLE_CHECK_LE(offset, rowCount, "Slice offset exceeds row count");
@@ -338,7 +351,7 @@ folly::IOBuf StreamSlicer::slice(
   const auto flagsOffset = writeSerializationHeader(
       headerBuffer_, SerializationVersion::kProjection, length);
   headerBuffer_[flagsOffset] = static_cast<char>(detail::makeFlagsByte(
-      slicedStreams.requiresNullBarrier,
+      slicedStreams.requiredBarrier,
       parser.streamEncodingUsesVarintRowCount(),
       /*streamHasChunkHeader=*/false));
 
@@ -608,6 +621,9 @@ void StreamSlicer::sliceType(
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "StreamSlicer cannot row-slice key-major Hybrid FlatMap streams.");
     default:
       NIMBLE_UNSUPPORTED(
           "StreamSlicer does not support slicing {} yet", type.kind());
@@ -638,12 +654,11 @@ void StreamSlicer::sliceDescriptor(
   outputStreams.streams[descriptor.offset()] = sliced;
   if (isRowOrFlatMapNullStream) {
     NIMBLE_CHECK(!sliced.empty(), "Sliced null stream must not be empty");
-    outputStreams.requiresNullBarrier |=
-        countTrue(
-            sliced,
-            {.offset = 0, .length = range.length},
-            outputBuffer,
-            encodingOptions) < range.length;
+    outputStreams.requiredBarrier |= countTrue(
+                                         sliced,
+                                         {.offset = 0, .length = range.length},
+                                         outputBuffer,
+                                         encodingOptions) < range.length;
   }
 }
 

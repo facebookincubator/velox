@@ -68,6 +68,17 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier ExceptionValues = 2;
   };
 
+  struct ALPRD {
+    /// High-part dictionary indices, one uint16 per non-null value.
+    static constexpr NestedEncodingIdentifier Codes = 0;
+    /// Low bits, one uint32 or uint64 per non-null FLOAT or DOUBLE value.
+    static constexpr NestedEncodingIdentifier RightParts = 1;
+    /// Increasing uint32 positions of dictionary misses in the non-null stream.
+    static constexpr NestedEncodingIdentifier ExceptionPositions = 2;
+    /// Replacement uint16 high parts, one per dictionary miss.
+    static constexpr NestedEncodingIdentifier ExceptionHighParts = 3;
+  };
+
   struct FrequencyPartition {
     // Partition metadata
     // Eventually we may want to allow for non-power-of-two bit partitions, but

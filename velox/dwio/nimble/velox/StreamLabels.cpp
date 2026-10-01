@@ -136,6 +136,30 @@ void addLabels(
       }
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& hybridMap = node->asHybridFlatMap();
+      const auto offset = hybridMap.nullsDescriptor().offset();
+      NIMBLE_CHECK_LT(labelIndex, labels.size(), "Unexpected label index.");
+      NIMBLE_CHECK_GT(offsetToLabel.size(), offset, "Unexpected offset.");
+      labels.emplace_back(labels.at(labelIndex) + name);
+      labelIndex = labels.size() - 1;
+      offsetToLabel.at(offset) = labelIndex;
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto& group = hybridMap.groupAt(i);
+        NIMBLE_CHECK_GT(
+            offsetToLabel.size(),
+            group.keyDescriptor.offset(),
+            "Unexpected keys offset.");
+        NIMBLE_CHECK_GT(
+            offsetToLabel.size(),
+            group.inMapDescriptor.offset(),
+            "Unexpected in-map offset.");
+        offsetToLabel.at(group.keyDescriptor.offset()) = labelIndex;
+        offsetToLabel.at(group.inMapDescriptor.offset()) = labelIndex;
+        addLabels(group.valueType, labelIndex, "", labels, offsetToLabel);
+      }
+      break;
+    }
     case Kind::ArrayWithOffsets: {
       const auto& array = node->asArrayWithOffsets();
       const auto offsetsOffset = array.offsetsDescriptor().offset();
@@ -212,6 +236,19 @@ StreamLabels::StreamLabels(const std::shared_ptr<const Type>& root) {
                   maxOffset, map.inMapDescriptorAt(i).offset());
             }
             labelCount += map.childrenCount();
+            break;
+          }
+          case Kind::HybridFlatMap: {
+            const auto& hybridMap = type.asHybridFlatMap();
+            maxOffset = std::max<size_t>(
+                maxOffset, hybridMap.nullsDescriptor().offset());
+            for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+              const auto& group = hybridMap.groupAt(i);
+              maxOffset =
+                  std::max<size_t>(maxOffset, group.keyDescriptor.offset());
+              maxOffset =
+                  std::max<size_t>(maxOffset, group.inMapDescriptor.offset());
+            }
             break;
           }
           case Kind::ArrayWithOffsets: {

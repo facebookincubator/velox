@@ -17,8 +17,12 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble {
 
@@ -44,15 +48,42 @@ class Decoder {
   virtual uint32_t next(
       uint32_t count,
       void* output,
+      std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
-      std::function<void*()> getOutputNulls = nullptr,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) = 0;
+
+  /// Reads absolute source rows densely into `output` without using or
+  /// advancing the sequential decode cursor. Empty `rows` returns zero
+  /// without touching `output`.
+  virtual uint32_t read(
+      std::span<const uint32_t> rows,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) = 0;
+
+  /// Reads ordered, disjoint source ranges densely into `output` without using
+  /// or advancing the sequential decode cursor.
+  virtual uint32_t read(
+      std::span<const RowRange> ranges,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) = 0;
 
   virtual void skip(uint32_t count) = 0;
 
   virtual void reset() = 0;
 
   virtual const Encoding* encoding() const = 0;
+
+  /// Decodes all rows remaining in the current backing encoding and advances
+  /// the sequential cursor. Implementations may reject this operation when
+  /// the row count cannot be determined before allocating the output.
+  virtual void read(
+      const std::function<void*(uint32_t rowCount)>& prepareOutput,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) = 0;
 };
 
 } // namespace facebook::nimble

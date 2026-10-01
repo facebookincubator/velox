@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -135,10 +136,11 @@ class CudfEqualityDeleteFileReader {
   void buildHashJoin(cuda::stream_ref stream);
 
   // Eagerly reads the Parquet-format equality delete file into the
-  // deleteKeyTable_ cudf table.
+  // deleteKeyTable_ cudf table, normalizing decimals to the logical key types.
   void directReadEqualityDeleteFile(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
-      std::shared_ptr<dwio::common::BufferedInput> bufferedInput);
+      std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
+      const std::vector<TypePtr>& equalityColumnTypes);
 
   // Lazily constructs the equality column indices in the input table
   // on the first call to applyDeletes().

@@ -31,10 +31,32 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+namespace facebook::nimble {
+
+struct ALPEncodingTestAccessor {
+  template <typename FloatType>
+  static void decodeBulkValues(
+      std::span<const uint64_t> encodedValues,
+      int exponent,
+      int factor,
+      FloatType* output) {
+    ALPEncoding<FloatType>::decodeBulkValues(
+        encodedValues.data(),
+        static_cast<velox::vector_size_t>(encodedValues.size()),
+        exponent,
+        factor,
+        output);
+  }
+};
+
+} // namespace facebook::nimble
 
 using namespace facebook;
 
@@ -557,6 +579,90 @@ TYPED_TEST(ALPEncodingTest, roundTrip) {
   }
 }
 
+TYPED_TEST(ALPEncodingTest, bulkDecodeMatchesScalar) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  constexpr auto kBatchSize = xsimd::batch<double>::size;
+  constexpr DataType kSentinel{-123.5};
+  const std::vector<int64_t> integers{
+      std::numeric_limits<int64_t>::min(),
+      std::numeric_limits<int64_t>::min() + 1,
+      std::numeric_limits<int64_t>::max(),
+      std::numeric_limits<int64_t>::max() - 1,
+      -(int64_t{1} << 53) - 1,
+      -(int64_t{1} << 53),
+      -(int64_t{1} << 32) - 1,
+      -1,
+      0,
+      1,
+      (int64_t{1} << 32) + 1,
+      (int64_t{1} << 53) - 1,
+      (int64_t{1} << 53) + 1,
+      (int64_t{1} << 53) + 3};
+  std::vector<uint64_t> encodedValues(integers.size() + 2 * kBatchSize);
+  for (size_t row = 0; row < encodedValues.size(); ++row) {
+    encodedValues[row] = velox::ZigZag::encode(integers[row % integers.size()]);
+  }
+
+  for (const auto& [exponent, factor] :
+       {std::pair{0, 0}, {1, 0}, {4, 2}, {0, 23}, {23, 0}, {23, 23}}) {
+    for (size_t start = 0; start < kBatchSize; ++start) {
+      for (size_t count = 0; count <= encodedValues.size() - start; ++count) {
+        SCOPED_TRACE(
+            fmt::format(
+                "e={} f={} start={} count={}", exponent, factor, start, count));
+        std::vector<DataType> output(encodedValues.size() + 2, kSentinel);
+        auto expected = output;
+        for (size_t row = 0; row < count; ++row) {
+          expected[start + 1 + row] = static_cast<DataType>(
+              static_cast<double>(integers[(start + row) % integers.size()]) *
+              Alp::kPow10Double[factor] / Alp::kPow10Double[exponent]);
+        }
+        nimble::ALPEncodingTestAccessor::decodeBulkValues<DataType>(
+            {encodedValues.data() + start, count},
+            exponent,
+            factor,
+            output.data() + start + 1);
+        for (size_t row = 0; row < output.size(); ++row) {
+          ASSERT_EQ(
+              nimble::detail::alp::toPhysical<DataType>(output[row]),
+              nimble::detail::alp::toPhysical<DataType>(expected[row]))
+              << "row=" << row;
+        }
+      }
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, rejectsOutOfRangeParameters) {
+  using DataType = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto values = this->template toVector<DataType>({0});
+  std::string serialized{encodeWithLayout<DataType>(
+      *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options)};
+  const auto prefixSize =
+      nimble::EncodingPrefix::prefixSize(serialized, options.useVarintRowCount);
+  const auto makeDecoder = [&](uint8_t exponent, uint8_t factor) {
+    auto* position = serialized.data() + prefixSize;
+    nimble::detail::alp::writeHeader(
+        {.exponent = exponent, .factor = factor}, position);
+    return std::make_unique<nimble::ALPEncoding<DataType>>(
+        *this->pool_, serialized, nullptr, options);
+  };
+
+  for (const uint8_t exponent : {0, 23}) {
+    for (const uint8_t factor : {0, 23}) {
+      EXPECT_NO_THROW(makeDecoder(exponent, factor));
+    }
+  }
+  for (uint8_t invalid = 24; invalid <= 31; ++invalid) {
+    SCOPED_TRACE(fmt::format("invalid={}", invalid));
+    NIMBLE_ASSERT_THROW(makeDecoder(invalid, 0), "Invalid ALP exponent.");
+    NIMBLE_ASSERT_THROW(makeDecoder(0, invalid), "Invalid ALP factor.");
+  }
+}
+
 TYPED_TEST(ALPEncodingTest, headerMetadataUsesVarints) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
@@ -607,6 +713,46 @@ TYPED_TEST(ALPEncodingTest, headerMetadataUsesVarints) {
     SCOPED_TRACE(i);
     EXPECT_TRUE(nimble::NimbleCompare<D>::equals(result[i], values[i]));
   }
+}
+
+TYPED_TEST(ALPEncodingTest, rejectsOutOfRangeScaleParameters) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto values = this->template toVector<D>({1, 2, 3});
+  const auto encoded = encodeWithLayout<D>(
+      *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+  const auto prefixSize =
+      nimble::EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+  const char* headerPosition = encoded.data() + prefixSize;
+  const auto originalHeader = nimble::detail::alp::readHeader(headerPosition);
+
+  const auto check = [&](uint8_t exponent,
+                         uint8_t factor,
+                         std::string_view expectedError) {
+    std::string serialized{encoded};
+    auto* control = serialized.data() + prefixSize;
+    nimble::detail::alp::writeHeader(
+        {
+            .exponent = exponent,
+            .factor = factor,
+            .hasExceptions = originalHeader.hasExceptions,
+        },
+        control);
+    std::vector<velox::BufferPtr> stringBuffers;
+    NIMBLE_ASSERT_THROW(
+        createEncoding(this->pool_.get(), serialized, options, stringBuffers),
+        expectedError);
+  };
+
+  check(
+      static_cast<uint8_t>(nimble::ALPEncoding<D>::kPow10Double.size()),
+      /*factor=*/0,
+      "Invalid ALP exponent.");
+  check(
+      /*exponent=*/0,
+      static_cast<uint8_t>(nimble::ALPEncoding<D>::kPow10Double.size()),
+      "Invalid ALP factor.");
 }
 
 TYPED_TEST(ALPEncodingTest, traverseEncodingsVisitsExceptionStreams) {

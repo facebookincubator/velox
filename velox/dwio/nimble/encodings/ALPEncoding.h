@@ -130,6 +130,8 @@ class ALPEncoding final
     const char* pos = data.data() + this->dataOffset();
 
     const auto header = detail::alp::readHeader(pos);
+    NIMBLE_CHECK_LE(header.exponent, kMaxExponent, "Invalid ALP exponent.");
+    NIMBLE_CHECK_LE(header.factor, kMaxFactor, "Invalid ALP factor.");
     exponent_ = header.exponent;
     factor_ = header.factor;
     exceptionCount_ = header.hasExceptions ? varint::readVarint32(&pos) : 0;
@@ -250,12 +252,7 @@ class ALPEncoding final
     const auto sourceStart =
         pos_ + static_cast<uint32_t>(selectedRows[0] - currentRow);
     const auto* encodedValues = encodedBuffer_.data() + sourceStart;
-    const auto exponent = exponent_;
-    const auto factor = factor_;
-    for (vector_size_t row = 0; row < numSelected; ++row) {
-      physicalValues[row] = detail::alp::toPhysical<cppDataType>(decodeValue(
-          velox::ZigZag::decode(encodedValues[row]), exponent, factor));
-    }
+    decodeBulkValues(encodedValues, numSelected, exponent_, factor_, values);
     patchExceptions(sourceStart, numSelected, physicalValues);
 
     if constexpr (!Visitor::kHasHook) {
@@ -658,6 +655,8 @@ class ALPEncoding final
   }
 
  private:
+  friend struct ALPEncodingTestAccessor;
+
   struct SlicedExceptionStreams {
     uint32_t count{0};
     std::string_view positions;
@@ -1021,6 +1020,15 @@ class ALPEncoding final
     const double scaled = value * kPow10Double[exponent];
     return static_cast<int64_t>(std::llround(scaled / kPow10Double[factor]));
   }
+
+  // Restores a contiguous run with SIMD and a scalar tail. The caller patches
+  // exception values after decoding.
+  static void decodeBulkValues(
+      const uint64_t* encodedValues,
+      vector_size_t numValues,
+      int exponent,
+      int factor,
+      cppDataType* output);
 
   // Reconstructs a floating-point value from an ALP integer.
   static cppDataType decodeValue(int64_t encoded, int exponent, int factor) {
