@@ -246,6 +246,17 @@ class TableEvolutionFuzzer {
     std::vector<dwio::common::FileFormat> formats;
     memory::MemoryPool* pool;
 
+    /// Columns that a format-specific driver needs in every generated table.
+    /// These are appended after the randomly generated columns and before any
+    /// columns required by a generated remaining filter.
+    std::vector<std::pair<std::string, TypePtr>> additionalColumns;
+
+    /// Rewrites a freshly fuzzed, flattened batch before sizing, writing, or
+    /// retaining it for the in-memory oracle. The row offset is within the
+    /// current file and the seed identifies the current fuzzer iteration.
+    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>
+        dataBatchMutator;
+
     /// Returns extra writer serde params to merge for one file, or none when
     /// unset. Called once per written file with the file's format and the
     /// fuzzer rng, so a driver can exercise format-specific write options,
