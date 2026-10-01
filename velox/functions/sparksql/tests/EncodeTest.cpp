@@ -331,6 +331,14 @@ TEST_F(EncodeTest, legacyCharsetCodingErrorAction) {
 
 TEST_F(EncodeTest, legacyCharsetSpecificReplacement) {
   enableLegacyCharsetsAndCodingErrorAction();
+  for (const auto* name : {"x-IBM300", "cp300", "ibm300", "ibm-300", "300"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0x42, 0x6F));
+  }
+  for (const auto* name : {"x-IBM834", "cp834", "ibm834", "ibm-834", "834"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0xFE, 0xFE));
+  }
   EXPECT_THAT(
       encodeBytes("\xF0\x9F\x98\x80", "ISO-2022-JP"),
       ElementsAre(0x1B, 0x24, 0x42, 0x21, 0x29, 0x1B, 0x28, 0x42));
