@@ -34,6 +34,7 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"
+#include "velox/expression/ExpressionExceptionProperties.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/PeeledEncoding.h"
