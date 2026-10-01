@@ -78,14 +78,27 @@ void DeltaSplitReader::prepareSplit(
   // on the split is informational -- the worker does not gate on it
   // today.
   //
-  // TODO(delta): The Delta spec strictly requires resolving id-mode
-  // columns by Parquet field_id (not by name), and rejecting or nulling
-  // when a file has no field_ids. Route kId through
-  // dwio::common::ColumnMappingMode::kParquetFieldId with field_ids
-  // provided on the column handles once we surface field_ids on the wire.
-  // Until then, name-based resolution works for delta.io writers (they
-  // stamp physicalName as the Parquet column name alongside field_id) but
-  // is not spec-strict against a spec-only-field_id writer.
+  // Invariant: for all three column mapping modes ('none', 'name', 'id'),
+  // the coordinator resolves each logical column to its physical Parquet
+  // name on the HiveColumnHandle before the split reaches the worker (see
+  // DeltaPrestoToVeloxConnector::sourceName). The ScanSpec built from
+  // those handles carries physical names on every child, so a kName
+  // lookup against the Parquet file reads the correct column -- including
+  // for RENAMED columns under 'name'/'id' mode, where the physical UUID
+  // is stable across renames while the logical name changes.
+  //
+  // Spec-strict id-mode gap: a writer that stamps only field_id on the
+  // Parquet columns (no physical UUID in the column name) would make the
+  // coordinator's physical-name point at a column that does not exist in
+  // the file. Rather than nulling that column silently and risk hiding
+  // real data stored under a generic name, adaptColumns() rejects any
+  // missing-from-file column in id mode -- see the branch there for the
+  // full rationale. Routing kId through
+  // dwio::common::ColumnMappingMode::kParquetFieldId with field_ids on
+  // the handles is the spec-strict fix and is tracked separately; the
+  // Delta column mapping mode on the split is captured on
+  // HiveDeltaSplit::columnMappingMode and plumbed from Java for that
+  // follow-up.
   baseReaderOpts_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
 
   // Delegate to the base Hive read path; adaptColumns() is virtual and picks
@@ -123,6 +136,9 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
   const bool readTimestampAsLocalTime =
       fileConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties());
+  const auto* deltaSplit = dynamic_cast<const HiveDeltaSplit*>(hiveSplit_.get());
+  const bool isIdMode = deltaSplit != nullptr &&
+      deltaSplit->columnMappingMode == DeltaColumnMappingMode::kId;
 
   for (const auto& childSpec : childrenSpecs) {
     const std::string& fieldName = childSpec->fieldName();
@@ -162,13 +178,33 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
       continue;
     }
 
-    // 4. Column missing from the data file (Delta schema evolution — a column
-    // was added after this file was written). Materialize as a null constant
-    // of the logical type.
+    // 4. Column missing from the data file. Two cases:
+    //  - 'none' / 'name' mode: Delta schema evolution. A column was added
+    //    to the table after this file was written, so the file has no
+    //    value for it -- materialize as a null constant of the logical
+    //    type. For 'name' mode this is still correct because the handle
+    //    carries the new column's physicalName (a UUID that no older
+    //    file was written with); missing-from-file is unambiguous.
+    //  - 'id' mode: ambiguous and unsafe to null. The coordinator stamps
+    //    the physical UUID on the handle, so when the UUID is absent
+    //    from the Parquet column names we cannot tell between (a) a
+    //    legitimate schema-evolution add and (b) a spec-strict id-mode
+    //    writer that stamped only field_id on the Parquet columns -- in
+    //    case (b) the data is in the file under a generic name and
+    //    nulling it would silently drop user data. We don't support
+    //    field_id-based resolution yet, so reject rather than guess.
     if (!fileTypeIdx.has_value()) {
       VELOX_CHECK_NOT_NULL(
           readerOutputType_,
           "Unable to resolve missing column '{}'",
+          fieldName);
+      VELOX_USER_CHECK(
+          !isIdMode,
+          "Reading Delta tables in column mapping id mode requires physical "
+          "column UUIDs in the Parquet file. Column not found in file: '{}'. "
+          "This likely means a spec-strict id-mode writer stamped only "
+          "field_id on the Parquet columns; field_id-based resolution is "
+          "not yet supported.",
           fieldName);
       childSpec->setConstantValue(
           BaseVector::createNullConstant(
