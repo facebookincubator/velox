@@ -28,6 +28,7 @@
 
 using namespace facebook::velox::exec;
 
+// TODO: Remove. Probe for the Ubuntu debug target filter.
 namespace facebook::velox::connector::hive {
 
 HiveConnector::HiveConnector(
