@@ -668,8 +668,37 @@ jobs:
              export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
+
+          # Configure first so the target list exists before filtering.
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug 2>&1 \
+            | tee /tmp/build-output.log
+
+          targets=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            # The planner's graph is generated from the dep-graph profile,
+            # which enables the cloud adapters this profile does not, so it
+            # names targets such as velox_abfs_registration_test that do not
+            # exist here. One unknown target aborts the whole build, so keep
+            # only what this configure defines.
+            ninja -C _build/debug -t targets all \
+              | sed -n 's/^\([A-Za-z0-9_+.-]*\): phony$/\1/p' \
+              | sort -u > available-targets.txt
+            read -ra planned <<< "$BUILD_TARGETS"
+            for target in "${planned[@]}"; do
+              if grep -qxF "$target" available-targets.txt; then
+                targets+=("$target")
+              fi
+            done
+            echo "plan targets : $BUILD_TARGETS"
+            echo "building     : ${targets[*]:-<none matched, building everything>}"
+            # Keep the ctest filter in the test step aligned with what was
+            # actually built. Empty means full build there too.
+            echo "BUILD_TARGETS=${targets[*]}" >> "$GITHUB_ENV"
+          fi
+
           # Empty TARGETS = full build.
-          make debug TARGETS="$BUILD_TARGETS" 2>&1 | tee /tmp/build-output.log
+          make build BUILD_DIR=debug TARGETS="${targets[*]}" 2>&1 \
+            | tee -a /tmp/build-output.log
 
       - name: Extract build errors
         id: build-errors
