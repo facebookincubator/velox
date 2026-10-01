@@ -218,6 +218,28 @@ TEST_F(HuffmanEncodingTest, skewedDistributionLengthLimitedRoundTrip) {
   EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
 }
 
+TEST_F(HuffmanEncodingTest, nearUniformLargeAlphabetRoundTrip) {
+  // A large near-uniform alphabet exercises the full 16-bit decode table
+  // without triggering length-limiting; codes sit a few bits below the limit.
+  // Rejected outright at the previous 4,096-symbol cap.
+  constexpr int32_t kSymbols = 5000;
+  Vector<int32_t> values{pool_.get()};
+  for (int32_t symbol = 0; symbol < kSymbols; ++symbol) {
+    const int32_t count = 4 + (symbol % 2);
+    for (int32_t i = 0; i < count; ++i) {
+      values.push_back(symbol);
+    }
+  }
+
+  // encode() throwing NIMBLE_INCOMPATIBLE_ENCODING here fails the test, which
+  // is the regression being guarded.
+  auto encoding = encode(values);
+
+  Vector<int32_t> result{pool_.get(), values.size()};
+  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
+  EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
+}
+
 TEST_F(HuffmanEncodingTest, skipAndPartialReadsCrossCheckpoints) {
   Vector<uint64_t> values{pool_.get()};
   for (uint32_t i = 0; i < 900; ++i) {
