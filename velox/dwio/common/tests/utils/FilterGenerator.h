@@ -137,6 +137,25 @@ class AbstractColumnStats {
     return filterSpec.allowNulls_ && folly::Random::oneIn(2, rng_);
   }
 
+  // Carves the selected percentile band into two or three sub-bands for an
+  // OR of disjoint ranges. Each sub-band covers only the first half of its
+  // slice; the second half is the gap that makes the result an OR rather than
+  // one wide range. Returned as percentiles so both the integer and the string
+  // side can resolve them against their own sorted samples.
+  std::vector<std::pair<float, float>> multiRangeBands(
+      const FilterSpec& filterSpec) {
+    const int32_t count =
+        2 + static_cast<int32_t>(folly::Random::rand32(2, rng_));
+    const float width = filterSpec.selectPct / static_cast<float>(count);
+    std::vector<std::pair<float, float>> bands;
+    bands.reserve(count);
+    for (int32_t i = 0; i < count; ++i) {
+      const float from = filterSpec.startPct + static_cast<float>(i) * width;
+      bands.emplace_back(from, from + width / 2);
+    }
+    return bands;
+  }
+
   const TypePtr type_;
   const RowTypePtr rootType_;
   int32_t numDistinct_ = 0;
@@ -347,8 +366,40 @@ class ColumnStats : public AbstractColumnStats {
       return std::make_unique<velox::common::NegatedBigintRange>(
           getIntegerValue(lower), getIntegerValue(upper), nullAllowed);
     }
+    // An OR of disjoint ranges. Its own testInt64 and testInt64Range mean a
+    // reader takes a different path than for one contiguous range, and a
+    // min/max check can no longer be a single comparison against the bounds.
+    if (folly::Random::oneIn(4, rng_)) {
+      auto multiRange = makeMultiRangeFilter(filterSpec, nullAllowed);
+      if (multiRange != nullptr) {
+        return multiRange;
+      }
+    }
     return std::make_unique<velox::common::BigintRange>(
         getIntegerValue(lower), getIntegerValue(upper), nullAllowed);
+  }
+
+  // Returns nullptr when the sample is too coarse for the sub-ranges to come
+  // out ascending and disjoint, which BigintMultiRange requires and a column
+  // with few distinct values cannot always satisfy -- valueAtPct then hands
+  // back the same value for neighbouring percentiles.
+  std::unique_ptr<Filter> makeMultiRangeFilter(
+      const FilterSpec& filterSpec,
+      bool nullAllowed) {
+    std::vector<std::unique_ptr<velox::common::BigintRange>> ranges;
+    int64_t previousUpper = 0;
+    for (const auto& [from, to] : multiRangeBands(filterSpec)) {
+      const int64_t lower = getIntegerValue(valueAtPct(from));
+      const int64_t upper = getIntegerValue(valueAtPct(to));
+      if (lower > upper || (!ranges.empty() && lower <= previousUpper)) {
+        return nullptr;
+      }
+      previousUpper = upper;
+      ranges.push_back(
+          std::make_unique<velox::common::BigintRange>(lower, upper, false));
+    }
+    return std::make_unique<velox::common::BigintMultiRange>(
+        std::move(ranges), nullAllowed);
   }
 
   // Scans every row rather than the sample in 'values_': a filter that has to
