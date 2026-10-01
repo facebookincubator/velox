@@ -13,7 +13,11 @@
 # limitations under the License.
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_delta_test HiveDeltaSplitTest.cpp PartitionValueConversionTest.cpp)
+  add_executable(
+    velox_hive_delta_test
+    HiveDeltaSplitTest.cpp
+    PartitionValueConversionTest.cpp
+    DeltaSplitReaderTest.cpp)
 
   add_test(velox_hive_delta_test velox_hive_delta_test)
 
@@ -23,6 +27,9 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_connector
     velox_connector_registry
     velox_dwio_common
+    velox_exec_test_lib
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
     velox_type
     velox_vector
     velox_memory
