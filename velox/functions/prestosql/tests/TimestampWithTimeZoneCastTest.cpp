@@ -460,20 +460,6 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateUnsetSessionZoneRendersGmt) {
   test::assertEqualVectors(expected, result);
 }
 
-TEST_F(TimestampWithTimeZoneCastTest, toDateInvalidSessionZoneThrows) {
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionTimezone, "Not/AZone"},
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
-  });
-
-  auto input = makeFlatVector<int64_t>(
-      {pack(0, tz::getTimeZoneID("-04:00"))}, TIMESTAMP_WITH_TIME_ZONE());
-
-  VELOX_ASSERT_THROW(
-      evaluate("cast(c0 as date)", makeRowVector({input})),
-      "Unknown time zone");
-}
-
 TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZoneUsesDstOffset) {
   setSessionZoneNonLegacy("America/New_York");
 

@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <folly/Conv.h>
+#include <folly/Try.h>
+
 #include "velox/common/config/Config.h"
 #include "velox/common/config/ConfigProperty.h"
 #include "velox/vector/TypeAliases.h"
@@ -42,13 +45,23 @@ namespace facebook::velox::core {
 ///     };
 ///   - static constexpr const char* kSpillEnabled = "spill_enabled"
 ///   - bool spillEnabled() const {
-///         return get<bool>(kSpillEnabled, false);
+///         return spillEnabled_.value();
 ///     }
+///   - folly::Try<bool> spillEnabled_{resolve<bool>(kSpillEnabled, false)};
 ///
-/// VELOX_QUERY_CONFIG_PROPERTY generates the same but without the accessor.
-/// Used for legacy properties with custom accessor logic (capacity parsing,
-/// validation, clamping). New properties should use VELOX_QUERY_CONFIG and
-/// put validation in QueryConfig::validateConfig() and
+/// The value is resolved once, when QueryConfig is constructed, so accessors
+/// are cheap enough to call per batch. It is stored in a folly::Try, which
+/// holds either the value or the error from converting it. The accessor
+/// rethrows the error, so a bad value fails only the code that reads that
+/// property. The macro ends in a public section, so use it only where public
+/// declarations are expected.
+///
+/// VELOX_QUERY_CONFIG_PROPERTY generates only the property struct and the key
+/// constant. Used for legacy properties with custom accessor logic (capacity
+/// parsing, validation, clamping). Such an accessor reads a member initialized
+/// with resolve() or resolveBytes() at the end of the class, so its value is
+/// also looked up once, at construction. New properties should use
+/// VELOX_QUERY_CONFIG and put validation in QueryConfig::validateConfig() and
 /// QueryConfigProvider::normalize().
 /// TODO: Unify validateConfig() and normalize() into a single validation path.
 #define VELOX_QUERY_CONFIG_PROPERTY(                 \
@@ -65,14 +78,65 @@ namespace facebook::velox::core {
     constName, accessorName, keyStr, CppType, defaultVal, desc)             \
   VELOX_QUERY_CONFIG_PROPERTY(constName, keyStr, CppType, defaultVal, desc) \
   CppType accessorName() const {                                            \
-    return get<CppType>(constName, defaultVal);                             \
-  }
+    return accessorName##_.value();                                         \
+  }                                                                         \
+                                                                            \
+ private:                                                                   \
+  folly::Try<CppType> accessorName##_{                                      \
+      resolve<CppType>(constName, defaultVal)};                             \
+                                                                            \
+ public:
 
 /// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
+/// Accessors return values resolved at construction: they do not look up the
+/// underlying IConfig, and changes made to that IConfig afterwards are not
+/// visible through them.
 class QueryConfig {
+ private:
+  // Declared before the cached property values, which are initialized from it.
+  std::shared_ptr<const config::IConfig> config_;
+
+  // Reads 'key' from 'config_', or returns 'defaultValue' if it is not set. A
+  // failure is kept and rethrown by the accessor, so it fails only the code
+  // that reads that property.
+  template <typename T>
+  folly::Try<T> resolve(const std::string& key, const T& defaultValue) const {
+    return folly::makeTryWith(
+        [&]() { return read<T>(key).value_or(defaultValue); });
+  }
+
+  template <typename T>
+  folly::Try<std::optional<T>> resolve(const std::string& key) const {
+    return folly::makeTryWith([&]() { return read<T>(key); });
+  }
+
+  // Like resolve(), for a capacity string such as "10MB" converted to a number
+  // of bytes. A malformed string fails with a user error that names 'key'.
+  folly::Try<uint64_t> resolveBytes(
+      const std::string& key,
+      const std::string& defaultValue) const;
+
+  // Reads 'key' from 'config_' and converts it to T, or returns std::nullopt
+  // if it is not set. A value that cannot be converted fails with a user error
+  // that names 'key'.
+  template <typename T>
+  std::optional<T> read(const std::string& key) const {
+    const auto value = config_->get<std::string>(key);
+    if (!value.has_value()) {
+      return std::nullopt;
+    }
+    auto result = folly::tryTo<T>(*value);
+    VELOX_USER_CHECK(
+        result.hasValue(),
+        "Invalid value for query config {}: {}",
+        key,
+        *value);
+    return std::move(result).value();
+  }
+
  public:
   explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
@@ -1556,58 +1620,50 @@ class QueryConfig {
   // Generated by VELOX_QUERY_CONFIG for simple properties above.
 
   uint64_t queryMaxMemoryPerNode() const {
-    return config::toCapacity(
-        get<std::string>(kQueryMaxMemoryPerNode, "0B"),
-        config::CapacityUnit::BYTE);
+    return queryMaxMemoryPerNode_.value();
   }
 
   vector_size_t preferredOutputBatchRows() const {
-    const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
+    const uint32_t batchRows = preferredOutputBatchRows_.value();
     VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
     return batchRows;
   }
 
   vector_size_t maxOutputBatchRows() const {
-    const uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
+    const uint32_t maxBatchRows = maxOutputBatchRows_.value();
     VELOX_USER_CHECK_LE(
         maxBatchRows, std::numeric_limits<vector_size_t>::max());
     return maxBatchRows;
   }
 
   vector_size_t mergeJoinOutputBatchStartSize() const {
-    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
+    const uint32_t batchRows = mergeJoinOutputBatchStartSize_.value();
     VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
     return batchRows;
   }
 
   uint32_t localMergeMaxNumMergeSources() const {
-    const auto maxNumMergeSources = get<uint32_t>(
-        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
+    const auto maxNumMergeSources = localMergeMaxNumMergeSources_.value();
     VELOX_CHECK_GT(maxNumMergeSources, 0);
     return maxNumMergeSources;
   }
 
   uint8_t spillNumPartitionBits() const {
-    constexpr uint8_t kDefaultBits = 3;
     constexpr uint8_t kMaxBits = 3;
-    return std::min(
-        kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
+    return std::min(kMaxBits, spillNumPartitionBits_.value());
   }
 
   uint32_t taskPartitionedWriterCount() const {
-    return get<uint32_t>(kTaskPartitionedWriterCount)
-        .value_or(taskWriterCount());
+    return taskPartitionedWriterCount_.value().value_or(taskWriterCount());
   }
 
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
       const {
-    return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
+    return debugAggregationApproxPercentileFixedRandomSeed_.value();
   }
 
   uint64_t debugMemoryPoolWarnThresholdBytes() const {
-    return config::toCapacity(
-        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
-        config::CapacityUnit::BYTE);
+    return debugMemoryPoolWarnThresholdBytes_.value();
   }
 
   enum class RowSizeTrackingMode {
@@ -1617,8 +1673,7 @@ class QueryConfig {
   };
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
-    return get<RowSizeTrackingMode>(
-        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
+    return rowSizeTrackingMode_.value();
   }
 
   template <typename T>
@@ -1636,7 +1691,7 @@ class QueryConfig {
   }
 
   /// Test-only method to override the current query config properties.
-  /// It is not thread safe.
+  /// Validates them like the constructor. It is not thread safe.
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 
@@ -1645,7 +1700,38 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::shared_ptr<const config::IConfig> config_;
+  // Values behind the hand-written accessors, before their custom checks. Each
+  // is a folly::Try so that a bad value fails only when its accessor is called.
+  folly::Try<uint64_t> queryMaxMemoryPerNode_{resolveBytes(
+      kQueryMaxMemoryPerNode,
+      kQueryMaxMemoryPerNodeProperty::defaultValue)};
+  folly::Try<uint32_t> preferredOutputBatchRows_{resolve<uint32_t>(
+      kPreferredOutputBatchRows,
+      kPreferredOutputBatchRowsProperty::defaultValue)};
+  folly::Try<uint32_t> maxOutputBatchRows_{resolve<uint32_t>(
+      kMaxOutputBatchRows,
+      kMaxOutputBatchRowsProperty::defaultValue)};
+  folly::Try<uint32_t> mergeJoinOutputBatchStartSize_{resolve<uint32_t>(
+      kMergeJoinOutputBatchStartSize,
+      kMergeJoinOutputBatchStartSizeProperty::defaultValue)};
+  folly::Try<uint32_t> localMergeMaxNumMergeSources_{resolve<uint32_t>(
+      kLocalMergeMaxNumMergeSources,
+      std::numeric_limits<uint32_t>::max())};
+  folly::Try<uint8_t> spillNumPartitionBits_{resolve<uint8_t>(
+      kSpillNumPartitionBits,
+      kSpillNumPartitionBitsProperty::defaultValue)};
+  folly::Try<std::optional<uint32_t>> taskPartitionedWriterCount_{
+      resolve<uint32_t>(kTaskPartitionedWriterCount)};
+  folly::Try<std::optional<uint32_t>>
+      debugAggregationApproxPercentileFixedRandomSeed_{
+          resolve<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed)};
+  folly::Try<uint64_t> debugMemoryPoolWarnThresholdBytes_{resolveBytes(
+      kDebugMemoryPoolWarnThresholdBytes,
+      kDebugMemoryPoolWarnThresholdBytesProperty::defaultValue)};
+  folly::Try<RowSizeTrackingMode> rowSizeTrackingMode_{
+      resolve<RowSizeTrackingMode>(
+          kRowSizeTrackingMode,
+          RowSizeTrackingMode::ENABLED_FOR_ALL)};
 };
 
 #undef VELOX_QUERY_CONFIG
