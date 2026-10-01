@@ -176,8 +176,8 @@ void QueryBenchmarkBase::printResults(
 namespace {
 // Parses the semicolon-separated key=value entries of --query_configs into
 // 'queryConfigs'. Called from initialize() so that a bad entry fails once
-// at startup instead of inside every query's run. Surrounding whitespace
-// is trimmed and empty entries are skipped.
+// at startup instead of inside every query's run. Whitespace around each
+// entry, key and value is trimmed; empty entries are skipped.
 void applyQueryConfigOverrides(
     std::unordered_map<std::string, std::string>& queryConfigs) {
   if (FLAGS_query_configs.empty()) {
@@ -196,8 +196,10 @@ void applyQueryConfigOverrides(
         std::string_view::npos,
         "Invalid --query_configs entry, expected key=value: '{}'",
         entry);
-    queryConfigs[std::string(entry.substr(0, equals))] =
-        std::string(entry.substr(equals + 1));
+    const std::string_view key = folly::trimWhitespace(entry.substr(0, equals));
+    const std::string_view value =
+        folly::trimWhitespace(entry.substr(equals + 1));
+    queryConfigs[std::string(key)] = std::string(value);
   }
 }
 } // namespace
