@@ -50,6 +50,8 @@ velox_add_library(
   TimestampUtils.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
+  XPathFunctions.cpp
+  XPathUtil.cpp
   XxHash64.cpp
   HEADERS
   AnsiMode.h
@@ -108,6 +110,8 @@ velox_add_library(
   UnscaledValueFunction.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
+  XPathFunctions.h
+  XPathUtil.h
   XxHash64.h
 )
 
@@ -119,6 +123,7 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   simdjson::simdjson
+  LibXml2::LibXml2
 )
 
 if(NOT VELOX_MONO_LIBRARY)
