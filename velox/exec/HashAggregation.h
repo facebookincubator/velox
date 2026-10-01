@@ -128,6 +128,10 @@ class HashAggregation : public Operator {
   // Returns the default global grouping set rows for the () set.
   RowVectorPtr getDefaultGlobalGroupingSetOutput();
 
+  // Combines global partial aggregation states across this operator's peers
+  // when doing so reduces the data sent downstream.
+  void combineGlobalPartialAggregation();
+
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
@@ -165,6 +169,10 @@ class HashAggregation : public Operator {
   bool finished_ = false;
   // True if partial aggregation has been found to be non-reducing.
   bool abandonedPartialAggregation_{false};
+
+  // True for a global partial aggregation whose states can be merged across
+  // drivers before output.
+  bool canCombineGlobalPartialAggregation_{false};
 
   RowContainerIterator resultIterator_;
   bool pushdownChecked_ = false;

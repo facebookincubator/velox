@@ -107,30 +107,28 @@ std::vector<RowVectorPtr> NestedLoopJoinBuild::mergeDataVectors() const {
 void NestedLoopJoinBuild::noMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
   // The last Driver to hit NestedLoopJoinBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
   // state. allPeersFinished is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     return;
   }
 
   {
-    auto promisesGuard = folly::makeGuard([&]() {
+    SCOPE_EXIT {
       // Realize the promises so that the other Drivers (which were not
       // the last to finish) can continue from the barrier and finish.
-      peers.clear();
+      peerOperators.clear();
       for (auto& promise : promises) {
         promise.setValue();
       }
-    });
+    };
 
-    for (auto& peer : peers) {
-      auto op = peer->findOperator(planNodeId());
-      auto* build = dynamic_cast<NestedLoopJoinBuild*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* build = peer->as<NestedLoopJoinBuild>();
       VELOX_CHECK_NOT_NULL(build);
       dataVectors_.insert(
           dataVectors_.begin(),

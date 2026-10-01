@@ -167,7 +167,7 @@ TEST_F(ExprStatsTest, printWithStats) {
 
 struct Event {
   std::string uuid;
-  std::unordered_map<std::string, exec::ExprStats> stats;
+  folly::F14FastMap<std::string, exec::ExprStats> stats;
   std::vector<std::string> sqls;
 };
 

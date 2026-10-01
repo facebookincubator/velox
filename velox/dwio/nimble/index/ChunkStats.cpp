@@ -21,7 +21,9 @@
 
 namespace facebook::nimble::index {
 
-std::unique_ptr<ChunkStats> ChunkStats::create(Section indexSection) {
+std::unique_ptr<ChunkStats> ChunkStats::create(
+    ChunkStatsVersion version,
+    Section indexSection) {
   const auto* root = flatbuffers::GetRoot<serialization::ChunkStats>(
       indexSection.content().data());
   NIMBLE_CHECK_NOT_NULL(root);
@@ -44,14 +46,16 @@ std::unique_ptr<ChunkStats> ChunkStats::create(Section indexSection) {
                                 : std::nullopt);
   }
 
-  return std::unique_ptr<ChunkStats>(
-      new ChunkStats(std::move(indexSection), std::move(groupSections)));
+  return std::unique_ptr<ChunkStats>(new ChunkStats(
+      version, std::move(indexSection), std::move(groupSections)));
 }
 
 ChunkStats::ChunkStats(
+    ChunkStatsVersion version,
     Section indexSection,
     std::vector<MetadataSection> groupSections)
-    : indexSection_{std::move(indexSection)},
+    : version_{version},
+      indexSection_{std::move(indexSection)},
       groupSections_{std::move(groupSections)} {}
 
 const MetadataSection& ChunkStats::groupMetadata(uint32_t groupIndex) const {

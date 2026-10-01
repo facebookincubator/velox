@@ -274,8 +274,7 @@ class HybridFlatMapType : public Type {
   size_t groupCount() const;
 
   /// Returns the group at zero-based schema-order `index`. The index is an
-  /// ordinal, not a group ID; use `findGroup()` for group-key lookup and
-  /// `defaultGroup()` for Default.
+  /// ordinal, not a group ID.
   const Group& groupAt(size_t index) const;
 
   /// Returns the reserved Default group. Fails when a projected schema omitted

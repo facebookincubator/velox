@@ -45,6 +45,18 @@ bool HybridFlatMap::supportedKeyKind(ScalarKind kind) {
   NIMBLE_UNREACHABLE("Unknown scalar kind: {}.", kind);
 }
 
+const HybridFlatMap::Group& HybridFlatMap::groupById(uint32_t groupId) const {
+  const auto iterator =
+      std::find_if(groups.begin(), groups.end(), [groupId](const auto& group) {
+        return group.groupId == groupId;
+      });
+  NIMBLE_CHECK(
+      iterator != groups.end(),
+      "Hybrid FlatMap group ID is missing: {}.",
+      groupId);
+  return *iterator;
+}
+
 std::string HybridFlatMap::serialize() const {
   flatbuffers::FlatBufferBuilder builder;
   std::vector<uint32_t> groupIds;

@@ -105,9 +105,17 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodedIntermediate_.decode(*args[0], rows);
-    rows.applyToSelected([&](vector_size_t i) {
-      addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
-    });
+    if (decodedIntermediate_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (!decodedIntermediate_.isNullAt(i)) {
+          addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
+        }
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
+      });
+    }
   }
 
   void addSingleGroupRawInput(
@@ -211,7 +219,7 @@ void registerCountAggregate(
             argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<CountAggregate>();
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

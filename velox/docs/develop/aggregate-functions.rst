@@ -156,6 +156,9 @@ A simple aggregation function is implemented as a class as the following.
     // Optional. Default is true.
     static constexpr bool default_null_behavior_ = false;
 
+    // Optional. Default is true.
+    static constexpr bool is_reducing_ = false;
+
     // Optional.
     static bool toIntermediate(
         exec::out_type<Array<Generic<T1>>>& out,
@@ -213,7 +216,11 @@ flag that controls null handling behavior.
 
 The author can define an optional flag `default_null_behavior_` indicating
 whether the aggregation function has default-null behavior. This flag is true
-by default. Next, the class can have an optional method `toIntermediate()`
+by default. The optional `is_reducing_` flag indicates whether the accumulator
+state is expected to be smaller than its input. This flag is true by default.
+Set it to false for aggregates whose state generally grows with input
+cardinality, such as aggregates that collect input values into an array. Next,
+the class can have an optional method `toIntermediate()`
 that converts the aggregation function's raw input directly to its intermediate
 states. Finally, the author must define a struct named `AccumulatorType` in
 the aggregation function class. We explain each part in more details below.

@@ -55,6 +55,10 @@ bool AggregateCompanionFunctionBase::isFixedSize() const {
   return fn_->isFixedSize();
 }
 
+bool AggregateCompanionFunctionBase::isReducing() const {
+  return fn_->isReducing();
+}
+
 void AggregateCompanionFunctionBase::setAllocatorInternal(
     HashStringAllocator* allocator) {
   fn_->setAllocator(allocator);
