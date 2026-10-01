@@ -90,7 +90,9 @@ class QueryBenchmarkBase {
   std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<cache::AsyncDataCache> cache_;
 
-  // QueryConfig properties. May be part of parameter sweep.
+  // Query configs from --query_configs and the 's-' lines of
+  // -test_flags_file; run() merges them into every query's configs,
+  // overriding the per-query configs.
   std::unordered_map<std::string, std::string> config_;
 
   // Parameter combinations to try. Each element specifies a flag and possible

@@ -173,7 +173,37 @@ void QueryBenchmarkBase::printResults(
   }
 }
 
+namespace {
+// Parses the semicolon-separated key=value entries of --query_configs into
+// 'queryConfigs'. Called from initialize() so that a bad entry fails once
+// at startup instead of inside every query's run. Surrounding whitespace
+// is trimmed and empty entries are skipped.
+void applyQueryConfigOverrides(
+    std::unordered_map<std::string, std::string>& queryConfigs) {
+  if (FLAGS_query_configs.empty()) {
+    return;
+  }
+  std::vector<std::string_view> entries;
+  folly::split(";", FLAGS_query_configs, entries);
+  for (const auto& rawEntry : entries) {
+    const std::string_view entry = folly::trimWhitespace(rawEntry);
+    if (entry.empty()) {
+      continue;
+    }
+    const auto equals = entry.find('=');
+    VELOX_USER_CHECK_NE(
+        equals,
+        std::string_view::npos,
+        "Invalid --query_configs entry, expected key=value: '{}'",
+        entry);
+    queryConfigs[std::string(entry.substr(0, equals))] =
+        std::string(entry.substr(equals + 1));
+  }
+}
+} // namespace
+
 void QueryBenchmarkBase::initialize() {
+  applyQueryConfigOverrides(config_);
   if (FLAGS_cache_gb) {
     memory::MemoryManager::Options options;
     int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
@@ -259,34 +289,6 @@ void QueryBenchmarkBase::shutdown() {
   }
 }
 
-namespace {
-// Parses the semicolon-separated key=value entries of -query_configs
-// into 'queryConfigs'. Surrounding whitespace is trimmed and empty
-// entries are skipped.
-void applyQueryConfigOverrides(
-    std::unordered_map<std::string, std::string>& queryConfigs) {
-  if (FLAGS_query_configs.empty()) {
-    return;
-  }
-  std::vector<std::string_view> entries;
-  folly::split(";", FLAGS_query_configs, entries);
-  for (const auto& rawEntry : entries) {
-    const std::string_view entry = folly::trimWhitespace(rawEntry);
-    if (entry.empty()) {
-      continue;
-    }
-    const auto equals = entry.find('=');
-    VELOX_USER_CHECK_NE(
-        equals,
-        std::string_view::npos,
-        "Invalid -query_configs entry, expected key=value: '{}'",
-        entry);
-    queryConfigs[std::string(entry.substr(0, equals))] =
-        std::string(entry.substr(equals + 1));
-  }
-}
-} // namespace
-
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 QueryBenchmarkBase::run(
     const TpchPlan& tpchPlan,
@@ -298,7 +300,11 @@ QueryBenchmarkBase::run(
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
       params.queryConfigs = queryConfigs;
-      applyQueryConfigOverrides(params.queryConfigs);
+      // 'config_' (--query_configs and the 's-' lines of -test_flags_file)
+      // overrides the per-query configs.
+      for (const auto& [key, value] : config_) {
+        params.queryConfigs[key] = value;
+      }
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {
