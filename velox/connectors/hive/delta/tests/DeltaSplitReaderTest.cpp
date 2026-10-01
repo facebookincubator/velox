@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/delta/DeltaSplitReader.h"
@@ -71,7 +72,9 @@ class DeltaSplitReaderTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<HiveDeltaSplit> makeDeltaSplit(
       const std::string& filePath,
       const std::unordered_map<std::string, std::optional<std::string>>&
-          partitionKeys) {
+          partitionKeys,
+      DeltaColumnMappingMode columnMappingMode =
+          DeltaColumnMappingMode::kNone) {
     return std::make_shared<HiveDeltaSplit>(
         exec::test::kHiveConnectorId,
         filePath,
@@ -82,7 +85,13 @@ class DeltaSplitReaderTest : public exec::test::HiveConnectorTestBase {
         /*tableBucketNumber=*/std::nullopt,
         /*customSplitInfo=*/
         std::unordered_map<std::string, std::string>{
-            {"table_format", "hive-delta"}});
+            {"table_format", "hive-delta"}},
+        /*extraFileInfo=*/std::shared_ptr<std::string>{},
+        /*cacheable=*/true,
+        /*infoColumns=*/std::unordered_map<std::string, std::string>{},
+        /*fileProperties=*/std::nullopt,
+        /*hasDeletionVector=*/false,
+        columnMappingMode);
   }
 
   // Builds a column-handle map matching 'rowType' with the columns at
@@ -177,6 +186,39 @@ TEST_F(DeltaSplitReaderTest, twoSplitsMissingToPresentColumn) {
       .split(splitA)
       .split(splitB)
       .assertResults(expected);
+}
+
+// Id-mode split with a column that is not present in the Parquet file must
+// fail rather than null the column. The two legitimate causes of missing-
+// from-file -- schema-evolution add vs. spec-strict id-mode writer that
+// stamped only field_id -- are indistinguishable at this layer, so nulling
+// risks silently dropping real data that lives in the file under a generic
+// column name. See DeltaSplitReader::adaptColumns' id-mode branch.
+TEST_F(DeltaSplitReaderTest, idModeRejectsMissingColumn) {
+  auto outputType = ROW({"id", "val"}, {BIGINT(), BIGINT()});
+
+  // File has only 'id'; the query asks for 'id' and 'val'.
+  auto file = writeParquetFile(
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+
+  auto split = makeDeltaSplit(
+      file->getPath(),
+      /*partitionKeys=*/{},
+      DeltaColumnMappingMode::kId);
+
+  auto assignments = makeAssignments(outputType, /*partitionIndices=*/{});
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(outputType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
+      "Reading Delta tables in column mapping id mode requires physical "
+      "column UUIDs in the Parquet file. Column not found in file: 'val'");
 }
 
 } // namespace
