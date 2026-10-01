@@ -184,6 +184,14 @@ ChunkStatsGroupV1::StreamIndex::StreamIndex(
 
 StreamIndex::~StreamIndex() = default;
 
+std::pair<uint32_t, uint32_t> StreamIndex::chunkRange() const {
+  NIMBLE_UNREACHABLE("Chunk iteration is not supported.");
+}
+
+uint32_t StreamIndex::chunkEndRow(uint32_t /*chunkIndex*/) const {
+  NIMBLE_UNREACHABLE("Chunk iteration is not supported.");
+}
+
 std::optional<ChunkStatValue> StreamIndex::chunkMinValue(
     uint32_t /*chunkIndex*/) const {
   return std::nullopt;
@@ -192,6 +200,16 @@ std::optional<ChunkStatValue> StreamIndex::chunkMinValue(
 std::optional<ChunkStatValue> StreamIndex::chunkMaxValue(
     uint32_t /*chunkIndex*/) const {
   return std::nullopt;
+}
+
+std::optional<std::pair<ChunkStatValue, ChunkStatValue>>
+StreamIndex::chunkBounds(uint32_t chunkIndex) const {
+  auto min = chunkMinValue(chunkIndex);
+  auto max = chunkMaxValue(chunkIndex);
+  if (!min.has_value() || !max.has_value()) {
+    return std::nullopt;
+  }
+  return std::make_pair(std::move(*min), std::move(*max));
 }
 
 ChunkLocation ChunkStatsGroupV1::StreamIndex::lookupChunk(
@@ -463,6 +481,10 @@ class ChunkStatsGroupV2::StreamIndex final : public index::StreamIndex {
   std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const override;
 
   uint32_t rowCount() const override;
+  std::pair<uint32_t, uint32_t> chunkRange() const override;
+  uint32_t chunkEndRow(uint32_t chunkIndex) const override;
+  std::optional<std::pair<ChunkStatValue, ChunkStatValue>> chunkBounds(
+      uint32_t chunkIndex) const override;
   std::optional<ChunkStatValue> chunkMinValue(
       uint32_t chunkIndex) const override;
   std::optional<ChunkStatValue> chunkMaxValue(
@@ -657,14 +679,16 @@ std::shared_ptr<index::StreamIndex> ChunkStatsGroupV2::createStreamIndex(
       streamBaseOffsets_[streamId] + startChunkOffset;
 
   const auto chunkCount = endChunkOffset - startChunkOffset;
-  if (chunkCount == 0 ||
-      (chunkCount == 1 &&
-       !hasChunkBounds(streamId, absoluteStartChunkOffset))) {
+  if (chunkCount == 0) {
     return nullptr;
   }
 
   const uint32_t absoluteEndChunkOffset =
       streamBaseOffsets_[streamId] + endChunkOffset;
+  NIMBLE_CHECK_FILE_LE(
+      chunkCount,
+      chunkRows_->readAt(absoluteEndChunkOffset - 1),
+      "Chunk count exceeds stream row count.");
   return std::make_shared<StreamIndex>(
       std::static_pointer_cast<const ChunkStatsGroupV2>(shared_from_this()),
       streamId,
@@ -737,10 +761,29 @@ uint32_t ChunkStatsGroupV2::StreamIndex::rowCount() const {
   return owner_->chunkRows_->readAt(endOffset_ - 1);
 }
 
+std::pair<uint32_t, uint32_t> ChunkStatsGroupV2::StreamIndex::chunkRange()
+    const {
+  return {startOffset_, endOffset_};
+}
+
+uint32_t ChunkStatsGroupV2::StreamIndex::chunkEndRow(
+    uint32_t chunkIndex) const {
+  (void)streamChunkIndex(chunkIndex);
+  const auto endRow = owner_->chunkRows_->readAt(chunkIndex);
+  const auto startRow = chunkIndex == startOffset_
+      ? 0
+      : owner_->chunkRows_->readAt(chunkIndex - 1);
+  NIMBLE_CHECK_FILE_GT(
+      endRow, startRow, "Chunk rows must be strictly increasing.");
+  return endRow;
+}
+
 uint32_t ChunkStatsGroupV2::StreamIndex::streamChunkIndex(
     uint32_t chunkIndex) const {
-  NIMBLE_CHECK_GE(chunkIndex, startOffset_);
-  NIMBLE_CHECK_LT(chunkIndex, endOffset_);
+  NIMBLE_CHECK_GE(
+      chunkIndex, startOffset_, "Chunk index is before this stream's range.");
+  NIMBLE_CHECK_LT(
+      chunkIndex, endOffset_, "Chunk index is beyond this stream's range.");
   return chunkIndex - owner_->streamBaseOffsets_[streamId()];
 }
 
@@ -818,6 +861,18 @@ std::optional<ChunkStatValue> ChunkStatsGroupV2::StreamIndex::chunkMaxValue(
              streamBounds.max.get(),
              index)
       .max;
+}
+
+std::optional<std::pair<ChunkStatValue, ChunkStatValue>>
+ChunkStatsGroupV2::StreamIndex::chunkBounds(uint32_t chunkIndex) const {
+  const auto index = streamChunkIndex(chunkIndex);
+  if (!owner_->hasChunkBounds(streamId(), chunkIndex)) {
+    return std::nullopt;
+  }
+  const auto& bounds = owner_->streamChunkBounds_[streamId()];
+  auto values = readChunkBounds(
+      bounds.dataType, bounds.min.get(), bounds.max.get(), index);
+  return std::make_pair(std::move(values.min), std::move(values.max));
 }
 
 namespace {

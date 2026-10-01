@@ -41,8 +41,10 @@ class Type;
 // Decoder for one logical stream assembled from per-batch segments.
 class BatchedStreamDecoder : public Decoder {
  public:
+  /// Copies the required metadata from `type`; the decoder does not retain a
+  /// reference to it.
   BatchedStreamDecoder(
-      const Type* type,
+      const Type& type,
       bool isInMapStream,
       size_t bufferPoolCapacity,
       velox::memory::MemoryPool* pool);
@@ -53,6 +55,11 @@ class BatchedStreamDecoder : public Decoder {
       std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
+
+  void read(
+      const std::function<void*(uint32_t rowCount)>& prepareOutput,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
 
   uint32_t read(
       std::span<const uint32_t> rows,
@@ -294,7 +301,7 @@ class BatchedStreamDecoder : public Decoder {
       std::vector<velox::BufferPtr>& stringBuffers);
 
   // --- Const members (set at construction, never modified) ---
-  const Type* const type_;
+  const Kind typeKind_;
   velox::memory::MemoryPool* const pool_;
   // True when this decoder reads a FlatMap child in-map presence stream rather
   // than the FlatMap value/null stream.

@@ -842,6 +842,8 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
   ASSERT_EQ(map.groupCount(), 1);
   EXPECT_EQ(map.groupAt(0).groupId, 7);
   EXPECT_EQ(map.groupAt(0).groupKeys, (std::vector<std::string>{"a"}));
+  NIMBLE_ASSERT_THROW(
+      map.defaultGroup(), "Hybrid FlatMap Default group is missing");
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMismatchedValueShapes) {

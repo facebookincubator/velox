@@ -38,8 +38,9 @@ namespace facebook::nimble::serde {
 
 /// Parsed flags shared across serialization header layouts.
 struct HeaderFlags {
-  /// Row/FlatMap null streams contain real nulls and block dense concatenation.
-  bool requiresNullBarrier{false};
+  /// The batch must be decoded independently. This is required by native
+  /// Hybrid FlatMap layout and by Row/FlatMap null streams with real nulls.
+  bool requiredBarrier{false};
   /// Encoding stream prefixes store row counts as varints instead of fixed u32.
   bool streamEncodingUsesVarintRowCount{true};
   /// Each kTablet stream retains its encoding chunk header.
@@ -48,14 +49,13 @@ struct HeaderFlags {
 
 /// Parsed serialization header common to all versions.
 struct SerializationHeader {
-  /// Header flags byte layout. bit0 is set when the serialized batch contains
-  /// Row/FlatMap null streams with real nulls. Readers treat this as a null
-  /// barrier and decode the batch through the per-batch path instead of the
-  /// dense concat fast path. bit1 is set when stream encoding row counts use
-  /// varint instead of fixed u32. For kTablet, bit2 is set when stream payloads
-  /// include encoding chunk headers. The remaining bits are reserved for
-  /// future use.
-  static constexpr uint8_t kNullBarrierRequiredFlag{0x01};
+  /// Header flags byte layout. bit0 is set when the serialized batch must be
+  /// decoded independently, including native Hybrid FlatMap batches and
+  /// batches with Row/FlatMap null streams containing real nulls. bit1 is set
+  /// when stream encoding row counts use varint instead of fixed u32. For
+  /// kTablet, bit2 is set when stream payloads include encoding chunk headers.
+  /// The remaining bits are reserved for future use.
+  static constexpr uint8_t kBarrierRequiredFlag{0x01};
   static constexpr uint8_t kStreamVarintRowCountFlag{0x02};
   static constexpr uint8_t kStreamChunkHeaderFlag{0x04};
 
@@ -107,19 +107,18 @@ char* extend(T& buffer, uint32_t size) {
 }
 
 inline uint8_t makeFlagsByte(
-    bool requiresNullBarrier,
+    bool requiredBarrier,
     bool streamEncodingUsesVarintRowCount,
     bool streamHasChunkHeader) {
-  return (requiresNullBarrier ? SerializationHeader::kNullBarrierRequiredFlag
-                              : 0) |
+  return (requiredBarrier ? SerializationHeader::kBarrierRequiredFlag : 0) |
       (streamEncodingUsesVarintRowCount
            ? SerializationHeader::kStreamVarintRowCountFlag
            : 0) |
       (streamHasChunkHeader ? SerializationHeader::kStreamChunkHeaderFlag : 0);
 }
 
-inline bool nullBarrierRequired(uint8_t flagsByte) {
-  return (flagsByte & SerializationHeader::kNullBarrierRequiredFlag) != 0;
+inline bool barrierRequired(uint8_t flagsByte) {
+  return (flagsByte & SerializationHeader::kBarrierRequiredFlag) != 0;
 }
 
 inline bool streamEncodingUsesVarintRowCount(uint8_t flagsByte) {
@@ -132,7 +131,7 @@ inline bool streamHasChunkHeader(uint8_t flagsByte) {
 
 inline HeaderFlags parseHeaderFlags(uint8_t flagsByte) {
   return {
-      .requiresNullBarrier = nullBarrierRequired(flagsByte),
+      .requiredBarrier = barrierRequired(flagsByte),
       .streamEncodingUsesVarintRowCount =
           streamEncodingUsesVarintRowCount(flagsByte),
       .streamHasChunkHeader = streamHasChunkHeader(flagsByte),
@@ -176,16 +175,16 @@ inline HeaderFlags readHeaderFlags(
   return detail::parseVersionedHeaderFlags(cursor.read<uint8_t>(), version);
 }
 
-inline bool readRequiresNullBarrierFlag(
+inline bool readRequiredBarrierFlag(
     const char*& pos,
     SerializationVersion version) {
-  return readHeaderFlags(pos, version).requiresNullBarrier;
+  return readHeaderFlags(pos, version).requiredBarrier;
 }
 
-inline bool readRequiresNullBarrierFlag(
+inline bool readRequiredBarrierFlag(
     folly::io::Cursor& cursor,
     SerializationVersion version) {
-  return readHeaderFlags(cursor, version).requiresNullBarrier;
+  return readHeaderFlags(cursor, version).requiredBarrier;
 }
 
 /// Reads the serialization header from `*pos`, detecting the version from the
@@ -219,7 +218,7 @@ size_t writeSerializationHeader(
   const size_t flagsOffset = buffer.size();
   auto* flagsPos = detail::extend(buffer, 1);
   *flagsPos = static_cast<char>(detail::makeFlagsByte(
-      /*requiresNullBarrier=*/false,
+      /*requiredBarrier=*/false,
       /*streamEncodingUsesVarintRowCount=*/true,
       /*streamHasChunkHeader=*/false));
   return flagsOffset;
@@ -242,9 +241,12 @@ inline size_t estimateSerializationHeaderSize(
 /// Parsed fields of a kTablet chunk slice header.
 struct TabletChunkHeader {
   uint32_t rowCount{0};
-  /// True when this chunk slice carries a Row/FlatMap null stream with real
-  /// nulls; routes the slice to the per-batch barrier path on read.
-  bool requiresNullBarrier{false};
+  union {
+    /// True when this chunk slice must use the per-batch decode path.
+    bool requiredBarrier{false};
+    /// Retains the previous field spelling for source compatibility.
+    bool requiresNullBarrier;
+  };
   /// True when encoding stream prefixes store row counts as varints.
   bool streamEncodingUsesVarintRowCount{false};
   /// True when each encoding stream retains its tablet chunk header.

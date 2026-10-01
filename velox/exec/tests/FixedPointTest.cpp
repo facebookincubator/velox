@@ -16,7 +16,6 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <functional>
-#include <mutex>
 #include <thread>
 #include <tuple>
 
@@ -24,9 +23,9 @@
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
-#include "velox/exec/FixedPointOperators.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
@@ -45,6 +44,19 @@ using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
 using exec::test::PlanBuilder;
+
+std::vector<std::pair<int64_t, int64_t>> readRows(TaskCursor& cursor) {
+  std::vector<std::pair<int64_t, int64_t>> rows;
+  while (cursor.moveNext()) {
+    const auto& result = cursor.current();
+    auto first = result->childAt(0)->as<SimpleVector<int64_t>>();
+    auto second = result->childAt(1)->as<SimpleVector<int64_t>>();
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      rows.emplace_back(first->valueAt(i), second->valueAt(i));
+    }
+  }
+  return rows;
+}
 
 // Partitions rows by the first (BIGINT) column modulo the partition count.
 // Unlike hash partitioning, this pins a key to a known partition, so a test can
@@ -94,17 +106,11 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    registerFixedPoint();
     // Route local:// task ids to the in-process exchange source so
     // PartitionedOutput -> Exchange works without networking.
     exec::ExchangeSource::factories().clear();
     exec::ExchangeSource::registerFactory(
         exec::test::createLocalExchangeSource);
-  }
-
-  void TearDown() override {
-    exec::Operator::unregisterAllOperators();
-    HiveConnectorTestBase::TearDown();
   }
 
   // Number of top-level worker tasks for 'node': the partition count of the
@@ -143,8 +149,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         // 'rootWorkerTaskId' -- nesting never moves a loop off its root
         // worker's process -- and return "{scheme}://{endpoint}/{id}".
         (void)rootWorkerTaskId;
-        auto id =
-            fmt::format("{}.it{}.p{}", workerAddress, iteration, planIndex);
+        auto id = fmt::format(
+            "local://{}.it{}.p{}", workerAddress, iteration, planIndex);
         return ProducerLocation{.taskId = id, .exchangeUri = id};
       };
       opts.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
@@ -167,7 +173,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     auto initialPlan = PlanBuilder(idGenerator).values({seed}).planNode();
 
     PlanBuilder bodyBuilder(idGenerator);
-    bodyBuilder.stateSource("vals", schema).project({"key", "val + 1 AS val"});
+    bodyBuilder.stateSource("vals", schema)
+        .project({"key AS next_key", "val + 1 AS next_val"});
 
     PlanBuilder convergenceBuilder(idGenerator);
     convergenceBuilder.stateSource("vals", schema)
@@ -276,48 +283,24 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
           [id = upstream->taskId()](const core::PlanNodeId&) { return id; };
     }
 
-    // Each worker collects its shard rows into perWorker[d] -- a serial worker
-    // from next() below, a parallel worker from this consumer (guarded by
-    // consumerMutexes[d], as it runs on the worker's executor thread).
+    // Each worker collects its shard rows into perWorker[d].
     std::vector<std::vector<std::pair<int64_t, int64_t>>> perWorker(numWorkers);
-    std::vector<std::mutex> consumerMutexes(numWorkers);
 
-    std::vector<std::shared_ptr<exec::Task>> workers;
-    workers.reserve(numWorkers);
+    std::vector<std::unique_ptr<exec::TaskCursor>> cursors;
+    cursors.reserve(numWorkers);
     for (int32_t d = 0; d < numWorkers; ++d) {
       auto node = (d == 0) ? node0 : makeWorkerNode(d);
-      exec::Consumer consumer;
-      if (mode == exec::Task::ExecutionMode::kParallel) {
-        auto* rows = &perWorker[d];
-        auto* mutex = &consumerMutexes[d];
-        consumer = [rows, mutex](
-                       RowVectorPtr batch,
-                       bool /*drained*/,
-                       ContinueFuture* /*future*/) {
-          if (batch != nullptr && batch->size() > 0) {
-            std::lock_guard<std::mutex> l(*mutex);
-            auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-            auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-            for (vector_size_t i = 0; i < batch->size(); ++i) {
-              rows->emplace_back(first->valueAt(i), second->valueAt(i));
-            }
-          }
-          return exec::BlockingReason::kNotBlocked;
-        };
-      }
-      workers.push_back(
-          exec::Task::create(
-              fmt::format(
-                  "local://fixedpoint-worker-{}-{}", queryCtx->queryId(), d),
-              core::PlanFragment{node},
-              /*destination=*/d,
-              queryCtx,
-              mode,
-              consumer,
-              /*memoryArbitrationPriority=*/0,
-              /*spillDiskOpts=*/std::nullopt,
-              /*onError=*/nullptr,
-              &options));
+      cursors.push_back(
+          TaskCursor::create({
+              .planNode = std::move(node),
+              .destination = d,
+              .queryCtx = mode == exec::Task::ExecutionMode::kParallel
+                  ? queryCtx
+                  : nullptr,
+              .copyResult = false,
+              .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
+              .fixedPointOptions = &options,
+          }));
     }
 
     // The coordinator wires the body-shuffle topology by adding one remote
@@ -330,61 +313,41 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     if (node0->requiresSplits()) {
       for (int32_t d = 0; d < numWorkers; ++d) {
         for (int32_t e = 0; e < numWorkers; ++e) {
-          workers[d]->addSplit(
+          cursors[d]->task()->addSplit(
               fixedPointNodeId,
               exec::Split(
                   std::make_shared<exec::RemoteConnectorSplit>(
-                      workers[e]->taskId())));
+                      cursors[e]->task()->taskId())));
         }
         if (initSplitsFor != nullptr) {
           // Addressed to the node that reads them, not to the fixed point:
           // that is how a fixed point with several scanned initial plans keeps
           // each one's splits apart.
           for (auto& [sourceId, split] : initSplitsFor(d)) {
-            workers[d]->addSplit(sourceId, std::move(split));
-            workers[d]->noMoreSplits(sourceId);
+            cursors[d]->task()->addSplit(sourceId, std::move(split));
+            cursors[d]->task()->noMoreSplits(sourceId);
           }
         }
-        workers[d]->noMoreSplits(fixedPointNodeId);
+        cursors[d]->task()->noMoreSplits(fixedPointNodeId);
       }
     }
 
-    // Drive each worker in 'mode'.  Serial: next() on its own thread, so peers
-    // rendezvous through the shuffle (next() runs the whole loop
-    // synchronously). Parallel: start() on the executor (run() runs there and
-    // blocks on its sub-tasks), with the shard delivered to the consumer above.
+    // Drive each cursor on its own thread so peer workers can rendezvous
+    // through the shuffle in both serial and parallel execution.
     std::vector<std::exception_ptr> errors(numWorkers);
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      std::vector<std::thread> threads;
-      threads.reserve(numWorkers);
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        threads.emplace_back([&, d]() {
-          try {
-            while (auto batch = workers[d]->next()) {
-              auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-              auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-              for (vector_size_t i = 0; i < batch->size(); ++i) {
-                perWorker[d].emplace_back(
-                    first->valueAt(i), second->valueAt(i));
-              }
-            }
-          } catch (...) {
-            errors[d] = std::current_exception();
-          }
-        });
-      }
-      for (auto& thread : threads) {
-        thread.join();
-      }
-    } else {
-      for (auto& worker : workers) {
-        worker->start(/*maxDrivers=*/1);
-      }
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        auto future = workers[d]->taskCompletionFuture();
-        std::move(future).wait();
-        errors[d] = workers[d]->error();
-      }
+    std::vector<std::thread> threads;
+    threads.reserve(numWorkers);
+    for (int32_t d = 0; d < numWorkers; ++d) {
+      threads.emplace_back([&, d]() {
+        try {
+          perWorker[d] = readRows(*cursors[d]);
+        } catch (...) {
+          errors[d] = std::current_exception();
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
     }
     for (auto& error : errors) {
       if (error) {
@@ -405,9 +368,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     std::vector<WorkerRun> results;
     results.reserve(numWorkers);
     for (int32_t d = 0; d < numWorkers; ++d) {
-      // Each worker task runs a FixedPointLoop (Task::create composes one
-      // onto a FixedPointNode plan); read its iteration count directly.
-      auto* fixedPoint = workers[d]->testingFixedPoint();
+      auto* fixedPoint = cursors[d]->task()->testingFixedPoint();
       VELOX_CHECK_NOT_NULL(fixedPoint, "Worker task has no FixedPointLoop");
       results.push_back({std::move(perWorker[d]), fixedPoint->iterations()});
     }
@@ -479,69 +440,22 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return rows;
   }
 
-  // Drives a plan whose root is NOT a FixedPointNode but which contains one as
+  // Drives a plan whose root is not a FixedPointNode but which contains one as
   // its leaf, with trailing nodes above it (e.g. a Project over a fixed point),
-  // in 'mode'.  Task::create yields a FixedPointLoop that runs the loop,
-  // then runs the trailing plan over the result.  Returns the rows as sorted
-  // (col0, col1) BIGINT pairs.
+  // in 'mode'. Returns the rows as sorted (col0, col1) BIGINT pairs.
   std::vector<std::pair<int64_t, int64_t>> runViaTrailing(
       const core::PlanNodePtr& plan,
       exec::Task::ExecutionMode mode) {
     auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
-    std::vector<std::pair<int64_t, int64_t>> rows;
-    std::mutex mutex;
-    auto collect = [&](const RowVectorPtr& batch) {
-      auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-      auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-      for (vector_size_t i = 0; i < batch->size(); ++i) {
-        rows.emplace_back(first->valueAt(i), second->valueAt(i));
-      }
-    };
-    const auto taskId =
-        fmt::format("local://fixedpoint-trailing-{}", queryCtx->queryId());
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      auto task = exec::Task::create(
-          taskId,
-          core::PlanFragment{plan},
-          /*destination=*/0,
-          queryCtx,
-          exec::Task::ExecutionMode::kSerial,
-          exec::Consumer{},
-          /*memoryArbitrationPriority=*/0,
-          /*spillDiskOpts=*/std::nullopt,
-          /*onError=*/nullptr,
-          &localOptions());
-      while (auto batch = task->next()) {
-        collect(batch);
-      }
-    } else {
-      exec::Consumer consumer = [&](RowVectorPtr batch,
-                                    bool /*drained*/,
-                                    ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          std::lock_guard<std::mutex> l(mutex);
-          collect(batch);
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-      auto task = exec::Task::create(
-          taskId,
-          core::PlanFragment{plan},
-          /*destination=*/0,
-          queryCtx,
-          exec::Task::ExecutionMode::kParallel,
-          consumer,
-          /*memoryArbitrationPriority=*/0,
-          /*spillDiskOpts=*/std::nullopt,
-          /*onError=*/nullptr,
-          &localOptions());
-      task->start(/*maxDrivers=*/1);
-      auto future = task->taskCompletionFuture();
-      std::move(future).wait();
-      if (auto error = task->error()) {
-        std::rethrow_exception(error);
-      }
-    }
+    auto cursor = TaskCursor::create({
+        .planNode = plan,
+        .queryCtx =
+            mode == exec::Task::ExecutionMode::kParallel ? queryCtx : nullptr,
+        .copyResult = false,
+        .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
+        .fixedPointOptions = &localOptions(),
+    });
+    auto rows = readRows(*cursor);
     std::sort(rows.begin(), rows.end());
     return rows;
   }
@@ -565,7 +479,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
 // The single body plan runs serially each iteration (no exchange): it reads the
 // frontier (the rows the append-mode result entry accumulated last iteration),
 // joins it with the static edges, and appends the next frontier back to result.
-// The FixedPointNode is driven through the Task interface and emits result --
+// The FixedPointNode is driven through TaskCursor and emits result --
 // the union of every iteration's frontier.
 TEST_F(FixedPointTest, recursiveCte) {
   auto schema = ROW({"id", "depth"}, BIGINT());
@@ -814,8 +728,8 @@ TEST_F(FixedPointTest, serialModeRejectsShuffle) {
 // Two-plan iteration that shuffles between sub-plans: plan 0 reads the frontier
 // and gathers it through a PartitionedOutput; plan 1 receives it via an
 // Exchange (a separate parallel task), halves each value, and writes the
-// frontier back.  Converges when the values reach zero.  Driven through the
-// Task interface; emits the final frontier.
+// frontier back. Converges when the values reach zero. TaskCursor emits the
+// final frontier.
 TEST_F(FixedPointTest, shuffleBetweenSubplans) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -918,7 +832,7 @@ TEST_F(FixedPointTest, shuffleDuringIteration) {
 }
 
 // A real by-key shuffle across two peer top-level tasks.  The fixed point runs
-// as two workers (destinations 0 and 1); the coordinator (runViaTask) wires
+// as two workers (destinations 0 and 1); the test harness wires
 // them all-to-all via remote splits and they shuffle directly with each other.
 //
 // The coordinator pre-partitions the input across the workers (modeling a
