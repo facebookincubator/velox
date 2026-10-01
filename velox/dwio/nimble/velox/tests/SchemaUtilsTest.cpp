@@ -735,6 +735,8 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
 
   ASSERT_EQ(projectedMap.groupCount(), 1);
   EXPECT_EQ(projectedMap.groupAt(0).groupId, 1);
+  NIMBLE_ASSERT_THROW(
+      projectedMap.defaultGroup(), "Hybrid FlatMap Default group is missing");
   EXPECT_EQ(
       projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"2", "3"}));
   EXPECT_EQ(

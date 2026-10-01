@@ -208,6 +208,25 @@ uint32_t EncodingViewDecoder::next(
   return numNonNulls;
 }
 
+void EncodingViewDecoder::read(
+    const std::function<void*(uint32_t rowCount)>& prepareOutput,
+    std::function<void*()> getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers) {
+  NIMBLE_CHECK_LE(nextRow_, encodingView_->rowCount());
+  const auto rowCount = encodingView_->rowCount() - nextRow_;
+  if (rowCount == 0) {
+    return;
+  }
+  auto* output = prepareOutput(rowCount);
+  NIMBLE_CHECK_NOT_NULL(output);
+  next(
+      rowCount,
+      output,
+      std::move(getOutputNulls),
+      stringBuffers,
+      /*scatterOutputBitmap=*/nullptr);
+}
+
 uint32_t EncodingViewDecoder::scatterNext(
     uint32_t count,
     void* output,

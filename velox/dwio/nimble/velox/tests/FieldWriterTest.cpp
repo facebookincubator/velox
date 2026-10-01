@@ -377,6 +377,84 @@ TEST_F(FieldWriterTest, rejectsConfiguredKeysInDefaultGroup) {
   EXPECT_THROW(FieldWriter::create(context, typeWithId), NimbleInternalError);
 }
 
+TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {
+  constexpr velox::vector_size_t kRows{2};
+  constexpr velox::vector_size_t kEntries{4};
+  const std::string groupedKey{"grouped_feature_name_longer_than_inline"};
+  const std::string defaultKey{"default_feature_name_longer_than_inline"};
+  const std::string replacementDefaultKey{
+      "replacement_default_feature_name_longer_than_inline"};
+  const auto mapType = velox::MAP(velox::VARCHAR(), velox::DOUBLE());
+  auto keys =
+      velox::BaseVector::create(velox::VARCHAR(), kEntries, pool_.get());
+  auto values =
+      velox::BaseVector::create(velox::DOUBLE(), kEntries, pool_.get());
+  const std::array<std::string_view, kEntries> keyData{
+      groupedKey, defaultKey, defaultKey, groupedKey};
+  const std::array<double, kEntries> valueData{1.0, 9.0, 99.0, 10.0};
+  for (velox::vector_size_t i = 0; i < kEntries; ++i) {
+    keys->asFlatVector<velox::StringView>()->set(
+        i, velox::StringView{keyData[i]});
+    values->asFlatVector<double>()->set(i, valueData[i]);
+  }
+
+  auto map = std::make_shared<velox::MapVector>(
+      pool_.get(),
+      mapType,
+      nullptr,
+      kRows,
+      velox::allocateOffsets(kRows, pool_.get()),
+      velox::allocateSizes(kRows, pool_.get()),
+      keys,
+      values);
+  const std::array<velox::vector_size_t, kRows> mapOffsets{0, 2};
+  const std::array<velox::vector_size_t, kRows> mapSizes{2, 2};
+  std::copy(
+      mapOffsets.begin(),
+      mapOffsets.end(),
+      map->mutableOffsets(kRows)->asMutable<velox::vector_size_t>());
+  std::copy(
+      mapSizes.begin(),
+      mapSizes.end(),
+      map->mutableSizes(kRows)->asMutable<velox::vector_size_t>());
+
+  const auto type = velox::ROW({{"features", mapType}});
+  const auto input = std::make_shared<velox::RowVector>(
+      pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap({{groupedKey}})}},
+      },
+      type,
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  keys->asFlatVector<velox::StringView>()->set(
+      1, velox::StringView{replacementDefaultKey});
+  keys->asFlatVector<velox::StringView>()->set(
+      2, velox::StringView{replacementDefaultKey});
+  const std::string replacementSerialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  velox::VectorPtr output;
+  {
+    Deserializer deserializer{schema, pool_.get()};
+    deserializer.deserialize(serialized, output);
+    deserializer.deserialize(replacementSerialized, output);
+  }
+
+  ASSERT_EQ(output->size(), input->size());
+  for (velox::vector_size_t row = 0; row < kRows; ++row) {
+    EXPECT_TRUE(input->equalValueAt(output.get(), row, row))
+        << "row " << row << " expected " << input->toString(row) << " actual "
+        << output->toString(row);
+  }
+}
+
 TEST_F(FieldWriterTest, initializesEverySupportedHybridValueType) {
   const auto valueType = velox::ROW(
       {"boolean",
