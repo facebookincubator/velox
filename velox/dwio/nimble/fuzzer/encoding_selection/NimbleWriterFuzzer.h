@@ -133,6 +133,12 @@ enum class WriteOutcome {
 /// nimble.encoding_selection_config.
 std::vector<EncodingType> allCandidateEncodings();
 
+/// Builds one compact JSON object shaped like a capping/exposure payload: a
+/// stable `t1` array plus sparsely present numeric-ID array fields. `rowIndex`
+/// deliberately controls empty and long arrays so a fixed seed covers those
+/// boundary shapes instead of depending on probability alone.
+std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex);
+
 /// Number of unfiltered random-policy files written before coverage repair.
 inline constexpr uint32_t kNumUnfilteredRounds = 10;
 
@@ -303,9 +309,12 @@ class NimbleWriterFuzzer {
  private:
   // Counts physical stream and metadata shapes validated during the run.
   struct ChunkStatsVerificationCoverage {
-    // Counts files whose chunk stats were enabled or disabled.
-    uint64_t numIndexedFiles{0};
+    // Counts files whose V2 chunk stats were enabled or disabled.
+    uint64_t numV2IndexedFiles{0};
     uint64_t numUnindexedFiles{0};
+    // Counts V2 indexes and chunks carrying min/max bounds.
+    uint64_t numV2IndexedStreams{0};
+    uint64_t numV2BoundedChunks{0};
     // Counts indexed groups and stripes.
     uint64_t numStripeGroups{0};
     uint64_t numStripes{0};
@@ -340,7 +349,8 @@ class NimbleWriterFuzzer {
   // physical chunks, and records which metadata shapes were exercised.
   void verifyChunkStatsMetadata(
       const std::string& file,
-      bool chunkStatsEnabled);
+      bool chunkStatsEnabled,
+      uint32_t maxStringStatSize);
 
   // Verifies file-level column statistics (value count, null count, min, max)
   // against the data that was actually written.

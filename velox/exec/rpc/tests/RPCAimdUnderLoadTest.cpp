@@ -117,11 +117,9 @@ class BurstFunctionBase : public AsyncRPCFunction {
     return config_.backend;
   }
 
-  // Overload classifier: rate-limit / timeout failures are backend overload
-  // (kOverloaded). A null-input error is a user error and must NOT move the
-  // window (folded into kSuccess/kNone below since it is not
-  // rate-limit/timeout). A clean drain feeds its RTT to the gradient and drives
-  // rate-limiter recovery.
+  // Overload failures produce kOverloaded. A null-input error is a user error
+  // and must not move the window (folded into kSuccess/kNone below). A clean
+  // drain feeds its RTT to the gradient and drives rate-limiter recovery.
   CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& responses) const override {
     bool hasNonOverloadError{false};
@@ -129,8 +127,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
       if (!response.hasError()) {
         continue;
       }
-      if (response.errorKind() == RPCErrorKind::kRateLimited ||
-          response.errorKind() == RPCErrorKind::kTimeout) {
+      if (velox::rpc::errorCategory(response.errorKind()) ==
+          velox::rpc::RPCErrorCategory::kOverload) {
         return CongestionSignal::kOverloaded;
       }
       hasNonOverloadError = true;

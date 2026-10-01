@@ -839,6 +839,46 @@ TEST_P(HashTableTest, arrayProbeNormalizedKey) {
   ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
 }
 
+TEST_P(HashTableTest, groupProbeDuplicateNewKeys) {
+  // Each batch repeats every new key within one probe window, so later rows
+  // must find the groups that earlier rows of the same window inserted.
+  constexpr int32_t kNumBatches = 100;
+  constexpr int32_t kBatchSize = 1'000;
+  constexpr int32_t kNumNewKeysPerBatch = 20;
+  for (const auto mode :
+       {BaseHashTable::HashMode::kNormalizedKey,
+        BaseHashTable::HashMode::kHash}) {
+    SCOPED_TRACE(BaseHashTable::modeString(mode));
+    auto table =
+        createHashTableForAggregation(ROW({"a", "b"}, {BIGINT(), BIGINT()}), 2);
+    if (mode == BaseHashTable::HashMode::kHash) {
+      table->forceGenericHashMode(
+          BaseHashTable::kNoSpillInputStartPartitionBit);
+    }
+    auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+    for (auto batch = 0; batch < kNumBatches; ++batch) {
+      auto groupId = [&](auto row) {
+        return batch * kNumNewKeysPerBatch + row % kNumNewKeysPerBatch;
+      };
+      // Both keys are unique per group, so the product of their distinct
+      // counts outgrows kArray mode. Spacing out 'b' keeps it out of range
+      // mode, while the combined range still fits a normalized key.
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>(kBatchSize, groupId),
+          makeFlatVector<int64_t>(
+              kBatchSize, [&](auto row) { return groupId(row) * 1'000; }),
+      });
+      insertGroups(*data, *lookup, *table);
+      ASSERT_EQ(lookup->newGroups.size(), kNumNewKeysPerBatch);
+      for (auto row = 0; row < kBatchSize; ++row) {
+        ASSERT_EQ(lookup->hits[row], lookup->hits[row % kNumNewKeysPerBatch]);
+      }
+    }
+    EXPECT_EQ(table->numDistinct(), kNumBatches * kNumNewKeysPerBatch);
+    EXPECT_EQ(table->hashMode(), mode);
+  }
+}
+
 TEST_P(HashTableTest, regularHashingTableSize) {
   keySpacing_ = 1000;
   auto checkTableSize = [&](BaseHashTable::HashMode mode,

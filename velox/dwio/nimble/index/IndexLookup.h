@@ -32,6 +32,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/serializers/KeyEncoder.h"
 
@@ -260,29 +261,6 @@ class IndexLookup {
    private:
     const std::vector<RowRange> rowRanges_;
     const std::vector<uint32_t> resultOffsets_;
-  };
-
-  /// Forward cursor over an index's encoded keys, one per file-level row, in
-  /// ascending row order.
-  ///
-  /// Yields the same bytes as keyAtRow() — the encoded key, not the key split
-  /// back into columns — but is meant for scanning rather than for one-off
-  /// resume-key lookups, so it amortizes the per-row search an index would
-  /// otherwise repeat.
-  ///
-  /// Not thread-safe; use one per thread. The index must outlive the cursor.
-  class KeyCursor {
-   public:
-    virtual ~KeyCursor() = default;
-
-    /// Returns whether next() has another key to return.
-    virtual bool hasNext() const = 0;
-
-    /// Returns the encoded key at the current row and advances by one row.
-    /// The returned view stays valid until the next next() call or until the
-    /// cursor is destroyed, whichever comes first. Throws when hasNext() is
-    /// false.
-    virtual std::string_view next() = 0;
   };
 
   virtual ~IndexLookup() = default;

@@ -23,6 +23,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
+#include "velox/exec/FixedPointOperators.h"
 #include "velox/exec/GroupId.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
@@ -742,6 +743,22 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
               ctx->task->planFragment().taskUniqueId.value_or(
                   assignUniqueIdNode->taskUniqueId()),
               ctx->task->uniqueRowIdPool()));
+    } else if (
+        auto fixedPoint =
+            std::dynamic_pointer_cast<const core::FixedPointNode>(planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), fixedPoint));
+    } else if (
+        auto stateSource =
+            std::dynamic_pointer_cast<const core::StateSourceNode>(planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), stateSource));
+    } else if (
+        auto stateHashJoin =
+            std::dynamic_pointer_cast<const core::StateHashJoinNode>(
+                planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), stateHashJoin));
     } else if (
         const auto traceScanNode =
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {

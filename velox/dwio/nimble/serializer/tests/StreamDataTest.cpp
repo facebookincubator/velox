@@ -162,7 +162,9 @@ class StreamDataParserHeaderTest : public ::testing::Test {
 
   static std::string buildTabletBuffer(uint32_t rowCount) {
     auto header = createTabletChunkHeader(
-        {.rowCount = rowCount, .rowRange = RowRange{/*start=*/0, rowCount}});
+        {.rowCount = rowCount,
+         .requiredBarrier = false,
+         .rowRange = RowRange{/*start=*/0, rowCount}});
     std::string buffer{
         reinterpret_cast<const char*>(header.data()), header.length()};
     writeTabletTrailer(/*sizes=*/{}, buffer);
@@ -284,6 +286,7 @@ class TabletChunkStripTest : public ::testing::Test {
     // Assemble: [header][stream data][trailer].
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = rowCount,
+         .requiredBarrier = false,
          .streamHasChunkHeader = streamHasChunkHeader,
          .rowRange = RowRange{0, rowCount}});
     std::string buffer(
