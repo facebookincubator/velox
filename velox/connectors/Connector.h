@@ -654,7 +654,28 @@ class ConnectorQueryCtx {
     bool adjustTimestampToTimezone_{false};
     folly::CancellationToken cancellationToken_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+    bool built_{false};
   };
+
+  /// Deprecated: Prefer Builder for new call sites. Kept public for source
+  /// compatibility with connectors outside Velox. Raw pointer inputs are
+  /// borrowed; expressionEvaluator is owned and tokenProvider is shared.
+  ConnectorQueryCtx(
+      memory::MemoryPool* operatorPool,
+      memory::MemoryPool* connectorPool,
+      const config::ConfigBase* sessionProperties,
+      const common::SpillConfig* spillConfig,
+      common::PrefixSortConfig prefixSortConfig,
+      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
+      cache::AsyncDataCache* cache,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId,
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone = false,
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -753,27 +774,6 @@ class ConnectorQueryCtx {
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
-
- public:
-  /// Deprecated: Prefer Builder for new call sites. Kept public for source
-  /// compatibility with connectors outside Velox. Raw pointer inputs are
-  /// borrowed; expressionEvaluator is owned and tokenProvider is shared.
-  ConnectorQueryCtx(
-      memory::MemoryPool* operatorPool,
-      memory::MemoryPool* connectorPool,
-      const config::ConfigBase* sessionProperties,
-      const common::SpillConfig* spillConfig,
-      common::PrefixSortConfig prefixSortConfig,
-      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
-      cache::AsyncDataCache* cache,
-      const std::string& queryId,
-      const std::string& taskId,
-      const std::string& planNodeId,
-      int driverId,
-      const std::string& sessionTimezone,
-      bool adjustTimestampToTimezone = false,
-      folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
  private:
   memory::MemoryPool* const operatorPool_;

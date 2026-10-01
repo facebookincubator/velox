@@ -154,6 +154,16 @@ TEST(ConnectorTest, builderPreservesConfiguredFields) {
   EXPECT_TRUE(connectorQueryCtx->cancellationToken().isCancellationRequested());
 }
 
+TEST(ConnectorTest, builderRejectsSecondBuild) {
+  config::ConfigBase sessionProperties({});
+  ConnectorQueryCtx::Builder builder;
+  builder.sessionProperties(&sessionProperties);
+
+  auto context = builder.build();
+  EXPECT_NE(context, nullptr);
+  EXPECT_THROW(builder.build(), VeloxRuntimeError);
+}
+
 class ConnectorRegistryTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {

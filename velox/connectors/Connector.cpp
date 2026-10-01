@@ -28,6 +28,8 @@
 namespace facebook::velox::connector {
 
 std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
+  VELOX_CHECK(!built_, "ConnectorQueryCtx::Builder can only build once");
+  built_ = true;
   return std::unique_ptr<ConnectorQueryCtx>(new ConnectorQueryCtx(
       operatorPool_,
       connectorPool_,
