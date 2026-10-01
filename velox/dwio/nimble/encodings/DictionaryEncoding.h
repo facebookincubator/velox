@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <span>
 #include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
@@ -183,6 +185,24 @@ class DictionaryEncoding
   std::unique_ptr<Encoding> indicesEncoding_;
   std::unique_ptr<Encoding> alphabetEncoding_;
   velox::BufferPtr indicesBuffer_;
+
+  void ensureFilterCache(velox::dwio::common::ScanState& scanState) {
+    auto& filterCache = scanState.filterCache;
+    const auto size = std::max<size_t>(1, alphabet_.size());
+    if (filterCache.size() != size) {
+      filterCache.resize(size);
+    }
+    std::fill(
+        filterCache.begin(),
+        filterCache.end(),
+        velox::dwio::common::FilterResult::kUnknown);
+    scanState.updateRawState();
+    filterCacheInitialized_ = true;
+  }
+
+  // Tracks dictionary identity. SelectiveColumnReader::resetFilterCaches()
+  // invalidates the verdicts when the filter changes.
+  bool filterCacheInitialized_{false};
 };
 
 //
@@ -270,6 +290,82 @@ class DictionaryIndicesHook : public velox::ValueHook {
   const vector_size_t offset_;
 };
 
+template <typename DictionaryVisitor>
+class DictionaryColumnVisitorHook : public velox::ValueHook {
+ public:
+  static constexpr bool kSkipNulls = true;
+  static constexpr bool kBulkFastPath = true;
+
+  explicit DictionaryColumnVisitorHook(DictionaryVisitor& visitor)
+      : visitor_{visitor} {}
+
+  bool acceptsNulls() const final {
+    return false;
+  }
+
+  void addValue(vector_size_t row, int64_t index) final {
+    processNullsUntil(row);
+    NIMBLE_DCHECK(
+        !visitor_.atEnd(), "Dictionary visitor received an extra index");
+    bool atEnd{false};
+    visitor_.process(index, atEnd);
+    syncFilterOnlyNumValues();
+  }
+
+  void addValues(
+      const vector_size_t* rows,
+      const int32_t* indices,
+      vector_size_t size) final {
+    vector_size_t runBegin{0};
+    while (runBegin < size) {
+      processNullsUntil(rows[runBegin]);
+      auto runEnd = runBegin + 1;
+      while (runEnd < size && rows[runEnd] == rows[runEnd - 1] + 1) {
+        ++runEnd;
+      }
+      visitor_.processBulk(indices + runBegin, runEnd - runBegin);
+      runBegin = runEnd;
+    }
+  }
+
+  void addNull(vector_size_t /*row*/) final {
+    NIMBLE_UNREACHABLE(__PRETTY_FUNCTION__);
+  }
+
+  void processTrailingNulls() {
+    processNullsUntil(visitor_.numRows());
+  }
+
+ private:
+  void processNullsUntil(vector_size_t row) {
+    NIMBLE_DCHECK_LE(visitor_.rowIndex(), row);
+    NIMBLE_DCHECK_LE(row, visitor_.numRows());
+    const auto numNulls = row - visitor_.rowIndex();
+    if constexpr (std::is_same_v<
+                      typename DictionaryVisitor::Extract,
+                      velox::dwio::common::ExtractToReader>) {
+      if (visitor_.reader().returnReaderNulls()) {
+        visitor_.addRowIndex(numNulls);
+        visitor_.addNumValues(numNulls);
+        return;
+      }
+    }
+    while (visitor_.rowIndex() < row) {
+      bool atEnd{false};
+      visitor_.processNull(atEnd);
+    }
+    syncFilterOnlyNumValues();
+  }
+
+  void syncFilterOnlyNumValues() {
+    if constexpr (DictionaryVisitor::kFilterOnly) {
+      visitor_.reader().setNumValues(visitor_.reader().outputRows().size());
+    }
+  }
+
+  DictionaryVisitor& visitor_;
+};
+
 } // namespace detail
 
 template <typename T>
@@ -277,6 +373,83 @@ template <typename V>
 void DictionaryEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
+  // Decode indices with an AlwaysTrue visitor and forward them directly into
+  // the shared logical-value dictionary visitor.
+  if (params.dictionaryAwareReads) {
+    if constexpr (
+        isIntegralType<T>() && sizeof(T) >= sizeof(int16_t) &&
+        (V::kHasFilter ||
+         std::is_same_v<
+             typename V::Extract,
+             velox::dwio::common::ExtractToReader>) &&
+        V::kHasBulkPath) {
+      using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
+          T,
+          typename V::FilterType,
+          typename V::Extract,
+          V::dense>;
+
+      auto& scanState = visitor.reader().scanState();
+      const auto filterCacheSize = std::max<size_t>(1, alphabet_.size());
+      if (!filterCacheInitialized_ ||
+          scanState.filterCache.size() != filterCacheSize) {
+        ensureFilterCache(scanState);
+      }
+      velox::dwio::common::RawScanState dictionaryState{};
+      dictionaryState.dictionary.values = alphabet_.data();
+      NIMBLE_CHECK_LE(
+          alphabet_.size(),
+          static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+          "Dictionary size exceeds the supported index range");
+      dictionaryState.dictionary.numValues =
+          static_cast<int32_t>(alphabet_.size());
+      dictionaryState.filterCache = scanState.filterCache.data();
+
+      const auto numRows = visitor.numRows() - visitor.rowIndex();
+      const auto outputCapacity = visitor.reader().numValues() + numRows;
+      const auto requiredBytes = std::max(
+          outputCapacity * sizeof(int32_t),
+          outputCapacity * sizeof(T) + numRows * sizeof(int32_t));
+      visitor.reader().template ensureValuesCapacity<uint8_t>(
+          requiredBytes, true);
+
+      DictionaryVisitor dictionaryVisitor{
+          visitor.filter(),
+          &visitor.reader(),
+          velox::RowSet(visitor.rows(), visitor.numRows()),
+          visitor.extractValues(),
+          dictionaryState};
+      dictionaryVisitor.setRowIndex(visitor.rowIndex());
+      dictionaryVisitor.setNumValuesBias(visitor.numValuesBias());
+
+      if constexpr (std::is_same_v<
+                        typename V::Extract,
+                        velox::dwio::common::ExtractToReader>) {
+        params.prepareResultNulls();
+      }
+
+      detail::DictionaryColumnVisitorHook<DictionaryVisitor> dictionaryHook{
+          dictionaryVisitor};
+      velox::common::AlwaysTrue indicesFilter;
+      DecoderVisitor<
+          int32_t,
+          velox::common::AlwaysTrue,
+          velox::dwio::common::ExtractToHook<decltype(dictionaryHook)>,
+          V::dense>
+          indicesVisitor{
+              indicesFilter,
+              &visitor.reader(),
+              velox::RowSet(visitor.rows(), visitor.numRows()),
+              velox::dwio::common::ExtractToHook<decltype(dictionaryHook)>(
+                  &dictionaryHook)};
+      indicesVisitor.setRowIndex(visitor.rowIndex());
+      callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
+      dictionaryHook.processTrailingNulls();
+      visitor.setRowIndex(dictionaryVisitor.rowIndex());
+      return;
+    }
+  }
+
   if constexpr (sizeof(T) < sizeof(uint32_t)) {
     // Although we do not use column reader values buffer in this decoder, the
     // fast path in nested decoders of indices can use it, so need to ensure it
