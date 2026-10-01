@@ -523,9 +523,9 @@ class TestShouldYieldOperator : public exec::Operator {
 
 // Hooks invoked by TestExchangeClient's control-plane methods.
 struct TestExchangeClientCallbacks {
-  std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId;
-  std::function<void()> onNoMoreRemoteTasks;
-  std::function<void()> onClose;
+  std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId{};
+  std::function<void()> onNoMoreRemoteTasks{};
+  std::function<void()> onClose{};
 };
 
 class TestExchangeClient : public ExchangeClient {
