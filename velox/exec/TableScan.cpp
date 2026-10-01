@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/TableScan.h"
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -395,7 +397,24 @@ bool TableScan::getSplit() {
     // will be nullptr if there was a cancellation.
     numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
     auto startTimeNs = getCurrentTimeNano();
-    auto preparedDataSource = connectorSplit->dataSource->move();
+    std::unique_ptr<connector::DataSource> preparedDataSource;
+    {
+      // The driver parks here on-thread waiting for a split preload prepared on
+      // another thread. Suspend it (via the operator pool's reclaimer) so a
+      // concurrent memory-arbitration reclaim can pause this task instead of
+      // dead-locking on numThreads_ > 0. No-op off a driver thread or when the
+      // pool has no suspending reclaimer.
+      auto* reclaimer = pool()->reclaimer();
+      if (reclaimer != nullptr) {
+        reclaimer->enterArbitration();
+      }
+      auto leaveGuard = folly::makeGuard([reclaimer]() {
+        if (reclaimer != nullptr) {
+          reclaimer->leaveArbitration();
+        }
+      });
+      preparedDataSource = connectorSplit->dataSource->move();
+    }
     auto endTimeNs = getCurrentTimeNano();
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kWaitForPreloadSplitNanos),
