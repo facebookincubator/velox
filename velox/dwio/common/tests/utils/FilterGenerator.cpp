@@ -287,26 +287,32 @@ std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
     const std::vector<RowVectorPtr>& batches,
     const Subfield& subfield) {
   Timestamp max;
-  bool hasMax = false;
-  for (const auto& batch : batches) {
-    auto values = getChildBySubfield(batch.get(), subfield, rootType_)
-                      ->as<SimpleVector<Timestamp>>();
-    DWIO_ENSURE_NOT_NULL(
-        values,
-        "Failed to convert to SimpleVector<Timestamp> for batch of kind ",
-        batch->type()->kindName());
-    for (auto i = 0; i < values->size(); ++i) {
-      if (values->isNullAt(i)) {
-        continue;
-      }
-      if (hasMax && max < values->valueAt(i)) {
-        max = values->valueAt(i);
-      } else if (!hasMax) {
-        max = values->valueAt(i);
-        hasMax = true;
-      }
-    }
+  columnMax(batches, subfield, max);
+  return std::make_unique<velox::common::TimestampRange>(max, max, false);
+}
+
+// The string counterpart of one past the maximum. kMaxString is chosen to
+// exceed the test data, which makes this identical to the row group skip
+// specialization above -- there the filter selecting nothing is the reason
+// VARCHAR is left out of supportsRowGroupSkip, here it is what is wanted.
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeEmptyResultRangeFilter(
+    const std::vector<RowVectorPtr>& /*batches*/,
+    const Subfield& /*subfield*/) {
+  static std::string max = kMaxString;
+  return std::make_unique<velox::common::BytesRange>(
+      max, false, false, max, false, false, false);
+}
+
+template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeEmptyResultRangeFilter(
+    const std::vector<RowVectorPtr>& batches,
+    const Subfield& subfield) {
+  Timestamp max;
+  if (!columnMax(batches, subfield, max) || max == Timestamp::max()) {
+    return nullptr;
   }
+  ++max;
   return std::make_unique<velox::common::TimestampRange>(max, max, false);
 }
 
@@ -396,6 +402,20 @@ bool supportsRowGroupSkip(const TypePtr& type) {
   return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
       kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
       kind == TypeKind::TIMESTAMP;
+}
+
+// An empty result filter is built one step past the column maximum, so the
+// kinds are those where "one step past" is exact and expressible: the integral
+// kinds, where getIntegerValue is lossless and the bound is max + 1, plus the
+// two with a specialization of their own. Floating point is excluded because
+// getIntegerValue truncates, and HUGEINT because the bound would not survive
+// the narrowing to int64_t; in both cases the filter could silently overlap a
+// real value. BOOLEAN is excluded because there is no value above true.
+bool supportsEmptyResult(const TypePtr& type) {
+  const auto kind = type->kind();
+  return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::VARCHAR || kind == TypeKind::TIMESTAMP;
 }
 
 // Draws a filter selectivity in percent.
@@ -492,6 +512,23 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
         specs.back().filterKind != FilterKind::kIsNotNull &&
         folly::Random::rand32(rng_) % 10 == 0) {
       specs.back().isForRowGroupSkip = true;
+    }
+  }
+
+  // Optionally turn the last spec into one that matches nothing. The last one
+  // and no other: makeSubfieldFilters narrows the reference rows in place as it
+  // walks the specs, so an empty result anywhere earlier would leave every
+  // later column sampling an empty row set and degenerating into an IsNull
+  // filter. Guarded on the probability first so that the default draws nothing
+  // and leaves the sequence above untouched.
+  if (emptyResultProbability_ > 0.0 && !specs.empty() &&
+      folly::Random::randDouble01(rng_) < emptyResultProbability_) {
+    auto& last = specs.back();
+    const auto fieldType = topLevelFieldType(*rowType_, last.field);
+    if (fieldType != nullptr && supportsEmptyResult(fieldType) &&
+        !last.isForRowGroupSkip && last.filterKind != FilterKind::kIsNull &&
+        last.filterKind != FilterKind::kIsNotNull) {
+      last.isForEmptyResult = true;
     }
   }
 
@@ -598,6 +635,8 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
     std::unique_ptr<Filter> filter;
     if (filterSpec.isForRowGroupSkip) {
       filter = stats->rowGroupSkipFilter(batches, subfield, hitRows);
+    } else if (filterSpec.isForEmptyResult) {
+      filter = stats->emptyResultFilter(batches, subfield, hitRows);
     } else {
       filter = stats->filter(batches, filterSpec, hitRows);
     }
