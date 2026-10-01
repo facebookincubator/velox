@@ -185,3 +185,42 @@ TEST_F(FilterGeneratorSeedTest, differentSeedsProduceDifferentFilters) {
   // seed actually drives the outcome.
   EXPECT_GT(descriptions.size(), 1);
 }
+
+// The old selectivity scheme drew from {1, 10, 20, 30} and {76, 80, ... 100}.
+// Nothing landed between 31% and 75%, and 100% -- a filter that excludes
+// nothing -- came up roughly one draw in thirteen.
+TEST(FilterGeneratorTest, selectivityCoversTheMidBandAndNeverReachesAll) {
+  auto rowType = ROW({{"big", BIGINT()}, {"int", INTEGER()}});
+  auto type = rowType;
+  FilterGenerator generator(type, /*seed=*/4242);
+
+  int32_t low = 0;
+  int32_t mid = 0;
+  int32_t high = 0;
+  for (int32_t i = 0; i < kDraws; ++i) {
+    auto filterable = generator.makeFilterables(rowType->size(), 100);
+    for (const auto& spec : generator.makeRandomSpecs(filterable, 0)) {
+      if (spec.filterKind == common::FilterKind::kIsNull ||
+          spec.filterKind == common::FilterKind::kIsNotNull) {
+        continue;
+      }
+      EXPECT_GT(spec.selectPct, 0);
+      EXPECT_LT(spec.selectPct, 100);
+      // startPct must leave room for the range it introduces.
+      EXPECT_GE(spec.startPct, 0);
+      EXPECT_LT(spec.startPct, 100 - spec.selectPct);
+
+      if (spec.selectPct < 10) {
+        ++low;
+      } else if (spec.selectPct < 75) {
+        ++mid;
+      } else {
+        ++high;
+      }
+    }
+  }
+
+  EXPECT_GT(low, 0);
+  EXPECT_GT(mid, 0);
+  EXPECT_GT(high, 0);
+}
