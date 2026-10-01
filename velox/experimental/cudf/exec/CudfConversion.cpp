@@ -105,8 +105,9 @@ void CudfFromVelox::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(
       dynamic_cast<const CudfVector*>(input.get()),
       "CudfFromVelox received a device-resident CudfVector. The upstream "
-      "operator produces GPU output but is classified as a CPU operator. Fix "
-      "its operator adapter so that no CudfFromVelox is placed after it.");
+      "operator produces GPU output but is classified as a CPU operator. "
+      "Make it emit host vectors, or fix its operator adapter so that no "
+      "CudfFromVelox is placed after it.");
 
   if (input->size() > 0) {
     // Materialize lazy vectors
