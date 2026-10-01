@@ -3552,11 +3552,14 @@ TEST_P(NimbleIndexProjectorTest, statsToString) {
   stats.numReadRows = 1'000;
   stats.numProjectedRows = 800;
   stats.numOutputBytes = 8'192;
+  stats.numPlannedBytes = 16'384;
+  stats.numMaxBytesTruncations = 2;
   EXPECT_EQ(
       stats.toString(),
       "Stats(numReadStripes=3, numSlicedStripes=1, "
       "slicedStripePct=33.33%, numReadRows=1000, numProjectedRows=800, "
-      "numOutputBytes=8.00KB, "
+      "numOutputBytes=8.00KB, numPlannedBytes=16.00KB, "
+      "numMaxBytesTruncations=2, "
       "lookupTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "prepareTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "scanTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
@@ -5094,6 +5097,66 @@ TEST_P(NimbleIndexProjectorTest, maxBytesNoTruncation) {
     auto result = projector->projectStreams(request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+  }
+}
+
+TEST_P(NimbleIndexProjectorTest, plannedBytesAndMaxBytesTruncations) {
+  writeResumeKeyTestData();
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+
+  // Each stripe holds 100 keys, so [100 * i, 100 * (i + 1)) is stripe i.
+  const auto project = [&](int64_t lowerKey,
+                           int64_t upperKey,
+                           const NimbleIndexProjector::Options& options) {
+    auto projector = createProjector(subfields);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, lowerKey, upperKey)};
+    projector->projectStreams(request, options);
+    return projector->stats();
+  };
+
+  std::vector<uint64_t> stripeBytes;
+  uint64_t totalStripeBytes{0};
+  for (int64_t stripe = 0; stripe < 5; ++stripe) {
+    stripeBytes.push_back(
+        project(stripe * 100, (stripe + 1) * 100, {}).numPlannedBytes);
+    ASSERT_GT(stripeBytes.back(), 0);
+    totalStripeBytes += stripeBytes.back();
+  }
+
+  // Unlimited, a range over the five stripes plans all of them.
+  {
+    const auto stats = project(0, 500, {});
+    EXPECT_EQ(stats.numPlannedBytes, totalStripeBytes);
+    EXPECT_EQ(stats.numMaxBytesTruncations, 0);
+  }
+
+  // A limit that the first two stripes meet exactly stops the projection
+  // there, and the total is the value that was compared against it.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxBytes = stripeBytes[0] + stripeBytes[1];
+    const auto stats = project(0, 500, options);
+    EXPECT_EQ(stats.numPlannedBytes, options.maxBytes);
+    EXPECT_EQ(stats.numReadStripes, 2);
+    EXPECT_EQ(stats.numMaxBytesTruncations, 1);
+  }
+
+  // Meeting the limit on the range's last stripe cuts nothing short.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxBytes = stripeBytes[0] + stripeBytes[1];
+    EXPECT_EQ(project(0, 200, options).numMaxBytesTruncations, 0);
+  }
+
+  // A projection stopped by the row limit is not a byte truncation.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxRows = 100;
+    EXPECT_EQ(project(0, 500, options).numMaxBytesTruncations, 0);
   }
 }
 

@@ -65,7 +65,7 @@ std::string NimbleIndexProjector::Stats::toString() const {
   return fmt::format(
       "Stats(numReadStripes={}, numSlicedStripes={}, "
       "slicedStripePct={:.2f}%, numReadRows={}, numProjectedRows={}, "
-      "numOutputBytes={}, "
+      "numOutputBytes={}, numPlannedBytes={}, numMaxBytesTruncations={}, "
       "lookupTiming=[{}], prepareTiming=[{}], scanTiming=[{}], "
       "projectionTiming=[{}])",
       numReadStripes,
@@ -76,6 +76,8 @@ std::string NimbleIndexProjector::Stats::toString() const {
       numReadRows,
       numProjectedRows,
       velox::succinctBytes(numOutputBytes),
+      velox::succinctBytes(numPlannedBytes),
+      numMaxBytesTruncations,
       lookupTiming.toString(),
       prepareTiming.toString(),
       scanTiming.toString(),
@@ -477,12 +479,19 @@ void NimbleIndexProjector::prepareStripes() {
     appendStripePlan(stripeIndex, rangeOffset, *streams);
     totalRows += stripeRows;
     totalBytes += streams->projectedBytes;
+    const bool maxBytesReached =
+        ctx_.options->maxBytes > 0 && totalBytes >= ctx_.options->maxBytes;
     if ((ctx_.options->maxRows > 0 && totalRows >= ctx_.options->maxRows) ||
-        (ctx_.options->maxBytes > 0 && totalBytes >= ctx_.options->maxBytes)) {
+        maxBytesReached) {
+      // Reaching the budget on the last planned stripe cuts nothing short.
+      if (maxBytesReached && resolvedStripeIndex + 1 < numResolvedStripes) {
+        ++stats_.numMaxBytesTruncations;
+      }
       ctx_.plan.truncated = true;
       break;
     }
   }
+  stats_.numPlannedBytes += totalBytes;
   ctx_.plan.stripeRangeOffsets.push_back(ctx_.plan.stripeRanges.size());
   ctx_.plan.projectedStreams.resize(
       ctx_.plan.stripeIndices.size() * projection_->streamOffsets.size());
