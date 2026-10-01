@@ -382,8 +382,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
     auto holder = makeConnectorQueryCtx(
         {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
          {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
-         {hive::FileConfig::kNimbleIntegerDictionaryAwareFilteringSession,
-          "true"}});
+         {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
@@ -398,7 +397,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_TRUE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 
   // Keys absent => flags fall back to their default (false).
@@ -418,7 +417,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_FALSE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 }
 
