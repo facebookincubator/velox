@@ -382,6 +382,12 @@ void registerSimpleFunctions(
       TimeWithTimezone,
       Varchar>({prefix + "at_timezone_convert"});
 
+  registerFunction<
+      WithTimezoneFunction,
+      TimestampWithTimezone,
+      Timestamp,
+      Varchar>({prefix + "with_timezone"});
+
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"}, {}, true, defaultOwner);
 

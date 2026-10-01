@@ -212,6 +212,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: with_timezone(timestamp, timezone) -> timestamp with timezone
+
+    Returns a TIMESTAMP WITH TIME ZONE by treating the timestamp as local time in the given timezone.
+
 .. function:: current_time() -> time with time zone
 
     Returns the current time since midnight with the session timezoneReturns the current time since midnight with the session timezone, based on the query session start time.

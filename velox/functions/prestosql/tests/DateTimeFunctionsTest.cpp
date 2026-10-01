@@ -7227,6 +7227,64 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(DateTimeFunctionsTest, withTimezone) {
+  const auto withTimezone = [&](std::optional<Timestamp> ts,
+                                std::optional<std::string> tz)
+      -> std::optional<TimestampWithTimezone> {
+    auto result = evaluateOnce<int64_t>(
+        "with_timezone(c0, c1)", {TIMESTAMP(), VARCHAR()}, ts, tz);
+    return TimestampWithTimezone::unpack(result);
+  };
+
+  // Null propagation.
+  EXPECT_EQ(std::nullopt, withTimezone(std::nullopt, "UTC"));
+  EXPECT_EQ(std::nullopt, withTimezone(Timestamp(0, 0), std::nullopt));
+
+  // UTC: wall clock == UTC, so stored millis == 0.
+  EXPECT_EQ(
+      TimestampWithTimezone(0, "UTC"), withTimezone(Timestamp(0, 0), "UTC"));
+
+  // Positive fixed offset +05:30: wall clock 1970-01-01 00:00:00 treated as
+  // local time in +05:30 → UTC is 5h30m earlier → -19800000 ms.
+  EXPECT_EQ(
+      TimestampWithTimezone(-19800000, "+05:30"),
+      withTimezone(Timestamp(0, 0), "+05:30"));
+
+  // Negative fixed offset -08:00: wall clock 1970-01-01 00:00:00 in -08:00
+  // → UTC is 8h later → +28800000 ms.
+  EXPECT_EQ(
+      TimestampWithTimezone(28800000, "-08:00"),
+      withTimezone(Timestamp(0, 0), "-08:00"));
+
+  // Named timezone: 2001-08-22 03:04:05.321 treated as America/New_York
+  // (UTC-4 in summer).  UTC = wall clock + 4h.
+  // Timestamp(998452645, 321000000) represents 2001-08-22 03:04:05.321 UTC.
+  // With NY (+4h to get UTC): stored millis = 998452645321 + 4*3600*1000
+  //                                          = 998467045321.
+  const Timestamp tsNY(998452645, 321000000);
+  auto result = withTimezone(tsNY, "America/New_York");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(998467045321, result->milliSeconds_);
+  EXPECT_EQ(tz::locateZone("America/New_York")->id(), result->timezone_->id());
+
+  // The timezone ID in the result must match what we passed in.
+  auto resultKathmandu = withTimezone(Timestamp(0, 0), "Asia/Kathmandu");
+  ASSERT_TRUE(resultKathmandu.has_value());
+  EXPECT_EQ(
+      tz::locateZone("Asia/Kathmandu")->id(), resultKathmandu->timezone_->id());
+  EXPECT_EQ(-19800000, resultKathmandu->milliSeconds_);
+
+  // DST: 2021-03-14 02:30:00 does not exist in America/New_York (spring
+  // forward), but the function should still return a result.
+  EXPECT_NE(
+      std::nullopt, withTimezone(Timestamp(1615693800, 0), "America/New_York"));
+
+  // Invalid timezone name must throw a user error.
+  VELOX_ASSERT_THROW(
+      withTimezone(Timestamp(0, 0), "Not/A/Zone"),
+      "Unknown time zone: 'Not/A/Zone'");
+}
+
 TEST_F(DateTimeFunctionsTest, currentTime) {
   auto testCurrentTime = [&](int64_t sessionStartTime,
                              const std::string& zone,

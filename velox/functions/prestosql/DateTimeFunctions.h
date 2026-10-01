@@ -1558,6 +1558,47 @@ struct FromIso8601Date {
   }
 };
 
+/// with_timezone(timestamp, varchar) → timestamp with time zone
+/// Returns a timestamp with time zone by assigning the given timezone to the
+/// timestamp. The timestamp is treated as a local time in the specified
+/// timezone and converted to UTC for internal storage.
+///
+/// For example:
+///   with_timezone(TIMESTAMP '2001-08-22 03:04:05.321', 'America/New_York')
+///   → 2001-08-22 03:04:05.321 America/New_York (stored as UTC)
+template <typename T>
+struct WithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::optional<int64_t> targetTimezoneID_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      targetTimezoneID_ = tz::getTimeZoneID(
+          std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    const int64_t timezoneID = timezone.size() > 0
+        ? tz::getTimeZoneID(std::string_view(timezone.data(), timezone.size()))
+        : targetTimezoneID_.value();
+    const auto* timeZonePtr = tz::locateZone(timezoneID);
+    // The input timestamp wall-clock time is treated as local time in the
+    // given timezone. Convert it to UTC for storage.
+    auto ts = timestamp;
+    ts.toGMT(*timeZonePtr);
+    result = pack(ts, timezoneID);
+  }
+};
+
 template <typename T>
 struct FromIso8601Timestamp {
   VELOX_DEFINE_FUNCTION_TYPES(T);
