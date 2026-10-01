@@ -474,7 +474,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   int32_t endStripe_{};
 
   // Index related fields.
-  const ClusterIndex* clusterIndex_{nullptr};
+  const ClusterIndexBase* clusterIndex_{nullptr};
   // File-level row range from index lookup, if index bounds are active.
   std::optional<RowRange> indexRowRange_;
 
@@ -923,7 +923,9 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
       options_.stringDecoderZeroCopy(),
       options_.preserveFlatMapsInMemory(),
       options_.nimblePreserveDictionaryEncoding(),
-      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_);
+      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_,
+      /*lazyColumnIo=*/false,
+      /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads());
 
   columnReader_ = buildColumnReader(
       options_.requestedType() ? options_.requestedType()

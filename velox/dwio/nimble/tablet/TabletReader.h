@@ -34,7 +34,7 @@
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
 #include "velox/dwio/nimble/index/ChunkStats.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
-#include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/index/DenseIndexRegistry.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
@@ -126,7 +126,7 @@ class StripeIdentifier {
   std::shared_ptr<ChunkStatsGroup> chunkStats_;
 };
 
-using index::ClusterIndex;
+using index::ClusterIndexBase;
 
 /// Provides read access to a tablet written by a TabletWriter.
 /// Example usage to read all streams from stripe 0 in a file:
@@ -290,7 +290,7 @@ class TabletReader {
   }
 
   // Returns the cluster index if available, nullptr otherwise.
-  const ClusterIndex* clusterIndex() const {
+  const ClusterIndexBase* clusterIndex() const {
     return clusterIndex_.get();
   }
 
@@ -681,7 +681,7 @@ class TabletReader {
 
   // Index related fields.
   std::vector<index::IndexDescriptor> indexDescriptors_;
-  std::unique_ptr<ClusterIndex> clusterIndex_;
+  std::unique_ptr<ClusterIndexBase> clusterIndex_;
   FileProperties properties_{false, false, {}};
 
   std::unique_ptr<index::DenseIndexRegistry> denseIndexRegistry_;
