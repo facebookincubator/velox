@@ -145,6 +145,26 @@ Status unmappableCharacter(const StringView& charset) {
       std::string(charset.data(), charset.size()));
 }
 
+// Returns the canonical Java name for aliases omitted by ICU.
+std::string_view canonicalSpecialJavaCharset(const StringView& requestedName) {
+  static constexpr std::string_view kIbm300Names[] = {
+      "300", "CP300", "IBM-300", "IBM300", "X-IBM300"};
+  for (const auto& name : kIbm300Names) {
+    if (equalsIgnoreCase(requestedName, name)) {
+      return "X-IBM300";
+    }
+  }
+
+  static constexpr std::string_view kIbm834Names[] = {
+      "834", "CP834", "IBM-834", "IBM834", "X-IBM834"};
+  for (const auto& name : kIbm834Names) {
+    if (equalsIgnoreCase(requestedName, name)) {
+      return "X-IBM834";
+    }
+  }
+  return {};
+}
+
 // ICU's JAVA alias standard identifies names exposed by Charset.forName. A
 // few JDK charsets have no JAVA alias in ICU, so retain their canonical Java
 // names as explicit compatibility exceptions.
@@ -161,6 +181,10 @@ bool isJavaCharset(const StringView& requestedName, const char* canonicalName) {
     if (equalsIgnoreCase(requestedName, unsupported)) {
       return false;
     }
+  }
+
+  if (!canonicalSpecialJavaCharset(requestedName).empty()) {
+    return true;
   }
 
   UErrorCode error{U_ZERO_ERROR};
@@ -520,6 +544,14 @@ bool isJavaShiftJis(const StringView& charset) {
 std::string_view javaSubstitutionBytes(
     const StringView& requestedName,
     const char* canonicalName) {
+  const auto specialJavaCharset = canonicalSpecialJavaCharset(requestedName);
+  if (specialJavaCharset == "X-IBM300") {
+    return "\x42\x6F";
+  }
+  if (specialJavaCharset == "X-IBM834") {
+    return "\xFE\xFE";
+  }
+
   UErrorCode error{U_ZERO_ERROR};
   const char* javaName = ucnv_getStandardName(canonicalName, "JAVA", &error);
   const StringView name{javaName == nullptr ? canonicalName : javaName};
@@ -527,12 +559,6 @@ std::string_view javaSubstitutionBytes(
       equalsIgnoreCase(name, "CP933") || equalsIgnoreCase(name, "CP935") ||
       equalsIgnoreCase(name, "CP937") || equalsIgnoreCase(name, "CP939")) {
     return "\x6F";
-  }
-  if (equalsIgnoreCase(requestedName, "X-IBM300")) {
-    return "\x42\x6F";
-  }
-  if (equalsIgnoreCase(requestedName, "X-IBM834")) {
-    return "\xFE\xFE";
   }
   return "?";
 }
@@ -707,7 +733,9 @@ Status encodeUtf8(exec::StringWriter& result, const StringView& input) {
 
   result.resize(outputSize);
   if (isValid) {
-    std::memcpy(result.data(), input.data(), input.size());
+    if (!input.empty()) {
+      std::memcpy(result.data(), input.data(), input.size());
+    }
     return Status::OK();
   }
 
