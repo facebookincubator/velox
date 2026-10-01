@@ -153,8 +153,40 @@ class FilterGeneratorSeedTest : public testing::Test,
     return folly::join(",", rendered);
   }
 
+  // Everything one generation produces: the specs, the filters built from
+  // them, and the reference rows left over once every filter has been applied.
+  struct Generated {
+    std::vector<FilterSpec> specs;
+    SubfieldFilters filters;
+    std::vector<uint64_t> hitRows;
+  };
+
+  Generated generate(
+      const RowTypePtr& rowType,
+      const std::vector<RowVectorPtr>& batches,
+      uint32_t seed,
+      double emptyResultProbability) {
+    auto type = rowType;
+    FilterGenerator generator(type, seed);
+    generator.setEmptyResultProbability(emptyResultProbability);
+    auto filterable = generator.makeFilterables(rowType->size(), 100);
+    Generated result;
+    result.specs = generator.makeRandomSpecs(filterable, 0);
+    result.filters = generator.makeSubfieldFilters(
+        result.specs, batches, nullptr, result.hitRows);
+    return result;
+  }
+
   static constexpr vector_size_t kBatchRows = 500;
 };
+
+int32_t countEmptyResultSpecs(const std::vector<FilterSpec>& specs) {
+  int32_t count = 0;
+  for (const auto& spec : specs) {
+    count += spec.isForEmptyResult ? 1 : 0;
+  }
+  return count;
+}
 
 } // namespace
 
@@ -223,4 +255,108 @@ TEST(FilterGeneratorTest, selectivityCoversTheMidBandAndNeverReachesAll) {
   EXPECT_GT(low, 0);
   EXPECT_GT(mid, 0);
   EXPECT_GT(high, 0);
+}
+
+// An empty result makes every other filter in the set vacuous, so it has to
+// stay off unless a caller asks for it. Also pins that the default draws no
+// random number for it: were it to draw, every existing consumer's filter
+// sequence would shift.
+TEST_F(FilterGeneratorSeedTest, emptyResultIsOptIn) {
+  auto rowType = ROW({{"big", BIGINT()}, {"int", INTEGER()}});
+  auto batches = makeBatches(rowType);
+  for (uint32_t seed = 1; seed <= 50; ++seed) {
+    const auto defaulted = generate(rowType, batches, seed, 0.0);
+    EXPECT_EQ(countEmptyResultSpecs(defaulted.specs), 0);
+
+    // Explicitly asking for zero has to be indistinguishable from the default,
+    // which it can only be if neither consumed randomness.
+    const auto explicitlyZero = generate(rowType, batches, seed, 0.0);
+    ASSERT_EQ(defaulted.specs.size(), explicitlyZero.specs.size());
+    for (size_t i = 0; i < defaulted.specs.size(); ++i) {
+      EXPECT_EQ(
+          defaulted.specs[i].toString(), explicitlyZero.specs[i].toString());
+    }
+  }
+}
+
+TEST_F(FilterGeneratorSeedTest, emptyResultLeavesNoRows) {
+  // Both columns BIGINT so the test can hand the filter the column's own
+  // min/max regardless of which one the generator picked last.
+  auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
+  constexpr int64_t kMaxValue = kBatchRows - 1;
+  std::vector<RowVectorPtr> batches{makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>(kBatchRows, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(
+           kBatchRows, [](auto row) { return kMaxValue - row; })})};
+
+  int32_t emptyResults = 0;
+  for (uint32_t seed = 1; seed <= 50; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 1.0);
+    ASSERT_LE(countEmptyResultSpecs(generated.specs), 1);
+    if (countEmptyResultSpecs(generated.specs) == 0) {
+      continue;
+    }
+    ++emptyResults;
+    // Only the last spec may be the empty one; an earlier one would leave the
+    // columns after it filtering an already empty row set.
+    EXPECT_TRUE(generated.specs.back().isForEmptyResult);
+    EXPECT_TRUE(generated.hitRows.empty());
+
+    // Zero surviving rows on its own is not the point -- two ordinary selective
+    // filters intersect to nothing often enough by chance. The filter also has
+    // to sit past the column maximum, so that a reader consulting min/max stats
+    // can skip every row group instead of descending and rejecting row by row.
+    const auto it =
+        generated.filters.find(Subfield(generated.specs.back().field));
+    ASSERT_NE(it, generated.filters.end());
+    EXPECT_FALSE(it->second->testInt64Range(0, kMaxValue, /*hasNull=*/false));
+  }
+  EXPECT_GT(emptyResults, 0);
+}
+
+TEST_F(FilterGeneratorSeedTest, emptyResultLeavesNoRowsForVarchar) {
+  auto rowType = ROW({{"str", VARCHAR()}});
+  std::vector<std::string> data;
+  data.reserve(kBatchRows);
+  for (int32_t i = 0; i < kBatchRows; ++i) {
+    data.push_back(fmt::format("value_{}", i));
+  }
+  std::vector<RowVectorPtr> batches{
+      makeRowVector(rowType->names(), {makeFlatVector(data)})};
+
+  int32_t emptyResults = 0;
+  for (uint32_t seed = 1; seed <= 50; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 1.0);
+    if (countEmptyResultSpecs(generated.specs) == 0) {
+      continue;
+    }
+    ++emptyResults;
+    EXPECT_TRUE(generated.hitRows.empty());
+  }
+  EXPECT_GT(emptyResults, 0);
+}
+
+// These kinds have no exact "one past the maximum": getIntegerValue truncates
+// floating point and narrows int128, and there is no bool above true. Picking
+// one anyway would produce a filter that quietly matches real rows, which is
+// worse than not generating the shape at all.
+TEST_F(FilterGeneratorSeedTest, noEmptyResultForUnsupportedTypes) {
+  auto rowType = ROW(
+      {{"real", REAL()},
+       {"double", DOUBLE()},
+       {"huge", HUGEINT()},
+       {"bool", BOOLEAN()}});
+  std::vector<RowVectorPtr> batches{makeRowVector(
+      rowType->names(),
+      {makeFlatVector<float>(kBatchRows, [](auto row) { return row * 0.5f; }),
+       makeFlatVector<double>(kBatchRows, [](auto row) { return row * 1.5; }),
+       makeFlatVector<int128_t>(kBatchRows, [](auto row) { return row; }),
+       makeFlatVector<bool>(
+           kBatchRows, [](auto row) { return row % 2 == 0; })})};
+
+  for (uint32_t seed = 1; seed <= 50; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 1.0);
+    EXPECT_EQ(countEmptyResultSpecs(generated.specs), 0);
+  }
 }
