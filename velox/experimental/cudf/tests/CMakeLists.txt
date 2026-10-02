@@ -172,7 +172,12 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_hash_join_test
   SOURCES HashJoinTest.cpp Main.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer Folly::folly fmt::fmt
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_custom_types_for_testing
+    velox_vector_fuzzer
+    Folly::folly
+    fmt::fmt
 )
 
 velox_add_cudf_test(
@@ -215,7 +220,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_nested_loop_join_test
   SOURCES Main.cpp NestedLoopJoinTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_custom_types_for_testing
 )
 
 velox_add_cudf_test(
@@ -269,6 +274,7 @@ velox_add_cudf_test(
   LIBS
     velox_cudf_exec_test_lib
     velox_cudf_hive_connector
+    velox_dwio_parquet_reader
     velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib

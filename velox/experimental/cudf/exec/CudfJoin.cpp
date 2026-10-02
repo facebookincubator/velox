@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -67,12 +68,11 @@ void fillNullColumns(
     cudf::size_type numRows,
     cuda::stream_ref stream) {
   for (const auto& proj : projections) {
-    auto cudfDataType =
-        veloxToCudfDataType(inputType->childAt(proj.inputChannel));
-    auto nullScalar = cudf::make_default_constructed_scalar(
-        cudfDataType, stream, get_temp_mr());
-    outCols[proj.outputChannel] = cudf::make_column_from_scalar(
-        *nullScalar, numRows, stream, get_output_mr());
+    outCols[proj.outputChannel] = makeAllNullColumn(
+        inputType->childAt(proj.inputChannel),
+        numRows,
+        stream,
+        get_output_mr());
   }
 }
 
