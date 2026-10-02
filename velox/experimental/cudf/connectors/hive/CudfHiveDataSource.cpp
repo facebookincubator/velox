@@ -47,18 +47,16 @@ namespace {
 
 // Returns whether a constant-folded filter keeps every row. A null constant
 // keeps none, matching SQL three-valued logic.
-bool isTrueConstant(const core::ConstantTypedExpr& constant) {
+bool isTrueConstant(
+    const core::ConstantTypedExpr& constant,
+    memory::MemoryPool* pool) {
   VELOX_USER_CHECK_EQ(
       constant.type()->kind(),
       TypeKind::BOOLEAN,
       "Remaining filter must be a boolean expression: {}",
       constant.toString());
-  if (constant.hasValueVector()) {
-    const auto* vector = constant.valueVector()->as<ConstantVector<bool>>();
-    return !vector->isNullAt(0) && vector->valueAt(0);
-  }
-  const auto& value = constant.value();
-  return !value.isNull() && value.value<bool>();
+  return !constant.isNull() &&
+      constant.toConstantVector(pool)->as<ConstantVector<bool>>()->valueAt(0);
 }
 
 } // namespace
@@ -141,9 +139,9 @@ CudfHiveDataSource::CudfHiveDataSource(
   if (const auto constantFilter =
           std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
               optimizedRemainingFilter_)) {
-    // A filter that folded to a constant keeps every row or none, so it needs
+    // A filter that folds to a constant keeps every row or none, so it needs
     // no columns and no evaluation.
-    remainingFilterRejectsAllRows_ = !isTrueConstant(*constantFilter);
+    remainingFilterRejectsAllRows_ = !isTrueConstant(*constantFilter, pool_);
     optimizedRemainingFilter_ = nullptr;
   }
   if (optimizedRemainingFilter_) {
@@ -346,8 +344,6 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfSplitReader_->resetSplit();
     return nullptr;
   }
-  // A table with no columns reports zero rows, so the chunk carries the row
-  // count of a scan that reads no columns.
   auto nRows = chunkOpt.value().numRows;
   auto cudfTable = std::move(chunkOpt.value().table);
   auto stream = cudfSplitReader_->stream();
