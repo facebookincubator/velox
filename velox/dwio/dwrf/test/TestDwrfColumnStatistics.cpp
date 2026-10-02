@@ -393,7 +393,7 @@ TEST(MapStatisticsBuilderTest, innerStatsType) {
     statsBuilder.addValues(2);
     mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder);
 
-    auto& intStats = dynamic_cast<IntegerColumnStatistics&>(
+    auto& intStats = dynamic_cast<IntegerColumnStatistics<>&>(
         *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
 
     EXPECT_EQ(1, intStats.getMinimum());

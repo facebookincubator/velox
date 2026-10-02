@@ -491,7 +491,8 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
           filePath,
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
@@ -528,7 +529,8 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
@@ -565,7 +567,8 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 // A constant decides the filter even when the data file carries the column.
@@ -597,7 +600,8 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
         filePath,
         /*partitionKeys=*/{},
         /*partitionKeysHandle=*/{},
-        /*asLocalTime=*/false);
+        /*asLocalTime=*/false,
+        dwio::common::FileFormat::DWRF);
   };
 
   // The file holds 0 through 99: statistics would keep the split for both.
@@ -659,7 +663,8 @@ TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
@@ -696,7 +701,8 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
           filePath,
           partitionKeys,
           partitionKeysHandle,
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
@@ -729,7 +735,8 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
             filePath,
             partitionKeys,
             partitionKeysHandle,
-            /*asLocalTime=*/false));
+            /*asLocalTime=*/false,
+            dwio::common::FileFormat::DWRF));
   }
 
   // Non-matching partition value.
@@ -751,7 +758,8 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
             filePath,
             partitionKeys,
             partitionKeysHandle,
-            /*asLocalTime=*/false));
+            /*asLocalTime=*/false,
+            dwio::common::FileFormat::DWRF));
   }
 }
 
@@ -779,7 +787,8 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
           filePath,
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false));
+          /*asLocalTime=*/false,
+          dwio::common::FileFormat::DWRF));
 }
 
 } // namespace facebook::velox::connector
