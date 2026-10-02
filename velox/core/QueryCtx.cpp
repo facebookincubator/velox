@@ -39,10 +39,17 @@ void CredentialKeys::write(
   }
 
   if (connectorId.empty()) {
-    queryConfig.insert(key);
+    queryConfigKeys_.insert(key);
   } else {
-    connectors[std::string(connectorId)].insert(key);
+    connectorKeys_[std::string(connectorId)].insert(key);
   }
+}
+
+bool CredentialKeys::isConnectorCredential(
+    std::string_view connectorId,
+    std::string_view key) const {
+  const auto it = connectorKeys_.find(connectorId);
+  return it != connectorKeys_.end() && it->second.contains(key);
 }
 
 // static

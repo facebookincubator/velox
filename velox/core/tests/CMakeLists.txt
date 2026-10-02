@@ -38,7 +38,6 @@ target_link_libraries(
     velox_presto_types
     velox_type
     velox_vector_test_lib
-    GTest::gmock
     GTest::gtest
     GTest::gtest_main
 )
