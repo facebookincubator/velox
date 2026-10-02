@@ -1036,6 +1036,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // output buffer.
   void maybeRemoveFromOutputBufferManager();
 
+  // Marks the output buffer initialization finished. Removes the task from the
+  // output buffer manager if the task was terminated before that, since
+  // terminate() then left the removal to this call.
+  void finishOutputBufferInitialization();
+
   // Returns task execution error message or empty string if not error
   // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
@@ -1563,6 +1568,12 @@ class Task : public std::enable_shared_from_this<Task> {
   // 'bufferManager_' under mutex_ and passed to createDriver(); empty if the
   // task has no partitioned output.
   PartitionedOutputFactory outputOperatorFactory_;
+
+  // Set under 'mutex_' once start() has finished calling initializeTask() on
+  // 'bufferManager_', whether the call returned or threw. Decides which side
+  // removes the task from the manager: terminate() if this was set when it
+  // changed 'state_', otherwise finishOutputBufferInitialization().
+  bool outputBufferInitializationFinished_{false};
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

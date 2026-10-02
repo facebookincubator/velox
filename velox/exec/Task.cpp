@@ -1228,18 +1228,12 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
         !createAndStartDrivers(concurrentSplitGroups)) {
       LOG(WARNING) << "Task " << taskId_
                    << " was terminated while starting: " << errorMessage();
-      // The concurrent termination may have run before this start() created
-      // the output buffer.
-      maybeRemoveFromOutputBufferManager();
       finishUnstartedDrivers();
       return;
     }
   } catch (const std::exception&) {
     if (isRunning()) {
-      // Terminates the task, which removes it from the output buffer manager.
       setError(std::current_exception());
-    } else {
-      maybeRemoveFromOutputBufferManager();
     }
     finishUnstartedDrivers();
     throw;
@@ -1435,12 +1429,23 @@ bool Task::initializePartitionOutput() {
       bufferManager_ = manager;
       outputOperatorFactory_ = entry->makeOutputOperator;
     }
-    manager->initializeTask(
-        shared_from_this(),
-        partitionedOutputNode->kind(),
-        partitionedOutputNode->numPartitions(),
-        numOutputDrivers,
-        partitionedOutputNode->transportOptions());
+    // A failed initializeTask() may have registered part of the task, so a
+    // failure finishes the initialization too.
+    std::exception_ptr initializeError;
+    try {
+      manager->initializeTask(
+          shared_from_this(),
+          partitionedOutputNode->kind(),
+          partitionedOutputNode->numPartitions(),
+          numOutputDrivers,
+          partitionedOutputNode->transportOptions());
+    } catch (...) {
+      initializeError = std::current_exception();
+    }
+    finishOutputBufferInitialization();
+    if (initializeError != nullptr) {
+      std::rethrow_exception(initializeError);
+    }
   }
   return true;
 }
@@ -2807,6 +2812,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  bool removeFromOutputBufferManager{false};
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -2868,6 +2874,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     exchangeClients.swap(exchangeClients_);
+    // While start() is still initializing the output buffer, it removes the
+    // task from the manager once that initialization finishes.
+    removeFromOutputBufferManager = outputBufferInitializationFinished_;
 
     barrierPromises.swap(barrierFinishPromises_);
     // Clear the barrier flag to ensure underBarrier() returns false after task
@@ -2889,7 +2898,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   // Task. The Drivers are now detached from Task and therefore will
   // not go on thread. The reference in the future callback is
   // typically the last one.
-  maybeRemoveFromOutputBufferManager();
+  if (removeFromOutputBufferManager) {
+    maybeRemoveFromOutputBufferManager();
+  }
 
   for (auto& exchangeClient : exchangeClients) {
     if (exchangeClient != nullptr) {
@@ -3015,6 +3026,18 @@ void Task::maybeRemoveFromOutputBufferManager() {
       }
       manager->removeTask(taskId_);
     }
+  }
+}
+
+void Task::finishOutputBufferInitialization() {
+  bool terminated{false};
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    outputBufferInitializationFinished_ = true;
+    terminated = !isRunningLocked();
+  }
+  if (terminated) {
+    maybeRemoveFromOutputBufferManager();
   }
 }
 

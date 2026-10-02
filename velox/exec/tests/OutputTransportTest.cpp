@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+#include <functional>
+
+#include <gmock/gmock.h>
+
+#include "folly/Synchronized.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/PartitionedOutput.h"
@@ -38,19 +44,94 @@ class TestTransportBufferManager : public DefaultOutputBufferManager {
   TestTransportBufferManager() : DefaultOutputBufferManager(Options{}) {}
 };
 
-// Test transport manager that counts removeTask() calls, which the manager
-// contract allows once per task.
-class CountingRemoveTaskBufferManager : public TestTransportBufferManager {
+// Test transport manager that records the order of initializeTask() and
+// removeTask() calls, which the manager contract allows once each per task.
+// 'beforeRegister' and 'afterRegister' run inside initializeTask(), before and
+// after the task's output buffer is registered.
+class LifecycleRecordingBufferManager : public TestTransportBufferManager {
  public:
+  void initializeTask(
+      std::shared_ptr<Task> task,
+      core::PartitionedOutputNode::Kind kind,
+      int numDestinations,
+      int numDrivers,
+      const std::string& transportOptions) override {
+    record("initializeTask");
+    if (beforeRegister != nullptr) {
+      beforeRegister(*task);
+    }
+    TestTransportBufferManager::initializeTask(
+        task, kind, numDestinations, numDrivers, transportOptions);
+    if (afterRegister != nullptr) {
+      afterRegister(*task);
+    }
+  }
+
   void removeTask(const std::string& taskId) override {
-    ++numRemoveTaskCalls;
+    record("removeTask");
     TestTransportBufferManager::removeTask(taskId);
   }
 
-  std::atomic_int32_t numRemoveTaskCalls{0};
+  std::vector<std::string> calls() const {
+    return calls_.copy();
+  }
+
+  std::function<void(Task&)> beforeRegister{};
+  std::function<void(Task&)> afterRegister{};
+
+ private:
+  void record(std::string_view call) {
+    calls_.wlock()->emplace_back(call);
+  }
+
+  folly::Synchronized<std::vector<std::string>> calls_;
 };
 
-class OutputTransportTest : public HiveConnectorTestBase {};
+using RecordingOutputOperatorBuilder = std::function<std::unique_ptr<Operator>(
+    int32_t operatorId,
+    DriverCtx* ctx,
+    const std::shared_ptr<const core::PartitionedOutputNode>& node,
+    bool eagerFlush,
+    const std::shared_ptr<LifecycleRecordingBufferManager>& manager)>;
+
+std::unique_ptr<Operator> makePartitionedOutput(
+    int32_t operatorId,
+    DriverCtx* ctx,
+    const std::shared_ptr<const core::PartitionedOutputNode>& node,
+    bool eagerFlush,
+    const std::shared_ptr<LifecycleRecordingBufferManager>& manager) {
+  return std::make_unique<PartitionedOutput>(
+      operatorId, ctx, node, eagerFlush, manager);
+}
+
+class OutputTransportTest : public HiveConnectorTestBase {
+ protected:
+  // Creates a task whose broadcast output goes through 'manager', registered
+  // for this task's query only.
+  std::shared_ptr<Task> makeTaskWithOutputManager(
+      const std::string& taskId,
+      const std::shared_ptr<LifecycleRecordingBufferManager>& manager,
+      RecordingOutputOperatorBuilder makeOutputOperator) {
+    const std::string transportType{TestTransportBufferManager::kTransport};
+    auto queryRegistry = OutputTransportRegistry::create();
+    queryRegistry->insert(
+        transportType,
+        OutputTransportEntry::make<LifecycleRecordingBufferManager>(
+            manager, std::move(makeOutputOperator)));
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(OutputTransportRegistry::kRegistryKey, queryRegistry);
+    return Task::create(
+        taskId,
+        PlanBuilder()
+            .tableScan(ROW("c0", BIGINT()))
+            .partitionedOutputBroadcast({}, "Presto", transportType)
+            .planFragment(),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+  }
+};
 
 TEST_F(OutputTransportTest, usesDefaultAfterRegistryClear) {
   // unregisterAll() resets the registry to its baseline -- the built-in
@@ -158,37 +239,100 @@ TEST_F(OutputTransportTest, selectsOperatorByTransportKind) {
 TEST_F(OutputTransportTest, removesTaskOnceWhenStartFails) {
   // start() fails after the task's output buffer was created. Task terminates
   // and must remove the task from the output buffer manager exactly once.
-  const std::string transportType{TestTransportBufferManager::kTransport};
-  auto manager = std::make_shared<CountingRemoveTaskBufferManager>();
-  auto queryRegistry = OutputTransportRegistry::create();
-  queryRegistry->insert(
-      transportType,
-      OutputTransportEntry::make<CountingRemoveTaskBufferManager>(
-          manager,
-          [](int32_t,
-             DriverCtx*,
-             const std::shared_ptr<const core::PartitionedOutputNode>&,
-             bool,
-             const std::shared_ptr<CountingRemoveTaskBufferManager>&)
-              -> std::unique_ptr<Operator> {
-            VELOX_FAIL("Output operator construction failed");
-          }));
-  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-  queryCtx->setRegistry(OutputTransportRegistry::kRegistryKey, queryRegistry);
-
-  auto task = Task::create(
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  auto task = makeTaskWithOutputManager(
       "task-output-start-failure",
-      PlanBuilder()
-          .tableScan(ROW("c0", BIGINT()))
-          .partitionedOutputBroadcast({}, "Presto", transportType)
-          .planFragment(),
-      0,
-      queryCtx,
-      Task::ExecutionMode::kParallel,
-      exec::Consumer{});
+      manager,
+      [](int32_t,
+         DriverCtx*,
+         const std::shared_ptr<const core::PartitionedOutputNode>&,
+         bool,
+         const std::shared_ptr<LifecycleRecordingBufferManager>&)
+          -> std::unique_ptr<Operator> {
+        VELOX_FAIL("Output operator construction failed");
+      });
 
   VELOX_ASSERT_THROW(task->start(1, 1), "Output operator construction failed");
-  EXPECT_EQ(manager->numRemoveTaskCalls, 1);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
+}
+
+// An abort that runs while start() initializes the output buffer leaves the
+// removal to start(), which removes the task once initializeTask() returns.
+TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedBeforeRegistration) {
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  manager->beforeRegister = [](Task& task) { task.requestAbort().wait(); };
+  auto task = makeTaskWithOutputManager(
+      "task-output-abort-before-registration", manager, makePartitionedOutput);
+
+  task->start(1, 1);
+  EXPECT_EQ(task->state(), TaskState::kAborted);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
+}
+
+TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedAfterRegistration) {
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  manager->afterRegister = [](Task& task) { task.requestAbort().wait(); };
+  auto task = makeTaskWithOutputManager(
+      "task-output-abort-after-registration", manager, makePartitionedOutput);
+
+  task->start(1, 1);
+  EXPECT_EQ(task->state(), TaskState::kAborted);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
+}
+
+// A failed initializeTask() may have registered part of the task, so the task
+// is still removed once.
+TEST_F(OutputTransportTest, removesTaskOnceWhenInitializeTaskThrows) {
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  manager->afterRegister = [](Task&) {
+    VELOX_FAIL("Output buffer initialization failed");
+  };
+  auto task = makeTaskWithOutputManager(
+      "task-output-initialize-failure", manager, makePartitionedOutput);
+
+  VELOX_ASSERT_THROW(task->start(1, 1), "Output buffer initialization failed");
+  EXPECT_EQ(task->state(), TaskState::kFailed);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
+}
+
+TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedAndInitializeTaskThrows) {
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  manager->afterRegister = [](Task& task) {
+    task.requestAbort().wait();
+    VELOX_FAIL("Output buffer initialization failed");
+  };
+  auto task = makeTaskWithOutputManager(
+      "task-output-abort-and-initialize-failure",
+      manager,
+      makePartitionedOutput);
+
+  VELOX_ASSERT_THROW(task->start(1, 1), "Output buffer initialization failed");
+  EXPECT_EQ(task->state(), TaskState::kAborted);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
+}
+
+// An abort after the output buffer is initialized but before start() creates
+// drivers is the termination's removal to make.
+DEBUG_ONLY_TEST_F(
+    OutputTransportTest,
+    removesTaskOnceWhenAbortedBeforeDriversStart) {
+  auto manager = std::make_shared<LifecycleRecordingBufferManager>();
+  auto task = makeTaskWithOutputManager(
+      "task-output-abort-before-drivers", manager, makePartitionedOutput);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::createAndStartDrivers",
+      std::function<void(Task*)>(
+          [](Task* task) { task->requestAbort().wait(); }));
+
+  task->start(1, 1);
+  EXPECT_EQ(task->state(), TaskState::kAborted);
+  EXPECT_THAT(
+      manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
 }
 
 } // namespace
