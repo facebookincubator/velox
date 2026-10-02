@@ -241,12 +241,8 @@ inline size_t estimateSerializationHeaderSize(
 /// Parsed fields of a kTablet chunk slice header.
 struct TabletChunkHeader {
   uint32_t rowCount{0};
-  union {
-    /// True when this chunk slice must use the per-batch decode path.
-    bool requiredBarrier{false};
-    /// Retains the previous field spelling for source compatibility.
-    bool requiresNullBarrier;
-  };
+  /// True when this chunk slice must use the per-batch decode path.
+  bool requiredBarrier{false};
   /// True when encoding stream prefixes store row counts as varints.
   bool streamEncodingUsesVarintRowCount{false};
   /// True when each encoding stream retains its tablet chunk header.
