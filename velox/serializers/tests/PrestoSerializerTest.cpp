@@ -2585,14 +2585,14 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
       BaseVector::wrapInDictionary(nullptr, indices, 32, nullableValues);
   // indices contains each even position twice: reference 0, 2, 4, ..., 30.
   // Thus, the 8 null positions produce 16 null rows and 16 non-null doubles.
-  // 16 * 8 + 32 / 8 = 132
+  // Null bitmaps are excluded from per-row estimates.
+  // 16 * 8 = 128
   std::vector<vector_size_t> expectedDictionaryRowSizes(32);
   for (auto i = 0; i < 32; ++i) {
-    expectedDictionaryRowSizes[i] =
-        (i % 2 == 0 ? 4 : 12) + (i % 8 == 0 ? 1 : 0);
+    expectedDictionaryRowSizes[i] = i % 2 == 0 ? 4 : 12;
   }
   testEstimateSerializedSizeByRows(
-      nullableDictionary, rows, 132, expectedDictionaryRowSizes);
+      nullableDictionary, rows, 128, expectedDictionaryRowSizes);
 
   auto nullableDoubles = makeFlatVector<double>(
       32,
@@ -2600,12 +2600,11 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
       [](vector_size_t row) { return row % 4 == 0; });
   std::vector<vector_size_t> expectedRowSizes(32);
   for (auto i = 0; i < 32; ++i) {
-    // 4 bytes for the row wrapper, 8 bytes for non-null doubles, and one byte
-    // for every eight nullable values.
-    expectedRowSizes[i] = (i % 4 == 0 ? 4 : 12) + (i % 8 == 0 ? 1 : 0);
+    // 4 bytes for the row wrapper and 8 bytes for non-null doubles.
+    expectedRowSizes[i] = i % 4 == 0 ? 4 : 12;
   }
   // 24 non-null doubles and 8 nulls.
-  // 24 * 8 + 32 / 8 = 196
+  // 24 * 8 = 192
   testEstimateSerializedSizeByRows(
-      nullableDoubles, rows, 196, expectedRowSizes);
+      nullableDoubles, rows, 192, expectedRowSizes);
 }

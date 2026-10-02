@@ -28,7 +28,8 @@ void estimateSerializedSizeInt(
     Scratch& scratch);
 
 /// Estimates sizes for the Presto iterative serializer, which flattens
-/// encodings for selected rows.
+/// encodings for selected rows. Excludes null bitmaps so estimates do not
+/// depend on batch boundaries or row order.
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,

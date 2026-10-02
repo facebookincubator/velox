@@ -26,7 +26,8 @@ void estimateSerializedSizeByRows(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch,
-    bool flatten);
+    bool flatten,
+    bool includeNullBitmap);
 
 // Attribute each null bitmap byte to the first of its eight rows.
 void addNullBitmapSize(vector_size_t** sizes, int32_t numRows) {
@@ -41,7 +42,8 @@ void estimateFlatSerializedSize(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool includeNullBitmap) {
   const auto valueSize = vector->type()->cppSizeInBytes();
   const auto numRows = rows.size();
   if (vector->mayHaveNulls()) {
@@ -55,7 +57,7 @@ void estimateFlatSerializedSize(
     for (int32_t i = 0; i < numNonNull; ++i) {
       *sizes[nonNulls[i]] += valueSize;
     }
-    if (numNonNull != numRows) {
+    if (includeNullBitmap && numNonNull != numRows) {
       addNullBitmapSize(sizes, numRows);
     }
   } else {
@@ -67,7 +69,8 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool includeNullBitmap) {
   const auto numRows = rows.size();
   auto strings = static_cast<const FlatVector<StringView>*>(vector);
   auto rawNulls = strings->rawNulls();
@@ -92,7 +95,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
     for (int32_t i = 0; i < numNonNull; ++i) {
       *sizes[nonNulls[i]] += rawValues[rows[nonNulls[i]]].size();
     }
-    if (numNonNull != numRows) {
+    if (includeNullBitmap && numNonNull != numRows) {
       addNullBitmapSize(sizes, numRows);
     }
   }
@@ -103,8 +106,10 @@ void estimateFlatSerializedSize<TypeKind::VARCHAR>(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
-  estimateFlatSerializedSizeVarcharOrVarbinary(vector, rows, sizes, scratch);
+    Scratch& scratch,
+    bool includeNullBitmap) {
+  estimateFlatSerializedSizeVarcharOrVarbinary(
+      vector, rows, sizes, scratch, includeNullBitmap);
 }
 
 template <>
@@ -112,8 +117,10 @@ void estimateFlatSerializedSize<TypeKind::VARBINARY>(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
-  estimateFlatSerializedSizeVarcharOrVarbinary(vector, rows, sizes, scratch);
+    Scratch& scratch,
+    bool includeNullBitmap) {
+  estimateFlatSerializedSizeVarcharOrVarbinary(
+      vector, rows, sizes, scratch, includeNullBitmap);
 }
 
 template <>
@@ -121,7 +128,8 @@ void estimateFlatSerializedSize<TypeKind::OPAQUE>(
     const BaseVector*,
     const folly::Range<const vector_size_t*>&,
     vector_size_t**,
-    Scratch&) {
+    Scratch&,
+    bool) {
   VELOX_FAIL("Opaque type support is not implemented.");
 }
 
@@ -131,14 +139,15 @@ void estimateFlattenedConstantSerializedSize(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch,
-    bool flatten) {
+    bool flatten,
+    bool includeNullBitmap) {
   VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
 
   using T = typename KindToFlatVector<Kind>::WrapperType;
   auto* constantVector = vector->as<ConstantVector<T>>();
   int32_t elementSize = vector->valueVector() ? 0 : sizeof(T);
   if (constantVector->isNullAt(0)) {
-    elementSize = 1;
+    elementSize = includeNullBitmap ? 1 : 0;
   } else if (vector->valueVector()) {
     const auto* values = constantVector->wrappedVector();
     vector_size_t* sizePtr = &elementSize;
@@ -148,7 +157,8 @@ void estimateFlattenedConstantSerializedSize(
         folly::Range<const vector_size_t*>(&singleRow, 1),
         &sizePtr,
         scratch,
-        flatten);
+        flatten,
+        includeNullBitmap);
   } else if constexpr (std::is_same_v<T, StringView>) {
     elementSize = constantVector->valueAt(0).size();
   }
@@ -166,7 +176,8 @@ void estimateWrapperSerializedSize(
     vector_size_t** sizes,
     const BaseVector* wrapper,
     Scratch& scratch,
-    bool flatten) {
+    bool flatten,
+    bool includeNullBitmap) {
   ScratchPtr<vector_size_t, 1> innerRowsHolder(scratch);
   ScratchPtr<vector_size_t*, 1> innerSizesHolder(scratch);
   const int32_t numRows = rows.size();
@@ -216,7 +227,7 @@ void estimateWrapperSerializedSize(
       }
     }
   }
-  if (hasNulls) {
+  if (includeNullBitmap && hasNulls) {
     addNullBitmapSize(sizes, numRows);
   }
   if (numInner == 0) {
@@ -228,13 +239,15 @@ void estimateWrapperSerializedSize(
       folly::Range<const vector_size_t*>(innerRows, numInner),
       innerSizes,
       scratch,
-      flatten);
+      flatten,
+      includeNullBitmap);
 }
 
 void estimateBiasedSerializedSize(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
-    vector_size_t** sizes) {
+    vector_size_t** sizes,
+    bool includeNullBitmap) {
   const auto valueSize = vector->type()->cppSizeInBytes();
   if (!vector->mayHaveNulls()) {
     for (auto i = 0; i < rows.size(); ++i) {
@@ -250,7 +263,7 @@ void estimateBiasedSerializedSize(
       ++numNonNull;
     }
   }
-  if (numNonNull != rows.size()) {
+  if (includeNullBitmap && numNonNull != rows.size()) {
     addNullBitmapSize(sizes, rows.size());
   }
 }
@@ -263,7 +276,8 @@ int32_t rowsToElementRows(
     vector_size_t** sizePtrs,
     ScratchPtr<vector_size_t>& elementRowsHolder,
     ScratchPtr<vector_size_t*>& elementSizesHolder,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool includeNullBitmap) {
   const vector_size_t* nonNullPositions = rows.data();
   auto numNonNull = rows.size();
   ScratchPtr<uint64_t, 4> nullsHolder(scratch);
@@ -274,7 +288,7 @@ int32_t rowsToElementRows(
     auto* mutableNonNullPositions = nonNullPositionsHolder.get(rows.size());
     numNonNull =
         simd::indicesOfSetBits(nulls, 0, rows.size(), mutableNonNullPositions);
-    if (numNonNull != rows.size()) {
+    if (includeNullBitmap && numNonNull != rows.size()) {
       addNullBitmapSize(sizePtrs, rows.size());
     }
     nonNullPositions = mutableNonNullPositions;
@@ -338,7 +352,8 @@ void estimateSerializedSizeInt(
         folly::Range<const vector_size_t*>(rows, numRows),
         rowSizes,
         scratch,
-        false);
+        /*flatten=*/false,
+        /*includeNullBitmap=*/true);
     offset += numRows;
   }
 }
@@ -348,7 +363,15 @@ void estimateSerializedSizeInt(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
-  estimateSerializedSizeByRows(vector, rows, sizes, scratch, true);
+  // A bitmap belongs to a batch, not to an individual row. Omitting it keeps
+  // per-row estimates invariant under splitting or reordering the input.
+  estimateSerializedSizeByRows(
+      vector,
+      rows,
+      sizes,
+      scratch,
+      /*flatten=*/true,
+      /*includeNullBitmap=*/false);
 }
 
 namespace {
@@ -357,7 +380,8 @@ void estimateSerializedSizeByRows(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch,
-    bool flatten) {
+    bool flatten,
+    bool includeNullBitmap) {
   const auto numRows = rows.size();
   if (vector->encoding() == VectorEncoding::Simple::FLAT &&
       vector->type()->isFixedWidth() && !vector->mayHaveNullsRecursive()) {
@@ -375,7 +399,8 @@ void estimateSerializedSizeByRows(
           vector,
           rows,
           sizes,
-          scratch);
+          scratch,
+          includeNullBitmap);
       break;
     }
     case VectorEncoding::Simple::CONSTANT:
@@ -386,14 +411,16 @@ void estimateSerializedSizeByRows(
           rows,
           sizes,
           scratch,
-          flatten);
+          flatten,
+          includeNullBitmap);
       break;
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::SEQUENCE:
-      estimateWrapperSerializedSize(rows, sizes, vector, scratch, flatten);
+      estimateWrapperSerializedSize(
+          rows, sizes, vector, scratch, flatten, includeNullBitmap);
       break;
     case VectorEncoding::Simple::BIASED:
-      estimateBiasedSerializedSize(vector, rows, sizes);
+      estimateBiasedSerializedSize(vector, rows, sizes, includeNullBitmap);
       break;
     case VectorEncoding::Simple::ROW: {
       ScratchPtr<vector_size_t, 1> innerRowsHolder(scratch);
@@ -411,7 +438,7 @@ void estimateSerializedSizeByRows(
         simd::gatherBits(vector->rawNulls(), rows, nulls);
         auto mutableInnerRows = innerRowsHolder.get(numRows);
         numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableInnerRows);
-        if (numInner != numRows) {
+        if (includeNullBitmap && numInner != numRows) {
           addNullBitmapSize(sizes, numRows);
         }
         innerSizes = innerSizesHolder.get(numInner);
@@ -433,7 +460,8 @@ void estimateSerializedSizeByRows(
               folly::Range(innerRows, numInner),
               innerSizes,
               scratch,
-              flatten);
+              flatten,
+              includeNullBitmap);
         }
       }
       break;
@@ -450,7 +478,8 @@ void estimateSerializedSizeByRows(
           sizes,
           elementRowsHolder,
           elementSizesHolder,
-          scratch);
+          scratch,
+          includeNullBitmap);
       if (numElements == 0) {
         return;
       }
@@ -463,7 +492,8 @@ void estimateSerializedSizeByRows(
                 elementRowsHolder.get(), numElements),
             elementSizesHolder.get(),
             scratch,
-            true);
+            true,
+            includeNullBitmap);
       }
       break;
     }
@@ -479,7 +509,8 @@ void estimateSerializedSizeByRows(
           sizes,
           elementRowsHolder,
           elementSizesHolder,
-          scratch);
+          scratch,
+          includeNullBitmap);
       if (numElements == 0) {
         return;
       }
@@ -491,12 +522,18 @@ void estimateSerializedSizeByRows(
               elementRowsHolder.get(), numElements),
           elementSizesHolder.get(),
           scratch,
-          true);
+          true,
+          includeNullBitmap);
       break;
     }
     case VectorEncoding::Simple::LAZY:
       estimateSerializedSizeByRows(
-          vector->loadedVector(), rows, sizes, scratch, flatten);
+          vector->loadedVector(),
+          rows,
+          sizes,
+          scratch,
+          flatten,
+          includeNullBitmap);
       break;
     default:
       VELOX_UNSUPPORTED("Unsupported vector encoding {}", vector->encoding());

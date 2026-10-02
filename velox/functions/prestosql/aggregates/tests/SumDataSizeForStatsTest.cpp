@@ -216,7 +216,7 @@ TEST_F(SumDataSizeForStatsTest, complexRecursiveGlobalAggregate) {
       }),
   })};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 115");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 113");
 }
 
 TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
@@ -229,7 +229,7 @@ TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
       }),
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
-          {{2, {{4, 5, std::nullopt, 6, 7, 8}}}},
+          {{2, {{4, 5, std::nullopt}}}},
           {{std::nullopt, {{7, 8, 9}}}},
       }),
   });
@@ -238,17 +238,14 @@ TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
   testAggregations(
-      vectors, {}, {"sum_data_size_for_stats(c1)"}, "VALUES (180)");
+      vectors, {}, {"sum_data_size_for_stats(c1)"}, "VALUES (105)");
 
   testAggregations(
-      vectors,
-      {"c0"},
-      {"sum_data_size_for_stats(c1)"},
-      "VALUES (1,120),(2,60)");
+      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,70),(2,35)");
 }
 
 TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
-  auto columnOne = makeFlatVector<int64_t>({1, 1, 2});
+  auto columnOne = makeFlatVector<int64_t>({1, 2, 1});
   auto columnTwo = makeRowVector({
       makeFlatVector<StringView>({
           "{1, 2, 3, 4, 5}",
@@ -271,10 +268,10 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 115");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 113");
 
   testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,65),(2,50)");
+      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,78),(2,35)");
 }
 
 TEST_F(SumDataSizeForStatsTest, mask) {
