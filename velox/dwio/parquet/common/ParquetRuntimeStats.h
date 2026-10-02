@@ -28,16 +28,22 @@ struct ParquetRuntimeStats {
   /// Time spent loading Parquet pages in nanoseconds.
   inline static constexpr std::string_view kPageLoadTimeNs =
       "pageLoadTimeNanos";
-
-  /// Describes the page-load-time runtime metric.
   inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
       kPageLoadTimeNsMetric = {kPageLoadTimeNs, RuntimeCounter::Unit::kNanos};
+
+  /// Number of pages skipped without reading or decompressing page data.
+  inline static constexpr std::string_view kSkippedPages = "skippedPages";
+  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
+      kSkippedPagesMetric = {kSkippedPages, RuntimeCounter::Unit::kNone};
+
+  /// Number of pages whose data was read and processed.
+  inline static constexpr std::string_view kProcessedPages = "processedPages";
+  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
+      kProcessedPagesMetric = {kProcessedPages, RuntimeCounter::Unit::kNone};
 
   /// Estimated memory used by the deserialized Parquet footer in bytes.
   inline static constexpr std::string_view kFooterEstimatedBytes =
       "footerEstimatedBytes";
-
-  /// Describes the estimated-footer-memory runtime metric.
   inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
       kFooterEstimatedBytesMetric = {
           kFooterEstimatedBytes,
