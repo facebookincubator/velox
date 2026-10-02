@@ -68,8 +68,9 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return FunctionExpression::create(expr, row, pool);
+         memory::MemoryPool* pool,
+         const CudfDateTimeContext& context) {
+        return FunctionExpression::create(expr, row, pool, context);
       },
       /*overwrite=*/false);
 
