@@ -15,11 +15,14 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/types/GpuStringView.cuh"
 #include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
 #include <cstdint>
 
 namespace facebook::velox {
+struct Varchar;
+struct Varbinary;
 template <typename P, typename S>
 struct ShortDecimal;
 template <typename P, typename S>
@@ -49,6 +52,20 @@ struct resolver {
   using in_type = T;
   using out_type = T;
   using null_free_in_type = T;
+};
+
+template <>
+struct resolver<Varchar> {
+  using in_type = GpuStringView;
+  using out_type = GpuStringView;
+  using null_free_in_type = GpuStringView;
+};
+
+template <>
+struct resolver<Varbinary> {
+  using in_type = GpuStringView;
+  using out_type = GpuStringView;
+  using null_free_in_type = GpuStringView;
 };
 
 template <typename P, typename S>

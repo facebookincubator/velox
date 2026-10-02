@@ -135,6 +135,91 @@ inline Constraints modulusConstraints() {
       {S3::name(), widerScale()}};
 }
 
+// --- SparkSQL ------------------------------------------------------------
+// Spark derives a result precision and scale, then applies its own adjustment,
+// so one makeConstraints produces them. Copied from
+// sparksql/DecimalArithmetic.cpp.
+namespace spark_decimal {
+
+using namespace decimal_detail;
+
+/// Spark's adjustment step. With precision loss allowed, a result wider than
+/// 38 digits sheds scale down to a floor of 6; otherwise the scale is bounded.
+inline Constraints makeConstraints(
+    const std::string& rPrecision,
+    const std::string& rScale,
+    bool allowPrecisionLoss) {
+  const std::string finalScale = allowPrecisionLoss
+      ? "(" + rPrecision + ") <= 38 ? (" + rScale + ") : max((" + rScale +
+          ") - (" + rPrecision + ") + 38, min((" + rScale + "), 6))"
+      : "min(" + rScale + ", 38)";
+  return {
+      {P3::name(), "min(38, " + rPrecision + ")"}, {S3::name(), finalScale}};
+}
+
+inline Constraints addSubtractConstraints(bool allowPrecisionLoss) {
+  const std::string rPrecision = "max(" + aPrecision() + " - " + aScale() +
+      ", " + bPrecision() + " - " + bScale() + ") + " + widerScale() + " + 1";
+  return makeConstraints(rPrecision, widerScale(), allowPrecisionLoss);
+}
+
+inline Constraints multiplyConstraints(bool allowPrecisionLoss) {
+  const std::string rPrecision = aPrecision() + " + " + bPrecision() + " + 1";
+  const std::string rScale = aScale() + " + " + bScale();
+  return makeConstraints(rPrecision, rScale, allowPrecisionLoss);
+}
+
+inline Constraints divideConstraints(bool allowPrecisionLoss) {
+  const std::string rScale =
+      "max(6, " + aScale() + " + " + bPrecision() + " + 1)";
+  const std::string rPrecision =
+      aPrecision() + " - " + aScale() + " + " + bScale() + " + " + rScale;
+  return makeConstraints(rPrecision, rScale, allowPrecisionLoss);
+}
+
+} // namespace spark_decimal
+
+/// Spark's divide adds two narrowing combinations on top of the five, because
+/// its result scale can shrink enough to fit a short decimal.
+template <template <class> typename Func>
+void registerGpuSparkDecimalDivide(
+    const std::vector<std::string>& aliases,
+    const Constraints& constraints) {
+  registerGpuDecimalBinary<Func>(aliases, constraints);
+
+  // (short, long) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>(aliases, constraints);
+
+  // (long, short) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases, constraints);
+}
+
+/// Integral divide returns a bigint, so its four combinations need no
+/// constraints.
+template <template <class> typename Func>
+void registerGpuSparkIntegralDecimalDivide(
+    const std::vector<std::string>& aliases) {
+  registerGpuFunction<
+      Func,
+      int64_t,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases);
+  registerGpuFunction<Func, int64_t, LongDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      aliases);
+  registerGpuFunction<Func, int64_t, ShortDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      aliases);
+  registerGpuFunction<Func, int64_t, LongDecimal<P1, S1>, ShortDecimal<P2, S2>>(
+      aliases);
+}
+
 /// floor, ceil and one-argument round: scale 0, and the integral digits plus
 /// one for the rounding carry. Matches registerDecimalFloorOrCeil.
 inline Constraints roundToIntegerConstraints() {

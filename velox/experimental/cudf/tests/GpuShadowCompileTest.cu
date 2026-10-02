@@ -25,6 +25,7 @@
 #include "velox/common/base/BitUtil.h"
 // Bitwise.h uses VELOX_USER_CHECK without including Exceptions.h.
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Status.h"
 #include "velox/functions/prestosql/Bitwise.h"
 #include "velox/functions/prestosql/Comparisons.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -105,6 +106,14 @@ verifyCountBits(const uint64_t* bits, int32_t begin, int32_t end) {
   return facebook::velox::bits::countBits(bits, begin, end);
 }
 
+// Compiles the Status shadow's macros for the device; nothing registered
+// reaches them yet.
+__device__ facebook::velox::Status verify_user_return(bool shouldFail) {
+  VELOX_USER_RETURN(shouldFail, "device status");
+  VELOX_USER_RETURN_NE(shouldFail, true, "device status ne");
+  return facebook::velox::Status::OK();
+}
+
 } // namespace
 
 // Forces device codegen for every verifier above. Sinks results through a
@@ -112,6 +121,7 @@ verifyCountBits(const uint64_t* bits, int32_t begin, int32_t end) {
 __global__ void probeKernel(double* sink, const uint64_t* bits) {
   verify_eq();
   verify_neq();
+  *sink += verify_user_return(bits[0] != 0).ok() ? 1.0 : 2.0;
   verify_bit_count();
   verify_bitwise_arithmetic_shift_right();
   verify_bitwise_shift_left();

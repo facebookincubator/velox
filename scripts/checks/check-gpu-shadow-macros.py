@@ -47,6 +47,10 @@ SHADOWED = [
         "velox/common/base/Exceptions.h",
         "velox/experimental/cudf/functions/gpu_shadows/velox/common/base/Exceptions.h",
     ),
+    (
+        "velox/common/base/Status.h",
+        "velox/experimental/cudf/functions/gpu_shadows/velox/common/base/Status.h",
+    ),
 ]
 
 # Names the shadow is allowed not to define, each with a reason. Keep this
