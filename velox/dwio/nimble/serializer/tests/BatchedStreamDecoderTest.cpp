@@ -16,6 +16,7 @@
 
 #include <array>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -245,7 +246,7 @@ TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
   auto input = serializeBatches(
       rowType, {makeIntBatch(rowType, 0, 1)}, serializerOptions());
   BatchedStreamDecoder decoder{
-      input.schema->asRow().childAt(0).get(),
+      *input.schema->asRow().childAt(0),
       /*isInMapStream=*/false,
       kNoBufferPool,
       pool_.get()};
@@ -304,7 +305,7 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
                                  size_t count) {
     ScalarType type{descriptor};
     BatchedStreamDecoder decoder{
-        &type, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+        type, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
     decoder.addBatch(
         /*startRow=*/0,
         encoded,
@@ -349,7 +350,7 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
       options.encodingOptions)};
   ScalarType inMapType{group.inMapDescriptor};
   BatchedStreamDecoder inMapDecoder{
-      &inMapType, /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
+      inMapType, /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
   inMapDecoder.addBatch(
       /*startRow=*/0,
       encodedInMap,
@@ -421,7 +422,7 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
   const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
 
   BatchedStreamDecoder decoder{
-      schema.get(), /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *schema, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   decoder.skip(2);
 
   std::vector<uint8_t> output(4, 0);
@@ -448,13 +449,13 @@ TEST_F(BatchedStreamDecoderTest, nextStitchesSegmentsFromMultipleBatches) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   EXPECT_EQ(readInts(decoder, 12), expectedInts(0, 12));
 }
 
-TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
+TEST_F(BatchedStreamDecoderTest, readUsesCurrentSegmentRowCountEncoding) {
   auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
   auto schemaInput = serializeBatches(
       rowType, {makeIntBatch(rowType, 0, 1)}, serializerOptions());
@@ -466,7 +467,7 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
   }};
 
   // Tablet batches independently choose the row-count prefix encoding. Verify
-  // the decoder preserves each segment's mode while stitching mixed batches.
+  // the decoder preserves each segment's mode while reading it independently.
   constexpr std::array<std::array<bool, 3>, 8> rowCountEncodingCombinations{{
       {false, false, false},
       {false, false, true},
@@ -484,7 +485,10 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
         std::to_string(useVarintRowCount[2]) + "]");
 
     BatchedStreamDecoder decoder{
-        valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+        *valueType,
+        /*isInMapStream=*/false,
+        kNoBufferPool,
+        pool_.get()};
     std::vector<std::unique_ptr<Buffer>> encodedBuffers;
     std::array<std::string, 3> encodedSegments;
     uint32_t startRow{0};
@@ -512,7 +516,22 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
       startRow += static_cast<uint32_t>(batches[i].size());
     }
 
-    EXPECT_EQ(readInts(decoder, 12), expectedInts(0, 12));
+    uint32_t numPreparedOutputs{0};
+    std::vector<facebook::velox::BufferPtr> stringBuffers;
+    for (size_t i = 0; i < batches.size(); ++i) {
+      std::vector<int32_t> output;
+      decoder.read(
+          [&](uint32_t rowCount) -> void* {
+            ++numPreparedOutputs;
+            output.resize(rowCount);
+            return output.data();
+          },
+          /*getOutputNulls=*/nullptr,
+          stringBuffers);
+
+      EXPECT_EQ(numPreparedOutputs, static_cast<uint32_t>(i + 1));
+      EXPECT_EQ(output, batches[i]);
+    }
   }
 }
 
@@ -528,13 +547,208 @@ TEST_F(BatchedStreamDecoderTest, nextResumesMidSegmentAcrossCalls) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   // Both reads straddle a batch boundary, so each one resumes a partially
   // consumed segment.
   EXPECT_EQ(readInts(decoder, 5), expectedInts(0, 5));
   EXPECT_EQ(readInts(decoder, 7), expectedInts(5, 7));
+}
+
+TEST_F(BatchedStreamDecoderTest, readStopsAtCurrentSegment) {
+  auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
+  auto input = serializeBatches(
+      rowType,
+      {makeIntBatch(rowType, 0, 4), makeIntBatch(rowType, 4, 3)},
+      serializerOptions());
+
+  const auto* valueType = input.schema->asRow().childAt(0).get();
+  const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
+  BatchedStreamDecoder decoder{
+      *valueType,
+      /*isInMapStream=*/false,
+      kNoBufferPool,
+      pool_.get()};
+  addBatches(decoder, input, valueOffset);
+
+  EXPECT_EQ(readInts(decoder, 2), expectedInts(0, 2));
+
+  std::vector<int32_t> output;
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  uint32_t numPreparedOutputs{0};
+  const auto read = [&]() {
+    output.clear();
+    decoder.read(
+        [&](uint32_t rowCount) -> void* {
+          ++numPreparedOutputs;
+          output.resize(rowCount);
+          return output.data();
+        },
+        /*getOutputNulls=*/nullptr,
+        stringBuffers);
+  };
+
+  read();
+  EXPECT_EQ(numPreparedOutputs, 1);
+  EXPECT_EQ(output, expectedInts(2, 2));
+
+  read();
+  EXPECT_EQ(numPreparedOutputs, 2);
+  EXPECT_EQ(output, expectedInts(4, 3));
+
+  bool preparedOutput{false};
+  decoder.read(
+      [&](uint32_t) -> void* {
+        preparedOutput = true;
+        return nullptr;
+      },
+      /*getOutputNulls=*/nullptr,
+      stringBuffers);
+  EXPECT_FALSE(preparedOutput);
+}
+
+TEST_F(BatchedStreamDecoderTest, readAdvancesPastEmptyCurrentSegment) {
+  auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
+  auto schemaInput = serializeBatches(
+      rowType, {makeIntBatch(rowType, 0, 1)}, serializerOptions());
+  const auto& valueType = *schemaInput.schema->asRow().childAt(0);
+  BatchedStreamDecoder decoder{
+      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+
+  const auto encode = [&](std::span<const int32_t> values) {
+    Buffer buffer{*pool_};
+    const std::string_view data{
+        reinterpret_cast<const char*>(values.data()), values.size_bytes()};
+    return std::string{serde::detail::encodeScalar<std::string>(
+        serializerOptions(),
+        ScalarKind::Int32,
+        data,
+        *pool_,
+        buffer,
+        /*encodingLayout=*/nullptr,
+        Encoding::Options{.useVarintRowCount = true})};
+  };
+  const std::array<int32_t, 0> empty{};
+  const std::array<int32_t, 1> value{42};
+  const auto emptySegment = encode(empty);
+  const auto valueSegment = encode(value);
+  decoder.addBatch(
+      /*startRow=*/0,
+      emptySegment,
+      /*legacyHeaderless=*/false,
+      /*streamEncodingUsesVarintRowCount=*/true);
+  decoder.addBatch(
+      /*startRow=*/0,
+      valueSegment,
+      /*legacyHeaderless=*/false,
+      /*streamEncodingUsesVarintRowCount=*/true);
+
+  bool preparedOutput{false};
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  decoder.read(
+      [&](uint32_t) -> void* {
+        preparedOutput = true;
+        return nullptr;
+      },
+      /*getOutputNulls=*/nullptr,
+      stringBuffers);
+  EXPECT_FALSE(preparedOutput);
+
+  std::array<int32_t, 1> output{};
+  decoder.read(
+      [&](uint32_t rowCount) -> void* {
+        EXPECT_EQ(rowCount, 1);
+        return output.data();
+      },
+      /*getOutputNulls=*/nullptr,
+      stringBuffers);
+  EXPECT_EQ(output, value);
+}
+
+TEST_F(BatchedStreamDecoderTest, readDecodesNullableCurrentSegment) {
+  auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
+  auto input = serializeBatches(
+      rowType,
+      {makeIntBatch(rowType, 0, 4),
+       makeIntBatch(rowType, 100, 5, /*nullEvery=*/2)},
+      serializerOptions());
+
+  const auto* valueType = input.schema->asRow().childAt(0).get();
+  const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
+  BatchedStreamDecoder decoder{
+      *valueType,
+      /*isInMapStream=*/false,
+      kNoBufferPool,
+      pool_.get()};
+  addBatches(decoder, input, valueOffset);
+
+  EXPECT_EQ(readInts(decoder, 4), expectedInts(0, 4));
+
+  std::vector<int32_t> output;
+  std::vector<uint64_t> nulls(facebook::velox::bits::nwords(5), 0);
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  decoder.read(
+      [&](uint32_t rowCount) -> void* {
+        output.resize(rowCount);
+        return output.data();
+      },
+      [&]() -> void* { return nulls.data(); },
+      stringBuffers);
+
+  ASSERT_EQ(output.size(), 5);
+  const std::vector<bool> expectedNonNull = {false, true, false, true, false};
+  std::vector<bool> actualNonNull(5);
+  for (uint32_t i = 0; i < actualNonNull.size(); ++i) {
+    actualNonNull[i] = facebook::velox::bits::isBitSet(nulls.data(), i);
+  }
+  EXPECT_EQ(actualNonNull, expectedNonNull);
+}
+
+TEST_F(BatchedStreamDecoderTest, readRejectsCurrentLegacySegment) {
+  auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
+  auto input = serializeBatches(
+      rowType, {makeIntBatch(rowType, 0, 4)}, serializerOptions());
+
+  const auto* valueType = input.schema->asRow().childAt(0).get();
+  const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
+  BatchedStreamDecoder decoder{
+      *valueType,
+      /*isInMapStream=*/false,
+      kNoBufferPool,
+      pool_.get()};
+  addBatches(decoder, input, valueOffset);
+  const std::array<int32_t, 2> legacyValues{4, 5};
+  decoder.addBatch(
+      /*startRow=*/4,
+      std::string_view{
+          reinterpret_cast<const char*>(legacyValues.data()),
+          legacyValues.size() * sizeof(int32_t)},
+      /*legacyHeaderless=*/true,
+      /*streamEncodingUsesVarintRowCount=*/false);
+
+  std::vector<int32_t> output;
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  decoder.read(
+      [&](uint32_t rowCount) -> void* {
+        output.resize(rowCount);
+        return output.data();
+      },
+      /*getOutputNulls=*/nullptr,
+      stringBuffers);
+  EXPECT_EQ(output, expectedInts(0, 4));
+
+  bool preparedOutput{false};
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          [&](uint32_t) -> void* {
+            preparedOutput = true;
+            return nullptr;
+          },
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "read is not supported for legacy headerless streams");
+  EXPECT_FALSE(preparedOutput);
 }
 
 TEST_F(BatchedStreamDecoderTest, skipAdvancesAcrossSegmentBoundary) {
@@ -549,7 +763,7 @@ TEST_F(BatchedStreamDecoderTest, skipAdvancesAcrossSegmentBoundary) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   // Consumes all of batch 1 and part of batch 2.
@@ -566,7 +780,7 @@ TEST_F(BatchedStreamDecoderTest, skipWithinSegmentThenRead) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   decoder.skip(3);
@@ -588,7 +802,7 @@ TEST_F(BatchedStreamDecoderTest, nextStitchesNullBitmapAcrossSegments) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   constexpr uint32_t kRows = 8;
@@ -623,7 +837,7 @@ TEST_F(BatchedStreamDecoderTest, denseReadReconstructsOmittedRowNullStream) {
   ASSERT_FALSE(input.batches[0].hasStream(rowNullsOffset));
 
   BatchedStreamDecoder decoder{
-      input.schema.get(),
+      *input.schema,
       /*isInMapStream=*/false,
       kNoBufferPool,
       pool_.get()};
@@ -646,7 +860,7 @@ TEST_F(BatchedStreamDecoderTest, skipOnOmittedRowNullStreamAdvancesCursor) {
       rowType, {makeIntBatch(rowType, 0, 6)}, serializerOptions());
 
   BatchedStreamDecoder decoder{
-      input.schema.get(),
+      *input.schema,
       /*isInMapStream=*/false,
       kNoBufferPool,
       pool_.get()};
@@ -676,7 +890,7 @@ TEST_F(BatchedStreamDecoderTest, clearRestoresDecoderForReuse) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
 
   addBatches(decoder, input, valueOffset);
   EXPECT_EQ(readInts(decoder, 8), expectedInts(0, 8));
@@ -696,7 +910,7 @@ TEST_F(BatchedStreamDecoderTest, nextWithZeroCountDecodesNothing) {
   const auto* valueType = input.schema->asRow().childAt(0).get();
   const auto valueOffset = valueType->asScalar().scalarDescriptor().offset();
   BatchedStreamDecoder decoder{
-      valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+      *valueType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
   addBatches(decoder, input, valueOffset);
 
   std::vector<facebook::velox::BufferPtr> stringBuffers;
@@ -713,7 +927,7 @@ TEST_F(BatchedStreamDecoderTest, addBatchRejectsEmptySegment) {
       rowType, {makeIntBatch(rowType, 0, 4)}, serializerOptions());
 
   BatchedStreamDecoder decoder{
-      input.schema->asRow().childAt(0).get(),
+      *input.schema->asRow().childAt(0),
       /*isInMapStream=*/false,
       kNoBufferPool,
       pool_.get()};
@@ -748,8 +962,8 @@ class BatchedStreamDecoderInMapTest : public BatchedStreamDecoderTest {
 
   // In-map decoders are constructed with the PARENT FlatMap type, not the
   // child value type — see Deserializer::createDeserializersForType.
-  static const Type* flatMapType(const SerializedInput& input) {
-    return input.schema->asRow().childAt(1).get();
+  static const Type& flatMapType(const SerializedInput& input) {
+    return *input.schema->asRow().childAt(1);
   }
 
   static std::vector<bool> readInMap(
@@ -773,7 +987,7 @@ TEST_F(BatchedStreamDecoderInMapTest, inMapReadFillsGapForAllPresentBatches) {
            rowType, std::vector<std::vector<std::string>>(3, {"a"}))},
       flatMapOptions());
 
-  const auto& flatMap = flatMapType(input)->asFlatMap();
+  const auto& flatMap = flatMapType(input).asFlatMap();
   const auto inMapOffset = flatMap.inMapDescriptorAt(0).offset();
   // Key "a" is in every row of both batches, so the writer omits the in-map
   // stream and the reader has to reconstruct it from presence ranges alone.
@@ -786,6 +1000,30 @@ TEST_F(BatchedStreamDecoderInMapTest, inMapReadFillsGapForAllPresentBatches) {
   decoder.addPresentInMapBatch(/*startRow=*/4, /*rowCount=*/3);
 
   EXPECT_EQ(readInMap(decoder, 7), std::vector<bool>(7, true));
+}
+
+TEST_F(BatchedStreamDecoderInMapTest, readRejectsLogicalInMapStreams) {
+  auto rowType = flatMapRowType();
+  auto input = serializeBatches(
+      rowType,
+      {makeFlatMapBatch(
+          rowType, std::vector<std::vector<std::string>>(1, {"a"}))},
+      flatMapOptions());
+  BatchedStreamDecoder decoder{
+      flatMapType(input), /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
+
+  bool preparedOutput{false};
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          [&](uint32_t) -> void* {
+            preparedOutput = true;
+            return nullptr;
+          },
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "read is not supported for logical FlatMap in-map streams");
+  EXPECT_FALSE(preparedOutput);
 }
 
 TEST_F(BatchedStreamDecoderInMapTest, inMapReadLeavesUnrecordedRowsAbsent) {
@@ -826,7 +1064,7 @@ TEST_F(
            rowType, std::vector<std::vector<std::string>>(3, {"a", "b"}))},
       flatMapOptions());
 
-  const auto& flatMap = flatMapType(input)->asFlatMap();
+  const auto& flatMap = flatMapType(input).asFlatMap();
   ASSERT_EQ(flatMap.childrenCount(), 2);
   const auto inMapOffsetB = flatMap.inMapDescriptorAt(1).offset();
   ASSERT_TRUE(input.batches[0].hasStream(inMapOffsetB));

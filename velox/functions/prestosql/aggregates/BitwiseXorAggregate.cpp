@@ -123,6 +123,7 @@ void registerBitwiseXorAggregate(
                 inputType->toString());
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

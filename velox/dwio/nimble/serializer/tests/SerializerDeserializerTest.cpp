@@ -737,7 +737,7 @@ TEST_P(SerializationTest, flatMapRejectsTopLevelNullRows) {
 
   NIMBLE_ASSERT_THROW(
       serializer.serialize(input, OrderedRanges::of(0, kRows)),
-      "Top-level row nulls are not supported when serializing FlatMap columns.");
+      "Top-level row nulls are not supported when serializing FlatMap/Hybrid FlatMap columns.");
 }
 
 TEST_P(SerializationTest, flatMapWithNestedNullsRoundTrips) {
@@ -1115,6 +1115,7 @@ SerializationTest::SerializeResult SerializationTest::serializeTablet(
     // Build kTablet: [header][raw stream data...][trailer].
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
+         .requiredBarrier = false,
          .streamEncodingUsesVarintRowCount =
              tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
@@ -2544,7 +2545,7 @@ TEST_F(SerializationTest, regularDataNullsDoNotRequireNullBarrier) {
   const char* pos = serialized.data();
   const auto header = serde::readSerializationHeader(
       pos, serialized.data() + serialized.size());
-  EXPECT_FALSE(header.flags.requiresNullBarrier);
+  EXPECT_FALSE(header.flags.requiredBarrier);
 
   const auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
@@ -2602,7 +2603,7 @@ TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   serialized[sizeof(uint8_t) + varint::varintSize(kRows)] =
       static_cast<char>(serde::detail::makeFlagsByte(
-          /*requiresNullBarrier=*/false,
+          /*requiredBarrier=*/false,
           /*streamEncodingUsesVarintRowCount=*/false,
           /*streamHasChunkHeader=*/false));
 
@@ -2669,16 +2670,14 @@ TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
     std::string serialized;
     const auto flagsOffset = serde::writeSerializationHeader(
         serialized, SerializationVersion::kSerialization, kRows);
-    const bool requiresNullBarrier = !std::all_of(
+    const bool requiredBarrier = !std::all_of(
         rootNonNulls.begin(), rootNonNulls.end(), [](bool nonNull) {
           return nonNull;
         });
     NIMBLE_CHECK_LT(
         flagsOffset, serialized.size(), "Invalid flags byte offset");
     serialized[flagsOffset] = static_cast<char>(
-        requiresNullBarrier
-            ? serde::SerializationHeader::kNullBarrierRequiredFlag
-            : 0);
+        requiredBarrier ? serde::SerializationHeader::kBarrierRequiredFlag : 0);
     std::vector<uint32_t> streamSizes(streams.back().first + 1, 0);
     for (const auto& [offset, stream] : streams) {
       streamSizes[offset] = static_cast<uint32_t>(stream.size());
@@ -5124,6 +5123,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxHighParallelism) {
 
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
+         .requiredBarrier = false,
          .streamEncodingUsesVarintRowCount =
              tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
@@ -5239,6 +5239,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxConcurrentDeserializers) {
 
       auto headerIOBuf = serde::createTabletChunkHeader(
           {.rowCount = stripeRows,
+           .requiredBarrier = false,
            .streamEncodingUsesVarintRowCount =
                tablet->properties().compactRowCountEncoding(),
            .streamHasChunkHeader = true,
@@ -5403,6 +5404,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxFlatMapWithParallelDecode) {
 
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
+         .requiredBarrier = false,
          .streamEncodingUsesVarintRowCount =
              tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
@@ -5516,6 +5518,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxRepeatedBatches) {
 
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
+         .requiredBarrier = false,
          .streamEncodingUsesVarintRowCount =
              tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,

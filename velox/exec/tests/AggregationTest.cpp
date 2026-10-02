@@ -610,6 +610,140 @@ TEST_F(AggregationTest, global) {
       "max(15), max(c1), max(c2), max(c3), max(c4), max(c5), sum(1) FROM tmp");
 }
 
+TEST_F(AggregationTest, combineGlobalPartial) {
+  core::PlanNodeId partialAggregationId;
+  auto makePlan = [&](std::initializer_list<VectorPtr> input,
+                      const std::vector<std::string>& aggregates) {
+    PlanBuilder builder;
+    builder.values({makeRowVector(input)}, /*parallelizable=*/true)
+        .partialAggregation({}, aggregates)
+        .capturePlanNodeId(partialAggregationId)
+        .localPartition({})
+        .finalAggregation();
+    return builder;
+  };
+
+  auto run = [&](const PlanBuilder& builder,
+                 std::initializer_list<Variant> expected) {
+    auto task = AssertQueryBuilder(builder.planNode())
+                    .maxDrivers(4)
+                    .assertResults(expected);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(partialAggregationId);
+    EXPECT_EQ(stats.numDrivers, 4);
+    return stats.outputRows;
+  };
+
+  {
+    SCOPED_TRACE("fixed-width state");
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatVector<int64_t>({1, 2, 3, 4})},
+                {"sum(c0)", "count(c0)"}),
+            {Variant(int64_t{40}), Variant(int64_t{16})}));
+  }
+
+  {
+    SCOPED_TRACE("fixed-width state over empty input");
+    EXPECT_EQ(
+        1,
+        run(makePlan({makeFlatVector<int64_t>({})}, {"sum(c0)", "count(c0)"}),
+            {Variant::null(TypeKind::BIGINT), Variant(int64_t{0})}));
+  }
+
+  {
+    SCOPED_TRACE("compacting variable-width state");
+    const auto value = std::string(1'024, 'a');
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100),
+                 makeConstant(value, 100)},
+                {"min(c1)", "sum(c0)"}),
+            {Variant(value), Variant(int64_t{19'800})}));
+  }
+
+  {
+    const auto maps = makeMapVector<int64_t, int64_t>(
+        100,
+        [](auto /*row*/) { return 1; },
+        [](auto row) { return row; },
+        [](auto row) { return row; });
+    for (const auto& [aggregate, expectedCardinality] :
+         std::vector<std::pair<std::string, int64_t>>{
+             {"array_agg(c0)", 400},
+             {"set_agg(c0)", 100},
+             {"map_agg(c0, c0)", 100},
+             {"multimap_agg(c0, c0)", 100},
+             {"map_union(c1)", 100},
+             {"map_union_sum(c1)", 100},
+         }) {
+      SCOPED_TRACE(aggregate);
+      EXPECT_EQ(
+          4,
+          run(makePlan(
+                  {makeFlatIdentityVector<int64_t>(100), maps}, {aggregate})
+                  .project({"cardinality(a0)"}),
+              {Variant(expectedCardinality)}));
+    }
+  }
+
+  {
+    SCOPED_TRACE("mixed reducing and non-reducing states");
+    EXPECT_EQ(
+        4,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100)},
+                {"sum(c0)", "array_agg(c0)"})
+                .project({"a0", "cardinality(a1)"}),
+            {Variant(int64_t{19'800}), Variant(int64_t{400})}));
+  }
+
+  {
+    SCOPED_TRACE("peer-specific intermediate metadata");
+    // Each driver sees a constant buckets argument, but the values differ
+    // across drivers. Combining partial states must preserve the global
+    // constant-argument validation and reject the query.
+    auto plan =
+        PlanBuilder()
+            .values({makeRowVector({
+                makeFlatVector<int64_t>({1, 2, 3, 4}),
+                makeConstant<int64_t>(1, 4),
+                makeConstant<int64_t>(31, 4),
+            })})
+            .localPartitionRoundRobinRow()
+            .partialAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
+            .localPartition({})
+            .finalAggregation()
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()),
+        "Buckets argument must be constant for all input rows");
+  }
+}
+
+DEBUG_ONLY_TEST_F(AggregationTest, combineGlobalPartialWithTaskAbort) {
+  // Aborting the task closes the drivers waiting for the last one to merge
+  // their states. The merge must not read a closed peer.
+  auto plan = PlanBuilder()
+                  .values(
+                      {makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})})},
+                      /*parallelizable=*/true)
+                  .partialAggregation({}, {"sum(c0)"})
+                  .localPartition({})
+                  .finalAggregation()
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      std::function<void(Operator*)>(
+          [](Operator* op) { op->operatorCtx()->task()->requestAbort(); }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()), "Aborted");
+}
+
 TEST_F(AggregationTest, manyGlobalAggregations) {
   // Test a query with a large number of global aggregations.
   // Global aggregations have a separate code path that does not use a

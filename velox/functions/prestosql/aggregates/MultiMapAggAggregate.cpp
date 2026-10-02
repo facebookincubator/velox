@@ -359,6 +359,11 @@ class MultiMapAggAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Retains every input value.
+    return false;
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
   }

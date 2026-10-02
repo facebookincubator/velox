@@ -136,8 +136,9 @@ std::shared_ptr<DecodedKeyChunk> SortedIndex::loadChunk(
           streamOffset + chunkOffset,
           chunkSize,
           velox::dwio::common::LogType::FOOTER),
-      *pool_,
-      chunkBuffer_);
+      createFlatKeyReader,
+      chunkBuffer_,
+      pool_);
 }
 
 std::string_view SortedIndex::extractKey(
@@ -193,13 +194,13 @@ void SortedIndex::scanEntries(
     }
 
     auto chunk = loadChunk(ci);
-    const uint32_t rowCount = chunk->encoding->rowCount();
+    const uint32_t rowCount = chunk->reader->rowCount();
 
     // Seek only in the first chunk. For continuation chunks, the loop guard
     // ensures entries are in range, so start at 0.
     const uint32_t startPos = (ci != startChunk)
         ? 0
-        : chunk->encoding->seek(startSeekKey, /*inclusive=*/true)
+        : chunk->reader->seek(startSeekKey, /*inclusive=*/true)
               .value_or(rowCount);
     if (startPos >= rowCount) {
       break;
@@ -208,13 +209,13 @@ void SortedIndex::scanEntries(
     // If all remaining entries in this chunk match, skip the end seek.
     const uint32_t endPos = hasMoreEntries(ci)
         ? rowCount
-        : chunk->encoding->seek(endSeekKey, /*inclusive=*/!isPointLookup)
+        : chunk->reader->seek(endSeekKey, /*inclusive=*/!isPointLookup)
               .value_or(rowCount);
     if (startPos >= endPos) {
       break;
     }
 
-    auto entries = chunk->encoding->materialize(startPos, endPos - startPos);
+    auto entries = chunk->reader->materialize(startPos, endPos - startPos);
     for (const auto& entry : entries) {
       matchedRows.emplace_back(extractRowId(entry));
     }

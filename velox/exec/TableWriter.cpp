@@ -439,7 +439,7 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->pauseRequested());
 
-  auto* writer = dynamic_cast<TableWriter*>(op_);
+  auto* writer = op_->as<TableWriter>();
   if (writer->closed_) {
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
