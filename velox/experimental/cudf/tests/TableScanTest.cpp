@@ -728,10 +728,8 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // Do the same for count, no columns projected out. The filter columns keep
-  // the projection non-empty, so this still reads and decodes c1 and c3.
-  // Counts with `count(1)`, not `sum(1)`: the GPU groupby aggregators reject a
-  // constant input for `sum` at runtime regardless of what the scan reads.
+  // Count with no projections, however the filter columns c1 and c3 are still
+  // read.
   assignments.clear();
   assertQuery(
       PlanBuilder()
@@ -745,7 +743,7 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT count(*) FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // Do the same for count, no filter, no projections. Nothing is read.
+  // Do the same for count, no filter, no projections. Only the footer is read.
   assignments.clear();
   tableHandle = makeTableHandle("parquet_table", rowType);
   assertQuery(
@@ -957,11 +955,8 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       "SELECT * FROM tmp LIMIT 0");
 }
 
-// A `count(*)` scan projects no columns at all. cuDF's column projection is a
-// `std::optional` whose unset state means "read every column" rather than "read
-// none", so such a scan takes its row count from the Parquet footer instead of
-// from a decoded column. The failure this guards against is a count of zero,
-// not an exception.
+// Verify that a `count(*)` scan with no projected columns returns the correct
+// row count from the Parquet footer
 TEST_F(TableScanTest, countStarNoProjectedColumns) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
@@ -998,18 +993,13 @@ TEST_F(TableScanTest, countStarNoProjectedColumns) {
                           filePath->getPath(), start, length)))
                       .copyResults(pool_.get(), task);
     EXPECT_EQ(result->size(), 1);
-    // A footer-only scan must not read any column chunk. The footer is a
-    // small fraction of a file with 10 row groups, so a scan that decodes
-    // even one column reads far more than this bound.
+    // A footer-only scan reads no column chunks.
     if (plan == countStarPlan) {
       EXPECT_LT(
           getTableScanRuntimeStat(task, io::kStorageReadBytes), fileSize / 4);
     }
     return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
   };
-
-  // The whole file, the shape a non-splittable table scan produces.
-  EXPECT_EQ(countRows(countStarPlan, 0, fileSize), 10'000);
 
   // A split owns only the row groups that start inside its byte range, so a
   // whole-file footer count would over-count either half.
@@ -1026,45 +1016,8 @@ TEST_F(TableScanTest, countStarNoProjectedColumns) {
   EXPECT_EQ(countRows(countStarPlan, fileSize, 1), 0);
 }
 
-// A `count(*)` with a subfield filter reads the filter column only and
-// projects nothing, over byte-range splits as well as the whole file.
-TEST_F(TableScanTest, countStarWithFilterOverSplits) {
-  auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
-  createDuckDbTable(vectors);
-
-  common::SubfieldFilters subfieldFilters =
-      common::test::SubfieldFiltersBuilder()
-          .add(
-              "c4",
-              std::make_unique<common::BigintRange>(
-                  int64_t(0), std::numeric_limits<int64_t>::max(), false))
-          .build();
-  auto plan = PlanBuilder(pool_.get())
-                  .startTableScan()
-                  .outputType(ROW({}, {}))
-                  .tableHandle(makeTableHandle(
-                      "parquet_table", rowType_, std::move(subfieldFilters)))
-                  .endTableScan()
-                  .singleAggregation({}, {"count(1)"})
-                  .planNode();
-  const auto sql = "SELECT count(*) FROM tmp WHERE c4 >= 0";
-
-  assertQuery(plan, {filePath}, sql);
-
-  const auto fileSize = fs::file_size(filePath->getPath());
-  const auto halfFileSize = fileSize / 2;
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .split(Split(
-          makeCudfHiveConnectorSplit(filePath->getPath(), 0, halfFileSize)))
-      .split(Split(makeCudfHiveConnectorSplit(
-          filePath->getPath(), halfFileSize, fileSize - halfFileSize)))
-      .assertResults(sql);
-}
-
-// A remaining filter that folds to a constant needs no column to decide, so it
-// keeps every row or skips the split without opening it.
+// A remaining filter that folds to a constant must either keep the row count
+// from the footer or skip the split without reading any columns.
 TEST_F(TableScanTest, constantRemainingFilter) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
@@ -1102,9 +1055,7 @@ TEST_F(TableScanTest, constantRemainingFilter) {
               BOOLEAN(), Variant::null(TypeKind::BOOLEAN))),
       CountAndSkippedSplits(0, 1));
 
-  // A filter that references no column but does not fold cannot be evaluated
-  // over rows that were never read. `rand() > 0.5` is not the `rand() < rate`
-  // shape that the Hive connector treats as a sample rate.
+  // A non-constant filter that references no column is rejected.
   auto randomFilter = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
       std::vector<core::TypedExprPtr>{

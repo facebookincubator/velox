@@ -124,14 +124,9 @@ void CudfIcebergSplitReader::resetSplit() {
   equalityDeleteFileReaders_.clear();
   extraEqualityColumns_.clear();
   injectedColumns_.clear();
-  fileColumnNames_.clear();
-  splitRowCount_ = 0;
-  noColumnsToRead_ = false;
-  syntheticTableProduced_ = false;
   skipSplit_ = false;
   transformedPushdownFilter_.reset();
   transformedLogicalFilter_.reset();
-  baseReadOffset_ = 0;
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
   deleteMask_.reset();
@@ -387,46 +382,22 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
   return {startRow, static_cast<std::size_t>(endRow - startRow + 1)};
 }
 
-std::optional<CudfSplitReader::Chunk> CudfIcebergSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::TableChunk>
+CudfIcebergSplitReader::readNextChunk() {
   if (skipSplit_) {
     return std::nullopt;
   }
 
-  std::unique_ptr<cudf::table> cudfTable;
-  if (noColumnsToRead_) {
-    if (syntheticTableProduced_) {
-      return std::nullopt;
-    }
-    syntheticTableProduced_ = true;
-    cudfTable = std::make_unique<cudf::table>(
-        std::vector<std::unique_ptr<cudf::column>>{});
-  } else {
-    // Read the next table chunk from the cuDF reader
-    auto chunkOpt = CudfSplitReader::readNextChunk();
-    if (not chunkOpt.has_value()) {
-      return std::nullopt;
-    }
-    cudfTable = std::move(chunkOpt.value().table);
+  // Read the next table chunk from the cuDF reader, or a table without columns
+  // of footer rows when every projected column is injected.
+  auto chunkOpt = CudfSplitReader::readNextChunk();
+  if (not chunkOpt.has_value()) {
+    return std::nullopt;
   }
+  auto cudfTable = std::move(chunkOpt.value().table);
 
   // Number of table rows before deletes.
-  const auto numRows = [&]() {
-    // For synthetic tables, return at most 2 billion rows at a time.
-    if (noColumnsToRead_) {
-      if (std::cmp_less_equal(
-              splitRowCount_, std::numeric_limits<cudf::size_type>::max())) {
-        return static_cast<cudf::size_type>(splitRowCount_);
-      } else {
-        // Reset the synthetic table produced flag to allow another chunk.
-        syntheticTableProduced_ = false;
-        splitRowCount_ -= std::numeric_limits<cudf::size_type>::max();
-        return static_cast<cudf::size_type>(
-            std::numeric_limits<cudf::size_type>::max());
-      }
-    } else {
-      return cudfTable->num_rows();
-    }
-  }();
+  const cudf::size_type numRows = chunkOpt.value().numRows;
 
   auto rowIndexColumn = std::unique_ptr<cudf::column>{};
   if (prependRowIndex_) {
@@ -532,14 +503,13 @@ std::optional<CudfSplitReader::Chunk> CudfIcebergSplitReader::readNextChunk() {
   // Update the base read offset
   baseReadOffset_ += numRows;
 
-  // A table with no columns reports zero rows, so a projection that reads and
-  // injects no columns carries its row count alongside the table. The override
-  // is always set for such a table because it was set for the columnless input.
-  const auto outputNumRows = cudfTable->num_columns() > 0
+  // A table without columns gets its row count from the override.
+  chunkOpt.value().numRows = cudfTable->num_columns() > 0
       ? cudfTable->num_rows()
       : rowCountOverride.value();
+  chunkOpt.value().table = std::move(cudfTable);
 
-  return Chunk{std::move(cudfTable), outputNumRows};
+  return chunkOpt;
 }
 
 void CudfIcebergSplitReader::classifyDeleteFiles() {
@@ -817,31 +787,6 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
         readColumnTypes_.push_back(deleteFile.keyTypes[i]);
       }
     }
-  }
-}
-
-void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
-  // Read file metadatas if not already
-  fileMetaDatas();
-
-  VELOX_CHECK_EQ(
-      fileMetaData_.size(),
-      1,
-      "Expected a single parquet footer for Iceberg data file");
-  const auto& meta = fileMetaData_.front();
-  VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
-  VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
-  std::tie(baseReadOffset_, splitRowCount_) = computeSplitRowRange();
-
-  const auto& root = meta.schema.front();
-  fileColumnNames_.clear();
-  fileColumnNames_.reserve(root.children_idx.size());
-  for (const auto childIdx : root.children_idx) {
-    VELOX_CHECK_LT(
-        childIdx,
-        meta.schema.size(),
-        "Parquet schema child index out of range");
-    fileColumnNames_.insert(meta.schema[childIdx].name);
   }
 }
 
