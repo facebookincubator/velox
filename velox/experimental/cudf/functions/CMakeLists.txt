@@ -32,3 +32,52 @@ target_include_directories(
   BEFORE
   INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
 )
+
+# Device side of the simple-function bridge: the only target with the shadow
+# include path. It exposes only cudf, rmm and standard library types, so no
+# shadowed type reaches a real-Velox translation unit.
+set(VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuPrestoFunctions.cu)
+if(${VELOX_ENABLE_SPARK_FUNCTIONS})
+  list(APPEND VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuSparkFunctions.cu)
+endif()
+add_library(velox_cudf_gpu_simple_functions ${VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES})
+
+target_include_directories(
+  velox_cudf_gpu_simple_functions
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
+)
+
+# --diag-error=20011 makes calling a __host__ function from a __host__
+# __device__ one an error. nvcc otherwise only warns when the call sits in a
+# template instantiated for both, and the kernel computes garbage.
+target_compile_options(
+  velox_cudf_gpu_simple_functions
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
+# Whole-program device compilation: every kernel is instantiated in the
+# translation unit that launches it, and the host reaches them only through
+# GpuLaunchFn. Separable compilation would add a device-link step that each
+# consumer would have to repeat.
+set_target_properties(
+  velox_cudf_gpu_simple_functions
+  PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
+)
+
+target_link_libraries(velox_cudf_gpu_simple_functions PRIVATE cudf::cudf velox_cudf_gpu_shadows)
+
+# Host side, without the shadow include path, so it sees real Velox headers. It
+# reaches the device code above only through GpuLaunchFn, a function pointer
+# over cudf and rmm types.
+add_library(velox_cudf_gpu_function_bridge GpuFunctionRegistry.cpp GpuSfiExpression.cpp)
+
+# cudf is PUBLIC because GpuFunctionRegistry.h, which consumers include, names
+# cudf types in GpuLaunchFn.
+target_link_libraries(
+  velox_cudf_gpu_function_bridge
+  PUBLIC velox_cudf_gpu_simple_functions cudf::cudf
+  PRIVATE velox_cudf_expression velox_cudf_expression_registry
+)
