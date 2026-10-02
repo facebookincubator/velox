@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -26,6 +27,63 @@ class QueryCtxTest : public testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
+
+TEST_F(QueryCtxTest, credentialKeysWrite) {
+  const std::string key{"token"};
+  const std::string credential{"secret"};
+
+  // Absent from the config: the credential becomes the stored value.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config;
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_THAT(keys.queryConfig, testing::UnorderedElementsAre(key));
+    EXPECT_TRUE(keys.connectors.empty());
+  }
+
+  // kReplace overwrites whatever was there.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, "other"}};
+    keys.write(
+        config, "", key, credential, CredentialKeys::OnConflict::kReplace);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_THAT(keys.queryConfig, testing::UnorderedElementsAre(key));
+  }
+
+  // kKeep leaves a different value in place. Recording the name anyway would
+  // redact a property that replay has to parse back.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, "other"}};
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), "other");
+    EXPECT_TRUE(keys.queryConfig.empty());
+  }
+
+  // kKeep over a value that happens to equal the credential records nothing
+  // either. The stored value is the config's own, and redacting a typed
+  // property because a credential collided with it would break replay.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, credential}};
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_TRUE(keys.queryConfig.empty());
+  }
+
+  // A connector id routes the record away from the query config.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config;
+    keys.write(
+        config, "hive", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_TRUE(keys.queryConfig.empty());
+    EXPECT_THAT(keys.connectors.at("hive"), testing::UnorderedElementsAre(key));
+  }
+}
 
 TEST_F(QueryCtxTest, withSysRootPool) {
   auto queryCtx = QueryCtx::create(
