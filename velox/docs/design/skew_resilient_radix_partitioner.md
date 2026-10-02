@@ -83,7 +83,7 @@ To solve these micro-architectural bottlenecks without altering Velox's public o
 
 - **Ownership**: The `AlignedArena` slab is owned by the `SkewResilientRadixPartitioner` instance.
 - **Lifecycle Integration**: The partitioner instance is instantiated within Velox's `LocalPartition` / `HashBuild` operator state (`OperatorCtx`).
-- **Resource Deallocation**: Memory allocated in `AlignedArena` is freed automatically when the operator's `finish()` or `close()` method is invoked by the `Driver`, returning all memory back to Velox's `memory::MemoryPool`.
+- **Resource Deallocation**: Memory allocated in `AlignedArena` is freed automatically when the operator's `close()` method is invoked by the `Driver`, returning all memory back to Velox's `memory::MemoryPool`.
 
 ---
 
@@ -95,8 +95,7 @@ To solve these micro-architectural bottlenecks without altering Velox's public o
 // Inside velox/exec/LocalPartition.h
 #include "velox/exec/SkewResilientRadixPartitioner.h"
 
-class LocalPartitionOperator : public Operator {
- private:
+class LocalPartition : public Operator { private:
   // Skew-Resilient Radix Partitioner for key-based local partitioning
   std::unique_ptr<SkewResilientRadixPartitioner> skewResilientPartitioner_;
 };
