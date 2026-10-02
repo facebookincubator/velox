@@ -16,7 +16,9 @@
 
 #include <memory>
 #include <string>
+#include <thread>
 
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -89,14 +91,43 @@ class MockOutputBufferManager : public OutputBufferManager {
   }
 };
 
+class BlockingDestructionOutputBufferManager : public MockOutputBufferManager {
+ public:
+  BlockingDestructionOutputBufferManager(
+      folly::Baton<>& destructionStarted,
+      folly::Baton<>& continueDestruction)
+      : destructionStarted_{destructionStarted},
+        continueDestruction_{continueDestruction} {}
+
+  BlockingDestructionOutputBufferManager(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager(
+      BlockingDestructionOutputBufferManager&&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      BlockingDestructionOutputBufferManager&&) = delete;
+
+  ~BlockingDestructionOutputBufferManager() override {
+    destructionStarted_.post();
+    continueDestruction_.wait();
+  }
+
+ private:
+  folly::Baton<>& destructionStarted_;
+  folly::Baton<>& continueDestruction_;
+};
+
 std::shared_ptr<OutputTransportEntry> makeEntry(
-    std::shared_ptr<OutputBufferManager> manager) {
-  return std::make_shared<OutputTransportEntry>(
+    std::shared_ptr<MockOutputBufferManager> manager) {
+  return OutputTransportEntry::make<MockOutputBufferManager>(
       std::move(manager),
       [](int32_t,
          DriverCtx*,
          const std::shared_ptr<const core::PartitionedOutputNode>&,
-         bool) -> std::unique_ptr<Operator> { return nullptr; });
+         bool,
+         const std::shared_ptr<MockOutputBufferManager>&)
+          -> std::unique_ptr<Operator> { return nullptr; });
 }
 
 TEST(OutputTransportRegistryTest, registryOperations) {
@@ -134,6 +165,26 @@ TEST(OutputTransportRegistryTest, defaultTransportResolves) {
       std::string(core::TransportKind::kInMemory));
   ASSERT_NE(defaultEntry, nullptr);
   EXPECT_EQ(defaultEntry->manager, instance);
+}
+
+TEST(OutputTransportRegistryTest, defaultTransportSurvivesReset) {
+  OutputTransportRegistry::unregisterAll();
+
+  folly::Baton<> destructionStarted;
+  folly::Baton<> continueDestruction;
+  auto manager = std::make_shared<BlockingDestructionOutputBufferManager>(
+      destructionStarted, continueDestruction);
+  OutputTransportRegistry::global().insert("blocking", makeEntry(manager));
+  manager.reset();
+
+  std::thread reset([] { OutputTransportRegistry::unregisterAll(); });
+  destructionStarted.wait();
+  auto defaultEntry = OutputTransportRegistry::tryGet(
+      std::string(core::TransportKind::kInMemory));
+  continueDestruction.post();
+  reset.join();
+
+  EXPECT_NE(defaultEntry, nullptr);
 }
 
 class OutputTransportRegistryFixture : public testing::Test {

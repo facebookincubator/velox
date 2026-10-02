@@ -89,7 +89,7 @@ TEST_F(OutputTransportTest, errorsOnUnregisteredTransport) {
       queryCtx,
       Task::ExecutionMode::kParallel,
       exec::Consumer{});
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       task->start(1, 1), "No output buffer manager registered for transport");
 }
 

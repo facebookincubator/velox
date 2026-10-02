@@ -31,9 +31,10 @@ namespace facebook::velox::exec {
 ///
 /// The data plane is deliberately absent: page payloads are transport specific
 /// (in-memory serialized pages, GPU buffers, ...), so there is nothing shared
-/// to abstract. The operator that consumes a transport's pages is built
-/// together with that transport's client, so it always knows the concrete
-/// client type and can reach the transport's own data plane directly.
+/// to abstract. A transport registers its client factory and its exchange
+/// operator factory together in ExchangeTransportRegistry, so the operator
+/// always knows the concrete client type it was paired with and can reach the
+/// transport's own data plane directly.
 ///
 /// The control-plane operations addRemoteTaskId(), noMoreRemoteTasks(), and
 /// close() must be safe to call from multiple threads: Task adds remote tasks
