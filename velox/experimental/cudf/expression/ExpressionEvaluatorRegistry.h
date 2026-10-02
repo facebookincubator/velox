@@ -27,6 +27,7 @@
 namespace facebook::velox::cudf_velox {
 
 class CudfExpression;
+struct CudfDateTimeContext;
 
 using CudfExpressionEvaluatorCanEvaluate =
     std::function<bool(const core::TypedExprPtr& expr)>;
@@ -34,7 +35,8 @@ using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
         const core::TypedExprPtr& expr,
         const RowTypePtr& inputRowSchema,
-        memory::MemoryPool* pool)>;
+        memory::MemoryPool* pool,
+        const CudfDateTimeContext& context)>;
 
 struct CudfExpressionEvaluatorEntry {
   int priority;

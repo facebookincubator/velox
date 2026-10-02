@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
@@ -471,11 +472,17 @@ void CudfHashJoinProbe::initialize() {
   // Create a reusable evaluator for the filter column. This is expensive to
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
+  // Resolve the session timezone once so timezone-sensitive CudfFunctions in
+  // the join filter receive it at construction.
+  const auto context =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
+
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
   filterEvaluator_ = createCudfExpression(
       optimizedFilter,
       facebook::velox::type::concatRowTypes(filterRowTypes),
-      pool);
+      pool,
+      context);
 
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
@@ -505,7 +512,8 @@ void CudfHashJoinProbe::initialize() {
           probeType_,
           rightPrecomputeInstructions_,
           leftPrecomputeInstructions_,
-          pool);
+          pool,
+          context);
     } else {
       createAstTree(
           optimizedFilter,
@@ -515,7 +523,8 @@ void CudfHashJoinProbe::initialize() {
           buildType_,
           leftPrecomputeInstructions_,
           rightPrecomputeInstructions_,
-          pool);
+          pool,
+          context);
     }
   }
 }

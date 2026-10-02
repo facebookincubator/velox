@@ -72,8 +72,13 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         input, pool_.get(), stream, mr);
     auto optimized =
         expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator =
-        createCudfExpression(optimized, input->rowType(), pool_.get());
+    // Build the evaluation context from the query config exactly as
+    // CudfFilterProject does, so a test can exercise timezone-aware functions
+    // under a session timezone via queryCtx_->testingOverrideConfigUnsafe.
+    const auto exprContext =
+        contextFromConfig(execCtx_.queryCtx()->queryConfig());
+    auto filterEvaluator = createCudfExpression(
+        optimized, input->rowType(), pool_.get(), exprContext);
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());

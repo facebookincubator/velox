@@ -38,6 +38,7 @@ DateAddFunction::DateAddFunction(
 
 ColumnOrView DateAddFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
+    [[maybe_unused]] cudf::size_type numRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto inputCol = asView(inputColumns[0]);

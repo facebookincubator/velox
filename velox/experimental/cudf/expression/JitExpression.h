@@ -33,7 +33,8 @@ class JitExpression : public CudfExpression {
   JitExpression(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const CudfDateTimeContext& context = {});
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(
