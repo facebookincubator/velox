@@ -44,9 +44,10 @@ struct ExchangeTransportEntry {
   /// 'makeClient'.
   const ExchangeOperatorFactory makeExchangeOperator;
 
-  /// Builds this transport's MergeExchange operator. Null if merge exchange is
-  /// unsupported. How the operator uses the Task-level client is
-  /// transport-specific.
+  /// Builds this transport's operator for a MergeExchangeNode. Null if merge
+  /// exchange is unsupported. The resulting driver pipeline, including any
+  /// DriverAdapter changes, must emit rows ordered by the node's sortingKeys()
+  /// and sortingOrders().
   const ExchangeOperatorFactory makeMergeExchangeOperator;
 
   /// Pairs a client factory with operator builders that receive its concrete
