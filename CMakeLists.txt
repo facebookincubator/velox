@@ -696,6 +696,27 @@ endif()
 velox_set_source(simdjson)
 velox_resolve_dependency(simdjson 4.1.0)
 
+# libxml2 backs the Spark XPath functions and is only needed when Spark
+# functions are enabled.
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  velox_set_source(LibXml2)
+  # XPath behavior depends on libxml2's function lookup order. Use the pinned
+  # dependency by default to keep Spark-compatible numeric formatting.
+  if(LibXml2_SOURCE STREQUAL "AUTO")
+    set(LibXml2_SOURCE "BUNDLED")
+  endif()
+  velox_resolve_dependency(LibXml2)
+  if(
+    LibXml2_SOURCE STREQUAL "SYSTEM"
+    AND LIBXML2_VERSION_STRING VERSION_GREATER_EQUAL "2.14"
+  )
+    message(
+      FATAL_ERROR
+      "Spark XPath functions require libxml2 earlier than 2.14"
+    )
+  endif()
+endif()
+
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)
 
