@@ -28,10 +28,10 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
-#include "velox/functions/lib/string/StringImpl.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/io/datasource.hpp>
@@ -510,6 +510,7 @@ void CudfSplitReader::resetSplit() {
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
   splitRowCount_ = 0;
+  readAllFileColumns_ = false;
   noColumnsToRead_ = false;
 }
 
@@ -654,8 +655,10 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_filter(*filter);
   }
 
-  // Set the column projection
-  readerOptions_.set_column_names(readColumnNames_);
+  // Skip column selection when reading every file column in file order
+  if (not readAllFileColumns_) {
+    readerOptions_.set_column_names(readColumnNames_);
+  }
 
   if (prependRowIndex_) {
     readerOptions_.enable_prepend_row_index_column(true);
@@ -705,6 +708,16 @@ void CudfSplitReader::fileMetaDatas() {
 void CudfSplitReader::createCudfReader() {
   // Read file metadatas
   fileMetaDatas();
+
+  // Check if we are reading all columns in order
+  const auto& schema = fileMetaData_.front().schema;
+  readAllFileColumns_ = std::ranges::equal(
+      schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
+        const auto& name = schema[childIdx].name;
+        return caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name;
+      });
 
   // Setup reader options
   setupReaderOptions();
