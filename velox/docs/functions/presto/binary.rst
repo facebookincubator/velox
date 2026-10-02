@@ -140,6 +140,10 @@ Binary Functions
 
     Computes the 64-bit SpookyHashV2 hash of ``binary``.
 
+.. function:: to_base32(binary) -> varchar
+
+    Encodes ``binary`` into a base32 string representation using the `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet (A-Z, 2-7).
+
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
