@@ -1810,13 +1810,14 @@ TEST_F(CudfFilterProjectTest, round) {
              .planNode();
   AssertQueryBuilder(plan).assertResults(data);
 
+  // Velox's round returns an integral argument unchanged for negative digits,
+  // and GPU SFI runs Velox's own body.
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0, -3) as c1"})
              .planNode();
-  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(plan).assertResults(data);
 }
 
 TEST_F(CudfFilterProjectTest, roundDecimal) {

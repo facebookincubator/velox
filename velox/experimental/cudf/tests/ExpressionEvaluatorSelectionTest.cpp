@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -60,6 +62,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
+        {"d", DOUBLE()},
         {"date", DATE()},
         {"c", INTEGER()},
     });
@@ -105,6 +108,118 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+// GPU SFI claims a call node only when a registered function binds the
+// argument types exactly: round and truncate register each arity separately,
+// a chained AND arrives flattened as one call that the variadic registration
+// matches at any arity while still checking the element type, and a null
+// literal, which has no element 0 to read, is declined in canEvaluate() so
+// another evaluator can take the node rather than create() throwing.
+TEST_F(CudfExpressionSelectionTest, gpuSfiCanEvaluate) {
+  struct Case {
+    std::string sql;
+    bool claimed;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", true},
+      {"d + d", true},
+      // The decimal-places argument is INTEGER, while an integer literal
+      // parses as BIGINT; a coerced plan carries the cast.
+      {"round(d)", true},
+      {"round(d, cast(2 as integer))", true},
+      {"round(a)", true},
+      {"truncate(d)", true},
+      {"truncate(d, cast(2 as integer))", true},
+      {"a > 1 AND b > 2", true},
+      {"a > 1 AND b > 2 AND c > 3", true},
+      {"a > 1 AND b > 2 AND c > 3 AND a < 9", true},
+      {"a > 1 OR b > 2", true},
+      {"a > 1 OR b > 2 OR c > 3", true},
+      {"not(a > 1)", true},
+      {"bitwise_and(a, cast(null as bigint))", false},
+      {"a + cast(null as bigint)", false},
+  };
+  for (const auto& [sql, claimed] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_EQ(GpuSfiExpression::canEvaluate(expr), claimed);
+  }
+
+  // Shapes the parser would not produce: truncate is floating point only, as
+  // in Velox, and the and() pack takes booleans, so a bigint pack of the same
+  // shape is not a match.
+  struct HandBuilt {
+    std::string name;
+    TypePtr returnType;
+    std::vector<std::string> fields;
+  };
+  const std::vector<HandBuilt> rejected = {
+      {"truncate", BIGINT(), {"a"}},
+      {"and", BOOLEAN(), {"a", "b"}},
+  };
+  for (const auto& [name, returnType, fields] : rejected) {
+    SCOPED_TRACE(name);
+    std::vector<core::TypedExprPtr> arguments;
+    for (const auto& field : fields) {
+      arguments.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              rowType_->findChild(field), field));
+    }
+    EXPECT_FALSE(
+        GpuSfiExpression::canEvaluate(
+            std::make_shared<core::CallTypedExpr>(
+                returnType, arguments, name)));
+  }
+}
+
+// GPU SFI (priority 75) sits between the function tier (50) and AST (100), so
+// it evaluates a call nothing else implements, AST takes a call both can
+// handle, and roots it never claims, such as a column, a literal or a call with
+// a null literal, still run on the GPU through another evaluator. When only
+// GPU SFI implements the call and it declines, the operator reports itself
+// ineligible at plan time and runs on the CPU.
+TEST_F(CudfExpressionSelectionTest, gpuSfiSelection) {
+  enum class Evaluator { kGpuSfi, kOther, kNone };
+  struct Case {
+    std::string sql;
+    Evaluator evaluator;
+  };
+  const std::vector<Case> cases = {
+      {"bitwise_and(a, b)", Evaluator::kGpuSfi},
+      {"d + d", Evaluator::kOther},
+      {"a", Evaluator::kOther},
+      {"42", Evaluator::kOther},
+      {"a + 1", Evaluator::kOther},
+      {"a + cast(null as bigint)", Evaluator::kOther},
+      {"bitwise_and(a, cast(null as bigint))", Evaluator::kNone},
+  };
+  for (const auto& [sql, evaluator] : cases) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    ASSERT_EQ(
+        canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()),
+        evaluator != Evaluator::kNone);
+    if (evaluator == Evaluator::kNone) {
+      continue;
+    }
+    auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+    ASSERT_NE(cudfExpr, nullptr);
+    EXPECT_EQ(
+        dynamic_cast<GpuSfiExpression*>(cudfExpr.get()) != nullptr,
+        evaluator == Evaluator::kGpuSfi);
+  }
+}
+
+// registerCudf() registers GPU SFI at the configured priority.
+TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto it = registry.find(kGpuSfiEvaluatorName);
+  ASSERT_NE(it, registry.end()) << "GPU SFI evaluator was never registered";
+  EXPECT_EQ(
+      it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
