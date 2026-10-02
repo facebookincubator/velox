@@ -367,40 +367,47 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   // cannot match it by accident.
   const std::string secret{"mg-api-key-do-not-leak-3f8a1c"};
   const std::string credentialKey{"test_credential_token"};
-  const auto queryCtx =
-      core::QueryCtx::Builder()
-          .executor(executor_.get())
-          .queryConfig(
-              core::QueryConfig(
-                  std::unordered_map<std::string, std::string>{
-                      {credentialKey, secret},
-                      // Named by isCredentialConfigKey() rather than reported
-                      // by the query. Every name on that list is covered, so
-                      // dropping one from it fails here.
-                      {"metagen_key", secret},
-                      {"model_api_key", secret},
-                      {"crypto_auth_tokens_metagen", secret},
-                      {core::QueryConfig::kSpillEnabled, "true"},
-                      {core::QueryConfig::kSpillNumPartitionBits, "17"},
-                  }))
-          .connectorConfigs(
-              std::unordered_map<
-                  std::string,
-                  std::shared_ptr<config::ConfigBase>>{
-                  {"test_trace",
-                   std::make_shared<config::ConfigBase>(
-                       std::unordered_map<std::string, std::string>{
-                           {credentialKey, secret},
-                           {"metagen_key", secret},
-                           {"cKey1", "cVal1"},
-                       })}})
-          .credentialKeys([&] {
-            core::CredentialKeys keys;
-            keys.queryConfig.insert(credentialKey);
-            keys.connectors["test_trace"].insert(credentialKey);
-            return keys;
-          }())
-          .build();
+  core::CredentialKeys keys;
+  std::unordered_map<std::string, std::string> queryConfigMap{
+      // Named by isCredentialConfigKey() rather than recorded by a write.
+      // Every name on that list is covered, so dropping one from it fails
+      // here.
+      {"metagen_key", secret},
+      {"model_api_key", secret},
+      {"crypto_auth_tokens_metagen", secret},
+      {core::QueryConfig::kSpillEnabled, "true"},
+      {core::QueryConfig::kSpillNumPartitionBits, "17"},
+  };
+  keys.write(
+      queryConfigMap,
+      "",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  std::unordered_map<std::string, std::string> connectorConfigMap{
+      {"metagen_key", secret},
+      {"cKey1", "cVal1"},
+  };
+  keys.write(
+      connectorConfigMap,
+      "test_trace",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .queryConfig(core::QueryConfig(queryConfigMap))
+                            .connectorConfigs(
+                                std::unordered_map<
+                                    std::string,
+                                    std::shared_ptr<config::ConfigBase>>{
+                                    {"test_trace",
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(connectorConfigMap))}})
+                            .credentialKeys(std::move(keys))
+                            .build();
 
   trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
       .write(*queryCtx, *planNode);
@@ -442,10 +449,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
 }
 
 TEST_F(OperatorTraceTest, traceMetadataRedactsWhereTheCredentialLanded) {
-  // One name, three destinations, built by the write() calls that produce it
-  // rather than by hand. It is the stored value in the query config and in one
-  // connector; the other connector kept a property of the same name, and
-  // redacting that would destroy a value replay still has to read back.
+  // One name, three destinations, built by the write() calls that produce it.
+  // It is the stored value in the query config and in one connector; the other
+  // connector kept a property of the same name, and redacting that would
+  // destroy a value replay still has to read back.
   const auto rowType = ROW({"c0", "c1"}, BIGINT());
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
   const auto outputDir = TempDirectoryPath::create();

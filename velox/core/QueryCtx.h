@@ -51,7 +51,8 @@ struct PlanFragment;
 /// Record through write(). A credential written into a config by any other
 /// means is reported by nothing here, and is redacted only if some other
 /// rule happens to name it.
-struct CredentialKeys {
+class CredentialKeys {
+ public:
   /// What a write does when the config already holds the key.
   enum class OnConflict {
     /// Keep the existing value and record nothing. What is stored came from
@@ -60,13 +61,6 @@ struct CredentialKeys {
     /// Replace it. The credential becomes the stored value.
     kReplace,
   };
-
-  /// Names a write stored a credential under in the query config.
-  folly::F14FastSet<std::string> queryConfig;
-
-  /// Per connector id, the names a write stored a credential under in that
-  /// connector's config.
-  folly::F14FastMap<std::string, folly::F14FastSet<std::string>> connectors;
 
   /// Writes 'credential' into 'config' under 'key', subject to 'onConflict',
   /// and records 'key' when this write stored it. 'connectorId' empty means
@@ -79,6 +73,22 @@ struct CredentialKeys {
       const std::string& key,
       const std::string& credential,
       OnConflict onConflict);
+
+  /// Whether write() recorded 'key' for the query config.
+  bool isQueryConfigCredential(std::string_view key) const {
+    return queryConfigKeys_.contains(key);
+  }
+
+  /// Whether write() recorded 'key' for 'connectorId'.
+  bool isConnectorCredential(std::string_view connectorId, std::string_view key)
+      const;
+
+ private:
+  // Keys write() recorded for the query config.
+  folly::F14FastSet<std::string> queryConfigKeys_;
+
+  // Keys write() recorded, per connector id.
+  folly::F14FastMap<std::string, folly::F14FastSet<std::string>> connectorKeys_;
 };
 
 /// Query execution context that manages resources and configuration for a
