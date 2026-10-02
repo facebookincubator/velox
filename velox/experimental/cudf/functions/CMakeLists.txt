@@ -67,7 +67,16 @@ set_target_properties(
   PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
 )
 
-target_link_libraries(velox_cudf_gpu_simple_functions PRIVATE cudf::cudf velox_cudf_gpu_shadows)
+# Host half of the session time zone, where tz::TimeZone and QueryConfig are
+# reachable; initialize() calls it through the POD-only GpuTimeZone.h.
+add_library(velox_cudf_gpu_time_zone GpuTimeZone.cpp)
+
+target_link_libraries(velox_cudf_gpu_time_zone PRIVATE cudf::cudf velox_core velox_type_tz)
+
+target_link_libraries(
+  velox_cudf_gpu_simple_functions
+  PRIVATE cudf::cudf velox_cudf_gpu_shadows velox_cudf_gpu_time_zone
+)
 
 # Host side, without the shadow include path, so it sees real Velox headers. It
 # reaches the device code above only through GpuLaunchFn, a function pointer

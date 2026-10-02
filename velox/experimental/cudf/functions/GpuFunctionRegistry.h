@@ -51,6 +51,9 @@ struct GpuArgView {
   cudf::size_type offset;
   /// When true every row reads element 0.
   bool isConstant;
+  /// Ticks per second of a timestamp argument, which cuDF stores as one
+  /// integer in the column's unit; zero otherwise.
+  int64_t ticksPerSecond;
 };
 
 /// An initialized function instance, as opaque bytes: only the

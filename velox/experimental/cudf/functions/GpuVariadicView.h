@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
 #include "velox/experimental/cudf/types/GpuProxyTypes.cuh"
+#include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
 #include <cudf/utilities/bit.hpp>
 
@@ -50,6 +51,25 @@ GPU_HOST_DEVICE inline const T& argValue(
   return static_cast<const T*>(argument.data)[argIndex(argument, row)];
 }
 
+/// A timestamp argument at this row, split from cuDF's one integer per row
+/// into seconds and nanoseconds in [0, 1e9), as Velox's Timestamp holds it;
+/// one tick before the epoch is second -1.
+GPU_HOST_DEVICE inline gpu::GpuTimestamp argTimestamp(
+    const GpuArgView& argument,
+    cudf::size_type row) {
+  const int64_t ticks = argValue<int64_t>(argument, row);
+  const int64_t ticksPerSecond = argument.ticksPerSecond;
+  int64_t seconds = ticks / ticksPerSecond;
+  int64_t remainder = ticks % ticksPerSecond;
+  if (remainder < 0) {
+    seconds -= 1;
+    remainder += ticksPerSecond;
+  }
+  return gpu::GpuTimestamp{
+      seconds,
+      static_cast<uint64_t>(remainder * (1'000'000'000 / ticksPerSecond))};
+}
+
 } // namespace detail
 
 /// One element of a variadic pack: a value, or nothing. Offers the
@@ -78,6 +98,12 @@ class GpuOptionalValue {
 /// column, so elements are read only through at().
 template <typename T>
 class GpuVariadicView {
+  // at() hands out a pointer into the column, and a timestamp has to be
+  // converted on the way out of it.
+  static_assert(
+      !std::is_same_v<T, gpu::GpuTimestamp>,
+      "Variadic timestamp arguments are not supported yet");
+
  public:
   GPU_HOST_DEVICE GpuVariadicView(
       const GpuArgView* arguments,

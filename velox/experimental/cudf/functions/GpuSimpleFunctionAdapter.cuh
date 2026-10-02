@@ -344,6 +344,8 @@ __device__ inline decltype(auto) slotArg(
     cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else if constexpr (std::is_same_v<TIn, gpu::GpuTimestamp>) {
+    return argTimestamp(arguments[i], row);
   } else {
     return argValue<TIn>(arguments[i], row);
   }
@@ -357,6 +359,11 @@ __device__ inline auto slotNullableArg(
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
+  // A null pointer stands for a null input here, and a converted timestamp has
+  // no storage in the column to point at.
+  static_assert(
+      !std::is_same_v<TIn, gpu::GpuTimestamp>,
+      "Timestamp arguments to callNullable() are not supported yet");
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
   } else {
@@ -387,6 +394,10 @@ __device__ void evaluateRow(
     int32_t numArgs,
     cudf::size_type row,
     std::index_sequence<I...>) {
+  // The output column holds cuDF's one-integer timestamps, not GpuTimestamp.
+  static_assert(
+      !std::is_same_v<TOut, gpu::GpuTimestamp>,
+      "Timestamp results are not supported yet");
   TOut result{};
 
   bool ok;

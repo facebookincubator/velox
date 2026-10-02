@@ -299,16 +299,43 @@ void collectReferencedInputFields(
   }
 }
 
+// Defined below, next to the date_trunc time zone check.
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr);
+
+// True when Velox would read TIMESTAMP arguments in the session time zone.
+bool sessionTimeZoneApplies(const core::QueryConfig& config) {
+  return config.adjustTimestampToTimezone() &&
+      !config.sessionTimezone().empty();
+}
+
+// True when `entry` can evaluate `expr` with Velox's result. While the session
+// time zone applies, an evaluator that reads TIMESTAMP as UTC is not offered a
+// tree containing a call such as hour(timestamp).
+bool canEvaluateUnder(
+    const CudfExpressionEvaluatorEntry& entry,
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
+  if (!entry.canEvaluate) {
+    return false;
+  }
+  if (sessionTimeZone && !entry.honorsSessionTimeZone &&
+      containsSessionTimeZoneSensitiveCall(expr)) {
+    return false;
+  }
+  return entry.canEvaluate(expr);
+}
+
 // Returns the highest-priority evaluator entry that can handle `expr`, or
 // nullptr when none can.
 const CudfExpressionEvaluatorEntry* findBestEvaluator(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (canEvaluateUnder(entry, expr, sessionTimeZone)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }
@@ -320,14 +347,16 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
 // Recursive, context-free check that some cuDF evaluator supports every node in
 // the expression tree. canExprRunOnGpu wraps this with expression optimization
 // and the timezone fallback.
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+bool canBeEvaluatedByCudf(
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (canEvaluateUnder(entry, expr, sessionTimeZone)) {
       supported = true;
       break;
     }
@@ -341,7 +370,7 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
     if (input->isConstantKind() || input->isInputKind()) {
       continue;
     }
-    if (!canBeEvaluatedByCudf(input)) {
+    if (!canBeEvaluatedByCudf(input, sessionTimeZone)) {
       return false;
     }
   }
@@ -3328,6 +3357,52 @@ bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
   return false;
 }
 
+// Calls whose result for a TIMESTAMP argument is a wall-clock field, and so
+// depends on the session time zone. Names follow
+// DateTimeFunctionsRegistration.cpp.
+bool isSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  static const std::unordered_set<std::string> kWallClockFields{
+      "year",
+      "quarter",
+      "month",
+      "day",
+      "day_of_month",
+      "day_of_week",
+      "dow",
+      "day_of_year",
+      "doy",
+      "week",
+      "week_of_year",
+      "year_of_week",
+      "yow",
+      "hour",
+      "minute",
+  };
+  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+  const auto name = exprRegistryName(expr);
+  if (name.compare(0, prefix.size(), prefix) != 0 ||
+      !kWallClockFields.contains(name.substr(prefix.size()))) {
+    return false;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), [](const auto& input) {
+        return input->type()->isTimestamp();
+      });
+}
+
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr) {
+  if (isSessionTimeZoneSensitiveCall(expr)) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(),
+      expr->inputs().end(),
+      containsSessionTimeZoneSensitiveCall);
+}
+
 // True if `expr` must fall back to CPU because it contains a timezone-sensitive
 // date_trunc while the session enables adjust_timestamp_to_session_timezone,
 // which cuDF cannot honor. False when `queryCtx` is null or the config is
@@ -3362,8 +3437,10 @@ bool canExprRunOnGpu(
   const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
       ? expression::optimize(expr, queryCtx, pool)
       : expr;
+  const bool sessionTimeZone =
+      queryCtx != nullptr && sessionTimeZoneApplies(queryCtx->queryConfig());
   return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+      canBeEvaluatedByCudf(checked, sessionTimeZone);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(
@@ -3371,7 +3448,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool,
     const core::QueryConfig& config) {
-  const auto* best = findBestEvaluator(expr);
+  const auto* best = findBestEvaluator(expr, sessionTimeZoneApplies(config));
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
   return best->create(expr, inputRowSchema, pool, config);

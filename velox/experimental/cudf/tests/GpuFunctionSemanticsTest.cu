@@ -18,6 +18,7 @@
 // Compiled with gpu_shadows/ ahead of the Velox source root, so it instantiates
 // the same functions GpuPrestoFunctions.cu registers.
 
+#include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 #include "velox/experimental/cudf/tests/MapOnDevice.h"
 
@@ -30,6 +31,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <vector>
 
@@ -37,6 +39,86 @@ namespace facebook::velox::cudf_velox::gpu_sfi {
 namespace {
 
 using facebook::velox::gpu::GpuExec;
+
+// ---------------------------------------------------------------------------
+// DATE field extraction
+// ---------------------------------------------------------------------------
+
+struct DateFields {
+  int64_t year;
+  int64_t month;
+  int64_t day;
+  int64_t quarter;
+  int64_t dayOfYear;
+  int64_t dayOfWeek;
+};
+
+__global__ void
+extractDateFields(const int32_t* days, DateFields* out, int count) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count) {
+    return;
+  }
+  GpuYearFunction<GpuExec>{}.call(out[i].year, days[i]);
+  GpuMonthFunction<GpuExec>{}.call(out[i].month, days[i]);
+  GpuDayFunction<GpuExec>{}.call(out[i].day, days[i]);
+  GpuQuarterFunction<GpuExec>{}.call(out[i].quarter, days[i]);
+  GpuDayOfYearFunction<GpuExec>{}.call(out[i].dayOfYear, days[i]);
+  GpuDayOfWeekFunction<GpuExec>{}.call(out[i].dayOfWeek, days[i]);
+}
+
+// Compares against gmtime_r rather than the CPU extractors, which share the
+// calendar code in TimeUtilsCore.h with the GPU ones.
+TEST(GpuFunctionSemanticsTest, dateFieldsMatchTheCLibrary) {
+  std::vector<int32_t> days;
+  // The epoch and its neighbours, both sides of a leap day, a century non-leap
+  // year, the TPC-H range, and dates far outside any real query's range.
+  for (int32_t day :
+       {0,
+        -1,
+        1,
+        365,
+        366,
+        -365,
+        8035,
+        10592,
+        19000,
+        7305,
+        7304,
+        -25567,
+        50000,
+        -700000,
+        700000,
+        100000,
+        -50000,
+        250000,
+        -250000}) {
+    days.push_back(day);
+  }
+  for (int32_t day = -3000; day <= 3000; day += 7) {
+    days.push_back(day);
+  }
+
+  const auto got = mapOnDevice<int32_t, DateFields>(
+      days, [](const int32_t* in, DateFields* out, int count) {
+        extractDateFields<<<(count + 255) / 256, 256>>>(in, out, count);
+      });
+
+  for (size_t i = 0; i < days.size(); ++i) {
+    SCOPED_TRACE(days[i]);
+    const time_t seconds = static_cast<time_t>(days[i]) * 86400;
+    std::tm expected{};
+    ASSERT_NE(gmtime_r(&seconds, &expected), nullptr);
+
+    EXPECT_EQ(got[i].year, 1900 + expected.tm_year);
+    EXPECT_EQ(got[i].month, 1 + expected.tm_mon);
+    EXPECT_EQ(got[i].day, expected.tm_mday);
+    EXPECT_EQ(got[i].quarter, expected.tm_mon / 3 + 1);
+    EXPECT_EQ(got[i].dayOfYear, expected.tm_yday + 1);
+    // tm_wday counts from Sunday; Presto counts Monday as 1 through Sunday 7.
+    EXPECT_EQ(got[i].dayOfWeek, expected.tm_wday == 0 ? 7 : expected.tm_wday);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Kleene logic
@@ -67,8 +149,12 @@ evaluateLogical(const Tristate* cases, Conjunctions* out, int count) {
     values[term] = cases[i].terms[term] == 1;
     // Validity is carried by the mask, as in a cudf column.
     masks[term] = cases[i].terms[term] >= 0 ? 1u : 0u;
-    arguments[term] =
-        GpuArgView{&values[term], &masks[term], 0, /*isConstant=*/true};
+    arguments[term] = GpuArgView{
+        &values[term],
+        &masks[term],
+        0,
+        /*isConstant=*/true,
+        /*ticksPerSecond=*/0};
   }
 
   GpuVariadicView<bool> terms{arguments, 3, 0};

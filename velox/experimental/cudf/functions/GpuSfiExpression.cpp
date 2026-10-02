@@ -131,13 +131,30 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
   return nullptr;
 }
 
+// Ticks per second of a cuDF timestamp column, or zero for any other type.
+int64_t ticksPerSecond(cudf::data_type type) {
+  switch (type.id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1'000;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 1'000'000;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 1'000'000'000;
+    default:
+      return 0;
+  }
+}
+
 // Forms the descriptor the kernel reads an argument through.
 GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
   return GpuArgView{
       static_cast<const void*>(column.head<uint8_t>()),
       column.null_mask(),
       column.offset(),
-      isConstant};
+      isConstant,
+      ticksPerSecond(column.type())};
 }
 
 // Runs the function's initialize() once, at compile time, with this call
@@ -347,6 +364,7 @@ void registerGpuSfiEvaluator(int priority) {
          const core::QueryConfig& config) {
         return GpuSfiExpression::create(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/true,
       /*overwrite=*/false);
 }
 

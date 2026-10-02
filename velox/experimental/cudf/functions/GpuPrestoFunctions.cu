@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/functions/GpuRegistrationHelpers.cuh"
 
 // Bitwise.h calls bits::countBits without including BitUtil.h.
+#include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 
 #include "velox/common/base/BitUtil.h"
@@ -132,6 +133,44 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
       int64_t,
       int64_t,
       int32_t>({prefix + "bitwise_right_shift_arithmetic"});
+
+  // --- Datetime -----------------------------------------------------------
+  // TIMESTAMP overloads apply the session time zone as the CPU does. Names
+  // follow DateTimeFunctionsRegistration.cpp.
+  registerGpuFunction<GpuYearFunction, int64_t, Timestamp>({prefix + "year"});
+  registerGpuFunction<GpuYearFunction, int64_t, Date>({prefix + "year"});
+  registerGpuFunction<GpuQuarterFunction, int64_t, Timestamp>(
+      {prefix + "quarter"});
+  registerGpuFunction<GpuQuarterFunction, int64_t, Date>({prefix + "quarter"});
+  registerGpuFunction<GpuMonthFunction, int64_t, Timestamp>({prefix + "month"});
+  registerGpuFunction<GpuMonthFunction, int64_t, Date>({prefix + "month"});
+  registerGpuFunction<GpuDayFunction, int64_t, Timestamp>(
+      {prefix + "day", prefix + "day_of_month"});
+  registerGpuFunction<GpuDayFunction, int64_t, Date>(
+      {prefix + "day", prefix + "day_of_month"});
+  registerGpuFunction<GpuDayOfWeekFunction, int64_t, Timestamp>(
+      {prefix + "day_of_week", prefix + "dow"});
+  registerGpuFunction<GpuDayOfWeekFunction, int64_t, Date>(
+      {prefix + "day_of_week", prefix + "dow"});
+  registerGpuFunction<GpuDayOfYearFunction, int64_t, Timestamp>(
+      {prefix + "day_of_year", prefix + "doy"});
+  registerGpuFunction<GpuDayOfYearFunction, int64_t, Date>(
+      {prefix + "day_of_year", prefix + "doy"});
+  registerGpuFunction<GpuWeekFunction, int64_t, Timestamp>(
+      {prefix + "week", prefix + "week_of_year"});
+  registerGpuFunction<GpuWeekFunction, int64_t, Date>(
+      {prefix + "week", prefix + "week_of_year"});
+  registerGpuFunction<GpuYearOfWeekFunction, int64_t, Timestamp>(
+      {prefix + "year_of_week", prefix + "yow"});
+  registerGpuFunction<GpuYearOfWeekFunction, int64_t, Date>(
+      {prefix + "year_of_week", prefix + "yow"});
+  registerGpuFunction<GpuHourFunction, int64_t, Timestamp>({prefix + "hour"});
+  registerGpuFunction<GpuMinuteFunction, int64_t, Timestamp>(
+      {prefix + "minute"});
+  registerGpuFunction<GpuSecondFunction, int64_t, Timestamp>(
+      {prefix + "second"});
+  registerGpuFunction<GpuMillisecondFunction, int64_t, Timestamp>(
+      {prefix + "millisecond"});
 
   // --- Logical -------------------------------------------------------------
   // See GpuLogicalFunctions.cuh. TODO: register is_null for every input type,

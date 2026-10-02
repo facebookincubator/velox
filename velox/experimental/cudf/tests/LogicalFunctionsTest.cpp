@@ -66,6 +66,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
           return std::make_shared<cudf_velox::ASTExpression>(
               expr, row, pool, config);
         },
+        /*honorsSessionTimeZone=*/false,
         /*overwrite=*/true);
 
     cudf_velox::registerCudfExpressionEvaluator(
@@ -81,6 +82,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
           return std::make_shared<cudf_velox::JitExpression>(
               expr, row, pool, config);
         },
+        /*honorsSessionTimeZone=*/false,
         /*overwrite=*/true);
 
     // GPU SFI also outranks the function tier and registers not and is_null.

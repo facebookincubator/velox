@@ -47,6 +47,9 @@ struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
   CudfExpressionEvaluatorCreate create;
+  /// True when the evaluator applies the session time zone to TIMESTAMP
+  /// arguments as Velox does; calls that depend on it go only to these.
+  bool honorsSessionTimeZone;
 };
 
 /// Ensure that built-in expression evaluators are registered.
@@ -63,6 +66,7 @@ bool registerCudfExpressionEvaluator(
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
+    bool honorsSessionTimeZone,
     bool overwrite = true);
 
 } // namespace facebook::velox::cudf_velox

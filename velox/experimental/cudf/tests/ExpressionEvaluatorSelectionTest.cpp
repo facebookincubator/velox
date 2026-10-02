@@ -227,6 +227,40 @@ TEST_F(CudfExpressionSelectionTest, variadicTailStillChecksElementType) {
   EXPECT_FALSE(GpuSfiExpression::canEvaluate(wrongElement));
 }
 
+// DATE is INTEGER underneath, so signature matching must compare logical type
+// names, not physical kinds.
+TEST_F(CudfExpressionSelectionTest, gpuSfiExtractsDateFields) {
+  for (const auto& sql :
+       {"year(date)",
+        "month(date)",
+        "day(date)",
+        "quarter(date)",
+        "day_of_year(date)",
+        "day_of_week(date)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  // An INTEGER argument must not bind to the DATE overload.
+  auto onInteger = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c")},
+      "year");
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(onInteger));
+
+  // The TIMESTAMP overloads apply the session time zone; GpuSfiTimestampTest
+  // checks what they compute.
+  auto onTimestamp = optimizeTypedExpr(
+      "year(cast(date as timestamp))",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(onTimestamp));
+}
+
 // GPU SFI cannot read a null literal argument, which has no element 0. It
 // declines in canEvaluate(), so another evaluator can take the node, rather
 // than throwing from create().
