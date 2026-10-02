@@ -371,6 +371,18 @@ TEST_F(FlatMapVectorTest, withNulls) {
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 2));
 }
 
+TEST_F(FlatMapVectorTest, containsNullAtValues) {
+  auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
+      {{{1L, 10L}, {2L, 20L}}},
+      {{{1L, 11L}, {2L, std::nullopt}}},
+      {{{1L, std::nullopt}}},
+  });
+
+  EXPECT_FALSE(flatMapVector->containsNullAt(0));
+  EXPECT_TRUE(flatMapVector->containsNullAt(1));
+  EXPECT_TRUE(flatMapVector->containsNullAt(2));
+}
+
 TEST_F(FlatMapVectorTest, nullInMaps) {
   // Construct a flat map with two null BufferPtrs in the inMaps vector.
   auto vectorSize = 1;

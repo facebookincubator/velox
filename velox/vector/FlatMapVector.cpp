@@ -259,7 +259,7 @@ bool FlatMapVector::containsNullAt(vector_size_t index) const {
         return true;
       }
 
-      if (mapValues_[i]->containsNullAt(i)) {
+      if (mapValues_[i]->containsNullAt(index)) {
         return true;
       }
     }
