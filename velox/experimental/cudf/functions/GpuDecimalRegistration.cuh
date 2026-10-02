@@ -135,6 +135,99 @@ inline Constraints modulusConstraints() {
       {S3::name(), widerScale()}};
 }
 
+// --- SparkSQL ------------------------------------------------------------
+// Spark derives a result precision and scale, then applies its own adjustment,
+// so one makeConstraints produces them. The expressions follow
+// sparksql/DecimalArithmetic.cpp.
+namespace spark_decimal {
+
+/// Spark's adjustment step. With precision loss allowed, a result wider than
+/// 38 digits sheds scale down to a floor of 6; otherwise the scale is capped
+/// at 38.
+inline Constraints makeConstraints(
+    const std::string& resultPrecision,
+    const std::string& resultScale,
+    bool allowPrecisionLoss) {
+  const std::string finalScale = allowPrecisionLoss
+      ? "(" + resultPrecision + ") <= 38 ? (" + resultScale + ") : max((" +
+          resultScale + ") - (" + resultPrecision + ") + 38, min((" +
+          resultScale + "), 6))"
+      : "min(" + resultScale + ", 38)";
+  return {
+      {P3::name(), "min(38, " + resultPrecision + ")"},
+      {S3::name(), finalScale}};
+}
+
+inline Constraints addSubtractConstraints(bool allowPrecisionLoss) {
+  using namespace decimal_detail;
+  const std::string resultPrecision = "max(" + aPrecision() + " - " + aScale() +
+      ", " + bPrecision() + " - " + bScale() + ") + " + widerScale() + " + 1";
+  return makeConstraints(resultPrecision, widerScale(), allowPrecisionLoss);
+}
+
+inline Constraints multiplyConstraints(bool allowPrecisionLoss) {
+  using namespace decimal_detail;
+  const std::string resultPrecision =
+      aPrecision() + " + " + bPrecision() + " + 1";
+  const std::string resultScale = aScale() + " + " + bScale();
+  return makeConstraints(resultPrecision, resultScale, allowPrecisionLoss);
+}
+
+/// divide with precision loss allowed. Denying it has its own derivation on
+/// the CPU, getDivideConstraintsDenyPrecisionLoss, which rebalances whole and
+/// fraction digits; it is left for the registration that needs it.
+inline Constraints divideConstraintsAllowPrecisionLoss() {
+  using namespace decimal_detail;
+  const std::string resultScale =
+      "max(6, " + aScale() + " + " + bPrecision() + " + 1)";
+  const std::string resultPrecision =
+      aPrecision() + " - " + aScale() + " + " + bScale() + " + " + resultScale;
+  return makeConstraints(resultPrecision, resultScale, true);
+}
+
+} // namespace spark_decimal
+
+/// Spark's divide adds two narrowing combinations on top of the five, because
+/// its result scale can shrink enough to fit a short decimal.
+template <template <class> typename Func>
+void registerGpuSparkDecimalDivide(
+    const std::vector<std::string>& aliases,
+    const Constraints& constraints) {
+  registerGpuDecimalBinary<Func>(aliases, constraints);
+
+  // (short, long) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>(aliases, constraints);
+
+  // (long, short) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases, constraints);
+}
+
+/// Integral divide returns a bigint, so its four combinations need no
+/// constraints.
+template <template <class> typename Func>
+void registerGpuSparkIntegralDecimalDivide(
+    const std::vector<std::string>& aliases) {
+  registerGpuFunction<
+      Func,
+      int64_t,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases);
+  registerGpuFunction<Func, int64_t, LongDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      aliases);
+  registerGpuFunction<Func, int64_t, ShortDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      aliases);
+  registerGpuFunction<Func, int64_t, LongDecimal<P1, S1>, ShortDecimal<P2, S2>>(
+      aliases);
+}
+
 /// floor, ceil and one-argument round: scale 0, and the integral digits plus
 /// one for the rounding carry. Matches registerDecimalFloorOrCeil.
 inline Constraints roundToIntegerConstraints() {

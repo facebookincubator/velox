@@ -31,6 +31,7 @@ struct IntervalYearMonth;
 struct Time;
 struct Timestamp;
 struct StringView;
+struct Varbinary;
 struct Varchar;
 template <typename T>
 struct Variadic;
@@ -109,16 +110,19 @@ struct resolver<Timestamp> {
   using null_free_in_type = Timestamp;
 };
 
-/// Velox's own StringView, as on the CPU. Only a constant VARCHAR argument is
-/// supported, read by initialize() on the host; a kernel hands a body an empty
-/// view, since it cannot read a strings column. There is no out_type: a kernel
-/// cannot write one either.
+/// Velox's own StringView, as on the CPU. Only a constant VARCHAR or VARBINARY
+/// argument is supported, read by initialize() on the host; a kernel hands a
+/// body an empty view, since it cannot read a strings column. There is no
+/// out_type: a kernel cannot write one either.
 template <>
 struct resolver<Varchar> {
   using in_type = StringView;
   using out_type = void;
   using null_free_in_type = StringView;
 };
+
+template <>
+struct resolver<Varbinary> : resolver<Varchar> {};
 
 /// A constant argument resolves as its underlying type; the registration marks
 /// it constant in the signature so that only a literal binds to it.

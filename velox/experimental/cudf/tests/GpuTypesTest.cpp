@@ -51,13 +51,21 @@ TEST(GpuTypesTest, resolver) {
   static_assert(resolvesTo<Timestamp, Timestamp>);
 }
 
-// A VARCHAR argument arrives as Velox's own StringView, as on the CPU, and a
-// kernel produces none.
-TEST(GpuTypesTest, resolverVarchar) {
-  using R = GpuExec::resolver<Varchar>;
-  static_assert(std::is_same_v<R::in_type, StringView>);
-  static_assert(std::is_same_v<R::null_free_in_type, StringView>);
-  static_assert(std::is_same_v<R::out_type, void>);
+// True when GpuExec hands a T argument to a body as Velox's own StringView and
+// lets a kernel produce none.
+template <typename T>
+constexpr bool resolvesToStringArgument =
+    std::is_same_v<typename GpuExec::resolver<T>::in_type, StringView> &&
+    std::is_same_v<
+        typename GpuExec::resolver<T>::null_free_in_type,
+        StringView> &&
+    std::is_same_v<typename GpuExec::resolver<T>::out_type, void>;
+
+// A VARCHAR or VARBINARY argument arrives as Velox's own StringView, as on the
+// CPU, and a kernel produces neither.
+TEST(GpuTypesTest, resolverStrings) {
+  static_assert(resolvesToStringArgument<Varchar>);
+  static_assert(resolvesToStringArgument<Varbinary>);
 }
 
 // A custom type with a custom comparison arrives in a view, as on the CPU,
