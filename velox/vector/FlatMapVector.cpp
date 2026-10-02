@@ -61,6 +61,77 @@ std::optional<column_index_t> getKeyChannelImpl(
 
 } // namespace
 
+FlatMapVector::FlatMapVector(
+    velox::memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    vector_size_t length,
+    VectorPtr distinctKeys,
+    std::vector<VectorPtr> mapValues,
+    std::vector<BufferPtr> inMaps,
+    std::optional<vector_size_t> nullCount,
+    bool sortedKeys)
+    : BaseVector(
+          pool,
+          type,
+          VectorEncoding::Simple::FLAT_MAP,
+          std::move(nulls),
+          length,
+          std::nullopt,
+          nullCount),
+      mapValues_(std::move(mapValues)),
+      inMaps_(std::move(inMaps)),
+      sortedKeys_(sortedKeys) {
+  VELOX_CHECK(type->isMap(), "FlatMapVector requires a MAP type.");
+  distinctKeys_ = BaseVector::getOrCreateEmpty(
+      std::move(distinctKeys), type->childAt(0), pool);
+  setDistinctKeysImpl(distinctKeys_);
+
+  VELOX_CHECK_EQ(
+      numDistinctKeys(),
+      mapValues_.size(),
+      "Wrong number of map value vectors.");
+  VELOX_CHECK_LE(
+      inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
+}
+
+void FlatMapVector::setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys) {
+  setDistinctKeysImpl(std::move(distinctKeys));
+  mapValues_.resize(numDistinctKeys());
+  inMaps_.clear();
+  sortedKeys_ = sortedKeys;
+}
+
+void FlatMapVector::setDistinctKeysImpl(VectorPtr distinctKeys) {
+  VELOX_CHECK(distinctKeys != nullptr);
+  VELOX_CHECK(
+      *distinctKeys->type() == *keyType(),
+      "Unexpected key type: {}",
+      distinctKeys->type()->toString());
+
+  distinctKeys_ = std::move(distinctKeys);
+  keyToChannel_.clear();
+
+  for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
+    keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
+  }
+}
+
+void FlatMapVector::appendDistinctKey(
+    const VectorPtr& sourceDistinctKeys,
+    column_index_t sourceChannel) {
+  column_index_t targetChannel = distinctKeys_->size();
+
+  distinctKeys_->resize(targetChannel + 1);
+  distinctKeys_->copy(
+      sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
+  mapValues_.resize(distinctKeys_->size());
+
+  keyToChannel_.insert(
+      {distinctKeys_->hashValueAt(targetChannel), targetChannel});
+  sortedKeys_ = false;
+}
+
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int32_t scalarValue) const {
   return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
