@@ -797,6 +797,65 @@ TEST_F(DecodedVectorTest, nullsOfDictionaryOverNullableBase) {
   }
 }
 
+TEST_F(DecodedVectorTest, nullsOfDictionaryWithNullsOverNullableBase) {
+  // Nulls on both levels: the dictionary's own and the base's, which decoding
+  // merges a word at a time. 130 rows is two full words and a tail, with nulls
+  // from each level on both sides of each word boundary.
+  constexpr vector_size_t kSize = 130;
+  const auto isWrapperNull = [](vector_size_t row) {
+    return row % 11 == 0 || row == 63 || row == 128;
+  };
+  const auto isBaseNull = [](vector_size_t row) {
+    return row % 7 == 0 || row == 64 || row == 127 || row == 129;
+  };
+
+  // The indices reverse the base, so row i reads base row kSize - 1 - i, and
+  // a base null placed there is what row i must see.
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    const auto baseRow = kSize - 1 - row;
+    if (!isBaseNull(row)) {
+      baseValues[baseRow] = baseRow;
+    }
+  }
+  auto wrapperNulls = allocateNulls(kSize, pool());
+  auto* rawWrapperNulls = wrapperNulls->asMutable<uint64_t>();
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    bits::setNull(rawWrapperNulls, row, isWrapperNull(row));
+  }
+  auto dictionary = BaseVector::wrapInDictionary(
+      wrapperNulls,
+      makeIndices(kSize, [](auto row) { return kSize - 1 - row; }),
+      kSize,
+      makeNullableFlatVector<int64_t>(baseValues));
+
+  const auto expectNulls = [&](DecodedVector& decoded,
+                               const SelectivityVector& rows) {
+    rows.applyToSelected([&](vector_size_t row) {
+      EXPECT_EQ(decoded.isNullAt(row), isWrapperNull(row) || isBaseNull(row))
+          << "row " << row;
+    });
+  };
+
+  {
+    DecodedVector decoded(*dictionary);
+    expectNulls(decoded, SelectivityVector(kSize));
+  }
+
+  {
+    // Rows 0-63 all selected, 64-127 the odd ones, 128-129 none.
+    SelectivityVector rows(kSize, false);
+    for (vector_size_t row = 0; row < 128; ++row) {
+      if (row < 64 || row % 2 == 1) {
+        rows.setValid(row, true);
+      }
+    }
+    rows.updateBounds();
+    DecodedVector decoded(*dictionary, rows);
+    expectNulls(decoded, rows);
+  }
+}
+
 TEST_F(DecodedVectorTest, nullsOfPartiallySelectedNestedDictionary) {
   // A partial decode fills in indices for the selected rows only, and a
   // reused DecodedVector keeps whatever an earlier decode left in the rest:

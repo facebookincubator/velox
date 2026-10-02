@@ -357,10 +357,13 @@ namespace {
 
 // For each row 'rows' selects (every row in [0, size) when 'rows' is null),
 // sets the row's bit in 'result' to the bit of 'sourceNulls' at the row's
-// index. Every other bit of 'result' keeps its value.
+// index. Every other bit of 'result' keeps its value. With kKeepNulls, rows
+// already null in 'result' stay null.
 //
 // Works a word at a time so each output word is stored once. Indices are read
-// only for selected rows, the only ones a partial decode fills in.
+// only for selected rows: a partial decode fills in only those, and a
+// dictionary leaves its indices undefined at its own null rows.
+template <bool kKeepNulls>
 void gatherNullsOfRows(
     const uint64_t* sourceNulls,
     const vector_size_t* indices,
@@ -368,6 +371,9 @@ void gatherNullsOfRows(
     vector_size_t size,
     uint64_t* result) {
   const auto gatherWord = [&](int32_t wordIndex, uint64_t selected) {
+    if constexpr (kKeepNulls) {
+      selected &= result[wordIndex];
+    }
     // No row selected: the word keeps its value.
     if (selected == 0) {
       return;
@@ -423,13 +429,10 @@ void DecodedVector::setFlatNulls(
     // When the leaf vector has no nulls, the loop below can never set a
     // null, so the entire per-row pass is skipped.
     if (leafNulls) {
-      auto copiedNulls = copiedNulls_.data();
-      applyToRows(rows, [&](vector_size_t row) {
-        if (!bits::isBitNull(nulls_, row) &&
-            bits::isBitNull(leafNulls, indices_[row])) {
-          bits::setNull(copiedNulls, row);
-        }
-      });
+      // Rows the wrapper already nulls stay null, and their index is never
+      // read.
+      gatherNullsOfRows</*kKeepNulls=*/true>(
+          leafNulls, indices_, rows, size_, copiedNulls_.data());
     }
     nulls_ = copiedNulls_.data();
   } else {
@@ -607,7 +610,8 @@ const uint64_t* DecodedVector::nulls(const SelectivityVector* rows) {
         // end but not greater.
         VELOX_CHECK_LE(rows->end(), size_);
       }
-      gatherNullsOfRows(nulls_, indices_, rows, size_, rawCopiedNulls);
+      gatherNullsOfRows</*kKeepNulls=*/false>(
+          nulls_, indices_, rows, size_, rawCopiedNulls);
       allNulls_ = copiedNulls_.data();
     }
   }
