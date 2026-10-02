@@ -78,6 +78,75 @@ int main(int argc, char** argv) {
       .addExpression("last_day_of_month", "last_day_of_month(c0)")
       .disableTesting();
 
+  // date_trunc on DATE inputs. Each unit hits a different code path
+  // in truncateDate (kWeek is pure int math, kMonth/kQuarter/kYear
+  // round-trip through the Neri-Schneider primitives in FastDate.h).
+  // Use a bounded year range (1970..~2100) so the benchmark measures
+  // the realistic in-range work rather than the rate of out-of-range
+  // throws that an unbounded fuzz of int32 days would produce.
+  auto dateTruncInput = vectorMaker.flatVector<int32_t>(
+      1024,
+      [](auto i) { return static_cast<int32_t>(i * 47); },
+      nullptr,
+      DATE());
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_year_date", vectorMaker.rowVector({dateTruncInput}))
+      .addExpression("date_trunc_year", "date_trunc('year', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_quarter_date", vectorMaker.rowVector({dateTruncInput}))
+      .addExpression("date_trunc_quarter", "date_trunc('quarter', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_month_date", vectorMaker.rowVector({dateTruncInput}))
+      .addExpression("date_trunc_month", "date_trunc('month', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_week_date", vectorMaker.rowVector({dateTruncInput}))
+      .addExpression("date_trunc_week", "date_trunc('week', c0)")
+      .disableTesting();
+
+  // date_trunc on TIMESTAMP inputs for the date-level units. Same
+  // recipe as the DATE benches with a bounded range (~130 years from
+  // epoch) so the measurement reflects the in-range path rather than
+  // the rate of out-of-range throws an unbounded fuzz would produce.
+  auto timestampTruncInput = vectorMaker.flatVector<Timestamp>(
+      1024, [](auto i) { return Timestamp(i * 86400 * 47, 0); });
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_year_timestamp",
+          vectorMaker.rowVector({timestampTruncInput}))
+      .addExpression("date_trunc_year", "date_trunc('year', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_quarter_timestamp",
+          vectorMaker.rowVector({timestampTruncInput}))
+      .addExpression("date_trunc_quarter", "date_trunc('quarter', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_month_timestamp",
+          vectorMaker.rowVector({timestampTruncInput}))
+      .addExpression("date_trunc_month", "date_trunc('month', c0)")
+      .disableTesting();
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "date_trunc_week_timestamp",
+          vectorMaker.rowVector({timestampTruncInput}))
+      .addExpression("date_trunc_week", "date_trunc('week', c0)")
+      .disableTesting();
+
   // TIMESTAMP inputs (seconds + nanos).
   benchmarkBuilder
       .addBenchmarkSet(

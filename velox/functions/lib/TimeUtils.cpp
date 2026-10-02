@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/type/FastDate.h"
 
 namespace facebook::velox::functions {
 
@@ -188,16 +189,107 @@ Timestamp truncateTimestamp(
       result = adjustEpoch(getSeconds(timestamp, timeZone), 24 * 60 * 60);
       break;
 
-    default:
-      auto dateTime = getDateTime(timestamp, timeZone);
-      adjustDateTime(dateTime, unit);
-      result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
+    default: {
+      // Convert to local days, truncate, convert back to local midnight.
+      const int64_t localSeconds = getSeconds(timestamp, timeZone);
+      int64_t localDays = localSeconds / kSecondsInDay;
+      if (localSeconds < 0 && localSeconds % kSecondsInDay) {
+        --localDays;
+      }
+      if (FOLLY_LIKELY(
+              localDays >= std::numeric_limits<int32_t>::min() &&
+              localDays <= std::numeric_limits<int32_t>::max())) {
+        const int32_t truncatedDays =
+            truncateDate(static_cast<int32_t>(localDays), unit);
+        result =
+            Timestamp(static_cast<int64_t>(truncatedDays) * kSecondsInDay, 0);
+      } else {
+        auto dateTime = getDateTime(timestamp, timeZone);
+        adjustDateTime(dateTime, unit);
+        result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
+      }
       break;
+    }
   }
 
   if (timeZone != nullptr) {
     result.toGMT(*timeZone);
   }
   return result;
+}
+
+int32_t truncateDate(int32_t days, DateTimeUnit unit) {
+  if (unit == DateTimeUnit::kDay) {
+    return days;
+  }
+
+  if (unit == DateTimeUnit::kWeek) {
+    // 1970-01-01 was a Thursday, so for any day d the ISO weekday
+    // (0 = Sun, 1 = Mon, ..., 6 = Sat) is `(4 + d) mod 7`. To shift
+    // back to Monday: Sun -> 6 days back, Mon -> 0, otherwise
+    // weekday - 1.
+    int32_t weekday = static_cast<int32_t>((4LL + days) % 7);
+    if (weekday < 0) {
+      weekday += 7;
+    }
+    const int32_t offsetBack = weekday == 0 ? 6 : weekday - 1;
+    // Subtract in 64-bit to avoid signed overflow when days == INT32_MIN, then
+    // reject the rare inputs whose Monday falls before the representable range
+    // rather than returning a wrapped value.
+    const int64_t weekStart = static_cast<int64_t>(days) - offsetBack;
+    VELOX_USER_CHECK_GE(
+        weekStart,
+        std::numeric_limits<int32_t>::min(),
+        "Date is out of range for truncation: {} days",
+        days);
+    return static_cast<int32_t>(weekStart);
+  }
+
+  // Month/quarter/year — pull (y, m, d) via the fast Neri-Schneider,
+  // adjust the month, push back. Only safe when both daysToYmd and
+  // ymdToDays land strictly inside their exact domains; the few years
+  // at each end of the int32 day range fall through to the existing
+  // std::tm path.
+  if (FOLLY_LIKELY(
+          days >= fast_date::kRataDieMin && days <= fast_date::kRataDieMax)) {
+    const auto ymd = daysToYmd(days);
+    if (FOLLY_LIKELY(
+            ymd.year > fast_date::kYearMin && ymd.year < fast_date::kYearMax)) {
+      uint32_t month;
+      switch (unit) {
+        case DateTimeUnit::kYear:
+          month = 1u;
+          break;
+        case DateTimeUnit::kQuarter:
+          month = ((ymd.month - 1u) / 3u) * 3u + 1u;
+          break;
+        case DateTimeUnit::kMonth:
+          month = ymd.month;
+          break;
+        default:
+          VELOX_UNREACHABLE();
+      }
+      return ymdToDays(ymd.year, month, 1u);
+    }
+  }
+
+  // Fallback for rare boundary inputs.
+  std::tm dateTime;
+  const int64_t seconds = static_cast<int64_t>(days) * kSecondsInDay;
+  VELOX_USER_CHECK(
+      Timestamp::epochToCalendarUtc(seconds, dateTime),
+      "Date is too large: {} days",
+      days);
+  adjustDateTime(dateTime, unit);
+  // The truncated unit start can fall before the representable range for inputs
+  // near INT32_MIN; reject those rather than returning a wrapped value.
+  const int64_t truncatedDays =
+      Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+  VELOX_USER_CHECK_GE(
+      truncatedDays,
+      std::numeric_limits<int32_t>::min(),
+      "Date is out of range for truncation: {} days",
+      days);
+  return static_cast<int32_t>(truncatedDays);
 }
 } // namespace facebook::velox::functions
