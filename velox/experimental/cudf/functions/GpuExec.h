@@ -29,7 +29,16 @@ struct IntervalDayTime;
 struct IntervalYearMonth;
 struct Time;
 class Timestamp;
+template <typename T>
+struct Variadic;
 } // namespace facebook::velox
+
+namespace facebook::velox::cudf_velox::gpu_sfi {
+/// Declared, not included: the resolver only names it, and its definition
+/// pulls in the cudf headers.
+template <typename T>
+class GpuVariadicView;
+} // namespace facebook::velox::cudf_velox::gpu_sfi
 
 namespace facebook::velox::gpu {
 
@@ -89,6 +98,17 @@ struct resolver<Timestamp> {
   using in_type = GpuTimestamp;
   using out_type = GpuTimestamp;
   using null_free_in_type = GpuTimestamp;
+};
+
+/// A variadic pack resolves to a view over its element type. Only in_type is
+/// meaningful: a pack is never a return type, and the view reports nullity per
+/// element.
+template <typename T>
+struct resolver<Variadic<T>> {
+  using in_type =
+      cudf_velox::gpu_sfi::GpuVariadicView<typename resolver<T>::in_type>;
+  using out_type = void;
+  using null_free_in_type = in_type;
 };
 
 } // namespace detail

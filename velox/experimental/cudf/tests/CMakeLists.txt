@@ -326,9 +326,56 @@ add_test(
 set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
 
-# Compile-only test that Velox simple-function headers (Arithmetic.h,
-# Bitwise.h, Comparisons.h) instantiate under nvcc with gpu_shadows/ ahead of
-# the Velox source root.
+# GPU SFI registry, on the host: the launchers are stand-ins that are never
+# invoked.
+add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_function_registry_test
+  COMMAND velox_cudf_gpu_function_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_registry_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+target_link_libraries(
+  velox_cudf_gpu_function_registry_test
+  velox_cudf_gpu_function_bridge
+  gtest
+  gtest_main
+)
+
+# GPU SFI semantics, on the device. Uses the registrations' shadow include path
+# and --diag-error=20011, so it instantiates the same functions.
+add_executable(velox_cudf_gpu_function_semantics_test GpuFunctionSemanticsTest.cu)
+set_target_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_include_directories(
+  velox_cudf_gpu_function_semantics_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_function_semantics_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
+add_test(
+  NAME velox_cudf_gpu_function_semantics_test
+  COMMAND velox_cudf_gpu_function_semantics_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+
+# Compile-only test for device-compiled simple functions that are not
+# registered, with gpu_shadows/ ahead of the Velox source root.
 add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
 set_target_properties(
   velox_cudf_gpu_shadow_compile_test
