@@ -5457,7 +5457,7 @@ class HybridFlatMapGroupReader {
         inMap_{pool} {}
 
   // Serializer Hybrid FlatMap batches are decode barriers, so each metadata
-  // decoder contains at most one physical group segment in this decode run.
+  // decoder contains one encoded chunk in this decode run.
   folly::coro::Task<void> co_load() {
     if (loaded_) {
       co_return;
@@ -5467,32 +5467,40 @@ class HybridFlatMapGroupReader {
         keyDecoder_ == nullptr,
         "Hybrid FlatMap key and in-map streams must be present together.");
     loaded_ = true;
+
+    const auto readMetadataChunk =
+        [&]<typename Values>(
+            Decoder* decoder, Values& values, std::string_view streamName) {
+          const auto rowCount = decoder->remainingRows();
+          values.resize(rowCount);
+          if (rowCount > 0) {
+            decoder->next(
+                rowCount,
+                values.data(),
+                [streamName]() -> void* {
+                  NIMBLE_FILE_FAIL(
+                      "Hybrid FlatMap {} stream must not contain nulls.",
+                      streamName);
+                },
+                scratchBuffers_,
+                /*scatterOutputBitmap=*/nullptr);
+          }
+          NIMBLE_CHECK_FILE_EQ(
+              decoder->remainingRows(),
+              0,
+              "Hybrid FlatMap {} stream must have one encoded chunk per decode "
+              "run.",
+              streamName);
+        };
+
     keys_.clear();
     if (keyDecoder_ != nullptr) {
-      keyDecoder_->read(
-          [&](uint32_t rowCount) -> void* {
-            keys_.resize(rowCount);
-            return keys_.data();
-          },
-          []() -> void* {
-            NIMBLE_FILE_FAIL(
-                "Hybrid FlatMap key stream must not contain nulls.");
-          },
-          scratchBuffers_);
+      readMetadataChunk(keyDecoder_, keys_, "key");
     }
 
     inMap_.clear();
     if (inMapDecoder_ != nullptr) {
-      inMapDecoder_->read(
-          [&](uint32_t rowCount) -> void* {
-            inMap_.resize(rowCount);
-            return inMap_.data();
-          },
-          []() -> void* {
-            NIMBLE_FILE_FAIL(
-                "Hybrid FlatMap in-map stream must not contain nulls.");
-          },
-          scratchBuffers_);
+      readMetadataChunk(inMapDecoder_, inMap_, "in-map");
     }
 
     if (keys_.empty()) {
