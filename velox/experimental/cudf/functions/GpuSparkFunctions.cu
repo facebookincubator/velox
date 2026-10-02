@@ -45,6 +45,13 @@ void registerSparkGpuFunctions(const std::string& prefix) {
   // Spark uses Presto's RoundFunction.
   registerGpuUnaryNumeric<RoundFunction>({prefix + "round"});
   registerGpuNumericWithDecimals<RoundFunction>({prefix + "round"});
+
+  // --- Decimal -------------------------------------------------------------
+  // Not registered. sparksql/DecimalUtil.h, which every Spark decimal struct
+  // reaches, includes velox/type/Type.h, which device code cannot parse, and
+  // boost::multiprecision for int256, which has no device form. The checked_*
+  // variants also return Status, which GpuUDFHolder rejects.
+  // TODO(gpu-sfi-checks).
 }
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

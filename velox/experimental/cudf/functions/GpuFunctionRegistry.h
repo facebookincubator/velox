@@ -22,6 +22,8 @@
 // crosses as a launch function pointer plus its signature as strings, from
 // which the host rebuilds an exec::FunctionSignature.
 
+#include "velox/type/SimpleFunctionTags.h"
+
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
@@ -51,6 +53,15 @@ struct GpuArgView {
   bool isConstant;
 };
 
+/// An initialized function instance, as opaque bytes: only the
+/// shadow-compiled side can name its type. Holds what initialize() derived from
+/// the argument types, such as decimal rescale factors. `data` is null for a
+/// function with no initialize().
+struct GpuFunctionInstance {
+  const void* data;
+  int32_t size;
+};
+
 /// Evaluates one registered function over a row range. Instantiated behind the
 /// shadow boundary, once per function and argument types.
 ///
@@ -59,11 +70,22 @@ struct GpuArgView {
 /// declined row's value is meaningless and its validity bit is cleared.
 using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     const std::vector<GpuArgView>& arguments,
+    const GpuFunctionInstance& instance,
     cudf::size_type numRows,
     cudf::data_type outputType,
     uint8_t* declinedRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
+
+/// Runs the function's initialize() over `instance`, which the caller has
+/// sized and aligned per the registration. Compiled behind the shadow
+/// boundary, so the kernel and initialize() share one instantiation of the
+/// function struct; initialize() binds `*inputTypes[i]` only to a
+/// `const Type&`, which needs no complete type.
+using GpuInitializeFn = void (*)(
+    void* instance,
+    const std::vector<TypePtr>& inputTypes,
+    const core::QueryConfig& config);
 
 /// Argument and return types as lowercase Velox type names, e.g. "double",
 /// derived from SimpleTypeTrait<T>::name.
@@ -76,6 +98,25 @@ struct GpuFunctionSignature {
   /// Integer variables named by the type strings, such as i1 and i5 in
   /// "decimal(i1,i5)". May contain duplicates.
   std::vector<std::string> integerVariables;
+  /// Constraints on those variables, as Velox spells them: a variable and the
+  /// expression SignatureBinder evaluates for it, such as "max(i2,i4)" for the
+  /// scale of a decimal sum. A variable with no entry is free.
+  std::vector<std::pair<std::string, std::string>> variableConstraints;
+
+  /// The physical types the kernel was compiled for, which the type names
+  /// cannot express: ShortDecimal<P,S> and LongDecimal<P,S> both render as
+  /// decimal(i1,i5) while being int64 and int128.
+  std::vector<TypeKind> argumentKinds;
+  TypeKind returnKind{TypeKind::UNKNOWN};
+};
+
+/// Storage for a function's instance and how to initialize it. `initialize`
+/// is null when the function has no initialize(); the instance is then
+/// default-constructed.
+struct GpuFunctionInstanceSpec {
+  GpuInitializeFn initialize;
+  int32_t size;
+  int32_t alignment;
 };
 
 /// Registers `launch` under each alias, with Velox's collision policy: an entry
@@ -86,6 +127,7 @@ bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
+    GpuFunctionInstanceSpec instanceSpec,
     bool overwrite = true);
 
 /// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu

@@ -40,6 +40,8 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 using gpu_sfi::GpuArgView;
+using gpu_sfi::GpuFunctionInstance;
+using gpu_sfi::GpuFunctionInstanceSpec;
 using gpu_sfi::GpuLaunchFn;
 
 // A constant is a one-row column read at element 0, which cannot represent a
@@ -52,6 +54,35 @@ bool hasNullLiteralArgument(const core::TypedExprPtr& expr) {
     }
   }
   return false;
+}
+
+// True when `entry`'s kernel was compiled for exactly these physical types. A
+// variadic tail repeats its element kind.
+bool physicalTypesMatch(
+    const gpu_sfi::GpuFunctionEntry& entry,
+    const std::vector<TypePtr>& argumentTypes,
+    const TypePtr& returnType) {
+  if (entry.returnKind != returnType->kind()) {
+    return false;
+  }
+  if (entry.argumentKinds.empty()) {
+    return argumentTypes.empty();
+  }
+  const auto fixed = entry.signature->variableArity()
+      ? entry.argumentKinds.size() - 1
+      : entry.argumentKinds.size();
+  if (entry.signature->variableArity() ? argumentTypes.size() < fixed
+                                       : argumentTypes.size() != fixed) {
+    return false;
+  }
+  for (std::size_t i = 0; i < argumentTypes.size(); ++i) {
+    const auto expected =
+        i < fixed ? entry.argumentKinds[i] : entry.argumentKinds.back();
+    if (argumentTypes[i]->kind() != expected) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
@@ -89,7 +120,11 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
     // Binding proves the arguments fit; the return type still has to be the one
     // the plan expects, since a bound generic could resolve to something else.
     const auto returnType = binder.tryResolveReturnType();
-    if (returnType != nullptr && returnType->equivalent(*expr->type())) {
+    if (returnType == nullptr || !returnType->equivalent(*expr->type())) {
+      continue;
+    }
+    // A decimal signature cannot tell a short-decimal kernel from a long one.
+    if (physicalTypesMatch(entry, argumentTypes, returnType)) {
       return &entry;
     }
   }
@@ -105,15 +140,48 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       isConstant};
 }
 
+// Runs the function's initialize() once, at compile time, with this call
+// site's argument types, as SimpleFunctionAdapter does in its constructor.
+std::vector<std::byte> makeInstance(
+    const GpuFunctionInstanceSpec& spec,
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  if (spec.initialize == nullptr) {
+    // No initialize(): the kernel default-constructs the instance.
+    return {};
+  }
+
+  std::vector<TypePtr> inputTypes;
+  inputTypes.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    inputTypes.push_back(input->type());
+  }
+
+  // A byte vector cannot hold overaligned state.
+  VELOX_CHECK_LE(
+      spec.alignment,
+      static_cast<int32_t>(alignof(std::max_align_t)),
+      "GPU function instance for {} needs {}-byte alignment, which exceeds "
+      "what a std::vector<std::byte> guarantees",
+      expr->toString(),
+      spec.alignment);
+
+  std::vector<std::byte> instance(spec.size);
+  spec.initialize(instance.data(), inputTypes, config);
+  return instance;
+}
+
 } // namespace
 
 GpuSfiExpression::GpuSfiExpression(
     GpuLaunchFn launch,
+    std::vector<std::byte> instance,
     cudf::data_type outputType,
     std::vector<Argument> arguments,
     std::vector<std::unique_ptr<cudf::column>> constants,
     std::vector<std::shared_ptr<CudfExpression>> subexpressions)
     : launch_(launch),
+      instance_(std::move(instance)),
       outputType_(outputType),
       arguments_(std::move(arguments)),
       constants_(std::move(constants)),
@@ -184,6 +252,7 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
 
   return std::make_shared<GpuSfiExpression>(
       resolved->launch,
+      makeInstance(resolved->instanceSpec, expr, config),
       veloxToCudfDataType(expr->type()),
       std::move(arguments),
       std::move(constants),
@@ -234,18 +303,28 @@ ColumnOrView GpuSfiExpression::eval(
     numRows = inputColumnViews.front().size();
   }
 
+  const GpuFunctionInstance instance{
+      instance_.empty() ? nullptr : instance_.data(),
+      static_cast<int32_t>(instance_.size())};
   if (errors == nullptr) {
     // No owner can act on a declined row, so the launch does not collect:
     // nulling the row would turn the error into a different answer.
     return launch_(
-        argViews, numRows, outputType_, /*declinedRows=*/nullptr, stream, mr);
+        argViews,
+        instance,
+        numRows,
+        outputType_,
+        /*declinedRows=*/nullptr,
+        stream,
+        mr);
   }
 
   // Every launch in this evaluation records into the owner's buffer, which the
   // owner reads once; reading a device scalar here would synchronize the
   // stream.
   auto* const declinedRows = errors->declinedRows(numRows);
-  return launch_(argViews, numRows, outputType_, declinedRows, stream, mr);
+  return launch_(
+      argViews, instance, numRows, outputType_, declinedRows, stream, mr);
 }
 
 void GpuSfiExpression::close() {
