@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 #include <boost/multiprecision/cpp_dec_float.hpp>
 #include <folly/ScopeGuard.h>
 #include <cmath>
@@ -2412,6 +2413,70 @@ TEST_F(SparkCastExprTestAnsiOn, overflow) {
 
 TEST_F(SparkCastExprTestAnsiOn, recursiveTryCast) {
   testRecursiveTryCast();
+}
+
+TEST_F(SparkCastExprTest, isAnsiSupportedComplexTypes) {
+  using functions::sparksql::SparkCastCallToSpecialForm;
+  // Every nested cast supports ANSI mode or cannot fail.
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ARRAY(VARCHAR()), ARRAY(BIGINT())));
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(DATE()))));
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          MAP(INTEGER(), VARCHAR()), MAP(DOUBLE(), INTEGER())));
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          MAP(REAL(), VARCHAR()), MAP(REAL(), REAL())));
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ROW({VARCHAR(), INTEGER()}), ROW({BIGINT(), VARCHAR()})));
+  EXPECT_TRUE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ROW({VARCHAR(), REAL()}), ROW({BIGINT(), BOOLEAN()})));
+
+  // A nested cast that is neither ANSI-supported nor known to never fail.
+  EXPECT_FALSE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ARRAY(DOUBLE()), ARRAY(REAL())));
+  EXPECT_FALSE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          MAP(INTEGER(), DOUBLE()), MAP(INTEGER(), REAL())));
+  EXPECT_FALSE(
+      SparkCastCallToSpecialForm::isAnsiSupported(
+          ROW({VARCHAR(), DOUBLE()}), ROW({BIGINT(), REAL()})));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, complexTypes) {
+  testCast(
+      makeArrayVector<StringView>({{"1", "2"}, {"3"}}),
+      makeArrayVector<int64_t>({{1, 2}, {3}}));
+  testCast(
+      makeMapVectorFromJson<int32_t, std::string>({R"( {1:"2", 3:"4"} )"}),
+      makeMapVectorFromJson<double, int32_t>({"{1:2, 3:4}"}));
+
+  // An invalid nested value throws instead of becoming null.
+  VELOX_ASSERT_THROW(
+      evaluateCast(
+          ARRAY(VARCHAR()),
+          ARRAY(BIGINT()),
+          makeRowVector({makeArrayVector<StringView>({{"1", "a"}})})),
+      "Cannot cast VARCHAR 'a' to BIGINT");
+  VELOX_ASSERT_THROW(
+      evaluateCast(
+          MAP(INTEGER(), VARCHAR()),
+          MAP(DOUBLE(), INTEGER()),
+          makeRowVector(
+              {makeMapVectorFromJson<int32_t, std::string>({R"( {1:"a"} )"})})),
+      "Cannot cast VARCHAR 'a' to INTEGER");
+  VELOX_ASSERT_THROW(
+      evaluateCast(
+          ROW({VARCHAR()}),
+          ROW({BIGINT()}),
+          makeRowVector({makeRowVector({makeFlatVector<StringView>({"a"})})})),
+      "Cannot cast VARCHAR 'a' to BIGINT");
 }
 
 // ============================================================================
