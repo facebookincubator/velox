@@ -474,11 +474,10 @@ void CudfHashJoinProbe::initialize() {
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-  filterEvaluator_ = createCudfExpression(
-      optimizedFilter,
-      facebook::velox::type::concatRowTypes(filterRowTypes),
-      pool,
-      config);
+  filterRowType_ = facebook::velox::type::concatRowTypes(filterRowTypes);
+  cpuFilterSource_ = optimizedFilter;
+  filterEvaluator_ =
+      createCudfExpression(optimizedFilter, filterRowType_, pool, config);
 
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
@@ -748,9 +747,23 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
   for (const auto& col : joinedCols) {
     joinedColViews.push_back(col->view());
   }
-  auto filterColumns =
-      filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
-  auto filterColumn = asView(filterColumns);
+  gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
+  auto filterColumns = filterEvaluator_->eval(
+      joinedColViews, stream, get_output_mr(), /*finalize=*/true, &errors);
+  // Checked before the mask drops the declined row.
+  std::unique_ptr<cudf::column> recovered;
+  if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+    recovered = reevaluateFilterOnCpu(
+        cpuFilterSource_,
+        filterRowType_,
+        joinedColViews,
+        cpuFilter_,
+        operatorCtx_->execCtx(),
+        operatorCtx_->pool(),
+        stream);
+  }
+  auto filterColumn =
+      recovered != nullptr ? recovered->view() : asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
   auto const numRows = filteredOutputNumRows(

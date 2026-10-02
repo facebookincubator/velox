@@ -17,6 +17,7 @@ add_library(
   AggregationRegistry.cpp
   CudfAggregation.cpp
   CudfAssignUniqueId.cpp
+  CpuFilterFallback.cpp
   CudfBatchConcat.cpp
   CudfConversion.cpp
   CudfDistinct.cpp

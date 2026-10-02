@@ -27,7 +27,12 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/TypeCoercer.h"
 
+#include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/reduction.hpp>
+#include <cudf/scalar/scalar.hpp>
+
+#include <rmm/device_uvector.hpp>
 
 #include <algorithm>
 
@@ -121,7 +126,8 @@ bool GpuSfiExpression::canEvaluate(const core::TypedExprPtr& expr) {
 std::shared_ptr<CudfExpression> GpuSfiExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* resolved = resolve(expr);
   VELOX_CHECK_NOT_NULL(
       resolved, "No GPU simple function for {}", expr->toString());
@@ -168,7 +174,8 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
     }
 
     // Delegates any child this evaluator does not handle itself.
-    subexpressions.push_back(createCudfExpression(input, inputRowSchema, pool));
+    subexpressions.push_back(
+        createCudfExpression(input, inputRowSchema, pool, config));
     arguments.push_back(
         Argument{
             Argument::Source::kSubexpression,
@@ -187,13 +194,14 @@ ColumnOrView GpuSfiExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
-    bool /*finalize*/) {
+    bool /*finalize*/,
+    gpu_sfi::GpuSfiErrors* errors) {
   // Results of delegated children have to outlive the launch.
   std::vector<ColumnOrView> subexpressionResults;
   subexpressionResults.reserve(subexpressions_.size());
   for (const auto& subexpression : subexpressions_) {
-    subexpressionResults.push_back(
-        subexpression->eval(inputColumnViews, stream, mr));
+    subexpressionResults.push_back(subexpression->eval(
+        inputColumnViews, stream, mr, /*finalize=*/false, errors));
   }
 
   std::vector<GpuArgView> argViews;
@@ -226,7 +234,18 @@ ColumnOrView GpuSfiExpression::eval(
     numRows = inputColumnViews.front().size();
   }
 
-  return launch_(argViews, numRows, outputType_, stream, mr);
+  if (errors == nullptr) {
+    // No owner can act on a declined row, so the launch does not collect:
+    // nulling the row would turn the error into a different answer.
+    return launch_(
+        argViews, numRows, outputType_, /*declinedRows=*/nullptr, stream, mr);
+  }
+
+  // Every launch in this evaluation records into the owner's buffer, which the
+  // owner reads once; reading a device scalar here would synchronize the
+  // stream.
+  auto* const declinedRows = errors->declinedRows(numRows);
+  return launch_(argViews, numRows, outputType_, declinedRows, stream, mr);
 }
 
 void GpuSfiExpression::close() {
@@ -245,8 +264,9 @@ void registerGpuSfiEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return GpuSfiExpression::create(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return GpuSfiExpression::create(expr, row, pool, config);
       },
       /*overwrite=*/false);
 }

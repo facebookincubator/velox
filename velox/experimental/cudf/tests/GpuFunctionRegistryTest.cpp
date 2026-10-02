@@ -34,6 +34,7 @@ std::unique_ptr<cudf::column> launcherA(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
+    uint8_t*,
     cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
@@ -43,6 +44,7 @@ std::unique_ptr<cudf::column> launcherB(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
+    uint8_t*,
     cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
@@ -148,7 +150,14 @@ TEST_F(GpuFunctionRegistryTest, registrationsCarryVeloxSignatures) {
   registerPrestoGpuFunctions("");
 
   const std::vector<std::pair<std::string, std::vector<std::string>>> expected{
-      {"plus", {"(double,double) -> double", "(real,real) -> real"}},
+      // PlusFunction for floating point, CheckedPlusFunction for integers.
+      {"plus",
+       {"(bigint,bigint) -> bigint",
+        "(double,double) -> double",
+        "(integer,integer) -> integer",
+        "(real,real) -> real",
+        "(smallint,smallint) -> smallint",
+        "(tinyint,tinyint) -> tinyint"}},
       {"abs",
        {"(bigint) -> bigint",
         "(double) -> double",
@@ -204,8 +213,8 @@ TEST_F(GpuFunctionRegistryTest, decimalSignaturesCarryPrecisionAndScale) {
   EXPECT_FALSE(wrongType.tryBind());
 }
 
-// The four functions whose bodies use VELOX_USER_CHECK stay unregistered
-// while the Exceptions shadow makes the checks no-ops. TODO(gpu-sfi-checks).
+// The four functions whose bodies use VELOX_USER_CHECK are not registered
+// yet; see the TODO at the registration site.
 TEST_F(GpuFunctionRegistryTest, checkBearingFunctionsAreNotRegistered) {
   registerPrestoGpuFunctions("");
 

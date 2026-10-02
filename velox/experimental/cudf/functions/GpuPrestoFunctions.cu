@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
 #include "velox/functions/prestosql/Comparisons.h"
@@ -35,10 +36,8 @@ using namespace facebook::velox::functions;
 void registerPrestoGpuFunctions(const std::string& prefix) {
   // --- Arithmetic ---------------------------------------------------------
   // Type sets follow MathematicalOperatorsRegistration.cpp and
-  // MathematicalFunctionsRegistration.cpp helper for helper. Floating point
-  // uses the plain structs. TODO(gpu-sfi-checks): register the integral
-  // overloads, which Presto binds to the Checked* structs, once device checks
-  // raise.
+  // MathematicalFunctionsRegistration.cpp helper for helper: the plain structs
+  // for floating point, the Checked* ones for the integral overloads.
   registerGpuBinaryFloatingPoint<PlusFunction>({prefix + "plus"});
   registerGpuBinaryFloatingPoint<MinusFunction>({prefix + "minus"});
   registerGpuBinaryFloatingPoint<MultiplyFunction>({prefix + "multiply"});
@@ -46,7 +45,7 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuBinaryFloatingPoint<ModulusFunction>({prefix + "mod"});
 
   // negate is floating point only upstream; its integral overloads come from
-  // CheckedNegateFunction.
+  // CheckedNegateFunction below.
   registerGpuUnaryFloatingPoint<NegateFunction>({prefix + "negate"});
 
   registerGpuUnaryNumeric<AbsFunction>({prefix + "abs"});
@@ -70,6 +69,14 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
       {prefix + "truncate"});
   registerGpuFunction<TruncateFunction, float, float, int32_t>(
       {prefix + "truncate"});
+
+  // --- Checked integral arithmetic ----------------------------------------
+  registerGpuBinaryIntegral<CheckedPlusFunction>({prefix + "plus"});
+  registerGpuBinaryIntegral<CheckedMinusFunction>({prefix + "minus"});
+  registerGpuBinaryIntegral<CheckedMultiplyFunction>({prefix + "multiply"});
+  registerGpuBinaryIntegral<CheckedDivideFunction>({prefix + "divide"});
+  registerGpuBinaryIntegral<CheckedModulusFunction>({prefix + "mod"});
+  registerGpuUnaryIntegral<CheckedNegateFunction>({prefix + "negate"});
 
   // --- Math and trigonometry ---------------------------------------------
   registerGpuFunction<ExpFunction, double, double>({prefix + "exp"});
@@ -132,10 +139,9 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuFunction<GpuNotFunction, bool, bool>({prefix + "not"});
   registerGpuFunction<GpuIsNullFunction, bool, bool>({prefix + "is_null"});
 
-  // Not registered: bit_count, bitwise_arithmetic_shift_right,
-  // bitwise_shift_left and bitwise_logical_shift_right validate their input
-  // with VELOX_USER_CHECK, which the Exceptions.h shadow discards, so they
-  // would return a wrong answer where the CPU raises. TODO(gpu-sfi-checks).
+  // TODO: Register bit_count, bitwise_arithmetic_shift_right,
+  // bitwise_shift_left and bitwise_logical_shift_right, whose VELOX_USER_CHECKs
+  // now raise.
   // eq and neq are absent because their call() bodies are host-only.
 }
 

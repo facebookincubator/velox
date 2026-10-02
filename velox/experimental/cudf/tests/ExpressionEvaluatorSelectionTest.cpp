@@ -118,7 +118,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsWhatOtherEvaluatorsCannot) {
   auto expr = optimizeTypedExpr(
       "bitwise_and(a, b)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
 }
 
@@ -139,7 +140,10 @@ TEST_F(CudfExpressionSelectionTest, nonCallRootsAreStillCovered) {
     auto expr =
         optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
     EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-    EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+    EXPECT_NE(
+        createCudfExpression(
+            expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+        nullptr);
   }
 }
 
@@ -171,6 +175,24 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiMatchesBothRoundArities) {
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
       "truncate");
   EXPECT_FALSE(GpuSfiExpression::canEvaluate(truncateBigint));
+}
+
+// Integral arithmetic binds the Checked* structs, as Presto does on the CPU.
+TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsCheckedIntegerArithmetic) {
+  for (const auto& sql : {"a + b", "a - b", "a * b", "negate(a)", "a / b"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  auto doubles = std::make_shared<core::CallTypedExpr>(
+      DOUBLE(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "d"),
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "d")},
+      "plus");
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(doubles));
 }
 
 // A chained AND arrives flattened: `a AND b AND c` is one three-argument call.
@@ -228,14 +250,18 @@ TEST_F(CudfExpressionSelectionTest, nullLiteralFallsThroughToAnotherEvaluator) {
       "a + cast(null as bigint)", rowType_, queryCtx_.get(), execCtx_.get());
   EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
   EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  EXPECT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 // AST outranks GPU SFI, so a call both can handle goes to AST.
 TEST_F(CudfExpressionSelectionTest, astStillOutranksGpuSfi) {
   auto expr =
       optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   EXPECT_EQ(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
 }
 

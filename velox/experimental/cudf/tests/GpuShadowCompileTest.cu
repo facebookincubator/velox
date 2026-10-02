@@ -74,9 +74,8 @@ static_assert(devicePowersOfTenMatchHost());
 VERIFY_BINARY(eq, EqFunction, bool, 1.0, 2.0)
 VERIFY_BINARY(neq, NeqFunction, bool, 1.0, 2.0)
 
-// Device-callable, but their bodies validate input with VELOX_USER_CHECK,
-// which the Exceptions.h shadow discards, so they are not registered.
-// TODO(gpu-sfi-checks).
+// Device-callable, and their VELOX_USER_CHECKs raise, but they are not
+// registered yet; see the TODO at the registration site.
 VERIFY_BINARY(bit_count, BitCountFunction, int64_t, int64_t{7}, int32_t{8})
 VERIFY_BINARY(
     bitwise_arithmetic_shift_right,
