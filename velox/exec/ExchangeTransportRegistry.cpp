@@ -29,10 +29,7 @@ namespace facebook::velox::exec {
 
 namespace {
 
-// Returns the entries the global registry starts with: the built-in in-memory
-// transport, kept as a first-class entry so lookups and enumeration stay plain
-// reads. kInMemory resolves with zero registration to preserve the
-// pre-registry guarantee that an exchange client is always available.
+// Keep kInMemory available without explicit registration for compatibility.
 //
 // TODO: Register kInMemory explicitly at engine init like any other transport.
 // Then this seeding goes away and unregisterAll() becomes a plain clear().
@@ -44,10 +41,7 @@ ExchangeTransportRegistry::Registry::Map builtinEntries() {
   return entries;
 }
 
-// The process-wide root registry, seeded with the built-in in-memory transport
-// on first access -- before any child scope can exist, since children are
-// created via create(&global()) -- so scoped lookups never mutate a parent, per
-// ScopedRegistry's contract.
+// Initialize the process-wide registry before a child can reference it.
 ScopedRegistry<std::string, ExchangeTransportEntry>& exchangeTransports() {
   static ScopedRegistry<std::string, ExchangeTransportEntry> instance;
   [[maybe_unused]] static const bool kSeeded = [] {
@@ -128,8 +122,6 @@ void ExchangeTransportRegistry::unregisterAll() {
 // static
 std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
 ExchangeTransportRegistry::snapshot(const core::QueryCtx& queryCtx) {
-  // Merges the per-query override with the global registry, consistent with
-  // tryGet(queryCtx, ...).
   std::vector<std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
       result;
   for (auto& [id, entry] : registryFor(queryCtx).snapshot()) {

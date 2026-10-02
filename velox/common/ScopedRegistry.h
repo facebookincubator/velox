@@ -104,8 +104,8 @@ class ScopedRegistry {
     local_.withWLock([&](auto& map) { entries.swap(map); });
   }
 
-  /// Replace all entries in the local scope atomically. Existing entries are
-  /// destroyed after releasing the registry lock.
+  /// Replaces all entries in the local scope atomically. Destroys displaced
+  /// entries after releasing the registry lock.
   void replaceAll(Map entries) {
     local_.withWLock([&](auto& map) { entries.swap(map); });
   }

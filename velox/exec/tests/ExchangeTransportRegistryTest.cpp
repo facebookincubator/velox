@@ -42,14 +42,12 @@ using ::testing::Key;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 
-// Entries are shared by every task that resolves the transport, and make()
-// validates their factories, so a registered entry must not be reassignable.
+// Keep entries immutable because tasks may share them.
 static_assert(!std::is_copy_assignable_v<ExchangeTransportEntry>);
 static_assert(!std::is_move_assignable_v<ExchangeTransportEntry>);
 
-// Minimal control-plane-only client, standing in for a transport's client
-// without needing an ExchangeSource or an executor. Each 'Tag' yields an
-// unrelated client type, as the clients of two different transports are.
+// Represents a control-plane-only client without an ExchangeSource or executor.
+// Each 'Tag' produces an unrelated client type.
 template <typename Tag>
 class NoOpExchangeClient : public ExchangeClient {
  public:
@@ -74,7 +72,6 @@ class NoOpExchangeClient : public ExchangeClient {
 
 using MockExchangeClient = NoOpExchangeClient<struct MockTag>;
 
-// Client of another transport, so a cast from MockExchangeClient must fail.
 using UnrelatedExchangeClient = NoOpExchangeClient<struct UnrelatedTag>;
 
 class BlockingDestructionState {
@@ -155,7 +152,7 @@ TEST_F(ExchangeTransportRegistryTest, registryOperations) {
   }
   EXPECT_EQ(ExchangeTransportRegistry::tryGet("nonexistent"), nullptr);
 
-  // getAll() also lists the always-available built-in in-memory default.
+  // Account for the built-in in-memory transport.
   EXPECT_THAT(ExchangeTransportRegistry::getAll(), SizeIs(numTransports + 1));
 
   ExchangeTransportRegistry::unregisterAll();
@@ -165,8 +162,7 @@ TEST_F(ExchangeTransportRegistryTest, registryOperations) {
 }
 
 TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
-  // The built-in in-memory transport is seeded into the registry and pairs an
-  // InMemoryExchangeClient factory with both exchange operator builders.
+  // The built-in entry supports both exchange operator types.
   auto defaultEntry = ExchangeTransportRegistry::tryGet(
       std::string(core::TransportKind::kInMemory));
   ASSERT_NE(defaultEntry, nullptr);
@@ -176,8 +172,7 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
 }
 
 TEST_F(ExchangeTransportRegistryTest, defaultTransportBufferSizeBoundary) {
-  // The in-memory client keeps the buffer size as int64_t, so the largest
-  // int64_t is accepted and anything above it is a user error.
+  // In-memory clients store the buffer size as int64_t.
   auto defaultEntry = ExchangeTransportRegistry::tryGet(
       std::string(core::TransportKind::kInMemory));
   ASSERT_NE(defaultEntry, nullptr);
@@ -250,8 +245,7 @@ TEST_F(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
       ExchangeTransportEntry::make<MockExchangeClient>(makeMockClient, nullptr),
       "Exchange transport operator builder is null");
 
-  // A transport that cannot merge leaves the merge builder null; Task fails
-  // fast when a MergeExchangeNode names it.
+  // A null merge builder denotes an unsupported merge exchange.
   auto entry = ExchangeTransportEntry::make<MockExchangeClient>(
       makeMockClient, buildNoOperator);
   ASSERT_NE(entry, nullptr);
@@ -259,9 +253,7 @@ TEST_F(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
 }
 
 TEST_F(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
-  // make<TClient>() binds the operator builder to the client type the
-  // transport's own factory produces, so a client from another transport is
-  // rejected rather than silently reinterpreted.
+  // Reject clients created by a different transport before calling the builder.
   bool built{false};
   bool builtMerge{false};
   auto entry = ExchangeTransportEntry::make<MockExchangeClient>(
@@ -365,7 +357,6 @@ TEST_F(ExchangeTransportRegistryTest, queryScopedGetAll) {
   queryRegistry->insert("shared", makeEntry());
   auto queryCtx = queryCtxWithRegistry(queryRegistry);
 
-  // getAll() also lists the always-available built-in in-memory default.
   const std::string inMemory{core::TransportKind::kInMemory};
   EXPECT_THAT(
       ExchangeTransportRegistry::getAll(*queryCtx),
@@ -377,9 +368,7 @@ TEST_F(ExchangeTransportRegistryTest, queryScopedGetAll) {
 }
 
 TEST_F(ExchangeTransportRegistryTest, isolatedQueryHasNoDefault) {
-  // Isolation mode (create(nullptr)) has no parent fallback, so not even the
-  // built-in default is visible; an isolated query must register every
-  // transport it uses.
+  // An isolated registry does not inherit the built-in transport.
   auto queryCtx =
       queryCtxWithRegistry(ExchangeTransportRegistry::create(nullptr));
 

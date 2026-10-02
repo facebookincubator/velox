@@ -2180,9 +2180,8 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
 TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   setupSources(5, 100);
   Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
-  // A custom leaf node that requires an exchange client names no transport. It
-  // always gets the built-in in-memory client, including in a query whose
-  // exchange transport registry is isolated and lists no transports.
+  // Custom leaf nodes name no transport, so they use the built-in in-memory
+  // client even with an isolated query registry.
   for (const bool isolatedTransportRegistry : {false, true}) {
     SCOPED_TRACE(
         isolatedTransportRegistry ? "isolated transport registry"

@@ -1242,12 +1242,9 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
 
 void Task::finishUnstartedDrivers() {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  // An enqueued driver counts itself as finished when it leaves. Reconcile only
-  // if no driver is running or has finished yet, which holds when start()
-  // enqueued none.
-  // TODO: Track whether any driver was enqueued. terminate() resets the running
-  // count, so drivers still on their threads when startup fails can also pass
-  // this check and are then counted twice.
+  // Mark planned drivers finished when startup enqueued none.
+  // TODO: Track enqueued drivers explicitly. terminate() clears the running
+  // count, so an active driver could otherwise be counted twice here.
   if (numRunningDrivers_ == 0 && numFinishedDrivers_ == 0) {
     numFinishedDrivers_ = numTotalDrivers_;
   }
@@ -1417,8 +1414,7 @@ bool Task::initializePartitionOutput() {
     VELOX_CHECK_GT(numOutputDrivers, 0);
     const auto& transport = partitionedOutputNode->transportKind();
     auto entry = OutputTransportRegistry::tryGet(*queryCtx_, transport);
-    // Same as on the receive side: an unregistered transport named by the plan
-    // is a configuration mistake, not an engine bug.
+    // An unregistered transport is a plan configuration error.
     VELOX_USER_CHECK_NOT_NULL(
         entry,
         "No output buffer manager registered for transport '{}'",
@@ -1429,8 +1425,7 @@ bool Task::initializePartitionOutput() {
       bufferManager_ = manager;
       outputOperatorFactory_ = entry->makeOutputOperator;
     }
-    // A failed initializeTask() may have registered part of the task, so a
-    // failure finishes the initialization too.
+    // Record completion even if initializeTask() partially fails.
     std::exception_ptr initializeError;
     try {
       manager->initializeTask(
@@ -1759,10 +1754,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 }
 
 void Task::ensureSplitGroupsAreBeingProcessedLocked() {
-  // Splits may arrive while start() is initializing pipeline-global state.
-  // createAndStartDrivers() allocates driver slots only after exchange clients
-  // and output state are ready, then calls this method to process queued split
-  // groups.
+  // Splits received during startup wait until driver slots are allocated.
   if (not isRunningLocked() or (numDriversPerSplitGroup_ == 0) or
       drivers_.empty()) {
     return;
@@ -2874,8 +2866,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     exchangeClients.swap(exchangeClients_);
-    // While start() is still initializing the output buffer, it removes the
-    // task from the manager once that initialization finishes.
+    // Defer removal to initialization while it is in progress.
     removeFromOutputBufferManager = outputBufferInitializationFinished_;
 
     barrierPromises.swap(barrierFinishPromises_);
@@ -3912,10 +3903,8 @@ bool Task::pauseRequested(ContinueFuture* future) {
 }
 
 namespace {
-// Returns the built-in in-memory transport entry. Custom leaf plan nodes that
-// require an exchange client but are not core::ExchangeNodes name no transport,
-// and their operators take an InMemoryExchangeClient. They use this entry
-// regardless of what a query registers under the in-memory transport id.
+// Custom nodes name no transport and still require an InMemoryExchangeClient,
+// so they always use the built-in entry.
 const std::shared_ptr<ExchangeTransportEntry>& builtinInMemoryTransport() {
   static const auto entry = InMemoryExchangeClient::makeDefaultTransportEntry();
   return entry;
@@ -3944,9 +3933,7 @@ void Task::createExchangeClientLocked(
   auto entry = exchangeNode != nullptr
       ? ExchangeTransportRegistry::tryGet(*queryCtx_, transport)
       : builtinInMemoryTransport();
-  // Naming a transport no one registered in this process, or one that cannot
-  // carry a merge exchange, is a configuration mistake and not an engine bug:
-  // the plan comes from the coordinator, so these are user errors.
+  // An unavailable transport is a plan configuration error.
   VELOX_USER_CHECK_NOT_NULL(
       entry, "No exchange client registered for transport '{}'", transport);
   if (planNode->is<core::MergeExchangeNode>()) {

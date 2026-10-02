@@ -29,19 +29,13 @@ namespace facebook::velox::exec {
 /// transport. Implementations own the set of producers a pipeline reads from
 /// and provide the operations by which Task drives them.
 ///
-/// The data plane is deliberately absent: page payloads are transport specific
-/// (in-memory serialized pages, GPU buffers, ...), so there is nothing shared
-/// to abstract. A transport registers its client factory and its exchange
-/// operator factory together in ExchangeTransportRegistry, so the operator
-/// always knows the concrete client type it was paired with and can reach the
-/// transport's own data plane directly.
+/// Page data is transport-specific and deliberately absent from this
+/// interface. ExchangeTransportRegistry pairs each client with an operator
+/// factory that understands its data plane.
 ///
-/// The control-plane operations addRemoteTaskId(), noMoreRemoteTasks(), and
-/// close() must be safe to call from multiple threads: Task adds remote tasks
-/// from the split path while drivers consume data. close() and
-/// noMoreRemoteTasks() must not throw. If one does while a task terminates,
-/// Task logs the error and continues so that termination completes. The
-/// status accessors provide best-effort snapshots for diagnostics.
+/// Control-plane operations must be thread-safe because Task adds remote tasks
+/// while drivers consume data. Status accessors provide best-effort snapshots
+/// for diagnostics.
 class ExchangeClient {
  public:
   virtual ~ExchangeClient() = default;

@@ -588,9 +588,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
                 planNode)) {
-      // Task resolved the entry and checked that it supports merge exchange
-      // when it created the exchange client, so a failure here is an engine
-      // bug rather than a misconfigured plan.
+      // Task validated merge support when it resolved the entry.
       VELOX_CHECK_NOT_NULL(
           exchangeTransportEntry,
           "No exchange transport entry was resolved for transport '{}'",
@@ -783,10 +781,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         // NOTE: the exchange client can only be used by one operator in a
         // driver.
         VELOX_CHECK_NOT_NULL(exchangeClient);
-        // A custom node reaches its operator through
-        // Operator::PlanNodeTranslator, which takes an InMemoryExchangeClient.
-        // Task creates the client of such a node from the built-in in-memory
-        // transport, so the cast holds.
+        // PlanNodeTranslator takes an InMemoryExchangeClient, and Task always
+        // uses the built-in transport for custom nodes.
         auto inMemoryExchangeClient =
             std::dynamic_pointer_cast<InMemoryExchangeClient>(exchangeClient);
         VELOX_CHECK_NOT_NULL(

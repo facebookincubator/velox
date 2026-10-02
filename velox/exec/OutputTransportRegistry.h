@@ -35,24 +35,17 @@ class QueryCtx;
 
 namespace facebook::velox::exec {
 
-/// Registry value pairing an output buffer manager with the factory that builds
-/// its matching output operator, keyed by transport id. Registering the two
-/// together ensures a transport's operator and manager cannot diverge. Build
-/// entries with make(), which binds the operator to this manager and rejects
-/// null halves.
+/// Pairs an output buffer manager with its operator factory. Use make() to bind
+/// the factory to the manager's concrete type.
 struct OutputTransportEntry {
-  /// Holds the output buffers of every task that uses this transport.
+  /// Owns the output buffers for this transport.
   const std::shared_ptr<OutputBufferManager> manager;
 
-  /// Builds this transport's output operator, binding 'manager'.
+  /// Builds output operators bound to 'manager'.
   const PartitionedOutputFactory makeOutputOperator;
 
-  /// Builds an entry, the only way to create one: pairs 'manager' with an
-  /// operator builder
-  /// that receives that same manager, so the operator can't be wired to a
-  /// different one than the entry stores. The manager is captured weakly (the
-  /// entry owns it) and locked when building, honoring the
-  /// PartitionedOutputFactory ownership contract.
+  /// Pairs 'manager' with an operator builder that receives the same concrete
+  /// manager. The entry owns the manager; the factory captures it weakly.
   template <typename TManager>
   static std::shared_ptr<OutputTransportEntry> make(
       std::shared_ptr<TManager> manager,
@@ -86,19 +79,9 @@ struct OutputTransportEntry {
         makeOutputOperator(std::move(makeOutputOperator)) {}
 };
 
-/// Manages output transport registration and lookup, keyed by transport id.
-/// Each entry pairs an output buffer manager with the factory that builds its
-/// matching output operator. All methods are thread-safe.
-///
-/// Two groups of APIs:
-///
-/// - Query-scoped APIs take a QueryCtx& and check for per-query registry
-///   overrides before falling back to the global registry. Use these in
-///   operator and task code where a QueryCtx is available.
-///
-/// - Global APIs operate directly on the global registry. Use these for
-///   process-level operations: startup registration, shutdown cleanup, and
-///   process-wide lookups.
+/// Thread-safe output transport registry. Query-scoped methods use the registry
+/// installed on QueryCtx, or the global registry if none is installed. A query
+/// registry falls back only to the parent passed to create().
 class OutputTransportRegistry {
  public:
   using Registry = ScopedRegistry<std::string, OutputTransportEntry>;
@@ -113,8 +96,7 @@ class OutputTransportRegistry {
   /// to it. Pass nullptr for isolation mode (no fallback).
   static std::shared_ptr<Registry> create(const Registry* parent = nullptr);
 
-  /// Returns the transport entry registered under 'id' for 'queryCtx'
-  /// (per-query override, then global registry), or nullptr.
+  /// Returns the entry visible to 'queryCtx', or nullptr.
   static std::shared_ptr<OutputTransportEntry> tryGet(
       const core::QueryCtx& queryCtx,
       const std::string& id);
@@ -124,8 +106,7 @@ class OutputTransportRegistry {
   /// honor them.
   static std::shared_ptr<OutputTransportEntry> tryGet(const std::string& id);
 
-  /// Returns all transports visible to 'queryCtx' as (id, entry) pairs
-  /// (per-query override merged over the global registry).
+  /// Returns all transports visible to 'queryCtx' as (id, entry) pairs.
   static std::vector<
       std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
   getAll(const core::QueryCtx& queryCtx);
@@ -143,9 +124,7 @@ class OutputTransportRegistry {
   static void unregisterAll();
 
  private:
-  /// Returns the (id, entry) pairs visible to 'queryCtx' -- the per-query
-  /// override merged with the global registry. Backs the QueryCtx-scoped
-  /// getAll().
+  /// Backs the QueryCtx-scoped getAll().
   static std::vector<
       std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
   snapshot(const core::QueryCtx& queryCtx);

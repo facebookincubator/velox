@@ -1036,9 +1036,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // output buffer.
   void maybeRemoveFromOutputBufferManager();
 
-  // Marks the output buffer initialization finished. Removes the task from the
-  // output buffer manager if the task was terminated before that, since
-  // terminate() then left the removal to this call.
+  // Completes output-buffer initialization and removes the task if termination
+  // won the race.
   void finishOutputBufferInitialization();
 
   // Returns task execution error message or empty string if not error
@@ -1106,7 +1105,7 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Add remote split to ExchangeClient for the specified plan node.
+  /// Adds a remote split to ExchangeClient for the specified plan node.
   /// Used to close remote sources that are added after the task completed
   /// early.
   void addRemoteSplit(
@@ -1223,13 +1222,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
-  // Creates an exchange client for the leaf plan node of a given pipeline. An
-  // ExchangeNode's transport is resolved in ExchangeTransportRegistry; any
-  // other leaf node that requires a client uses the built-in in-memory
-  // transport. Keeps the entry so that the matching exchange operator can be
-  // built from it later. Must be called with 'mutex_' held. Throws a user
-  // error if an ExchangeNode names an unregistered transport, or a
-  // MergeExchangeNode names a transport without merge support.
+  // Creates a pipeline's exchange client and retains the entry that builds its
+  // matching operator. Custom leaf nodes use the built-in in-memory transport.
+  // Must be called with 'mutex_' held. Throws a user error for an unavailable
+  // transport or unsupported merge exchange.
   void createExchangeClientLocked(
       int32_t pipelineId,
       const core::PlanNodePtr& planNode,
@@ -1370,13 +1366,9 @@ class Task : public std::enable_shared_from_this<Task> {
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
       exchangeClientByPlanNode_;
 
-  // Exchange transport entries, indexed by pipeline ID like
-  // 'exchangeClients_'. Each entry created the client at the same index and
-  // carries the factories that build the matching exchange operators. Null for
-  // pipelines that don't read from an exchange. Kept until the Task is
-  // destroyed, not cleared on termination, because the clients remain
-  // reachable through 'exchangeClientByPlanNode_' and may use state the entry
-  // owns.
+  // Entry that created each pipeline's client and builds its operators. Entries
+  // outlive termination because clients kept for late splits may depend on
+  // entry-owned state.
   std::vector<std::shared_ptr<ExchangeTransportEntry>>
       exchangeTransportEntries_;
 
@@ -1569,10 +1561,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // task has no partitioned output.
   PartitionedOutputFactory outputOperatorFactory_;
 
-  // Set under 'mutex_' once start() has finished calling initializeTask() on
-  // 'bufferManager_', whether the call returned or threw. Decides which side
-  // removes the task from the manager: terminate() if this was set when it
-  // changed 'state_', otherwise finishOutputBufferInitialization().
+  // Set under 'mutex_' after initializeTask() returns or throws. Whichever path
+  // observes both this flag and task termination owns buffer removal.
   bool outputBufferInitializationFinished_{false};
 
   // Boolean indicating that we have already received no-more-output-buffers

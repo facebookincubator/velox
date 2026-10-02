@@ -829,11 +829,8 @@ struct DriverFactory {
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
-  /// Builds the operators of one driver of this pipeline. 'exchangeClient' and
-  /// 'exchangeTransportEntry' are the client the Task resolved for this
-  /// pipeline and the registry entry that created it; both are null unless the
-  /// pipeline reads from an exchange. The exchange operator is built from the
-  /// entry so that it always matches the client's transport.
+  /// Builds one driver. If the pipeline's leaf needs an exchange client, Task
+  /// supplies the client and matching transport entry; otherwise both are null.
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
       std::shared_ptr<ExchangeClient> exchangeClient,

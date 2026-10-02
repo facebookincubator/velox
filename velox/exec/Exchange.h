@@ -46,12 +46,9 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
-  /// 'exchangeClient' is of type InMemoryExchangeClient rather than the
-  /// abstract ExchangeClient, because this operator reads pages off the
-  /// in-memory exchange queue, which belongs to that client's data plane, not
-  /// to the abstract control plane. ExchangeTransportRegistry binds each
-  /// transport's operator builder to its own client type, so the pairing holds
-  /// without a runtime cast here.
+  /// Takes an InMemoryExchangeClient because this operator reads the client's
+  /// queue directly. ExchangeTransportRegistry ensures that the operator
+  /// receives the matching client type.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,

@@ -44,10 +44,8 @@ class TestTransportBufferManager : public DefaultOutputBufferManager {
   TestTransportBufferManager() : DefaultOutputBufferManager(Options{}) {}
 };
 
-// Test transport manager that records the order of initializeTask() and
-// removeTask() calls, which the manager contract allows once each per task.
-// 'beforeRegister' and 'afterRegister' run inside initializeTask(), before and
-// after the task's output buffer is registered.
+// Records task initialization and removal. Hooks run immediately before and
+// after registration inside initializeTask().
 class LifecycleRecordingBufferManager : public TestTransportBufferManager {
  public:
   void initializeTask(
@@ -106,8 +104,7 @@ std::unique_ptr<Operator> makePartitionedOutput(
 
 class OutputTransportTest : public HiveConnectorTestBase {
  protected:
-  // Creates a task whose broadcast output goes through 'manager', registered
-  // for this task's query only.
+  // Creates a broadcast task with a query-scoped 'manager'.
   std::shared_ptr<Task> makeTaskWithOutputManager(
       const std::string& taskId,
       const std::shared_ptr<LifecycleRecordingBufferManager>& manager,
@@ -237,8 +234,7 @@ TEST_F(OutputTransportTest, selectsOperatorByTransportKind) {
 }
 
 TEST_F(OutputTransportTest, removesTaskOnceWhenStartFails) {
-  // start() fails after the task's output buffer was created. Task terminates
-  // and must remove the task from the output buffer manager exactly once.
+  // A startup failure after buffer creation must remove the task exactly once.
   auto manager = std::make_shared<LifecycleRecordingBufferManager>();
   auto task = makeTaskWithOutputManager(
       "task-output-start-failure",
@@ -257,8 +253,7 @@ TEST_F(OutputTransportTest, removesTaskOnceWhenStartFails) {
       manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
 }
 
-// An abort that runs while start() initializes the output buffer leaves the
-// removal to start(), which removes the task once initializeTask() returns.
+// If abort overlaps initializeTask(), start() owns removal after it returns.
 TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedBeforeRegistration) {
   auto manager = std::make_shared<LifecycleRecordingBufferManager>();
   manager->beforeRegister = [](Task& task) { task.requestAbort().wait(); };
@@ -283,8 +278,7 @@ TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedAfterRegistration) {
       manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
 }
 
-// A failed initializeTask() may have registered part of the task, so the task
-// is still removed once.
+// removeTask() cleans up a partial registration when initializeTask() throws.
 TEST_F(OutputTransportTest, removesTaskOnceWhenInitializeTaskThrows) {
   auto manager = std::make_shared<LifecycleRecordingBufferManager>();
   manager->afterRegister = [](Task&) {
@@ -316,8 +310,7 @@ TEST_F(OutputTransportTest, removesTaskOnceWhenAbortedAndInitializeTaskThrows) {
       manager->calls(), ::testing::ElementsAre("initializeTask", "removeTask"));
 }
 
-// An abort after the output buffer is initialized but before start() creates
-// drivers is the termination's removal to make.
+// After initialization completes, terminate() owns removal.
 DEBUG_ONLY_TEST_F(
     OutputTransportTest,
     removesTaskOnceWhenAbortedBeforeDriversStart) {

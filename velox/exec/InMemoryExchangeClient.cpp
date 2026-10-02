@@ -89,10 +89,7 @@ std::shared_ptr<ExchangeTransportEntry>
 InMemoryExchangeClient::makeDefaultTransportEntry() {
   return ExchangeTransportEntry::make<InMemoryExchangeClient>(
       [](const ExchangeClientContext& context) {
-        // The two byte limits come from the Task-supplied context rather than
-        // being re-derived by the transport. Low-water mark for filling the
-        // exchange queue is 1/2 of the per worker buffer size of the
-        // producers.
+        // Validate the Task-supplied limit before narrowing it.
         const auto& queryConfig = context.queryConfig;
         VELOX_USER_CHECK_LE(
             context.maxExchangeBufferSize,

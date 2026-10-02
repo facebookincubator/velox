@@ -29,16 +29,9 @@ namespace facebook::velox::exec {
 
 namespace {
 
-// Returns the entries the global registry starts with: the built-in in-memory
-// transport, kept as a first-class entry so lookups and enumeration stay plain
-// reads.
-//
-// Backward-compat shim: kInMemory must resolve with zero registration to
-// preserve the pre-registry guarantee that the default output buffer manager is
-// always present. The target end state is to register kInMemory explicitly at
-// engine init like any other transport, which retires this seeding (and the
-// unregisterAll() re-seed) and leaves a plain map: unregisterAll() fully clears
-// and isolation is uniform.
+// Keep kInMemory available without explicit registration for compatibility.
+// TODO: Register it at engine initialization and let unregisterAll() clear the
+// registry completely.
 OutputTransportRegistry::Registry::Map builtinEntries() {
   OutputTransportRegistry::Registry::Map entries;
   entries.emplace(
@@ -47,10 +40,7 @@ OutputTransportRegistry::Registry::Map builtinEntries() {
   return entries;
 }
 
-// The process-wide root registry, seeded with the built-in in-memory transport
-// on first access -- before any child scope can exist, since children are
-// created via create(&global()) -- so scoped lookups never mutate a parent, per
-// ScopedRegistry's contract.
+// Initialize the process-wide registry before a child can reference it.
 ScopedRegistry<std::string, OutputTransportEntry>& outputTransports() {
   static ScopedRegistry<std::string, OutputTransportEntry> instance;
   [[maybe_unused]] static const bool seeded = [] {
@@ -122,19 +112,13 @@ void OutputTransportRegistry::unregisterAll(const core::QueryCtx& queryCtx) {
 
 // static
 void OutputTransportRegistry::unregisterAll() {
-  // Reset to baseline: drop user registrations and restore the built-in
-  // in-memory default. The re-seed is part of the backward-compat shim (see
-  // builtinEntries()); with init-time registration this reduces to a plain
-  // clear(). Replace the contents under one lock so readers cannot observe the
-  // default transport as temporarily unregistered.
+  // Restore only the built-in entry atomically.
   global().replaceAll(builtinEntries());
 }
 
 // static
 std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
 OutputTransportRegistry::snapshot(const core::QueryCtx& queryCtx) {
-  // Merges the per-query override with the global registry, consistent with
-  // tryGet(queryCtx, ...).
   std::vector<std::pair<std::string, std::shared_ptr<OutputTransportEntry>>>
       result;
   for (auto& [id, entry] : registryFor(queryCtx).snapshot()) {

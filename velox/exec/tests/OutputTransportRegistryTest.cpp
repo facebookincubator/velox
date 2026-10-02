@@ -40,8 +40,7 @@ using ::testing::Key;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 
-// Entries are shared by every task that resolves the transport, and make()
-// validates their factories, so a registered entry must not be reassignable.
+// Keep entries immutable because tasks may share them.
 static_assert(!std::is_copy_assignable_v<OutputTransportEntry>);
 static_assert(!std::is_move_assignable_v<OutputTransportEntry>);
 
@@ -154,7 +153,7 @@ TEST(OutputTransportRegistryTest, registryOperations) {
   }
   EXPECT_EQ(OutputTransportRegistry::tryGet("nonexistent"), nullptr);
 
-  // getAll() also lists the always-available built-in in-memory default.
+  // Account for the built-in in-memory transport.
   auto all = OutputTransportRegistry::getAll();
   EXPECT_THAT(all, SizeIs(numManagers + 1));
 
@@ -165,8 +164,7 @@ TEST(OutputTransportRegistryTest, registryOperations) {
 }
 
 TEST(OutputTransportRegistryTest, defaultTransportResolves) {
-  // The built-in in-memory transport is seeded into the registry and resolves
-  // to the default manager singleton.
+  // The built-in entry resolves to the default manager singleton.
   auto instance = DefaultOutputBufferManager::getInstanceRef();
 
   auto defaultEntry = OutputTransportRegistry::tryGet(
@@ -283,7 +281,6 @@ TEST_F(OutputTransportRegistryFixture, queryScopedGetAll) {
       "shared", makeEntry(std::make_shared<MockOutputBufferManager>()));
   auto queryCtx = queryCtxWithRegistry(queryRegistry);
 
-  // getAll() also lists the always-available built-in in-memory default.
   const std::string inMemory{core::TransportKind::kInMemory};
   EXPECT_THAT(
       OutputTransportRegistry::getAll(*queryCtx),
@@ -295,9 +292,7 @@ TEST_F(OutputTransportRegistryFixture, queryScopedGetAll) {
 }
 
 TEST_F(OutputTransportRegistryFixture, isolatedQueryHasNoDefault) {
-  // Isolation mode (create(nullptr)) has no parent fallback, so not even the
-  // built-in default is visible; an isolated query must register every
-  // transport it uses.
+  // An isolated registry does not inherit the built-in transport.
   auto queryCtx =
       queryCtxWithRegistry(OutputTransportRegistry::create(nullptr));
 

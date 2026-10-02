@@ -914,9 +914,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
 }
 
 TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
-  // An ExchangeNode naming a transport with no registered client is a
-  // misconfiguration: resolution fails fast rather than silently receiving over
-  // another transport.
+  // Do not silently fall back when the requested transport is unavailable.
   const std::string transportKind{"ucx-unregistered"};
   ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
 
@@ -935,8 +933,7 @@ TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
   VELOX_ASSERT_USER_THROW(
       task->start(1, 1),
       "No exchange client registered for transport 'ucx-unregistered'");
-  // No driver was created, so start() must count the planned ones as
-  // finished; otherwise waiting for the task's drivers never ends.
+  // Count planned drivers as finished when startup fails before creating any.
   ASSERT_GT(task->numTotalDrivers(), 0);
   EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
 }
@@ -1032,8 +1029,8 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
   task->requestAbort().wait();
   EXPECT_TRUE(transportStateAvailableOnNoMoreRemoteTasks);
 
-  // A terminated Task still hands remote splits that arrive late to the
-  // client, so the transport state stays alive as long as the Task.
+  // Retain the transport entry after termination so late splits can still use
+  // entry-owned state.
   EXPECT_FALSE(transportStateReference.expired());
   task->addSplit(
       exchangeNodeId,
@@ -1046,9 +1043,8 @@ TEST_F(TaskTest, customExchangeTransportLifecycle) {
 }
 
 TEST_F(TaskTest, customExchangeTransportMergeUsesTaskClient) {
-  // A transport's merge builder receives the Task-level client that its own
-  // factory created for the MergeExchangeNode's pipeline, and that client
-  // still receives remote splits that arrive after the task stops.
+  // Give the merge builder its transport's Task-level client and retain that
+  // client for late splits.
   const std::string transportKind{"test-merge-exchange"};
   auto queryRegistry = ExchangeTransportRegistry::create();
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -1126,8 +1122,7 @@ TEST_F(TaskTest, customExchangeTransportContext) {
       }));
   queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
 
-  // Copies of the context fields, since the context is valid only during the
-  // factory call.
+  // Copy observed fields because the context is valid only during the call.
   struct ObservedContext {
     std::string taskId;
     int destination{-1};
@@ -1198,10 +1193,8 @@ TEST_F(TaskTest, customExchangeTransportContext) {
 }
 
 TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
-  // Task calls close() and, for a queued remote split, noMoreRemoteTasks() on
-  // a transport-defined client while it terminates. An exception from either
-  // must not escape termination and leave join bridges and split promises
-  // unresolved.
+  // Exceptions from close() or noMoreRemoteTasks() must not interrupt
+  // termination or strand waiters.
   for (const bool throwOnClose : {true, false}) {
     SCOPED_TRACE(
         throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
@@ -1245,8 +1238,7 @@ TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
         exec::Consumer{});
 
     task->start(1, 1);
-    // The test operator never pulls this split, so it is still queued when
-    // the task terminates and is delivered to the client then.
+    // Leave a split queued so termination calls noMoreRemoteTasks().
     task->addSplit(
         exchangeNodeId,
         exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
@@ -1258,9 +1250,8 @@ TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
-  // start() releases the task mutex before initializing pipeline-global state
-  // and again before creating drivers. An abort in either window must let
-  // start() return and must count every planned driver as finished.
+  // Aborting at either unlocked startup step must finish every planned driver
+  // and let start() return.
   for (const std::string_view startupStep :
        {"facebook::velox::exec::Task::initializePartitionOutput",
         "facebook::velox::exec::Task::createAndStartDrivers"}) {
@@ -1316,9 +1307,8 @@ DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
-  // A grouped split can arrive after start() has planned the drivers but
-  // before it has created the exchange clients and driver slots. The split
-  // group must wait for them and then run.
+  // A grouped split received before driver-slot creation must wait and run
+  // afterward.
   const std::string transportKind{"test-grouped-exchange"};
   auto queryRegistry = ExchangeTransportRegistry::create();
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -1373,8 +1363,6 @@ DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
 }
 
 TEST_F(TaskTest, errorsOnNullExchangeOperator) {
-  // A transport whose operator builder returns no operator fails the task
-  // instead of handing a null operator to the driver.
   const std::string transportKind{"null-operator-transport"};
   auto queryRegistry = ExchangeTransportRegistry::create();
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -1406,8 +1394,7 @@ TEST_F(TaskTest, errorsOnNullExchangeOperator) {
 }
 
 TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
-  // A transport may register no merge exchange builder. A MergeExchangeNode
-  // naming it must fail rather than fall back to another transport's operator.
+  // Missing merge support must not fall back to another transport.
   const std::string transportKind{"no-merge-transport"};
   ExchangeTransportRegistry::global().insert(
       transportKind,

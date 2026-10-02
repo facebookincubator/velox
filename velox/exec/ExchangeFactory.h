@@ -40,22 +40,16 @@ struct DriverCtx;
 class Operator;
 class ExchangeClient;
 
-/// Builds a pipeline's exchange operator (e.g. Exchange or MergeExchange) for
-/// the same transport as the Task-level exchange client. Plain exchange
-/// operators consume this client. A merge operator's use of it is
-/// transport-specific because the operator may create clients for individual
-/// sources.
+/// Builds an exchange operator using its transport's Task-level client. Merge
+/// operators may additionally create a client for each source.
 using ExchangeOperatorFactory = std::function<std::unique_ptr<Operator>(
     int32_t operatorId,
     DriverCtx* ctx,
     const std::shared_ptr<const core::ExchangeNode>& node,
     std::shared_ptr<ExchangeClient> client)>;
 
-/// Caller-supplied context for building one Task-level exchange client.
-/// Grouping the arguments lets the caller, not the transport, size the
-/// exchange buffer. Task fills 'maxExchangeBufferSize' and
-/// 'minExchangeOutputBatchBytes' from 'queryConfig'. These limits do not
-/// describe any per-source clients that a merge operator creates itself.
+/// Inputs supplied by Task when creating one pipeline's exchange client. The
+/// buffer limits do not apply to per-source clients created by merge operators.
 ///
 /// Always construct with designated initializers. Several fields share a type,
 /// so positional initialization could silently swap them.
@@ -82,18 +76,14 @@ struct ExchangeClientContext {
   /// Executor running the exchange sources' response callbacks.
   folly::Executor* executor;
 
-  /// The running query's config, so a transport can honor session-level
-  /// exchange tuning beyond the fields above. Valid only during the factory
-  /// call; a client that needs a setting later keeps a copy of it.
+  /// The query config, valid only during the factory call. Copy any settings
+  /// needed afterward.
   const core::QueryConfig& queryConfig;
 };
 
-/// Creates the transport's exchange client for one pipeline of one task.
-/// Invoked synchronously while the owning Task holds its mutex. Implementations
-/// must not perform blocking transport setup or call back into that Task;
-/// defer transport setup until remote task ids are added to the client. They
-/// also must not allocate from the context's 'pool': the Task requires its
-/// memory pool to be empty when it creates drivers.
+/// Creates one pipeline's exchange client while Task holds its mutex. The
+/// factory must not block, call back into Task, or allocate from 'pool'. Defer
+/// transport setup until remote task IDs are added.
 using ExchangeClientFactory = std::function<std::shared_ptr<ExchangeClient>(
     const ExchangeClientContext& context)>;
 

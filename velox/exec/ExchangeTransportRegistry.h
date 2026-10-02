@@ -24,8 +24,7 @@
 
 #include "velox/common/ScopedRegistry.h"
 #include "velox/common/base/Exceptions.h"
-// make<TClient>() downcasts the abstract client, so the complete type is
-// needed here, not just the forward declaration in ExchangeFactory.h.
+// make<TClient>() downcasts the client and therefore needs its complete type.
 #include "velox/exec/ExchangeClient.h"
 #include "velox/exec/ExchangeFactory.h"
 
@@ -35,11 +34,8 @@ class QueryCtx;
 
 namespace facebook::velox::exec {
 
-/// Registry value pairing a Task-level exchange client factory with the
-/// factories that build operators for the same transport, keyed by transport
-/// id. Build entries with make(), which gives the operator builders the
-/// concrete Task-level client type and rejects a null client factory or
-/// exchange operator builder.
+/// Pairs a transport's client factory with its operator factories. Use make()
+/// to bind the operator factories to the concrete client type.
 struct ExchangeTransportEntry {
   /// Creates this transport's exchange client for one pipeline of one task.
   const ExchangeClientFactory makeClient;
@@ -48,18 +44,13 @@ struct ExchangeTransportEntry {
   /// 'makeClient'.
   const ExchangeOperatorFactory makeExchangeOperator;
 
-  /// Builds this transport's MergeExchange operator and receives the
-  /// Task-level client from 'makeClient'. The client may be used for data or
-  /// only for control, depending on the transport's merge implementation; see
-  /// InMemoryExchangeClient::makeDefaultTransportEntry() for the built-in one.
-  /// Null when the transport does not support merge exchange; Task fails fast
-  /// if a MergeExchangeNode names such a transport.
+  /// Builds this transport's MergeExchange operator. Null if merge exchange is
+  /// unsupported. How the operator uses the Task-level client is
+  /// transport-specific.
   const ExchangeOperatorFactory makeMergeExchangeOperator;
 
-  /// Builds an entry, the only way to create one: pairs a client factory with
-  /// operator builders that receive the concrete client type that factory
-  /// produces.
-  /// Pass 'buildMergeExchange' as nullptr when the transport cannot merge.
+  /// Pairs a client factory with operator builders that receive its concrete
+  /// client type. Leave 'buildMergeExchange' null if merging is unsupported.
   template <typename TClient>
   static std::shared_ptr<ExchangeTransportEntry> make(
       std::function<std::shared_ptr<TClient>(
@@ -134,19 +125,9 @@ struct ExchangeTransportEntry {
         makeMergeExchangeOperator(std::move(makeMergeExchangeOperator)) {}
 };
 
-/// Manages exchange transport registration and lookup, keyed by transport id.
-/// Each entry pairs an exchange client factory with the factories that build
-/// its matching exchange operators. All methods are thread-safe.
-///
-/// Two groups of APIs:
-///
-/// - Query-scoped APIs take a QueryCtx& and check for per-query registry
-///   overrides before falling back to the global registry. Use these in
-///   operator and task code where a QueryCtx is available.
-///
-/// - Global APIs operate directly on the global registry. Use these for
-///   process-level operations: startup registration, shutdown cleanup, and
-///   process-wide lookups.
+/// Thread-safe exchange transport registry. Query-scoped methods use the
+/// registry installed on QueryCtx, or the global registry if none is installed.
+/// A query registry falls back only to the parent passed to create().
 class ExchangeTransportRegistry {
  public:
   using Registry = ScopedRegistry<std::string, ExchangeTransportEntry>;
@@ -161,8 +142,7 @@ class ExchangeTransportRegistry {
   /// to it. Pass nullptr for isolation mode (no fallback).
   static std::shared_ptr<Registry> create(const Registry* parent = nullptr);
 
-  /// Returns the transport entry registered under 'id' for 'queryCtx'
-  /// (per-query override, then global registry), or nullptr.
+  /// Returns the entry visible to 'queryCtx', or nullptr.
   static std::shared_ptr<ExchangeTransportEntry> tryGet(
       const core::QueryCtx& queryCtx,
       const std::string& id);
@@ -172,8 +152,7 @@ class ExchangeTransportRegistry {
   /// honor them.
   static std::shared_ptr<ExchangeTransportEntry> tryGet(const std::string& id);
 
-  /// Returns all transports visible to 'queryCtx' as (id, entry) pairs
-  /// (per-query override merged over the global registry).
+  /// Returns all transports visible to 'queryCtx' as (id, entry) pairs.
   static std::vector<
       std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
   getAll(const core::QueryCtx& queryCtx);
@@ -191,9 +170,7 @@ class ExchangeTransportRegistry {
   static void unregisterAll();
 
  private:
-  // Returns the (id, entry) pairs visible to 'queryCtx' -- the per-query
-  // override merged with the global registry. Backs the QueryCtx-scoped
-  // getAll().
+  /// Backs the QueryCtx-scoped getAll().
   static std::vector<
       std::pair<std::string, std::shared_ptr<ExchangeTransportEntry>>>
   snapshot(const core::QueryCtx& queryCtx);
