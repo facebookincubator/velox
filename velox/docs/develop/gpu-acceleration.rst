@@ -173,7 +173,11 @@ be adopted incrementally.
 
 The UCX exchange is experimental and is built separately from the core library
 (it requires a system UCX installation and benefits from GPUDirect/RDMA-capable
-hardware).
+hardware). It is controlled by ``VELOX_ENABLE_UCX_EXCHANGE``, which requires
+``VELOX_ENABLE_CUDF`` and defaults to whether a system UCX was found. Setting it
+``OFF`` on a host that has UCX builds the cuDF backend without the transport, in
+which case no plan can select ``TransportKind::kUcx``; setting it ``ON`` without
+a system UCX is a configure error.
 
 Choosing an approach
 --------------------

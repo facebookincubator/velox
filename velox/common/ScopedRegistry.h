@@ -53,6 +53,7 @@ template <typename K, typename V>
 class ScopedRegistry {
  public:
   using ValuePtr = std::shared_ptr<V>;
+  using Map = folly::F14FastMap<K, ValuePtr>;
 
   /// Create a root registry (no parent).
   ScopedRegistry() : parent_{nullptr} {}
@@ -99,7 +100,13 @@ class ScopedRegistry {
   /// Entries are moved out under the lock and destroyed outside to avoid
   /// holding the lock during potentially slow destructors.
   void clear() {
-    folly::F14FastMap<K, ValuePtr> entries;
+    Map entries;
+    local_.withWLock([&](auto& map) { entries.swap(map); });
+  }
+
+  /// Replace all entries in the local scope atomically. Existing entries are
+  /// destroyed after releasing the registry lock.
+  void replaceAll(Map entries) {
     local_.withWLock([&](auto& map) { entries.swap(map); });
   }
 
@@ -136,7 +143,7 @@ class ScopedRegistry {
   }
 
  private:
-  folly::Synchronized<folly::F14FastMap<K, ValuePtr>> local_;
+  folly::Synchronized<Map> local_;
   const ScopedRegistry* parent_;
 };
 

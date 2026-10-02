@@ -39,19 +39,12 @@ namespace facebook::velox::exec {
 /// its matching output operator, keyed by transport id. Registering the two
 /// together ensures a transport's operator and manager cannot diverge. Build
 /// entries with make(), which binds the operator to this manager and rejects
-/// null halves; direct construction is for tests passing real values.
+/// null halves.
 struct OutputTransportEntry {
   std::shared_ptr<OutputBufferManager> manager;
 
   /// Builds this transport's output operator, binding 'manager'.
   PartitionedOutputFactory makeOutputOperator;
-
-  /// Constructs an entry from a manager and the operator builder bound to it.
-  OutputTransportEntry(
-      std::shared_ptr<OutputBufferManager> manager,
-      PartitionedOutputFactory makeOutputOperator)
-      : manager(std::move(manager)),
-        makeOutputOperator(std::move(makeOutputOperator)) {}
 
   /// Preferred way to build an entry: pairs 'manager' with an operator builder
   /// that receives that same manager, so the operator can't be wired to a
@@ -70,7 +63,7 @@ struct OutputTransportEntry {
     VELOX_CHECK_NOT_NULL(manager, "Output transport manager is null");
     VELOX_CHECK(build != nullptr, "Output transport operator builder is null");
     std::weak_ptr<TManager> weakManager = manager;
-    return std::make_shared<OutputTransportEntry>(
+    return std::shared_ptr<OutputTransportEntry>(new OutputTransportEntry(
         std::move(manager),
         [weakManager = std::move(weakManager), build = std::move(build)](
             int32_t operatorId,
@@ -80,8 +73,15 @@ struct OutputTransportEntry {
           auto manager = weakManager.lock();
           VELOX_CHECK_NOT_NULL(manager, "Output buffer manager has expired");
           return build(operatorId, ctx, node, eagerFlush, manager);
-        });
+        }));
   }
+
+ private:
+  OutputTransportEntry(
+      std::shared_ptr<OutputBufferManager> manager,
+      PartitionedOutputFactory makeOutputOperator)
+      : manager(std::move(manager)),
+        makeOutputOperator(std::move(makeOutputOperator)) {}
 };
 
 /// Manages output transport registration and lookup, keyed by transport id.
