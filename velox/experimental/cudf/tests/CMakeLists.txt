@@ -361,6 +361,46 @@ velox_add_cudf_test(
   LIBS Folly::folly fmt::fmt
 )
 
+# GPU SFI registry, on the host: the launchers are stand-ins that are never
+# invoked.
+add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_function_registry_test
+  COMMAND velox_cudf_gpu_function_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_registry_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+target_link_libraries(
+  velox_cudf_gpu_function_registry_test
+  velox_cudf_gpu_function_bridge
+  velox_functions_prestosql
+  GTest::gmock
+  gtest
+  gtest_main
+)
+
+# GPU SFI semantics, on the device. Compiled against the GPU shadows like the
+# registrations, so it instantiates the same functions.
+add_executable(velox_cudf_gpu_function_semantics_test GpuFunctionSemanticsTest.cu)
+set_target_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+velox_cudf_use_gpu_shadows(velox_cudf_gpu_function_semantics_test)
+target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
+add_test(
+  NAME velox_cudf_gpu_function_semantics_test
+  COMMAND velox_cudf_gpu_function_semantics_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+
 # Compile-only test that each mechanism a Velox simple function needs on the
 # device, the gpu_shadows/ headers and the VELOX_GPU_COMPATIBLE annotations,
 # generates device code under nvcc with gpu_shadows/ ahead of the Velox source

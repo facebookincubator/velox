@@ -17,6 +17,57 @@
 // GPU shadow for velox/type/SimpleFunctionApi.h. Keeps the type tags, which
 // SimpleFunctionTags.h defines and which parse under nvcc, and drops the
 // host-only function-signature machinery the real header stacks on them.
+//
+// The SimpleTypeTrait specialisations below are copied from the real header,
+// where they sit above the host-only half. Registration reads
+// SimpleTypeTrait<T>::name to build the signature strings the host matches
+// against, so they must stay identical.
 #pragma once
 
 #include "velox/type/SimpleFunctionTags.h"
+
+namespace facebook::velox {
+
+/// SimpleTypeTrait template.
+
+template <typename P, typename S>
+struct SimpleTypeTrait<ShortDecimal<P, S>>
+    : public TypeTraits<TypeKind::BIGINT> {};
+
+template <typename P, typename S>
+struct SimpleTypeTrait<LongDecimal<P, S>>
+    : public TypeTraits<TypeKind::HUGEINT> {};
+
+template <>
+struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
+
+template <>
+struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
+
+template <>
+struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
+  static constexpr const char* name = "DATE";
+};
+
+template <>
+struct SimpleTypeTrait<IntervalDayTime> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "INTERVAL DAY TO SECOND";
+};
+
+template <>
+struct SimpleTypeTrait<IntervalYearMonth>
+    : public TypeTraits<TypeKind::INTEGER> {
+  static constexpr const char* name = "INTERVAL YEAR TO MONTH";
+};
+
+template <>
+struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "TIME";
+};
+
+// SimpleTypeTrait<TimeMicroUtc> is the one specialisation not carried over:
+// unlike the tags above, TimeMicroUtc is declared in Type.h rather than
+// SimpleFunctionTags.h, so the type does not exist in a device translation unit
+// to specialise on. A function taking one cannot be registered here anyway.
+
+} // namespace facebook::velox

@@ -48,3 +48,38 @@ function(velox_cudf_use_gpu_shadows target)
       $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
   )
 endfunction()
+
+# Device side of the simple-function bridge: the only target with the shadow
+# include path. It exposes only cudf, rmm and standard library types, so no
+# shadowed type reaches a real-Velox translation unit.
+set(VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuPrestoFunctions.cu)
+if(${VELOX_ENABLE_SPARK_FUNCTIONS})
+  list(APPEND VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuSparkFunctions.cu)
+endif()
+add_library(velox_cudf_gpu_simple_functions ${VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES})
+
+velox_cudf_use_gpu_shadows(velox_cudf_gpu_simple_functions)
+
+# Whole-program device compilation: every kernel is instantiated in the
+# translation unit that launches it, and the host reaches them only through
+# GpuLaunchFn. Separable compilation would add a device-link step that each
+# consumer would have to repeat.
+set_target_properties(
+  velox_cudf_gpu_simple_functions
+  PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
+)
+
+target_link_libraries(velox_cudf_gpu_simple_functions PRIVATE cudf::cudf)
+
+# Host side, without the shadow include path, so it sees real Velox headers. It
+# reaches the device code above only through GpuLaunchFn, a function pointer
+# over cudf and rmm types.
+add_library(velox_cudf_gpu_function_bridge GpuFunctionRegistry.cpp GpuSfiExpression.cpp)
+
+# cudf is PUBLIC because GpuFunctionRegistry.h, which consumers include, names
+# cudf types in GpuLaunchFn.
+target_link_libraries(
+  velox_cudf_gpu_function_bridge
+  PUBLIC velox_cudf_gpu_simple_functions cudf::cudf
+  PRIVATE velox_cudf_expression velox_cudf_expression_registry
+)
