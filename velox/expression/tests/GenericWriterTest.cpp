@@ -558,6 +558,87 @@ TEST_F(GenericWriterTest, dynamicRow) {
   ASSERT_EQ(current2.tryCastTo<DynamicRow>(), nullptr);
 }
 
+TEST_F(GenericWriterTest, dynamicRowSetNullAtDiscardsState) {
+  VectorPtr result;
+  BaseVector::ensureWritable(
+      SelectivityVector(3),
+      ROW({ARRAY(BIGINT()), MAP(VARCHAR(), BIGINT()), ROW({ARRAY(BIGINT())})}),
+      pool(),
+      result);
+
+  auto addArray = [](GenericWriter& child, const std::vector<int64_t>& values) {
+    auto& array = child.castTo<Array<Any>>();
+    for (auto value : values) {
+      array.add_item().castTo<int64_t>() = value;
+    }
+  };
+  auto addMapEntry = [](GenericWriter& child,
+                        const std::string& key,
+                        int64_t value) {
+    auto [keyWriter, valueWriter] = child.castTo<Map<Any, Any>>().add_item();
+    keyWriter.castTo<Varchar>().copy_from(key);
+    valueWriter.castTo<int64_t>() = value;
+  };
+  auto nestedArray = [](DynamicRowWriter& row) -> GenericWriter& {
+    return row.get_writer_at(2).castTo<DynamicRow>().get_writer_at(0);
+  };
+
+  VectorWriter<Any> writer;
+  writer.init(*result);
+
+  writer.setOffset(0);
+  auto& row = writer.current().castTo<DynamicRow>();
+  addArray(row.get_writer_at(0), {1, 2});
+  row.set_null_at(0);
+  addArray(row.get_writer_at(0), {10});
+  addMapEntry(row.get_writer_at(1), "a", 1);
+  row.set_null_at(1);
+  addMapEntry(row.get_writer_at(1), "b", 2);
+  addArray(nestedArray(row), {3});
+  row.set_null_at(2);
+  addArray(nestedArray(row), {4});
+  writer.commit(true);
+
+  writer.setOffset(1);
+  addArray(row.get_writer_at(0), {5});
+  row.set_null_at(0);
+  addMapEntry(row.get_writer_at(1), "c", 3);
+  row.set_null_at(1);
+  row.set_null_at(2);
+  addArray(nestedArray(row), {6});
+  writer.commit(true);
+
+  writer.setOffset(2);
+  addArray(row.get_writer_at(0), {7});
+  addMapEntry(row.get_writer_at(1), "d", 4);
+  addArray(nestedArray(row), {8});
+  writer.commit(true);
+  writer.finish();
+
+  auto* rowVector = result->as<RowVector>();
+  ASSERT_EQ(rowVector->childAt(0)->as<ArrayVector>()->elements()->size(), 2);
+  ASSERT_EQ(rowVector->childAt(1)->as<MapVector>()->mapKeys()->size(), 2);
+  ASSERT_EQ(
+      rowVector->childAt(2)
+          ->as<RowVector>()
+          ->childAt(0)
+          ->as<ArrayVector>()
+          ->elements()
+          ->size(),
+      3);
+
+  using ArrayData = std::vector<std::optional<int64_t>>;
+  using MapData = std::vector<std::pair<StringView, std::optional<int64_t>>>;
+  auto expected = makeRowVector({
+      makeNullableArrayVector<int64_t>(
+          {ArrayData{10}, std::nullopt, ArrayData{7}}),
+      makeNullableMapVector<StringView, int64_t>(
+          {MapData{{"b"_sv, 2}}, std::nullopt, MapData{{"d"_sv, 4}}}),
+      makeRowVector({makeArrayVector<int64_t>({{4}, {6}, {8}})}),
+  });
+  test::assertEqualVectors(expected, result);
+}
+
 TEST_F(GenericWriterTest, nested) {
   // Test with map of array.
   VectorPtr result;

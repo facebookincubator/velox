@@ -211,6 +211,13 @@ class DateTimeFormatter {
   // Returns Unexpected with UserError status if parsing failed.
   Expected<DateTimeResult> parse(const std::string_view& input) const;
 
+  /// Parses accepted fractional-second digits at microsecond precision.
+  /// Digits after the sixth are truncated and shorter fractions are padded
+  /// with zeros. Pattern-width, full-input, and other parsing rules are
+  /// unchanged.
+  Expected<DateTimeResult> parseWithMicrosecondPrecision(
+      const std::string_view& input) const;
+
   /// Returns max size of the formatted string. Can be used to preallocate
   /// memory before calling format() to avoid extra copy.
   uint32_t maxResultSize(const tz::TimeZone* timezone) const;
@@ -233,6 +240,10 @@ class DateTimeFormatter {
       const std::optional<std::string>& zeroOffsetText = std::nullopt) const;
 
  private:
+  /// Shared implementation for the supported fractional-second precisions.
+  template <bool microsecondPrecision>
+  Expected<DateTimeResult> parseImpl(const std::string_view& input) const;
+
   std::unique_ptr<char[]> literalBuf_;
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;

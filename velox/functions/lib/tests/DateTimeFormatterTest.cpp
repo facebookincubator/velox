@@ -560,6 +560,15 @@ TEST_F(JodaDateTimeFormatterTest, parseYear) {
   EXPECT_EQ(
       fromTimestampString("292278994-01-01"),
       parseJoda("292278994", "y").timestamp);
+
+  // Wide patterns fail on values that overflow the digit accumulator instead
+  // of wrapping to a valid year (2^64 + 1970). Leading zeros do not overflow.
+  const auto wideYear = std::string(20, 'y');
+  EXPECT_EQ(
+      fromTimestampString("1970-01-01"),
+      parseJoda("00000000000000001970", wideYear).timestamp);
+  EXPECT_THROW(parseJoda("18446744073709553586", wideYear), VeloxUserError);
+  EXPECT_THROW(parseJoda("-18446744073709553586", wideYear), VeloxUserError);
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseWeekYear) {
@@ -1304,6 +1313,40 @@ TEST_F(JodaDateTimeFormatterTest, parseFractionOfSecond) {
 
   EXPECT_THROW(parseJoda("-1", "S"), VeloxUserError);
   EXPECT_THROW(parseJoda("999", "S"), VeloxUserError);
+
+  const auto parseMicroseconds = [&](std::string_view input,
+                                     std::string_view format) {
+    return dateTimeResult(
+        getJodaDateTimeFormatter(format)->parseWithMicrosecondPrecision(input));
+  };
+
+  EXPECT_EQ(
+      Timestamp(0, 123'456'000),
+      parseMicroseconds("123456789", "SSSSSSSSS").timestamp);
+  EXPECT_EQ(
+      Timestamp(0, 123'000'000), parseJoda("123456789", "SSSSSSSSS").timestamp);
+  EXPECT_EQ(
+      Timestamp(0, 1'000), parseMicroseconds("000001", "SSSSSS").timestamp);
+  EXPECT_EQ(Timestamp(0, 0), parseJoda("000001", "SSSSSS").timestamp);
+  EXPECT_EQ(Timestamp(0, 100'000'000), parseMicroseconds("1", "S").timestamp);
+  EXPECT_EQ(
+      Timestamp(0, 120'000'000), parseMicroseconds("12", "SSSSSS").timestamp);
+
+  EXPECT_EQ(
+      Timestamp(0, 184'467'000),
+      parseMicroseconds("18446744073709551616", std::string(20, 'S'))
+          .timestamp);
+
+  result = parseMicroseconds(
+      "2022-02-24 02:19:33.123456+04:00", "yyyy-MM-dd HH:mm:ss.SSSSSSZ");
+  EXPECT_EQ(
+      Timestamp(
+          fromTimestampString("2022-02-24 02:19:33").getSeconds(), 123'456'000),
+      result.timestamp);
+  EXPECT_EQ("+04:00", result.timezone->name());
+
+  EXPECT_THROW(parseMicroseconds("1234567", "SSSSSS"), VeloxUserError);
+  EXPECT_THROW(parseMicroseconds("-1", "S"), VeloxUserError);
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseConsecutiveSpecifiers) {
@@ -2459,6 +2502,33 @@ TEST_F(SimpleDateTimeFormatterTest, parseUsingPartialInput) {
   EXPECT_EQ(
       fromTimestampString("2024-08-01"),
       parseSimple("2024 08 01 5", "yyyy MM", false).timestamp);
+}
+
+TEST_F(SimpleDateTimeFormatterTest, parseFractionOfSecond) {
+  for (bool lenient : {true, false}) {
+    // Simple formatters read fractions as whole milliseconds without padding.
+    EXPECT_EQ(
+        Timestamp(0, 1'000'000), parseSimple("1", "SSS", lenient).timestamp);
+    EXPECT_EQ(
+        Timestamp(0, 999'000'000),
+        parseSimple("999", "SSS", lenient).timestamp);
+
+    // Wide fractions fail instead of wrapping the digit accumulator to 0.
+    EXPECT_THROW(
+        parseSimple("18446744073709551616", std::string(20, 'S'), lenient),
+        VeloxUserError);
+  }
+
+  // Strict mode enforces the millisecond field range.
+  EXPECT_THROW(parseSimple("1000", "SSSS", false), VeloxUserError);
+
+  // Lenient mode carries milliseconds into seconds up to the int32 microsecond
+  // storage limit and fails rather than wrapping beyond it.
+  EXPECT_EQ(Timestamp(1, 0), parseSimple("1000", "SSSS", true).timestamp);
+  EXPECT_EQ(
+      Timestamp(2'147, 483'000'000),
+      parseSimple("2147483", "SSSSSSS", true).timestamp);
+  EXPECT_THROW(parseSimple("2147484", "SSSSSSS", true), VeloxUserError);
 }
 
 } // namespace facebook::velox::functions
