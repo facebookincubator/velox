@@ -17,8 +17,10 @@
 // Compile-only test. Proves that nvcc, with gpu_shadows/ ahead of the Velox
 // source root and --diag-error=20011, generates device code for each mechanism
 // a Velox simple function relies on when it runs on the GPU: one probe per
-// shadowed header or annotation. nvcc generates device code only for what a
-// kernel reaches, so probeKernel must call every probe or it checks nothing.
+// shadowed header or annotation. Registration compiles every registered
+// function's call() as a kernel under the same flags, so there are no
+// per-function probes here. nvcc generates device code only for what a kernel
+// reaches, so probeKernel must call every probe or it checks nothing.
 
 #include "velox/experimental/cudf/functions/GpuExec.h"
 

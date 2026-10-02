@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -77,9 +78,18 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
           return std::make_shared<cudf_velox::JitExpression>(expr, row, pool);
         },
         /*overwrite=*/true);
+
+    // GPU SFI also outranks the function tier and registers not and is_null.
+    auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
+    auto& gpuSfi = registry.at(cudf_velox::kGpuSfiEvaluatorName);
+    previousGpuSfiPriority_ = gpuSfi.priority;
+    gpuSfi.priority = 0;
   }
 
   void TearDown() override {
+    cudf_velox::getCudfExpressionEvaluatorRegistry()
+        .at(cudf_velox::kGpuSfiEvaluatorName)
+        .priority = previousGpuSfiPriority_;
     cudf_velox::unregisterCudf();
     execCtx_.reset();
     queryCtx_.reset();
@@ -113,6 +123,8 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
 
   std::shared_ptr<core::QueryCtx> queryCtx_;
   std::unique_ptr<core::ExecCtx> execCtx_;
+  // Restored in TearDown, since the evaluator registry is global.
+  int previousGpuSfiPriority_{0};
 };
 
 // UnaryFunction: negation of a boolean column. Base column-only path.
