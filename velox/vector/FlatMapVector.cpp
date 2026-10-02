@@ -16,6 +16,8 @@
 
 #include <folly/hash/Hash.h>
 
+#include <unordered_map>
+
 #include "velox/vector/FlatMapVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -26,40 +28,58 @@ namespace {
 constexpr vector_size_t kToStringMaxFlatMapElements = 5;
 constexpr std::string_view kToStringDelimiter{", "};
 
-template <typename T, typename TMap>
+template <typename T, typename TKeyIndex>
 std::optional<column_index_t> getKeyChannelImpl(
     const VectorPtr& distinctKeys,
-    const TMap& keyToChannel,
+    const TKeyIndex& keyIndex,
     T keyValue) {
-  if (distinctKeys == nullptr) {
-    return std::nullopt;
-  }
-
   auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
   VELOX_CHECK(
       simpleKeys != nullptr,
       "Incompatible vector type for flat map vector keys: {}",
       distinctKeys->toString());
 
-  uint64_t hash = folly::hasher<T>{}(keyValue);
-  auto range = keyToChannel.equal_range(hash);
-
-  // Key hash wasn't found on the map.
-  if (range.first == range.second) {
-    return std::nullopt;
-  }
-
-  // Here there was at least one hash match. Need to compare to the keys vector
-  // to ensure it's an actual match and not a hash collision.
-  for (auto it = range.first; it != range.second; ++it) {
-    if (simpleKeys->valueAt(it->second) == keyValue) {
-      return it->second;
-    }
-  }
-  return std::nullopt;
+  return keyIndex.find(
+      folly::hasher<T>{}(keyValue), [&](column_index_t channel) {
+        return simpleKeys->valueAt(static_cast<vector_size_t>(channel)) ==
+            keyValue;
+      });
 }
 
 } // namespace
+
+// Maps the hash of each distinct key to its channel. Keying on the hash
+// supports any key type without templating this class, so lookups must compare
+// the actual keys to rule out hash collisions.
+class FlatMapVector::KeyIndex {
+ public:
+  explicit KeyIndex(const BaseVector& distinctKeys) {
+    for (vector_size_t i = 0; i < distinctKeys.size(); ++i) {
+      add(distinctKeys.hashValueAt(i));
+    }
+  }
+
+  // Indexes the next channel, whose key hashes to `hash`.
+  void add(uint64_t hash) {
+    const auto channel = static_cast<column_index_t>(keyToChannel_.size());
+    keyToChannel_.insert({hash, channel});
+  }
+
+  // Returns the first channel under `hash` for which `isMatch(channel)` holds.
+  template <typename TIsMatch>
+  std::optional<column_index_t> find(uint64_t hash, TIsMatch isMatch) const {
+    auto range = keyToChannel_.equal_range(hash);
+    for (auto it = range.first; it != range.second; ++it) {
+      if (isMatch(it->second)) {
+        return it->second;
+      }
+    }
+    return std::nullopt;
+  }
+
+ private:
+  std::unordered_multimap<uint64_t, column_index_t> keyToChannel_;
+};
 
 FlatMapVector::FlatMapVector(
     velox::memory::MemoryPool* pool,
@@ -95,6 +115,8 @@ FlatMapVector::FlatMapVector(
       inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
 }
 
+FlatMapVector::~FlatMapVector() = default;
+
 void FlatMapVector::setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys) {
   setDistinctKeysImpl(std::move(distinctKeys));
   mapValues_.resize(numDistinctKeys());
@@ -110,60 +132,54 @@ void FlatMapVector::setDistinctKeysImpl(VectorPtr distinctKeys) {
       distinctKeys->type()->toString());
 
   distinctKeys_ = std::move(distinctKeys);
-  keyToChannel_.clear();
+  keyIndex_ = std::make_unique<folly::DelayedInit<KeyIndex>>();
+}
 
-  for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
-    keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
-  }
+const FlatMapVector::KeyIndex& FlatMapVector::keyIndex() const {
+  return keyIndex_->try_emplace_with(
+      [this] { return KeyIndex(*distinctKeys_); });
 }
 
 void FlatMapVector::appendDistinctKey(
     const VectorPtr& sourceDistinctKeys,
     column_index_t sourceChannel) {
-  column_index_t targetChannel = distinctKeys_->size();
+  const vector_size_t targetChannel = distinctKeys_->size();
 
   distinctKeys_->resize(targetChannel + 1);
   distinctKeys_->copy(
       sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
   mapValues_.resize(distinctKeys_->size());
 
-  keyToChannel_.insert(
-      {distinctKeys_->hashValueAt(targetChannel), targetChannel});
+  // An index that is not built yet picks up the new key when it is built.
+  if (keyIndex_->has_value()) {
+    keyIndex_->value().add(distinctKeys_->hashValueAt(targetChannel));
+  }
   sortedKeys_ = false;
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int32_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int64_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     StringView scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     const VectorPtr& keysVector,
     vector_size_t index) const {
-  uint64_t hash = keysVector->hashValueAt(index);
-  auto range = keyToChannel_.equal_range(hash);
-
-  // Key hash wasn't found on the map.
-  if (range.first == range.second) {
-    return std::nullopt;
-  }
-
-  for (auto it = range.first; it != range.second; ++it) {
-    if (keysVector->equalValueAt(distinctKeys_.get(), index, it->second)) {
-      return it->second;
-    }
-  }
-  return std::nullopt;
+  return keyIndex().find(
+      keysVector->hashValueAt(index), [&](column_index_t channel) {
+        return keysVector->equalValueAt(
+            distinctKeys_.get(), index, static_cast<vector_size_t>(channel));
+      });
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
