@@ -1018,14 +1018,10 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
 
-  auto testFilter = [&](const std::string& filter, bool expectCudfScan) {
+  auto testFilter = [&](const std::string& filter,
+                        const RowVectorPtr& expected,
+                        bool expectCudfScan) {
     SCOPED_TRACE(filter);
-
-    auto referencePlan =
-        PlanBuilder(pool_.get()).values({data}).filter(filter).planNode();
-    auto expected = AssertQueryBuilder(referencePlan)
-                        .config(CudfConfig::kCudfEnabled, false)
-                        .copyResults(pool());
 
     auto scanPlan = PlanBuilder(pool_.get())
                         .startTableScan()
@@ -1048,11 +1044,16 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
   };
 
   // A supported, non-extractable remaining filter keeps the scan on GPU.
-  testFilter("c0 % 2 = 0", true);
+  testFilter(
+      "c0 % 2 = 0",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      true);
 
   // An unsupported nested function falls back to the CPU Hive data source.
   testFilter(
-      "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))", false);
+      "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1})}),
+      false);
 }
 
 TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
@@ -1074,18 +1075,9 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
 
   auto testFilter = [&](const std::string& filter,
                         bool adjustTimestampToTimezone,
+                        const RowVectorPtr& expected,
                         bool expectCudfScan) {
     SCOPED_TRACE(filter);
-
-    auto referencePlan =
-        PlanBuilder(pool_.get()).values({data}).filter(filter).planNode();
-    auto expected = AssertQueryBuilder(referencePlan)
-                        .config(CudfConfig::kCudfEnabled, false)
-                        .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
-                        .config(
-                            QueryConfig::kAdjustTimestampToTimezone,
-                            adjustTimestampToTimezone ? "true" : "false")
-                        .copyResults(pool());
 
     auto scanPlan = PlanBuilder(pool_.get())
                         .startTableScan()
@@ -1111,24 +1103,33 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
     EXPECT_EQ(wasCudfToVeloxUsed(task, scanPlan->id()), expectCudfScan);
   };
 
+  auto firstRow = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767297600, 0)},
+          TIMESTAMP())}); // 2026-01-01 20:00:00 UTC.
+  auto noRows = makeRowVector(rowType, 0);
+
   // Without session-timezone adjustment, day truncation is safe on GPU.
   testFilter(
       "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 00:00:00'",
       false,
+      data,
       true);
 
   // Day truncation must use CPU session-timezone semantics when adjustment is
-  // enabled. 20:00 UTC is 01:30 the next day in Asia/Kolkata, whose truncated
-  // value is 18:30 UTC on the previous day.
+  // enabled.
   testFilter(
       "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 18:30:00'",
       true,
+      noRows,
       false);
 
   // Minute truncation is timezone-insensitive and remains eligible.
   testFilter(
       "date_trunc('minute', event_ts) = TIMESTAMP '2026-01-01 20:00:00'",
       true,
+      firstRow,
       true);
 }
 

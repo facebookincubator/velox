@@ -210,6 +210,13 @@ bool canExprRunOnGpu(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
+/// Plan-time GPU eligibility for an already-typed expression when only the
+/// connector's timestamp-adjustment setting is available. This overload does
+/// not optimize the expression.
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    bool adjustTimestampToTimezone);
+
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
 std::optional<std::vector<std::string>> extractFieldPath(
@@ -218,16 +225,5 @@ std::optional<std::vector<std::string>> extractFieldPath(
 /// Return the set of top-level input field names referenced by the expression.
 std::unordered_set<std::string> referencedInputFields(
     const core::TypedExprPtr& expr);
-
-/// Checks a group of compiled expressions for cuDF evaluator support and
-/// query-dependent semantic restrictions.
-///
-/// @param exprs Expressions to check.
-/// @param adjustTimestampToTimezone Whether timestamps are adjusted to the
-/// session timezone. Timezone-sensitive expressions that cuDF evaluates in UTC
-/// are rejected when this is true.
-bool canBeEvaluatedByCudf(
-    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
-    bool adjustTimestampToTimezone);
 
 } // namespace facebook::velox::cudf_velox

@@ -43,11 +43,10 @@ namespace facebook::velox::cudf_velox::connector::hive {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
-bool isCudfHiveDataSourceSupported(
+bool CudfHiveDataSource::isSupported(
     const ConnectorTableHandlePtr& tableHandle,
-    const ConnectorQueryCtx* connectorQueryCtx) {
-  VELOX_CHECK_NOT_NULL(connectorQueryCtx);
-
+    bool adjustTimestampToTimezone,
+    memory::MemoryPool* pool) {
   auto hiveTableHandle =
       std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
   if (!hiveTableHandle) {
@@ -59,10 +58,13 @@ bool isCudfHiveDataSourceSupported(
     return true;
   }
 
-  auto exprSet =
-      connectorQueryCtx->expressionEvaluator()->compile(remainingFilter);
-  return facebook::velox::cudf_velox::canBeEvaluatedByCudf(
-      exprSet->exprs(), connectorQueryCtx->adjustTimestampToTimezone());
+  VELOX_CHECK_NOT_NULL(pool);
+  auto optimizeQueryCtx = core::QueryCtx::create();
+  auto optimizedRemainingFilter =
+      expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool);
+
+  return facebook::velox::cudf_velox::canExprRunOnGpu(
+      optimizedRemainingFilter, adjustTimestampToTimezone);
 }
 
 CudfHiveDataSource::CudfHiveDataSource(

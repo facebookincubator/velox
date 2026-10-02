@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
@@ -43,7 +44,6 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -144,21 +144,14 @@ class TableScanAdapter : public OperatorAdapter {
       return false;
     }
 
-    auto hiveTableHandle = std::dynamic_pointer_cast<
-        const facebook::velox::connector::hive::HiveTableHandle>(
-        tableScanNode->tableHandle());
-    if (!hiveTableHandle) {
+    const auto* queryCtx = ctx->task->queryCtx().get();
+    if (!facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource::
+            isSupported(
+                tableScanNode->tableHandle(),
+                queryCtx->queryConfig().adjustTimestampToTimezone(),
+                op->pool())) {
       LOG_FALLBACK(
-          "TableScan table handle is not HiveTableHandle, PlanNode id: {}",
-          planNode->id());
-      return false;
-    }
-
-    const auto& remainingFilter = hiveTableHandle->remainingFilter();
-    if (remainingFilter &&
-        !canBeEvaluatedByCudf({remainingFilter}, ctx->task->queryCtx().get())) {
-      LOG_FALLBACK(
-          "TableScan remaining filter cannot be evaluated by cuDF, PlanNode id: {}",
+          "TableScan table handle or remaining filter is not supported by cuDF, PlanNode id: {}",
           planNode->id());
       return false;
     }
