@@ -29,6 +29,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 
 #include <folly/ScopeGuard.h>
@@ -3232,8 +3233,9 @@ TEST_F(CudfFilterProjectTest, tryIsNotGpuEligible) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// Every reachable check in the Checked* integral operators. All are user
-// errors, and each message is the one Velox's own code formats.
+// Every reachable check in the registered functions: the Checked* integral
+// operators and the decimal operators. All are user errors, and each message
+// is the one Velox's own code formats.
 TEST_F(CudfFilterProjectTest, everyReachableCheckRaisesTheCpuError) {
   // Integral arithmetic would go to the AST evaluator, which carries no checks.
   cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
@@ -3250,6 +3252,26 @@ TEST_F(CudfFilterProjectTest, everyReachableCheckRaisesTheCpuError) {
       makeFlatVector<int64_t>({1, kMin}),
       makeFlatVector<int64_t>({1, 1}),
   });
+  auto decimals = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2)),
+      makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2)),
+  });
+  auto wideDecimals = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+      // Negated, so that subtracting it overflows the same way adding the
+      // positive one does.
+      makeFlatVector<int128_t>(
+          {1, -DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+  });
+
+  auto nearLimit = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, static_cast<int128_t>(6) * DecimalUtil::kPowersOfTen[37]},
+          DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({1, 2}, DECIMAL(38, 0)),
+  });
+
   struct Case {
     const char* what;
     RowVectorPtr data;
@@ -3267,6 +3289,16 @@ TEST_F(CudfFilterProjectTest, everyReachableCheckRaisesTheCpuError) {
       {"checkedDivide", integral, "c0 / c1", "division by zero"},
       {"checkedModulus", integral, "c0 % c1", "Cannot divide by 0"},
       {"checkedNegate", extremes, "negate(c0)", "Cannot negate minimum value"},
+      // The decimal operators. At scale 0, plus and minus overflow in
+      // checkedPlus rather than in their own "Decimal overflow" branch.
+      {"decimalPlus", wideDecimals, "c0 + c0", "integer overflow: "},
+      {"decimalMinus", wideDecimals, "c0 - c1", "integer overflow: "},
+      // checkedMultiply fires first here: the product leaves int128 entirely.
+      {"decimalMultiply", wideDecimals, "c0 * c0", "integer overflow: "},
+      // 6e37 * 2 fits int128 but not decimal(38,0), so valueInRange fails.
+      {"decimalMultiplyRange", nearLimit, "c0 * c1", "Decimal overflow"},
+      {"decimalDivide", decimals, "c0 / c1", "Division by zero"},
+      {"decimalModulus", decimals, "mod(c0, c1)", "Modulus by zero"},
   };
 
   for (const auto& testCase : cases) {

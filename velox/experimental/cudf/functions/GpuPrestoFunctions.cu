@@ -18,6 +18,7 @@
 // velox/functions/prestosql/registration/*.cpp registers them on the CPU.
 // Compiled with the gpu_shadows/ include path ahead of the Velox source root.
 
+#include "velox/experimental/cudf/functions/GpuDecimalRegistration.cuh"
 #include "velox/experimental/cudf/functions/GpuRegistrationHelpers.cuh"
 
 // Bitwise.h calls bits::countBits without including BitUtil.h.
@@ -28,6 +29,7 @@
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
 #include "velox/functions/prestosql/Comparisons.h"
+#include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
@@ -138,6 +140,35 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuFunction<GpuOrFunction, bool, Variadic<bool>>({prefix + "or"});
   registerGpuFunction<GpuNotFunction, bool, bool>({prefix + "not"});
   registerGpuFunction<GpuIsNullFunction, bool, bool>({prefix + "is_null"});
+
+  // --- Decimal -------------------------------------------------------------
+  // Five type combinations each, as registerDecimalBinary registers them, with
+  // Velox's result precision and scale constraints. initialize() derives the
+  // rescale factors from the argument types.
+  registerGpuDecimalBinary<functions::detail::DecimalPlusFunction>(
+      {prefix + "plus"}, plusMinusConstraints());
+  registerGpuDecimalBinary<functions::detail::DecimalMinusFunction>(
+      {prefix + "minus"}, plusMinusConstraints());
+  registerGpuDecimalBinary<functions::detail::DecimalMultiplyFunction>(
+      {prefix + "multiply"}, multiplyConstraints());
+  registerGpuDecimalBinary<functions::detail::DecimalDivideFunction>(
+      {prefix + "divide"}, divideConstraints());
+  registerGpuDecimalBinary<functions::detail::DecimalModulusFunction>(
+      {prefix + "mod"}, modulusConstraints());
+
+  registerGpuDecimalToInteger<functions::detail::DecimalFloorFunction>(
+      {prefix + "floor"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<functions::detail::DecimalCeilFunction>(
+      {prefix + "ceil"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<functions::detail::DecimalRoundFunction>(
+      {prefix + "round"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<functions::detail::DecimalTruncateFunction>(
+      {prefix + "truncate"}, truncateToIntegerConstraints());
+
+  registerGpuDecimalRoundWithDigits<functions::detail::DecimalRoundFunction>(
+      {prefix + "round"});
+  registerGpuDecimalTruncateWithDigits<
+      functions::detail::DecimalTruncateFunction>({prefix + "truncate"});
 
   // TODO: Register bit_count, bitwise_arithmetic_shift_right,
   // bitwise_shift_left and bitwise_logical_shift_right, whose VELOX_USER_CHECKs
