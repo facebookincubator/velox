@@ -1235,6 +1235,9 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
     if (isRunning()) {
       setError(std::current_exception());
     }
+    // Another thread's setError() may not have terminated the task yet.
+    // finishUnstartedDrivers() needs the total that termination recomputes.
+    terminate(TaskState::kFailed);
     finishUnstartedDrivers();
     throw;
   }
@@ -3643,6 +3646,7 @@ void Task::setError(const std::exception_ptr& exception) {
     }
     exception_ = exception;
   }
+  TestValue::adjust("facebook::velox::exec::Task::setError::terminate", this);
   terminate(TaskState::kFailed);
   if (onError_) {
     onError_(exception_);

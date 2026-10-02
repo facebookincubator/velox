@@ -1309,78 +1309,115 @@ DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
 DEBUG_ONLY_TEST_F(
     TaskTest,
     driverBuildFailureAfterEnqueueFinishesPlannedDrivers) {
-  // A driver build fails after other drivers were enqueued. The finished count
-  // must still reach the total once every driver has left.
-  const std::string transportKind{"test-grouped-exchange"};
-  auto queryRegistry = ExchangeTransportRegistry::create();
-  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
-  queryRegistry->insert(
-      transportKind,
-      ExchangeTransportEntry::make<TestExchangeClient>(
-          [](const ExchangeClientContext&) {
-            return std::make_shared<TestExchangeClient>();
-          },
-          [](int32_t operatorId,
-             DriverCtx* ctx,
-             const std::shared_ptr<const core::ExchangeNode>& node,
-             const std::shared_ptr<TestExchangeClient>&)
-              -> std::unique_ptr<Operator> {
-            return std::make_unique<TestExchangeOperator>(
-                operatorId, ctx, node);
-          }));
+  // A driver build fails after other drivers were enqueued, optionally while
+  // another thread's error has not terminated the task yet. The finished count
+  // must reach the total once every driver has left.
+  for (const bool pendingError : {false, true}) {
+    SCOPED_TRACE(fmt::format("pendingError: {}", pendingError));
+    const std::string transportKind{"test-grouped-exchange"};
+    auto queryRegistry = ExchangeTransportRegistry::create();
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+    queryRegistry->insert(
+        transportKind,
+        ExchangeTransportEntry::make<TestExchangeClient>(
+            [](const ExchangeClientContext&) {
+              return std::make_shared<TestExchangeClient>();
+            },
+            [](int32_t operatorId,
+               DriverCtx* ctx,
+               const std::shared_ptr<const core::ExchangeNode>& node,
+               const std::shared_ptr<TestExchangeClient>&)
+                -> std::unique_ptr<Operator> {
+              return std::make_unique<TestExchangeOperator>(
+                  operatorId, ctx, node);
+            }));
 
-  // Grouped probe, ungrouped build.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId exchangeNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
-                  .capturePlanNodeId(exchangeNodeId)
-                  .hashJoin(
-                      {"a"},
-                      {"b"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .values({makeRowVector(
-                              {"b"}, {makeFlatVector<int64_t>({1})})})
-                          .planNode(),
-                      "",
-                      {"a"})
-                  .planFragment();
-  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
-  plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
-  plan.numSplitGroups = 2;
-  auto task = Task::create(
-      "task-driver-build-failure-after-enqueue",
-      std::move(plan),
-      0,
-      queryCtx,
-      Task::ExecutionMode::kParallel,
-      exec::Consumer{});
-  for (int32_t groupId = 0; groupId < 2; ++groupId) {
-    task->addSplit(
-        exchangeNodeId,
-        exec::Split(
-            std::make_shared<RemoteConnectorSplit>(
-                "remote-task-" + std::to_string(groupId)),
-            groupId));
+    // Grouped probe, ungrouped build. Split group 2 is planned but never seen,
+    // so the planned total (4) exceeds the one termination recomputes (3).
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId exchangeNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                    .capturePlanNodeId(exchangeNodeId)
+                    .hashJoin(
+                        {"a"},
+                        {"b"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({makeRowVector(
+                                {"b"}, {makeFlatVector<int64_t>({1})})})
+                            .planNode(),
+                        "",
+                        {"a"})
+                    .planFragment();
+    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+    plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+    plan.numSplitGroups = 3;
+    auto task = Task::create(
+        "task-driver-build-failure-after-enqueue",
+        std::move(plan),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    for (int32_t groupId = 0; groupId < 2; ++groupId) {
+      task->addSplit(
+          exchangeNodeId,
+          exec::Split(
+              std::make_shared<RemoteConnectorSplit>(
+                  "remote-task-" + std::to_string(groupId)),
+              groupId));
+    }
+
+    // Holds the other thread after it set its error and before it terminates
+    // the task.
+    const auto startThreadId = std::this_thread::get_id();
+    folly::Baton<> errorSet;
+    folly::Baton<> releaseError;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::setError::terminate",
+        std::function<void(Task*)>([&](Task*) {
+          if (std::this_thread::get_id() != startThreadId) {
+            errorSet.post();
+            releaseError.wait();
+          }
+        }));
+    std::thread errorThread;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createAndStartDrivers",
+        std::function<void(Task*)>([&](Task* startingTask) {
+          if (pendingError) {
+            errorThread = std::thread([startingTask] {
+              startingTask->setError(
+                  std::make_exception_ptr(
+                      std::runtime_error("Concurrent error")));
+            });
+            errorSet.wait();
+          }
+        }));
+    // Builds run in order: ungrouped, split group 0, split group 1.
+    std::atomic_int32_t numDriverBuilds{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createDriversLocked",
+        std::function<void(Task*)>([&](Task*) {
+          if (++numDriverBuilds == 3) {
+            VELOX_FAIL("Driver construction failed");
+          }
+        }));
+
+    VELOX_ASSERT_THROW(task->start(1, 2), "Driver construction failed");
+    releaseError.post();
+    if (errorThread.joinable()) {
+      errorThread.join();
+    }
+    // Completes once every driver has left its thread and been accounted.
+    task->requestAbort().wait();
+    EXPECT_EQ(numDriverBuilds, 3);
+    EXPECT_EQ(task->state(), TaskState::kFailed);
+    ASSERT_EQ(task->numTotalDrivers(), 3);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
   }
-
-  // Builds run in order: ungrouped, split group 0, split group 1.
-  std::atomic_int32_t numDriverBuilds{0};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Task::createDriversLocked",
-      std::function<void(Task*)>([&](Task*) {
-        if (++numDriverBuilds == 3) {
-          VELOX_FAIL("Driver construction failed");
-        }
-      }));
-
-  VELOX_ASSERT_THROW(task->start(1, 2), "Driver construction failed");
-  // Completes once every driver has left its thread and been accounted.
-  task->requestAbort().wait();
-  EXPECT_EQ(numDriverBuilds, 3);
-  ASSERT_EQ(task->numTotalDrivers(), 3);
-  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
