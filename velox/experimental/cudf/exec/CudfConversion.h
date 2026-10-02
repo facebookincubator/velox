@@ -44,10 +44,6 @@ class CudfFromVelox : public CudfOperatorBase {
     return !finished_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override {
     return finished_;
   }
@@ -77,10 +73,6 @@ class CudfToVelox : public CudfOperatorBase {
 
   bool needsInput() const override {
     return !finished_;
-  }
-
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override {

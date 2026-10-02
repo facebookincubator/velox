@@ -864,9 +864,7 @@ CudfReduce::CudfReduce(
           exec::isPartialOutput(aggregationNode->step()) &&
           !hasFinalAggs(aggregationNode->aggregates())) {}
 
-void CudfReduce::initialize() {
-  Operator::initialize();
-
+void CudfReduce::doInitialize() {
   inputType_ = aggregationNode_->sources()[0]->outputType();
 
   numAggregates_ = aggregationNode_->aggregates().size();
