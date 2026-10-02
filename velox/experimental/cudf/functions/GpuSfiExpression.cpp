@@ -40,6 +40,8 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 using gpu_sfi::GpuArgView;
+using gpu_sfi::GpuFunctionInstance;
+using gpu_sfi::GpuFunctionInstanceSpec;
 using gpu_sfi::GpuLaunchFn;
 
 // A constant is a one-row column read at element 0, which cannot represent a
@@ -52,6 +54,35 @@ bool hasNullLiteralArgument(const core::TypedExprPtr& expr) {
     }
   }
   return false;
+}
+
+// True when `entry`'s kernel was compiled for exactly these physical types. A
+// variadic tail repeats its element kind.
+bool physicalTypesMatch(
+    const gpu_sfi::GpuFunctionEntry& entry,
+    const std::vector<TypePtr>& argumentTypes,
+    const TypePtr& returnType) {
+  if (entry.returnKind != returnType->kind()) {
+    return false;
+  }
+  if (entry.argumentKinds.empty()) {
+    return argumentTypes.empty();
+  }
+  const auto fixed = entry.signature->variableArity()
+      ? entry.argumentKinds.size() - 1
+      : entry.argumentKinds.size();
+  if (entry.signature->variableArity() ? argumentTypes.size() < fixed
+                                       : argumentTypes.size() != fixed) {
+    return false;
+  }
+  for (std::size_t i = 0; i < argumentTypes.size(); ++i) {
+    const auto expected =
+        i < fixed ? entry.argumentKinds[i] : entry.argumentKinds.back();
+    if (argumentTypes[i]->kind() != expected) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
@@ -89,7 +120,11 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
     // Binding proves the arguments fit; the return type still has to be the one
     // the plan expects, since a bound generic could resolve to something else.
     const auto returnType = binder.tryResolveReturnType();
-    if (returnType != nullptr && returnType->equivalent(*expr->type())) {
+    if (returnType == nullptr || !returnType->equivalent(*expr->type())) {
+      continue;
+    }
+    // A decimal signature cannot tell a short-decimal kernel from a long one.
+    if (physicalTypesMatch(entry, argumentTypes, returnType)) {
       return &entry;
     }
   }
@@ -105,15 +140,75 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       isConstant};
 }
 
+// A function's instance and the class of the error its initialize() raised.
+struct InitializedInstance {
+  std::vector<std::byte> bytes;
+  gpu_sfi::ErrorClass initializeError{gpu_sfi::ErrorClass::kNone};
+};
+
+// Runs the function's initialize() once, at compile time, with this call
+// site's argument types, as SimpleFunctionAdapter does in its constructor. As
+// there, a runtime error fails the call here, and any other error is kept to be
+// raised on every row the function applies to.
+InitializedInstance makeInstance(
+    const GpuFunctionInstanceSpec& spec,
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  if (spec.initialize == nullptr) {
+    // No initialize(): the kernel default-constructs the instance.
+    return {};
+  }
+
+  std::vector<TypePtr> inputTypes;
+  inputTypes.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    inputTypes.push_back(input->type());
+  }
+
+  // A byte vector cannot hold overaligned state.
+  VELOX_CHECK_LE(
+      spec.alignment,
+      static_cast<int32_t>(alignof(std::max_align_t)),
+      "GPU function instance for {} needs {}-byte alignment, which exceeds "
+      "what a std::vector<std::byte> guarantees",
+      expr->toString(),
+      spec.alignment);
+
+  InitializedInstance instance{std::vector<std::byte>(spec.size)};
+  try {
+    instance.initializeError = static_cast<gpu_sfi::ErrorClass>(
+        spec.initialize(instance.bytes.data(), inputTypes, config));
+  } catch (const VeloxRuntimeError&) {
+    throw;
+  } catch (const std::exception&) {
+    // Thrown by a callee compiled outside the shadow, with the real checks.
+    instance.initializeError = gpu_sfi::ErrorClass::kUserError;
+  }
+  // A check behind the shadow records its class rather than throwing, so the
+  // runtime error is raised here, without the message Velox's check carries.
+  if (instance.initializeError == gpu_sfi::ErrorClass::kRuntimeError) {
+    VELOX_FAIL(
+        "GPU simple function failed a runtime check in initialize(): {}",
+        expr->toString());
+  }
+  return instance;
+}
+
 } // namespace
 
 GpuSfiExpression::GpuSfiExpression(
     GpuLaunchFn launch,
+    std::vector<std::byte> instance,
+    gpu_sfi::ErrorClass initializeError,
+    std::string expression,
     cudf::data_type outputType,
     std::vector<Argument> arguments,
     std::vector<std::unique_ptr<cudf::column>> constants,
     std::vector<std::shared_ptr<CudfExpression>> subexpressions)
     : launch_(launch),
+      instance_(std::move(instance)),
+      initializeError_(initializeError),
+      expression_(std::move(expression)),
       outputType_(outputType),
       arguments_(std::move(arguments)),
       constants_(std::move(constants)),
@@ -182,8 +277,12 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
             static_cast<int32_t>(subexpressions.size() - 1)});
   }
 
+  auto instance = makeInstance(resolved->instanceSpec, expr, config);
   return std::make_shared<GpuSfiExpression>(
       resolved->launch,
+      std::move(instance.bytes),
+      instance.initializeError,
+      expr->toString(),
       veloxToCudfDataType(expr->type()),
       std::move(arguments),
       std::move(constants),
@@ -234,18 +333,37 @@ ColumnOrView GpuSfiExpression::eval(
     numRows = inputColumnViews.front().size();
   }
 
+  const GpuFunctionInstance instance{
+      instance_.empty() ? nullptr : instance_.data(),
+      static_cast<int32_t>(instance_.size()),
+      static_cast<uint8_t>(initializeError_)};
   if (errors == nullptr) {
+    // A failed initialize() leaves no value to keep for the rows it declines,
+    // and without a collector no owner can raise Velox's error for them.
+    if (initializeError_ != gpu_sfi::ErrorClass::kNone && numRows > 0) {
+      VELOX_USER_FAIL(
+          "GPU simple function failed a check in initialize(), and its caller "
+          "cannot re-evaluate the rows on the CPU to raise the error: {}",
+          expression_);
+    }
     // No owner can act on a declined row, so the launch does not collect:
     // nulling the row would turn the error into a different answer.
     return launch_(
-        argViews, numRows, outputType_, /*declinedRows=*/nullptr, stream, mr);
+        argViews,
+        instance,
+        numRows,
+        outputType_,
+        /*declinedRows=*/nullptr,
+        stream,
+        mr);
   }
 
   // Every launch in this evaluation records into the owner's buffer, which the
   // owner reads once; reading a device scalar here would synchronize the
   // stream.
   auto* const declinedRows = errors->declinedRows(numRows);
-  return launch_(argViews, numRows, outputType_, declinedRows, stream, mr);
+  return launch_(
+      argViews, instance, numRows, outputType_, declinedRows, stream, mr);
 }
 
 void GpuSfiExpression::close() {

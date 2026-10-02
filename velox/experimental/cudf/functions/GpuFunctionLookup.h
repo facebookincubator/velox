@@ -33,6 +33,12 @@ struct GpuFunctionEntry {
   /// Parsed once at registration from the strings the device side supplied.
   exec::FunctionSignaturePtr signature;
   GpuLaunchFn launch;
+  /// How to build this function's instance before the first launch.
+  GpuFunctionInstanceSpec instanceSpec;
+  /// The physical types the kernel was compiled for. Entries can share a
+  /// signature and differ here; every decimal function does.
+  std::vector<TypeKind> argumentKinds;
+  TypeKind returnKind{TypeKind::UNKNOWN};
 };
 
 /// Every registration made so far, keyed by lowercased function name.

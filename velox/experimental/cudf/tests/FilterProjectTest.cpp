@@ -33,6 +33,7 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 
 #include <cudf/table/table.hpp>
@@ -4382,10 +4383,10 @@ TEST_F(CudfFilterProjectTest, tryIsNotGpuEligible) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// Every reachable check in the Checked* integral operators and the checked
-// bitwise functions raises Velox's own user error, message included, in a
-// projection and in a filter, where the failure is detected before the
-// declined row is dropped.
+// Every reachable check in the registered functions, the Checked* integral
+// operators, the checked bitwise functions and the decimal operators, raises
+// Velox's own user error, message included, in a projection and in a filter,
+// where the failure is detected before the declined row is dropped.
 TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
   // Integral arithmetic would otherwise go to the AST evaluator, which carries
   // no checks.
@@ -4416,6 +4417,33 @@ TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
       makeFlatVector<int64_t>({3, 3}),
       makeFlatVector<int64_t>({8, 1}),
   });
+  auto decimals = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2)),
+      makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2)),
+  });
+  // A short and a long decimal column, for the storage-width combinations
+  // with a short result from a long operand, and a long constant over the
+  // short column, with a long result.
+  auto mixedWidthDecimals = makeRowVector({
+      makeFlatVector<int64_t>({1'000, 0}, DECIMAL(7, 2)),
+      makeFlatVector<int128_t>({2'000, 0}, DECIMAL(20, 3)),
+  });
+  auto wideDecimals = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+      // Negated, so that subtracting it overflows the same way adding the
+      // positive one does.
+      makeFlatVector<int128_t>(
+          {1, -DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+  });
+
+  auto nearLimit = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, static_cast<int128_t>(6) * DecimalUtil::kPowersOfTen[37]},
+          DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({1, 2}, DECIMAL(38, 0)),
+  });
+
   struct Case {
     const char* what;
     RowVectorPtr data;
@@ -4432,6 +4460,23 @@ TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
       {"checkedNegate", extremes, "negate(c0)", false},
       // abs rejects the minimum value of its type.
       {"abs", extremes, "abs(c0)", false},
+      // The decimal operators. At scale 0, plus and minus overflow in
+      // checkedPlus rather than in their own "Decimal overflow" branch, and
+      // checkedMultiply fires first when the product leaves int128 entirely.
+      {"decimalPlus", wideDecimals, "c0 + c0", false},
+      {"decimalMinus", wideDecimals, "c0 - c1", false},
+      {"decimalMultiply", wideDecimals, "c0 * c0", false},
+      // 6e37 * 2 fits int128 but not decimal(38,0), so valueInRange fails.
+      {"decimalMultiplyRange", nearLimit, "c0 * c1", false},
+      {"decimalDivide", decimals, "c0 / c1", false},
+      {"decimalDivideMixedWidths",
+       mixedWidthDecimals,
+       "CAST('2.000' AS DECIMAL(20, 3)) / c0",
+       false},
+      {"decimalDivideShortByLong", mixedWidthDecimals, "c0 / c1", false},
+      {"decimalModulus", decimals, "mod(c0, c1)", false},
+      {"decimalModulusShortByLong", mixedWidthDecimals, "mod(c0, c1)", false},
+      {"decimalModulusLongByShort", mixedWidthDecimals, "mod(c1, c0)", false},
       {"filter", integral, "c0 / c1 > 1", true},
       {"bitCountNumber", negativeShift, "bit_count(c0, c2)", false},
       {"bitCountBits", narrowBits, "bit_count(c0, c2)", false},

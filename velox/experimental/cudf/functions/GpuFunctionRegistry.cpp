@@ -51,12 +51,22 @@ std::string sanitizeName(const std::string& name) {
 exec::FunctionSignaturePtr toVeloxSignature(
     const GpuFunctionSignature& signature) {
   exec::FunctionSignatureBuilder builder;
+  std::unordered_map<std::string, std::string> constraints;
+  for (const auto& [name, constraint] : signature.variableConstraints) {
+    constraints.emplace(name, constraint);
+  }
   // Deduplicated: the builder rejects a repeated variable, which a signature
   // naming one variable twice would otherwise produce.
   std::unordered_set<std::string> declared;
   for (const auto& variable : signature.integerVariables) {
-    if (declared.insert(variable).second) {
+    if (!declared.insert(variable).second) {
+      continue;
+    }
+    auto constraint = constraints.find(variable);
+    if (constraint == constraints.end()) {
       builder.integerVariable(variable);
+    } else {
+      builder.integerVariable(variable, constraint->second);
     }
   }
   builder.returnType(signature.returnType);
@@ -75,6 +85,7 @@ bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
+    GpuFunctionInstanceSpec instanceSpec,
     bool overwrite) {
   auto veloxSignature = toVeloxSignature(signature);
 
@@ -88,7 +99,9 @@ bool registerGpuKernel(
     // arity is a separate entry.
     auto existing = std::find_if(
         entries.begin(), entries.end(), [&](const GpuFunctionEntry& entry) {
-          return *entry.signature == *veloxSignature;
+          return *entry.signature == *veloxSignature &&
+              entry.argumentKinds == signature.argumentKinds &&
+              entry.returnKind == signature.returnKind;
         });
 
     if (existing != entries.end()) {
@@ -97,10 +110,17 @@ bool registerGpuKernel(
         continue;
       }
       existing->launch = launch;
+      existing->instanceSpec = instanceSpec;
       continue;
     }
 
-    entries.push_back(GpuFunctionEntry{veloxSignature, launch});
+    entries.push_back(
+        GpuFunctionEntry{
+            veloxSignature,
+            launch,
+            instanceSpec,
+            signature.argumentKinds,
+            signature.returnKind});
   }
   return registeredAll;
 }

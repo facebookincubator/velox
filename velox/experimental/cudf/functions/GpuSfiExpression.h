@@ -18,6 +18,10 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
 namespace facebook::velox::cudf_velox {
 
 inline constexpr const char* kGpuSfiEvaluatorName = "gpu_sfi";
@@ -49,6 +53,9 @@ class GpuSfiExpression : public CudfExpression {
 
   GpuSfiExpression(
       gpu_sfi::GpuLaunchFn launch,
+      std::vector<std::byte> instance,
+      gpu_sfi::ErrorClass initializeError,
+      std::string expression,
       cudf::data_type outputType,
       std::vector<Argument> arguments,
       std::vector<std::unique_ptr<cudf::column>> constants,
@@ -76,6 +83,15 @@ class GpuSfiExpression : public CudfExpression {
 
  private:
   const gpu_sfi::GpuLaunchFn launch_;
+  // The function's initialized instance, built once at compile time. Opaque
+  // because only the shadow-compiled side can name the type.
+  const std::vector<std::byte> instance_;
+  // The class of the error initialize() raised, kept like Velox's
+  // initializeException_ and raised on every row the function applies to.
+  const gpu_sfi::ErrorClass initializeError_;
+  // The call, for the error raised when a failed initialize() has no collector
+  // to report its rows to.
+  const std::string expression_;
   const cudf::data_type outputType_;
   const std::vector<Argument> arguments_;
   const std::vector<std::unique_ptr<cudf::column>> constants_;

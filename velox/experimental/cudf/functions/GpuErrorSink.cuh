@@ -48,19 +48,30 @@ enum class GpuErrorKind : uint8_t {
 /// functions that name it.
 extern __shared__ uint8_t gpuErrorBytes[];
 
+/// Where a check that fails in host code records itself: the first failure on
+/// this thread since the slot was last cleared. Behind the shadow, a function's
+/// initialize() is the only host code with checks, and it runs on the thread
+/// that compiles the call, so its caller clears the slot before the call and
+/// reads it after.
+inline GpuErrorKind& hostRaisedError() {
+  thread_local GpuErrorKind kind{GpuErrorKind::kNone};
+  return kind;
+}
+
 /// Records that this thread's row failed a check. It does not return: the body
 /// runs on with the rejected data, and the row is declined. The first failure
 /// wins, so the kind names the earliest rejected precondition. Each byte
-/// belongs to one thread, so no atomics are needed.
+/// belongs to one thread, so no atomics are needed. In host code, the failure
+/// goes to hostRaisedError() instead.
 __host__ __device__ inline void gpuRaise(GpuErrorKind kind) {
 #ifdef __CUDA_ARCH__
   if (gpuErrorBytes[threadIdx.x] == static_cast<uint8_t>(GpuErrorKind::kNone)) {
     gpuErrorBytes[threadIdx.x] = static_cast<uint8_t>(kind);
   }
 #else
-  // The host pass of a translation unit compiled behind the shadow never runs
-  // a function body; only registration code is host code there.
-  (void)kind;
+  if (hostRaisedError() == GpuErrorKind::kNone) {
+    hostRaisedError() = kind;
+  }
 #endif
 }
 
