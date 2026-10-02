@@ -2210,6 +2210,9 @@ class HybridFlatMapFieldWriter : public FieldWriter {
           descriptors.keyDescriptor, nodeId_);
       auto* inMapStream = &context_.createContentStreamData<bool>(
           descriptors.inMapDescriptor, nodeId_);
+      // The reader consumes each group's key and in-map metadata atomically.
+      keyStream->disableChunking();
+      inMapStream->disableChunking();
 
       return groups_.emplace_back(
           Group{

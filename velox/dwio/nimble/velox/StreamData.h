@@ -84,6 +84,16 @@ class StreamData {
     return false;
   }
 
+  /// Returns whether this stream must remain one encoding chunk per stripe.
+  bool noChunking() const {
+    return noChunking_;
+  }
+
+  /// Keeps metadata that readers consume atomically in one stripe chunk.
+  void disableChunking() {
+    noChunking_ = true;
+  }
+
   virtual void reset() = 0;
 
   virtual void materialize() {}
@@ -94,6 +104,7 @@ class StreamData {
 
  private:
   const StreamDescriptorBuilder& descriptor_;
+  bool noChunking_{false};
 };
 
 class MutableStreamData : public StreamData {
