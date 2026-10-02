@@ -37,6 +37,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <new>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -76,6 +78,11 @@ struct SignatureType {
     return lowercase(SimpleTypeTrait<T>::name);
   }
   static void collectVariables(std::vector<std::string>&) {}
+  /// The physical type the kernel is compiled for, which name() cannot
+  /// always express.
+  static constexpr TypeKind kind() {
+    return SimpleTypeTrait<T>::typeKind;
+  }
 };
 
 template <typename P, typename S>
@@ -86,6 +93,9 @@ struct SignatureType<ShortDecimal<P, S>> {
   static void collectVariables(std::vector<std::string>& variables) {
     variables.push_back(P::name());
     variables.push_back(S::name());
+  }
+  static constexpr TypeKind kind() {
+    return TypeKind::BIGINT;
   }
 };
 
@@ -98,6 +108,9 @@ struct SignatureType<LongDecimal<P, S>> {
     variables.push_back(P::name());
     variables.push_back(S::name());
   }
+  static constexpr TypeKind kind() {
+    return TypeKind::HUGEINT;
+  }
 };
 
 /// A variadic pack contributes its element type; the signature marks it with
@@ -109,6 +122,9 @@ struct SignatureType<Variadic<T>> {
   }
   static void collectVariables(std::vector<std::string>& variables) {
     SignatureType<T>::collectVariables(variables);
+  }
+  static constexpr TypeKind kind() {
+    return SignatureType<T>::kind();
   }
 };
 
@@ -128,6 +144,9 @@ std::vector<std::string> signatureVariables() {
 /// false marks the output row null, as a Velox simple function does.
 template <typename Fn, typename TReturn, typename... TArgs>
 struct GpuUDFHolder {
+  /// The instance type, as UDFHolder::udf_struct_t names it.
+  using udf_struct_t = Fn;
+
   using exec_return_type = typename gpu::GpuExec::resolver<TReturn>::out_type;
 
   template <typename T>
@@ -214,10 +233,54 @@ struct GpuUDFHolder {
   static constexpr bool alwaysSucceeds =
       isDefaultNullBehavior && !hasCallBool && !hasCallNullFreeBool;
 
-  __device__ static bool invoke(
-      exec_return_type& out,
-      const exec_arg_type<TArgs>&... args) {
-    Fn fn;
+  /// True when the struct declares the template initialize() Velox calls once
+  /// per compiled call site, detected as core::UDFHolder detects it.
+  template <typename U, typename = void>
+  struct hasTemplateInitialize : std::false_type {};
+
+  template <typename U>
+  struct hasTemplateInitialize<
+      U,
+      std::void_t<decltype(std::declval<U>().initialize(
+          std::declval<const std::vector<TypePtr>&>(),
+          std::declval<const core::QueryConfig&>(),
+          static_cast<const exec_arg_type<TArgs>*>(nullptr)...))>>
+      : std::true_type {};
+
+  static constexpr bool hasInitialize = hasTemplateInitialize<Fn>::value;
+
+  // TODO(gpu-sfi-initialize): Detect the initialize() overload that takes a
+  // memory::MemoryPool* after config, trying the pool-free one first as
+  // UDFHolder does. A function using it today runs on a default-constructed
+  // instance. None registered here does.
+
+  /// Passes null for every constant argument value, as Velox does for a
+  /// non-constant argument; no registered function reads them.
+  /// TODO(gpu-sfi-initialize): Pass constant argument values through.
+  static void initializeInstance(
+      void* storage,
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config) {
+    auto* fn = new (storage) Fn{};
+    if constexpr (hasInitialize) {
+      fn->initialize(
+          inputTypes,
+          config,
+          static_cast<const exec_arg_type<TArgs>*>(nullptr)...);
+    }
+  }
+
+  /// The instance is trivially copyable and small, so it reaches the device by
+  /// value as a kernel argument.
+  static_assert(
+      std::is_trivially_copyable_v<Fn>,
+      "A GPU simple function's instance is memcpy'd to the device, so any "
+      "state initialize() sets has to be trivially copyable. A member holding "
+      "a pointer, a std::string or a std::optional of a non-trivial type "
+      "cannot cross that boundary.");
+
+  __device__ static bool
+  invoke(Fn fn, exec_return_type& out, const exec_arg_type<TArgs>&... args) {
     if constexpr (hasCallBool) {
       return fn.call(out, args...);
     } else if constexpr (hasCallVoid) {
@@ -232,9 +295,9 @@ struct GpuUDFHolder {
   }
 
   __device__ static bool invokeNullable(
+      Fn fn,
       exec_return_type& out,
       exec_nullable_arg_type<TArgs>... args) {
-    Fn fn;
     if constexpr (hasCallNullableBool) {
       return fn.callNullable(out, args...);
     } else {
@@ -249,7 +312,10 @@ struct GpuUDFHolder {
         detail::SignatureType<TReturn>::name(),
         {detail::SignatureType<TArgs>::name()...},
         (detail::isVariadicArg<TArgs>::value || ...),
-        detail::signatureVariables<TReturn, TArgs...>()};
+        detail::signatureVariables<TReturn, TArgs...>(),
+        /*variableConstraints=*/{},
+        {detail::SignatureType<TArgs>::kind()...},
+        detail::SignatureType<TReturn>::kind()};
   }
 };
 
@@ -313,6 +379,7 @@ __device__ inline GpuErrorKind raisedError() {
 /// function cannot decline a row.
 template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
 __device__ void evaluateRow(
+    typename Holder::udf_struct_t fn,
     TOut* out,
     bool* valid,
     uint8_t* declinedRows,
@@ -332,11 +399,11 @@ __device__ void evaluateRow(
       return;
     }
     ok =
-        Holder::invoke(result, slotArg<TIn>(arguments, numArgs, I, row)...);
+        Holder::invoke(fn, result, slotArg<TIn>(arguments, numArgs, I, row)...);
   } else {
     // callNullable() asked to see nulls, which arrive as null pointers.
     ok = Holder::invokeNullable(
-        result, slotNullableArg<TIn>(arguments, numArgs, I, row)...);
+        fn, result, slotNullableArg<TIn>(arguments, numArgs, I, row)...);
   }
 
   // A declined row's value came from data a check rejected, so it is not
@@ -360,6 +427,7 @@ __device__ void evaluateRow(
 
 template <typename Holder, typename TOut, typename... TIn>
 __global__ void simpleFunctionKernel(
+    typename Holder::udf_struct_t fn,
     TOut* out,
     bool* valid,
     uint8_t* declinedRows,
@@ -375,7 +443,14 @@ __global__ void simpleFunctionKernel(
     return;
   }
   evaluateRow<Holder, TOut, TIn...>(
-      out, valid, declinedRows, arguments, numArgs, row, std::index_sequence_for<TIn...>{});
+      fn,
+      out,
+      valid,
+      declinedRows,
+      arguments,
+      numArgs,
+      row,
+      std::index_sequence_for<TIn...>{});
 }
 
 } // namespace detail
@@ -388,11 +463,20 @@ struct GpuSimpleFunctionAdapter {
 
   static std::unique_ptr<cudf::column> launch(
       const std::vector<GpuArgView>& arguments,
+      const GpuFunctionInstance& instance,
       cudf::size_type numRows,
       cudf::data_type outputType,
       uint8_t* declinedRows,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
+    // Retypes the instance in the only translation unit that can name its
+    // type. The registered size comes from the same instantiation.
+    using Fn = typename Holder::udf_struct_t;
+    Fn fn{};
+    if (instance.data != nullptr && instance.size == sizeof(Fn)) {
+      std::memcpy(&fn, instance.data, sizeof(Fn));
+    }
+
     auto out = cudf::make_fixed_width_column(
         outputType, numRows, cudf::mask_state::UNALLOCATED, stream, mr);
     if (numRows == 0) {
@@ -429,6 +513,7 @@ struct GpuSimpleFunctionAdapter {
            detail::kBlockSize,
            detail::kBlockSize * sizeof(uint8_t),
            stream.get()>>>(
+            fn,
             out->mutable_view().template data<TOut>(),
             needsValidity ? valid.data() : nullptr,
             declinedRows,
@@ -453,16 +538,30 @@ struct GpuSimpleFunctionAdapter {
 /// Registers a Velox simple function to run on GPU. Func<GpuExec> is
 /// instantiated here, so each dialect registers its own implementation under a
 /// shared name by naming its own type.
+///
+/// `constraints` gives Velox's constraint on a signature variable, such as a
+/// decimal result scale computed from the argument scales.
 template <template <class> typename Func, typename TReturn, typename... TArgs>
 bool registerGpuFunction(
     const std::vector<std::string>& aliases,
+    std::vector<std::pair<std::string, std::string>> constraints = {},
     bool overwrite = true) {
   using Fn = Func<gpu::GpuExec>;
   using Holder = GpuUDFHolder<Fn, TReturn, TArgs...>;
   using Adapter = GpuSimpleFunctionAdapter<Holder, TReturn, TArgs...>;
 
+  auto signature = Holder::signature();
+  signature.variableConstraints = std::move(constraints);
+
   return registerGpuKernel(
-      aliases, Holder::signature(), &Adapter::launch, overwrite);
+      aliases,
+      std::move(signature),
+      &Adapter::launch,
+      GpuFunctionInstanceSpec{
+          Holder::hasInitialize ? &Holder::initializeInstance : nullptr,
+          static_cast<int32_t>(sizeof(Fn)),
+          static_cast<int32_t>(alignof(Fn))},
+      overwrite);
 }
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi
