@@ -185,8 +185,14 @@ class CudfSplitReader : public NvtxHelper {
   // Whether to prepend a row index column to the output.
   bool prependRowIndex_{false};
 
+  // Whether Parquet column names are matched case-insensitively.
+  bool caseInsensitiveColumnNames_{false};
+
   // Top-level column names from the file metadata.
   std::unordered_set<std::string> fileColumnNames_;
+
+  // Whether `readColumnNames_` is just file columns in the same order.
+  bool readAllFileColumns_{false};
 
   // Tracks the absolute row range covered by the split.
   std::size_t baseReadOffset_{0};

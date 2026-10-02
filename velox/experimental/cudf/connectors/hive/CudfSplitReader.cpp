@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
@@ -229,6 +230,8 @@ CudfSplitReader::CudfSplitReader(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
       hiveConfig.maxCoalescedDistanceBytes(sessionProperties));
+  caseInsensitiveColumnNames_ =
+      hiveConfig.isFileColumnNamesReadAsLowerCase(sessionProperties);
 }
 
 CudfSplitReader::~CudfSplitReader() {
@@ -287,7 +290,11 @@ void CudfSplitReader::cacheSchemaFromMetadata() {
         childIdx,
         meta.schema.size(),
         "Parquet schema child index out of range");
-    fileColumnNames_.insert(meta.schema[childIdx].name);
+    const auto& name = meta.schema[childIdx].name;
+    fileColumnNames_.insert(
+        caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name);
   }
 }
 
@@ -503,6 +510,7 @@ void CudfSplitReader::resetSplit() {
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
   splitRowCount_ = 0;
+  readAllFileColumns_ = false;
   noColumnsToRead_ = false;
 }
 
@@ -629,6 +637,7 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
           .timestamp_type(cudfHiveConfig_->timestampType())
+          .case_sensitive_names(not caseInsensitiveColumnNames_)
           .build();
 
   // Set skip_bytes and num_bytes if available
@@ -643,8 +652,10 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_filter(*filter);
   }
 
-  // Set the column projection
-  readerOptions_.set_column_names(readColumnNames_);
+  // Skip column selection when reading every file column in file order
+  if (not readAllFileColumns_) {
+    readerOptions_.set_column_names(readColumnNames_);
+  }
 
   if (prependRowIndex_) {
     readerOptions_.enable_prepend_row_index_column(true);
@@ -694,6 +705,16 @@ void CudfSplitReader::fileMetaDatas() {
 void CudfSplitReader::createCudfReader() {
   // Read file metadatas
   fileMetaDatas();
+
+  // Check if we are reading all columns in order
+  const auto& schema = fileMetaData_.front().schema;
+  readAllFileColumns_ = std::ranges::equal(
+      schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
+        const auto& name = schema[childIdx].name;
+        return caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name;
+      });
 
   // Setup reader options
   setupReaderOptions();
