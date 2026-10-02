@@ -1491,6 +1491,10 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   return *descriptor.context<WriterStreamContext>();
 }
 
+bool noChunking(const StreamData& streamData) {
+  return streamData.noChunking();
+}
+
 void initializeEncodingLayouts(
     const TypeBuilder& typeBuilder,
     const EncodingLayoutTree& encodingLayoutTree);
@@ -3177,20 +3181,31 @@ bool Writer::encodeStreamChunk(
     uint64_t minChunkSize,
     uint64_t maxChunkSize,
     bool ensureFullChunks,
+    bool lastChunk,
     Stream& encodedStream,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool,
     uint64_t& streamBytes,
     std::atomic_uint64_t& chunkBytes,
     std::atomic_uint64_t& logicalBytes) {
+  const bool chunkingDisabled = noChunking(streamData);
+  if (chunkingDisabled && !lastChunk) {
+    return false;
+  }
+
   bool writtenChunk{false};
   logicalBytes += streamData.memoryUsed();
   auto& streamChunks = encodedStream.chunks;
+  // Protected streams reach this path only at stripe close. Raising the cap
+  // to the complete buffered size makes the chunker emit at most one chunk.
+  const auto streamMaxChunkSize = chunkingDisabled
+      ? std::max(maxChunkSize, streamData.memoryUsed())
+      : maxChunkSize;
   auto chunker = getStreamChunker(
       streamData,
       StreamChunkerOptions{
           .minChunkSize = minChunkSize,
-          .maxChunkSize = maxChunkSize,
+          .maxChunkSize = streamMaxChunkSize,
           .ensureFullChunks = ensureFullChunks,
           .isFirstChunk = streamChunks.empty()});
   uint64_t encodedChunkBytes{0};
@@ -3204,6 +3219,12 @@ bool Writer::encodeStreamChunk(
   chunkBytes += encodedChunkBytes;
   // Compact erases processed stream data to reclaim memory.
   chunker->compact();
+  if (chunkingDisabled) {
+    NIMBLE_CHECK_LE(
+        streamChunks.size(),
+        1,
+        "A stream with chunking disabled produced multiple chunks.");
+  }
   logicalBytes -= streamData.memoryUsed();
   return writtenChunk;
 }
@@ -3383,6 +3404,7 @@ bool Writer::writeChunks(
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
+                    lastChunk,
                     encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
@@ -3416,6 +3438,7 @@ bool Writer::writeChunks(
                 minChunkSize,
                 maxChunkSize,
                 ensureFullChunks,
+                lastChunk,
                 encodedStreams_[offset],
                 encodingScratchBufferPool,
                 encodingBufferPool,
@@ -3573,7 +3596,8 @@ bool Writer::evaluateFlushPolicy() {
       std::vector<uint32_t> indices;
       indices.reserve(streamCount);
       for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
-        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+        if (!noChunking(*streams[streamIndex].second) &&
+            streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
           indices.push_back(streamIndex);
         }
       }
@@ -3607,8 +3631,14 @@ bool Writer::evaluateFlushPolicy() {
         // TODO(T240072104): Improve performance by bucketing the streams
         // by size (by most significant bit) instead of sorting them.
         // Only sort streams above minChunkSize.
-        std::vector<uint32_t> streamIndices(streams.size());
-        std::iota(streamIndices.begin(), streamIndices.end(), 0);
+        std::vector<uint32_t> streamIndices;
+        streamIndices.reserve(streams.size());
+        for (uint32_t streamIndex = 0; streamIndex < streams.size();
+             ++streamIndex) {
+          if (!noChunking(*streams[streamIndex].second)) {
+            streamIndices.push_back(streamIndex);
+          }
+        }
         std::sort(
             streamIndices.begin(),
             streamIndices.end(),

@@ -253,6 +253,7 @@ class Writer : public velox::dwio::common::Writer {
       uint64_t minChunkSize,
       uint64_t maxChunkSize,
       bool ensureFullChunks,
+      bool lastChunk,
       Stream& stream,
       velox::BufferPool* encodingScratchBufferPool,
       EncodingBufferPool* encodingBufferPool,
