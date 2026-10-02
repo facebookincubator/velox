@@ -644,6 +644,37 @@ TEST_F(FlatMapVectorTest, setDistinctKeys) {
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)103), std::nullopt);
 }
 
+TEST_F(FlatMapVectorTest, appendDistinctKey) {
+  auto makeVector = [&] {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(BIGINT(), REAL()),
+        nullptr,
+        2,
+        maker_.flatVector<int64_t>({101, 102}),
+        std::vector<VectorPtr>{nullptr, nullptr},
+        std::vector<BufferPtr>{});
+  };
+  auto newKeys = maker_.flatVector<int64_t>({103});
+
+  // Append before any lookup.
+  {
+    auto vector = makeVector();
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
+
+  // Append after a lookup.
+  {
+    auto vector = makeVector();
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), std::nullopt);
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
+}
+
 TEST_F(FlatMapVectorTest, sortedKeyIndices) {
   auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
       {{{101, 1}, {105, 5}, {100, 0}, {102, 2}}},
