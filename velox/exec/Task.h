@@ -950,9 +950,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // this acquired 'mutex_'.
   bool createAndStartDrivers(uint32_t concurrentSplitGroups);
 
-  // Counts every planned driver as finished if no driver is running or has
-  // finished yet, so that waiting for the drivers ends. start() calls this when
-  // it stops because the task was terminated concurrently or startup failed.
+  // Marks planned drivers that were never tracked as finished. Called when
+  // startup stops.
   void finishUnstartedDrivers();
 
   // Creates a bunch of drivers for the given split group.
@@ -1465,6 +1464,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // drivers finish their work. We use this number to detect when the Task is
   // completed.
   uint32_t numFinishedDrivers_{0};
+  // Drivers placed in 'drivers_'. Each tracked driver is accounted exactly once
+  // by normal removal or termination.
+  uint32_t numTrackedDrivers_{0};
   // Reflects number of drivers required to process single split group during
   // grouped execution. Zero for a completely ungrouped execution.
   uint32_t numDriversPerSplitGroup_{0};

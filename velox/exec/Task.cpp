@@ -1242,11 +1242,10 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
 
 void Task::finishUnstartedDrivers() {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  // Mark planned drivers finished when startup enqueued none.
-  // TODO: Track enqueued drivers explicitly. terminate() clears the running
-  // count, so an active driver could otherwise be counted twice here.
-  if (numRunningDrivers_ == 0 && numFinishedDrivers_ == 0) {
-    numFinishedDrivers_ = numTotalDrivers_;
+  // A throwing check here would replace the startup error.
+  VELOX_DCHECK_LE(numTrackedDrivers_, numTotalDrivers_);
+  if (numTrackedDrivers_ < numTotalDrivers_) {
+    numFinishedDrivers_ += numTotalDrivers_ - numTrackedDrivers_;
   }
 }
 
@@ -1336,6 +1335,8 @@ bool Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
         drivers_.emplace_back(std::move(driver));
       }
     }
+    // Track the batch before enqueuing: an enqueue can throw.
+    numTrackedDrivers_ += numDriversUngrouped_;
 
     // Set and start all Drivers together inside 'mutex_' so that
     // cancellations and pauses have the well-defined timing. For example, do
@@ -1780,6 +1781,7 @@ void Task::ensureSplitGroupsAreBeingProcessedLocked() {
       auto& targetPtr = drivers_[i];
       targetPtr = std::move(newDriverPtr);
       if (targetPtr) {
+        ++numTrackedDrivers_;
         ++numRunningDrivers_;
         Driver::enqueue(targetPtr);
       }
