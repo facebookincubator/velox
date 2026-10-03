@@ -22,8 +22,9 @@ namespace facebook::velox::cudf_velox {
 JitExpression::JitExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool)
-    : expr_{expr, inputRowSchema, pool} {}
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config)
+    : expr_{expr, inputRowSchema, pool, config} {}
 
 void JitExpression::close() {
   expr_.close();
@@ -33,13 +34,15 @@ ColumnOrView JitExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
-    bool finalize) {
+    bool finalize,
+    gpu_sfi::GpuSfiErrors* errors) {
   auto precomputedColumns = precomputeSubexpressions(
       inputColumnViews,
       expr_.precomputeInstructions_,
       expr_.scalars_,
       expr_.inputRowSchema_,
-      stream);
+      stream,
+      errors);
 
   // Make table_view from input columns and precomputed columns
   std::vector<cudf::column_view> allColumnViews(inputColumnViews);
@@ -90,8 +93,9 @@ void registerJitEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return std::make_shared<JitExpression>(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return std::make_shared<JitExpression>(expr, row, pool, config);
       },
       /*overwrite=*/false);
 }

@@ -74,6 +74,25 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
             pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   }
+
+  // Requires the GPU to fail `plan` with the user error the CPU raises, message
+  // included.
+  void assertGpuRaisesCpuError(const core::PlanNodePtr& plan) {
+    unregisterCudf();
+    const auto cpuMessage = userErrorMessage(plan);
+    registerCudf();
+    EXPECT_EQ(userErrorMessage(plan), cpuMessage);
+  }
+
+  std::string userErrorMessage(const core::PlanNodePtr& plan) {
+    try {
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+    } catch (const VeloxUserError& e) {
+      return e.message();
+    }
+    ADD_FAILURE() << "Expected a user error";
+    return "";
+  }
 };
 
 TEST_F(CudfDecimalTest, decimal64And128ArithmeticAndComparison) {
@@ -1144,37 +1163,12 @@ TEST_F(CudfDecimalTest, decimalDivideOverflowAndDivideByZeroPrecedence) {
         .planNode();
   };
 
-  auto assertThrows = [&](const core::PlanNodePtr& plan,
-                          const std::string& cpuMessage,
-                          const std::string& gpuMessage) {
-    unregisterCudf();
-    VELOX_ASSERT_USER_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
-        cpuMessage);
-    registerCudf();
-    VELOX_ASSERT_USER_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
-        gpuMessage);
-  };
-
-  // Overflowing row first: the CPU reports the overflow it reaches first, the
-  // GPU still reports division by zero. This is the divergence, and the only
-  // case where the two engines name different error kinds for the same batch.
-  // Only the shared "overflow" substring is pinned because the CPU wording
-  // varies by path.
-  assertThrows(
-      makePlan({overflowLhs, safeLhs}, {overflowRhs, zeroRhs}),
-      "overflow",
-      "Division by zero");
-
-  // Zero divisor first: both engines report division by zero, so the GPU
-  // result is unchanged by the reordering while the CPU result is not.
-  assertThrows(
-      makePlan({safeLhs, overflowLhs}, {zeroRhs, overflowRhs}),
-      "Division by zero",
-      "Division by zero");
+  // Whichever row fails first decides the error, on the GPU as on the CPU: a
+  // declined batch is re-evaluated through Velox.
+  assertGpuRaisesCpuError(
+      makePlan({overflowLhs, safeLhs}, {overflowRhs, zeroRhs}));
+  assertGpuRaisesCpuError(
+      makePlan({safeLhs, overflowLhs}, {zeroRhs, overflowRhs}));
 }
 
 // A conditional that excludes the zero-divisor rows must not fail the batch.
@@ -1756,10 +1750,8 @@ TEST_F(CudfDecimalTest, decimalCoalesceStopsAtFirstLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Parameterized test that verifies cudf decimal binary ops fail-fast on
-// overflow, matching Presto / Velox CPU semantics. The cuDF kernel reports a
-// single batch-wide overflow flag and the host raises a user error for the
-// whole expression.
+// Parameterized test that verifies decimal binary ops on the GPU fail fast on
+// overflow with the error Velox's CPU raises.
 struct DecimalOverflowParam {
   std::string name;
   std::string op;
@@ -1767,7 +1759,6 @@ struct DecimalOverflowParam {
   TypePtr bType;
   std::vector<int128_t> aValues;
   std::vector<int128_t> bValues;
-  std::string expectedMessage;
 };
 
 class CudfDecimalOverflowTest
@@ -1790,19 +1781,9 @@ TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
                   .project({param.op + " AS result"})
                   .planNode();
 
-  // Velox CPU decimal arithmetic is fail-fast on overflow; the cuDF GPU path
-  // must match. Both engines must raise a VeloxUserError naming an overflow
-  // (error-kind parity), and the GPU must use its specific wording. The CPU
-  // wording varies by path ("Decimal overflow. Value ...", "Decimal overflow:
-  // a * b", "integer overflow: a + b"), so only the shared substring is pinned.
-  unregisterCudf();
-  VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "overflow");
-  registerCudf();
-  VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      param.expectedMessage);
+  // Velox CPU decimal arithmetic is fail-fast on overflow, and the GPU must
+  // raise the same error.
+  assertGpuRaisesCpuError(plan);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1816,8 +1797,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {2 * DecimalUtil::kPowersOfTen[37]},
-            "Decimal overflow in add"},
+            {2 * DecimalUtil::kPowersOfTen[37]}},
         // 9e37 - (-2e37) = 1.1e38, exceeds output precision 38.
         DecimalOverflowParam{
             "subtract",
@@ -1825,8 +1805,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {-2 * DecimalUtil::kPowersOfTen[37]},
-            "Decimal overflow in subtract"},
+            {-2 * DecimalUtil::kPowersOfTen[37]}},
         // 1e19 * 1e19 = 1e38 needs 39 digits, exceeds output precision 38.
         DecimalOverflowParam{
             "multiply",
@@ -1834,8 +1813,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {DecimalUtil::kPowersOfTen[19]},
-            {DecimalUtil::kPowersOfTen[19]},
-            "Decimal overflow in multiply"},
+            {DecimalUtil::kPowersOfTen[19]}},
         // Raw int128 wrap (not just a precision violation): 9e37 + 9e37
         // = 1.8e38 exceeds the int128 max (~1.7e38), so the checked add itself
         // overflows.
@@ -1845,8 +1823,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {9 * DecimalUtil::kPowersOfTen[37]},
-            "Decimal overflow in add"},
+            {9 * DecimalUtil::kPowersOfTen[37]}},
         // 9e37 - (-9e37) = 1.8e38 overflows the raw int128 subtraction.
         DecimalOverflowParam{
             "subtractInt128Wrap",
@@ -1854,8 +1831,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {-9 * DecimalUtil::kPowersOfTen[37]},
-            "Decimal overflow in subtract"},
+            {-9 * DecimalUtil::kPowersOfTen[37]}},
         // 9e37 * 10 = 9e38 overflows the raw int128 multiplication.
         DecimalOverflowParam{
             "multiplyInt128Wrap",
@@ -1863,8 +1839,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 0),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {DecimalUtil::kPowersOfTen[1]},
-            "Decimal overflow in multiply"},
+            {DecimalUtil::kPowersOfTen[1]}},
         // Dividend is rescaled by 10^6 before the divide (9e37 * 1e6 = 9e43),
         // which overflows int128 (rescale path).
         DecimalOverflowParam{
@@ -1873,8 +1848,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 6),
             DECIMAL(38, 6),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {DecimalUtil::kPowersOfTen[6]},
-            "Decimal overflow in divide"},
+            {DecimalUtil::kPowersOfTen[6]}},
         // Precision path for divide: the rescaled dividend fits int128
         // (1.5e36 * 1e2 = 1.5e38 < int128 max) but the quotient 1.5e36 / 0.01 =
         // 1.5e38 (raw, scale 2) needs 39 digits and exceeds output
@@ -1885,8 +1859,7 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 2),
             DECIMAL(38, 2),
             {15 * DecimalUtil::kPowersOfTen[35]},
-            {1},
-            "Decimal overflow in divide"},
+            {1}},
         // Mixed-scale ADD/SUB/MOD: the scale-0 operand is rescaled to the
         // output scale (10) before the kernel op, and 9e37 * 1e10 = 9e47
         // overflows int128. This exercises the overflow-checked pre-kernel
@@ -1899,24 +1872,21 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             DECIMAL(38, 10),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {1},
-            "Decimal overflow in add"},
+            {1}},
         DecimalOverflowParam{
             "subtractMixedScale",
             "a - b",
             DECIMAL(38, 0),
             DECIMAL(38, 10),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {1},
-            "Decimal overflow in subtract"},
+            {1}},
         DecimalOverflowParam{
             "moduloMixedScale",
             "a % b",
             DECIMAL(38, 0),
             DECIMAL(38, 10),
             {9 * DecimalUtil::kPowersOfTen[37]},
-            {1},
-            "Decimal overflow in modulo"}),
+            {1}}),
     [](const testing::TestParamInfo<DecimalOverflowParam>& info) {
       return info.param.name;
     });
@@ -2136,100 +2106,76 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
       });
   std::vector<RowVectorPtr> vectors = {input};
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"a + CAST('20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in add");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a + CAST('20000000000000000000000000000000000000' "
+                    "AS DECIMAL(38, 0)) AS result"})
+          .planNode());
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"CAST('20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) + a AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in add");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"CAST('20000000000000000000000000000000000000' "
+                    "AS DECIMAL(38, 0)) + a AS result"})
+          .planNode());
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"a - CAST('-20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in subtract");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a - CAST('-20000000000000000000000000000000000000' "
+                    "AS DECIMAL(38, 0)) AS result"})
+          .planNode());
 
   // -2e37 - 9e37 = -1.1e38, exceeds output precision 38 (lhs-scalar path).
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"CAST('-20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) - a AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in subtract");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"CAST('-20000000000000000000000000000000000000' "
+                    "AS DECIMAL(38, 0)) - a AS result"})
+          .planNode());
 
   // 1e19 * 1e19 = 1e38 needs 39 digits, exceeding output precision 38.
   auto mulInput = makeRowVector(
       {"a"}, {makeFlatVector<int128_t>({nineteenE18}, DECIMAL(38, 0))});
   std::vector<RowVectorPtr> mulVectors = {mulInput};
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(mulVectors)
-              .project(
-                  {"a * CAST('10000000000000000000' AS DECIMAL(38, 0)) AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in multiply");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(mulVectors)
+          .project(
+              {"a * CAST('10000000000000000000' AS DECIMAL(38, 0)) AS result"})
+          .planNode());
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(mulVectors)
-              .project(
-                  {"CAST('10000000000000000000' AS DECIMAL(38, 0)) * a AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in multiply");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(mulVectors)
+          .project(
+              {"CAST('10000000000000000000' AS DECIMAL(38, 0)) * a AS result"})
+          .planNode());
 
   // Divide rhs-scalar: dividend rescale overflows int128 (9e37 * 1e6).
   auto divRescaleInput = makeRowVector(
       {"a"}, {makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 6))});
   std::vector<RowVectorPtr> divRescaleVectors = {divRescaleInput};
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(divRescaleVectors)
-              .project({"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in divide");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(divRescaleVectors)
+          .project({"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
+          .planNode());
 
   // Divide lhs-scalar: quotient exceeds output precision 38.
   auto divPrecisionInput =
       makeRowVector({"a"}, {makeFlatVector<int128_t>({1}, DECIMAL(38, 2))});
   std::vector<RowVectorPtr> divPrecisionVectors = {divPrecisionInput};
 
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(divPrecisionVectors)
-              .project({"CAST('150000000000000000000000000000000000.00' "
-                        "AS DECIMAL(38, 2)) / a AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Decimal overflow in divide");
+  assertGpuRaisesCpuError(
+      exec::test::PlanBuilder()
+          .values(divPrecisionVectors)
+          .project({"CAST('150000000000000000000000000000000000.00' "
+                    "AS DECIMAL(38, 2)) / a AS result"})
+          .planNode());
 }
 
 // Mixed-scale ADD/SUB/MOD operands are rescaled to the output scale before the
@@ -2387,15 +2333,8 @@ TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
                   .project({"a + b AS result"})
                   .planNode();
 
-  // CPU and GPU must both fail fast on the batch.
-  unregisterCudf();
-  VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "overflow");
-  registerCudf();
-  VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "Decimal overflow in add");
+  // CPU and GPU must both fail fast on the batch, with the same error.
+  assertGpuRaisesCpuError(plan);
 }
 
 // Null-masked overflow must not fail the batch: only null rows hold the
