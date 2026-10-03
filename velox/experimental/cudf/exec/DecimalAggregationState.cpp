@@ -23,6 +23,7 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/strings/detail/utilities.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/utilities.hpp>
 
@@ -81,7 +82,9 @@ DecimalSumStateColumns deserializeDecimalSumState(
   cudf::strings_column_view strings(stateCol);
 
   auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
-  auto const payloadSize = strings.chars_size(stream);
+  auto const [payloadBegin, payloadEnd] =
+      cudf::strings::detail::get_first_and_last_offset(strings, stream);
+  auto const payloadSize = payloadEnd - payloadBegin;
   // A null row's payload width is path dependent. serializeDecimalSumState
   // writes kDecimalSumStateSize bytes for every row including nulls, while a
   // velox/Arrow round trip compacts null rows to 0 bytes. Both encodings can
@@ -104,9 +107,6 @@ DecimalSumStateColumns deserializeDecimalSumState(
       fullPayloadSize,
       payloadSize);
 
-  auto offsetsView = strings.offsets();
-  auto charsPtr = reinterpret_cast<const uint8_t*>(strings.chars_begin(stream));
-
   auto sumCol = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::DECIMAL128, -scale},
       numRows,
@@ -123,22 +123,11 @@ DecimalSumStateColumns deserializeDecimalSumState(
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
 
-  // numRows is guaranteed positive here
-  auto const offsetsType = offsetsView.type().id();
   VELOX_CHECK(
-      offsetsType == cudf::type_id::INT32 ||
-          offsetsType == cudf::type_id::INT64,
-      "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
-      cudf::type_to_name(offsetsView.type()));
-  detail::unpackDecimalSumState(
-      offsetsType,
-      offsetsView,
-      charsPtr,
-      sumView,
-      countView,
-      numRows,
-      stateCol.null_mask(),
-      stream);
+      detail::unpackDecimalSumState(stateCol, sumView, countView, stream),
+      "Decimal sum state requires every non-null row to be {} bytes and {}-byte aligned",
+      detail::kDecimalSumStateSize,
+      alignof(int64_t));
 
   if (stateCol.nullable()) {
     auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
