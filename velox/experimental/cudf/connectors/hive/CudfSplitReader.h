@@ -170,6 +170,9 @@ class CudfSplitReader : public NvtxHelper {
   // Whether to prepend a row index column to the output.
   bool prependRowIndex_{false};
 
+  // Whether Parquet column names are matched case-insensitively.
+  bool caseInsensitiveColumnNames_{false};
+
  private:
   // Stores row group indices for one Parquet source.
   using RowGroupIndices = std::vector<cudf::size_type>;
