@@ -1154,11 +1154,13 @@ TEST_P(TabletTest, vectorIndex) {
     EXPECT_EQ(tablet->vectorIndex("embedding"), vectorIndex);
     EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesAfterLoad);
     EXPECT_EQ(indexIoStats_->read().count(), indexReadsAfterLoad);
-    const auto results = vectorIndex->search({
-        .queryVector = {2.0, 2.0},
+    const auto searchResult = vectorIndex->search({
+        .queryVectors = {2.0, 2.0},
         .numNeighbors = 1,
-        .numProbes = 1,
+        .searchOptions =
+            std::make_shared<nimble::index::VectorIndex::IvfSearchOptions>(1),
     });
+    const auto results = searchResult.results(0);
     EXPECT_THAT(
         results,
         testing::ElementsAre(
