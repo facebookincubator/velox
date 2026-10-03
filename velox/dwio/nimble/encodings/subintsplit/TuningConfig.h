@@ -27,8 +27,29 @@ struct TuningConfig {
   /// Controls deterministic sampling for split planning.
   SamplerConfig sampler{};
 
-  /// Controls candidate generation and split selection.
-  SelectorConfig selector{};
+  /// Controls candidate generation and split selection. Huffman and
+  /// DeltaBlock are withdrawn: each would be priced into where boundaries
+  /// fall while no section can be encoded as it, and each costs a pass over
+  /// the sample per grid cell. They must stay in step with
+  /// nestedEncodingReadFactors, which decides what a section may be.
+  SelectorConfig selector{.allowHuffman = false, .allowDeltaBlock = false};
+
+  /// Whether a fitted slope * row + base (a line frame) or a per-row step (a
+  /// step frame) may be subtracted from every value before planning its
+  /// sections (see RowFrame.h). Either frame is kept only where it encodes
+  /// smaller than the plain values; a read pays one multiply-add per row.
+  bool rowFrame{true};
+
+  /// Test and ablation only: keeps a fitted row frame without comparing the
+  /// residuals against the values, so its cost where the encoder would have
+  /// declined it can be measured. Inert unless rowFrame is set, and where no
+  /// frame fits. Never set in a writer.
+  bool rowFrameForceApply{false};
+
+  /// Encodings the planner may cost a section against. Empty means every
+  /// encoding. A restricted set only narrows what the planner considers; it
+  /// does not change the format.
+  AllowedEncodings allowedEncodings{};
 
   /// Bounds values combined per decode pass.
   ///
@@ -36,11 +57,25 @@ struct TuningConfig {
   /// throughput-equivalent. The larger value amortizes nested dispatch while
   /// retaining cache locality.
   uint32_t decodeChunkSize{4'096};
+
+  /// Folds Constant sections into one pre-shifted word when a stream is
+  /// opened, so the decode loop never materialises them. Decode only.
+  bool foldConstantSections{true};
+
+  /// Decodes a stream whose one remaining section holds each value verbatim
+  /// straight into the caller's buffer, skipping the scratch copy and the
+  /// mask-and-shift pass. Decode only.
+  bool passThrough{true};
+
+  /// Decodes a block at a time on the readWithVisitor slow path instead of
+  /// one value per section per call. Decode only; applies to streams with no
+  /// transform, row frame or delta.
+  bool visitorBlockBuffer{true};
 };
 
 /// Defines the production tuning used by every normal SubIntSplit encode and
 /// decode path. Benchmarks and focused tests may pass an alternate config
 /// directly to SubIntSplitEncoding.
-inline constexpr TuningConfig kDefaultTuningConfig{};
+inline const TuningConfig kDefaultTuningConfig{};
 
 } // namespace facebook::nimble::subintsplit
