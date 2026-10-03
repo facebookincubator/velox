@@ -22,22 +22,21 @@ namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
 
-/// GPU-accelerated TopNRowNumber: partitioned top-N with row_number.
-/// Used when the optimizer rewrites ROW_NUMBER() OVER (...) WHERE rn <= limit
-/// into a TopNRowNumber plan node.
+/// Computes partitioned top-N with row_number, rank, or dense_rank on the GPU.
 ///
-/// Retained state is bounded to O(limit * distinct partitions) rather than
-/// the full input: each input batch is locally reduced to its own top-`limit`
-/// rows per partition, then merged with the running `candidates_` (which
-/// already holds the top-`limit` rows per partition across all prior
-/// batches) and pruned back down to `limit` rows per partition. See
-/// reduceBatchToLocalCandidates() and mergeAndPruneCandidates().
+/// Prunes each batch and the merged candidates to ranks within the limit.
+/// row_number retains at most `limit` rows per partition. rank and dense_rank
+/// retain all qualifying peers, so their candidate sets can grow to the full
+/// input when all rows tie.
 class CudfTopNRowNumber : public CudfOperatorBase {
  public:
   CudfTopNRowNumber(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::TopNRowNumberNode>& node);
+
+  /// Checks whether the ranking function and key types are supported on GPU.
+  static bool canRunOnGPU(const core::TopNRowNumberNode& node);
 
   bool needsInput() const override {
     return !noMoreInput_;
@@ -55,19 +54,16 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   void doNoMoreInput() override;
 
  private:
-  /// Reduces a single input batch to its own top-`limit_` rows per
-  /// partition: sorts by partition+ordering keys, computes row_number
-  /// locally, filters the sort permutation to row_number <= limit_, and only
-  /// then gathers the full payload for the surviving rows.
+  // Sorts a batch by partition and ordering keys, filters its permutation to
+  // ranks <= limit_, then gathers only the surviving payload rows.
   CudfVectorPtr reduceBatchToLocalCandidates(
       const CudfVectorPtr& cudfInput,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
-  /// Merges two candidate sets (each already sorted by partition+ordering
-  /// keys and containing at most `limit_` rows per partition) via
-  /// cudf::merge, recomputes row_number over the merged rows, and prunes
-  /// back down to `limit_` rows per partition.
+  // Merges sorted candidate sets, recomputes ranks, and retains ranks <=
+  // limit_. Adding rows cannot improve a row's rank, so previously pruned rows
+  // cannot qualify after a merge.
   CudfVectorPtr mergeAndPruneCandidates(
       const CudfVectorPtr& previous,
       const CudfVectorPtr& incoming,
@@ -95,11 +91,11 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   // size()), since partition keys are listed first in allSortKeys_).
   std::vector<cudf::size_type> localPartitionKeyIndices_;
 
-  // Bounded candidate state: at most `limit_` rows per distinct partition
-  // seen so far, sorted by partition+ordering keys, with the schema of
-  // inputType_ (the row_number column, if any, is only materialized once in
-  // doGetOutput()). Updated incrementally after each input batch instead of
-  // retaining the full input.
+  // Positions of ordering keys after the partition-key prefix of allSortKeys_.
+  std::vector<cudf::size_type> localSortKeyIndices_;
+
+  // Rows with ranks <= limit_, sorted by partition and ordering keys, with
+  // inputType_ schema. The optional rank column is materialized in doGetOutput.
   CudfVectorPtr candidates_;
   bool finished_{false};
   std::unique_ptr<CudaEvent> cudaEvent_;
