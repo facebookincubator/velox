@@ -54,3 +54,11 @@ TEST_F(DictionaryEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::DictionaryEncoding<std::string_view>>(
       randomStringViews(backing, /*seed=*/10), positions);
 }
+
+// The view decodes the alphabet up front only when it has fewer entries than
+// the column has rows. With every value distinct it does not, so this keeps
+// the per-value alphabet read covered alongside the decoded one above.
+TEST_F(DictionaryEncodingViewTest, readsWithoutDecodedAlphabet) {
+  expectReads<nimble::DictionaryEncoding<int32_t>>(
+      makeVector({5, 7, 9, 11, 13, -1}), {5, 0, 3, 2, 4, 1});
+}

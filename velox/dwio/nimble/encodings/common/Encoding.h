@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Options.h"
 
 #include <memory>
 #include <string_view>
@@ -137,6 +138,13 @@ class Encoding {
     /// 2 = TierTagArray, 3 = EliasFano.
     uint8_t frequencyPartitionIndex = 0;
 
+    /// When true, TierTagArray builds a per-tier `resolvedValues` vector at
+    /// decode construction so point/range/bulk decode read the decoded value
+    /// directly instead of chasing `dictionary[indices[rank]]`. Trades extra
+    /// resident memory (up to |T| bytes per row versus 4 for indices) for
+    /// fewer dependent loads on the hot path.
+    bool frequencyPartitionResolveTierValues = true;
+
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader
     /// reads it back from the stream (self-describing).
@@ -161,20 +169,39 @@ class Encoding {
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
 
+    /// Rows a stream's costly candidates are first priced on, before
+    /// selection decides whether to price them on the whole stream. Zero,
+    /// the default, prices every candidate on every row. MainlyConstant,
+    /// Dictionary, RLE and Huffman price from distinct values or runs, which
+    /// is expensive on a long near-unique stream that loses to plain bit
+    /// packing anyway; with this set, a costly candidate is only priced on the
+    /// whole stream if its sample cost is within selectionScreenMargin of the
+    /// cheapest.
+    uint32_t selectionScreenRows{0};
+
+    /// How far a costly candidate's sample cost may exceed the cheapest before
+    /// the screen drops it, as a ratio. Only read when selectionScreenRows is
+    /// set.
+    double selectionScreenMargin{1.25};
+
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
-    ///
-    /// A monotone counter's low bits are maximally random viewed absolutely
-    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
-    /// compress them while the delta form is trivial. This mirrors OpenZL,
-    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
-    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
-    /// huge unsigned values.
-    ///
-    /// Delta-encoded streams can only be read sequentially from row 0, so
-    /// skip() and readWithVisitor() reject them. Do not enable for production
-    /// until restatement points are added.
+    /// A monotone counter's low bits are nearly random viewed absolutely but
+    /// nearly constant viewed as deltas, so this can compress cases no
+    /// per-bit-range encoding can. Delta-encoded streams can only be read
+    /// sequentially from row 0: skip() decodes every skipped row, point and
+    /// range reads cost a full scan, and the delta form carries no row frame
+    /// or section transforms. Do not enable for production until restatement
+    /// points are added.
     bool subIntSplitDeltaPreTransform{false};
+
+    /// SubIntSplit planner and decoder settings; see subintsplit::Options.
+    subintsplit::Options subIntSplit{};
+
+    /// Prices a Huffman tree deeper than HuffmanEncoding::kMaxCodeBits at its
+    /// Shannon bound instead of declining it. encode() length-limits such a
+    /// tree, so it remains encodable. On by default.
+    bool huffmanPriceLengthLimited{true};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
@@ -329,6 +356,20 @@ class Encoding {
   virtual void materializeIndices(uint32_t /*rowCount*/, uint32_t* /*buffer*/) {
     NIMBLE_UNREACHABLE("materializeIndices on non-dictionary encoding");
   }
+
+  /// Whether reads leave a decoded span resident that later reads are
+  /// served from, so the first read after construction carries a one-time
+  /// build cost the ones after it do not. A benchmark needs this to
+  /// attribute that first cost correctly rather than to whichever read
+  /// happens to come first.
+  virtual bool retainsDecodeCache() const {
+    return false;
+  }
+
+  /// Drops the retained decoded span, so the next read rebuilds it. Paired
+  /// with retainsDecodeCache() to let a measurement separate the first
+  /// read's cost from the rest. A no-op where there is no cache.
+  virtual void dropDecodeCache() {}
 
   // A string for debugging/iteration that gives details about *this.
   // Offset adds that many spaces before the msg (useful for children
@@ -719,11 +760,16 @@ void readWithVisitorFast(
   // accelerate multi-chunk decoding.
   const auto numNonNullsSoFar =
       velox::bits::countNonNulls(nulls, 0, params.numScanned);
-  if constexpr (V::dense) {
-    if constexpr (kOutputNulls) {
-      NIMBLE_DCHECK(
-          !visitor.reader().hasNulls() || visitor.reader().returnReaderNulls());
-    }
+  // The dense path writes no result nulls: it is only correct when the reader
+  // returns its own nulls. setReturnNullsMode() declines that whenever the scan
+  // spec carries a filter, AlwaysTrue included, even though the visitor then
+  // has no filter to apply and still outputs nulls. Such a read takes the
+  // general path below, which builds the result nulls itself.
+  bool takeDensePath = V::dense;
+  if constexpr (V::dense && kOutputNulls) {
+    takeDensePath = visitor.reader().returnReaderNulls();
+  }
+  if (takeDensePath) {
     outerRows.resize(numRows);
     auto numNonNulls = velox::simd::indicesOfSetBits(
         nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());

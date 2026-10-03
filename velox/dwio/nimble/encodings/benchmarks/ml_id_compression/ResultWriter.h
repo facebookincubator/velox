@@ -39,6 +39,7 @@
 DECLARE_string(mlidc_output_csv);
 DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);
+DECLARE_int32(mlidc_chunk_rows);
 DECLARE_int32(mlidc_iters);
 DECLARE_int64(mlidc_seed);
 DECLARE_string(mlidc_file);
@@ -49,6 +50,7 @@ DECLARE_int32(mlidc_block_codec_iters);
 DECLARE_string(mlidc_dtype);
 DECLARE_int32(mlidc_block_codec_probes);
 DECLARE_string(mlidc_datasets);
+DECLARE_bool(mlidc_validate);
 
 namespace facebook::nimble::mlidc {
 
@@ -215,13 +217,14 @@ inline void writeRunManifest(const std::string& path) {
   // differ only in compressor produce different numbers under the same
   // encoder names, so a result set is not interpretable without them.
   manifest["flags"] = folly::dynamic::object("mlidc_rows", FLAGS_mlidc_rows)(
+      "mlidc_chunk_rows", FLAGS_mlidc_chunk_rows)(
       "mlidc_iters", FLAGS_mlidc_iters)("mlidc_seed", FLAGS_mlidc_seed)(
       "mlidc_file", FLAGS_mlidc_file)(
       "mlidc_dataset_name", FLAGS_mlidc_dataset_name)(
       "mlidc_substream_compression", FLAGS_mlidc_substream_compression)(
       "mlidc_outer_compression", FLAGS_mlidc_outer_compression)(
       "mlidc_block_codec_iters", FLAGS_mlidc_block_codec_iters)(
-      "mlidc_dtype", FLAGS_mlidc_dtype);
+      "mlidc_dtype", FLAGS_mlidc_dtype)("mlidc_validate", FLAGS_mlidc_validate);
 
   auto json = folly::toPrettyJson(manifest);
   if (folly::writeFile(json, path.c_str())) {

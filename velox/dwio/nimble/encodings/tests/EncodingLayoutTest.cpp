@@ -22,6 +22,8 @@
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #endif
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -320,6 +322,85 @@ TEST(EncodingLayoutTests, forEncoding) {
   EXPECT_TRUE(captured.child(2).has_value());
 }
 
+TEST(EncodingLayoutTests, frequencyPartition) {
+  // FrequencyPartition nests its partition metadata, a dictionary and a key
+  // stream per tier, the values no tier holds and, under a tag array index,
+  // the tag stream. Capture records each under its nested identifier, so the
+  // layout replays: slicing re-encodes a row range with it.
+  using Ids = nimble::EncodingIdentifiers::FrequencyPartition;
+  // 400 distinct values: uint16_t's four tiers hold 278, the rest fall back.
+  std::vector<uint16_t> data;
+  data.reserve(4'000);
+  for (uint32_t i = 0; i < 4'000; ++i) {
+    data.push_back(static_cast<uint16_t>(i % 2 == 0 ? 7 : i % 800));
+  }
+  nimble::EncodingSelectionPolicyCreator encodingSelectionPolicyCreator =
+      [encodingFactory = nimble::ManualEncodingSelectionPolicyFactory{}](
+          nimble::DataType dataType)
+      -> std::unique_ptr<nimble::EncodingSelectionPolicyBase> {
+    return encodingFactory.createPolicy(dataType);
+  };
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  // Indexed layouts, which read rows back in their original order.
+  for (const auto indexType :
+       {nimble::FreqPartIndexType::PerTierBitmaps,
+        nimble::FreqPartIndexType::TierTagArray}) {
+    SCOPED_TRACE(static_cast<int>(indexType));
+    const nimble::Encoding::Options options{
+        .frequencyPartitionIndex = static_cast<uint8_t>(indexType)};
+    nimble::Buffer buffer{*pool};
+    const auto encoded = nimble::EncodingFactory::encode<uint16_t>(
+        std::make_unique<nimble::ReplayedEncodingSelectionPolicy<uint16_t>>(
+            nimble::EncodingLayout{
+                nimble::EncodingType::FrequencyPartition,
+                {},
+                nimble::CompressionType::Uncompressed,
+                std::vector<std::optional<const nimble::EncodingLayout>>(
+                    Ids::TierTags + 1)},
+            std::nullopt,
+            encodingSelectionPolicyCreator),
+        data,
+        buffer,
+        options);
+
+    const auto captured =
+        nimble::EncodingLayoutCapture::capture(encoded, options);
+    ASSERT_EQ(
+        captured.encodingType(), nimble::EncodingType::FrequencyPartition);
+    ASSERT_EQ(captured.childrenCount(), Ids::TierTags + 1);
+    for (const auto identifier :
+         {Ids::PartitionOffsets,
+          Ids::PartitionSizes,
+          Ids::Dict1Bit,
+          Ids::Dict8Bit,
+          Ids::Keys1Bit,
+          Ids::Keys8Bit,
+          Ids::UnencodedValues}) {
+      EXPECT_TRUE(captured.child(identifier).has_value()) << +identifier;
+    }
+    EXPECT_FALSE(captured.child(Ids::Dict16Bit).has_value());
+    EXPECT_EQ(
+        captured.child(Ids::TierTags).has_value(),
+        indexType == nimble::FreqPartIndexType::TierTagArray);
+
+    for (const auto& [offset, length] :
+         {std::pair<uint32_t, uint32_t>{0, 4'000}, {1'001, 777}}) {
+      nimble::Buffer sliceBuffer{*pool};
+      const auto sliced = nimble::EncodingSliceFactory::slice(
+          encoded, offset, length, sliceBuffer, options);
+      auto decoded = nimble::EncodingFactory{options}.create(
+          *pool, sliced, [&sliceBuffer](uint32_t size) -> void* {
+            return sliceBuffer.reserve(size);
+          });
+      ASSERT_EQ(decoded->rowCount(), length);
+      std::vector<uint16_t> values(length);
+      decoded->materialize(length, values.data());
+      EXPECT_TRUE(
+          std::equal(values.begin(), values.end(), data.begin() + offset));
+    }
+  }
+}
+
 TEST(EncodingLayoutTests, fsst) {
   nimble::EncodingLayout fsstLayout{
       nimble::EncodingType::Fsst,
@@ -562,6 +643,24 @@ TEST(EncodingLayoutTests, replayDictionaryRejectsEmpty) {
       encodeAndCapture<uint32_t>(
           std::move(dictionary), std::vector<uint32_t>{}),
       "Dictionary encoding cannot be used with 0 rows.");
+}
+
+TEST(EncodingLayoutTests, replaySimdForBitpackRejectsEmpty) {
+  // A replayed layout applied to a slice can land SimdForBitpack on an empty
+  // nested stream. It is rejected as an incompatible encoding, like
+  // Dictionary above, rather than failing an internal check.
+  nimble::EncodingLayout simdForBitpack{
+      nimble::EncodingType::SimdForBitpack,
+      {},
+      nimble::CompressionType::Uncompressed};
+
+  try {
+    encodeAndCapture<uint32_t>(
+        std::move(simdForBitpack), std::vector<uint32_t>{});
+    FAIL() << "Expected an incompatible encoding error";
+  } catch (const nimble::NimbleUserError& error) {
+    EXPECT_EQ(error.errorCode(), nimble::error_code::IncompatibleEncoding);
+  }
 }
 
 TEST(

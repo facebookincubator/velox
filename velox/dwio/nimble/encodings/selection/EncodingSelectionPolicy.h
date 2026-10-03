@@ -18,8 +18,10 @@
 #include <glog/logging.h>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,6 +34,8 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
+#include "velox/dwio/nimble/encodings/subintsplit/DecodeCost.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TopLevelPolicy.h"
 
 namespace facebook::nimble {
 
@@ -99,6 +103,369 @@ using EncodingSelectionPolicyCreator =
 #define UNIQUE_PTR_FACTORY(data_type, class, ...) \
   UNIQUE_PTR_FACTORY_EXTRA(data_type, class, , __VA_ARGS__)
 
+/// Whether a nested stream is decoded once when its parent encoding is
+/// constructed, rather than on every read that touches it. Only
+/// FrequencyPartition's tag stream qualifies today.
+inline bool isDecodedOnceAtConstruction(
+    EncodingType parentEncodingType,
+    std::optional<NestedEncodingIdentifier> nestedEncodingIdentifier) {
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  return parentEncodingType == EncodingType::FrequencyPartition &&
+      nestedEncodingIdentifier ==
+      EncodingIdentifiers::FrequencyPartition::TierTags;
+#else
+  (void)parentEncodingType;
+  (void)nestedEncodingIdentifier;
+  return false;
+#endif
+}
+
+/// The encodings a nested stream may be chosen from, given the candidates its
+/// parent was chosen from and the encoding the parent settled on. A free
+/// function rather than a method because ManualEncodingSelectionPolicy below
+/// and any policy standing in for it, such as a test's, must reach the same
+/// answer; a second, divergent copy is hard to notice since both sides still
+/// produce plausible sizes.
+inline std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors(
+    const std::vector<std::pair<EncodingType, float>>& parentReadFactors,
+    EncodingType parentEncodingType,
+    std::optional<NestedEncodingIdentifier> nestedEncodingIdentifier =
+        std::nullopt) {
+  std::vector<std::pair<EncodingType, float>> nested;
+  nested.reserve(parentReadFactors.size());
+  // Excludes encodings already selected in parent levels: not strictly
+  // required, but guarantees convergence and speeds up nested selection.
+  for (const auto& entry : parentReadFactors) {
+    // BitRangeSplit sections are restricted to encodings that can decode one
+    // of its bit ranges; every other parent only excludes itself.
+    const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
+        ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
+              entry.first)
+        : entry.first != parentEncodingType;
+    if (isCandidate) {
+      nested.emplace_back(entry);
+    }
+  }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  // SubIntSplit decomposes its input into bit-range segments, each
+  // independently re-encoded via encodeNested(); segments often look very
+  // different from the original column, so extra integer-compression
+  // candidates are offered here beyond the global default read factors.
+  // This list reaches the whole subtree, not only direct children of a
+  // SubIntSplit node: recursion is bounded because each candidate's own
+  // encoding type (not SubIntSplit) is what gets passed down to its
+  // children, so it drops itself out at the next level.
+  if (parentEncodingType == EncodingType::SubIntSplit) {
+    for (const auto& pair :
+         {// PFOR, SimdForBitpack and BlockBitPacking are held above the
+          // delta family's factor; levelling them cedes bulk decode
+          // throughput and point latency to a small compression gain. Do
+          // not change without re-measuring.
+          std::pair{EncodingType::PFOR, 0.9f},
+          std::pair{EncodingType::SimdForBitpack, 0.9f},
+          std::pair{EncodingType::BlockBitPacking, 0.9f},
+          std::pair{EncodingType::Delta, 0.85f},
+          std::pair{EncodingType::FOR, 0.85f},
+          // Huffman is deliberately absent: it decodes bit-serially, which
+          // costs bulk decode throughput here. See
+          // subintsplit::TuningConfig::selector for the opt-in.
+          //
+          // DeltaBlock is deliberately absent too: its serial prefix-sum
+          // decode does not vectorize, and its per-block baselines (which
+          // pay off on a gather or low-selectivity read) are untested here.
+          std::pair{EncodingType::FrequencyPartition, 0.85f}}) {
+      nested.push_back(pair);
+    }
+  }
+#endif
+
+  // A stream decoded once at construction, rather than on every read, can
+  // admit encodings rightly withheld from section payloads, where decode cost
+  // is paid per read: the reader works from the already-decoded form. Huffman
+  // is the case in point, admitted here despite being withheld from the
+  // SubIntSplit list above.
+  if (isDecodedOnceAtConstruction(
+          parentEncodingType, nestedEncodingIdentifier) &&
+      std::none_of(nested.begin(), nested.end(), [](const auto& entry) {
+        return entry.first == EncodingType::Huffman;
+      })) {
+    nested.emplace_back(EncodingType::Huffman, 0.85f);
+  }
+  return nested;
+}
+
+/// The read factor select() weighs `encodingType` by: the table's factor,
+/// except Trivial's is withheld (raised to 1.0) where taking it would cost
+/// compression. Trivial stores at the storage type's width rather than the
+/// value width, so against a stream it does not fit exactly it is always
+/// larger; its low factor can still let it out-cost a narrower FixedBitWidth
+/// on the weighted comparison, silently spending bits on decode speed.
+/// Withholding it only when it is no smaller than FixedBitWidth keeps the
+/// discount wherever it is actually free, and does not by itself hand the
+/// stream to FixedBitWidth if some other candidate's own factor beats it.
+///
+/// select() applies it only under
+/// subintsplit::Options::sectionEstimatorRefinements. A free function because
+/// anything modelling selection, such as the oracle harness, must reach the
+/// same answer or silently drift from it.
+inline float effectiveReadFactor(
+    EncodingType encodingType,
+    float tableReadFactor,
+    uint64_t estimatedSize,
+    const std::optional<uint64_t>& fixedBitWidthSize) {
+  const bool trivialKeepsItsDiscount = encodingType != EncodingType::Trivial ||
+      !fixedBitWidthSize.has_value() || estimatedSize <= *fixedBitWidthSize;
+  return trivialKeepsItsDiscount ? tableReadFactor : 1.0f;
+}
+
+/// Whether `encodingType` is certain to cost at least `minCost`, from a
+/// lower bound on its estimate, so selection may skip estimating it without
+/// changing the result. Trivial is never skipped, so that a skip never depends
+/// on how Trivial's read factor is weighed.
+template <typename T>
+bool candidateCannotWin(
+    EncodingType encodingType,
+    float readFactor,
+    double minCost,
+    std::span<const typename TypeTraits<T>::physicalType> values,
+    const Statistics<typename TypeTraits<T>::physicalType>& statistics,
+    const Encoding::Options& options) {
+  if (encodingType == EncodingType::Trivial ||
+      minCost == std::numeric_limits<double>::max()) {
+    return false;
+  }
+  const auto lowerBound =
+      detail::EncodingSizeEstimation<T>::estimateSizeLowerBound(
+          encodingType, values, statistics, options);
+  // The same expression select() costs an estimate with, so that a bound equal
+  // to the estimate rounds to the same cost.
+  return lowerBound.has_value() &&
+      static_cast<double>(lowerBound.value() * readFactor) >= minCost;
+}
+
+/// FixedBitWidth's estimate when it is among `candidates` and
+/// effectiveReadFactor needs it, that is under
+/// subintsplit::Options::sectionEstimatorRefinements; otherwise nothing.
+template <typename T>
+std::optional<uint64_t> fixedBitWidthSizeForReadFactors(
+    std::span<const std::pair<EncodingType, float>> candidates,
+    std::span<const typename TypeTraits<T>::physicalType> values,
+    const Statistics<typename TypeTraits<T>::physicalType>& statistics,
+    const Encoding::Options& options) {
+  if (!options.subIntSplit.sectionEstimatorRefinements ||
+      std::none_of(candidates.begin(), candidates.end(), [](const auto& entry) {
+        return entry.first == EncodingType::FixedBitWidth;
+      })) {
+    return std::nullopt;
+  }
+  return detail::EncodingSizeEstimation<T>::estimateSize(
+      EncodingType::FixedBitWidth, values, statistics, options);
+}
+
+/// The candidate select() takes and its estimated size, which is empty when
+/// no candidate can store the values.
+struct SelectedCandidate {
+  EncodingType encodingType{EncodingType::Trivial};
+  std::optional<uint64_t> estimatedSize;
+};
+
+/// select()'s comparison of `candidates` on `values`: each candidate's
+/// estimate weighed by its read factor (see effectiveReadFactor), plus its
+/// decode cost when a SubIntSplit section asks for one, the decode-weighted
+/// winner bounded on size by the size-only winner. Sizes are estimated under
+/// `options`. A free function so that anything modelling selection, such as
+/// SubIntSplit's plan refiner, reaches select()'s answer rather than a copy
+/// kept in step by hand.
+template <typename T>
+SelectedCandidate selectCandidate(
+    std::span<const std::pair<EncodingType, float>> candidates,
+    std::span<const typename TypeTraits<T>::physicalType> values,
+    const Statistics<typename TypeTraits<T>::physicalType>& statistics,
+    const Encoding::Options& options) {
+  // FixedBitWidth's size, when it is a candidate, so effectiveReadFactor
+  // can withhold Trivial's discount where taking it would cost compression.
+  const auto fixedBitWidthSize = fixedBitWidthSizeForReadFactors<T>(
+      candidates, values, statistics, options);
+
+  // How much a section's decode counts against its size, and for which
+  // read shape. Zero unless this is a SubIntSplit section and the caller
+  // asked for decode to count, in which case the term below vanishes and
+  // selection falls back to size alone.
+  const auto& subIntSplitOptions = options.subIntSplit;
+  const double decodeWeight = subIntSplitOptions.sectionSelection
+      ? subIntSplitOptions.decodeWeight
+      : 0.0;
+
+  // Costs are compared in double so the decode term, which is in bytes and
+  // can be large, does not lose the size term to rounding, and so that
+  // candidateCannotWin compares against minCost without rounding. The decode
+  // term only adds to a candidate's cost, so its size lower bound still
+  // bounds that cost from below.
+  double minCost = std::numeric_limits<double>::max();
+  SelectedCandidate selected;
+  // What size alone would have chosen, held against the decode-weighted
+  // winner below. Tracked unconditionally, since it is the incumbent when
+  // the weight is zero.
+  double minSizeCost = std::numeric_limits<double>::max();
+  SelectedCandidate sizeSelected;
+  for (const auto& [encodingType, tableReadFactor] : candidates) {
+    if (candidateCannotWin<T>(
+            encodingType,
+            tableReadFactor,
+            minCost,
+            values,
+            statistics,
+            options)) {
+      continue;
+    }
+    const auto estimatedSize = detail::EncodingSizeEstimation<T>::estimateSize(
+        encodingType, values, statistics, options);
+    if (!estimatedSize.has_value()) {
+      NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
+      continue;
+    }
+
+    // Read factor weights raise/lower the favorability of each encoding,
+    // except where Trivial's would be unearned; see effectiveReadFactor.
+    // Without a FixedBitWidth size it returns the table's factor unchanged.
+    const auto readFactor = effectiveReadFactor(
+        encodingType,
+        tableReadFactor,
+        estimatedSize.value(),
+        fixedBitWidthSize);
+    // Size, plus what reading the section back costs. Section decode times
+    // add rather than max, so a slow section is paid in full by every scan
+    // of the column, which choosing on size alone cannot see. See
+    // subintsplit/DecodeCost.h for the per-encoding rates.
+    const double sizeCost =
+        static_cast<double>(estimatedSize.value() * readFactor);
+    if (sizeCost < minSizeCost) {
+      minSizeCost = sizeCost;
+      sizeSelected = {encodingType, estimatedSize};
+    }
+    double cost = sizeCost;
+    if (decodeWeight != 0.0) {
+      const double nanosPerRow = subintsplit::decodeNanosPerRow(
+          encodingType,
+          subIntSplitOptions.decodeAccessPattern,
+          subIntSplitOptions.decodeReadPath,
+          static_cast<double>(estimatedSize.value()) * 8.0,
+          values.size());
+      cost += subintsplit::decodeCostBits(
+                  nanosPerRow, values.size(), decodeWeight) /
+          8.0;
+    }
+    NIMBLE_SELECTION_LOG(
+        "Encoding: " << encodingType << ", Size: "
+                     << velox::succinctBytes(estimatedSize.value())
+                     << ", Factor: " << readFactor << ", Cost: " << cost);
+    if (cost < minCost) {
+      minCost = cost;
+      selected = {encodingType, estimatedSize};
+    }
+  }
+
+  // Bounded on size: without this, a section can be handed an encoding
+  // that reads faster but stores the column arbitrarily worse.
+  if (decodeWeight != 0.0 && selected.estimatedSize.has_value() &&
+      sizeSelected.estimatedSize.has_value() &&
+      static_cast<double>(selected.estimatedSize.value()) >
+          static_cast<double>(sizeSelected.estimatedSize.value()) *
+              (1.0 + subIntSplitOptions.maxSizeRegression)) {
+    selected = sizeSelected;
+  }
+  return selected;
+}
+
+/// Whether selection's screen may withhold `encodingType` from pricing on the
+/// whole stream. These are the candidates that price a stream from its
+/// distinct values or its runs; see Encoding::Options::selectionScreenRows.
+inline bool isScreenedBySample(EncodingType encodingType) {
+  switch (encodingType) {
+    case EncodingType::MainlyConstant:
+    case EncodingType::Dictionary:
+    case EncodingType::RLE:
+    case EncodingType::Huffman:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Numeric body of screenCandidatesBySample.
+template <typename T>
+void screenNumericCandidatesBySample(
+    std::span<const typename TypeTraits<T>::physicalType> values,
+    std::vector<std::pair<EncodingType, float>>& candidates,
+    const Encoding::Options& options) {
+  using physicalType = typename TypeTraits<T>::physicalType;
+  const size_t sampleRows = options.selectionScreenRows;
+  if (sampleRows == 0 || values.size() <= 2 * sampleRows ||
+      std::none_of(candidates.begin(), candidates.end(), [](const auto& entry) {
+        return isScreenedBySample(entry.first);
+      })) {
+    return;
+  }
+
+  constexpr size_t kBlocks{8};
+  const auto sample = sampleSpreadBlocks(
+      values, kBlocks, std::max<size_t>(sampleRows / kBlocks, 1));
+  const std::span<const physicalType> sampleValues{sample};
+  const auto sampleStatistics = Statistics<physicalType>::create(sampleValues);
+
+  // Weighed as select() weighs the whole stream, so the screen does not drop
+  // a candidate select() would keep; see effectiveReadFactor.
+  const auto fixedBitWidthSize = fixedBitWidthSizeForReadFactors<T>(
+      candidates, sampleValues, sampleStatistics, options);
+  std::vector<std::optional<double>> sampleCosts;
+  sampleCosts.reserve(candidates.size());
+  double cheapest = std::numeric_limits<double>::max();
+  for (const auto& [encodingType, readFactor] : candidates) {
+    const auto estimatedSize = detail::EncodingSizeEstimation<T>::estimateSize(
+        encodingType, sampleValues, sampleStatistics, options);
+    if (!estimatedSize.has_value()) {
+      sampleCosts.emplace_back();
+      continue;
+    }
+    const double cost =
+        static_cast<double>(estimatedSize.value()) *
+        effectiveReadFactor(
+            encodingType, readFactor, estimatedSize.value(), fixedBitWidthSize);
+    sampleCosts.emplace_back(cost);
+    cheapest = std::min(cheapest, cost);
+  }
+
+  const double bound = cheapest * options.selectionScreenMargin;
+  size_t kept{0};
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (!isScreenedBySample(candidates[i].first) ||
+        !sampleCosts[i].has_value() || sampleCosts[i].value() <= bound) {
+      candidates[kept++] = candidates[i];
+    }
+  }
+  candidates.resize(kept);
+}
+
+/// Drops from `candidates` each costly candidate whose price on a sample of
+/// `values` exceeds the cheapest candidate's sample price by more than
+/// Encoding::Options::selectionScreenMargin. Leaves `candidates` untouched
+/// when the screen is off or the stream is too short to be worth sampling.
+/// A candidate the sample could not price at all is kept.
+template <typename T>
+void screenCandidatesBySample(
+    std::span<const typename TypeTraits<T>::physicalType> values,
+    std::vector<std::pair<EncodingType, float>>& candidates,
+    const Encoding::Options& options) {
+  using physicalType = typename TypeTraits<T>::physicalType;
+  // Numbers only, which is what the screen has been measured on. Booleans
+  // cannot be sampled into a span at all.
+  if constexpr (!isNumericType<physicalType>() || isBoolType<physicalType>()) {
+    return;
+  } else {
+    screenNumericCandidatesBySample<T>(values, candidates, options);
+  }
+}
+
 /// Manual encoding selection implementation.
 /// Uses a manually crafted model to choose the most appropriate encoding based
 /// on the provided statistics.
@@ -149,6 +516,66 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       }
     }
 
+    // A nested stream (one this policy was created for by a parent encoding)
+    // is not offered SubIntSplit when the caller withholds it; see
+    // subintsplit::Options::inNestedStreams.
+    if (identifier_.has_value() && !options.subIntSplit.inNestedStreams) {
+      candidateEncodingReadFactors.erase(
+          std::remove_if(
+              candidateEncodingReadFactors.begin(),
+              candidateEncodingReadFactors.end(),
+              [](const auto& entry) {
+                return entry.first == EncodingType::SubIntSplit;
+              }),
+          candidateEncodingReadFactors.end());
+    }
+
+    bool subIntSplitForced{false};
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // A bit-flip admission decides from the profile alone whether SubIntSplit
+    // is worth costing: a rejected stream loses the candidate, an admitted
+    // one still has to win the ordinary size comparison.
+    // subintsplit::Options::admissionForces instead makes an admitted stream
+    // SubIntSplit without pricing it, so forcing holds even where the estimate
+    // declines, such as under substream compression.
+    if constexpr (
+        isIntegralType<T>() &&
+        (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+      const auto admission = options.subIntSplit.admission;
+      const auto subIntSplit = std::find_if(
+          candidateEncodingReadFactors.begin(),
+          candidateEncodingReadFactors.end(),
+          [](const auto& entry) {
+            return entry.first == EncodingType::SubIntSplit;
+          });
+      if (admission != subintsplit::SubIntSplitAdmission::kEstimate &&
+          subIntSplit != candidateEncodingReadFactors.end()) {
+        const bool admitted = subintsplit::bitFlipAdmits(
+            subintsplit::bitFlipAdmissionProfile(
+                values, admission, options.subIntSplit.admissionProfilePairs),
+            admission,
+            subintsplit::TopLevelPolicyConfig{});
+        if (!admitted) {
+          candidateEncodingReadFactors.erase(subIntSplit);
+        } else if (options.subIntSplit.admissionForces) {
+          const auto entry = *subIntSplit;
+          candidateEncodingReadFactors.assign(1, entry);
+          subIntSplitForced = true;
+        }
+      }
+    }
+#endif
+
+    // Not for a forced stream, which has one candidate left, nor while decode
+    // is priced: the screen compares sizes, and would drop a candidate that
+    // loses on size and wins once its decode is counted.
+    if (!subIntSplitForced &&
+        (!options.subIntSplit.sectionSelection ||
+         options.subIntSplit.decodeWeight == 0.0)) {
+      screenCandidatesBySample<T>(
+          values, candidateEncodingReadFactors, options);
+    }
+
     // Fast path: when there are no candidate encodings, fall back to Trivial.
     if (candidateEncodingReadFactors.empty()) {
       return {
@@ -158,35 +585,26 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
-    float minCost = std::numeric_limits<float>::max();
-    EncodingType selectedEncoding = EncodingType::Trivial;
-    std::optional<uint64_t> selectedEstimatedSize;
-    // Iterate on all candidate encodings, and pick the encoding with the
-    // minimal cost.
-    for (const auto& entry : candidateEncodingReadFactors) {
-      const auto encodingType = entry.first;
-      const auto estimatedSize =
-          detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
-      if (!estimatedSize.has_value()) {
-        NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
-        continue;
-      }
+    // A size estimate counts bytes on disk, which are compressed bytes when
+    // this policy hands its streams to a substream compressor; this flag
+    // tells an estimate which world it is pricing. Copied, not mutated,
+    // since the caller's options are shared with the encode.
+    Encoding::Options estimationOptions = options;
+    estimationOptions.subIntSplit.substreamCompression =
+        compressionOptions_.has_value() &&
+        compressionOptions_->compressionType != CompressionType::Uncompressed;
 
-      // We use read factor weights to raise/lower the favorability of each
-      // encoding.
-      const auto readFactor = entry.second;
-      const auto cost = estimatedSize.value() * readFactor;
-      NIMBLE_SELECTION_LOG(
-          "Encoding: " << encodingType << ", Size: "
-                       << velox::succinctBytes(estimatedSize.value())
-                       << ", Factor: " << readFactor << ", Cost: " << cost);
-      if (cost < minCost) {
-        minCost = cost;
-        selectedEncoding = encodingType;
-        selectedEstimatedSize = estimatedSize;
-      }
+    const auto selected = selectCandidate<T>(
+        candidateEncodingReadFactors, values, statistics, estimationOptions);
+    auto selectedEncoding = selected.encodingType;
+    const auto selectedEstimatedSize = selected.estimatedSize;
+    // After the size bound, which a forced stream's one candidate cannot
+    // trip: its decode-weighted and size-only winners are the same.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    if (subIntSplitForced) {
+      selectedEncoding = EncodingType::SubIntSplit;
     }
+#endif
 
     NIMBLE_SELECTION_LOG(
         "Selected Encoding"
@@ -242,36 +660,40 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     return candidateEncodingReadFactors_;
   }
 
+  std::unique_ptr<EncodingSelectionPolicy<T>> narrowed(
+      const std::function<bool(EncodingType)>& keep) const override {
+    std::vector<std::pair<EncodingType, float>> kept;
+    for (const auto& entry : candidateEncodingReadFactors_) {
+      if (keep(entry.first)) {
+        kept.push_back(entry);
+      }
+    }
+    // Nested streams are offered what createImpl would offer them.
+    return std::make_unique<ManualEncodingSelectionPolicy<T>>(
+        std::move(kept),
+        compressionOptions_,
+        identifier_,
+        nestedEncodingReadFactorsOverride_.has_value()
+            ? nestedEncodingReadFactorsOverride_.value()
+            : candidateEncodingReadFactors_);
+  }
+
  protected:
   std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
       EncodingType parentEncodingType,
       NestedEncodingIdentifier nestedEncodingIdentifier,
       DataType nestedDataType) override {
-    // In each sub-level of the encoding selection, we exclude the encodings
-    // selected in parent levels. Although this is not required (as hopefully,
-    // the model will not pick a nested encoding of the same type as the
-    // parent), it provides an additional safety net, making sure the encoding
-    // selection will eventually converge, and also slightly speeds up nested
-    // encoding selection.
-    // TODO: validate the assumptions here compared to brute forcing, to see if
-    // the same encoding is selected multiple times in the tree (for example,
-    // should we allow trivial string lengths to be encoded using trivial
-    // encoding?)
-    std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors;
+    // The candidate list is decided by nestedEncodingReadFactors above, not
+    // here, so that a policy standing in for this one reaches the same list
+    // through the same code rather than through a copy of it.
     const auto& sourceEncodingReadFactors =
         nestedEncodingReadFactorsOverride_.has_value()
         ? nestedEncodingReadFactorsOverride_.value()
         : candidateEncodingReadFactors_;
-    nestedEncodingReadFactors.reserve(sourceEncodingReadFactors.size());
-    for (const auto& entry : sourceEncodingReadFactors) {
-      const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
-          ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
-                entry.first)
-          : entry.first != parentEncodingType;
-      if (isCandidate) {
-        nestedEncodingReadFactors.emplace_back(entry);
-      }
-    }
+    auto nestedEncodingReadFactors = nimble::nestedEncodingReadFactors(
+        sourceEncodingReadFactors,
+        parentEncodingType,
+        nestedEncodingIdentifier);
     UNIQUE_PTR_FACTORY(
         nestedDataType,
         ManualEncodingSelectionPolicy,

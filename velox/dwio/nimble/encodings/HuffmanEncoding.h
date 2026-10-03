@@ -222,6 +222,12 @@ class HuffmanEncoding final
     assignCodeLengths(nodes, queue.top().node, 0, lengths);
   }
 
+  // Bits the Huffman codes over `frequencies` occupy, or nullopt when the
+  // deepest code would not fit in kMaxCodeBits. Requires at least two symbols,
+  // and sorts `frequencies` in place, so the caller must not rely on their
+  // order afterwards.
+  static std::optional<uint64_t> codeBits(std::vector<uint32_t>& frequencies);
+
   physicalType decodeValue(uint32_t row) const;
 
   Vector<physicalType> alphabet_;
@@ -321,14 +327,95 @@ typename HuffmanEncoding<T>::physicalType HuffmanEncoding<T>::decodeValue(
   NIMBLE_UNREACHABLE("Invalid Huffman row {}", row);
 }
 
+// Decodes the run in one forward pass over the bitstream, rather than calling
+// decodeValue per row: codes are variable length, so a row's bit offset is
+// only reachable by decoding forward from the nearest checkpoint, and doing
+// that once per row in the run would repeat the shared prefix each time.
 template <typename T>
 void HuffmanEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   NIMBLE_DCHECK_LE(currentRow_ + rowCount, this->rowCount_);
+  if (rowCount == 0) {
+    return;
+  }
   auto* output = static_cast<physicalType*>(buffer);
+
+  const uint32_t checkpoint = currentRow_ / kCheckpointStride;
+  uint32_t bitOffset = checkpoints_[checkpoint];
+  const uint32_t mask = (1u << tableLog_) - 1;
+
+  auto nextEntry = [&]() {
+    uint32_t bits = 0;
+    const uint32_t byteOffset = bitOffset >> 3;
+    const uint32_t available =
+        std::min<uint32_t>(4, bitstreamBytes_ - byteOffset);
+    std::memcpy(&bits, bitstream_ + byteOffset, available);
+    bits >>= bitOffset & 7;
+    const auto entry = decodeTable_[bits & mask];
+    NIMBLE_CHECK_GT(entry.bits, 0);
+    bitOffset += entry.bits;
+    return entry;
+  };
+
+  for (uint32_t row = checkpoint * kCheckpointStride; row < currentRow_;
+       ++row) {
+    nextEntry();
+  }
   for (uint32_t i = 0; i < rowCount; ++i) {
-    output[i] = decodeValue(currentRow_ + i);
+    output[i] = alphabet_[nextEntry().symbol];
   }
   currentRow_ += rowCount;
+}
+
+template <typename T>
+std::optional<uint64_t> HuffmanEncoding<T>::codeBits(
+    std::vector<uint32_t>& frequencies) {
+  const size_t symbolCount = frequencies.size();
+  std::sort(frequencies.begin(), frequencies.end());
+
+  // Leaves sorted by frequency and internal nodes created in nondecreasing
+  // weight order are each already sorted, so merging the two sequences
+  // reproduces the same pop order a heap-based build would use, with ties
+  // going to the leaf. This builds the same tree with no heap and no nodes;
+  // carrying a height alongside each weight finds the deepest code without
+  // walking a tree that no longer exists.
+  //
+  // The merged weights also give the bitstream length directly: a merge puts
+  // one more bit on every row underneath it, so summing each internal node's
+  // weight totals sum(f * l) with no tree or per-symbol lengths needed.
+  struct Subtree {
+    uint64_t weight;
+    uint8_t height;
+  };
+  std::vector<Subtree> internals;
+  internals.reserve(symbolCount - 1);
+
+  size_t leafIndex = 0;
+  size_t internalIndex = 0;
+  const auto takeSmallest = [&]() -> Subtree {
+    if (leafIndex < symbolCount &&
+        (internalIndex == internals.size() ||
+         frequencies[leafIndex] <= internals[internalIndex].weight)) {
+      return {frequencies[leafIndex++], 0};
+    }
+    return internals[internalIndex++];
+  };
+
+  uint64_t totalBits = 0;
+  for (size_t remaining = symbolCount; remaining > 1; --remaining) {
+    const auto left = takeSmallest();
+    const auto right = takeSmallest();
+    const auto height =
+        static_cast<uint8_t>(1 + std::max(left.height, right.height));
+    // Every node hangs below the root, so a subtree already past the limit is
+    // proof enough that the deepest code is too.
+    if (height > kMaxCodeBits) {
+      return std::nullopt;
+    }
+    const uint64_t weight = left.weight + right.weight;
+    totalBits += weight;
+    internals.push_back({weight, height});
+  }
+  return totalBits;
 }
 
 template <typename T>
@@ -345,19 +432,40 @@ std::optional<uint64_t> HuffmanEncoding<T>::estimateSize(
     return std::nullopt;
   }
 
-  // No depth gate here: encode() length-limits instead of failing, so there is
-  // nothing for the estimator to decline. Building the tree just to check depth
-  // would be pure cost — the estimate below is derived from uniqueCounts, not
-  // from the code lengths.
-  uint64_t encodedBits = 0;
-  const uint64_t rowsMinusOne = values.size() - 1;
+  // Bit count and max-depth feasibility depend only on the multiset of
+  // frequencies, not on which value carries which count, so the counts
+  // Statistics already holds are enough; no pass over the values is needed.
+  std::vector<uint32_t> frequencies;
+  frequencies.reserve(uniqueCounts->size());
   for (const auto& [value, count] : uniqueCounts.value()) {
     (void)value;
-    encodedBits += count * velox::bits::bitsRequired(rowsMinusOne / count);
+    frequencies.push_back(static_cast<uint32_t>(count));
   }
+
+  // codeBits returns what the encoder will really write, pricing Huffman on
+  // its own terms rather than on a Shannon-length upper bound.
+  //
+  // A tree deeper than kMaxCodeBits is declined unless
+  // Options::huffmanPriceLengthLimited is set: encode() length-limits it
+  // rather than failing, and the Shannon lengths are a sound bound for a
+  // length-limited code, which is never shorter.
+  auto encodedBits = codeBits(frequencies);
+  if (!encodedBits.has_value()) {
+    if (!options.huffmanPriceLengthLimited) {
+      return std::nullopt;
+    }
+    uint64_t shannonBits = 0;
+    const uint64_t rowsMinusOne = values.size() - 1;
+    for (const auto& [value, count] : uniqueCounts.value()) {
+      (void)value;
+      shannonBits += count * velox::bits::bitsRequired(rowsMinusOne / count);
+    }
+    encodedBits = shannonBits;
+  }
+
   const uint64_t checkpoints =
       velox::bits::divRoundUp(values.size(), kCheckpointStride);
-  const uint64_t bitstreamBytes = (encodedBits + 7) / 8 + 4;
+  const uint64_t bitstreamBytes = (encodedBits.value() + 7) / 8 + 4;
   return EncodingPrefix::serializedSize(
              values.size(), options.useVarintRowCount) +
       varint::varintSize(uniqueCounts->size()) + 1 +
