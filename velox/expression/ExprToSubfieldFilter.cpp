@@ -846,7 +846,22 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeBetweenFilter(
   if (!upper) {
     return nullptr;
   }
+  if (lower->isNullAt(0) || upper->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
   switch (lower->typeKind()) {
+    case TypeKind::TINYINT:
+      if (negated) {
+        return notBetween(
+            singleValue<int8_t>(lower), singleValue<int8_t>(upper));
+      }
+      return between(singleValue<int8_t>(lower), singleValue<int8_t>(upper));
+    case TypeKind::SMALLINT:
+      if (negated) {
+        return notBetween(
+            singleValue<int16_t>(lower), singleValue<int16_t>(upper));
+      }
+      return between(singleValue<int16_t>(lower), singleValue<int16_t>(upper));
     case TypeKind::INTEGER:
       if (negated) {
         return notBetween(
