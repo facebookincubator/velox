@@ -23,6 +23,8 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace cudf {
@@ -33,13 +35,28 @@ class tree;
 
 namespace facebook::velox::cudf_velox {
 
+struct SubfieldFilterDecimalType {
+  cudf::type_id type;
+  int32_t scale;
+  bool isDecimal{true};
+};
+
+// Physical cuDF storage type and scale for each top-level decimal input field.
+using SubfieldFilterDecimalTypes =
+    std::unordered_map<std::string, SubfieldFilterDecimalType>;
+
+bool hasDecimalSubfieldFilter(
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& inputRowSchema);
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -48,6 +65,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
 
 } // namespace facebook::velox::cudf_velox
