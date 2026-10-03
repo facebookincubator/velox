@@ -9750,4 +9750,35 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
       0);
 }
 
+// A device check that fails in a join filter raises Velox's error. Decimal
+// division puts the filter on GPU SFI, since the AST evaluator does not take
+// decimals.
+TEST_F(HashJoinTest, declinedRowInAJoinFilterRaisesTheCpuError) {
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2))});
+  auto build = makeRowVector(
+      {"u_k", "u_val"},
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2))});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .hashJoin(
+              {"k"},
+              {"u_k"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "cast(t_val / u_val as double) > 1.0",
+              {"k"},
+              core::JoinType::kInner)
+          .planNode();
+
+  // The row that pairs 200 with 0.
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()), "Division by zero");
+}
+
 } // namespace

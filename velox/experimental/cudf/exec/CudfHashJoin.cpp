@@ -447,11 +447,13 @@ void CudfHashJoinProbe::initialize() {
   }
 
   auto* const pool = operatorCtx_->pool();
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  const auto& config = queryCtx->queryConfig();
 
   // Optimize once so the filter evaluator and the two-table AST tree see the
   // same constant-folded form.
-  const auto optimizedFilter = expression::optimize(
-      joinNode_->filter(), operatorCtx_->execCtx()->queryCtx(), pool);
+  const auto optimizedFilter =
+      expression::optimize(joinNode_->filter(), queryCtx, pool);
 
   // Disable AST-based filtering (and force precomputation) if the filter
   // expression contains a type the AST/JIT evaluator can't handle, using the
@@ -472,10 +474,10 @@ void CudfHashJoinProbe::initialize() {
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-  filterEvaluator_ = createCudfExpression(
-      optimizedFilter,
-      facebook::velox::type::concatRowTypes(filterRowTypes),
-      pool);
+  filterRowType_ = facebook::velox::type::concatRowTypes(filterRowTypes);
+  cpuFilterSource_ = optimizedFilter;
+  filterEvaluator_ =
+      createCudfExpression(optimizedFilter, filterRowType_, pool, config);
 
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
@@ -505,7 +507,8 @@ void CudfHashJoinProbe::initialize() {
           probeType_,
           rightPrecomputeInstructions_,
           leftPrecomputeInstructions_,
-          pool);
+          pool,
+          config);
     } else {
       createAstTree(
           optimizedFilter,
@@ -515,7 +518,8 @@ void CudfHashJoinProbe::initialize() {
           buildType_,
           leftPrecomputeInstructions_,
           rightPrecomputeInstructions_,
-          pool);
+          pool,
+          config);
     }
   }
 }
@@ -743,9 +747,23 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
   for (const auto& col : joinedCols) {
     joinedColViews.push_back(col->view());
   }
-  auto filterColumns =
-      filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
-  auto filterColumn = asView(filterColumns);
+  gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
+  auto filterColumns = filterEvaluator_->eval(
+      joinedColViews, stream, get_output_mr(), /*finalize=*/true, &errors);
+  // Checked before the mask drops the declined row.
+  std::unique_ptr<cudf::column> recovered;
+  if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+    recovered = reevaluateFilterOnCpu(
+        cpuFilterSource_,
+        filterRowType_,
+        joinedColViews,
+        cpuFilter_,
+        operatorCtx_->execCtx(),
+        operatorCtx_->pool(),
+        stream);
+  }
+  auto filterColumn =
+      recovered != nullptr ? recovered->view() : asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
   auto const numRows = filteredOutputNumRows(
