@@ -28,6 +28,8 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
+Driver::Driver() = default;
+
 Driver::~Driver() = default;
 
 namespace {
