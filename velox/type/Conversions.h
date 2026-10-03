@@ -19,6 +19,7 @@
 #include <fmt/compile.h>
 #include <folly/Conv.h>
 #include <folly/Expected.h>
+#include <folly/Likely.h>
 #include <cctype>
 #include <string>
 #include <type_traits>
@@ -249,6 +250,24 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
 /// control characters from both front and back and returns
 /// a StringView of the trimmed string.
 std::string_view trimWhiteSpace(const char* data, size_t length);
+
+/// Removes a trailing 'f', 'F', 'd' or 'D' that follows a digit or '.', as
+/// Java's Float.parseFloat and Double.parseDouble accept, e.g. "1.5d" becomes
+/// "1.5". Leaves other input unchanged, so "NaNd" and "1.5 d" stay invalid.
+inline StringView trimFloatSuffix(StringView view) {
+  if (view.size() < 2) {
+    return view;
+  }
+  const char last = view.data()[view.size() - 1];
+  if (FOLLY_UNLIKELY(
+          last == 'f' || last == 'F' || last == 'd' || last == 'D')) {
+    const char beforeLast = view.data()[view.size() - 2];
+    if ((beforeLast >= '0' && beforeLast <= '9') || beforeLast == '.') {
+      return StringView(view.data(), view.size() - 1);
+    }
+  }
+  return view;
+}
 
 /// To TINYINT, SMALLINT, INTEGER, BIGINT, and HUGEINT converter.
 template <TypeKind KIND, typename TPolicy>
