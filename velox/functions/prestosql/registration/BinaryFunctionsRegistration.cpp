@@ -78,6 +78,9 @@ void registerSimpleFunctions(
   registerFunction<FromBase64Function, Varbinary, Varbinary>(
       {prefix + "from_base64"}, {}, true, defaultOwner);
 
+  registerFunction<ToBase32Function, Varchar, Varbinary>(
+      {prefix + "to_base32"});
+
   registerFunction<FromBase32Function, Varbinary, Varchar>(
       {prefix + "from_base32"}, {}, true, defaultOwner);
   registerFunction<FromBase32Function, Varbinary, Varbinary>(
