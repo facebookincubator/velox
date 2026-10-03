@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
+#include <numeric>
+
 #include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
@@ -2295,6 +2298,143 @@ TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, timestampFilters) {
+  constexpr vector_size_t kNumRows = 4'096;
+  std::vector<int64_t> denseRows(kNumRows);
+  std::iota(denseRows.begin(), denseRows.end(), 0);
+  const std::vector<int64_t> sparseRows{
+      3, 31, 32, 127, 128, 255, 1'001, 2'047, 4'095};
+  std::vector<std::unique_ptr<Filter>> filters;
+  filters.push_back(
+      exec::between(Timestamp(-86'400, 1), Timestamp(50 * 86'400, 0), true));
+  filters.push_back(
+      exec::between(Timestamp(-86'400, 1), Timestamp(50 * 86'400, 0), false));
+  filters.push_back(exec::isNotNull());
+  filters.push_back(nullptr);
+
+  for (bool hasNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
+    auto timestamps = makeFlatVector<Timestamp>(
+        kNumRows,
+        [](auto row) {
+          const int64_t days = row < 1'000 ? row % 8 - 4 : row - 2'000;
+          return Timestamp(days * 86'400, 0);
+        },
+        [&](auto row) { return hasNulls && row % 11 == 0; });
+    auto data = makeRowVector(
+        {"id", "col"}, {makeFlatVector<int64_t>(denseRows), timestamps});
+
+    const auto testRead = [&](const dwio::common::MemorySink& sink,
+                              int32_t batchSize) {
+      for (const auto& rows : {denseRows, sparseRows}) {
+        const bool sparse = rows.size() != kNumRows;
+        SCOPED_TRACE(fmt::format("sparse={}", sparse));
+        for (const auto& filter : filters) {
+          SCOPED_TRACE(filter ? filter->toString() : "unfiltered");
+          std::vector<int64_t> expectedIds;
+          for (auto row : rows) {
+            if (!filter ||
+                (timestamps->isNullAt(row)
+                     ? filter->testNull()
+                     : filter->testTimestamp(timestamps->valueAt(row)))) {
+              expectedIds.push_back(row);
+            }
+          }
+          for (bool projectTimestamp : {false, true}) {
+            SCOPED_TRACE(fmt::format("projectTimestamp={}", projectTimestamp));
+            auto reader = createReaderInMemory(sink);
+            auto scanSpec = makeScanSpec(data->rowType());
+            if (sparse) {
+              scanSpec->childByName("id")->setFilter(exec::in(rows));
+            }
+            auto* timestampSpec = scanSpec->childByName("col");
+            if (filter) {
+              timestampSpec->setFilter(filter->clone());
+            }
+            timestampSpec->setProjectOut(projectTimestamp);
+            auto options = makeRowReaderOpts(data->rowType());
+            options.setScanSpec(scanSpec);
+            auto rowReader = reader->createRowReader(options);
+            const auto outputType =
+                projectTimestamp ? data->rowType() : ROW("id", BIGINT());
+            VectorPtr result =
+                BaseVector::create(outputType, 0, leafPool_.get());
+            std::vector<int64_t> actualIds;
+            while (rowReader->next(batchSize, result)) {
+              auto* output = result->as<RowVector>();
+              const auto* ids = output->childAt(0)
+                                    ->loadedVector()
+                                    ->as<SimpleVector<int64_t>>();
+              const auto* values = projectTimestamp
+                  ? output->childAt(1)
+                        ->loadedVector()
+                        ->as<SimpleVector<Timestamp>>()
+                  : nullptr;
+              for (auto row = 0; row < output->size(); ++row) {
+                const auto id = ids->valueAt(row);
+                ASSERT_GE(id, 0);
+                ASSERT_LT(id, kNumRows);
+                actualIds.push_back(id);
+                if (values) {
+                  ASSERT_EQ(values->isNullAt(row), timestamps->isNullAt(id));
+                  if (!values->isNullAt(row)) {
+                    ASSERT_EQ(values->valueAt(row), timestamps->valueAt(id));
+                  }
+                }
+              }
+            }
+            EXPECT_THAT(actualIds, testing::ElementsAreArray(expectedIds));
+          }
+        }
+      }
+    };
+
+    for (auto encoding :
+         {parquet::arrow::Encoding::kPlain,
+          parquet::arrow::Encoding::kRleDictionary,
+          parquet::arrow::Encoding::kDeltaBinaryPacked}) {
+      const bool enableDictionary =
+          encoding == parquet::arrow::Encoding::kRleDictionary;
+      for (bool dataPageV2 : {false, true}) {
+        // Exercise page boundaries and multiple decoder batches within a page.
+        for (const auto& [pageSize, batchSize] :
+             {std::pair{128, 127},
+              std::pair{128, 2'048},
+              std::pair{1'048'576, 4'096}}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "encoding={}, dataPageV2={}, pageSize={}, batchSize={}",
+                  static_cast<int>(encoding),
+                  dataPageV2,
+                  pageSize,
+                  batchSize));
+          ParquetWriterOptions writerOptions;
+          writerOptions.enableDictionary = enableDictionary;
+          writerOptions.encoding =
+              enableDictionary ? parquet::arrow::Encoding::kPlain : encoding;
+          writerOptions.parquetWriteTimestampUnit =
+              TimestampPrecision::kMicroseconds;
+          writerOptions.useParquetDataPageV2 = dataPageV2;
+          writerOptions.dataPageSize = pageSize;
+          writerOptions.batchSize = 64;
+          writerOptions.dictionaryPageSizeLimit = 64;
+          auto* sink = write(data, writerOptions);
+          auto reader = createReaderInMemory(*sink);
+          ASSERT_EQ(
+              std::static_pointer_cast<const ParquetTypeWithId>(
+                  reader->typeWithId()->childAt(1))
+                  ->parquetType_,
+              thrift::Type::INT64);
+          ASSERT_THAT(
+              reader->fileMetaData().rowGroup(0).columnChunk(1).encodings(),
+              testing::Contains(static_cast<thrift::Encoding>(encoding)));
+          testRead(*sink, batchSize);
+        }
+      }
+    }
+  }
 }
 
 TEST_F(ParquetReaderTest, columnStatisticsTimestamp) {
