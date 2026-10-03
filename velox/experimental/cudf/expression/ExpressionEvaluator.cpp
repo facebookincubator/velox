@@ -2998,6 +2998,15 @@ bool isConditionalFunction(const core::TypedExprPtr& expr) {
   return name == "switch" || name == "if";
 }
 
+/// True for the special forms registered as LogicalFunction.
+bool isConjunctFunction(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  return name == "and" || name == "or";
+}
+
 /// Maps each entry of subexpressions_ back to its expr_->inputs() index.
 /// create() drops constant children, so `if(c, x, 1)` yields {0, 1}.
 std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
@@ -3010,6 +3019,30 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
     }
   }
   return indices;
+}
+
+/// Rows where \p condition is anything but a valid \p value, nulls included.
+rmm::device_buffer makeRowMaskExcept(
+    const cudf::column_view& condition,
+    bool value,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  // bools_to_mask keeps valid true rows alone, so negate to exclude true
+  // instead, and turn nulls true to keep them. NOT maps null to null.
+  std::unique_ptr<cudf::column> negated;
+  if (value) {
+    negated =
+        cudf::unary_operation(condition, cudf::unary_operator::NOT, stream, mr);
+  }
+  const auto selector = negated ? negated->view() : condition;
+  std::unique_ptr<cudf::column> nullsKept;
+  if (selector.has_nulls()) {
+    const cudf::numeric_scalar<bool> keepNulls(true, true, stream, mr);
+    nullsKept = cudf::replace_nulls(selector, keepNulls, stream, mr);
+  }
+  auto [mask, unusedUnsetCount] =
+      cudf::bools_to_mask(nullsKept ? nullsKept->view() : selector, stream, mr);
+  return std::move(*mask);
 }
 
 /// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
@@ -3025,18 +3058,8 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
     auto [mask, unusedUnsetCount] = cudf::bools_to_mask(condition, stream, mr);
     return std::move(*mask);
   }
-  // The else branch also owns the null rows, and NOT maps null to null.
-  auto negated =
-      cudf::unary_operation(condition, cudf::unary_operator::NOT, stream, mr);
-  std::unique_ptr<cudf::column> elseCondition;
-  if (negated->view().has_nulls()) {
-    const cudf::numeric_scalar<bool> nullsTakeElse(true, true, stream, mr);
-    elseCondition =
-        cudf::replace_nulls(negated->view(), nullsTakeElse, stream, mr);
-  }
-  auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
-      elseCondition ? elseCondition->view() : negated->view(), stream, mr);
-  return std::move(*mask);
+  // The else branch also owns the null rows.
+  return makeRowMaskExcept(condition, /*value=*/true, stream, mr);
 }
 
 /// Views over \p inputs' data with \p rowMask ANDed into every null mask, so a
@@ -3188,6 +3211,53 @@ ColumnOrView FunctionExpression::eval(
         subexprResults.push_back(
             subexpressions_[branch]->eval(
                 branchInputs.back().views, stream, mr));
+      }
+    } else if (isConjunctFunction(expr_) && subexpressions_.size() > 1) {
+      // and/or have the same hazard: LogicalFunction folds operands that were
+      // each materialized over every row, so a guard like d <> 0 would not keep
+      // a later q / d off the zero rows. Hand each operand only the rows the
+      // operands before it leave undecided, the rows Velox CPU's ConjunctExpr
+      // evaluates it on. Hiding a decided row cannot change its result: false
+      // AND null is false, and true OR null is true. Constant operands narrow
+      // nothing here; LogicalFunction folds them.
+      const bool isAnd =
+          expr_->asUnchecked<core::CallTypedExpr>()->name() == "and";
+      rmm::device_buffer undecided;
+      branchInputs.reserve(subexpressions_.size() - 1);
+      for (size_t operand = 0; operand < subexpressions_.size(); ++operand) {
+        if (operand == 0) {
+          subexprResults.push_back(
+              subexpressions_[0]->eval(inputColumnViews, stream, mr));
+        } else {
+          branchInputs.push_back(maskInputRows(
+              inputColumnViews,
+              static_cast<const cudf::bitmask_type*>(undecided.data()),
+              stream,
+              mr));
+          subexprResults.push_back(
+              subexpressions_[operand]->eval(
+                  branchInputs.back().views, stream, mr));
+        }
+        if (operand + 1 == subexpressions_.size()) {
+          break;
+        }
+        // A false decides AND and a true decides OR.
+        const auto result = asView(subexprResults.back());
+        auto stillUndecided =
+            makeRowMaskExcept(result, /*value=*/!isAnd, stream, mr);
+        if (operand == 0) {
+          undecided = std::move(stillUndecided);
+          continue;
+        }
+        // Rows hidden from this operand may have evaluated to anything, so only
+        // the rows it saw can stay undecided.
+        const std::vector<const cudf::bitmask_type*> masks{
+            static_cast<const cudf::bitmask_type*>(undecided.data()),
+            static_cast<const cudf::bitmask_type*>(stillUndecided.data())};
+        const std::vector<cudf::size_type> beginBits{0, 0};
+        undecided =
+            cudf::bitmask_and(masks, beginBits, result.size(), stream, mr)
+                .first;
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
