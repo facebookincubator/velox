@@ -175,6 +175,19 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
   };
 }
 
+bool detail::useLogicalTypeForEncoding(
+    DataType logicalType,
+    EncodingType encodingType) {
+  if (logicalType != DataType::Float && logicalType != DataType::Double) {
+    return false;
+  }
+  return encodingType == EncodingType::ALP ||
+      encodingType == EncodingType::ALPRD ||
+      encodingType == EncodingType::Dictionary ||
+      encodingType == EncodingType::RLE ||
+      encodingType == EncodingType::MainlyConstant;
+}
+
 bool detail::layoutUsesAlprd(const EncodingLayout& layout) {
   if (layout.encodingType() == EncodingType::ALPRD) {
     return true;

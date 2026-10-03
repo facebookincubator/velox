@@ -92,9 +92,9 @@ class ALPRDSelectionTest : public ::testing::Test {
   std::string_view encode(
       std::span<const PhysicalType> values,
       std::unique_ptr<EncodingSelectionPolicy<T>> selectionPolicy) {
-    std::vector<T> logical;
-    for (auto value : values) {
-      logical.push_back(std::bit_cast<T>(value));
+    ScopedVector<T> logical{values.size(), pool_.get(), options_.bufferPool};
+    for (size_t i = 0; i < values.size(); ++i) {
+      logical[i] = std::bit_cast<T>(values[i]);
     }
     return EncodingFactory::encode<T>(
         std::move(selectionPolicy), logical, *buffer_, options_);
@@ -112,9 +112,13 @@ class ALPRDSelectionTest : public ::testing::Test {
       auto decoder = useLegacy
           ? legacy::EncodingFactory(options_).create(*pool_, encoded, nullptr)
           : EncodingFactory(options_).create(*pool_, encoded, nullptr);
-      std::vector<PhysicalType> actual(values.size());
+      ScopedVector<PhysicalType> actual{
+          values.size(), pool_.get(), options_.bufferPool};
+      std::fill(actual.begin(), actual.end(), 0);
       decoder->materialize(values.size(), actual.data());
-      EXPECT_THAT(actual, ::testing::ElementsAreArray(values));
+      EXPECT_THAT(
+          (std::span<const PhysicalType>{actual}),
+          ::testing::ElementsAreArray(values));
     }
   }
 
@@ -343,7 +347,9 @@ TYPED_TEST(ALPRDSelectionTest, nullableSelectionAndReplay) {
     const uint32_t numValues = parent == EncodingType::ALPRD ? 512 : 4'096;
     std::vector<T> values;
     std::vector<PhysicalType> expected(2 * numValues, 0);
-    Vector<bool> notNulls(this->pool_.get(), expected.size(), false);
+    ScopedVector<bool> notNulls{
+        expected.size(), this->pool_.get(), this->options_.bufferPool};
+    std::fill(notNulls.begin(), notNulls.end(), false);
     for (uint32_t i = 0; i < numValues; ++i) {
       const auto bits = parent == EncodingType::MainlyConstant
           ? (i % 8 == 0 ? alphabet[i / 8] : 0)

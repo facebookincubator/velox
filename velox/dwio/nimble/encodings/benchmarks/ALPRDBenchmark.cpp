@@ -210,7 +210,7 @@ Vector<T> readInput() {
 template <typename T>
 void validate(
     const Vector<T>& values,
-    const std::vector<typename TypeTraits<T>::physicalType>& output) {
+    std::span<const typename TypeTraits<T>::physicalType> output) {
   using P = typename TypeTraits<T>::physicalType;
   for (size_t i = 0; i < values.size(); ++i) {
     NIMBLE_CHECK_EQ(
@@ -336,7 +336,8 @@ void profileSelection(std::string_view dataset) {
   std::array<std::string, 2> encoded;
   std::array<std::string, 2> layouts;
   std::array<uint64_t, 2> estimates{};
-  std::vector<P> output(values.size());
+  ScopedVector<P> output{
+      values.size(), benchmarkPool().get(), options.bufferPool};
   const EncodingFactory factory(options);
   std::vector<Operation> operations;
   for (size_t variant = 0; variant < factories.size(); ++variant) {
@@ -423,7 +424,8 @@ void profileDataset(std::string_view dataset) {
   const auto encoded =
       encodeData<ALPRDEncoding<T>>(EncodingType::ALPRD, values, options);
   const auto metadata = ALPRDEncodingBase::readMetadata(encoded, options);
-  std::vector<P> output(values.size());
+  ScopedVector<P> output{
+      values.size(), benchmarkPool().get(), options.bufferPool};
   const auto physicals = std::span<const P>(
       reinterpret_cast<const P*>(values.data()), values.size());
   const EncodingFactory factory(options);
@@ -555,8 +557,9 @@ void encode(uint32_t iterations, bool withExceptions) {
 template <typename T>
 void decode(uint32_t iterations, bool withExceptions) {
   std::string encoded;
-  std::vector<typename TypeTraits<T>::physicalType> output;
   const auto options = encodingOptions();
+  ScopedVector<typename TypeTraits<T>::physicalType> output{
+      0, benchmarkPool().get(), options.bufferPool};
   const EncodingFactory factory(options);
   BENCHMARK_SUSPEND {
     const auto values =
