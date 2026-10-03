@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <future>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <random>
@@ -209,6 +210,14 @@ class VectorIndexTest : public ::testing::Test {
     return closeWriter(*writer);
   }
 
+  // Writes one flat vector data set using the supplied index configuration.
+  WrittenIndexes writeIndexFromVectors(
+      const VectorIndexConfig& config,
+      const std::vector<float>& vectors) {
+    return writeIndex(
+        config, {makeInputFromVectors(vectors, config.dimensions)});
+  }
+
   // Parses the directory from the captured optional section.
   VectorIndexDirectory readDirectory(const WrittenIndexes& written) {
     auto directoryBuffer = MetadataBuffer::decompress(
@@ -336,11 +345,13 @@ class VectorIndexTest : public ::testing::Test {
           queryVectors.begin() + nextQueryOffset);
 
       VectorIndex::SearchConfig searchConfig{
-          .queryVector = queryVector,
+          .queryVectors = queryVector,
           .numNeighbors = numNeighbors,
-          .numProbes = numProbes,
+          .searchOptions =
+              std::make_shared<VectorIndex::IvfSearchOptions>(numProbes),
       };
-      const auto results = reader->search(searchConfig);
+      const auto searchResult = reader->search(searchConfig);
+      const auto results = searchResult.results(0);
 
       const auto countMatches = [&](uint32_t requestedNeighbors) {
         const auto resultWidth = std::min(requestedNeighbors, numNeighbors);
@@ -388,6 +399,32 @@ class VectorIndexTest : public ::testing::Test {
         .indexType = indexType,
         .numPartitions = numPartitions,
     };
+  }
+
+  // Compares one query's ordered row IDs and scores.
+  template <typename ActualResults, typename ExpectedResults>
+  void expectSearchResultsEqual(
+      const ActualResults& actual,
+      const ExpectedResults& expected) {
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t neighborIndex = 0; neighborIndex < expected.size();
+         ++neighborIndex) {
+      EXPECT_EQ(actual[neighborIndex].rowId, expected[neighborIndex].rowId);
+      EXPECT_FLOAT_EQ(
+          actual[neighborIndex].score, expected[neighborIndex].score);
+    }
+  }
+
+  // Compares all query ranges in two search results.
+  void expectSearchResultsEqual(
+      const VectorIndex::SearchResults& actual,
+      const VectorIndex::SearchResults& expected) {
+    ASSERT_EQ(actual.numQueries(), expected.numQueries());
+    for (size_t queryIndex = 0; queryIndex < expected.numQueries();
+         ++queryIndex) {
+      expectSearchResultsEqual(
+          actual.results(queryIndex), expected.results(queryIndex));
+    }
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -443,12 +480,14 @@ TEST_F(VectorIndexTest, concurrentSearchUsesPerRequestNumProbes) {
       writeIndex(makeConfig(VectorIndexType::kIvfFlat), {batch});
   const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
 
-  const auto searchRows = [&query](
+  const auto searchRows = [this, &query](
                               const VectorIndex& index, uint32_t numProbes) {
-    const auto results = index.search(
-        {.queryVector = query,
+    const auto searchResult = index.search(
+        {.queryVectors = query,
          .numNeighbors = numNeighbors,
-         .numProbes = numProbes});
+         .searchOptions =
+             std::make_shared<VectorIndex::IvfSearchOptions>(numProbes)});
+    const auto results = searchResult.results(0);
     std::vector<int64_t> rows;
     rows.reserve(results.size());
     for (const auto& result : results) {
@@ -478,6 +517,454 @@ TEST_F(VectorIndexTest, concurrentSearchUsesPerRequestNumProbes) {
   for (uint32_t i = 0; i < searches.size(); ++i) {
     SCOPED_TRACE(fmt::format("search={}", i));
     EXPECT_EQ(searches[i].get(), i % 2 == 0 ? expectedNarrow : expectedWide);
+  }
+}
+
+TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
+  struct TestParam {
+    VectorIndexType indexType;
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
+  };
+
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumQueries{3};
+  constexpr uint32_t kNumNeighbors{5};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  const std::array testParams{
+      TestParam{
+          .indexType = VectorIndexType::kIvfFlat,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQ,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kHnswSq8,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      },
+  };
+
+  for (const auto& param : testParams) {
+    SCOPED_TRACE(
+        fmt::format("indexType={}", static_cast<int>(param.indexType)));
+    const auto written =
+        writeIndexFromVectors(makeConfig(param.indexType), data);
+    const auto reader = readIndex(written);
+
+    const auto batchResults = reader->search({
+        .queryVectors = queries,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = param.searchOptions,
+    });
+    ASSERT_EQ(batchResults.numQueries(), kNumQueries);
+
+    for (uint32_t query = 0; query < kNumQueries; ++query) {
+      const auto queryOffset =
+          static_cast<std::ptrdiff_t>(static_cast<size_t>(query) * kDimensions);
+      const auto queryBegin = queries.begin() + queryOffset;
+      const auto expected = reader->search({
+          .queryVectors = std::vector<float>(
+              queryBegin,
+              queryBegin + static_cast<std::ptrdiff_t>(kDimensions)),
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = param.searchOptions,
+      });
+      expectSearchResultsEqual(
+          batchResults.results(query), expected.results(0));
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, searchRejectsInvalidConfig) {
+  constexpr uint32_t kNumVectors{100};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto ivfWritten =
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+  const auto ivfReader = readIndex(ivfWritten);
+
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = {},
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      }),
+      "Query vector batch must not be empty");
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = std::vector<float>(kDimensions + 1, 0.0f),
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      }),
+      "Query vector batch must contain complete vectors");
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .numNeighbors = 0,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      }),
+      "Number of neighbors must be positive");
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = nullptr,
+      }),
+      "Search options must be set");
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(0),
+      }),
+      "Number of probed partitions must be positive");
+  NIMBLE_ASSERT_USER_THROW(
+      ivfReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      }),
+      "IVF index requires IVF search options");
+
+  const auto hnswWritten =
+      writeIndexFromVectors(makeConfig(VectorIndexType::kHnswSq8), data);
+  const auto hnswReader = readIndex(hnswWritten);
+  NIMBLE_ASSERT_USER_THROW(
+      hnswReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(0),
+      }),
+      "HNSW search depth must be positive");
+  NIMBLE_ASSERT_USER_THROW(
+      hnswReader->search({
+          .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      }),
+      "HNSW index requires HNSW search options");
+}
+
+TEST_F(VectorIndexTest, searchClampsOversizedSearchParameters) {
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumQueries{3};
+  constexpr uint32_t kNumNeighbors{10};
+  constexpr uint32_t kNumPartitions{8};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  const auto ivfWritten = writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfFlat,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          kNumPartitions),
+      data);
+  const auto ivfReader = readIndex(ivfWritten);
+  const auto allPartitions = ivfReader->search({
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions =
+          std::make_shared<VectorIndex::IvfSearchOptions>(kNumPartitions),
+  });
+  const auto oversizedNumProbes = ivfReader->search({
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+  });
+  expectSearchResultsEqual(oversizedNumProbes, allPartitions);
+
+  const auto hnswWritten =
+      writeIndexFromVectors(makeConfig(VectorIndexType::kHnswSq8), data);
+  const auto hnswReader = readIndex(hnswWritten);
+  const auto fullDepth = hnswReader->search({
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions =
+          std::make_shared<VectorIndex::HnswSearchOptions>(kNumVectors),
+  });
+  const auto oversizedDepth = hnswReader->search({
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+  });
+  expectSearchResultsEqual(oversizedDepth, fullDepth);
+}
+
+TEST_F(VectorIndexTest, searchNormalizesEachCosineQuery) {
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndexFromVectors(
+      makeConfig(VectorIndexType::kIvfFlat, VectorDistanceMetric::kCosine),
+      data);
+  const auto reader = readIndex(written);
+
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  auto queries = query;
+  std::transform(
+      query.begin(), query.end(), std::back_inserter(queries), [](float value) {
+        return value * 7.0f;
+      });
+  const auto originalQueries = queries;
+  VectorIndex::SearchConfig config{
+      .queryVectors = std::move(queries),
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  };
+
+  const auto results = reader->search(config);
+
+  EXPECT_EQ(config.queryVectors, originalQueries);
+  ASSERT_EQ(results.numQueries(), 2);
+  const auto firstQuery = results.results(0);
+  const auto secondQuery = results.results(1);
+  ASSERT_EQ(firstQuery.size(), secondQuery.size());
+  for (size_t neighborIndex = 0; neighborIndex < firstQuery.size();
+       ++neighborIndex) {
+    EXPECT_EQ(
+        firstQuery[neighborIndex].rowId, secondQuery[neighborIndex].rowId);
+    EXPECT_FLOAT_EQ(
+        firstQuery[neighborIndex].score, secondQuery[neighborIndex].score);
+  }
+}
+
+TEST_F(VectorIndexTest, searchKeepsUnderfilledQueriesSeparate) {
+  constexpr uint32_t kNumVectors{100};
+  constexpr uint32_t kNumQueries{3};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfFlat,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          /*numPartitions=*/20),
+      data);
+  const auto reader = readIndex(written);
+
+  const auto results = reader->search({
+      .queryVectors = std::vector<float>(
+          data.begin(),
+          data.begin() +
+              static_cast<std::ptrdiff_t>(kNumQueries * kDimensions)),
+      .numNeighbors = kNumVectors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+  });
+
+  ASSERT_EQ(results.numQueries(), kNumQueries);
+  for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+    const auto queryResults = results.results(queryIndex);
+    ASSERT_FALSE(queryResults.empty());
+    EXPECT_LT(queryResults.size(), kNumVectors);
+    EXPECT_EQ(queryResults.front().rowId, queryIndex);
+  }
+}
+
+TEST_F(VectorIndexTest, searchFiltersRowsBeforeTopK) {
+  struct TestParam {
+    VectorIndexType indexType;
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
+  };
+
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{20};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> allowedRowBitmap((kNumVectors + 7) / 8);
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    allowedRowBitmap[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+
+  std::vector<VectorIndex::SearchResult> expectedResults;
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    float squaredDistance{0};
+    for (uint32_t dimension = 0; dimension < kDimensions; ++dimension) {
+      const auto difference = query[dimension] -
+          data[static_cast<size_t>(row) * kDimensions + dimension];
+      squaredDistance += difference * difference;
+    }
+    expectedResults.push_back({
+        .rowId = row,
+        .score = squaredDistance,
+    });
+  }
+  std::ranges::sort(expectedResults, {}, &VectorIndex::SearchResult::score);
+  expectedResults.resize(kNumNeighbors);
+
+  const std::array testParams{
+      TestParam{
+          .indexType = VectorIndexType::kIvfFlat,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQ,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kHnswSq8,
+          .searchOptions =
+              std::make_shared<VectorIndex::HnswSearchOptions>(kNumVectors),
+      },
+  };
+
+  for (const auto& param : testParams) {
+    SCOPED_TRACE(
+        fmt::format("indexType={}", static_cast<int>(param.indexType)));
+    const auto written = writeIndex(
+        makeConfig(param.indexType), {makeInputFromVectors(data, kDimensions)});
+    const auto reader = readIndex(written);
+    auto queries = query;
+    queries.insert(queries.end(), query.begin(), query.end());
+    const auto searchResults = reader->search({
+        .queryVectors = std::move(queries),
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = param.searchOptions,
+        .rowSelection = VectorIndex::SearchConfig::RowSelection::fromBitmap(
+            allowedRowBitmap),
+    });
+    ASSERT_EQ(searchResults.numQueries(), 2);
+    for (size_t queryIndex = 0; queryIndex < searchResults.numQueries();
+         ++queryIndex) {
+      const auto results = searchResults.results(queryIndex);
+      ASSERT_EQ(results.size(), kNumNeighbors);
+      for (const auto& result : results) {
+        EXPECT_EQ(result.rowId % 5, 0);
+      }
+      if (param.indexType == VectorIndexType::kIvfFlat) {
+        expectSearchResultsEqual(results, expectedResults);
+      }
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, searchFiltersRowsByRangeBeforeTopK) {
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{20};
+  const RowRange allowedRows{100, 200};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+
+  const auto searchResults = reader->search({
+      .queryVectors = query,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromRange(allowedRows),
+  });
+  const auto results = searchResults.results(0);
+
+  ASSERT_EQ(results.size(), kNumNeighbors);
+  for (const auto& result : results) {
+    EXPECT_GE(result.rowId, allowedRows.startRow);
+    EXPECT_LT(result.rowId, allowedRows.endRow);
+  }
+}
+
+TEST_F(VectorIndexTest, searchRejectsInvalidRowSelection) {
+  constexpr uint32_t kNumVectors{100};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+
+  {
+    const std::vector<uint8_t> invalidBitmap{1};
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromBitmap(
+                invalidBitmap),
+        }),
+        "Row selection bitmap size does not match the index");
+  }
+
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromRange(
+                RowRange{10, 5}),
+        }),
+        "Row selection range must be ordered");
+  }
+
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromRange(
+                RowRange{0, kNumVectors + 1}),
+        }),
+        "Row selection range exceeds the index row count");
+  }
+}
+
+TEST_F(VectorIndexTest, searchReturnsEmptyWhenFilterRejectsEveryRow) {
+  constexpr uint32_t kNumVectors{100};
+  constexpr uint32_t kNumQueries{2};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+  const std::vector<uint8_t> allowedRowBitmap((kNumVectors + 7) / 8);
+  const auto searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+      std::numeric_limits<uint32_t>::max());
+
+  const auto searchResults = reader->search({
+      .queryVectors = std::vector<float>(
+          data.begin(), data.begin() + kNumQueries * kDimensions),
+      .searchOptions = searchOptions,
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromBitmap(allowedRowBitmap),
+  });
+  ASSERT_EQ(searchResults.numQueries(), kNumQueries);
+  EXPECT_EQ(searchResults.totalNumResults(), 0);
+  EXPECT_TRUE(searchResults.results(0).empty());
+  EXPECT_TRUE(searchResults.results(1).empty());
+}
+
+TEST_F(VectorIndexTest, searchCompactsUnderfilledResults) {
+  constexpr uint32_t kNumVectors{100};
+  constexpr uint32_t kNumQueries{2};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+
+  const auto searchResults = reader->search({
+      .queryVectors = std::vector<float>(
+          data.begin(), data.begin() + kNumQueries * kDimensions),
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromRange(RowRange{0, 3}),
+  });
+
+  ASSERT_EQ(searchResults.numQueries(), kNumQueries);
+  EXPECT_EQ(searchResults.totalNumResults(), 6);
+  for (size_t queryIndex = 0; queryIndex < searchResults.numQueries();
+       ++queryIndex) {
+    std::vector<int64_t> rowIds;
+    for (const auto& result : searchResults.results(queryIndex)) {
+      rowIds.push_back(result.rowId);
+    }
+    std::ranges::sort(rowIds);
+    EXPECT_EQ(rowIds, std::vector<int64_t>({0, 1, 2}));
   }
 }
 
@@ -514,11 +1001,12 @@ TEST_F(VectorIndexTest, exactMatchIvfFlat) {
   }
 
   VectorIndex::SearchConfig searchConfig{
-      .queryVector = queryVector,
+      .queryVectors = queryVector,
       .numNeighbors = 5,
-      .numProbes = 4,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(4),
   };
-  auto results = reader->search(searchConfig);
+  const auto searchResult = reader->search(searchConfig);
+  const auto results = searchResult.results(0);
 
   ASSERT_FALSE(results.empty());
   EXPECT_EQ(results[0].rowId, 42);
@@ -554,11 +1042,12 @@ TEST_F(VectorIndexTest, l2ScoreOrdering) {
 
   std::vector<float> queryVector(dimensions, 0.5f);
   VectorIndex::SearchConfig searchConfig{
-      .queryVector = queryVector,
+      .queryVectors = queryVector,
       .numNeighbors = 10,
-      .numProbes = 4,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(4),
   };
-  auto results = reader->search(searchConfig);
+  const auto searchResult = reader->search(searchConfig);
+  const auto results = searchResult.results(0);
 
   // Squared L2 scores are monotonically non-decreasing.
   for (size_t i = 1; i < results.size(); ++i) {
@@ -591,19 +1080,14 @@ TEST_F(VectorIndexTest, serializationRoundTrip) {
 
   // Search should return valid results.
   auto queries = generateRandomVectors(5, kDimensions, /*seed=*/77);
+  const auto searchResult = reader->search({
+      .queryVectors = std::move(queries),
+      .numNeighbors = 5,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  ASSERT_EQ(searchResult.numQueries(), 5);
   for (size_t queryIndex = 0; queryIndex < 5; ++queryIndex) {
-    const auto queryOffset = static_cast<std::ptrdiff_t>(
-        queryIndex * static_cast<size_t>(kDimensions));
-    const auto nextQueryOffset = static_cast<std::ptrdiff_t>(
-        (queryIndex + 1) * static_cast<size_t>(kDimensions));
-    std::vector<float> queryVector(
-        queries.begin() + queryOffset, queries.begin() + nextQueryOffset);
-    VectorIndex::SearchConfig searchConfig{
-        .queryVector = queryVector,
-        .numNeighbors = 5,
-        .numProbes = 8,
-    };
-    auto results = reader->search(searchConfig);
+    const auto results = searchResult.results(queryIndex);
     ASSERT_FALSE(results.empty());
     for (const auto& result : results) {
       EXPECT_GE(result.rowId, 0);
@@ -805,11 +1289,12 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
     const auto vectorIndex = vectorIndexDirectory.load(expectedColumns[i]);
     const auto queryBegin = data[i]->begin() + kQueryRow * kDimensions;
     const std::vector<float> query(queryBegin, queryBegin + kDimensions);
-    const auto results = vectorIndex->search({
-        .queryVector = query,
+    const auto searchResult = vectorIndex->search({
+        .queryVectors = query,
         .numNeighbors = 1,
-        .numProbes = 8,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
     });
+    const auto results = searchResult.results(0);
     ASSERT_EQ(results.size(), 1);
     EXPECT_EQ(results.front().rowId, kQueryRow);
   }
@@ -857,16 +1342,18 @@ TEST_F(VectorIndexTest, hnswSearchDepth) {
   const auto reader = readIndex(written);
 
   auto searchConfig = VectorIndex::SearchConfig{
-      .queryVector =
+      .queryVectors =
           std::vector<float>(data.begin(), data.begin() + kDimensions),
       .numNeighbors = 1,
-      .hnswSearchDepth = 16,
+      .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(16),
   };
-  const auto results = reader->search(searchConfig);
+  const auto searchResult = reader->search(searchConfig);
+  const auto results = searchResult.results(0);
   ASSERT_EQ(results.size(), 1);
   EXPECT_EQ(results.front().rowId, 0);
 
-  searchConfig.hnswSearchDepth = 0;
+  searchConfig.searchOptions =
+      std::make_shared<VectorIndex::HnswSearchOptions>(0);
   NIMBLE_ASSERT_THROW(
       reader->search(searchConfig), "HNSW search depth must be positive");
 }
@@ -875,6 +1362,7 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
   struct TestParam {
     VectorIndexType indexType;
     VectorDistanceMetric metric;
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
     std::string debugString() const {
       return fmt::format(
           "indexType={}, metric={}",
@@ -884,11 +1372,31 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
   };
 
   std::vector<TestParam> testParams = {
-      {VectorIndexType::kIvfFlat, VectorDistanceMetric::kL2},
-      {VectorIndexType::kIvfSq8, VectorDistanceMetric::kCosine},
-      {VectorIndexType::kIvfPq, VectorDistanceMetric::kDotProduct},
-      {VectorIndexType::kIvfRaBitQ, VectorDistanceMetric::kL2},
-      {VectorIndexType::kHnswSq8, VectorDistanceMetric::kL2},
+      {
+          .indexType = VectorIndexType::kIvfFlat,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kIvfSq8,
+          .metric = VectorDistanceMetric::kCosine,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kIvfPq,
+          .metric = VectorDistanceMetric::kDotProduct,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kIvfRaBitQ,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kHnswSq8,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      },
   };
 
   for (const auto& param : testParams) {
@@ -910,13 +1418,13 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
     EXPECT_EQ(reader->dimensions(), kDimensions);
     EXPECT_EQ(reader->numVectors(), 500);
 
-    const auto results = reader->search({
-        .queryVector =
+    const auto searchResult = reader->search({
+        .queryVectors =
             std::vector<float>(data.begin(), data.begin() + kDimensions),
         .numNeighbors = 10,
-        .numProbes = 8,
-        .hnswSearchDepth = 32,
+        .searchOptions = param.searchOptions,
     });
+    const auto results = searchResult.results(0);
     ASSERT_FALSE(results.empty());
     EXPECT_LE(results.size(), 10);
     for (const auto& result : results) {
@@ -957,19 +1465,14 @@ TEST_F(VectorIndexTest, multipleBatchesAccumulate) {
 
   // Search should find vectors from any batch.
   auto queries = generateRandomVectors(10, kDimensions, /*seed=*/77);
+  const auto searchResult = reader->search({
+      .queryVectors = std::move(queries),
+      .numNeighbors = 5,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  ASSERT_EQ(searchResult.numQueries(), 10);
   for (size_t queryIndex = 0; queryIndex < 10; ++queryIndex) {
-    const auto queryOffset = static_cast<std::ptrdiff_t>(
-        queryIndex * static_cast<size_t>(kDimensions));
-    const auto nextQueryOffset = static_cast<std::ptrdiff_t>(
-        (queryIndex + 1) * static_cast<size_t>(kDimensions));
-    std::vector<float> queryVector(
-        queries.begin() + queryOffset, queries.begin() + nextQueryOffset);
-    VectorIndex::SearchConfig searchConfig{
-        .queryVector = queryVector,
-        .numNeighbors = 5,
-        .numProbes = 8,
-    };
-    auto results = reader->search(searchConfig);
+    const auto results = searchResult.results(queryIndex);
     ASSERT_FALSE(results.empty());
     for (const auto& result : results) {
       EXPECT_GE(result.rowId, 0);
@@ -1176,11 +1679,12 @@ TEST_F(VectorIndexTest, dictionaryEncodedVectors) {
   const auto written = writeIndex(config, {encodedInput});
   const auto reader = readIndex(written);
   const auto queryBegin = data.end() - kDimensions;
-  const auto results = reader->search({
-      .queryVector = std::vector<float>(queryBegin, data.end()),
+  const auto searchResult = reader->search({
+      .queryVectors = std::vector<float>(queryBegin, data.end()),
       .numNeighbors = 1,
-      .numProbes = 2,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(2),
   });
+  const auto results = searchResult.results(0);
 
   ASSERT_EQ(results.size(), 1);
   EXPECT_EQ(results.front().rowId, 0);
@@ -1246,12 +1750,13 @@ TEST_F(VectorIndexTest, dimensionMismatchOnSearch) {
   ASSERT_NE(reader, nullptr);
 
   VectorIndex::SearchConfig searchConfig{
-      .queryVector = std::vector<float>(kDimensions + 1, 0.0f),
+      .queryVectors = std::vector<float>(kDimensions + 1, 0.0f),
       .numNeighbors = 5,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
   };
   NIMBLE_ASSERT_THROW(
       reader->search(searchConfig),
-      "Query vector dimensions do not match the index");
+      "Query vector batch must contain complete vectors");
 }
 
 TEST_F(VectorIndexTest, emptyDirectoryRejected) {
@@ -1466,11 +1971,12 @@ TEST_F(VectorIndexTest, numNeighborsLargerThanDataset) {
 
   std::vector<float> queryVector(kDimensions, 0.5f);
   VectorIndex::SearchConfig searchConfig{
-      .queryVector = queryVector,
+      .queryVectors = queryVector,
       .numNeighbors = 100,
-      .numProbes = 2,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(2),
   };
-  auto results = reader->search(searchConfig);
+  const auto searchResult = reader->search(searchConfig);
+  const auto results = searchResult.results(0);
 
   // Should return at most the number of vectors in the dataset.
   EXPECT_LE(results.size(), 50);
@@ -1490,11 +1996,12 @@ TEST_F(VectorIndexTest, singleVector) {
   EXPECT_EQ(reader->numVectors(), 1);
 
   VectorIndex::SearchConfig searchConfig{
-      .queryVector = std::vector<float>(kDimensions, 1.0f),
+      .queryVectors = std::vector<float>(kDimensions, 1.0f),
       .numNeighbors = 1,
-      .numProbes = 1,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
   };
-  auto results = reader->search(searchConfig);
+  const auto searchResult = reader->search(searchConfig);
+  const auto results = searchResult.results(0);
   ASSERT_EQ(results.size(), 1);
   EXPECT_EQ(results[0].rowId, 0);
   EXPECT_NEAR(results[0].score, 0.0f, 1e-6f);
