@@ -14,13 +14,131 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/CudaUtil.cuh"
+#include "velox/experimental/wave/common/Exception.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 #include "velox/experimental/wave/dwio/decode/GpuDecoder.cuh"
 
 namespace facebook::velox::wave {
+
+const char* decodeStepName(DecodeStep step) {
+  switch (step) {
+    case DecodeStep::kSelective32:
+      return "kSelective32";
+    case DecodeStep::kCompact64:
+      return "kCompact64";
+    case DecodeStep::kSelective64:
+      return "kSelective64";
+    case DecodeStep::kSelective32Chunked:
+      return "kSelective32Chunked";
+    case DecodeStep::kSelective64Chunked:
+      return "kSelective64Chunked";
+    case DecodeStep::kConstant32:
+      return "kConstant32";
+    case DecodeStep::kConstant64:
+      return "kConstant64";
+    case DecodeStep::kConstantChar:
+      return "kConstantChar";
+    case DecodeStep::kConstantBool:
+      return "kConstantBool";
+    case DecodeStep::kConstantBytes:
+      return "kConstantBytes";
+    case DecodeStep::kTrivial:
+      return "kTrivial";
+    case DecodeStep::kTrivialNoOp:
+      return "kTrivialNoOp";
+    case DecodeStep::kMainlyConstant:
+      return "kMainlyConstant";
+    case DecodeStep::kBitpack32:
+      return "kBitpack32";
+    case DecodeStep::kBitpack64:
+      return "kBitpack64";
+    case DecodeStep::kRleTotalLength:
+      return "kRleTotalLength";
+    case DecodeStep::kRleBool:
+      return "kRleBool";
+    case DecodeStep::kRle:
+      return "kRle";
+    case DecodeStep::kDictionary:
+      return "kDictionary";
+    case DecodeStep::kDictionaryOnBitpack:
+      return "kDictionaryOnBitpack";
+    case DecodeStep::kVarint:
+      return "kVarint";
+    case DecodeStep::kNullable:
+      return "kNullable";
+    case DecodeStep::kSentinel:
+      return "kSentinel";
+    case DecodeStep::kSparseBool:
+      return "kSparseBool";
+    case DecodeStep::kMakeScatterIndices:
+      return "kMakeScatterIndices";
+    case DecodeStep::kScatter32:
+      return "kScatter32";
+    case DecodeStep::kScatter64:
+      return "kScatter64";
+    case DecodeStep::kLengthToOffset:
+      return "kLengthToOffset";
+    case DecodeStep::kMissing:
+      return "kMissing";
+    case DecodeStep::kStruct:
+      return "kStruct";
+    case DecodeStep::kArray:
+      return "kArray";
+    case DecodeStep::kMap:
+      return "kMap";
+    case DecodeStep::kFlatMap:
+      return "kFlatMap";
+    case DecodeStep::kFlatMapNode:
+      return "kFlatMapNode";
+    case DecodeStep::kRowCountNoFilter:
+      return "kRowCountNoFilter";
+    case DecodeStep::kCountBits:
+      return "kCountBits";
+    case DecodeStep::kUnsupported:
+      return "kUnsupported";
+  }
+  return "<invalid>";
+}
+
+namespace {
+// The steps detail::decodeSwitch() has a case for. Keep in sync with it.
+bool isSupportedDecodeStep(DecodeStep step) {
+  switch (step) {
+    case DecodeStep::kSelective32:
+    case DecodeStep::kSelective64:
+    case DecodeStep::kSelective32Chunked:
+    case DecodeStep::kSelective64Chunked:
+    case DecodeStep::kCompact64:
+    case DecodeStep::kCountBits:
+    case DecodeStep::kTrivial:
+    case DecodeStep::kDictionaryOnBitpack:
+    case DecodeStep::kSparseBool:
+    case DecodeStep::kMainlyConstant:
+    case DecodeStep::kVarint:
+    case DecodeStep::kRleTotalLength:
+    case DecodeStep::kRle:
+    case DecodeStep::kMakeScatterIndices:
+    case DecodeStep::kRowCountNoFilter:
+      return true;
+    default:
+      return false;
+  }
+}
+} // namespace
+
+void checkDecodeStepSupported(DecodeStep step) {
+  if (!isSupportedDecodeStep(step)) {
+    waveError(
+        fmt::format(
+            "Wave GPU decode does not implement DecodeStep {} ({})",
+            decodeStepName(step),
+            static_cast<int32_t>(step)));
+  }
+}
 
 int32_t GpuDecode::tempSize() const {
   // 1 int32 per lane as an upper limit.
@@ -88,6 +206,7 @@ void launchDecode(
     }
     numOps += numSteps;
     for (auto& step : program) {
+      checkDecodeStepSupported(step->step);
       shared = std::max(
           shared, detail::sharedMemorySizeForDecode<kBlockSize>(step->step));
     }
