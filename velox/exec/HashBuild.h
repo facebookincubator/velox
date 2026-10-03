@@ -394,6 +394,11 @@ class HashBuild final : public Operator {
   // Reusable memory for spill partition calculation for input data.
   std::vector<uint32_t> spillPartitions_;
 
+  // Reusable selectivity vector and rotating sequence for scattering
+  // null-key rows across spill partitions (right and full joins only).
+  SelectivityVector spillNonNullActiveRows_;
+  uint64_t spillNullScatterSeq_{0};
+
   // Reusable memory for input spilling processing.
   std::vector<vector_size_t> numSpillInputs_;
   std::vector<BufferPtr> spillInputIndicesBuffers_;
