@@ -43,17 +43,17 @@ add_library(
   SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
-  subintsplit/CostModel.cpp
-  subintsplit/CostModel.h
   subintsplit/BitSection.h
+  subintsplit/CostModel.h
+  subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
   subintsplit/Format.h
+  subintsplit/RowFrame.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
-  subintsplit/SectionEncoder.h
-  subintsplit/SectionMetrics.cpp
   subintsplit/SectionMetrics.h
-  subintsplit/SectionTable.h
+  subintsplit/SectionTransform.h
+  subintsplit/SectionTransforms.cpp
   subintsplit/SplitBoundaries.cpp
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
@@ -68,6 +68,7 @@ add_library(
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
   views/EncodingView.cpp
+  views/DecodedFallbackEncodingView.h
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp

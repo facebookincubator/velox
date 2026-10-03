@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/DecodedFallbackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
@@ -39,6 +40,32 @@
 
 namespace facebook::nimble {
 namespace detail {
+namespace {
+
+// Whether a SubIntSplit stream has a section that varies per row and that no
+// EncodingView can read. When such sections are the only varying ones, the
+// SubIntSplitEncodingView decodes each of them once and holds the values, so
+// it keeps as much memory as a full decode of the stream while paying for
+// reassembly on every read. Decided from the stream and section headers alone,
+// so choosing the view never decodes a section.
+bool allVaryingSectionsViewless(std::string_view data, uint32_t dataOffset) {
+  bool hasViewlessSection = false;
+  for (const auto& section : subintsplit::parseSections(data, dataOffset)) {
+    const auto sectionType = EncodingPrefix::encodingType(section.stream);
+    if (sectionType == EncodingType::Constant) {
+      continue;
+    }
+    if (supportsEncodingView(sectionType)) {
+      return false;
+    }
+    hasViewlessSection = true;
+  }
+  // A stream of Constant sections alone is read from bits folded at
+  // construction, which holds no values, so it stays on the positional view.
+  return hasViewlessSection;
+}
+
+} // namespace
 
 template <typename T>
 std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
@@ -152,9 +179,26 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        // A delta stream requires every prior value to reconstruct a given
+        // index, so it is decoded once and served from the decoded values.
+        // A stream whose varying sections have no view of their own is decoded
+        // once as well: reading it positionally would hold the same decoded
+        // sections and add reassembly work to every read. The encoding applies
+        // the row frame and the section transforms while decoding, so the
+        // decoded values are already in row order. Every other stream,
+        // including reordered, framed and transformed ones, is read
+        // positionally.
+        const auto dataOffset =
+            EncodingPrefix::prefixSize(data, options.useVarintRowCount);
+        if (subintsplit::isDeltaStream(data, dataOffset) ||
+            allVaryingSectionsViewless(data, dataOffset)) {
+          return std::make_unique<DecodedFallbackEncodingView<T>>(
+              data, pool, options);
+        }
         return std::make_unique<SubIntSplitEncodingView<T>>(
             data, pool, options);
       }
@@ -211,7 +255,8 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
-      EncodingType::SubIntSplit};
+      EncodingType::SubIntSplit,
+      EncodingType::SubIntSplitReordered};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),

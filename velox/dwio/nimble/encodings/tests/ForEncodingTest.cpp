@@ -340,6 +340,177 @@ TEST_F(ForEncodingTest, mixedBitWidths) {
   }
 }
 
+// Round-trips every bit width FOR can select, through the bulk path (one
+// materialize of every row), the point path (one materialize per row), and
+// slices, which are the only way a frame comes to start part-way through a
+// byte: a fresh encode always begins each frame at a multiple of 128 values,
+// which is byte aligned at every legal width. A decode fast path specialised
+// for some widths must not change what any other width, start offset or access
+// pattern returns.
+TEST_F(ForEncodingTest, roundTripsEveryBitWidthAlignedAndUnaligned) {
+  constexpr uint32_t kFrameSize = 128;
+
+  auto check = [&]<typename T>(const uint8_t width) {
+    SCOPED_TRACE(
+        testing::Message() << "type width=" << sizeof(T) * 8
+                           << ", frame width=" << static_cast<int>(width));
+    constexpr uint32_t kTypeBits = sizeof(T) * 8;
+    const uint64_t span = width == 64 ? ~0ULL : ((1ULL << width) - 1ULL);
+    // A non-zero reference would overflow T once the residual spans the whole
+    // type, so the widest frame of each type is referenced at zero.
+    const T reference = width == kTypeBits ? T{0} : T{3};
+
+    uint64_t state = 0x9E3779B97F4A7C15ULL;
+    auto nextRandom = [&state]() {
+      state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+      return state;
+    };
+
+    nimble::Vector<T> data(pool_.get());
+    data.reserve(3 * kFrameSize);
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+      for (uint32_t i = 0; i < kFrameSize; ++i) {
+        uint64_t residual;
+        if (i == 0) {
+          residual = 0;
+        } else if (i == 1) {
+          // Pins the frame's selected bit width to exactly width.
+          residual = span;
+        } else if (span == ~0ULL) {
+          residual = nextRandom();
+        } else {
+          residual = nextRandom() % (span + 1ULL);
+        }
+        data.push_back(static_cast<T>(reference + static_cast<T>(residual)));
+      }
+    }
+    const auto rowCount = static_cast<uint32_t>(data.size());
+
+    const auto encoded =
+        nimble::test::Encoder<nimble::ForEncoding<T>>::encode(*buffer_, data);
+
+    nimble::ForEncoding<T> bulk{*pool_, encoded};
+    nimble::Vector<T> bulkOutput(pool_.get(), rowCount);
+    bulk.materialize(rowCount, bulkOutput.data());
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      ASSERT_EQ(bulkOutput[i], data[i]) << "bulk row " << i;
+    }
+
+    nimble::ForEncoding<T> point{*pool_, encoded};
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      T value{};
+      point.materialize(1, &value);
+      ASSERT_EQ(value, data[i]) << "point row " << i;
+    }
+
+    for (const uint32_t offset : {1u, 2u, 3u, 5u, 7u, 63u, 65u, 127u, 129u}) {
+      SCOPED_TRACE(testing::Message() << "slice offset=" << offset);
+      const uint32_t length = rowCount - offset;
+      nimble::Buffer sliceBuffer{*pool_};
+      const auto sliced = nimble::ForEncoding<T>::slice(
+          encoded, offset, length, sliceBuffer, nimble::Encoding::Options{});
+
+      nimble::ForEncoding<T> slice{*pool_, sliced};
+      nimble::Vector<T> sliceOutput(pool_.get(), length);
+      slice.materialize(length, sliceOutput.data());
+      for (uint32_t i = 0; i < length; ++i) {
+        ASSERT_EQ(sliceOutput[i], data[offset + i]) << "sliced row " << i;
+      }
+    }
+  };
+
+  for (uint8_t width = 0; width <= 8; ++width) {
+    check.template operator()<uint8_t>(width);
+  }
+  for (uint8_t width = 0; width <= 32; ++width) {
+    check.template operator()<uint32_t>(width);
+  }
+  for (uint8_t width = 0; width <= 64; ++width) {
+    check.template operator()<uint64_t>(width);
+  }
+}
+
+// Frames of differing widths in one stream, which is what a real column
+// produces and what makes the per-frame width dispatch worth having. Slicing
+// such a stream is the only way a frame comes to start part-way through a
+// byte at a width above 8: a fresh encode begins every frame at a multiple of
+// 128 values, but a slice re-packs from an arbitrary row, so a narrow leading
+// frame leaves the frames after it at an arbitrary bit phase.
+TEST_F(ForEncodingTest, roundTripsMixedBitWidthFrames) {
+  constexpr uint32_t kFrameSize = 128;
+
+  auto check = [&]<typename T>(const std::vector<uint8_t>& widths) {
+    constexpr uint32_t kTypeBits = sizeof(T) * 8;
+    uint64_t state = 0xD1B54A32D192ED03ULL;
+    auto nextRandom = [&state]() {
+      state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+      return state;
+    };
+
+    nimble::Vector<T> data(pool_.get());
+    data.reserve(widths.size() * kFrameSize);
+    for (const uint8_t width : widths) {
+      const uint64_t span = width == 64 ? ~0ULL : ((1ULL << width) - 1ULL);
+      const T reference = width == kTypeBits ? T{0} : T{5};
+      for (uint32_t i = 0; i < kFrameSize; ++i) {
+        uint64_t residual;
+        if (i == 0) {
+          residual = 0;
+        } else if (i == 1) {
+          residual = span;
+        } else if (span == ~0ULL) {
+          residual = nextRandom();
+        } else {
+          residual = nextRandom() % (span + 1ULL);
+        }
+        data.push_back(static_cast<T>(reference + static_cast<T>(residual)));
+      }
+    }
+    const auto rowCount = static_cast<uint32_t>(data.size());
+
+    const auto encoded =
+        nimble::test::Encoder<nimble::ForEncoding<T>>::encode(*buffer_, data);
+
+    nimble::ForEncoding<T> bulk{*pool_, encoded};
+    nimble::Vector<T> bulkOutput(pool_.get(), rowCount);
+    bulk.materialize(rowCount, bulkOutput.data());
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      ASSERT_EQ(bulkOutput[i], data[i]) << "bulk row " << i;
+    }
+
+    nimble::ForEncoding<T> point{*pool_, encoded};
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      T value{};
+      point.materialize(1, &value);
+      ASSERT_EQ(value, data[i]) << "point row " << i;
+    }
+
+    for (const uint32_t offset : {1u, 2u, 3u, 5u, 7u, 63u, 65u, 127u, 129u}) {
+      SCOPED_TRACE(testing::Message() << "slice offset=" << offset);
+      const uint32_t length = rowCount - offset;
+      nimble::Buffer sliceBuffer{*pool_};
+      const auto sliced = nimble::ForEncoding<T>::slice(
+          encoded, offset, length, sliceBuffer, nimble::Encoding::Options{});
+
+      nimble::ForEncoding<T> slice{*pool_, sliced};
+      nimble::Vector<T> sliceOutput(pool_.get(), length);
+      slice.materialize(length, sliceOutput.data());
+      for (uint32_t i = 0; i < length; ++i) {
+        ASSERT_EQ(sliceOutput[i], data[offset + i]) << "sliced row " << i;
+      }
+    }
+  };
+
+  check.template operator()<uint8_t>({1, 8, 2, 0, 4, 8, 1, 2, 4});
+  check.template operator()<uint32_t>(
+      {1, 32, 2, 16, 4, 0, 8, 12, 1, 2, 4, 24, 31, 32});
+  // FOR stores a frame wider than 32 bits at 64, and behind a narrow frame a
+  // slice leaves such a frame unaligned, where the bit-stream decode can only
+  // assemble values of up to 56 bits. uint64_t frames here therefore stay at
+  // 32 bits or less.
+  check.template operator()<uint64_t>({1, 32, 2, 16, 4, 8, 0, 16, 1, 2, 4, 32});
+}
+
 // Test random access by reading subsets
 TEST_F(ForEncodingTest, randomAccess) {
   auto seed = folly::Random::rand32();
