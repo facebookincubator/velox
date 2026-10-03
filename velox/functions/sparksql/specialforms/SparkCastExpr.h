@@ -46,6 +46,8 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       const core::QueryConfig& config) override;
 
   /// Determines if ANSI mode is supported for casting from fromType to toType.
+  /// A cast between ARRAY, MAP or ROW types supports ANSI mode when every
+  /// nested cast either supports ANSI mode or cannot fail.
   /// TODO: Remove this function once all cast operations support ANSI mode.
   /// @param fromType The source type of the cast
   /// @param toType The target type of the cast
