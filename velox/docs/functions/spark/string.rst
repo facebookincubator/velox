@@ -423,9 +423,13 @@ String Functions
     input after the final match. When ``limit`` <= 0, the pattern is applied as many times as possible, and
     the result can have any length.
 
-    When ``delimiter`` is empty, the input is split into single characters. If ``limit`` is smaller than
-    ``string`` length, only ``limit`` characters are returned. If ``limit`` is not provided or is greater than
-    ``string`` length, all characters are returned without an empty trailing element.
+    When ``delimiter`` is empty, the input is split into single characters. If ``limit`` is not provided or is
+    greater than ``string`` length, all characters are returned without an empty trailing element. If ``limit``
+    is smaller than ``string`` length, the behavior depends on ``spark.legacy_split_empty_pattern``:
+
+    * ``true`` (default): only ``limit`` characters are returned, as in Spark before 4.1.
+    * ``false``: the first ``limit`` - 1 characters are returned as single elements, and the last element
+      contains the remaining input, as in Spark 4.1+ (SPARK-49968).
 
     This behavior aligns with Spark 3.4+.
 
@@ -440,8 +444,11 @@ String Functions
 
         SELECT split('one', '1'); -- ["one"]
         SELECT split('abcd', ''); -- ["a","b","c","d"]
-        SELECT split('abcd', '', 3); -- ["a","b","c"]
         SELECT split('abcd', '', 5); -- ["a","b","c","d"]
+        -- With spark.legacy_split_empty_pattern=true (default):
+        SELECT split('abcd', '', 3); -- ["a","b","c"]
+        -- With spark.legacy_split_empty_pattern=false:
+        SELECT split('abcd', '', 3); -- ["a","b","cd"]
 
 .. spark:function:: startswith(left, right) -> boolean
 
