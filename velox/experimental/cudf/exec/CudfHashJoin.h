@@ -171,6 +171,17 @@ class CudfHashJoinProbe : public CudfOperatorBase {
  private:
   void waitForBuildReady(cuda::stream_ref stream);
 
+  /// Records a stream that read hashObject_ tables, scalars_, tree_, or
+  /// filterEvaluator_. Probe inputs use round-robin pool streams; when the
+  /// stream changes, the previous one is join_streams'd into the new one so
+  /// a later syncGetOutputStreams() wait covers every read since the last
+  /// sync, not only the newest stream.
+  void recordGetOutputStream(cuda::stream_ref stream);
+
+  /// Host-syncs the chained getOutput streams (if any) and clears the
+  /// tracker so a later isFinished() poll does not sync again.
+  void syncGetOutputStreams();
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
@@ -252,6 +263,14 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// getOutput() before noMoreInput() fires, and unset flags remain in their
   /// host-synchronized all-false init state with no pending GPU work.
   std::optional<cuda::stream_ref> lastProbeStream_;
+
+  /// Head of the getOutput stream chain: hashObject_ tables, scalars_,
+  /// tree_, and filterEvaluator_ are read on this stream (or on earlier
+  /// pool streams joined into it). Set on every doGetOutput() call, unlike
+  /// lastProbeStream_ above, which is right/full-join-only. Synced in
+  /// doClose() and isFinished() before releasing that state. rightMatchedFlags_
+  /// is released by the destructor, not here.
+  std::optional<cuda::stream_ref> lastGetOutputStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
