@@ -87,7 +87,7 @@ void appendAllNestedStreams(
       childrenOffsets.push_back(hybridMap.nullsDescriptor().offset());
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto groupStreams = hybridMap.groupAt(i);
-        childrenOffsets.push_back(groupStreams.keyDescriptor.offset());
+        childrenOffsets.push_back(groupStreams.keyPresenceDescriptor.offset());
         childrenOffsets.push_back(groupStreams.inMapDescriptor.offset());
         appendAllNestedStreams(groupStreams.valueType, childrenOffsets);
       }

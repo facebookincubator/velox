@@ -314,10 +314,10 @@ class FlatMapTypeBuilder : public TypeBuilder {
 
 class HybridFlatMapTypeBuilder : public TypeBuilder {
  public:
-  /// References the key and row-presence streams for one physical group.
+  /// References key-presence and row-presence streams for one physical group.
   struct GroupDescriptor {
-    /// Stores the actual keys represented by the following in-map segments.
-    const StreamDescriptorBuilder& keyDescriptor;
+    /// Marks which schema-ordered group keys occur in the physical batch.
+    const StreamDescriptorBuilder& keyPresenceDescriptor;
     /// Stores key-major row-presence bits for the observed keys.
     const StreamDescriptorBuilder& inMapDescriptor;
   };
@@ -326,7 +326,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   struct Group {
     uint32_t groupId;
     const std::vector<std::string>& groupKeys;
-    const StreamDescriptorBuilder& keyDescriptor;
+    const StreamDescriptorBuilder& keyPresenceDescriptor;
     const StreamDescriptorBuilder& inMapDescriptor;
     const TypeBuilder& valueType;
   };
@@ -334,7 +334,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns the map-level null stream descriptor.
   const StreamDescriptorBuilder& nullsDescriptor() const;
 
-  /// Returns the scalar type used by map keys and group keys streams.
+  /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
   /// Registers one physical group and its complete value subtree.
@@ -342,6 +342,9 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       uint32_t groupId,
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
+
+  /// Appends a newly observed key to the Default group's ordered catalog.
+  void appendDefaultGroupKey(std::string key);
 
   /// Returns the number of physical groups present in this schema.
   size_t groupCount() const;
@@ -357,7 +360,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   struct StoredGroup {
     uint32_t groupId;
     std::vector<std::string> groupKeys;
-    std::unique_ptr<StreamDescriptorBuilder> keyDescriptor;
+    std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
   };
@@ -371,6 +374,10 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   const bool requiresDefaultGroup_;
   StreamDescriptorBuilder nullsDescriptor_;
   std::vector<StoredGroup> groups_;
+  // Zero-based schema position of the reserved Default group.
+  std::optional<size_t> defaultGroupIndex_{};
+  // Keys already registered in the Default group's ordered catalog.
+  folly::F14FastSet<std::string> defaultGroupKeys_{};
 
   friend class SchemaBuilder;
 };

@@ -2029,12 +2029,12 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
     return std::find(selectedOffsets.begin(), selectedOffsets.end(), offset) !=
         selectedOffsets.end();
   };
-  EXPECT_TRUE(
-      containsOffset(sourceHybridMap.groupAt(0).keyDescriptor.offset()));
-  EXPECT_FALSE(
-      containsOffset(sourceHybridMap.groupAt(1).keyDescriptor.offset()));
-  EXPECT_TRUE(
-      containsOffset(sourceHybridMap.defaultGroup().keyDescriptor.offset()));
+  EXPECT_TRUE(containsOffset(
+      sourceHybridMap.groupAt(0).keyPresenceDescriptor.offset()));
+  EXPECT_FALSE(containsOffset(
+      sourceHybridMap.groupAt(1).keyPresenceDescriptor.offset()));
+  EXPECT_TRUE(containsOffset(
+      sourceHybridMap.defaultGroup().keyPresenceDescriptor.offset()));
   EXPECT_THAT(
       selectedOffsets,
       ElementsAre(
@@ -2044,13 +2044,13 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
               .valueType->asScalar()
               .scalarDescriptor()
               .offset(),
-          sourceHybridMap.groupAt(0).keyDescriptor.offset(),
+          sourceHybridMap.groupAt(0).keyPresenceDescriptor.offset(),
           sourceHybridMap.groupAt(0).inMapDescriptor.offset(),
           sourceHybridMap.defaultGroup()
               .valueType->asScalar()
               .scalarDescriptor()
               .offset(),
-          sourceHybridMap.defaultGroup().keyDescriptor.offset(),
+          sourceHybridMap.defaultGroup().keyPresenceDescriptor.offset(),
           sourceHybridMap.defaultGroup().inMapDescriptor.offset()));
 
   const auto projectedSchema = projector.projectedSchema();
@@ -2063,7 +2063,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
   EXPECT_EQ(
       projectedHybridMap.groupAt(0).groupKeys,
       (std::vector<std::string>{"1", "2"}));
-  EXPECT_TRUE(projectedHybridMap.groupAt(1).groupKeys.empty());
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(1).groupKeys,
+      (std::vector<std::string>{"99", "100"}));
 
   for (bool useChained : {false, true}) {
     const auto projected = projectInput(projector, serialized, useChained);
@@ -2132,15 +2134,15 @@ TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
     Projector projector{
         inputSchema, subfields, pool_.get(), projectorOptions()};
 
-    // Every key, present or absent, resolves to Default, so each projection
-    // carries the whole Default group.
+    // A selected Default key or an unknown key carries the whole Default
+    // group. Exact key filtering happens while decoding.
     EXPECT_THAT(
         projector.testingInputStreamIndices(),
         ElementsAre(
             sourceRow.nullsDescriptor().offset(),
             sourceHybridMap.nullsDescriptor().offset(),
             defaultGroup.valueType->asScalar().scalarDescriptor().offset(),
-            defaultGroup.keyDescriptor.offset(),
+            defaultGroup.keyPresenceDescriptor.offset(),
             defaultGroup.inMapDescriptor.offset(),
             sourceRow.childAt(1)->asScalar().scalarDescriptor().offset()));
     const auto projectedSchema = projector.projectedSchema();
@@ -2149,7 +2151,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
     ASSERT_EQ(projectedHybridMap.groupCount(), 1);
     EXPECT_EQ(
         projectedHybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
-    EXPECT_TRUE(projectedHybridMap.groupAt(0).groupKeys.empty());
+    EXPECT_EQ(
+        projectedHybridMap.groupAt(0).groupKeys,
+        (std::vector<std::string>{"9", "1", "2"}));
 
     for (bool useIOBuf : {false, true}) {
       SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));

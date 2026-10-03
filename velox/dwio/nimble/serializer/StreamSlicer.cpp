@@ -164,7 +164,7 @@ uint32_t maxStreamOffset(const Type& type) {
         const auto& group = hybridFlatMap.groupAt(i);
         offset = std::max(
             {offset,
-             maxStreamOffset(group.keyDescriptor),
+             maxStreamOffset(group.keyPresenceDescriptor),
              maxStreamOffset(group.inMapDescriptor),
              maxStreamOffset(*group.valueType)});
       }

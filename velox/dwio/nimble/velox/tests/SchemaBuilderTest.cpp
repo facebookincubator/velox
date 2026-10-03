@@ -72,7 +72,7 @@ std::shared_ptr<TypeBuilder> makeComplexValue(SchemaBuilder& builder) {
   return row;
 }
 
-TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
+TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyPresenceStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
@@ -88,13 +88,16 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
   root->addChild("features", hybridMap);
 
   EXPECT_EQ(builder.nodeCount(), nodeCountBeforeGroup + 5);
-  EXPECT_EQ(streams.keyDescriptor.scalarKind(), ScalarKind::String);
+  EXPECT_EQ(streams.keyPresenceDescriptor.scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(streams.inMapDescriptor.scalarKind(), ScalarKind::Bool);
-  EXPECT_EQ(defaultStreams.keyDescriptor.scalarKind(), ScalarKind::String);
+  EXPECT_EQ(
+      defaultStreams.keyPresenceDescriptor.scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(defaultStreams.inMapDescriptor.scalarKind(), ScalarKind::Bool);
-  EXPECT_NE(streams.keyDescriptor.offset(), streams.inMapDescriptor.offset());
   EXPECT_NE(
-      streams.keyDescriptor.offset(), groupValue->scalarDescriptor().offset());
+      streams.keyPresenceDescriptor.offset(), streams.inMapDescriptor.offset());
+  EXPECT_NE(
+      streams.keyPresenceDescriptor.offset(),
+      groupValue->scalarDescriptor().offset());
   EXPECT_NE(
       streams.inMapDescriptor.offset(),
       groupValue->scalarDescriptor().offset());
@@ -105,7 +108,9 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
   const auto storedDefaultGroup = hybridMap->groupAt(1);
   EXPECT_EQ(storedDefaultGroup.groupId, HybridFlatMap::kDefaultGroupId);
   EXPECT_TRUE(storedDefaultGroup.groupKeys.empty());
-  EXPECT_EQ(storedGroup.keyDescriptor.offset(), streams.keyDescriptor.offset());
+  EXPECT_EQ(
+      storedGroup.keyPresenceDescriptor.offset(),
+      streams.keyPresenceDescriptor.offset());
   EXPECT_EQ(
       storedGroup.inMapDescriptor.offset(), streams.inMapDescriptor.offset());
   EXPECT_EQ(&storedGroup.valueType, groupValue.get());
@@ -124,7 +129,7 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
   EXPECT_EQ(metadata.groups[0].groupId, 7);
   EXPECT_EQ(metadata.groups[0].groupKeys, (std::vector<std::string>{"a", "b"}));
   EXPECT_TRUE(metadata.groups[1].groupKeys.empty());
-  EXPECT_EQ(nodes[2].scalarKind(), ScalarKind::String);
+  EXPECT_EQ(nodes[2].scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(nodes[3].scalarKind(), ScalarKind::Bool);
 
   const auto schema = SchemaReader::getSchema(nodes);
@@ -142,7 +147,8 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
   EXPECT_EQ(
       hybridMapType.groupAt(0).groupKeys, (std::vector<std::string>{"a", "b"}));
   EXPECT_EQ(
-      hybridMapType.groupAt(0).keyDescriptor.scalarKind(), ScalarKind::String);
+      hybridMapType.groupAt(0).keyPresenceDescriptor.scalarKind(),
+      ScalarKind::Bool);
   EXPECT_EQ(
       hybridMapType.groupAt(0).inMapDescriptor.scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(
@@ -186,7 +192,7 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyStreams) {
       std::find(
           presenceOffsets.begin(),
           presenceOffsets.end(),
-          streams.keyDescriptor.offset()),
+          streams.keyPresenceDescriptor.offset()),
       presenceOffsets.end());
   EXPECT_NE(
       std::find(
@@ -233,6 +239,40 @@ TEST(SchemaBuilderTest, hybridFlatMapSupportsComplexGroupValueTypes) {
   EXPECT_TRUE(value.childAt(5)->isFlatMap());
 }
 
+TEST(SchemaBuilderTest, hybridFlatMapTracksDefaultGroupKeys) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      7, {"configured"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+  EXPECT_TRUE(hybridMap->groupAt(0).groupKeys.empty());
+  hybridMap->appendDefaultGroupKey("observed");
+  NIMBLE_ASSERT_THROW(
+      hybridMap->appendDefaultGroupKey("observed"),
+      "Duplicate Hybrid FlatMap key: 'observed'");
+  EXPECT_EQ(
+      hybridMap->groupAt(0).groupKeys, (std::vector<std::string>{"observed"}));
+  EXPECT_EQ(
+      hybridMap->groupAt(1).groupKeys,
+      (std::vector<std::string>{"configured"}));
+}
+
+TEST(SchemaBuilderTest, rejectsDuplicateDefaultGroupKeys) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+
+  NIMBLE_ASSERT_THROW(
+      hybridMap->addGroup(
+          HybridFlatMap::kDefaultGroupId,
+          {"duplicate", "duplicate"},
+          builder.createScalarTypeBuilder(ScalarKind::Int64)),
+      "Duplicate Hybrid FlatMap key: 'duplicate'");
+}
+
 TEST(SchemaBuilderTest, hybridFlatMapSupportsEmptyFlatMapGroupValueTypes) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
@@ -273,7 +313,7 @@ TEST(SchemaBuilderTest, hybridFlatMapStreamVisitorsShortCircuit) {
           map.groupAt(0).valueType->asScalar().scalarDescriptor().offset()}));
 
   std::vector<offset_size> presenceOffsets;
-  const auto firstKeysOffset = map.groupAt(0).keyDescriptor.offset();
+  const auto firstKeysOffset = map.groupAt(0).keyPresenceDescriptor.offset();
   EXPECT_TRUE(visitPresenceStreamOffsets(map, [&](offset_size offset) {
     presenceOffsets.push_back(offset);
     return offset == firstKeysOffset;
@@ -294,7 +334,7 @@ TEST(SchemaBuilderTest, hybridFlatMapStreamVisitorsShortCircuit) {
       presenceOffsets,
       (std::vector<offset_size>{
           map.nullsDescriptor().offset(),
-          map.groupAt(0).keyDescriptor.offset(),
+          map.groupAt(0).keyPresenceDescriptor.offset(),
           map.groupAt(0).inMapDescriptor.offset(),
           firstValueOffset}));
 
@@ -391,12 +431,12 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
         std::vector<HybridFlatMapType::Group>{
             {.groupId = 1,
              .groupKeys = {"nested"},
-             .keyDescriptor = StreamDescriptor{1, ScalarKind::String},
+             .keyPresenceDescriptor = StreamDescriptor{1, ScalarKind::Bool},
              .inMapDescriptor = StreamDescriptor{2, ScalarKind::Bool},
              .valueType = nestedGroupScalar},
             {.groupId = HybridFlatMap::kDefaultGroupId,
              .groupKeys = {},
-             .keyDescriptor = StreamDescriptor{4, ScalarKind::String},
+             .keyPresenceDescriptor = StreamDescriptor{4, ScalarKind::Bool},
              .inMapDescriptor = StreamDescriptor{5, ScalarKind::Bool},
              .valueType = nestedDefaultScalar},
         });
@@ -409,12 +449,13 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
             std::vector<HybridFlatMapType::Group>{
                 {.groupId = 0,
                  .groupKeys = {"outer"},
-                 .keyDescriptor = StreamDescriptor{8, ScalarKind::String},
+                 .keyPresenceDescriptor = StreamDescriptor{8, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{9, ScalarKind::Bool},
                  .valueType = nested},
                 {.groupId = HybridFlatMap::kDefaultGroupId,
                  .groupKeys = {},
-                 .keyDescriptor = StreamDescriptor{11, ScalarKind::String},
+                 .keyPresenceDescriptor =
+                     StreamDescriptor{11, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{12, ScalarKind::Bool},
                  .valueType = outerDefaultScalar},
             }),
@@ -431,12 +472,14 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
             std::vector<HybridFlatMapType::Group>{
                 {.groupId = 0,
                  .groupKeys = {"outer"},
-                 .keyDescriptor = StreamDescriptor{15, ScalarKind::String},
+                 .keyPresenceDescriptor =
+                     StreamDescriptor{15, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{16, ScalarKind::Bool},
                  .valueType = nestedRow},
                 {.groupId = HybridFlatMap::kDefaultGroupId,
                  .groupKeys = {},
-                 .keyDescriptor = StreamDescriptor{17, ScalarKind::String},
+                 .keyPresenceDescriptor =
+                     StreamDescriptor{17, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{18, ScalarKind::Bool},
                  .valueType = outerDefaultScalar},
             }),
@@ -462,12 +505,14 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsNestedHybridFlatMap) {
             std::vector<HybridFlatMapType::Group>{
                 {.groupId = 0,
                  .groupKeys = {"outer"},
-                 .keyDescriptor = StreamDescriptor{24, ScalarKind::String},
+                 .keyPresenceDescriptor =
+                     StreamDescriptor{24, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{25, ScalarKind::Bool},
                  .valueType = nestedFlatMap},
                 {.groupId = HybridFlatMap::kDefaultGroupId,
                  .groupKeys = {},
-                 .keyDescriptor = StreamDescriptor{26, ScalarKind::String},
+                 .keyPresenceDescriptor =
+                     StreamDescriptor{26, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{27, ScalarKind::Bool},
                  .valueType = outerDefaultScalar},
             }),
@@ -553,10 +598,10 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsTruncatedGroup) {
                            .groupKeys = {}},
                       },
               })},
-      SchemaNode{Kind::Scalar, 1, ScalarKind::String},
+      SchemaNode{Kind::Scalar, 1, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 2, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 3, ScalarKind::Int64},
-      SchemaNode{Kind::Scalar, 4, ScalarKind::String},
+      SchemaNode{Kind::Scalar, 4, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 5, ScalarKind::Bool},
   };
 
@@ -585,7 +630,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReadsDefaultOnlyWithoutGroupKeys) {
                 reinterpret_cast<const char*>(
                     metadataBuilder.GetBufferPointer()),
                 metadataBuilder.GetSize()}}}},
-      SchemaNode{Kind::Scalar, 1, ScalarKind::String},
+      SchemaNode{Kind::Scalar, 1, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 2, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 3, ScalarKind::Int64},
   };
@@ -640,7 +685,7 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     ASSERT_EQ(nodes.size(), 4);
     EXPECT_EQ(nodes[0].kind(), Kind::HybridFlatMap);
     EXPECT_EQ(nodes[0].childrenCount(), 1);
-    EXPECT_EQ(nodes[1].scalarKind(), ScalarKind::String);
+    EXPECT_EQ(nodes[1].scalarKind(), ScalarKind::Bool);
     EXPECT_EQ(nodes[2].scalarKind(), ScalarKind::Bool);
     EXPECT_EQ(nodes[3].scalarKind(), ScalarKind::Int64);
 
@@ -673,13 +718,12 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         HybridFlatMap::kDefaultGroupId,
         {},
         builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId,
-        {},
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
-
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Duplicate Hybrid FlatMap group ID: 4294967295");
+        hybridMap->addGroup(
+            HybridFlatMap::kDefaultGroupId,
+            {},
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        "Hybrid FlatMap has multiple Default groups");
   }
 
   {
@@ -703,12 +747,14 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
     hybridMap->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {"default-key"},
+        {"z", "default-key"},
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-    NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(),
-        "Hybrid FlatMap Default group cannot contain group keys");
+    const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+    const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
+    EXPECT_EQ(
+        defaultGroup.groupKeys, (std::vector<std::string>{"z", "default-key"}));
+    EXPECT_EQ(schema->asHybridFlatMap().findGroup("default-key"), 1);
   }
 
   {
@@ -863,7 +909,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
         metadata.groups.size(),
         hybridFlatMapAttributes(metadata));
     for (size_t i = 0; i < nodes.front().childrenCount(); ++i) {
-      nodes.emplace_back(Kind::Scalar, 1 + 3 * i, ScalarKind::String);
+      nodes.emplace_back(Kind::Scalar, 1 + 3 * i, ScalarKind::Bool);
       nodes.emplace_back(Kind::Scalar, 2 + 3 * i, ScalarKind::Bool);
       nodes.emplace_back(Kind::Scalar, 3 + 3 * i, ScalarKind::Int64);
     }
@@ -983,12 +1029,12 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMismatchedValueShapes) {
             std::vector<HybridFlatMapType::Group>{
                 {.groupId = 0,
                  .groupKeys = {"a"},
-                 .keyDescriptor = StreamDescriptor{1, ScalarKind::String},
+                 .keyPresenceDescriptor = StreamDescriptor{1, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{2, ScalarKind::Bool},
                  .valueType = mismatch.configured()},
                 {.groupId = HybridFlatMap::kDefaultGroupId,
                  .groupKeys = {},
-                 .keyDescriptor = StreamDescriptor{3, ScalarKind::String},
+                 .keyPresenceDescriptor = StreamDescriptor{3, ScalarKind::Bool},
                  .inMapDescriptor = StreamDescriptor{4, ScalarKind::Bool},
                  .valueType = mismatch.defaultValue()},
             }),
@@ -1005,7 +1051,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMalformedPhysicalGroups) {
           },
   };
   const auto makeNodes = [&](ScalarKind parentKeyKind,
-                             ScalarKind keysKind,
+                             ScalarKind keyPresenceKind,
                              ScalarKind inMapKind,
                              std::optional<std::string> valueName,
                              size_t childCount = 2) {
@@ -1017,10 +1063,10 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMalformedPhysicalGroups) {
             std::nullopt,
             childCount,
             hybridFlatMapAttributes(metadata)},
-        SchemaNode{Kind::Scalar, 1, keysKind},
+        SchemaNode{Kind::Scalar, 1, keyPresenceKind},
         SchemaNode{Kind::Scalar, 2, inMapKind},
         SchemaNode{Kind::Scalar, 3, ScalarKind::Int64, std::move(valueName)},
-        SchemaNode{Kind::Scalar, 4, parentKeyKind},
+        SchemaNode{Kind::Scalar, 4, ScalarKind::Bool},
         SchemaNode{Kind::Scalar, 5, ScalarKind::Bool},
         SchemaNode{Kind::Scalar, 6, ScalarKind::Int64},
     };
@@ -1033,7 +1079,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMalformedPhysicalGroups) {
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
           ScalarKind::String,
-          ScalarKind::String,
+          ScalarKind::Bool,
           ScalarKind::Bool,
           std::nullopt,
           1)),
@@ -1044,31 +1090,31 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMalformedPhysicalGroups) {
           ScalarKind::Int64,
           ScalarKind::Bool,
           std::nullopt)),
-      "Hybrid FlatMap keys stream must match its key type");
+      "Hybrid FlatMap key-presence stream must be boolean");
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
           ScalarKind::String,
-          ScalarKind::String,
+          ScalarKind::Bool,
           ScalarKind::Int64,
           std::nullopt)),
       "Hybrid FlatMap in-map stream must be boolean");
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
           ScalarKind::String,
-          ScalarKind::String,
+          ScalarKind::Bool,
           ScalarKind::Bool,
           "named-value")),
       "Hybrid FlatMap group value child must be unnamed");
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
           ScalarKind::Undefined,
-          ScalarKind::Undefined,
+          ScalarKind::Bool,
           ScalarKind::Bool,
           std::nullopt)),
       "Hybrid FlatMap key kind is unsupported: Undefined");
 
   auto mismatchedValues = makeNodes(
-      ScalarKind::String, ScalarKind::String, ScalarKind::Bool, std::nullopt);
+      ScalarKind::String, ScalarKind::Bool, ScalarKind::Bool, std::nullopt);
   mismatchedValues.back() = SchemaNode{Kind::Scalar, 6, ScalarKind::String};
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(mismatchedValues),
