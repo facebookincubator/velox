@@ -42,7 +42,9 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     if (formatData_->as<ParquetData>().isDeltaBinaryPacked()) {
       return false;
     }
-    if (this->fileType().type()->isLongDecimal()) {
+    if (this->fileType().type()->kind() == TypeKind::HUGEINT) {
+      // Long decimals and UUIDs come from big-endian FIXED_LEN_BYTE_ARRAY
+      // values, which the SIMD fast paths cannot decode.
       return false;
     }
     if (this->fileType().type()->isShortDecimal()) {

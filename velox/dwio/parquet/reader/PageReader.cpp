@@ -686,9 +686,10 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           values[i] = __builtin_bswap64(values[i]);
         }
         break;
-      } else if (type_->type()->isLongDecimal()) {
-        // Parquet decimal values have a fixed typeLength_ and are in big-endian
-        // layout.
+      } else if (type_->type()->kind() == TypeKind::HUGEINT) {
+        // Long decimal and UUID values both have a fixed typeLength_ and are
+        // in big-endian layout. A UUID is always the full 16 bytes, so only
+        // decimals take the expansion branch below.
         if (numParquetBytes < numVeloxBytes) {
           auto values = dictionary_.values->asMutable<int128_t>();
           for (auto i = dictionary_.numValues - 1; i >= 0; --i) {

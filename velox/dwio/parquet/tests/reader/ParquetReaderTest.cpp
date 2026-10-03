@@ -1693,6 +1693,71 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
       uuidVector->loadedVector()->asFlatVector<StringView>()->valueAt(0));
 }
 
+namespace {
+// Returns the hugeint whose big-endian byte image is the 16 bytes of the UUID,
+// which is how Presto represents a UUID in memory.
+int128_t uuidValue(uint64_t high, uint64_t low) {
+  return static_cast<int128_t>((static_cast<uint128_t>(high) << 64) | low);
+}
+
+// The six values in uuid_logical.parquet and uuid_logical_dictionary.parquet,
+// in file order.
+std::vector<std::optional<int128_t>> uuidFixtureValues() {
+  return {
+      uuidValue(0x0011223344556677, 0x8899aabbccddeeff),
+      std::nullopt,
+      uuidValue(0x9c55ef53837e4c0d, 0x833b40dd4c411aff),
+      uuidValue(0xffffffffffffffff, 0xffffffffffffffff),
+      uuidValue(0, 0),
+      uuidValue(0x0011223344556677, 0x8899aabbccddeeff)};
+}
+} // namespace
+
+TEST_F(ParquetReaderTest, readUuidAsHugeint) {
+  // Both files hold the same values written by Presto's Parquet writer, the
+  // first PLAIN encoded and the second RLE_DICTIONARY encoded.
+  auto outputRowType = ROW("uuid_field", HUGEINT());
+  auto expected =
+      makeRowVector({makeNullableFlatVector<int128_t>(uuidFixtureValues())});
+
+  for (const auto* filename :
+       {"uuid_logical.parquet", "uuid_logical_dictionary.parquet"}) {
+    SCOPED_TRACE(filename);
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputRowType);
+    auto reader = createReader(filename, readerOptions);
+    EXPECT_EQ(reader->numberOfRows(), 6ULL);
+    EXPECT_EQ(
+        reader->typeWithId()->childAt(0)->type()->kind(), TypeKind::HUGEINT);
+
+    auto rowReader = createRowReaderFromReader(*reader, outputRowType);
+    assertReadWithReaderAndExpected(
+        outputRowType, *rowReader, expected, *leafPool_);
+  }
+}
+
+TEST_F(ParquetReaderTest, filterUuidAsHugeint) {
+  // The filter is expressed in Presto UUID values, so it only selects the row
+  // if the file bytes are decoded to the same representation.
+  const auto value = *uuidFixtureValues()[2];
+  auto outputRowType = ROW("uuid_field", HUGEINT());
+  auto expected = makeRowVector({makeFlatVector<int128_t>({value})});
+
+  for (const auto* filename :
+       {"uuid_logical.parquet", "uuid_logical_dictionary.parquet"}) {
+    SCOPED_TRACE(filename);
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputRowType);
+    auto reader = createReader(filename, readerOptions);
+
+    FilterMap filters;
+    filters.emplace(
+        "uuid_field", std::make_unique<HugeintRange>(value, value, false));
+    assertReadWithReaderAndFilters(
+        *reader, outputRowType, std::move(filters), expected);
+  }
+}
+
 TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   auto outputRowType = ROW("regionkey", BIGINT());
   auto readerBundle = readerBuilder("v2_page.parquet", outputRowType).build();

@@ -30,6 +30,7 @@
 #include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
 #include "velox/dwio/parquet/reader/UnknownColumnReader.h"
+#include "velox/dwio/parquet/reader/UuidColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
@@ -53,6 +54,19 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
         fileType->type()->equivalent(*TIME_MICRO_UTC()));
     return std::make_unique<TimeColumnReader>(
         requestedType, fileType, params, scanSpec);
+  }
+
+  // A UUID column mapped to hugeint needs the file bytes reordered; see
+  // UuidColumnReader.
+  if (fileType->type()->kind() == TypeKind::HUGEINT) {
+    const auto& logicalType =
+        std::static_pointer_cast<const ParquetTypeWithId>(fileType)
+            ->logicalType_;
+    if (logicalType.has_value() &&
+        logicalType->getType() == thrift::LogicalType::Type::UUID) {
+      return std::make_unique<UuidColumnReader>(
+          requestedType, fileType, params, scanSpec);
+    }
   }
 
   switch (fileType->type()->kind()) {
