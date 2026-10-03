@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -41,12 +42,18 @@ namespace facebook::nimble {
 
 namespace detail {
 
+/// Chooses a deterministic point within an evenly sized sampling interval.
+/// Varies offsets to avoid repeatedly observing one phase of periodic input.
+uint32_t
+sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
+
 /// Estimates encoded data size for encoding selection. Estimates are heuristic
 /// and are not expected to match the serialized size exactly.
 template <typename T>
 struct EncodingSizeEstimation {
   using physicalType = typename TypeTraits<T>::physicalType;
 
+  /// Estimates size from statistics over the full input.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       const size_t entryCount,
@@ -64,6 +71,7 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
+  /// Estimates size from the full input and its statistics.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       std::span<const physicalType> values,
@@ -80,6 +88,29 @@ struct EncodingSizeEstimation {
     NIMBLE_UNREACHABLE(
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
+
+  /// Projects selection costs for numTotalRows values from sampleValues and
+  /// its statistics. The sample may contain the full input. Scalar range and
+  /// constant estimates use the full row count; other existing estimates scale
+  /// their sampled payload. A policy enables ALPRD's child-aware model and the
+  /// corresponding floating-point container estimates. No candidate is encoded.
+  static std::optional<uint64_t> estimateSize(
+      EncodingType encodingType,
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase* policy);
+
+  /// Estimates the bytes written for numTotalRows values by the child chosen
+  /// by policy using sampleValues, before generic compression. Corrects FBW's
+  /// padding and scalar prefix sizes without changing the policy's established
+  /// scoring of existing codecs.
+  static uint64_t estimateSelectedSize(
+      EncodingSelectionPolicyBase& policy,
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
+      const Encoding::Options& options);
 
  private:
   static std::optional<uint64_t> estimateNumericSize(
@@ -170,6 +201,13 @@ struct EncodingSizeEstimation {
         // read dispatch accepts it.
         if constexpr (isIntegralType<T>()) {
           return HuffmanEncoding<T>::estimateSize(values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::ALPRD: {
+        if constexpr (isFloatingPointType<T>()) {
+          return ALPRDEncoding<T>::estimateSize(values, options);
         } else {
           return std::nullopt;
         }

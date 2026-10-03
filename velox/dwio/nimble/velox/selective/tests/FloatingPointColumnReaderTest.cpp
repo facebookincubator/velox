@@ -241,7 +241,8 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
   void checkFileEncoding(
       const std::string& file,
       EncodingType expectedType,
-      bool multipleChunks) {
+      bool multipleChunks,
+      bool requireEveryChunk) {
     io::ReaderOptions ioOptions(pool());
     ioOptions.setDataIoStats(dataIoStats_);
     ioOptions.setMetadataIoStats(metadataIoStats_);
@@ -266,8 +267,10 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
             continue;
           }
           const auto layout = EncodingLayoutCapture::capture(data, {});
-          ASSERT_EQ(layout.encodingType(), expectedType);
-          ++encodedChunks;
+          if (requireEveryChunk) {
+            ASSERT_EQ(layout.encodingType(), expectedType);
+          }
+          encodedChunks += layout.encodingType() == expectedType;
         }
       }
     }
@@ -275,7 +278,12 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
   }
 
   template <typename T>
-  void testAlprdRead(bool nullable, bool filtered, bool cache, bool zeroCopy) {
+  void testAlprdRead(
+      bool nullable,
+      bool filtered,
+      bool cache,
+      bool zeroCopy,
+      bool automaticSelection) {
     using Physical = typename TypeTraits<T>::physicalType;
     constexpr auto shift = sizeof(T) * 8 - 16;
     auto valueAt = [](auto row) {
@@ -289,6 +297,18 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     auto input = makeRowVector({makeFlatVector<T>(8'193, valueAt, nullAt)});
     auto writerOptions =
         makeSingleScalarColumnWriterOptions(EncodingType::ALPRD);
+    if (automaticSelection) {
+      writerOptions.encodingSelectionPolicyCreator = [](DataType type) {
+        return ManualEncodingSelectionPolicyFactory{
+            {{EncodingType::Constant, 1},
+             {EncodingType::Trivial, 1},
+             {EncodingType::FixedBitWidth, 1},
+             {EncodingType::ALP, 1},
+             {EncodingType::ALPRD, 1}},
+            std::nullopt}
+            .createPolicy(type);
+      };
+    }
     writerOptions.enableChunking = true;
     writerOptions.minStreamChunkRawSize = 1'024;
     writerOptions.maxStreamChunkRawSize = 2'048;
@@ -296,7 +316,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     const auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
     // Assert the requested codec was written, rather than silently falling
     // back.
-    checkFileEncoding<T>(file, EncodingType::ALPRD, true);
+    checkFileEncoding<T>(file, EncodingType::ALPRD, true, !automaticSelection);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
     if (filtered) {
@@ -324,7 +344,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         *rootPool(),
         input,
         makeSingleScalarColumnWriterOptions(EncodingType::ALP));
-    checkFileEncoding<T>(file, EncodingType::ALP, false);
+    checkFileEncoding<T>(file, EncodingType::ALP, false, true);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
     auto readers = makeReaders(input, file, scanSpec, zeroCopy);
@@ -406,12 +426,22 @@ class ALPRDColumnReaderTest
 
 TEST_P(ALPRDColumnReaderTest, floatRead) {
   const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<float>(nullable, filtered, cache, zeroCopy);
+  testAlprdRead<float>(nullable, filtered, cache, zeroCopy, false);
 }
 
 TEST_P(ALPRDColumnReaderTest, doubleRead) {
   const auto [nullable, filtered, cache, zeroCopy] = GetParam();
-  testAlprdRead<double>(nullable, filtered, cache, zeroCopy);
+  testAlprdRead<double>(nullable, filtered, cache, zeroCopy, false);
+}
+
+TEST_P(ALPRDColumnReaderTest, automaticFloatRead) {
+  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
+  testAlprdRead<float>(nullable, filtered, cache, zeroCopy, true);
+}
+
+TEST_P(ALPRDColumnReaderTest, automaticDoubleRead) {
+  const auto [nullable, filtered, cache, zeroCopy] = GetParam();
+  testAlprdRead<double>(nullable, filtered, cache, zeroCopy, true);
 }
 
 INSTANTIATE_TEST_SUITE_P(

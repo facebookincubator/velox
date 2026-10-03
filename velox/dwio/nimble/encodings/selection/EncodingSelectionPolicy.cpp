@@ -163,6 +163,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       // enable for production tables without consulting the Nimble team
       // (oncall: dwios).
       EncodingType::ALP,
+      EncodingType::ALPRD,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
@@ -172,6 +173,31 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::Fsst,
       EncodingType::Huffman,
   };
+}
+
+bool detail::useLogicalTypeForEncoding(
+    DataType logicalType,
+    EncodingType encodingType) {
+  if (logicalType != DataType::Float && logicalType != DataType::Double) {
+    return false;
+  }
+  return encodingType == EncodingType::ALP ||
+      encodingType == EncodingType::ALPRD ||
+      encodingType == EncodingType::Dictionary ||
+      encodingType == EncodingType::RLE ||
+      encodingType == EncodingType::MainlyConstant;
+}
+
+bool detail::layoutUsesAlprd(const EncodingLayout& layout) {
+  if (layout.encodingType() == EncodingType::ALPRD) {
+    return true;
+  }
+  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+    if (layout.child(i) && layoutUsesAlprd(*layout.child(i))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace facebook::nimble
