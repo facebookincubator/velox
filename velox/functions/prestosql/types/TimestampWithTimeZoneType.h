@@ -104,8 +104,12 @@ class TimestampWithTimeZoneType final : public BigintType {
   }
 };
 
-inline bool isTimestampWithTimeZoneType(const TypePtr& type) {
+inline bool isTimestampWithTimeZoneType(const Type& type) {
   // Pointer comparison works since this type is a singleton.
+  return TimestampWithTimeZoneType::get().get() == &type;
+}
+
+inline bool isTimestampWithTimeZoneType(const TypePtr& type) {
   return TimestampWithTimeZoneType::get() == type;
 }
 
