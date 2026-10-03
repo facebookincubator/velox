@@ -495,7 +495,7 @@ std::optional<RowVectorPtr> FileDataSource::next(
   }
 
   if (outputType_->size() == 0) {
-    return exec::wrap(rowsRemaining, remainingIndices, rowVector);
+    return BaseVector::create<RowVector>(outputType_, rowsRemaining, pool_);
   }
 
   std::vector<VectorPtr> outputColumns;
