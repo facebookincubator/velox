@@ -18,6 +18,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <atomic>
 #include <new>
 #include <thread>
 
@@ -43,7 +44,7 @@ class ConcurrentCounter {
         counters_(numShards_) {
     VELOX_CHECK_GE(numShards_, 1);
     for (auto& counter : counters_) {
-      counter.value = T();
+      counter.value.store(T(), std::memory_order_relaxed);
     }
   }
 
@@ -59,6 +60,15 @@ class ConcurrentCounter {
     return sum;
   }
 
+  template <typename ReadFn>
+  T read(const ReadFn& readFn) const {
+    T sum = T();
+    for (size_t i = 0; i < numShards_; ++i) {
+      sum += counters_[i].read(readFn);
+    }
+    return sum;
+  }
+
   /// Invoked to update with 'delta'.
   void update(T delta) {
     counters_[shardIndex()].update(delta);
@@ -66,14 +76,14 @@ class ConcurrentCounter {
 
   /// Invoked to update with 'delta' and user provided 'updateFn'. The function
   /// picks up the shard to apply the customized update.
-  using UpdateFn = std::function<bool(T& counter, T delta, std::mutex& lock)>;
+  using UpdateFn = std::function<bool(std::atomic<T>& counter, T delta)>;
   bool update(T delta, const UpdateFn& updateFn) {
     return counters_[shardIndex()].update(delta, updateFn);
   }
 
   void testingClear() {
     for (auto& counter : counters_) {
-      counter.value = T();
+      counter.value.store(T(), std::memory_order_relaxed);
     }
   }
 
@@ -87,21 +97,23 @@ class ConcurrentCounter {
 
  private:
   struct alignas(folly::hardware_destructive_interference_size) Counter {
-    mutable std::mutex lock;
-    T value;
+    std::atomic<T> value;
 
     T read() const {
-      std::lock_guard<std::mutex> l(lock);
-      return value;
+      return value.load(std::memory_order_relaxed);
+    }
+
+    template <typename ReadFn>
+    T read(const ReadFn& readFn) const {
+      return readFn(value);
     }
 
     void update(T delta) {
-      std::lock_guard<std::mutex> l(lock);
-      value += delta;
+      value.fetch_add(delta, std::memory_order_relaxed);
     }
 
     bool update(T delta, const UpdateFn& updateFn) {
-      return updateFn(value, delta, lock);
+      return updateFn(value, delta);
     }
   };
 
