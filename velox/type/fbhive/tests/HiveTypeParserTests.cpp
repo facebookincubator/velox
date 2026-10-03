@@ -21,6 +21,7 @@
 #include "gtest/gtest-test-part.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/OpaqueCustomTypes.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
@@ -259,5 +260,53 @@ TEST(FbHive, parseCustomTypeReturnsSingleton) {
   EXPECT_EQ(parsed.get(), TestCustomType::get().get());
   EXPECT_EQ(parsed->kind(), TypeKind::VARCHAR);
   unregisterCustomType("test_custom_type");
+}
+
+// An Iceberg `timestamptz` column reaches Velox as Hive 3's spelling of the
+// instant type: Iceberg's own HiveSchemaUtil emits "timestamp with local time
+// zone" for a TimestampType with shouldAdjustToUTC(). Presto's Iceberg
+// connector forwards that string as the column's Hive type, so this parser has
+// to accept it. Semantically it is an instant, so it maps to TIMESTAMP WITH
+// TIME ZONE -- mapping it to a zoneless TIMESTAMP would silently drop the UTC
+// contract.
+TEST(FbHive, timestampWithLocalTimeZone) {
+  HiveTypeParser parser;
+
+  ASSERT_EQ(
+      parser.parse("timestamp with local time zone"),
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // Case-insensitive, like every other keyword in this parser.
+  ASSERT_EQ(
+      parser.parse("TIMESTAMP WITH LOCAL TIME ZONE"),
+      TIMESTAMP_WITH_TIME_ZONE());
+  ASSERT_EQ(
+      parser.parse("Timestamp With Local Time Zone"),
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // The longer keyword must not shadow plain "timestamp". The tokenizer matches
+  // keywords by prefix in TokenType declaration order, so the ordering of the
+  // two tokens is load-bearing -- same constraint as TimeMicroUtc/Time.
+  ASSERT_EQ(parser.parse("timestamp")->kind(), TypeKind::TIMESTAMP);
+
+  // Nested: Iceberg struct/array/map fields carry the same spelling.
+  auto row =
+      parser.parse("struct<a:timestamp with local time zone,b:timestamp>");
+  ASSERT_EQ(row->kind(), TypeKind::ROW);
+  EXPECT_EQ(row->childAt(0), TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_EQ(row->childAt(1)->kind(), TypeKind::TIMESTAMP);
+  EXPECT_EQ(
+      parser.parse("array<timestamp with local time zone>")->childAt(0),
+      TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_EQ(
+      parser.parse("map<string,timestamp with local time zone>")->childAt(1),
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // Partial spellings must fail loudly rather than parse as "timestamp" and
+  // leave trailing input unconsumed.
+  VELOX_ASSERT_THROW(parser.parse("timestamp with"), "Input remaining");
+  VELOX_ASSERT_THROW(parser.parse("timestamp with local"), "Input remaining");
+  VELOX_ASSERT_THROW(
+      parser.parse("timestamp with local time"), "Input remaining");
 }
 } // namespace facebook::velox::type::fbhive
