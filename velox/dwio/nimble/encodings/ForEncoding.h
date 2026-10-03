@@ -422,6 +422,40 @@ void ForEncoding<T>::decodeRange(
 
     const uint64_t mask = (bitWidth == 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
 
+    // Topping the buffer up a byte at a time only keeps every bit while at
+    // most 56 bits are already buffered; past that the byte's high bits are
+    // shifted out of the 64-bit buffer and lost, and a 64-bit value then also
+    // hits `bitBuffer >>= 64`, which is undefined and on x86 leaves the buffer
+    // untouched, so every later value in the frame repeats the same garbage.
+    // Values wider than 56 bits are therefore assembled from what the buffer
+    // already holds plus the low bits of the next byte.
+    if (bitWidth > 56) {
+      for (uint32_t i = 0; i < rowsToDecode; ++i) {
+        while (bitsInBuffer <= 56 && bitsInBuffer < bitWidth) {
+          bitBuffer |= static_cast<uint64_t>(static_cast<uint8_t>(*byteCursor))
+              << bitsInBuffer;
+          ++byteCursor;
+          bitsInBuffer += 8;
+        }
+        if (bitsInBuffer >= bitWidth) {
+          decodeException(i, bitBuffer & mask);
+          bitsInBuffer -= bitWidth;
+          bitBuffer = (bitWidth == 64) ? 0 : (bitBuffer >> bitWidth);
+          continue;
+        }
+        const uint8_t missingBits = bitWidth - bitsInBuffer;
+        const uint64_t nextByte = static_cast<uint8_t>(*byteCursor);
+        ++byteCursor;
+        decodeException(
+            i,
+            bitBuffer |
+                ((nextByte & ((1ULL << missingBits) - 1)) << bitsInBuffer));
+        bitBuffer = nextByte >> missingBits;
+        bitsInBuffer = 8u - missingBits;
+      }
+      return;
+    }
+
     for (uint32_t i = 0; i < rowsToDecode; ++i) {
       while (bitsInBuffer < bitWidth) {
         bitBuffer |= static_cast<uint64_t>(static_cast<uint8_t>(*byteCursor))
