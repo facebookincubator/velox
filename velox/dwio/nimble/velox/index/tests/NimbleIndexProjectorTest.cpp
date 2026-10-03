@@ -1330,6 +1330,45 @@ TEST_P(NimbleIndexProjectorTest, slicesStripeBasedOnOverfetchRatio) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, rejectsMultiChunkStripeSlicing) {
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  constexpr int kRowsPerChunk = 100;
+
+  std::vector<RowVectorPtr> batches;
+  for (int chunk = 0; chunk < 2; ++chunk) {
+    const auto rowOffset = chunk * kRowsPerChunk;
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerChunk, [rowOffset](auto row) { return rowOffset + row; }),
+         vectorMaker_->flatVector<int32_t>(
+             kRowsPerChunk,
+             [rowOffset](auto row) { return (rowOffset + row) * 10; })}));
+  }
+
+  WriterOptions writerOptions;
+  writerOptions.enableChunking = true;
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return false; },
+        /*chunkLambda=*/[](const StripeProgress&) { return true; });
+  };
+  writeBatches(batches, std::move(writerOptions));
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 50, 150)};
+  NimbleIndexProjector::Options options;
+  options.maxOverfetchRowsRatio = 0.0;
+  NIMBLE_ASSERT_THROW(
+      projector->projectStreams(request, options),
+      "Expected exactly one chunk in stream");
+}
+
 TEST_P(NimbleIndexProjectorTest, slicesPartialStripesAroundFullStripe) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   writeResumeKeyTestData(/*rowsPerBatch=*/100, /*numBatches=*/3);

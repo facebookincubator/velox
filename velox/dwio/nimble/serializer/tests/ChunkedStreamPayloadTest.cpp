@@ -25,6 +25,7 @@
 
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 
 namespace facebook::nimble::serde {
@@ -119,6 +120,66 @@ TEST_P(ChunkedStreamPayloadTest, chunkOwnership) {
       EXPECT_NE(stripped.data(), chunks.data() + kChunkHeaderSize);
     }
   }
+}
+
+TEST_P(ChunkedStreamPayloadTest, singleChunkOwnership) {
+  struct TestCase {
+    std::string_view name;
+    std::string chunk;
+    std::string expectedPayload;
+    bool expectedUsesInputStorage;
+  };
+  const std::vector<TestCase> testCases = {
+      {"uncompressed", makeUncompressedChunk("payload"), "payload", true},
+      {"compressed",
+       makeZstdChunk("compressed payload"),
+       "compressed payload",
+       false},
+  };
+  EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+  auto* const optionalBufferPool = GetParam() ? &bufferPool : nullptr;
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    ScopedEncodingBuffer strippedStreamBuffer{pool_.get(), optionalBufferPool};
+    const auto stripped =
+        stripSingleChunkHeader(testCase.chunk, strippedStreamBuffer.get());
+
+    EXPECT_EQ(stripped, testCase.expectedPayload);
+    if (testCase.expectedUsesInputStorage) {
+      EXPECT_EQ(stripped.data(), testCase.chunk.data() + kChunkHeaderSize);
+    } else {
+      EXPECT_NE(stripped.data(), testCase.chunk.data() + kChunkHeaderSize);
+    }
+  }
+}
+
+TEST_P(ChunkedStreamPayloadTest, rejectsMultipleChunksAsSingleChunk) {
+  auto chunks = makeUncompressedChunk("first");
+  chunks.append(makeUncompressedChunk("second"));
+  EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+  auto* const optionalBufferPool = GetParam() ? &bufferPool : nullptr;
+  ScopedEncodingBuffer strippedStreamBuffer{pool_.get(), optionalBufferPool};
+
+  NIMBLE_ASSERT_THROW(
+      stripSingleChunkHeader(chunks, strippedStreamBuffer.get()),
+      "Expected exactly one chunk in stream");
+}
+
+TEST_P(ChunkedStreamPayloadTest, rejectsTruncatedSingleChunk) {
+  EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+  auto* const optionalBufferPool = GetParam() ? &bufferPool : nullptr;
+  ScopedEncodingBuffer strippedStreamBuffer{pool_.get(), optionalBufferPool};
+
+  NIMBLE_ASSERT_THROW(
+      stripSingleChunkHeader("data", strippedStreamBuffer.get()),
+      "Truncated chunk header in stream");
+
+  auto chunk = makeUncompressedChunk("payload");
+  chunk.pop_back();
+  NIMBLE_ASSERT_THROW(
+      stripSingleChunkHeader(chunk, strippedStreamBuffer.get()),
+      "Chunk data exceeds stream boundary");
 }
 
 INSTANTIATE_TEST_SUITE_P(
