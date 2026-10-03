@@ -608,6 +608,7 @@ TEST_F(VectorIndexTest, searchRejectsInvalidConfig) {
   NIMBLE_ASSERT_USER_THROW(
       ivfReader->search({
           .queryVectors = std::vector<float>(kDimensions, 0.0f),
+          .searchOptions = nullptr,
       }),
       "Search options must be set");
   NIMBLE_ASSERT_USER_THROW(
@@ -755,6 +756,215 @@ TEST_F(VectorIndexTest, searchKeepsUnderfilledQueriesSeparate) {
     ASSERT_FALSE(queryResults.empty());
     EXPECT_LT(queryResults.size(), kNumVectors);
     EXPECT_EQ(queryResults.front().rowId, queryIndex);
+  }
+}
+
+TEST_F(VectorIndexTest, searchFiltersRowsBeforeTopK) {
+  struct TestParam {
+    VectorIndexType indexType;
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
+  };
+
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{20};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> allowedRowBitmap((kNumVectors + 7) / 8);
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    allowedRowBitmap[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+
+  std::vector<VectorIndex::SearchResult> expectedResults;
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    float squaredDistance{0};
+    for (uint32_t dimension = 0; dimension < kDimensions; ++dimension) {
+      const auto difference = query[dimension] -
+          data[static_cast<size_t>(row) * kDimensions + dimension];
+      squaredDistance += difference * difference;
+    }
+    expectedResults.push_back({
+        .rowId = row,
+        .score = squaredDistance,
+    });
+  }
+  std::ranges::sort(expectedResults, {}, &VectorIndex::SearchResult::score);
+  expectedResults.resize(kNumNeighbors);
+
+  const std::array testParams{
+      TestParam{
+          .indexType = VectorIndexType::kIvfFlat,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQ,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kHnswSq8,
+          .searchOptions =
+              std::make_shared<VectorIndex::HnswSearchOptions>(kNumVectors),
+      },
+  };
+
+  for (const auto& param : testParams) {
+    SCOPED_TRACE(
+        fmt::format("indexType={}", static_cast<int>(param.indexType)));
+    const auto written = writeIndex(
+        makeConfig(param.indexType), {makeInputFromVectors(data, kDimensions)});
+    const auto reader = readIndex(written);
+    auto queries = query;
+    queries.insert(queries.end(), query.begin(), query.end());
+    const auto searchResults = reader->search({
+        .queryVectors = std::move(queries),
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = param.searchOptions,
+        .rowSelection = VectorIndex::SearchConfig::RowSelection::fromBitmap(
+            allowedRowBitmap),
+    });
+    ASSERT_EQ(searchResults.numQueries(), 2);
+    for (size_t queryIndex = 0; queryIndex < searchResults.numQueries();
+         ++queryIndex) {
+      const auto results = searchResults.results(queryIndex);
+      ASSERT_EQ(results.size(), kNumNeighbors);
+      for (const auto& result : results) {
+        EXPECT_EQ(result.rowId % 5, 0);
+      }
+      if (param.indexType == VectorIndexType::kIvfFlat) {
+        expectSearchResultsEqual(results, expectedResults);
+      }
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, searchFiltersRowsByRangeBeforeTopK) {
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{20};
+  const RowRange allowedRows{100, 200};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+
+  const auto searchResults = reader->search({
+      .queryVectors = query,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromRange(allowedRows),
+  });
+  const auto results = searchResults.results(0);
+
+  ASSERT_EQ(results.size(), kNumNeighbors);
+  for (const auto& result : results) {
+    EXPECT_GE(result.rowId, allowedRows.startRow);
+    EXPECT_LT(result.rowId, allowedRows.endRow);
+  }
+}
+
+TEST_F(VectorIndexTest, searchRejectsInvalidRowSelection) {
+  constexpr uint32_t kNumVectors{100};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+
+  {
+    const std::vector<uint8_t> invalidBitmap{1};
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromBitmap(
+                invalidBitmap),
+        }),
+        "Row selection bitmap size does not match the index");
+  }
+
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromRange(
+                RowRange{10, 5}),
+        }),
+        "Row selection range must be ordered");
+  }
+
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        reader->search({
+            .queryVectors = query,
+            .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+            .rowSelection = VectorIndex::SearchConfig::RowSelection::fromRange(
+                RowRange{0, kNumVectors + 1}),
+        }),
+        "Row selection range exceeds the index row count");
+  }
+}
+
+TEST_F(VectorIndexTest, searchReturnsEmptyWhenFilterRejectsEveryRow) {
+  constexpr uint32_t kNumVectors{100};
+  constexpr uint32_t kNumQueries{2};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+  const std::vector<uint8_t> allowedRowBitmap((kNumVectors + 7) / 8);
+  const auto searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+      std::numeric_limits<uint32_t>::max());
+
+  const auto searchResults = reader->search({
+      .queryVectors = std::vector<float>(
+          data.begin(), data.begin() + kNumQueries * kDimensions),
+      .searchOptions = searchOptions,
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromBitmap(allowedRowBitmap),
+  });
+  ASSERT_EQ(searchResults.numQueries(), kNumQueries);
+  EXPECT_EQ(searchResults.totalNumResults(), 0);
+  EXPECT_TRUE(searchResults.results(0).empty());
+  EXPECT_TRUE(searchResults.results(1).empty());
+}
+
+TEST_F(VectorIndexTest, searchCompactsUnderfilledResults) {
+  constexpr uint32_t kNumVectors{100};
+  constexpr uint32_t kNumQueries{2};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(data, kDimensions)});
+  const auto reader = readIndex(written);
+
+  const auto searchResults = reader->search({
+      .queryVectors = std::vector<float>(
+          data.begin(), data.begin() + kNumQueries * kDimensions),
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max()),
+      .rowSelection =
+          VectorIndex::SearchConfig::RowSelection::fromRange(RowRange{0, 3}),
+  });
+
+  ASSERT_EQ(searchResults.numQueries(), kNumQueries);
+  EXPECT_EQ(searchResults.totalNumResults(), 6);
+  for (size_t queryIndex = 0; queryIndex < searchResults.numQueries();
+       ++queryIndex) {
+    std::vector<int64_t> rowIds;
+    for (const auto& result : searchResults.results(queryIndex)) {
+      rowIds.push_back(result.rowId);
+    }
+    std::ranges::sort(rowIds);
+    EXPECT_EQ(rowIds, std::vector<int64_t>({0, 1, 2}));
   }
 }
 
