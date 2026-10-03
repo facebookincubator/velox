@@ -26,6 +26,13 @@ class FromJsonTest : public SparkFunctionBaseTest {
     auto expr = createFromJson(expected->type());
     testEncodings(expr, {input}, expected);
   }
+
+  void setQueryTimeZone(const std::string& timeZone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
 };
 
 TEST_F(FromJsonTest, basicStruct) {
@@ -247,6 +254,86 @@ TEST_F(FromJsonTest, basicDate) {
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
+TEST_F(FromJsonTest, basicTimestamp) {
+  // 2021-07-01T10:20:30Z is 1625134830 seconds since the epoch.
+  auto expected = makeNullableFlatVector<Timestamp>(
+      {Timestamp(1625134830, 0),
+       Timestamp(1625134830, 0),
+       Timestamp(1625134830, 123456000),
+       Timestamp(1625134830, 123000000),
+       Timestamp(1625134830, 123456000),
+       Timestamp(1625134830, 0),
+       Timestamp(1625127630, 0),
+       Timestamp(1625127630, 0),
+       Timestamp(1625097600, 0),
+       Timestamp(1625134830, 0),
+       Timestamp(1625134830, 0),
+       Timestamp(-1, 0),
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": "2021-07-01T10:20:30"})",
+       R"({"a": "2021-07-01 10:20:30"})",
+       R"({"a": "2021-07-01T10:20:30.123456"})",
+       R"({"a": "2021-07-01T10:20:30.123Z"})", // Millisecond precision.
+       // Digits beyond microseconds are truncated, as in Spark.
+       R"({"a": "2021-07-01T10:20:30.123456789Z"})",
+       R"({"a": "2021-07-01T10:20:30Z"})",
+       R"({"a": "2021-07-01T10:20:30+02:00"})",
+       R"({"a": "2021-07-01T10:20:30GMT+02:00"})", // Legacy format.
+       R"({"a": "2021-07-01"})", // Date only.
+       R"({"a": "  2021-07-01T10:20:30  "})", // Surrounding whitespace.
+       R"({"a": 1625134830})", // Seconds since the epoch.
+       R"({"a": -1})",
+       R"({"a": ""})",
+       R"({"a": "AA"})",
+       R"({"a": "2021/07/01 10:20:30"})",
+       R"({"a": 1625134830.5})", // Floating point numbers are not accepted.
+       R"({"a": true})",
+       R"({"a": {"b": 1}})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
+TEST_F(FromJsonTest, timestampWithSessionTimeZone) {
+  setQueryTimeZone("America/Los_Angeles");
+  // Strings without an explicit time zone are interpreted in the session time
+  // zone (PDT, UTC-07:00 on 2021-07-01). Strings with a time zone and integers
+  // are not affected.
+  auto expected = makeNullableFlatVector<Timestamp>(
+      {Timestamp(1625160030, 0),
+       Timestamp(1625134830, 0),
+       Timestamp(1625127630, 0),
+       Timestamp(1625122800, 0),
+       Timestamp(1625134830, 0)});
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": "2021-07-01T10:20:30"})",
+       R"({"a": "2021-07-01T10:20:30Z"})",
+       R"({"a": "2021-07-01T10:20:30+02:00"})",
+       R"({"a": "2021-07-01"})",
+       R"({"a": 1625134830})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
+TEST_F(FromJsonTest, nestedTimestamp) {
+  // ROW(ARRAY(TIMESTAMP), ROW(TIMESTAMP))
+  auto arrayVector = makeNullableArrayVector<Timestamp>(
+      {{Timestamp(1625134830, 0), std::nullopt}, {}, {Timestamp(0, 0)}});
+  auto rowVector = makeRowVector(
+      {"c"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp(1625134830, 0), std::nullopt, Timestamp(1625134830, 0)})});
+  auto expected = makeRowVector({"a", "b"}, {arrayVector, rowVector});
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": ["2021-07-01T10:20:30Z", null], "b": {"c": 1625134830}})",
+       R"({"a": [], "b": {"c": "invalid"}})",
+       R"({"a": [0], "b": {"c": "2021-07-01T10:20:30Z"}})"});
+  testFromJson(input, expected);
+}
+
 TEST_F(FromJsonTest, basicShortDecimal) {
   auto expected = makeNullableFlatVector<int64_t>(
       {53210, -100, std::nullopt, std::nullopt}, DECIMAL(7, 2));
@@ -434,6 +521,10 @@ TEST_F(FromJsonTest, invalidType) {
       testFromJson(input, primitiveTypeOutput), "Unsupported type BIGINT.");
   VELOX_ASSERT_USER_THROW(
       testFromJson(input, mapOutput), "Unsupported type MAP<BIGINT,BIGINT>.");
+  auto timestampOutput = makeFlatVector<Timestamp>(
+      {Timestamp(0, 0), Timestamp(0, 0), Timestamp(0, 0)});
+  VELOX_ASSERT_USER_THROW(
+      testFromJson(input, timestampOutput), "Unsupported type TIMESTAMP.");
 }
 
 TEST_F(FromJsonTest, invalidJson) {

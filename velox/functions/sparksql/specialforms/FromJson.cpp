@@ -28,6 +28,8 @@
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox::exec;
 
@@ -80,9 +82,10 @@ struct ExtractJsonTypeImpl {
       exec::GenericWriter& writer,
       bool isRoot,
       const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
-      column_index_t nodeIndex) {
+      column_index_t nodeIndex,
+      const tz::TimeZone* sessionTimeZone) {
     return KindDispatcher<kind>::apply(
-        input, writer, isRoot, jsonRowSchemaInfo, nodeIndex);
+        input, writer, isRoot, jsonRowSchemaInfo, nodeIndex, sessionTimeZone);
   }
 
  private:
@@ -96,7 +99,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       VELOX_NYI("Parse json to {} is not supported.", TypeTraits<kind>::name);
       return simdjson::error_code::UNEXPECTED_ERROR;
     }
@@ -110,7 +114,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       std::string_view s;
       if (type == simdjson::ondemand::json_type::string) {
@@ -131,7 +136,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       if (type == simdjson::ondemand::json_type::boolean) {
         auto& w = writer.castTo<bool>();
@@ -150,7 +156,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       return castJsonToInt<int8_t>(value, writer);
     }
   };
@@ -163,7 +170,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       return castJsonToInt<int16_t>(value, writer);
     }
   };
@@ -176,7 +184,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       if (writer.type() == DATE()) {
         return castJsonToDate(value, writer);
       }
@@ -192,7 +201,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       if (writer.type()->isShortDecimal()) {
         return castJsonToDecimal<int64_t>(value, writer);
       }
@@ -208,7 +218,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       VELOX_CHECK(writer.type()->isLongDecimal());
       return castJsonToDecimal<int128_t>(value, writer);
     }
@@ -222,7 +233,8 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       return castJsonToFloatingPoint<float>(value, writer);
     }
   };
@@ -235,8 +247,23 @@ struct ExtractJsonTypeImpl {
         bool /*isRoot*/,
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
-        column_index_t /*nodeIndex*/) {
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* /*sessionTimeZone*/) {
       return castJsonToFloatingPoint<double>(value, writer);
+    }
+  };
+
+  template <typename Dummy>
+  struct KindDispatcher<TypeKind::TIMESTAMP, Dummy> {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*nodeIndex*/,
+        const tz::TimeZone* sessionTimeZone) {
+      return castJsonToTimestamp(value, writer, sessionTimeZone);
     }
   };
 
@@ -247,7 +274,8 @@ struct ExtractJsonTypeImpl {
         exec::GenericWriter& writer,
         bool isRoot,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
-        column_index_t nodeIndex) {
+        column_index_t nodeIndex,
+        const tz::TimeZone* sessionTimeZone) {
       auto& writerTyped = writer.castTo<Array<Any>>();
       const auto& elementType = writer.type()->childAt(0);
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
@@ -267,7 +295,8 @@ struct ExtractJsonTypeImpl {
                 writerTyped.add_item(),
                 false,
                 jsonRowSchemaInfo,
-                nodeIndex + 1));
+                nodeIndex + 1,
+                sessionTimeZone));
           }
         }
       } else if (
@@ -280,7 +309,8 @@ struct ExtractJsonTypeImpl {
             writerTyped.add_item(),
             false,
             jsonRowSchemaInfo,
-            nodeIndex + 1));
+            nodeIndex + 1,
+            sessionTimeZone));
       } else {
         return simdjson::INCORRECT_TYPE;
       }
@@ -295,7 +325,8 @@ struct ExtractJsonTypeImpl {
         exec::GenericWriter& writer,
         bool /*isRoot*/,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
-        column_index_t nodeIndex) {
+        column_index_t nodeIndex,
+        const tz::TimeZone* sessionTimeZone) {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       const auto& valueType = writer.type()->childAt(1);
       SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
@@ -316,7 +347,8 @@ struct ExtractJsonTypeImpl {
               std::get<1>(writers),
               false,
               jsonRowSchemaInfo,
-              nodeIndex + 1));
+              nodeIndex + 1,
+              sessionTimeZone));
         }
       }
       return simdjson::SUCCESS;
@@ -330,7 +362,8 @@ struct ExtractJsonTypeImpl {
         exec::GenericWriter& writer,
         bool isRoot,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
-        column_index_t nodeIndex) {
+        column_index_t nodeIndex,
+        const tz::TimeZone* sessionTimeZone) {
       const auto& rowType = writer.type()->asRow();
       auto& writerTyped = writer.castTo<DynamicRow>();
       if (value.type().error() != ::simdjson::SUCCESS) {
@@ -370,7 +403,8 @@ struct ExtractJsonTypeImpl {
                   writerTyped.get_writer_at(index),
                   false,
                   jsonRowSchemaInfo,
-                  nodeIndices.at(key));
+                  nodeIndices.at(key),
+                  sessionTimeZone);
               if (res != simdjson::SUCCESS) {
                 writerTyped.set_null_at(index);
               }
@@ -440,6 +474,84 @@ struct ExtractJsonTypeImpl {
     }
     writer.castTo<int32_t>() = day;
     return simdjson::SUCCESS;
+  }
+
+  // Casts a JSON value to a timestamp following the semantics of Spark's JSON
+  // parser when no 'timestampFormat' option is provided:
+  // - A string is parsed with the same rules as CAST(VARCHAR AS TIMESTAMP).
+  //   Strings without an explicit time zone are interpreted in the session
+  //   time zone. If parsing fails and the string contains "GMT", Spark's legacy
+  //   fallback removes it and parses the string again.
+  // - An integer is interpreted as the number of seconds since the epoch.
+  // - Any other JSON value cannot be converted and results in NULL.
+  static simdjson::error_code castJsonToTimestamp(
+      Input value,
+      exec::GenericWriter& writer,
+      const tz::TimeZone* sessionTimeZone) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
+    switch (type) {
+      case simdjson::ondemand::json_type::string: {
+        std::string_view s;
+        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+        StringView trimmed;
+        stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
+            trimmed, StringView(s));
+        if (trimmed.size() == 0) {
+          return simdjson::INCORRECT_TYPE;
+        }
+        const std::string_view str(trimmed.data(), trimmed.size());
+        auto parsed = util::fromTimestampWithTimezoneString(
+            str.data(), str.size(), util::TimestampParseMode::kSparkCast);
+        if (parsed.hasError() &&
+            stringImpl::stringPosition</*isAscii=*/true>(str, kGMT, 1) > 0) {
+          // Try again after cleaning up the legacy timestamp string by
+          // removing the "GMT" string.
+          std::vector<char> cleaned(str.size());
+          auto size = stringCore::replace</*ignoreEmptyReplaced=*/true>(
+              cleaned.data(), str, kGMT, std::string_view(), false);
+          parsed = util::fromTimestampWithTimezoneString(
+              cleaned.data(), size, util::TimestampParseMode::kSparkCast);
+        }
+        if (parsed.hasError()) {
+          return simdjson::INCORRECT_TYPE;
+        }
+        // Like CAST, adjust to the session time zone only for TIMESTAMP. For
+        // TIMESTAMP_UTC the parsed fields are stored as-is.
+        if (writer.type()->equivalent(*TIMESTAMP_UTC())) {
+          writer.castTo<Timestamp>() = parsed.value().timestamp;
+        } else {
+          writer.castTo<Timestamp>() = util::fromParsedTimestampWithTimeZone(
+              parsed.value(), sessionTimeZone);
+        }
+        return simdjson::SUCCESS;
+      }
+      case simdjson::ondemand::json_type::number: {
+        SIMDJSON_ASSIGN_OR_RAISE(auto num, value.get_number());
+        if (num.get_number_type() !=
+            simdjson::ondemand::number_type::signed_integer) {
+          return simdjson::INCORRECT_TYPE;
+        }
+        // Spark interprets an integer as seconds since the epoch. Saturate on
+        // overflow, like CAST(BIGINT AS TIMESTAMP).
+        constexpr int64_t kMaxSeconds = std::numeric_limits<int64_t>::max() /
+            Timestamp::kMicrosecondsInSecond;
+        constexpr int64_t kMinSeconds = std::numeric_limits<int64_t>::min() /
+            Timestamp::kMicrosecondsInSecond;
+        const int64_t seconds = num.get_int64();
+        int64_t micros;
+        if (seconds > kMaxSeconds) {
+          micros = std::numeric_limits<int64_t>::max();
+        } else if (seconds < kMinSeconds) {
+          micros = std::numeric_limits<int64_t>::min();
+        } else {
+          micros = seconds * Timestamp::kMicrosecondsInSecond;
+        }
+        writer.castTo<Timestamp>() = Timestamp::fromMicrosNoError(micros);
+        return simdjson::SUCCESS;
+      }
+      default:
+        return simdjson::INCORRECT_TYPE;
+    }
   }
 
   template <typename T>
@@ -600,10 +712,14 @@ struct ExtractJsonTypeImpl {
 /// - Map: Keys must be `VARCHAR` type.
 /// - Row: Partial parsing is supported, but JSON arrays cannot be parsed into a
 /// ROW type.
+/// - Timestamp: Strings are parsed like CAST(VARCHAR AS TIMESTAMP), using the
+/// session time zone when no time zone is given; integers are seconds since
+/// the epoch. Other values return `NULL`.
 template <TypeKind kind>
 class FromJsonFunction final : public exec::VectorFunction {
  public:
-  explicit FromJsonFunction(const TypePtr& type) {
+  FromJsonFunction(const TypePtr& type, const tz::TimeZone* sessionTimeZone)
+      : sessionTimeZone_(sessionTimeZone) {
     column_index_t index = 0;
     constructRowSchemaInfoMap(type, index);
   }
@@ -655,7 +771,8 @@ class FromJsonFunction final : public exec::VectorFunction {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         writer.setOffset(row);
         if (error != simdjson::SUCCESS ||
-            extractJsonToWriter(jsonDoc, writer, rowSchemaInfoMap_) !=
+            extractJsonToWriter(
+                jsonDoc, writer, rowSchemaInfoMap_, sessionTimeZone_) !=
                 simdjson::SUCCESS) {
           writer.commitNull();
         }
@@ -696,7 +813,8 @@ class FromJsonFunction final : public exec::VectorFunction {
       simdjson::ondemand::document doc;
       auto error = simdjsonParse(paddedInput).get(doc);
       if (error != simdjson::SUCCESS ||
-          extractJsonToWriter(doc, writer, rowSchemaInfoMap_) !=
+          extractJsonToWriter(
+              doc, writer, rowSchemaInfoMap_, sessionTimeZone_) !=
               simdjson::SUCCESS) {
         writer.commitNull();
       }
@@ -759,16 +877,24 @@ class FromJsonFunction final : public exec::VectorFunction {
   // Extracts data from json doc and writes it to writer.
   // @param rowSchemaInfoMap A map from schema tree node index to
   // JsonRowSchemaInfo.
+  // @param sessionTimeZone The session time zone used to interpret timestamp
+  // strings without an explicit time zone, or nullptr for UTC.
   static simdjson::error_code extractJsonToWriter(
       simdjson::ondemand::document& doc,
       exec::VectorWriter<Any>& writer,
-      const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& rowSchemaInfoMap) {
+      const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& rowSchemaInfoMap,
+      const tz::TimeZone* sessionTimeZone) {
     if (doc.is_null()) {
       writer.commitNull();
     } else {
       SIMDJSON_TRY(
           ExtractJsonTypeImpl<simdjson::ondemand::document&>::apply<kind>(
-              doc, writer.current(), true, rowSchemaInfoMap, 0));
+              doc,
+              writer.current(),
+              true,
+              rowSchemaInfoMap,
+              0,
+              sessionTimeZone));
       writer.commit(true);
     }
     return simdjson::SUCCESS;
@@ -778,6 +904,9 @@ class FromJsonFunction final : public exec::VectorFunction {
   mutable std::string paddedInput_;
   // Map from row schema tree node index to schema information for JSON rows.
   folly::F14FastMap<int64_t, JsonRowSchemaInfo> rowSchemaInfoMap_;
+  // Session time zone used to interpret timestamp strings without an explicit
+  // time zone. nullptr means UTC.
+  const tz::TimeZone* const sessionTimeZone_;
 };
 
 /// Determines whether a given type is supported.
@@ -810,7 +939,8 @@ bool isSupportedType(const TypePtr& type, bool isRootType) {
     case TypeKind::TINYINT:
     case TypeKind::DOUBLE:
     case TypeKind::REAL:
-    case TypeKind::VARCHAR: {
+    case TypeKind::VARCHAR:
+    case TypeKind::TIMESTAMP: {
       return !isRootType;
     }
     default:
@@ -829,7 +959,7 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   VELOX_USER_CHECK_EQ(args.size(), 1, "from_json expects one argument.");
   VELOX_USER_CHECK_EQ(
       args[0]->type()->kind(),
@@ -838,13 +968,20 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
   VELOX_USER_CHECK(
       isSupportedType(type, true), "Unsupported type {}.", type->toString());
 
+  const auto sessionTzName = config.sessionTimezone();
+  const tz::TimeZone* sessionTimeZone =
+      sessionTzName.empty() ? nullptr : tz::locateZone(sessionTzName);
+
   std::shared_ptr<exec::VectorFunction> func;
   if (type->kind() == TypeKind::ARRAY) {
-    func = std::make_shared<FromJsonFunction<TypeKind::ARRAY>>(type);
+    func = std::make_shared<FromJsonFunction<TypeKind::ARRAY>>(
+        type, sessionTimeZone);
   } else if (type->kind() == TypeKind::MAP) {
-    func = std::make_shared<FromJsonFunction<TypeKind::MAP>>(type);
+    func = std::make_shared<FromJsonFunction<TypeKind::MAP>>(
+        type, sessionTimeZone);
   } else {
-    func = std::make_shared<FromJsonFunction<TypeKind::ROW>>(type);
+    func = std::make_shared<FromJsonFunction<TypeKind::ROW>>(
+        type, sessionTimeZone);
   }
 
   return std::make_shared<exec::Expr>(
