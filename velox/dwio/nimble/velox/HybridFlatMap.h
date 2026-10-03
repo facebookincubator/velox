@@ -35,6 +35,8 @@ class HybridFlatMap {
   /// Describes one group in logical schema order.
   struct Group {
     uint32_t groupId{0};
+    /// Keys in key-presence bitmap order. Configured groups are sorted;
+    /// Default preserves first-seen order.
     std::vector<std::string> groupKeys;
 
     bool operator==(const Group&) const = default;
@@ -127,19 +129,16 @@ void validateHybridFlatMapGroups(
     }
     if (HybridFlatMap::isDefaultGroup(groupId)) {
       foundDefault = true;
-      NIMBLE_CHECK(
-          groupKeys.empty(),
-          "Hybrid FlatMap Default group cannot contain group keys.");
     } else {
       NIMBLE_CHECK(
           !groupKeys.empty(),
           "Hybrid FlatMap group must contain at least one key: {}.",
           groupId);
+      NIMBLE_CHECK(
+          std::is_sorted(groupKeys.begin(), groupKeys.end()),
+          "Hybrid FlatMap group keys must be sorted: {}.",
+          groupId);
     }
-    NIMBLE_CHECK(
-        std::is_sorted(groupKeys.begin(), groupKeys.end()),
-        "Hybrid FlatMap group keys must be sorted: {}.",
-        groupId);
     for (const auto& key : groupKeys) {
       NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
       NIMBLE_CHECK(

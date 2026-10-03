@@ -104,6 +104,7 @@ class StreamData {
 
  private:
   const StreamDescriptorBuilder& descriptor_;
+  // Marks metadata that readers consume atomically with sibling streams.
   bool noChunking_{false};
 };
 
