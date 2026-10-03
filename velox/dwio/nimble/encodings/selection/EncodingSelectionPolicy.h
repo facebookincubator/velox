@@ -39,7 +39,7 @@ using EncodingSelectionPolicyCreator =
     std::function<std::unique_ptr<EncodingSelectionPolicyBase>(DataType)>;
 
 namespace detail {
-/// Checks whether a replayed tree needs logical floating-point child types.
+/// Checks whether a layout tree contains ALPRD.
 bool layoutUsesAlprd(const EncodingLayout& layout);
 } // namespace detail
 
@@ -132,12 +132,12 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     return selectImpl(values, values.size(), statistics, options, true);
   }
 
-  EncodingSelectionResult selectFromSample(
-      std::span<const physicalType> values,
-      uint32_t numRows,
+  EncodingSelectionResult select(
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
-    return selectImpl(values, numRows, statistics, options, false);
+    return selectImpl(sampleValues, numTotalRows, statistics, options, false);
   }
 
   EncodingSelectionResult selectNullable(
@@ -152,7 +152,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
-  bool useLogicalTypeForNullable() const override {
+  bool useLogicalTypeForNestedEncoding() const override {
     const auto containsAlprd = [](const auto& factors) {
       return std::any_of(factors.begin(), factors.end(), [](const auto& entry) {
         return entry.first == EncodingType::ALPRD;
@@ -261,7 +261,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
       auto* nestedPolicy = encodingType == EncodingType::ALPRD ||
-              (refineNestedCandidates && useLogicalTypeForNullable())
+              (refineNestedCandidates && useLogicalTypeForNestedEncoding())
           ? this
           : nullptr;
       const auto estimatedSize =
@@ -567,7 +567,8 @@ class ReplayedEncodingSelectionPolicy
       std::span<const bool> /* nulls */,
       const Statistics<physicalType>& /* statistics */,
       const Encoding::Options& /* options */) override {
-    // NullableEncoding asks createImpl() for nullable data and nulls children.
+    // NullableEncoding asks createImpl() for non-null value and null-flag
+    // children.
     // The replay policy is initialized with the data layout, so synthesize the
     // nullable parent shape here.
     encodingLayout_ = EncodingLayout{
@@ -585,10 +586,10 @@ class ReplayedEncodingSelectionPolicy
     };
   }
 
-  bool useLogicalTypeForNullable() const override {
+  bool useLogicalTypeForNestedEncoding() const override {
     return detail::layoutUsesAlprd(encodingLayout_) ||
         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
-            ->useLogicalTypeForNullable();
+            ->useLogicalTypeForNestedEncoding();
   }
 
  protected:

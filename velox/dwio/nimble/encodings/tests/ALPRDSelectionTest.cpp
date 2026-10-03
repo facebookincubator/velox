@@ -356,8 +356,8 @@ TYPED_TEST(ALPRDSelectionTest, nullableSelectionAndReplay) {
     if (parent == EncodingType::ALPRD) {
       selectionPolicy = this->policy(candidates(), std::nullopt);
     } else {
-      // Bind the container so another legal tree (e.g. ALPRD[Dictionary])
-      // cannot hide whether its nullable floating-point child is selectable.
+      // Bind the container to verify ALPRD selection for its floating-point
+      // value child under the Nullable wrapper.
       selectionPolicy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
           EncodingLayout{
               parent,

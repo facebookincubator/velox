@@ -97,13 +97,14 @@ class ALPRDEncodingBase {
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 
-  /// Estimates a numRows payload from all values or a representative sample.
+  /// Estimates a payload of numTotalRows values from sampleValues, which may
+  /// contain the full input or a representative sample.
   /// Uses the same bounded training as encode(), including child policies,
   /// prefix sizes, byte rounding, padding and exception metadata.
   template <typename PhysicalType>
   static std::optional<uint64_t> estimateSize(
-      std::span<const PhysicalType> values,
-      uint32_t numRows,
+      std::span<const PhysicalType> sampleValues,
+      uint32_t numTotalRows,
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 

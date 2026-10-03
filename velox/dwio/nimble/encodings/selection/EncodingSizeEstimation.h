@@ -89,25 +89,27 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
-  /// Projects selection costs from a representative sample. Scalar range and
+  /// Projects selection costs for numTotalRows values from sampleValues and
+  /// its statistics. The sample may contain the full input. Scalar range and
   /// constant estimates use the full row count; other existing estimates scale
   /// their sampled payload. A policy enables ALPRD's child-aware model and the
   /// corresponding floating-point container estimates. No candidate is encoded.
   static std::optional<uint64_t> estimateSize(
       EncodingType encodingType,
-      std::span<const physicalType> values,
-      uint32_t numRows,
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 
-  /// Estimates the bytes written by the child chosen by policy, before generic
-  /// compression. Corrects FBW's padding and scalar prefix sizes without
-  /// changing the policy's established scoring of existing codecs.
+  /// Estimates the bytes written for numTotalRows values by the child chosen
+  /// by policy using sampleValues, before generic compression. Corrects FBW's
+  /// padding and scalar prefix sizes without changing the policy's established
+  /// scoring of existing codecs.
   static uint64_t estimateSelectedSize(
       EncodingSelectionPolicyBase& policy,
-      std::span<const physicalType> values,
-      uint32_t numRows,
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
       const Encoding::Options& options);
 
  private:
