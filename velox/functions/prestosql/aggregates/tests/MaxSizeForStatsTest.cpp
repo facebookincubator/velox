@@ -243,10 +243,10 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
 
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 36");
+  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 35");
 
   testAggregations(
-      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,36),(2,36)");
+      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,35),(2,35)");
 }
 
 TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
@@ -276,7 +276,7 @@ TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
   testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 50");
 
   testAggregations(
-      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,50),(2,36)");
+      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,50),(2,35)");
 }
 
 TEST_F(MaxSizeForStatsTest, mask) {

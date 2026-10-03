@@ -140,7 +140,7 @@ class SumDataSizeForStatsAggregate
 
     vector_size_t i = 0;
     rows.testSelected([&](auto row) {
-      rowIndices_[i] = IndexRange{row, 1};
+      rowIndices_[i] = row;
       rowSizePtrs_[i] = &rowSizes_[i];
       return ++i < numRowsToProcess;
     });
@@ -148,7 +148,8 @@ class SumDataSizeForStatsAggregate
     getVectorSerde()->estimateSerializedSize(
         vector.get(),
         folly::Range(rowIndices_.data(), rowIndices_.size()),
-        rowSizePtrs_.data());
+        rowSizePtrs_.data(),
+        scratch_);
   }
 
   void doUpdateSingleGroup(
@@ -179,7 +180,8 @@ class SumDataSizeForStatsAggregate
   // Reusable buffers to calculate the data size of input rows.
   std::vector<vector_size_t> rowSizes_;
   std::vector<vector_size_t*> rowSizePtrs_;
-  std::vector<IndexRange> rowIndices_;
+  std::vector<vector_size_t> rowIndices_;
+  Scratch scratch_;
 };
 
 } // namespace

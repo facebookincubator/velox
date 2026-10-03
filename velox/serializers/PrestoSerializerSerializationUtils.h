@@ -112,19 +112,15 @@ inline int32_t rangesTotalSize(const folly::Range<const IndexRange*>& ranges) {
 
 // Returns ranges for the non-null rows of an array  or map. 'rows' gives the
 // rows. nulls is the nulls of the array/map or nullptr if no nulls. 'offsets'
-// and 'sizes' are the offsets and sizes of the array/map.Returns the number of
-// index ranges. Obtains the ranges from 'rangesHolder'. If 'sizesPtr' is
-// non-null, gets returns  the sizes for the inner ranges in 'sizesHolder'. If
-// 'stream' is non-null, writes the lengths and nulls for the array/map into
-// 'stream'.
+// and 'sizes' are the offsets and sizes of the array/map. Returns the number
+// of index ranges and obtains them from 'rangesHolder'. If 'stream' is
+// non-null, writes the lengths and nulls for the array/map into 'stream'.
 int32_t rowsToRanges(
     folly::Range<const vector_size_t*> rows,
     const uint64_t* rawNulls,
     const vector_size_t* offsets,
     const vector_size_t* sizes,
-    vector_size_t** sizesPtr,
     ScratchPtr<IndexRange>& rangesHolder,
-    ScratchPtr<vector_size_t*>* sizesHolder,
     VectorStream* stream,
     Scratch& scratch);
 
