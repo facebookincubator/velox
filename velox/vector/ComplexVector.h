@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
 
@@ -110,7 +111,7 @@ class RowVector : public BaseVector {
   void appendNulls(vector_size_t numberOfRows);
 
   /// Get the child vector at a given offset.
-  VectorPtr& childAt(column_index_t index) {
+  VectorPtr& childAt(column_index_t index) [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     VELOX_CHECK_LT(
         index,
         childrenSize_,
@@ -119,7 +120,8 @@ class RowVector : public BaseVector {
     return children_[index];
   }
 
-  const VectorPtr& childAt(column_index_t index) const {
+  const VectorPtr& childAt(column_index_t index) const
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     VELOX_CHECK_LT(
         index,
         childrenSize_,
@@ -130,19 +132,22 @@ class RowVector : public BaseVector {
 
   /// Returns child vector for the specified field name. Throws if field with
   /// specified name doesn't exist.
-  VectorPtr& childAt(const std::string& name) {
+  VectorPtr& childAt(const std::string& name)
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return children_[type_->asRow().getChildIdx(name)];
   }
 
-  const VectorPtr& childAt(const std::string& name) const {
+  const VectorPtr& childAt(const std::string& name) const
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return children_[type_->asRow().getChildIdx(name)];
   }
 
-  std::vector<VectorPtr>& children() {
+  std::vector<VectorPtr>& children() [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return children_;
   }
 
-  const std::vector<VectorPtr>& children() const {
+  const std::vector<VectorPtr>& children() const
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return children_;
   }
 
@@ -330,11 +335,11 @@ class RowVector : public BaseVector {
 struct ArrayVectorBase : BaseVector {
   ArrayVectorBase(const ArrayVectorBase&) = delete;
 
-  const BufferPtr& offsets() const {
+  const BufferPtr& offsets() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return offsets_;
   }
 
-  const BufferPtr& sizes() const {
+  const BufferPtr& sizes() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return sizes_;
   }
 
@@ -503,11 +508,11 @@ class ArrayVector : public ArrayVectorBase {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
-  const VectorPtr& elements() const {
+  const VectorPtr& elements() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return elements_;
   }
 
-  VectorPtr& elements() {
+  VectorPtr& elements() [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return elements_;
   }
 
@@ -642,19 +647,19 @@ class MapVector : public ArrayVectorBase {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
-  const VectorPtr& mapKeys() const {
+  const VectorPtr& mapKeys() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return keys_;
   }
 
-  VectorPtr& mapKeys() {
+  VectorPtr& mapKeys() [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return keys_;
   }
 
-  const VectorPtr& mapValues() const {
+  const VectorPtr& mapValues() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return values_;
   }
 
-  VectorPtr& mapValues() {
+  VectorPtr& mapValues() [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return values_;
   }
 
