@@ -24,6 +24,10 @@ namespace facebook::velox::core {
 class QueryConfig;
 } // namespace facebook::velox::core
 
+namespace facebook::velox::tz {
+class TimeZone;
+} // namespace facebook::velox::tz
+
 /// The session time zone in a form device code can apply. Names only POD
 /// types, so it is safe on both sides of the shadow include path.
 namespace facebook::velox::cudf_velox::gpu_sfi {
@@ -83,5 +87,10 @@ struct GpuTimeZone {
 /// adjust_timestamp_to_session_timezone is set, UTC otherwise. Defined on the
 /// host; initialize() calls it from the shadow-compiled side.
 GpuTimeZone gpuSessionTimeZone(const core::QueryConfig& config);
+
+/// The device form of one Velox time zone. A named zone's table is built on
+/// first use and cached per device for the life of the process. Defined on the
+/// host.
+GpuTimeZone gpuTimeZone(const tz::TimeZone& zone);
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

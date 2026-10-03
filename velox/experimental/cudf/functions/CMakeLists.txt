@@ -67,9 +67,10 @@ set_target_properties(
   PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
 )
 
-# Host half of the session time zone, where tz::TimeZone and QueryConfig are
-# reachable; initialize() calls it through the POD-only GpuTimeZone.h.
-add_library(velox_cudf_gpu_time_zone GpuTimeZone.cpp)
+# Host half of the time zones, where tz::TimeZone and QueryConfig are
+# reachable; initialize() calls it through the POD-only GpuTimeZone.h and
+# GpuTimeZoneDatabase.h.
+add_library(velox_cudf_gpu_time_zone GpuTimeZone.cpp GpuTimeZoneDatabase.cpp)
 
 target_link_libraries(velox_cudf_gpu_time_zone PRIVATE cudf::cudf velox_core velox_type_tz)
 

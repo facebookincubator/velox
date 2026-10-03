@@ -117,13 +117,17 @@ GpuTimeZone gpuSessionTimeZone(const core::QueryConfig& config) {
   if (zone == nullptr) {
     return GpuTimeZone{};
   }
-  if (zone->tz() == nullptr) {
+  return gpuTimeZone(*zone);
+}
+
+GpuTimeZone gpuTimeZone(const tz::TimeZone& zone) {
+  if (zone.tz() == nullptr) {
     GpuTimeZone fixed;
     fixed.fixedOffset = static_cast<int32_t>(
-        std::chrono::seconds(zone->offset().value()).count());
+        std::chrono::seconds(zone.offset().value()).count());
     return fixed;
   }
-  const auto table = deviceTable(*zone);
+  const auto table = deviceTable(zone);
   GpuTimeZone named;
   named.transitions = table.transitions;
   named.offsets = table.offsets;

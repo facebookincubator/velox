@@ -427,3 +427,27 @@ add_subdirectory(utils)
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
   add_subdirectory(sparksql)
 endif()
+
+# Every Velox time zone looked up on the device and compared with tz::TimeZone
+# on the host. Shadow include path and --diag-error=20011 as for the semantics
+# test, since the lookup is device code.
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_time_zone_database_test
+  SOURCES GpuTimeZoneDatabaseTest.cu
+  LIBS velox_cudf_gpu_time_zone velox_type_tz cudf::cudf
+)
+set_target_properties(
+  velox_cudf_gpu_time_zone_database_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_include_directories(
+  velox_cudf_gpu_time_zone_database_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_time_zone_database_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
