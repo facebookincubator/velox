@@ -256,27 +256,30 @@ class Encoder {
     }
 
     std::unique_ptr<nimble::EncodingSelectionPolicyBase> createImpl(
-        nimble::EncodingType /* encodingType */,
+        nimble::EncodingType parentEncodingType,
         nimble::NestedEncodingIdentifier /* identifier */,
         nimble::DataType type) override {
       // When realNestedSelection_ is set, nested (sub-stream) encodings are
       // chosen by the normal cost-based factory instead of being forced to
       // Trivial -- e.g. so SubIntSplit exercises its diverse per-section
-      // encoders. SubIntSplit is removed from the candidates to avoid infinite
-      // recursion (it is also not registered in EncodingFactory dispatch).
+      // encoders.
+      //
+      // The candidate list comes from nestedEncodingReadFactors, the same
+      // function the writer's policy uses, with parentEncodingType forwarded
+      // rather than discarded. Discarding it meant a SubIntSplit section was
+      // offered eight encodings where the writer offers fifteen, so a test
+      // asking for real nested selection got a narrower encoder than the one
+      // it meant to exercise. The generic rule also drops the parent encoding
+      // from the candidates, which is where the hand-rolled SubIntSplit erase
+      // has gone: for a SubIntSplit parent it removes exactly what the erase
+      // did, and it keeps the recursion bounded the same way.
       if (realNestedSelection_) {
-        auto readFactors = nimble::ManualEncodingSelectionPolicyFactory::
-            defaultEncodingReadFactors();
-        readFactors.erase(
-            std::remove_if(
-                readFactors.begin(),
-                readFactors.end(),
-                [](const auto& factor) {
-                  return factor.first == nimble::EncodingType::SubIntSplit;
-                }),
-            readFactors.end());
         return nimble::ManualEncodingSelectionPolicyFactory{
-            std::move(readFactors), std::nullopt}
+            nimble::nestedEncodingReadFactors(
+                nimble::ManualEncodingSelectionPolicyFactory::
+                    defaultEncodingReadFactors(),
+                parentEncodingType),
+            std::nullopt}
             .createPolicy(type);
       }
       UNIQUE_PTR_FACTORY(
@@ -317,6 +320,33 @@ class Encoder {
             compressionType, realNestedSelection)};
 
     return E::encode(selection, physicalValues, buffer, options);
+  }
+
+  // As encode(), for an encoding whose encode() also takes an algorithm-local
+  // tuning config, such as SubIntSplit's.
+  template <typename Tuning>
+  static std::string_view encodeWithTuning(
+      nimble::Buffer& buffer,
+      const nimble::Vector<T>& values,
+      const Tuning& tuning,
+      CompressionType compressionType = CompressionType::Uncompressed,
+      const nimble::Encoding::Options& options = {},
+      bool realNestedSelection = false) {
+    using physicalType = typename nimble::TypeTraits<T>::physicalType;
+
+    auto physicalValues = std::span<const physicalType>(
+        reinterpret_cast<const physicalType*>(values.data()), values.size());
+    nimble::EncodingSelection<physicalType> selection{
+        {.encodingType = EncodingTypeTraits<E>::encodingType,
+         .compressionPolicyFactory =
+             [compressionType]() {
+               return std::make_unique<TestCompressPolicy>(compressionType);
+             }},
+        nimble::Statistics<physicalType>::create(physicalValues),
+        std::make_unique<TestTrivialEncodingSelectionPolicy<T>>(
+            compressionType, realNestedSelection)};
+
+    return E::encode(selection, physicalValues, buffer, options, tuning);
   }
 
   static std::string_view encodeNullable(

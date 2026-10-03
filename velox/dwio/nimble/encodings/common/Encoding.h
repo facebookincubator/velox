@@ -161,19 +161,30 @@ class Encoding {
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
 
+    /// Rows a stream's costly candidates are first priced on, before
+    /// selection decides whether to price them on the whole stream. Zero,
+    /// the default, prices every candidate on every row. MainlyConstant,
+    /// Dictionary, RLE and Huffman price from distinct values or runs, which
+    /// is expensive on a long near-unique stream that loses to plain bit
+    /// packing anyway; with this set, a costly candidate is only priced on the
+    /// whole stream if its sample cost is within selectionScreenMargin of the
+    /// cheapest.
+    uint32_t selectionScreenRows{0};
+
+    /// How far a costly candidate's sample cost may exceed the cheapest before
+    /// the screen drops it, as a ratio. Only read when selectionScreenRows is
+    /// set.
+    double selectionScreenMargin{1.25};
+
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
-    ///
-    /// A monotone counter's low bits are maximally random viewed absolutely
-    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
-    /// compress them while the delta form is trivial. This mirrors OpenZL,
-    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
-    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
-    /// huge unsigned values.
-    ///
-    /// Delta-encoded streams can only be read sequentially from row 0, so
-    /// skip() and readWithVisitor() reject them. Do not enable for production
-    /// until restatement points are added.
+    /// A monotone counter's low bits are nearly random viewed absolutely but
+    /// nearly constant viewed as deltas, so this can compress cases no
+    /// per-bit-range encoding can. Delta-encoded streams can only be read
+    /// sequentially from row 0: skip() decodes every skipped row, point and
+    /// range reads cost a full scan, and the delta form carries no row frame
+    /// or section transforms. Do not enable for production until restatement
+    /// points are added.
     bool subIntSplitDeltaPreTransform{false};
 
     /// Per-column decoding statistics for timing decompression.

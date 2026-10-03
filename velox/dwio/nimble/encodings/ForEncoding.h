@@ -435,6 +435,47 @@ void ForEncoding<T>::decodeRange(
     }
   };
 
+  // Byte-aligned narrow widths (1, 2 and 4 bits) unpack a 64-bit word at a
+  // time in place of decodeBitStream's per-value refill test; a sliced stream
+  // can start part-way through a byte and keeps the bit-stream path instead.
+  //
+  // The last load is bounded by the end of the packed payload rather than
+  // relying on trailing slack: FOR's packed data is the final field of the
+  // encoding, so nothing guarantees readable bytes past it.
+  const uint8_t* const packedDataEnd =
+      reinterpret_cast<const uint8_t*>(packedData_) + header_.packedDataSize;
+
+  auto decodeNarrowAligned = [&]<uint8_t kBitWidth>(
+                                 const uint8_t* byteCursor,
+                                 uint32_t rowsToDecode,
+                                 auto&& decodeException) {
+    constexpr uint32_t kValuesPerWord = 64 / kBitWidth;
+    constexpr uint64_t kMask = (1ULL << kBitWidth) - 1ULL;
+
+    uint32_t row = 0;
+    while (row + kValuesPerWord <= rowsToDecode &&
+           byteCursor + sizeof(uint64_t) <= packedDataEnd) {
+      uint64_t word;
+      std::memcpy(&word, byteCursor, sizeof(uint64_t));
+      byteCursor += sizeof(uint64_t);
+      for (uint32_t i = 0; i < kValuesPerWord; ++i) {
+        decodeException(row + i, (word >> (i * kBitWidth)) & kMask);
+      }
+      row += kValuesPerWord;
+    }
+
+    if (row < rowsToDecode) {
+      decodeBitStream(
+          byteCursor,
+          0,
+          kBitWidth,
+          rowsToDecode - row,
+          [&](uint32_t i, uint64_t residual) {
+            decodeException(row + i, residual);
+          });
+    }
+  };
+
   uint32_t currentRow = startRow;
   uint32_t outputOffset = 0;
   uint32_t remainingRowCount = rowCount;
@@ -476,6 +517,18 @@ void ForEncoding<T>::decodeRange(
         // Byte-aligned: use typed loads for power-of-two widths, bit-stream
         // otherwise
         switch (frame.bitWidth) {
+          case 1:
+            decodeNarrowAligned.template operator()<1>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
+          case 2:
+            decodeNarrowAligned.template operator()<2>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
+          case 4:
+            decodeNarrowAligned.template operator()<4>(
+                byteCursor, rowsToDecode, decodeException);
+            break;
           case 8:
             for (uint32_t i = 0; i < rowsToDecode; ++i) {
               decodeException(i, byteCursor[i]);
