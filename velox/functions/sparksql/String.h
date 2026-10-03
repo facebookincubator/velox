@@ -23,6 +23,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -1026,6 +1027,15 @@ struct ConvFunction {
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
 
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const int32_t* /*fromBase*/,
+      const int32_t* /*toBase*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
   static bool checkInput(StringView input, int32_t fromBase, int32_t toBase) {
     if (input.empty()) {
       return false;
@@ -1050,8 +1060,10 @@ struct ConvFunction {
     return i;
   }
 
-  static uint64_t
-  toUnsigned(StringView input, int32_t start, int32_t fromBase) {
+  // Parses the valid digits of 'input' as an unsigned 64-bit number. On
+  // overflow, returns the maximum value (-1 as a signed number) or, when ANSI
+  // mode is enabled, throws, as Spark does.
+  uint64_t toUnsigned(StringView input, int32_t start, int32_t fromBase) const {
     uint64_t unsignedValue;
     auto fromStatus = std::from_chars(
         input.data() + start,
@@ -1062,6 +1074,9 @@ struct ConvFunction {
       return 0;
     }
     if (fromStatus.ec == std::errc::result_out_of_range) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Overflow in function conv()");
+      }
       return kMaxUnsignedInt64_;
     }
     return unsignedValue;
@@ -1190,6 +1205,9 @@ struct ConvFunction {
     }
     return true;
   }
+
+ private:
+  bool ansiEnabled_{false};
 };
 
 /// replace(input, replaced) -> varchar
