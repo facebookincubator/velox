@@ -57,7 +57,7 @@ function install_build_prerequisites {
     dnf update -y
   fi
   dnf_install autoconf automake ccache clang compiler-rt \
-    gcc-toolset-12 gcc-toolset-14 git libtool \
+    gcc-toolset-12 gcc-toolset-14 git libtool libunwind-dev \
     llvm ninja-build python3-pip python3-devel wget which
 
   install_uv
