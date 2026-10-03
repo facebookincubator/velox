@@ -371,6 +371,15 @@ target_link_libraries(
   gtest_main
 )
 
+# Host half of the GpuTimeZone device tests, compiled without the shadow
+# include path so tz::TimeZone and Timestamp are reachable. It hands the
+# shadow-compiled test only POD and standard types.
+add_library(velox_cudf_time_zone_reference TimeZoneReference.cpp)
+target_link_libraries(
+  velox_cudf_time_zone_reference
+  PRIVATE velox_cudf_gpu_time_zone velox_core velox_type velox_type_tz
+)
+
 # GPU SFI semantics, on the device. Uses the registrations' shadow include path
 # and --diag-error=20011, so it instantiates the same functions.
 add_executable(velox_cudf_gpu_function_semantics_test GpuFunctionSemanticsTest.cu)
@@ -389,7 +398,14 @@ target_compile_options(
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
 )
-target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
+target_link_libraries(
+  velox_cudf_gpu_function_semantics_test
+  velox_cudf_time_zone_reference
+  cudf::cudf
+  fmt::fmt
+  gtest
+  gtest_main
+)
 add_test(
   NAME velox_cudf_gpu_function_semantics_test
   COMMAND velox_cudf_gpu_function_semantics_test

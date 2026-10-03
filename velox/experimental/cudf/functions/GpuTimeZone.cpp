@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/functions/GpuTimeZone.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -48,6 +49,16 @@ HostTable tabulate(const tzdb::time_zone& zone) {
     const auto offsetSeconds = static_cast<int32_t>(offset.count());
     if (!table.offsets.empty() && table.offsets.back() == offsetSeconds) {
       return;
+    }
+    // toUtc() searches the table by local start time, so each interval must
+    // start later in local time than the one before it: an offset decrease
+    // must not undo more than the interval it ends. The first entry starts at
+    // INT64_MIN and is left out of the comparison.
+    if (table.transitions.size() >= 2) {
+      VELOX_CHECK_GT(
+          begin + offsetSeconds,
+          table.transitions.back() + table.offsets.back(),
+          "Time zone offsets do not ascend in local time");
     }
     table.transitions.push_back(begin);
     table.offsets.push_back(offsetSeconds);

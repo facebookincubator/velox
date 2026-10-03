@@ -81,6 +81,61 @@ struct GpuTimeZone {
     }
     return utcSeconds + offsets[low];
   }
+
+  /// A UTC instant for a local wall-clock time, or the report that the local
+  /// time was skipped.
+  struct UtcInstant {
+    /// Seconds since the epoch. In a gap, the instant the offset in force
+    /// before the change gives, which is also what correct_nonexistent_time()
+    /// followed by to_sys() produces.
+    int64_t utcSeconds;
+    /// False for a local time that an offset increase skipped.
+    /// Timestamp::toGMT() raises a user error there; a device caller does the
+    /// same through VELOX_USER_FAIL, since this header cannot throw.
+    bool exists;
+  };
+
+  /// UTC instant for a local wall-clock time, as Timestamp::toGMT() computes
+  /// it: a local time that an offset decrease repeats maps to the earlier
+  /// instant, and one that an offset increase skipped has exists == false.
+  VELOX_GPU_COMPATIBLE UtcInstant toUtc(int64_t localSeconds) const {
+    if (transitions == nullptr) {
+      return {localSeconds - fixedOffset, true};
+    }
+    // Folded by whole cycles exactly as toLocal() folds the instant, so the
+    // two stay inverse of each other across the table's end.
+    int64_t local = localSeconds;
+    int64_t foldedCycles = 0;
+    if (local >= kTableEndSeconds) {
+      const int64_t cycleStart = kTableEndSeconds - kCycleSeconds;
+      const int64_t sinceCycleStart = (local - cycleStart) % kCycleSeconds;
+      foldedCycles = local - cycleStart - sinceCycleStart;
+      local = cycleStart + sinceCycleStart;
+    }
+    // Last interval whose local start, transitions[i] + offsets[i], is at or
+    // before the local time. Interval 0 starts at INT64_MIN, which must not be
+    // offset, and always qualifies; the search never reads it.
+    int32_t low = 0;
+    int32_t high = numTransitions - 1;
+    while (low < high) {
+      const int32_t middle = low + (high - low + 1) / 2;
+      if (transitions[middle] + offsets[middle] <= local) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    // After an offset decrease the previous interval still covers the local
+    // time; its instant is the earlier one.
+    if (low > 0 && local < transitions[low] + offsets[low - 1]) {
+      return {local - offsets[low - 1] + foldedCycles, true};
+    }
+    // An offset increase ends an interval, in local time, before the next one
+    // starts; local times in between belong to no interval.
+    const bool exists = low == numTransitions - 1 ||
+        local < transitions[low + 1] + offsets[low];
+    return {local - offsets[low] + foldedCycles, exists};
+  }
 };
 
 /// The time zone getTimeZoneFromConfig() selects: the session time zone when

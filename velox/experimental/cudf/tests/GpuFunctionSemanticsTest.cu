@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 #include "velox/experimental/cudf/tests/MapOnDevice.h"
+#include "velox/experimental/cudf/tests/TimeZoneReference.h"
 
 // For FOLLY_ALWAYS_INLINE, which the checked-arithmetic structs carry.
 #include "folly/CPortability.h"
@@ -30,9 +31,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
@@ -117,6 +120,272 @@ TEST(GpuFunctionSemanticsTest, dateFieldsMatchTheCLibrary) {
     EXPECT_EQ(got[i].dayOfYear, expected.tm_yday + 1);
     // tm_wday counts from Sunday; Presto counts Monday as 1 through Sunday 7.
     EXPECT_EQ(got[i].dayOfWeek, expected.tm_wday == 0 ? 7 : expected.tm_wday);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GpuTimeZone: local time back to UTC
+// ---------------------------------------------------------------------------
+
+// Fixed offsets, zones with and without daylight saving time, a 30-minute
+// daylight shift (Lord_Howe), a 45-minute offset (Kathmandu), a zone that
+// abolished daylight saving time (Sao_Paulo), and one that skipped a whole day
+// (Apia).
+const std::vector<std::string> kTimeZones{
+    "UTC",
+    "+05:30",
+    "-08:00",
+    "America/Los_Angeles",
+    "Europe/London",
+    "Asia/Kolkata",
+    "Asia/Kathmandu",
+    "Australia/Lord_Howe",
+    "America/Sao_Paulo",
+    "Pacific/Apia",
+};
+
+// Zones whose daylight saving rules keep running past the end of the device
+// table.
+const std::vector<std::string> kDaylightSavingTimeZones{
+    "America/Los_Angeles",
+    "Australia/Lord_Howe",
+    "Europe/London",
+};
+
+struct LocalToUtc {
+  int64_t utcSeconds;
+  uint8_t exists;
+  // toLocal() of utcSeconds, so the round trip runs on the device too.
+  int64_t backToLocal;
+};
+
+__global__ void localToUtc(
+    const int64_t* locals,
+    LocalToUtc* out,
+    int count,
+    GpuTimeZone zone) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count) {
+    return;
+  }
+  const auto instant = zone.toUtc(locals[i]);
+  out[i].utcSeconds = instant.utcSeconds;
+  out[i].exists = instant.exists ? 1 : 0;
+  out[i].backToLocal = zone.toLocal(instant.utcSeconds);
+}
+
+struct UtcRoundTrip {
+  int64_t localSeconds;
+  int64_t backToUtc;
+  uint8_t exists;
+};
+
+__global__ void utcToLocalAndBack(
+    const int64_t* instants,
+    UtcRoundTrip* out,
+    int count,
+    GpuTimeZone zone) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count) {
+    return;
+  }
+  out[i].localSeconds = zone.toLocal(instants[i]);
+  const auto back = zone.toUtc(out[i].localSeconds);
+  out[i].backToUtc = back.utcSeconds;
+  out[i].exists = back.exists ? 1 : 0;
+}
+
+// Appends `count` deterministic values spread over [from, to).
+void appendSpread(
+    std::vector<int64_t>& values,
+    int64_t from,
+    int64_t to,
+    int32_t count) {
+  uint64_t state = 0x9e37'79b9'7f4a'7c15;
+  const auto span = static_cast<uint64_t>(to - from);
+  for (int32_t i = 0; i < count; ++i) {
+    state = state * 6'364'136'223'846'793'005ULL + 1'442'695'040'888'963'407ULL;
+    values.push_back(from + static_cast<int64_t>((state >> 11) % span));
+  }
+}
+
+// Seconds either side of a point that reach into, and just past, an hour-long
+// gap or overlap.
+const std::vector<int64_t> kEdgeDeltas{-3'600, -1, 0, 1, 3'599};
+
+// Local times either side of the wall-clock reading each offset change ends on
+// and the one it starts on, plus a spread over the whole span.
+std::vector<int64_t> localTimesAroundChanges(
+    const std::vector<OffsetChange>& changes,
+    int32_t fromYear,
+    int32_t toYear,
+    int32_t spreadCount) {
+  std::vector<int64_t> values;
+  for (const auto& change : changes) {
+    for (const int32_t offset : {change.offsetBefore, change.offsetAfter}) {
+      for (const int64_t delta : kEdgeDeltas) {
+        values.push_back(change.utcSeconds + offset + delta);
+      }
+    }
+  }
+  appendSpread(
+      values,
+      yearStartSeconds(fromYear),
+      yearStartSeconds(toYear),
+      spreadCount);
+  return values;
+}
+
+// Instants either side of each offset change, plus a spread over the span.
+std::vector<int64_t> instantsAroundChanges(
+    const std::vector<OffsetChange>& changes,
+    int32_t fromYear,
+    int32_t toYear,
+    int32_t spreadCount) {
+  std::vector<int64_t> values;
+  for (const auto& change : changes) {
+    for (const int64_t delta : kEdgeDeltas) {
+      values.push_back(change.utcSeconds + delta);
+    }
+  }
+  appendSpread(
+      values,
+      yearStartSeconds(fromYear),
+      yearStartSeconds(toYear),
+      spreadCount);
+  return values;
+}
+
+// Runs toUtc() on the device over `locals` and holds each result to
+// Timestamp::toGMT(): the same instant, and a gap exactly where the CPU raises.
+// In a gap the instant must be the one date_add's correction produces. Outside
+// a gap, toLocal() must take the instant back to the local time. Returns the
+// number of gaps, so a caller can check the zone exercised one.
+int32_t assertToUtcMatchesCpu(
+    const std::string& timeZone,
+    const std::vector<int64_t>& locals) {
+  const auto zone = deviceTimeZone(timeZone);
+  const auto got = mapOnDevice<int64_t, LocalToUtc>(
+      locals, [&](const int64_t* in, LocalToUtc* out, int count) {
+        localToUtc<<<(count + 255) / 256, 256>>>(in, out, count, zone);
+      });
+
+  int32_t numGaps{0};
+  for (size_t i = 0; i < locals.size(); ++i) {
+    SCOPED_TRACE(fmt::format("{} local {}", timeZone, locals[i]));
+    const auto expected = cpuToUtc(timeZone, locals[i]);
+    EXPECT_EQ(got[i].exists != 0, expected.has_value());
+    if (expected.has_value()) {
+      EXPECT_EQ(got[i].utcSeconds, *expected);
+      EXPECT_EQ(got[i].backToLocal, locals[i]);
+    } else {
+      ++numGaps;
+      EXPECT_EQ(got[i].utcSeconds, cpuCorrectedToUtc(timeZone, locals[i]));
+    }
+  }
+  return numGaps;
+}
+
+// Runs toLocal() then toUtc() on the device over `instants`. The local time is
+// held to Timestamp::toTimezone(), and the way back must land on the instant
+// itself, except where an offset decrease repeats the local time: there the
+// earlier of the two instants is the answer, so the later one comes back
+// shifted by the decrease. Returns how many instants were shifted, so a caller
+// can check the zone exercised an overlap.
+int32_t assertUtcRoundTrip(
+    const std::string& timeZone,
+    const std::vector<OffsetChange>& changes,
+    const std::vector<int64_t>& instants) {
+  const auto zone = deviceTimeZone(timeZone);
+  const auto got = mapOnDevice<int64_t, UtcRoundTrip>(
+      instants, [&](const int64_t* in, UtcRoundTrip* out, int count) {
+        utcToLocalAndBack<<<(count + 255) / 256, 256>>>(in, out, count, zone);
+      });
+
+  int32_t numShifted{0};
+  for (size_t i = 0; i < instants.size(); ++i) {
+    SCOPED_TRACE(fmt::format("{} instant {}", timeZone, instants[i]));
+    EXPECT_EQ(got[i].localSeconds, cpuToLocal(timeZone, instants[i]));
+    // An instant's own local time always exists.
+    EXPECT_TRUE(got[i].exists != 0);
+
+    int64_t expected = instants[i];
+    for (const auto& change : changes) {
+      const int64_t decrease = change.offsetBefore - change.offsetAfter;
+      if (decrease > 0 && instants[i] >= change.utcSeconds &&
+          instants[i] < change.utcSeconds + decrease) {
+        expected -= decrease;
+        ++numShifted;
+      }
+    }
+    EXPECT_EQ(got[i].backToUtc, expected);
+  }
+  return numShifted;
+}
+
+bool hasIncrease(const std::vector<OffsetChange>& changes) {
+  for (const auto& change : changes) {
+    if (change.offsetAfter > change.offsetBefore) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasDecrease(const std::vector<OffsetChange>& changes) {
+  for (const auto& change : changes) {
+    if (change.offsetAfter < change.offsetBefore) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Every offset change over the years a nanosecond column can hold, which
+// reach back past the zones' local mean time, with a spread over the same
+// span.
+TEST(GpuFunctionSemanticsTest, localTimeToUtcMatchesCpu) {
+  for (const auto& timeZone : kTimeZones) {
+    SCOPED_TRACE(timeZone);
+    const auto changes = offsetChanges(timeZone, 1678, 2262);
+    const auto numGaps = assertToUtcMatchesCpu(
+        timeZone, localTimesAroundChanges(changes, 1678, 2262, 20'000));
+    EXPECT_EQ(numGaps > 0, hasIncrease(changes));
+    const auto numShifted = assertUtcRoundTrip(
+        timeZone, changes, instantsAroundChanges(changes, 1678, 2262, 20'000));
+    EXPECT_EQ(numShifted > 0, hasDecrease(changes));
+  }
+}
+
+// Past 2800 both directions fold by whole 400-year cycles. A local time and
+// the instant it names can fall on different sides of the table's end, so the
+// edges of the end and of later cycle boundaries are covered from both sides.
+TEST(
+    GpuFunctionSemanticsTest,
+    localTimeToUtcMatchesCpuBeyondTheTabulatedRange) {
+  std::vector<int64_t> edges;
+  for (const int64_t cycles : {0, 1, 3}) {
+    const int64_t boundary =
+        GpuTimeZone::kTableEndSeconds + cycles * GpuTimeZone::kCycleSeconds;
+    for (const int64_t delta :
+         {-86'400, -43'200, -3'600, -1, 0, 1, 3'600, 43'200, 86'400}) {
+      edges.push_back(boundary + delta);
+    }
+  }
+
+  for (const auto& timeZone : kDaylightSavingTimeZones) {
+    SCOPED_TRACE(timeZone);
+    const auto changes = offsetChanges(timeZone, 2700, 4100);
+    ASSERT_TRUE(hasIncrease(changes));
+    ASSERT_TRUE(hasDecrease(changes));
+
+    auto locals = localTimesAroundChanges(changes, 2700, 4100, 5'000);
+    locals.insert(locals.end(), edges.begin(), edges.end());
+    EXPECT_GT(assertToUtcMatchesCpu(timeZone, locals), 0);
+
+    auto instants = instantsAroundChanges(changes, 2700, 4100, 5'000);
+    instants.insert(instants.end(), edges.begin(), edges.end());
+    EXPECT_GT(assertUtcRoundTrip(timeZone, changes, instants), 0);
   }
 }
 
