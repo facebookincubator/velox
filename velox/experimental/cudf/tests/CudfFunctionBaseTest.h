@@ -72,8 +72,11 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         input, pool_.get(), stream, mr);
     auto optimized =
         expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator =
-        createCudfExpression(optimized, input->rowType(), pool_.get());
+    auto filterEvaluator = createCudfExpression(
+        optimized,
+        input->rowType(),
+        pool_.get(),
+        execCtx_.queryCtx()->queryConfig());
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());
