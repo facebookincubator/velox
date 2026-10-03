@@ -186,9 +186,10 @@ class EncodingSelectionPolicyBase {
 
   virtual ~EncodingSelectionPolicyBase() = default;
 
-  /// Requests logical floating-point selection for a nullable data child.
-  /// Defaults to physical selection to preserve existing nullable layouts.
-  virtual bool useLogicalTypeForNullable() const {
+  /// Requests logical floating-point types for nested encoding selection.
+  /// Defaults to physical selection to preserve existing layouts.
+  /// The selected encoding determines which type is serialized.
+  virtual bool useLogicalTypeForNestedEncoding() const {
     return false;
   }
 
@@ -230,16 +231,18 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) = 0;
 
-  /// Selects from a representative sample of numRows values. Policies that
-  /// project costs can override this; other policies retain their selection
-  /// behavior without presenting a sample-sized estimate as a full size.
-  virtual EncodingSelectionResult selectFromSample(
-      std::span<const physicalType> values,
-      uint32_t numRows,
+  /// Selects an encoding from sampleValues representing a stream containing
+  /// numTotalRows values. The sample row count is sampleValues.size(). Policies
+  /// that project costs can override this; other policies retain their
+  /// selection behavior without presenting a sample-sized estimate as a full
+  /// size.
+  virtual EncodingSelectionResult select(
+      std::span<const physicalType> sampleValues,
+      uint32_t numTotalRows,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) {
-    auto result = select(values, statistics, options);
-    if (numRows != values.size()) {
+    auto result = select(sampleValues, statistics, options);
+    if (numTotalRows != sampleValues.size()) {
       result.estimatedSize.reset();
     }
     return result;
@@ -277,7 +280,7 @@ std::string_view EncodingSelection<T>::encodeNested(
   if constexpr (isFloatingPointType<LogicalT>()) {
     static_assert(
         std::is_same_v<NestedT, typename TypeTraits<LogicalT>::physicalType>);
-    useLogicalType = nestedPolicy->useLogicalTypeForNullable();
+    useLogicalType = nestedPolicy->useLogicalTypeForNestedEncoding();
     if (useLogicalType) {
       nestedPolicy = selectionPolicy_->template create<LogicalT>(
           encodingType(), nestedEncodingIdentifier);
@@ -291,6 +294,11 @@ std::string_view EncodingSelection<T>::encodeNested(
         static_cast<EncodingSelectionPolicy<NestedT>*>(nestedPolicy.get())
             ->select(values, statistics, options);
   }
+
+  NIMBLE_CHECK_NE(
+      selectionResult.encodingType,
+      EncodingType::Nullable,
+      "EncodingSelectionPolicy::select() must not return Nullable.");
 
   EncodingSelection<NestedT> nestedSelection{
       std::move(selectionResult),

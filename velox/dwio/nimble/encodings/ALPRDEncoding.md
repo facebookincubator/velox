@@ -12,8 +12,9 @@ does not contain ALP blocks or switch between the two algorithms internally.
 
 ## Scope and selection
 
-ALP_RD supports explicit layouts and opt-in manual selection, ordinary Nimble
-file reads, and the generic visitor path. It has no encoding view yet.
+ALP_RD supports explicit layouts, opt-in automatic selection through the manual
+policy, ordinary Nimble file reads, and the generic visitor path. It has no
+encoding view yet.
 
 To enable automatic selection, add `ALPRD=<readFactor>` to the manual policy's
 candidate configuration. ALP_RD is absent from production default candidates.
@@ -37,6 +38,12 @@ Dictionary alphabets, RLE run values, and MainlyConstant uncommon values can
 select ALP_RD through their inherited or explicitly overridden candidates.
 Parent estimation includes that floating-point child choice. Ancestor encoding
 filters apply as usual.
+
+The policy hook `useLogicalTypeForNestedEncoding()` requests logical
+floating-point types for nested encoding selection and the corresponding
+container cost estimates. Its default is `false`. The selected encoding
+determines which type is serialized. NULL handling remains the responsibility
+of the enclosing Nullable wrapper.
 
 A Nullable wrapper retains physical selection and type tags by default. When
 its policy enables ALP_RD, the data child uses logical floating-point selection
@@ -137,19 +144,56 @@ options and FixedBitWidth's seven padding bytes. Estimation and encoding share
 this training routine. Equal final costs prefer narrower low parts; equal
 scalar layouts within a split prefer the smaller dictionary.
 
+### Size estimation from samples
+
+The sample-based selection and size-estimation APIs distinguish `sampleValues`
+from `numTotalRows`. The former contains the observed values; its size is the
+sample row count. The latter is the total row count of the stream being
+estimated. For example, 1,024 sampled values can represent a stream containing
+1,000,000 values. The sample may also contain the full input.
+
+For codecs using the generic extrapolation path, the estimate is:
+
+```text
+numSampleRows = sampleValues.size()
+estimatedSize = fullPrefixSize
+    + (sampleSizeBytes - samplePrefixSize) * numTotalRows / numSampleRows
+```
+
+Here `sampleSizeBytes` is the sample's estimated encoded size in bytes. The
+outer prefix is counted once, using the full row count, since its varint length
+may change with that count. Existing composite estimates on this path scale
+their inner metadata together with the payload as a conservative heuristic.
+Varint retains its estimator's fixed-prefix convention for policy scoring;
+the selected child's size is then corrected for the actual prefix option.
+
+Codec-specific models handle costs that do not follow this formula. Constant
+stores its value once and only adjusts the prefix. Trivial, FixedBitWidth and
+SimdForBitpack use the total row count with sample statistics. ALP uses its own
+sample-based estimator. Selected FixedBitWidth child sizes also include the
+padding required by the serialized representation.
+
+ALP_RD estimates its four children separately. Codes and right parts each
+represent `numTotalRows` values. The two exception streams each represent
+`ceil(sampleExceptions * numTotalRows / numSampleRows)` values; their samples
+contain only the observed exceptions. When no exceptions are sampled, the
+estimate omits these two streams. The ALP_RD prefix, dictionary, exception count
+and child-length varints are added once to the selected child estimates.
+
 Sampling, the bounded shortlist and existing composite child estimates remain
-heuristics. Scalar estimates project observed ranges and frequencies to the
-full row count; composite estimates project sampled sizes. Floating-point
-container estimates sample their derived value stream and retain the existing
-heuristics for integer or boolean sibling streams. The manual policy uses one
-level of child-policy lookahead: sampled child selection uses existing container
-heuristics instead of recursively training every possible encoding tree. The
-writer selects again on the actual child input at each level. Generic compression
-is not predicted, matching Nimble's existing in-memory selection objective.
+heuristics. Floating-point container estimates sample their derived value
+stream and retain the existing heuristics for integer or boolean sibling
+streams. The manual policy uses one level of child-policy lookahead: sampled
+child selection uses existing container heuristics instead of recursively
+training every possible encoding tree. The writer selects again on the actual
+child input at each level. Generic compression is not predicted, matching
+Nimble's existing in-memory selection objective.
 Neither training nor automatic selection guarantees the smallest serialized payload.
 The full input is encoded against the selected dictionary; unsampled keys
 become exceptions. Readers depend only on the serialized parameters and
 reconstruction rules, so training may evolve without changing the format.
+
+### Layout replay
 
 Layout capture records the ALP_RD ID and four child slots, with absent layouts
 for the two exception children when there are no exceptions. These slots let

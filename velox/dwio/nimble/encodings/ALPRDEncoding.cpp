@@ -393,14 +393,14 @@ ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
 
 template <typename PhysicalType>
 std::optional<uint64_t> ALPRDEncodingBase::estimateSize(
-    std::span<const PhysicalType> values,
-    uint32_t numRows,
+    std::span<const PhysicalType> sampleValues,
+    uint32_t numTotalRows,
     const Encoding::Options& options,
     EncodingSelectionPolicyBase* policy) {
-  if (values.empty()) {
+  if (sampleValues.empty()) {
     return std::nullopt;
   }
-  return trainSplit(values, numRows, options, policy).size;
+  return trainSplit(sampleValues, numTotalRows, options, policy).size;
 }
 
 template ALPRDEncodingBase::Parameters

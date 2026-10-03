@@ -162,33 +162,40 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
 template <typename T>
 std::optional<uint64_t> EncodingSizeEstimation<T>::estimateSize(
     EncodingType encodingType,
-    std::span<const physicalType> values,
-    uint32_t numRows,
+    std::span<const physicalType> sampleValues,
+    uint32_t numTotalRows,
     const Statistics<physicalType>& statistics,
     const Encoding::Options& options,
     EncodingSelectionPolicyBase* policy) {
   if constexpr (isFloatingPointType<T>()) {
     if (encodingType == EncodingType::ALPRD) {
-      return ALPRDEncodingBase::estimateSize(values, numRows, options, policy);
+      return ALPRDEncodingBase::estimateSize(
+          sampleValues, numTotalRows, options, policy);
     }
     if (policy != nullptr) {
       if (auto size = estimateNestedFloatingPointSize<T>(
-              encodingType, values, numRows, statistics, *policy, options)) {
+              encodingType,
+              sampleValues,
+              numTotalRows,
+              statistics,
+              *policy,
+              options)) {
         return size;
       }
     }
   }
-  if (numRows == values.size()) {
-    return estimateSize(encodingType, values, statistics, options);
+  if (numTotalRows == sampleValues.size()) {
+    return estimateSize(encodingType, sampleValues, statistics, options);
   }
-  NIMBLE_CHECK(!values.empty(), "Size estimation requires a non-empty sample.");
-  NIMBLE_CHECK_LE(values.size(), numRows);
+  NIMBLE_CHECK(
+      !sampleValues.empty(), "Size estimation requires a non-empty sample.");
+  NIMBLE_CHECK_LE(sampleValues.size(), numTotalRows);
   const auto prefixSize =
-      EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
-  const auto samplePrefixSize =
-      EncodingPrefix::serializedSize(values.size(), options.useVarintRowCount);
+      EncodingPrefix::serializedSize(numTotalRows, options.useVarintRowCount);
+  const auto samplePrefixSize = EncodingPrefix::serializedSize(
+      sampleValues.size(), options.useVarintRowCount);
   if (encodingType == EncodingType::Constant) {
-    auto size = estimateSize(encodingType, values, statistics, options);
+    auto size = estimateSize(encodingType, sampleValues, statistics, options);
     return size ? std::optional<uint64_t>{*size - samplePrefixSize + prefixSize}
                 : std::nullopt;
   }
@@ -196,21 +203,32 @@ std::optional<uint64_t> EncodingSizeEstimation<T>::estimateSize(
     if (encodingType == EncodingType::Trivial ||
         encodingType == EncodingType::FixedBitWidth ||
         encodingType == EncodingType::SimdForBitpack) {
-      return estimateSize(encodingType, numRows, statistics, options);
+      return estimateSize(encodingType, numTotalRows, statistics, options);
     }
   }
   if constexpr (isFloatingPointType<T>()) {
     if (encodingType == EncodingType::ALP) {
-      return ALPEncoding<T>::estimateSizeFromSample(numRows, values, options);
+      return ALPEncoding<T>::estimateSizeFromSample(
+          numTotalRows, sampleValues, options);
     }
   }
-  auto size = estimateSize(encodingType, values, statistics, options);
+  auto size = estimateSize(encodingType, sampleValues, statistics, options);
   if (!size) {
     return std::nullopt;
   }
+  // Project the sampled bytes after the outer prefix to the full row count:
+  //
+  //   estimatedSize = fullPrefixSize
+  //       + (sampleSizeBytes - samplePrefixSize)
+  //           * numTotalRows / numSampleRows
+  //
+  // Here numSampleRows is sampleValues.size(). Count the outer prefix once;
+  // its varint length can depend on the row count.
+  //
   // Existing composite estimates are heuristics. Scaling their inner metadata
   // along with the payload is conservative; it avoids assuming a different
   // child codec merely because the sample is small.
+  //
   // Varint's existing estimator uses a fixed prefix. Keep that convention for
   // policy scoring, then correct it for the selected child's serialized size.
   const auto estimatedPrefixSize = encodingType == EncodingType::Varint
@@ -220,31 +238,35 @@ std::optional<uint64_t> EncodingSizeEstimation<T>::estimateSize(
       ? EncodingPrefix::kFixedPrefixSize
       : samplePrefixSize;
   return estimatedPrefixSize +
-      (*size - std::min<uint64_t>(*size, estimatedSamplePrefixSize)) * numRows /
-      values.size();
+      (*size - std::min<uint64_t>(*size, estimatedSamplePrefixSize)) *
+      numTotalRows / sampleValues.size();
 }
 
 template <typename T>
 uint64_t EncodingSizeEstimation<T>::estimateSelectedSize(
     EncodingSelectionPolicyBase& policy,
-    std::span<const physicalType> values,
-    uint32_t numRows,
+    std::span<const physicalType> sampleValues,
+    uint32_t numTotalRows,
     const Encoding::Options& options) {
-  const auto statistics = Statistics<physicalType>::create(values);
-  auto result =
-      static_cast<EncodingSelectionPolicy<T>&>(policy).selectFromSample(
-          values, numRows, statistics, options);
+  const auto statistics = Statistics<physicalType>::create(sampleValues);
+  auto result = static_cast<EncodingSelectionPolicy<T>&>(policy).select(
+      sampleValues, numTotalRows, statistics, options);
   auto size = result.estimatedSize;
   if (!size) {
     size = estimateSize(
-        result.encodingType, values, numRows, statistics, options, &policy);
+        result.encodingType,
+        sampleValues,
+        numTotalRows,
+        statistics,
+        options,
+        &policy);
   }
   const auto prefixSize =
-      EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
+      EncodingPrefix::serializedSize(numTotalRows, options.useVarintRowCount);
   if (!size) {
     // Custom policies can select codecs without estimators. Keep their layout
     // binding and use an uncompressed size as the training approximation.
-    return prefixSize + 1 + uint64_t{numRows} * sizeof(physicalType);
+    return prefixSize + 1 + uint64_t{numTotalRows} * sizeof(physicalType);
   }
   if (result.encodingType == EncodingType::Trivial ||
       result.encodingType == EncodingType::FixedBitWidth ||
