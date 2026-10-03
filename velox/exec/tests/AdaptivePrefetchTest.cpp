@@ -16,7 +16,10 @@
 
 #include "velox/exec/AdaptivePrefetch.h"
 #include <gtest/gtest.h>
+#include <functional>
+#include <limits>
 #include <thread>
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -46,6 +49,44 @@ TEST(AdaptivePrefetchTest, fastIterationsProduceHighLookAhead) {
   EXPECT_GE(lookAhead, 4);
   EXPECT_LE(lookAhead, 32);
 }
+
+#ifndef NDEBUG
+TEST(AdaptivePrefetchTest, measuredLookAhead) {
+  common::testutil::TestValue::enable();
+  const struct {
+    std::chrono::nanoseconds::rep elapsedNs;
+    int32_t lookAhead;
+  } testCases[] = {
+      {0, 32},
+      {-1, 32},
+      {1, 32},
+      {200, 32},
+      {201, 31},
+      {400, 16},
+      {1'600, 4},
+      {1'601, 4},
+      {std::numeric_limits<std::chrono::nanoseconds::rep>::max(), 4},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.elapsedNs);
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::AdaptivePrefetch::computeLookAhead",
+        std::function<void(std::chrono::nanoseconds::rep*)>(
+            [&](auto* elapsedNs) { *elapsedNs = testCase.elapsedNs; }));
+    for (int32_t numIterations : {4, 5, 16, 17, 20, 48, 49, 64}) {
+      SCOPED_TRACE(numIterations);
+      AdaptivePrefetch prefetch(numIterations);
+      for (int32_t i = 0; i < numIterations; ++i) {
+        const auto lookAhead = i < 16 ? 4 : testCase.lookAhead;
+        EXPECT_EQ(
+            prefetch.lookAhead(),
+            i + lookAhead < numIterations ? lookAhead : 0);
+      }
+    }
+  }
+  common::testutil::TestValue::disable();
+}
+#endif
 
 TEST(AdaptivePrefetchTest, returnsZeroNearEnd) {
   AdaptivePrefetch prefetch(20);

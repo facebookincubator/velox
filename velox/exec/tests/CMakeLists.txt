@@ -464,7 +464,7 @@ add_test(
   COMMAND velox_adaptive_prefetch_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
+target_link_libraries(velox_adaptive_prefetch_test velox_test_util GTest::gtest GTest::gtest_main)
 
 add_executable(velox_output_transport_registry_test OutputTransportRegistryTest.cpp)
 add_test(
