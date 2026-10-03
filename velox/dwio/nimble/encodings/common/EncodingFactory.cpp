@@ -30,6 +30,11 @@
 #include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+// FrequencyPartition is experimental and its format may still change, so only
+// builds with NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS write or decode it.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#endif
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -211,6 +216,13 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::FOR: {
       RETURN_ENCODING_BY_INTEGER_TYPE(ForEncoding, dataType);
     }
+    // Experimental: decoded only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // builds.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FrequencyPartition: {
+      RETURN_ENCODING_BY_NON_BOOL_TYPE(FrequencyPartitionEncoding, dataType);
+    }
+#endif
     default: {
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType:{} -- garbage input?",
@@ -397,6 +409,19 @@ std::string_view EncodingFactory::encode(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "MainlyConstant encoding should not be selected for bool data types.");
     }
+    // Experimental: written only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // builds.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FrequencyPartition: {
+      if constexpr (std::is_same<T, bool>::value) {
+        NIMBLE_INCOMPATIBLE_ENCODING(
+            "FrequencyPartition encoding should not be selected for bool data types.");
+      } else {
+        return FrequencyPartitionEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+    }
+#endif
     case EncodingType::SparseBool: {
       if constexpr (std::is_same<T, bool>::value) {
         return SparseBoolEncoding::encode(
@@ -482,6 +507,13 @@ std::string_view EncodingFactory::encode(
     }
     case EncodingType::SimdForBitpack: {
       if constexpr (isIntegralType<physicalType>()) {
+        if (castedValues.empty()) {
+          // A replayed layout can land SimdForBitpack on an empty stream (e.g.
+          // a slice's nested stream). Rejected like Dictionary above, so the
+          // caller retries without the captured layout.
+          NIMBLE_INCOMPATIBLE_ENCODING(
+              "SimdForBitpack encoding cannot be used with 0 rows.");
+        }
         return SimdForBitpackEncoding<T>::encode(
             selection, castedValues, buffer, options);
       }
