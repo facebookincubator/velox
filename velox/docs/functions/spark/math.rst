@@ -71,6 +71,68 @@ Mathematical Functions
 
     Returns the string representation of the long value ``x`` represented in binary.
 
+.. spark:function:: bround(x, d) -> [same as x]
+
+    Rounds ``x`` to ``d`` decimal places, resolving exact halfway cases toward
+    the even neighbor (HALF_EVEN). Negative ``d`` rounds to a multiple of
+    ``10 ** -d``. Omitting ``d`` is equivalent to specifying zero.
+
+    Accepts TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, and DECIMAL.
+    The scale must be a constant INTEGER expression in the inclusive interval
+    ``[-400, 400]``, or NULL. A null scale produces null. At supported scales,
+    a null input produces null. Integral and floating-point inputs retain their type.
+    Integral overflow wraps in legacy mode and raises a user error when
+    the Velox query setting ``spark.ansi_enabled`` is true.
+
+    Integrations may use ``bround(x, d, ansiEnabled)`` for TINYINT, SMALLINT,
+    INTEGER, and BIGINT inputs. The third argument is a constant BOOLEAN
+    carrying the resolved expression's ANSI mode. It overrides the query
+    setting so that analyzed or cached plans retain their original overflow
+    semantics when the session setting changes. Scale and NULL-input behavior
+    are the same as the two-argument form. This is a native integration overload,
+    not an additional Spark SQL user-facing signature; it is not available for
+    REAL, DOUBLE, or DECIMAL inputs.
+
+    Floating-point rounding uses the shortest decimal representation of the
+    value, rather than rounding a binary multiplication by a power of ten.
+    REAL values are widened to DOUBLE before this conversion, as in Spark.
+    NaN and infinities are unchanged; rounded zero is positive zero.
+
+    Floating-point rounding at nonzero scales targets Spark running on JDK21.
+    JDK17 can select a longer decimal representation and produce different
+    BROUND results for the same input bits. Integrations running Spark on JDK17
+    must fall back for REAL and DOUBLE inputs at nonzero scales rather than
+    assume cross-JDK equivalence. Scale zero, including the unary form, does
+    not use decimal conversion and is supported on both JDK17 and JDK21.
+    This distinction concerns the runtime JDK, not the Java bytecode target.
+    Integral and DECIMAL inputs do not use floating-point decimal conversion.
+
+    DECIMAL uses the ``decimal_bround`` special form with an explicitly
+    resolved result type. For an input DECIMAL(p, s), nonnegative ``d`` gives
+    scale ``min(s, d)`` and precision ``min(p - s + 1 + min(s, d), 38)``.
+    Negative ``d`` gives scale zero and precision
+    ``min(max(p - s + 1, -d + 1), 38)``. Rounding beyond the result's decimal
+    range raises a user error.
+
+    The interval above is an explicit native support limit, not a universal
+    Spark scale cutoff. Non-null scales outside it are rejected during
+    primitive function initialization or decimal expression construction,
+    including cases that would numerically round to zero or be unchanged.
+    Integrations must fall back outside this interval to preserve Spark's
+    scale-arithmetic errors and interpreter/codegen differences, rather than
+    clamp the scale or substitute a native numerical result.
+
+    See the `Spark 4.1.1 rounding expressions
+    <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_
+    for the reference semantics.
+
+    ::
+
+        SELECT bround(CAST(2.5 AS DOUBLE));     -- 2.0
+        SELECT bround(CAST(3.5 AS DOUBLE));     -- 4.0
+        SELECT bround(CAST(2.55 AS DOUBLE), 1); -- 2.6
+        SELECT bround(25, -1);  -- 20
+
 .. spark:function:: cbrt(x) -> double
 
     Returns the cube root of ``x``.
