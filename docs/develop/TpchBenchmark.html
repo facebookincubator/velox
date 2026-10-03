@@ -124,6 +124,10 @@ library so it is possible other Cloud storage APIs could also be affected.</em><
 grows.</p></li>
 <li><p><em>max_coalesce_distance_bytes</em> - Maximum gap bytes between data that can be
 coalesced. Larger may mean more fetched data but at greater bytes/sec.</p></li>
+<li><p><em>query_configs</em> - Semicolon-separated Velox query config overrides applied to
+every query, e.g.
+<code class="docutils literal notranslate"><span class="pre">--query_configs=&quot;max_split_preload_per_driver=10;hash_probe_bloom_filter_pushdown_max_size=16777216&quot;</span></code>.
+The keys are the session-level configs in <code class="docutils literal notranslate"><span class="pre">velox/core/QueryConfig.h</span></code>.</p></li>
 </ul>
 </section>
 <section id="top-optimization-recommendations">
@@ -165,11 +169,7 @@ coalesced. Larger may mean more fetched data but at greater bytes/sec.</p></li>
 <td><p>Best is 1</p></td>
 <td><p>Best is 1</p></td>
 </tr>
-<tr class="row-odd"><td><p>split_preload_per_driver</p></td>
-<td><p>Best is 2</p></td>
-<td><p>Best is 2</p></td>
-</tr>
-<tr class="row-even"><td><p>cache_prefetch_min_pct</p></td>
+<tr class="row-odd"><td><p>cache_prefetch_min_pct</p></td>
 <td><p>Best is 80</p></td>
 <td><p>Best is 80</p></td>
 </tr>
