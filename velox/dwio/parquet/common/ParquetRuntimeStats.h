@@ -17,8 +17,6 @@
 #pragma once
 
 #include <string_view>
-#include <utility>
-
 #include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::velox::parquet {
@@ -30,18 +28,20 @@ struct ParquetRuntimeStats {
       "pageLoadTimeNanos";
 
   /// Describes the page-load-time runtime metric.
-  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
-      kPageLoadTimeNsMetric = {kPageLoadTimeNs, RuntimeCounter::Unit::kNanos};
+  inline static constexpr RuntimeMetricDefinition kPageLoadTimeNsMetric = {
+      kPageLoadTimeNs,
+      RuntimeCounter::Unit::kNanos,
+      RuntimeCounter::AggregationKind::kPerOperator};
 
   /// Estimated memory used by the deserialized Parquet footer in bytes.
   inline static constexpr std::string_view kFooterEstimatedBytes =
       "footerEstimatedBytes";
 
   /// Describes the estimated-footer-memory runtime metric.
-  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
-      kFooterEstimatedBytesMetric = {
-          kFooterEstimatedBytes,
-          RuntimeCounter::Unit::kBytes};
+  inline static constexpr RuntimeMetricDefinition kFooterEstimatedBytesMetric =
+      {kFooterEstimatedBytes,
+       RuntimeCounter::Unit::kBytes,
+       RuntimeCounter::AggregationKind::kPerEvent};
 };
 
 } // namespace facebook::velox::parquet

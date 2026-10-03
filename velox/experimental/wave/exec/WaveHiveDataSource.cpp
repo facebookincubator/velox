@@ -148,7 +148,9 @@ WaveHiveDataSource::getRuntimeStats() {
   auto map = runtimeStats_.toRuntimeMetricMap();
   for (const auto& [name, counter] : splitReaderStats_) {
     map.insert(
-        std::make_pair(name, RuntimeMetric(counter.value, counter.unit)));
+        std::make_pair(
+            name,
+            RuntimeMetric(counter.value, counter.unit, counter.aggregation)));
   }
   return map;
 }
