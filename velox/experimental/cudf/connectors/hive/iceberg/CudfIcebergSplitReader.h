@@ -53,6 +53,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   CudfIcebergSplitReader(
       std::shared_ptr<CudfHiveConnectorSplit> split,
       std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
+      std::unordered_set<std::string> partitionColumnNames,
       std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
       const RowTypePtr& outputType,
       const std::vector<std::string>& readColumnNames,
@@ -161,16 +162,19 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   //    Synthesized from split metadata (e.g. $file_size). Recorded for
   //    post-read injection as a constant.
   //
-  // 2. Partition columns (Hive-migrated tables):
+  // 2. Partition columns (Hive-migrated tables) indicated by `kPartitionKey`:
   //    Value comes from the split's `partitionKeys`, not the data file.
   //    Recorded for post-read injection as a constant.
   //
   // 3. Columns missing from the file (schema evolution):
-  //    Newly added columns absent from `fileColumnNames_`. Recorded for
-  //    post-read injection as a typed NULL.
+  //    Other columns absent from `fileColumnNames_`. Recorded for post-read
+  //    injection as a typed NULL.
   //
   // 4. Columns present in the file:
   //    Left in `readColumnNames_` for the parquet reader.
+  //
+  // A regular column sharing a partition
+  // field's name falls into (3-4). Only (2) reads `partitionKeys`.
   //
   // Injected names (1-3) are removed from `readColumnNames_`. `outputIndex` is
   // the column's position in the pre-strip `readColumnNames_` layout (output,
@@ -227,6 +231,10 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   bool deferEverything() const;
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
+
+  // Output and filter-only columns whose handles are `kPartitionKey`.
+  const std::unordered_set<std::string> partitionColumnNames_;
+
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
   // Subfield filters the pushed AST was built from, used to fold the filter on

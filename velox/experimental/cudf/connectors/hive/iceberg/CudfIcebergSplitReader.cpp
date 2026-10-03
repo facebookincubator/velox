@@ -86,6 +86,7 @@ bool shouldSkipBySequenceNumber(
 CudfIcebergSplitReader::CudfIcebergSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
+    std::unordered_set<std::string> partitionColumnNames,
     std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
     const RowTypePtr& outputType,
     const std::vector<std::string>& readColumnNames,
@@ -111,6 +112,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           ioStats,
           subfieldFilterAst),
       icebergSplit_(std::move(icebergSplit)),
+      partitionColumnNames_(std::move(partitionColumnNames)),
       hiveConfig_(hiveConfig),
       subfieldFilters_(subfieldFilters) {
   VELOX_CHECK_NOT_NULL(subfieldFilters_);
@@ -798,8 +800,10 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
   for (const auto& deleteFile : equalityDeleteFiles_) {
     for (size_t i = 0; i < deleteFile.keyNames.size(); ++i) {
       const auto& columnName = deleteFile.keyNames[i];
-      if (icebergSplit_->partitionKeys.contains(columnName) or
-          not fileColumnNames_.contains(columnName)) {
+      // A physical key column is read even if a partition field shares its
+      // name. Keys absent from the file, including Hive partition columns,
+      // are unsupported.
+      if (not fileColumnNames_.contains(columnName)) {
         VELOX_NYI(
             "Equality deletes on partition columns or columns "
             "missing from the data file are not yet supported: {}",
@@ -892,18 +896,20 @@ void CudfIcebergSplitReader::adaptColumns() {
         iter != split_->infoColumns.end()) {
       injectedColumns_.push_back({i, fieldName, iter->second, veloxType});
       injectedNames.insert(fieldName);
-    } else if (auto it = icebergSplit_->partitionKeys.find(fieldName);
-               it != icebergSplit_->partitionKeys.end()) {
-      // Partition columns: Hive migrated table. In Hive-written data
-      // files, partition column values are stored in partition metadata
-      // rather than in the data file itself, following Hive's
-      // partitioning convention.
-      injectedColumns_.push_back({i, fieldName, it->second, veloxType});
-      injectedNames.insert(fieldName);
     } else if (not fileColumnNames_.contains(fieldName)) {
-      // Schema evolution: Column was added after the data file was written
-      // and doesn't exist in older data files.
-      injectedColumns_.push_back({i, fieldName, std::nullopt, veloxType});
+      // Hive-migrated partition columns are absent from data files and take
+      // the split's partition value. Any other missing column was added after
+      // the file was written and reads as NULL, even if a transformed
+      // partition field shares its name.
+      auto partitionValue = std::optional<std::string>{};
+      if (partitionColumnNames_.contains(fieldName)) {
+        if (const auto partitionIter =
+                icebergSplit_->partitionKeys.find(fieldName);
+            partitionIter != icebergSplit_->partitionKeys.end()) {
+          partitionValue = partitionIter->second;
+        }
+      }
+      injectedColumns_.push_back({i, fieldName, partitionValue, veloxType});
       injectedNames.insert(fieldName);
     }
   }
