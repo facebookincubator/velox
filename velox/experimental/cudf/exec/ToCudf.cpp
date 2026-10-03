@@ -29,6 +29,7 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
+#include "velox/common/base/Exceptions.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -411,8 +412,22 @@ void CudfConfig::initialize(
     outputMemoryResource = config[kCudfOutputMr];
   }
   if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
-    batchSizeMinThreshold =
+    const auto targetRows =
         folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+    VELOX_USER_CHECK_GT(
+        targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+    batchSizeMinThreshold = targetRows;
+  }
+  if (config.find(kCudfBatchSizeMinBytes) != config.end()) {
+    // tryTo so that a negative or malformed value is a user error, not a
+    // folly::ConversionError.
+    const auto& value = config[kCudfBatchSizeMinBytes];
+    const auto targetBytes = folly::tryTo<uint64_t>(value);
+    VELOX_USER_CHECK(
+        targetBytes.hasValue() && targetBytes.value() > 0,
+        "cuDF BatchConcat minimum byte target must be a positive integer: {}",
+        value);
+    batchSizeMinBytes = targetBytes.value();
   }
   if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
     batchSizeMaxThreshold =
