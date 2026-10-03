@@ -271,65 +271,6 @@ TEST(FilterTest, createHugeintValuesEmpty) {
   EXPECT_FALSE(filter->testInt128(0));
 }
 
-TEST(FilterTest, mergeWithHugeintValuesUsingHashTable) {
-  auto valueAt = [](uint64_t highBits) {
-    return HugeInt::build(highBits, /*lowBits=*/42);
-  };
-
-  const auto value1 = valueAt(1);
-  const auto value2 = valueAt(2);
-  const auto value3 = valueAt(3);
-  const auto value4 = valueAt(4);
-
-  auto test =
-      [](const Filter& left, const Filter& right, const Filter& expected) {
-        auto merged = left.mergeWith(&right);
-        ASSERT_TRUE(merged->testingEquals(expected));
-        auto reverseMerged = right.mergeWith(&left);
-        ASSERT_TRUE(reverseMerged->testingEquals(expected));
-      };
-
-  {
-    SCOPED_TRACE("HugeintValuesUsingHashTable");
-    auto left = createHugeintValues({value1, value2, value3}, true);
-    auto right = createHugeintValues({value2, value4}, false);
-    auto expected = createHugeintValues({value2}, false);
-    test(*left, *right, *expected);
-  }
-
-  {
-    SCOPED_TRACE("HugeintRange");
-    auto values = createHugeintValues({value1, value2, value3}, true);
-    auto range = betweenHugeint(value2, value4, true);
-    auto expected = createHugeintValues({value2, value3}, true);
-    test(*values, *range, *expected);
-  }
-
-  {
-    SCOPED_TRACE("HugeintRange intersection");
-    auto left = betweenHugeint(value1, value3, true);
-    auto right = betweenHugeint(value2, value4, false);
-    auto expected = betweenHugeint(value2, value3, false);
-    test(*left, *right, *expected);
-  }
-
-  {
-    SCOPED_TRACE("Disjoint ranges with nulls");
-    auto left = betweenHugeint(value1, value1, true);
-    auto right = betweenHugeint(value2, value4, true);
-    IsNull expected;
-    test(*left, *right, expected);
-  }
-
-  {
-    SCOPED_TRACE("Disjoint values with nulls");
-    auto left = createHugeintValues({value1}, true);
-    auto right = createHugeintValues({value2}, true);
-    IsNull expected;
-    test(*left, *right, expected);
-  }
-}
-
 TEST(FilterTest, negatedBigintRange) {
   auto filter = notEqual(1, false);
   EXPECT_FALSE(filter->testNull());
@@ -1579,6 +1520,41 @@ void testMergeWithBigint(Filter* left, Filter* right) {
           right->testInt64(0xdeadbeefbadefeedL));
 }
 
+void testMergeWithHugeint(Filter* left, Filter* right) {
+  auto merged = left->mergeWith(right);
+
+  ASSERT_EQ(merged->testNull(), left->testNull() && right->testNull())
+      << "left: " << left->toString() << ", right: " << right->toString()
+      << ", merged: " << merged->toString();
+
+  const std::vector<int128_t> testValues = {
+      DecimalUtil::kLongDecimalMin,
+      -1,
+      0,
+      1,
+      HugeInt::build(/*hi=*/0, /*lo=*/41),
+      HugeInt::build(/*hi=*/0, /*lo=*/42),
+      HugeInt::build(/*hi=*/0, /*lo=*/43),
+      HugeInt::build(/*hi=*/1, /*lo=*/41),
+      HugeInt::build(/*hi=*/1, /*lo=*/42),
+      HugeInt::build(/*hi=*/1, /*lo=*/43),
+      HugeInt::build(/*hi=*/2, /*lo=*/42),
+      HugeInt::build(/*hi=*/3, /*lo=*/42),
+      HugeInt::build(/*hi=*/4, /*lo=*/42),
+      HugeInt::build(/*hi=*/5, /*lo=*/42),
+      DecimalUtil::kLongDecimalMax,
+  };
+
+  for (const auto value : testValues) {
+    ASSERT_EQ(
+        merged->testInt128(value),
+        left->testInt128(value) && right->testInt128(value))
+        << "at " << std::to_string(value) << ", left: " << left->toString()
+        << ", right: " << right->toString()
+        << ", merged: " << merged->toString();
+  }
+}
+
 void testMergeWithDouble(Filter* left, Filter* right) {
   auto merged = left->mergeWith(right);
   ASSERT_EQ(merged->testNull(), left->testNull() && right->testNull());
@@ -1882,6 +1858,42 @@ TEST(FilterTest, mergeWithBigint) {
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
+    }
+  }
+}
+
+TEST(FilterTest, mergeWithHugeint) {
+  const auto value1 = HugeInt::build(/*hi=*/1, /*lo=*/42);
+  const auto value2 = HugeInt::build(/*hi=*/2, /*lo=*/42);
+  const auto value3 = HugeInt::build(/*hi=*/3, /*lo=*/42);
+  const auto value4 = HugeInt::build(/*hi=*/4, /*lo=*/42);
+
+  std::vector<std::unique_ptr<Filter>> filters;
+  addUntypedFilters(filters);
+
+  // Equality.
+  filters.push_back(equalHugeint(value1));
+  filters.push_back(equalHugeint(value1, true));
+  filters.push_back(equalHugeint(value3));
+  filters.push_back(equalHugeint(value3, true));
+
+  // Between.
+  filters.push_back(betweenHugeint(value1, value3));
+  filters.push_back(betweenHugeint(value1, value3, true));
+  filters.push_back(betweenHugeint(value3, value4));
+  filters.push_back(betweenHugeint(value3, value4, true));
+
+  // IN-list.
+  filters.push_back(createHugeintValues({value1, value2, value3}, false));
+  filters.push_back(createHugeintValues({value1, value2, value3}, true));
+  filters.push_back(createHugeintValues({value2, value4}, false));
+  filters.push_back(createHugeintValues({value2, value4}, true));
+  filters.push_back(createHugeintValues({value1}, false));
+  filters.push_back(createHugeintValues({value1}, true));
+
+  for (const auto& left : filters) {
+    for (const auto& right : filters) {
+      testMergeWithHugeint(left.get(), right.get());
     }
   }
 }
