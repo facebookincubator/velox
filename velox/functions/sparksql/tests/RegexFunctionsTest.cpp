@@ -768,5 +768,56 @@ TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {
   EXPECT_EQ(regexpInstr("aaaa", "aa"), 1);
 }
 
+// End-to-end coverage for the Java->RE2 translator wired into regexp_replace
+// and regexp_instr. The translator itself is unit-tested in
+// functions/lib/java_regex/tests; these tests exist to catch a wiring
+// regression, i.e. the pattern reaching RE2 untranslated. The \uXXXX and
+// \p{...} spellings below are ones RE2 rejects outright, so skipping
+// translation surfaces as a throw rather than a wrong answer.
+TEST_F(RegexFunctionsTest, javaRegexTranslationEndToEnd) {
+  // \uXXXX -> \x{XXXX}.
+  EXPECT_EQ(testRegexpReplace("A", "\\u0041", "X"), "X");
+  EXPECT_EQ(testRegexpReplace("xAy", "x\\u0041y", "Z"), "Z");
+
+  // A UTF-16 surrogate pair folds into the single code point it encodes.
+  // U+1F600 GRINNING FACE is F0 9F 98 80 in UTF-8.
+  EXPECT_EQ(testRegexpReplace("\xF0\x9F\x98\x80", "\\uD83D\\uDE00", "X"), "X");
+
+  // Unicode block and script/category properties, expanded without ICU.
+  // U+03B1 GREEK SMALL LETTER ALPHA is CE B1 in UTF-8.
+  EXPECT_EQ(testRegexpReplace("\xCE\xB1", "\\p{InGreek}", "X"), "X");
+  EXPECT_EQ(testRegexpReplace("\xCE\xB1", "\\p{IsGreek}", "X"), "X");
+  EXPECT_EQ(testRegexpReplace("abc", "\\p{ASCII}", "X"), "XXX");
+
+  // Named groups keep working through the translator.
+  EXPECT_EQ(testRegexpReplace("abc", "(?<alpha>b)", "[${alpha}]"), "a[b]c");
+
+  // regexp_instr goes through the same preparation.
+  auto regexpInstr = [&](std::optional<std::string> str, std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), str);
+  };
+  EXPECT_EQ(regexpInstr("zA", "\\u0041"), 2);
+  EXPECT_EQ(regexpInstr("z\xCE\xB1", "\\p{InGreek}"), 2);
+}
+
+// \Q...\E quotes literal text, so a '(?<' inside it opens no group. The legacy
+// RE2::GlobalReplace-based preparation rewrote it to '(?P<' and silently
+// matched the wrong text; RE2 compiles both spellings, so nothing threw.
+TEST_F(RegexFunctionsTest, regexpReplaceQuotedNamedGroupIsLiteral) {
+  EXPECT_EQ(testRegexpReplace("a(?<g>b", "\\Q(?<g>\\E", "X"), "aXb");
+}
+
+// The non-constant pattern path prepares patterns behind the compiled-regex
+// cache, so translation must still happen on a cache miss.
+TEST_F(RegexFunctionsTest, javaRegexTranslationNonConstantPattern) {
+  auto result = testingRegexpReplaceRows(
+      {"A", "\xCE\xB1", "B"},
+      {"\\u0041", "\\p{InGreek}", "\\p{ASCII}"},
+      {"X", "Y", "Z"});
+  auto output = convertOutput({"X", "Y", "Z"}, 1);
+  assertEqualVectors(result, output);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql
