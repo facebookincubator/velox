@@ -15,9 +15,9 @@
  */
 
 #include "conversion.h"
-#include <velox/vector/arrow/Abi.h>
-#include <velox/vector/arrow/Bridge.h>
 #include "context.h"
+#include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::py {
 

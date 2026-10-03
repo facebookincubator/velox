@@ -18,8 +18,8 @@
 
 #include <fmt/format.h>
 #include <folly/String.h>
-#include <velox/common/base/Exceptions.h>
 #include <iomanip>
+#include "velox/common/base/Exceptions.h"
 
 #include <sstream>
 #include "velox/functions/prestosql/types/BigintEnumType.h"

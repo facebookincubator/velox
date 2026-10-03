@@ -19,17 +19,17 @@
 #include <folly/Synchronized.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
-#include <velox/exec/Task.h>
-#include <velox/experimental/ucx-exchange/UcxOutputQueueManager.h>
 #include <chrono>
 #include <future>
 #include <memory>
 #include <tuple>
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/EnumDefine.h"
+#include "velox/exec/Task.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/PartitionKey.h"
+#include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
 namespace facebook::velox::ucx_exchange {
 

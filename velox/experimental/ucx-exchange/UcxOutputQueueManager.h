@@ -16,11 +16,11 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
-#include <velox/exec/OutputBufferManager.h>
-#include <velox/exec/Task.h>
 #include <functional>
 #include <string_view>
 #include <unordered_set>
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/Task.h"
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
 namespace facebook::velox::ucx_exchange {

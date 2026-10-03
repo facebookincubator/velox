@@ -15,7 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/writer/FlatMapColumnWriter.h"
-#include <velox/dwio/dwrf/writer/StatisticsBuilder.h>
+#include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatMapVector.h"
