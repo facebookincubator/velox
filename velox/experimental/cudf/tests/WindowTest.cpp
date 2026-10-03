@@ -72,6 +72,22 @@ class CudfWindowTest : public testing::Test,
   void TearDown() override {
     cudf_velox::unregisterCudf();
   }
+
+  void assertCpuAndGpuResults(const core::PlanNodePtr& plan) {
+    cudf_velox::unregisterCudf();
+    auto expected = AssertQueryBuilder(plan).copyResults(pool());
+    cudf_velox::registerCudf();
+
+    auto task = AssertQueryBuilder(plan).assertResults(expected);
+    bool hasCudfWindow = false;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& operatorStats : pipeline.operatorStats) {
+        EXPECT_NE(operatorStats.operatorType, "Window");
+        hasCudfWindow |= operatorStats.operatorType == "CudfWindow";
+      }
+    }
+    EXPECT_TRUE(hasCudfWindow);
+  }
 };
 
 TEST_F(CudfWindowTest, rowNumberPartitionOrder) {
@@ -456,17 +472,14 @@ TEST_F(CudfWindowTest, rowNumberMultiBatch) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// Multi-column ORDER BY covered in follow-on PR (requires cuDF upgrade).
-TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
-  // Same shape as valuesRowsStreamingWindowBuild (CPU) but non-streaming window
-  // and explicit expected vectors (no DuckDB runner).
+TEST_F(CudfWindowTest, multiFunctionPartitionOrder) {
   auto data = makeRowVector(
       {"c0", "c1", "c2", "c3", "c4"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int32_t>({1, 1, 2, 1, 1}),
           makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
-          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({0, 1, 0, 0, 1}),
           makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
       });
 
@@ -490,9 +503,9 @@ TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
       {"c0", "c1", "c2", "c3", "c4", "w0", "w1", "w2", "w3"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int32_t>({1, 1, 2, 1, 1}),
           makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
-          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({0, 1, 0, 0, 1}),
           makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
           makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
           makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
@@ -501,6 +514,82 @@ TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
       });
 
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, multiColumnOrderBy) {
+  auto data = makeRowVector(
+      {"p", "sort_number", "sort_string", "v"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {2, 1, 2, 1, std::nullopt, 1, std::nullopt, 2, 1, 2}),
+          makeNullableFlatVector<int32_t>(
+              {1, 1, 1, 1, 2, std::nullopt, 2, std::nullopt, 1, 1}),
+          makeNullableFlatVector<std::string>(
+              {"b",
+               "a",
+               "a",
+               "a",
+               std::nullopt,
+               "a",
+               std::nullopt,
+               "a",
+               std::nullopt,
+               std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {20, 10, std::nullopt, 10, 50, 30, 50, 40, 60, 70}),
+      });
+
+  for (const auto& partition : {"", "partition by p"}) {
+    for (const auto& ordering :
+         {"sort_number asc nulls first, sort_string desc nulls last",
+          "sort_number desc nulls last, sort_string asc nulls first",
+          "sort_number asc nulls last, sort_string desc nulls first",
+          "sort_number desc nulls first, sort_string asc nulls last"}) {
+      SCOPED_TRACE(fmt::format("{} order by {}", partition, ordering));
+      const auto window = fmt::format("{} order by {}", partition, ordering);
+      const std::vector<std::string> expressions = {
+          fmt::format("rank() over ({})", window),
+          fmt::format("dense_rank() over ({})", window),
+          fmt::format("sum(v) over ({})", window),
+          fmt::format("count(v) over ({})", window),
+          fmt::format("count(*) over ({})", window),
+          fmt::format(
+              "sum(v) over ({} range between unbounded preceding "
+              "and unbounded following)",
+              window),
+      };
+      assertCpuAndGpuResults(
+          PlanBuilder().values(split(data, 3)).window(expressions).planNode());
+    }
+  }
+}
+
+TEST_F(CudfWindowTest, multiColumnRankWithNestedKeysFallsBack) {
+  auto arrayKey = makeArrayVector<int64_t>({{1}, {1, 2}, {2}});
+  const std::vector<VectorPtr> nestedKeys = {
+      arrayKey, makeRowVector({arrayKey})};
+  for (const auto& nestedKey : nestedKeys) {
+    SCOPED_TRACE(nestedKey->type()->toString());
+    auto data = makeRowVector(
+        {"p", "ord", "nested_key"},
+        {
+            makeFlatVector<int32_t>({1, 1, 2}),
+            makeFlatVector<int32_t>({1, 1, 2}),
+            nestedKey,
+        });
+    for (const auto& partition : {"", "partition by p"}) {
+      for (const auto& function : {"row_number", "rank", "dense_rank"}) {
+        const auto expression = fmt::format(
+            "{}() over ({} order by ord, nested_key)", function, partition);
+        SCOPED_TRACE(expression);
+        auto plan =
+            PlanBuilder().values({data}).window({expression}).planNode();
+        VELOX_ASSERT_THROW(
+            AssertQueryBuilder(plan).copyResults(pool()),
+            "Replacement with cuDF operator failed");
+      }
+    }
+  }
 }
 
 TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
@@ -1805,6 +1894,32 @@ TEST_F(CudfWindowTest, inputsSortedStreamingWindow) {
       });
 
   AssertQueryBuilder(plan).assertResults(expected);
+
+  auto sortedData = makeRowVector(
+      {"p", "ord", "detail", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 1, 2, 1, 1}),
+          makeNullableFlatVector<int32_t>({2, 1, 0, std::nullopt, 1}),
+          makeNullableFlatVector<double>({10, std::nullopt, 30, 40, 60}),
+      });
+  const std::string window =
+      "partition by p order by ord, detail desc nulls first";
+  assertCpuAndGpuResults(
+      PlanBuilder()
+          .values(split(sortedData, 3))
+          .streamingWindow({
+              fmt::format("rank() over ({})", window),
+              fmt::format("dense_rank() over ({})", window),
+              fmt::format("row_number() over ({})", window),
+              fmt::format("lag(v) over ({})", window),
+              fmt::format("sum(v) over ({})", window),
+              fmt::format(
+                  "avg(v) over ({} rows between unbounded preceding "
+                  "and unbounded following)",
+                  window),
+          })
+          .planNode());
 }
 
 TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
@@ -2026,6 +2141,18 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
       realData,
       "sum(v) over (order by ord rows between unbounded preceding "
       "and current row) as s");
+  assertFallback(
+      realData,
+      "avg(v) over (order by ord rows between unbounded preceding "
+      "and unbounded following) as a");
+
+  auto integerData = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<int64_t>({1, 2}),
+      });
+  assertFallback(integerData, "avg(v) over (partition by p) as a");
 
   auto decimalData = makeRowVector(
       {"ord", "d"},
@@ -2037,6 +2164,10 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
       decimalData,
       "avg(d) over (order by ord rows between unbounded preceding "
       "and current row) as a");
+  assertFallback(
+      decimalData,
+      "avg(d) over (order by ord range between unbounded preceding "
+      "and unbounded following) as a");
 
   auto arrayData = makeRowVector(
       {"ord", "v"},
@@ -2092,28 +2223,136 @@ TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
   }
 }
 
-TEST_F(CudfWindowTest, fullPartitionAverageFallsBackUntilOptimized) {
+TEST_F(CudfWindowTest, fullPartitionAverage) {
   auto data = makeRowVector(
-      {"p", "ord", "v"},
+      {"p", "q", "ord", "v", "other"},
       {
-          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
-          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
-          makeNullableFlatVector<double>({10.0, std::nullopt, 30.0, 5.0, 15.0}),
+          makeNullableFlatVector<int32_t>(
+              {2, 1, std::nullopt, 1, 2, std::nullopt, 3, 3, 1, 4}),
+          makeFlatVector<std::string>(
+              {"b", "a", "a", "b", "b", "a", "c", "c", "a", "d"}),
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+          makeNullableFlatVector<double>(
+              {10,
+               std::nullopt,
+               20,
+               30,
+               50,
+               40,
+               std::nullopt,
+               std::nullopt,
+               60,
+               100}),
+          makeNullableFlatVector<double>(
+              {1, 2, 3, std::nullopt, 5, 6, 7, 8, std::nullopt, 10}),
       });
 
-  const std::vector<std::string> expressions = {
-      "avg(v) over (partition by p) as a",
-      "avg(v) over (partition by p order by ord "
-      "rows between unbounded preceding and unbounded following) as a",
-  };
+  for (const auto& partition : {"", "partition by p", "partition by p, q"}) {
+    for (const std::string ordering :
+         {"", "order by ord", "order by v desc nulls first, ord"}) {
+      for (const std::string frame :
+           {"",
+            "rows between unbounded preceding and unbounded following",
+            "range between unbounded preceding and unbounded following"}) {
+        if (!ordering.empty() && frame.empty()) {
+          continue;
+        }
+        const auto window = fmt::format("{} {} {}", partition, ordering, frame);
+        SCOPED_TRACE(window);
+        auto plan = PlanBuilder()
+                        .values(split(data, 3))
+                        .window({
+                            fmt::format("avg(v) over ({})", window),
+                            fmt::format("avg(other) over ({})", window),
+                            fmt::format("count(v) over ({})", window),
+                            fmt::format("rank() over ({})", window),
+                        })
+                        .planNode();
+        assertCpuAndGpuResults(plan);
+      }
+    }
+  }
 
-  for (const auto& expression : expressions) {
-    SCOPED_TRACE(expression);
-    auto plan = PlanBuilder().values({data}).window({expression}).planNode();
+  {
+    SCOPED_TRACE("NaN, signed zero and null partition keys");
+    const auto kNan = std::numeric_limits<double>::quiet_NaN();
+    auto floatingKeyData = makeRowVector(
+        {"p", "q", "v"},
+        {
+            makeFlatVector<double>(
+                {kNan, 0.0, 1.0, -kNan, -0.0, 1.0, kNan, -0.0, -kNan, 0.0}),
+            makeNullableFlatVector<int32_t>(
+                {1,
+                 std::nullopt,
+                 2,
+                 1,
+                 std::nullopt,
+                 2,
+                 std::nullopt,
+                 3,
+                 std::nullopt,
+                 3}),
+            makeNullableFlatVector<double>(
+                {10,
+                 20,
+                 std::nullopt,
+                 30,
+                 40,
+                 std::nullopt,
+                 50,
+                 60,
+                 std::nullopt,
+                 80}),
+        });
+    assertCpuAndGpuResults(
+        PlanBuilder()
+            .values(split(floatingKeyData, 3))
+            .window({"avg(v) over (partition by p, q)"})
+            .planNode());
+  }
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+  {
+    SCOPED_TRACE("All-null global average");
+    auto nullData = makeRowVector(
+        {"ord", "v"},
+        {
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeNullableFlatVector<double>(
+                {std::nullopt, std::nullopt, std::nullopt}),
+        });
+    assertCpuAndGpuResults(
+        PlanBuilder()
+            .values({nullData})
+            .window({"avg(v) over (order by ord rows between "
+                     "unbounded preceding and unbounded following)"})
+            .planNode());
+  }
+
+  {
+    SCOPED_TRACE("Empty input");
+    auto emptyData = BaseVector::create<RowVector>(data->type(), 0, pool());
+    assertCpuAndGpuResults(
+        PlanBuilder()
+            .values({emptyData})
+            .window({"avg(v) over (partition by p)"})
+            .planNode());
+  }
+
+  {
+    SCOPED_TRACE("Large single partition");
+    constexpr vector_size_t kNumRows = 100'000;
+    auto largeData = makeRowVector(
+        {"p", "v"},
+        {
+            makeFlatVector<int32_t>(kNumRows, [](auto /*row*/) { return 1; }),
+            makeFlatVector<double>(
+                kNumRows, [](auto row) { return static_cast<double>(row); }),
+        });
+    assertCpuAndGpuResults(
+        PlanBuilder()
+            .values(split(largeData, 10))
+            .window({"avg(v) over (partition by p)"})
+            .planNode());
   }
 }
 
