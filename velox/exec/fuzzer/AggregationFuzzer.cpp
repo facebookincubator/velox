@@ -23,6 +23,7 @@
 
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
 
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -97,6 +98,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const std::vector<RowVectorPtr>& inputWithNullRows,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -107,6 +109,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const std::vector<RowVectorPtr>& inputWithNullRows,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -129,6 +132,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
       const std::vector<core::ExprPtr>& projections,
+      const std::vector<RowVectorPtr>& inputWithNullRows,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier);
 
@@ -156,6 +160,19 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       bool testWithSpilling = true) {
     for (auto i = 0; i < plans.size(); ++i) {
       const auto& planWithSplits = plans[i];
+
+      if (planWithSplits.verifyResultExactly) {
+        LOG(INFO) << "Testing plan #" << i << " with exact result comparison";
+        testPlan(
+            planWithSplits,
+            false /*injectSpill*/,
+            false /*abandonPartial*/,
+            false /*customVerification*/,
+            {},
+            expected,
+            1 /*maxDrivers*/);
+        continue;
+      }
 
       LOG(INFO) << "Testing plan #" << i;
       testPlan(
@@ -357,7 +374,14 @@ void AggregationFuzzer::go() {
       logVectors(convertedInput);
 
       verifyAggregation(
-          groupingKeys, {}, {}, convertedInput, projections, false, {});
+          groupingKeys,
+          {},
+          {},
+          convertedInput,
+          projections,
+          /*inputWithNullRows=*/{},
+          false,
+          {});
     } else {
       // Pick a random signature.
       auto signatureWithStats = pickSignature();
@@ -423,6 +447,16 @@ void AggregationFuzzer::go() {
 
       logVectors(convertedInput);
 
+      std::vector<RowVectorPtr> inputWithNullRows;
+      const auto& metadata = getAggregateFunctionMetadata(signature.name);
+      if (metadata.ignoreNullInputs && !signature.args.empty()) {
+        const auto argumentNames = makeNames(signature.args.size());
+        for (const auto& inputVector : convertedInput) {
+          inputWithNullRows.push_back(
+              makeInputWithNullRows(inputVector, {argumentNames}, pool_.get()));
+        }
+      }
+
       const bool customVerification =
           customVerificationFunctions_.count(signature.name) != 0;
       std::shared_ptr<ResultVerifier> customVerifier;
@@ -438,6 +472,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            inputWithNullRows,
             customVerification,
             customVerifier);
         if (failed) {
@@ -451,6 +486,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            inputWithNullRows,
             customVerification,
             customVerifier);
         if (failed) {
@@ -463,6 +499,7 @@ void AggregationFuzzer::go() {
             masks,
             convertedInput,
             projections,
+            inputWithNullRows,
             customVerification,
             customVerifier);
         if (failed) {
@@ -477,7 +514,7 @@ void AggregationFuzzer::go() {
       LOG(WARNING)
           << "Iteration succeeded with --persist_and_run_once flag enabled "
              "(expecting crash failure)";
-      exit(0);
+      return;
     }
 
     reSeed();
@@ -701,12 +738,32 @@ void makeStreamingPlansWithTableScan(
           .planNode());
 }
 
+// Appends a single aggregation over 'inputWithNullRows' whose result must equal
+// the first plan's result.
+void addIgnoreNullInputPlan(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& masks,
+    const std::vector<RowVectorPtr>& inputWithNullRows,
+    const std::vector<core::ExprPtr>& projections,
+    std::vector<AggregationFuzzerBase::PlanWithSplits>& plans) {
+  plans.push_back(
+      {.plan = PlanBuilder()
+                   .values(inputWithNullRows)
+                   .projectExpressions(projections)
+                   .singleAggregation(groupingKeys, aggregates, masks)
+                   .planNode(),
+       .splits = {},
+       .verifyResultExactly = true});
+}
+
 bool AggregationFuzzer::verifyAggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const std::vector<RowVectorPtr>& inputWithNullRows,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   auto firstPlan = PlanBuilder()
@@ -800,6 +857,11 @@ bool AggregationFuzzer::verifyAggregation(
     }
   }
 
+  if (!inputWithNullRows.empty()) {
+    addIgnoreNullInputPlan(
+        groupingKeys, aggregates, masks, inputWithNullRows, projections, plans);
+  }
+
   if (persistAndRunOnce_) {
     persistReproInfo(plans, reproPersistPath_);
   }
@@ -814,6 +876,7 @@ bool AggregationFuzzer::verifySortedAggregation(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const std::vector<RowVectorPtr>& inputWithNullRows,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   auto firstPlan = PlanBuilder()
@@ -897,6 +960,16 @@ bool AggregationFuzzer::verifySortedAggregation(
                .planNode(),
            splits});
     }
+  }
+
+  if (!inputWithNullRows.empty()) {
+    addIgnoreNullInputPlan(
+        groupingKeys,
+        {aggregate},
+        masks,
+        inputWithNullRows,
+        projections,
+        plans);
   }
 
   if (customVerification &&
@@ -1115,6 +1188,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
     const std::vector<std::string>& masks,
     const std::vector<RowVectorPtr>& input,
     const std::vector<core::ExprPtr>& projections,
+    const std::vector<RowVectorPtr>& inputWithNullRows,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier) {
   const auto firstPlan =
@@ -1195,6 +1269,16 @@ bool AggregationFuzzer::verifyDistinctAggregation(
                .planNode(),
            splits});
     }
+  }
+
+  if (!inputWithNullRows.empty()) {
+    addIgnoreNullInputPlan(
+        groupingKeys,
+        {aggregate},
+        masks,
+        inputWithNullRows,
+        projections,
+        plans);
   }
 
   if (persistAndRunOnce_) {

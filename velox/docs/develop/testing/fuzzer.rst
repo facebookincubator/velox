@@ -113,6 +113,12 @@ computing count(distinct) on input data and checking whether the results
 of approx_distinct are within expected error bound. Verifier for approx_percentile
 works similarly.
 
+For functions that declare ``ignoreNullInputs`` in their metadata, Fuzzer also
+checks that rows with a null argument leave the result unchanged. Before every
+input row, it inserts a copy with one argument set to null. A single aggregation
+over that input runs once without spilling, and its result must equal the single
+aggregation over the original input, bypassing custom verifiers.
+
 At the end of the run, Fuzzer prints out statistics that show what has been
 tested:
 
