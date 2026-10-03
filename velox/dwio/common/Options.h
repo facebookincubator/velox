@@ -572,6 +572,14 @@ class RowReaderOptions {
   }
 
   bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_.value_or(false);
+  }
+
+  /// Returns the raw setting, distinguishing "never set" from an explicit
+  /// false. The Nimble batch reader needs that distinction: an unset option
+  /// leaves its own default in place, while an explicit false turns the
+  /// optimization off.
+  std::optional<bool> stringDecoderZeroCopyOverride() const {
     return stringDecoderZeroCopy_;
   }
 
@@ -687,9 +695,10 @@ class RowReaderOptions {
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
   bool indexEnabled_{false};
-  // Enables zero-copy string decoding in the Nimble selective reader,
-  // using the non-legacy encoding path. Controlled via session property.
-  bool stringDecoderZeroCopy_{false};
+  // Enables zero-copy string decoding in the Nimble readers, using the
+  // non-legacy encoding path. Controlled via session property. Unset means
+  // the reader keeps whatever default it resolves for itself.
+  std::optional<bool> stringDecoderZeroCopy_;
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
