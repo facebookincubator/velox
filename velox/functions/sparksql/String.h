@@ -100,6 +100,19 @@ struct BitLengthFunction {
   }
 };
 
+/// Returns the byte length of a string or binary value.
+template <typename T>
+struct OctetLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const TInput& input) {
+    // StringView is constructed with an int32_t length, so input.size() is
+    // guaranteed to fit.
+    result = static_cast<int32_t>(input.size());
+  }
+};
+
 /// chr function
 /// chr(n) -> string
 /// Returns the Unicode code point ``n`` as a single character string.

@@ -80,6 +80,35 @@ TEST_F(StringTest, bitLengthVarbinary) {
   EXPECT_EQ(bitLength("\U0001F408"), 32);
 }
 
+TEST_F(StringTest, octetLength) {
+  const auto octetLength = [&](const std::optional<std::string>& input,
+                               const TypePtr& inputType) {
+    return evaluateOnce<int32_t>("octet_length(c0)", inputType, input);
+  };
+
+  for (const auto& inputType : {VARCHAR(), VARBINARY()}) {
+    SCOPED_TRACE(inputType->toString());
+    EXPECT_EQ(octetLength("", inputType), 0);
+    EXPECT_EQ(octetLength(std::string("\0", 1), inputType), 1);
+    EXPECT_EQ(octetLength("1", inputType), 1);
+    EXPECT_EQ(octetLength("123", inputType), 3);
+    // Verifies byte count rather than character count.
+    EXPECT_EQ(octetLength("😋", inputType), 4);
+    // Euro sign is 3 bytes in UTF-8.
+    EXPECT_EQ(octetLength("€", inputType), 3);
+    // Consists of five codepoints (17 bytes).
+    EXPECT_EQ(octetLength(kWomanFacepalmingLightSkinTone, inputType), 17);
+    EXPECT_EQ(octetLength("\U0001F408", inputType), 4);
+    EXPECT_EQ(octetLength(std::nullopt, inputType), std::nullopt);
+  }
+
+  // Arbitrary binary values do not require valid UTF-8.
+  EXPECT_EQ(octetLength(std::string("\xFF\x00\x80", 3), VARBINARY()), 3);
+  // ASCII boundary: DEL (0x7F) is 1 byte, next codepoint (0x80) is 2 bytes.
+  EXPECT_EQ(octetLength("\x7F", VARBINARY()), 1);
+  EXPECT_EQ(octetLength("\xC2\x80", VARBINARY()), 2);
+}
+
 TEST_F(StringTest, chr) {
   const auto chr = [&](std::optional<int64_t> arg) {
     return evaluateOnce<std::string>("chr(c0)", arg);
