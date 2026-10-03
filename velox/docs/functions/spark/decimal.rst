@@ -46,7 +46,7 @@ The HiveQL behavior:
 https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
 
 Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
-while the decimal addition, subtraction, multiplication and integer division do not.
+while the decimal addition, subtraction, multiplication, integer division and remainder do not.
 
 Addition and Subtraction
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -90,6 +90,14 @@ Integer Division
     precision = p1 - s1 + s2
     p = precision == 0 ? 1 : min(38,  precision)
     s = 0
+
+Remainder
+~~~~~~~~~
+
+::
+
+    p = min(p1 - s1, p2 - s2) + max(s1, s2)
+    s = max(s1, s2)
 
 Decimal Precision and Scale Adjustment
 --------------------------------------
@@ -193,6 +201,23 @@ Arithmetic Functions
 
         SELECT CAST(1.1 as DECIMAL(3, 1)) * CAST(2.0 as DECIMAL(3, 1)); -- 2.20
         SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) * CAST(10 as DECIMAL(38, 0)); -- NULL
+
+.. spark:function:: remainder(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the remainder of dividing ``x`` by ``y``. The sign of the result follows ``x``.
+    The result type is determined by the precision and scale computation rules described above,
+    and the result never overflows.
+    When ``y`` is zero, returns NULL following the behavior when Spark ANSI mode is disabled,
+    and throws an exception when Spark ANSI mode is enabled.
+    Corresponds to Spark's operator ``%``. Matches Spark 4.3.1 and later. Earlier
+    Spark versions throw ``java.lang.ArithmeticException: Division impossible`` for
+    some inputs whose integral quotient needs more than 39 digits (SPARK-61050),
+    while this function returns the remainder. ::
+
+        SELECT CAST(10.5 as DECIMAL(3, 1)) % CAST(3 as DECIMAL(3, 1)); -- 1.5
+        SELECT CAST(-10.5 as DECIMAL(3, 1)) % CAST(3.00 as DECIMAL(3, 2)); -- -1.50
+        SELECT CAST(10.5 as DECIMAL(3, 1)) % CAST(0 as DECIMAL(3, 1)); -- NULL
+        SELECT CAST(repeat('9', 38) as DECIMAL(38, 0)) % CAST(0.007 as DECIMAL(3, 3)); -- 0.006
 
 .. spark:function:: subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
