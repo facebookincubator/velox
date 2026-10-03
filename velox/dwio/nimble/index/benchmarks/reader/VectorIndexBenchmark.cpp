@@ -284,7 +284,7 @@ class VectorIndexBenchmark {
         writerPool_{rootPool_->addLeafChild("writer")},
         readerPool_{rootPool_->addLeafChild("reader")} {
     auto syntheticData = makeSyntheticData();
-    searchConfigs_ = makeSearchConfigs(syntheticData.queries);
+    searchConfig_ = makeSearchConfig(syntheticData.queries);
     input_ = makeInput(syntheticData.corpus);
     index_ = writeIndex(input_);
     directory_.emplace(createIndexDirectory());
@@ -314,7 +314,7 @@ class VectorIndexBenchmark {
     }
     if (shouldRun("reload_and_search")) {
       printQueryResult(
-          "Resident E2E (reload + sequential query batch + destroy)",
+          "Resident E2E (reload + batched search + destroy)",
           runForDuration(
               options_.benchmarkSeconds,
               options_.numQueries,
@@ -481,44 +481,37 @@ class VectorIndexBenchmark {
         std::vector<velox::VectorPtr>{std::move(embeddings)});
   }
 
-  std::vector<VectorIndex::SearchConfig> makeSearchConfigs(
+  VectorIndex::SearchConfig makeSearchConfig(
       const std::vector<float>& queries) const {
     VELOX_CHECK_EQ(
         queries.size(),
         static_cast<size_t>(options_.numQueries) * options_.dimensions);
-    std::vector<VectorIndex::SearchConfig> searchConfigs;
-    searchConfigs.reserve(options_.numQueries);
-    for (uint32_t query = 0; query < options_.numQueries; ++query) {
-      const auto queryBegin =
-          queries.begin() +
-          static_cast<std::ptrdiff_t>(
-              static_cast<size_t>(query) * options_.dimensions);
-      searchConfigs.push_back({
-          .queryVector = std::vector<float>(
-              queryBegin,
-              queryBegin + static_cast<std::ptrdiff_t>(options_.dimensions)),
-          .numNeighbors = effectiveNumNeighbors(),
-          .numProbes = options_.numProbes == 0
-              ? std::numeric_limits<uint32_t>::max()
-              : options_.numProbes,
-          .hnswSearchDepth = options_.hnswSearchDepth,
-      });
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
+    if (options_.indexType == VectorIndexType::kHnswSq8) {
+      searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(
+          options_.hnswSearchDepth);
+    } else {
+      searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          options_.numProbes == 0 ? std::numeric_limits<uint32_t>::max()
+                                  : options_.numProbes);
     }
-    return searchConfigs;
+    return {
+        .queryVectors = queries,
+        .numNeighbors = effectiveNumNeighbors(),
+        .searchOptions = std::move(searchOptions),
+    };
   }
 
   void searchAll(const VectorIndex& index) const {
-    for (const auto& searchConfig : searchConfigs_) {
-      const auto searchResults = index.search(searchConfig);
-      folly::doNotOptimizeAway(searchResults.data());
-    }
+    const auto searchResult = index.search(searchConfig_);
+    folly::doNotOptimizeAway(searchResult.totalNumResults());
   }
 
   RecallResult validateAndMeasureRecall(const SyntheticData& data) const {
     const auto index = directory_->load(kColumnName);
     VELOX_CHECK_EQ(index->dimensions(), options_.dimensions);
     VELOX_CHECK_EQ(index->numVectors(), options_.numVectors);
-    VELOX_CHECK(!searchConfigs_.empty());
+    VELOX_CHECK(!searchConfig_.queryVectors.empty());
 
     const auto numNeighbors = effectiveNumNeighbors();
     faiss::IndexFlat groundTruth{
@@ -538,8 +531,10 @@ class VectorIndexBenchmark {
     uint64_t numMatches{0};
     uint64_t numTopOneMatches{0};
     uint64_t checksum{kFnv1a64OffsetBasis};
+    const auto searchResult = index->search(searchConfig_);
+    VELOX_CHECK_EQ(searchResult.numQueries(), options_.numQueries);
     for (uint32_t query = 0; query < options_.numQueries; ++query) {
-      const auto results = index->search(searchConfigs_.at(query));
+      const auto results = searchResult.results(query);
       const auto exactBegin = exactLabels.begin() +
           static_cast<std::ptrdiff_t>(
                                   static_cast<size_t>(query) * numNeighbors);
@@ -633,8 +628,8 @@ class VectorIndexBenchmark {
   const std::shared_ptr<velox::memory::MemoryPool> writerPool_;
   // Accounts for directory metadata and serialized-index I/O buffers.
   const std::shared_ptr<velox::memory::MemoryPool> readerPool_;
-  // Stores one request for each held-out query.
-  std::vector<VectorIndex::SearchConfig> searchConfigs_;
+  // Stores the held-out queries in one native search batch.
+  VectorIndex::SearchConfig searchConfig_;
   // Owns the input reused by write workloads.
   velox::RowVectorPtr input_;
   // Owns the in-memory representation of the generated file sections.
