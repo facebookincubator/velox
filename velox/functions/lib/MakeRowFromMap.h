@@ -165,10 +165,15 @@ class MakeRowFromMap {
     createKeyToFieldIndexMap(options.keysToProject);
   }
 
+  /// If 'reusableResult' is non-null and compatible (same number of children
+  /// and matching value types), its child buffers are recycled to avoid
+  /// reallocating the output. Its children are moved out, so the caller must
+  /// not use 'reusableResult' afterwards. Ignored when 'replaceNulls' is true.
   VectorPtr apply(
       const BaseVector& map,
       const SelectivityVector& rows,
-      exec::EvalCtx* evalCtx) {
+      exec::EvalCtx* evalCtx,
+      RowVector* reusableResult = nullptr) {
     VELOX_USER_CHECK_EQ(
         map.type()->kind(), TypeKind::MAP, "Input must be of MAP typeKind");
 
@@ -180,7 +185,7 @@ class MakeRowFromMap {
         inputKeyType_,
         "Map key type and the type of keys to project are not the same");
 
-    return toRowVectorImpl(map, rows, evalCtx);
+    return toRowVectorImpl(map, rows, evalCtx, reusableResult);
   }
 
  private:
@@ -201,7 +206,8 @@ class MakeRowFromMap {
   VectorPtr toRowVectorImpl(
       const BaseVector& vector,
       const SelectivityVector& rows,
-      exec::EvalCtx* evalCtx) {
+      exec::EvalCtx* evalCtx,
+      RowVector* reusableResult = nullptr) {
     exec::LocalDecodedVector decodedMap(evalCtx);
     decodedMap.get()->decode(vector, rows);
     auto mapBase = decodedMap->base()->asUnchecked<MapVector>();
@@ -217,18 +223,33 @@ class MakeRowFromMap {
     std::vector<VectorPtr> children;
     children.reserve(keyToIndex_.size());
     auto vectorPool = evalCtx ? evalCtx->vectorPool() : nullptr;
+    std::vector<VectorPtr>* reusableChildren = nullptr;
+    if (!replaceNulls_ && reusableResult != nullptr &&
+        reusableResult->childrenSize() == keyToIndex_.size()) {
+      reusableChildren = &reusableResult->children();
+    }
     for (size_t i = 0; i < keyToIndex_.size(); ++i) {
       if (replaceNulls_) {
         children.push_back(
             MakeRowFromMapDefaults::createFlat(
                 valueType, outputSize, *mapBase->pool(), vectorPool));
       } else {
-        children.push_back(
-            vectorPool
-                ? vectorPool->get(valueType, outputSize)
-                : BaseVector::create(valueType, outputSize, mapBase->pool()));
-        auto rawNulls = children.back()->mutableRawNulls();
+        VectorPtr child;
+        if (reusableChildren != nullptr) {
+          VectorPtr& prev = (*reusableChildren)[i];
+          if (prev != nullptr && *prev->type() == *valueType) {
+            child = std::move(prev);
+            BaseVector::prepareForReuse(child, outputSize);
+          }
+        }
+        if (child == nullptr) {
+          child = vectorPool
+              ? vectorPool->get(valueType, outputSize)
+              : BaseVector::create(valueType, outputSize, mapBase->pool());
+        }
+        auto rawNulls = child->mutableRawNulls();
         bits::fillBits(rawNulls, 0, outputSize, bits::kNull);
+        children.push_back(std::move(child));
       }
     }
     auto outputNulls =
