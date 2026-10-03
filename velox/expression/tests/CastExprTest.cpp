@@ -1214,6 +1214,10 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<std::string, float>("real", {"1.7E308"}, {kInf});
     testCast<std::string, float>("real", {"1."}, {1.0});
     testCast<std::string, float>("real", {"1"}, {1});
+    testCast<std::string, float>("real", {"1.2f"}, {1.2});
+    testCast<std::string, float>("real", {"1.2F"}, {1.2});
+    testCast<std::string, float>("real", {"1.2d"}, {1.2});
+    testCast<std::string, float>("real", {"1.2D"}, {1.2});
     testCast<std::string, float>("real", {"  1  "}, {1});
     testCast<std::string, float>("real", {"-Infinity"}, {-kInf});
     testCast<std::string, float>("real", {"+Infinity"}, {kInf});
@@ -1221,6 +1225,10 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<std::string, float>("real", {"  NaN  "}, {kNan});
     testCast<std::string, float>("real", {"  -NaN  "}, {kNan});
     testCast<std::string, float>("real", {"  +NaN  "}, {kNan});
+    testCast<std::string, double>("double", {"1.2f"}, {1.2});
+    testCast<std::string, double>("double", {"1.2F"}, {1.2});
+    testCast<std::string, double>("double", {"1.2d"}, {1.2});
+    testCast<std::string, double>("double", {"1.2D"}, {1.2});
   }
 
   // To boolean.
