@@ -205,6 +205,38 @@ TEST_F(FieldWriterTest, omitsAbsentHybridKeysAndEmptyGroups) {
   EXPECT_EQ(defaultValues->rowCount(), 0);
 }
 
+TEST_F(FieldWriterTest, disablesChunkingOnlyForHybridGroupMetadata) {
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  FieldWriterContext context{*pool_};
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap({{"1", "2"}}));
+  auto writer = FieldWriter::create(context, typeWithId);
+
+  const auto schema =
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+  const auto& hybridMap = schema->asHybridFlatMap();
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    SCOPED_TRACE(fmt::format("group={}", i));
+    const auto& group = hybridMap.groupAt(i);
+    const auto* keys = findStream(context, group.keyDescriptor.offset());
+    const auto* inMap = findStream(context, group.inMapDescriptor.offset());
+    const auto* values = findStream(
+        context, group.valueType->asScalar().scalarDescriptor().offset());
+    ASSERT_NE(keys, nullptr);
+    ASSERT_NE(inMap, nullptr);
+    ASSERT_NE(values, nullptr);
+    EXPECT_TRUE(keys->noChunking());
+    EXPECT_TRUE(inMap->noChunking());
+    EXPECT_FALSE(values->noChunking());
+  }
+
+  const auto* nulls = findStream(context, hybridMap.nullsDescriptor().offset());
+  ASSERT_NE(nulls, nullptr);
+  EXPECT_FALSE(nulls->noChunking());
+}
+
 TEST_F(FieldWriterTest, writesStringKeysInGroupOrder) {
   using Entry = std::pair<velox::StringView, std::optional<int64_t>>;
   const auto map = vectorMaker_->mapVector<velox::StringView, int64_t>(

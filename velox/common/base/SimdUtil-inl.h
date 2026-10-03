@@ -1113,9 +1113,12 @@ uint8_t gather8BitsImpl(
   // offset.  There is an AND which will be zero if the bit is not set.
   // This is finally converted to a mask with a negated SIMD
   // comparison with 0.
-  static const xsimd::batch<int32_t, A> kByteBits = {
-      1, 2, 4, 8, 16, 32, 64, 128};
-  auto maskV = detail::Permute<int32_t, A>::apply(kByteBits, vindex & 7, A{});
+  //
+  // A plain local, not a function-local static: a static's initialization
+  // guard is checked on every call, and it keeps this function from inlining
+  // into gatherBits(), which calls it once per 8 bits.
+  const xsimd::batch<int32_t, A> byteBits = {1, 2, 4, 8, 16, 32, 64, 128};
+  auto maskV = detail::Permute<int32_t, A>::apply(byteBits, vindex & 7, A{});
   auto zero = xsimd::batch<int32_t, A>::broadcast(0);
   auto data = detail::Gather<int32_t, int32_t, A>::template maskApply<1>(
       zero,

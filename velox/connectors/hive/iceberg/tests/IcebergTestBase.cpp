@@ -106,20 +106,17 @@ void IcebergTestBase::recreateConnectorQueryCtx(
   auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(), opPool_.get());
 
-  connectorQueryCtx_ = std::make_unique<ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      nullptr,
-      common::PrefixSortConfig(),
-      std::move(expressionEvaluator),
-      nullptr,
-      "query.IcebergTest",
-      "task.IcebergTest",
-      "planNodeId.IcebergTest",
-      0,
-      sessionTimezone,
-      adjustTimestampToTimezone);
+  connectorQueryCtx_ = ConnectorQueryCtx::Builder()
+                           .operatorPool(opPool_.get())
+                           .connectorPool(connectorPool_.get())
+                           .sessionProperties(connectorSessionProperties_.get())
+                           .expressionEvaluator(std::move(expressionEvaluator))
+                           .queryId("query.IcebergTest")
+                           .taskId("task.IcebergTest")
+                           .planNodeId("planNodeId.IcebergTest")
+                           .sessionTimezone(sessionTimezone)
+                           .adjustTimestampToTimezone(adjustTimestampToTimezone)
+                           .build();
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(

@@ -301,30 +301,58 @@ TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
   }
 }
 
-TEST_F(QueryConfigTest, legacyTimestampWithTimezone) {
-  // Defaults to legacy rendering, so enabling the config is opt-in.
+TEST_F(QueryConfigTest, useSessionTimezoneForTimestampWithTimezone) {
   {
     auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_TRUE(config.legacyTimestampWithTimezone());
+    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
   }
 
   {
     std::unordered_map<std::string, std::string> configData(
-        {{QueryConfig::kLegacyTimestampWithTimezone, "false"}});
+        {{QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"}});
     auto queryCtx =
         QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_FALSE(config.legacyTimestampWithTimezone());
+    EXPECT_TRUE(config.useSessionTimezoneForTimestampWithTimezone());
   }
 
   {
     std::unordered_map<std::string, std::string> configData(
-        {{QueryConfig::kLegacyTimestampWithTimezone, "true"}});
+        {{QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "false"}});
     auto queryCtx =
         QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_TRUE(config.legacyTimestampWithTimezone());
+    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{"legacy_timestamp_with_timezone", "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{"legacy_timestamp_with_timezone", "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.useSessionTimezoneForTimestampWithTimezone());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData({
+        {"legacy_timestamp_with_timezone", "false"},
+        {QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "false"},
+    });
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
   }
 }
 
