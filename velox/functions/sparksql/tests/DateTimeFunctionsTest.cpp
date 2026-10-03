@@ -1009,6 +1009,48 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
       Timestamp::fromMillis(2));
 }
 
+TEST_F(DateTimeFunctionsTest, getTimestampAnsi) {
+  enableAnsiMode();
+
+  const auto getTimestamp = [&](const std::optional<StringView>& dateString,
+                                const std::optional<StringView>& format) {
+    return evaluateOnce<Timestamp>("get_timestamp(c0, c1)", dateString, format);
+  };
+  const auto getTimestampConstantFormat =
+      [&](const std::optional<StringView>& dateString,
+          const std::string& format) {
+        return evaluateOnce<Timestamp>(
+            fmt::format("get_timestamp(c0, '{}')", format), dateString);
+      };
+
+  // Valid inputs are not affected.
+  EXPECT_EQ(getTimestamp("1970-01-01", "yyyy-MM-dd"), Timestamp(0, 0));
+  EXPECT_EQ(
+      getTimestampConstantFormat("1970-01-01", "yyyy-MM-dd"), Timestamp(0, 0));
+  EXPECT_EQ(getTimestamp(std::nullopt, "yyyy-MM-dd"), std::nullopt);
+  EXPECT_EQ(getTimestamp("1970-01-01", std::nullopt), std::nullopt);
+
+  // A parsing error throws, with a constant or non-constant format.
+  VELOX_ASSERT_USER_THROW(
+      getTimestamp("1970-01-01 06:10:59.019", "HH:mm:ss.SSS"),
+      "Invalid date format");
+  VELOX_ASSERT_USER_THROW(
+      getTimestampConstantFormat("1970-01-01 06:10:59.019", "HH:mm:ss.SSS"),
+      "Invalid date format");
+  VELOX_ASSERT_USER_THROW(
+      getTimestamp("malformed input", "yyyy-MM-dd"), "Invalid date format");
+  // A field value out of range.
+  VELOX_ASSERT_USER_THROW(
+      getTimestamp("2020-13-01", "yyyy-MM-dd"), "Invalid date format");
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      evaluateOnce<Timestamp>(
+          "try(get_timestamp(c0, 'yyyy-MM-dd'))",
+          std::optional<StringView>("malformed input")),
+      std::nullopt);
+}
+
 TEST_F(DateTimeFunctionsTest, hour) {
   const auto hour = [&](const StringView timestampStr) {
     const auto timeStamp = std::make_optional(parseTimestamp(timestampStr));
