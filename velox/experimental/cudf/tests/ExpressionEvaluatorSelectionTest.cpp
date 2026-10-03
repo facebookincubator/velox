@@ -29,6 +29,7 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 
 #include <folly/ScopeGuard.h>
@@ -259,6 +260,37 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiExtractsDateFields) {
       queryCtx_.get(),
       execCtx_.get());
   EXPECT_TRUE(GpuSfiExpression::canEvaluate(onTimestamp));
+}
+
+// TIMESTAMP WITH TIME ZONE reaches cuDF as the int64 that packs UTC millis over
+// a zone key. No evaluator binds the logical type, and each of them would read
+// the packed bits as a number, so they all decline and the expression stays on
+// the CPU.
+TEST_F(
+    CudfExpressionSelectionTest,
+    timestampWithTimeZoneIsClaimedByNoEvaluator) {
+  auto rowType = ROW(
+      {{"tz0", TIMESTAMP_WITH_TIME_ZONE()},
+       {"tz1", TIMESTAMP_WITH_TIME_ZONE()}});
+  for (const auto& sql :
+       {"tz0 = tz1",
+        "tz0 < tz1",
+        "tz0 between tz1 and tz1",
+        "cast(tz0 as varchar)",
+        "cast(tz0 as timestamp)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_FALSE(ASTExpression::canEvaluate(expr));
+    EXPECT_FALSE(JitExpression::canEvaluate(expr));
+    EXPECT_FALSE(FunctionExpression::canEvaluate(expr));
+    EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // The column itself still reaches the GPU: passing it through reads no bits.
+  auto column =
+      optimizeTypedExpr("tz0", rowType, queryCtx_.get(), execCtx_.get());
+  EXPECT_TRUE(canExprRunOnGpu(column, queryCtx_.get(), pool_.get()));
 }
 
 // GPU SFI cannot read a null literal argument, which has no element 0. It

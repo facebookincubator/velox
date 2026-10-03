@@ -28,9 +28,11 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <folly/ScopeGuard.h>
 
@@ -996,6 +998,74 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
       assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
     }
   }
+}
+
+// TIMESTAMP WITH TIME ZONE packs UTC millis over a zone key in one int64, and
+// two values naming the same instant in different zones compare equal. cuDF
+// sees the column as INT64, so an evaluator that compares or casts the number
+// answers for the packed bits; these expressions have to run on the CPU.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneExpressionsRunOnCpu) {
+  const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
+  const auto utc = tz::getTimeZoneID("UTC");
+  // The same instants in two zones, in both orders since the zone keys sort
+  // one way, one row where the instants differ, and a null.
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int64_t>(
+           {pack(0, losAngeles),
+            pack(1'000, losAngeles),
+            pack(-1'000, losAngeles),
+            pack(1'700'000'000'000, losAngeles),
+            pack(5'000, utc),
+            pack(1'000, losAngeles),
+            std::nullopt},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeNullableFlatVector<int64_t>(
+           {pack(0, utc),
+            pack(1'000, utc),
+            pack(-1'000, utc),
+            pack(1'700'000'000'000, utc),
+            pack(5'000, losAngeles),
+            pack(2'000, utc),
+            pack(0, utc)},
+           TIMESTAMP_WITH_TIME_ZONE())});
+
+  // The operator declines these expressions at plan time, which is observable
+  // only when the plan may continue on the CPU.
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
+  for (const auto& projection :
+       {"c0 = c1",
+        "c0 <> c1",
+        "c0 < c1",
+        "c0 <= c1",
+        "c0 > c1",
+        "c0 >= c1",
+        "c0 between c1 and c1",
+        "cast(c0 as varchar)",
+        "cast(c0 as timestamp)"}) {
+    SCOPED_TRACE(projection);
+    assertProjectMatchesVelox({data}, {projection});
+  }
+
+  for (const auto& filter : {"c0 = c1", "c0 between c1 and c1"}) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox({data}, filter, {"c0", "c1"});
+  }
+
+  // Presto has no cast from TIMESTAMP WITH TIME ZONE to BIGINT, so the plan
+  // reports the CPU's error rather than handing back the packed bits.
+  auto plan =
+      PlanBuilder().values({data}).project({"cast(c0 as bigint)"}).planNode();
+  VELOX_ASSERT_THROW(
+      runPlan(plan), "Cannot cast TIMESTAMP WITH TIME ZONE to BIGINT");
 }
 
 TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
