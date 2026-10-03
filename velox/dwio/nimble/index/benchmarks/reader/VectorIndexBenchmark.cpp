@@ -35,8 +35,8 @@
 #include <glog/logging.h>
 #include <omp.h>
 
-#include "fb_velox/common/Profiler.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/fb/Profiler.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
