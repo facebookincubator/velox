@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 #include <unordered_map>
 
 #include "velox/common/config/Config.h"
@@ -208,6 +209,16 @@ void configureRowReaderOptions(
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
+  }
+  // Deferring the prefetch of lazily loaded columns only pays when the scan's
+  // filters eliminate rows. Without a subfield filter and without a remaining
+  // filter every row survives, so the scan stays eager whatever the parameter
+  // says.
+  auto deferIt = tableParameters.find(
+      dwio::common::TableParameter::kDeferLazyColumnPrefetch);
+  if (deferIt != tableParameters.end() && folly::to<bool>(deferIt->second) &&
+      ((scanSpec && scanSpec->hasFilter()) || metadataFilter != nullptr)) {
+    rowReaderOptions.setDeferLazyColumnPrefetch(true);
   }
   rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setIOExecutor(ioExecutor);

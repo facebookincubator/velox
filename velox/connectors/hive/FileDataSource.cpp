@@ -26,6 +26,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -494,6 +495,14 @@ std::optional<RowVectorPtr> FileDataSource::next(
     }
   }
 
+  // The first batch with rows passing all filters means the lazily loaded
+  // columns will be read; start their deferred prefetch now instead of on the
+  // first actual read. A no-op unless the reader deferred them.
+  if (!lazyColumnsHintSent_) {
+    lazyColumnsHintSent_ = true;
+    splitReader_->hintLazyColumnsNeeded();
+  }
+
   if (outputType_->size() == 0) {
     return exec::wrap(rowsRemaining, remainingIndices, rowVector);
   }
@@ -653,6 +662,7 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 }
 
 void FileDataSource::resetSplit() {
+  lazyColumnsHintSent_ = false;
   split_.reset();
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.

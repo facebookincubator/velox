@@ -308,12 +308,140 @@ std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     const std::shared_ptr<dwio::common::BufferedInput>& input) {
   if (isRowGroupBuffered(index, *input)) {
     enqueueRowGroup(index, *input);
+    rowGroupInputs_[index] = input;
     return input;
   }
-  auto newInput = input->clone();
+  std::shared_ptr<dwio::common::BufferedInput> newInput = input->clone();
   enqueueRowGroup(index, *newInput);
   newInput->load(dwio::common::LogType::STRIPE);
+  rowGroupInputs_[index] = newInput;
   return newInput;
+}
+
+namespace {
+// Collects the physical columns under 'reader', mirroring
+// enqueueRowGroupRecursive(): a struct without logical children gets its
+// nulls from its rep/def source reader (a synthetic physical leaf), if any.
+void collectLeaves(
+    dwio::common::SelectiveColumnReader* reader,
+    std::vector<ParquetData*>& leaves) {
+  const auto& children = reader->children();
+  if (children.empty()) {
+    if (reader->fileType().type()->kind() == TypeKind::ROW) {
+      if (auto* source =
+              static_cast<StructColumnReader*>(reader)->repDefSourceReader()) {
+        collectLeaves(source, leaves);
+      }
+      return;
+    }
+    auto& data = reader->formatData().as<ParquetData>();
+    if (data.isLeaf()) {
+      leaves.push_back(&data);
+    }
+    return;
+  }
+  for (auto* child : children) {
+    if (child != nullptr) {
+      collectLeaves(child, leaves);
+    }
+  }
+}
+} // namespace
+
+void StructColumnReader::resolveLazyColumns() {
+  if (lazyColumnsResolved_) {
+    return;
+  }
+  lazyColumnsResolved_ = true;
+  if (!deferLazyColumnPrefetch_) {
+    return;
+  }
+  for (auto* child : children_) {
+    if (child == nullptr) {
+      continue;
+    }
+    // Same condition as SelectiveStructColumnReaderBase::read() uses to
+    // produce the child as a LazyVector instead of reading it eagerly.
+    const auto* childSpec = child->scanSpec();
+    if (!(generateLazyChildren() && child->isTopLevel() &&
+          childSpec->projectOut() && !childSpec->hasFilter())) {
+      continue;
+    }
+    std::vector<ParquetData*> leaves;
+    collectLeaves(child, leaves);
+    if (leaves.empty()) {
+      continue;
+    }
+    lazyColumns_.insert(child);
+    for (auto* leaf : leaves) {
+      lazyColumnLeaves_.emplace_back(leaf, child);
+      leaf->setLazyColumnCallback([this, child](uint32_t /*rowGroup*/) {
+        markLazyColumnNeeded(child);
+      });
+    }
+  }
+}
+
+void StructColumnReader::markAllLazyColumnsNeeded() {
+  resolveLazyColumns();
+  if (neededLazyColumns_.size() == lazyColumns_.size()) {
+    return;
+  }
+  neededLazyColumns_ = lazyColumns_;
+  prefetchNeededLazyColumns();
+}
+
+void StructColumnReader::markLazyColumnNeeded(
+    dwio::common::SelectiveColumnReader* column) {
+  if (!neededLazyColumns_.insert(column).second) {
+    // Already needed: its chunks are enqueued for every buffered row group.
+    return;
+  }
+  prefetchNeededLazyColumns();
+}
+
+void StructColumnReader::prefetchNeededLazyColumns() {
+  for (auto it = rowGroupInputs_.begin(); it != rowGroupInputs_.end();) {
+    auto input = it->second.lock();
+    if (!input) {
+      it = rowGroupInputs_.erase(it);
+      continue;
+    }
+    const auto index = it->first;
+    ++it;
+    std::vector<ParquetData*> missing;
+    for (auto& [leaf, column] : lazyColumnLeaves_) {
+      if (neededLazyColumns_.count(column) != 0 &&
+          !leaf->isRowGroupEnqueued(index)) {
+        missing.push_back(leaf);
+      }
+    }
+    if (missing.empty()) {
+      continue;
+    }
+    if (isRowGroupBuffered(index, *input)) {
+      // The whole row group is in memory (e.g. preloaded file): the streams
+      // are served from it, nothing to load.
+      for (auto* leaf : missing) {
+        leaf->enqueueRowGroup(index, *input);
+      }
+      continue;
+    }
+    // A new input for this deferred load: the row group's input and any
+    // earlier deferred input have been loaded already and a BufferedInput is
+    // loaded only once, so their pending loads stay intact.
+    auto lazyInput = input->clone();
+    for (auto* leaf : missing) {
+      leaf->enqueueRowGroup(index, *lazyInput);
+    }
+    lazyInput->load(dwio::common::LogType::STRIPE);
+    deferredInputs_[index].push_back(std::move(lazyInput));
+  }
+}
+
+void StructColumnReader::releaseRowGroup(uint32_t index) {
+  deferredInputs_.erase(index);
+  rowGroupInputs_.erase(index);
 }
 
 bool StructColumnReader::isRowGroupBuffered(
@@ -327,7 +455,18 @@ bool StructColumnReader::isRowGroupBuffered(
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  enqueueRowGroupRecursive(*this, index, input);
+  resolveLazyColumns();
+  for (auto* child : children_) {
+    if (child == nullptr) {
+      continue;
+    }
+    if (lazyColumns_.count(child) != 0 &&
+        neededLazyColumns_.count(child) == 0) {
+      // Deferred: enqueued once the scan shows the column is needed.
+      continue;
+    }
+    enqueueRowGroupRecursive(*child, index, input);
+  }
 }
 
 void StructColumnReader::seekToRowGroup(int64_t index) {
