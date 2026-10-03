@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/registration/Register.h"
@@ -411,6 +413,38 @@ TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
       {"collect_set(c0, false)"},
       {"spark_array_sort(a0)"},
       {expected});
+}
+
+TEST_F(CollectSetAggregateTest, respectNullsWindow) {
+  // Window functions forward the constant ignoreNulls argument to the
+  // aggregate, so nulls are kept with ignoreNulls=false in window mode too.
+  auto data = makeRowVector(
+      {"c0", "p", "s"},
+      {makeNullableFlatVector<int32_t>({1, std::nullopt, 1, 2}),
+       makeFlatVector<int32_t>({1, 1, 1, 1}),
+       makeFlatVector<int32_t>({1, 2, 3, 4})});
+
+  auto plan =
+      exec::test::PlanBuilder()
+          .values({data})
+          .window({"collect_set(c0, false) over (partition by p order by s "
+                   "rows between unbounded preceding and current row)"})
+          .project({"spark_array_sort(w0)"})
+          .planNode();
+  auto expected = makeRowVector({makeNullableArrayVector<int32_t>(
+      std::vector<std::vector<std::optional<int32_t>>>{
+          {1}, {1, std::nullopt}, {1, std::nullopt}, {1, 2, std::nullopt}})});
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = exec::test::PlanBuilder()
+             .values({data})
+             .window({"collect_set(c0, true) over (partition by p order by s "
+                      "rows between unbounded preceding and current row)"})
+             .project({"spark_array_sort(w0)"})
+             .planNode();
+  expected = makeRowVector(
+      {makeArrayVectorFromJson<int32_t>({"[1]", "[1]", "[1]", "[1, 2]"})});
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {

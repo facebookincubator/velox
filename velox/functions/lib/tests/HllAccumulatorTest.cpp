@@ -15,6 +15,8 @@
  */
 #include "velox/functions/lib/HllAccumulator.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include "velox/common/base/XxHashInline.h"
 
 #include <gtest/gtest-typed-test.h>
@@ -328,4 +330,34 @@ TYPED_TEST(HllAccumulatorTest, mergeUninitializedAccumulator) {
   accumulator.mergeWith(StringView(buffer), this->allocator_);
 
   EXPECT_EQ(accumulator.cardinality(), numValues);
+}
+
+TYPED_TEST(HllAccumulatorTest, checkSerializedHll) {
+  using facebook::velox::common::hll::checkSerializedHll;
+
+  auto sparse = facebook::velox::common::hll::SparseHlls::serializeEmpty(11);
+  EXPECT_EQ(checkSerializedHll(sparse.data(), sparse.size()), 11);
+
+  facebook::velox::common::hll::HllAccumulator<int64_t, false, TypeParam>
+      accumulator{12, this->allocator_};
+  for (int64_t i = 0; i < 10'000; ++i) {
+    accumulator.append(i);
+  }
+  ASSERT_FALSE(accumulator.isSparse());
+  std::string dense(accumulator.serializedSize(), '\0');
+  accumulator.serialize(dense.data());
+  EXPECT_EQ(checkSerializedHll(dense.data(), dense.size()), 12);
+
+  // Empty, truncated and garbage inputs are rejected before being read.
+  VELOX_ASSERT_USER_THROW(
+      checkSerializedHll(sparse.data(), 0), "Invalid serialized HyperLogLog");
+  VELOX_ASSERT_USER_THROW(
+      checkSerializedHll(sparse.data(), 3), "Invalid serialized HyperLogLog");
+  VELOX_ASSERT_USER_THROW(
+      checkSerializedHll(dense.data(), dense.size() - 1),
+      "Invalid serialized HyperLogLog");
+  const std::string garbage = "not a hyperloglog";
+  VELOX_ASSERT_USER_THROW(
+      checkSerializedHll(garbage.data(), garbage.size()),
+      "Invalid serialized HyperLogLog");
 }

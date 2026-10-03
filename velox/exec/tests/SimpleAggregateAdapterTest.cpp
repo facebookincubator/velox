@@ -17,6 +17,8 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -582,6 +584,32 @@ TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
   // function. A cast expression like BIGINT '10' would be rejected by
   // AggregateInfo, which only accepts field accesses, constants, and lambdas.
   testAggregations({input}, {}, {"simple_const_fwd(c0, 10)"}, {expected});
+}
+
+TEST_F(
+    SimpleConstantInputForwardingAggregationTest,
+    forwardsConstantInputsToWindowFunctions) {
+  // Window functions create the aggregate themselves and must forward the
+  // constant arguments the same way AggregateInfo does.
+  auto input = makeRowVector(
+      {"c0", "p", "s"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({1, 1, 1}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  auto plan =
+      exec::test::PlanBuilder()
+          .values({input})
+          .window({"simple_const_fwd(c0, 10) over (partition by p order "
+                   "by s rows between current row and 1 following)"})
+          .planNode();
+  // Frames: {1, 2} -> 11 + 12, {2, 3} -> 12 + 13, {3} -> 13.
+  auto expected = makeRowVector(
+      {"c0", "p", "s", "w0"},
+      {input->childAt(0),
+       input->childAt(1),
+       input->childAt(2),
+       makeFlatVector<int64_t>({23, 25, 13})});
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
 }
 
 // A testing simple avg aggregate function, and it is used to check for

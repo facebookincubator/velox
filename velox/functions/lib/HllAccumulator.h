@@ -57,6 +57,20 @@ inline uint64_t hashOne<StringView, true>(const StringView& value) {
 
 } // namespace detail
 
+/// Validates that the 'size' bytes at 'input' hold a well-formed serialized
+/// sparse or dense HLL and returns its index bit length. Throws a user error
+/// otherwise. Aggregates use this to reject malformed intermediate results
+/// before merging them.
+inline int8_t checkSerializedHll(const char* input, int32_t size) {
+  VELOX_USER_CHECK(
+      SparseHlls::canDeserialize(input, size) ||
+          DenseHlls::canDeserialize(input, size),
+      "Invalid serialized HyperLogLog");
+  // Sparse and dense digests share the same header: the format version
+  // followed by the index bit length.
+  return DenseHlls::deserializeIndexBitLength(input);
+}
+
 template <
     typename T,
     bool HllAsFinalResult,

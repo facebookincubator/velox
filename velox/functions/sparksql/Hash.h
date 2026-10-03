@@ -13,9 +13,72 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Computes the hash of a single primitive value using the hash function in
+/// HashClass (e.g. XxHash64 or Murmur3Hash). HashClass provides the
+/// Spark-compatible hashInt32, hashInt64, hashFloat, hashDouble,
+/// hashLongDecimal, hashTimestamp and hashBytes functions. Shared by the hash
+/// vector functions and by aggregates that need Spark's hash of a value.
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int32_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashInt32(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int64_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashInt64(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    float input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashFloat(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    double input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashDouble(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int128_t input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashLongDecimal(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    Timestamp input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashTimestamp(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    StringView input,
+    typename HashClass::SeedType seed) {
+  return HashClass::hashBytes(input, seed);
+}
+
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    UnknownValue /*input*/,
+    typename HashClass::SeedType seed) {
+  return seed;
+}
 
 // Supported types:
 //   - Boolean
