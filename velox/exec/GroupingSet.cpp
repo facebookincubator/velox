@@ -1593,7 +1593,8 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
     mergeSelection_.clearAll();
   }
   mergeSelection_.setValid(input.currentIndex(), true);
-  mergeSelection_.updateBounds();
+  mergeSelection_.setActiveBounds(
+      input.currentIndex(), input.currentIndex() + 1);
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
