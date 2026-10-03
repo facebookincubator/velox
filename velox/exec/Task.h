@@ -1036,11 +1036,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   folly::dynamic toShortJsonLocked() const;
 
+ public:
+  /// Task pause/resume reclamation, reusable by custom-resource factories.
   class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
         const std::shared_ptr<Task>& task,
-        int64_t priority = 0);
+        int64_t priority = 0,
+        std::optional<std::string> customPoolTag = std::nullopt);
 
     uint64_t reclaim(
         memory::MemoryPool* pool,
@@ -1052,8 +1055,13 @@ class Task : public std::enable_shared_from_this<Task> {
         override;
 
    private:
-    MemoryReclaimer(const std::shared_ptr<Task>& task, int64_t priority)
-        : exec::MemoryReclaimer(priority), task_(task) {
+    MemoryReclaimer(
+        const std::shared_ptr<Task>& task,
+        int64_t priority,
+        std::optional<std::string> customPoolTag)
+        : exec::MemoryReclaimer(priority),
+          task_(task),
+          customPoolTag_(std::move(customPoolTag)) {
       VELOX_CHECK_NOT_NULL(task);
     }
 
@@ -1065,15 +1073,20 @@ class Task : public std::enable_shared_from_this<Task> {
       return task_.lock();
     }
 
+    memory::MemoryPool* memoryPool(const std::shared_ptr<Task>& task) const;
+
     uint64_t reclaimTask(
         const std::shared_ptr<Task>& task,
+        memory::MemoryPool* pool,
         uint64_t targetBytes,
         uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats);
 
     std::weak_ptr<Task> task_;
+    const std::optional<std::string> customPoolTag_;
   };
 
+ private:
   /// Returns true if state is 'running'.
   bool isRunningLocked() const;
 

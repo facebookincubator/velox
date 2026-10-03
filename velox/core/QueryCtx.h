@@ -503,6 +503,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       TraceCtxProvider traceCtxProvider = nullptr,
       CredentialKeys credentialKeys = {});
 
+ public:
+  /// Query arbitration coordination, reusable by custom-resource factories.
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
@@ -536,6 +538,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     memory::MemoryPool* const pool_;
   };
 
+ private:
   static config::ConfigBase* getEmptyConfig() {
     static const std::unique_ptr<config::ConfigBase> kEmptyConfig =
         std::make_unique<config::ConfigBase>(

@@ -782,7 +782,8 @@ void Task::initCustomTaskPools() {
         resource, "No CustomMemoryResource registered for tag: {}", tag);
     customChildPools_.push_back(root->addAggregateChild(
         fmt::format("task.{}.{}", taskId_.c_str(), tag),
-        resource->newReclaimer()));
+        resource->newTaskReclaimer(
+            shared_from_this(), memoryArbitrationPriority_)));
     customTaskPools_[tag] = customChildPools_.back().get();
   }
 }
@@ -3925,9 +3926,23 @@ void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {
 
 std::unique_ptr<memory::MemoryReclaimer> Task::MemoryReclaimer::create(
     const std::shared_ptr<Task>& task,
-    int64_t priority) {
+    int64_t priority,
+    std::optional<std::string> customPoolTag) {
   return std::unique_ptr<memory::MemoryReclaimer>(
-      new Task::MemoryReclaimer(task, priority));
+      new Task::MemoryReclaimer(task, priority, std::move(customPoolTag)));
+}
+
+memory::MemoryPool* Task::MemoryReclaimer::memoryPool(
+    const std::shared_ptr<Task>& task) const {
+  if (!customPoolTag_.has_value()) {
+    return task->pool();
+  }
+  const auto it = task->customTaskPools_.find(*customPoolTag_);
+  VELOX_CHECK(
+      it != task->customTaskPools_.end(),
+      "Custom task pool missing for tag: {}",
+      *customPoolTag_);
+  return it->second;
 }
 
 uint64_t Task::MemoryReclaimer::reclaim(
@@ -3939,13 +3954,13 @@ uint64_t Task::MemoryReclaimer::reclaim(
   if (FOLLY_UNLIKELY(task == nullptr)) {
     return 0;
   }
-  VELOX_CHECK_EQ(task->pool()->name(), pool->name());
+  VELOX_CHECK_EQ(memoryPool(task)->name(), pool->name());
 
   uint64_t reclaimWaitTimeUs{0};
   uint64_t reclaimedBytes{0};
   {
     MicrosecondWallTimer timer{&reclaimWaitTimeUs};
-    reclaimedBytes = reclaimTask(task, targetBytes, maxWaitMs, stats);
+    reclaimedBytes = reclaimTask(task, pool, targetBytes, maxWaitMs, stats);
   }
   ++task->taskStats_.memoryReclaimCount;
   task->taskStats_.memoryReclaimMs += reclaimWaitTimeUs / 1'000;
@@ -3954,6 +3969,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
 
 uint64_t Task::MemoryReclaimer::reclaimTask(
     const std::shared_ptr<Task>& task,
+    memory::MemoryPool* pool,
     uint64_t targetBytes,
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
@@ -4001,8 +4017,8 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
     uint64_t reclaimExecTimeUs{0};
     {
       MicrosecondWallTimer timer{&reclaimExecTimeUs};
-      reclaimedBytes = memory::MemoryReclaimer::reclaim(
-          task->pool(), targetBytes, maxWaitMs, stats);
+      reclaimedBytes =
+          memory::MemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
     }
     RECORD_HISTOGRAM_METRIC_VALUE(
         kMetricTaskMemoryReclaimExecTimeMs, reclaimExecTimeUs / 1'000);
@@ -4023,7 +4039,7 @@ void Task::MemoryReclaimer::abort(
   if (FOLLY_UNLIKELY(task == nullptr)) {
     return;
   }
-  VELOX_CHECK_EQ(task->pool()->name(), pool->name());
+  VELOX_CHECK_EQ(memoryPool(task)->name(), pool->name());
 
   task->setError(error);
   // TODO: respect the memory arbitration request timeout later.

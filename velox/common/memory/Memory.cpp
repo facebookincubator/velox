@@ -294,13 +294,31 @@ std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
     std::shared_ptr<CustomMemoryResource> resource,
     const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
   VELOX_USER_CHECK_NOT_NULL(resource);
-  return addRootPoolImpl(
+  return addCustomRootPool(
       name,
+      resource->allocator(),
+      resource->arbitrator(),
       resource->maxCapacity(),
       resource->newReclaimer(),
+      poolDebugOpts);
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
+    const std::string& name,
+    MemoryAllocator* allocator,
+    MemoryArbitrator* arbitrator,
+    int64_t maxCapacity,
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  VELOX_USER_CHECK_NOT_NULL(allocator, "Custom root pool allocator is null");
+  VELOX_USER_CHECK_NOT_NULL(arbitrator, "Custom root pool arbitrator is null");
+  return addRootPoolImpl(
+      name,
+      maxCapacity,
+      std::move(reclaimer),
       poolDebugOpts,
-      resource->allocator(),
-      resource->arbitrator());
+      allocator,
+      arbitrator);
 }
 
 std::shared_ptr<MemoryPool> MemoryManager::addRootPoolImpl(
