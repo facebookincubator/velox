@@ -43,3 +43,29 @@ target_link_libraries(
   CUDA::cudart
   breeze_cuda
 )
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_executable(velox_wave_scan_benchmark ScanBenchmark.cu)
+
+  target_link_libraries(
+    velox_wave_scan_benchmark
+    velox_wave_common
+    Folly::folly
+    gflags::gflags
+    glog::glog
+    fmt::fmt
+    CUDA::cudart
+  )
+
+  add_executable(velox_wave_scan_shared_benchmark ScanSharedBenchmark.cu)
+
+  target_link_libraries(
+    velox_wave_scan_shared_benchmark
+    velox_wave_common
+    Folly::folly
+    gflags::gflags
+    glog::glog
+    fmt::fmt
+    CUDA::cudart
+  )
+endif()
