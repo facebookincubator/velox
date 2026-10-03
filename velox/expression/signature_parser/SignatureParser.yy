@@ -24,7 +24,7 @@
 
 %code
 {
-    #include <velox/expression/signature_parser/Scanner.h>
+    #include "velox/expression/signature_parser/Scanner.h"
     #define yylex(x) scanner->lex(x)
 }
 

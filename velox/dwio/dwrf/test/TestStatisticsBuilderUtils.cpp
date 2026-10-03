@@ -19,9 +19,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <velox/common/memory/HashStringAllocator.h>
-#include <velox/common/memory/Memory.h>
 #include <cmath>
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/common/memory/Memory.h"
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;

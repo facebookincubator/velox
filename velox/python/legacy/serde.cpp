@@ -17,7 +17,7 @@
 #include "serde.h"
 #include "context.h"
 
-#include <velox/vector/VectorSaver.h>
+#include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::py {
 
