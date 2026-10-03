@@ -252,6 +252,13 @@ class TypeCoercer {
   std::optional<Coercion> coerce(const TypePtr& fromType, const TypePtr& toType)
       const;
 
+  /// Returns the rule-defined target for coercing 'fromType' to a scalar type
+  /// named 'toTypeName', or std::nullopt. This supports binding parameters of
+  /// a target type before the fully resolved target is available.
+  std::optional<Coercion> tryCoerceToTypeBase(
+      const Type& fromType,
+      std::string_view toTypeName) const;
+
   /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
   /// 'b' are coercible to. Returns nullptr if no such type exists.
   ///

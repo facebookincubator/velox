@@ -2020,6 +2020,72 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     VELOX_ASSERT_EQ_TYPES(coercions[0], BIGINT());
     ASSERT_EQ(coercions[1], nullptr);
   }
+
+  // Coercion to a parameterized scalar type binds its parameters from the
+  // coercion target.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .integerVariable("precision")
+            .integerVariable("scale")
+            .returnType("decimal(precision, scale)")
+            .argumentType("decimal(precision, scale)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(10, 0));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(10, 0));
+  }
+
+  // A fixed parameterized target can widen the rule's minimum target.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .returnType("decimal(12, 2)")
+            .argumentType("decimal(12, 2)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(12, 2));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(12, 2));
+  }
+
+  // A partially fixed target binds its variable to the least compatible type.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .integerVariable("precision")
+            .returnType("decimal(precision, 20)")
+            .argumentType("decimal(precision, 20)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(30, 20));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(30, 20));
+  }
+
+  // Failed inference does not retain provisional integer bindings.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .returnType("decimal(precision, 0)")
+                         .argumentType("decimal(precision, 20)")
+                         .build();
+    const std::vector<TypePtr> argTypes{BIGINT()};
+    exec::SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+    ASSERT_EQ(binder.tryResolveReturnType(), nullptr);
+  }
 }
 
 // Two DECIMALs of different precision or scale bound to one type variable, as
