@@ -534,6 +534,12 @@ ScanSpec* ScanSpec::addArrayElementFieldRecursively(const Type& type) {
   return child;
 }
 
+std::shared_ptr<ScanSpec> ScanSpec::allFieldsRoot(const Type& type) {
+  auto root = std::make_shared<ScanSpec>("root");
+  root->addAllChildFields(type);
+  return root;
+}
+
 void ScanSpec::addAllChildFields(const Type& type) {
   switch (type.kind()) {
     case TypeKind::ROW: {
