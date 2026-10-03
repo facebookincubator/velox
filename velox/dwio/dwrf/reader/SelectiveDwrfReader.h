@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveColumnReader.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
 namespace facebook::velox::dwrf {
@@ -45,6 +44,7 @@ class SelectiveDwrfReader {
       common::ScanSpec* scanSpec,
       FlatMapContext flatMapContext = {},
       bool isRoot = false) {
+    VELOX_CHECK_NOT_NULL(scanSpec);
     auto params = DwrfParams(stripe, streamLabels, stats, flatMapContext);
     return build(
         columnReaderOptions,
