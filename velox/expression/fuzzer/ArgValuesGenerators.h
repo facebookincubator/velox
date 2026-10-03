@@ -104,61 +104,6 @@ class URLArgValuesGenerator : public ArgValuesGenerator {
       ExpressionFuzzerState& state) override;
 };
 
-class TDigestArgValuesGenerator : public ArgValuesGenerator {
- public:
-  explicit TDigestArgValuesGenerator(std::string functionName) {
-    functionName_ = std::move(functionName);
-  }
-  ~TDigestArgValuesGenerator() override = default;
-
-  std::vector<core::TypedExprPtr> generate(
-      const CallableSignature& signature,
-      const VectorFuzzer::Options& options,
-      FuzzerGenerator& rng,
-      ExpressionFuzzerState& state) override;
-
- private:
-  std::string functionName_;
-};
-
-class QDigestArgValuesGenerator : public ArgValuesGenerator {
- public:
-  explicit QDigestArgValuesGenerator(std::string functionName) {
-    functionName_ = std::move(functionName);
-  }
-  ~QDigestArgValuesGenerator() override = default;
-
-  std::vector<core::TypedExprPtr> generate(
-      const CallableSignature& signature,
-      const VectorFuzzer::Options& options,
-      FuzzerGenerator& rng,
-      ExpressionFuzzerState& state) override;
-
- private:
-  std::string functionName_;
-};
-
-class UnifiedDigestArgValuesGenerator : public ArgValuesGenerator {
- public:
-  explicit UnifiedDigestArgValuesGenerator(std::string functionName)
-      : functionName_(std::move(functionName)),
-        tdigestGenerator_(functionName_),
-        qdigestGenerator_(functionName_) {}
-
-  ~UnifiedDigestArgValuesGenerator() override = default;
-
-  std::vector<core::TypedExprPtr> generate(
-      const CallableSignature& signature,
-      const VectorFuzzer::Options& options,
-      FuzzerGenerator& rng,
-      ExpressionFuzzerState& state) override;
-
- private:
-  std::string functionName_;
-  TDigestArgValuesGenerator tdigestGenerator_;
-  QDigestArgValuesGenerator qdigestGenerator_;
-};
-
 /// Generates arguments for fb_dedup_normalize_text function.
 /// For the two-parameter version, constrains the second parameter to valid
 /// normalization forms: NFC, NFD, NFKC, NFKD.
@@ -187,23 +132,6 @@ class AtTimezoneArgValuesGenerator : public ArgValuesGenerator {
       const VectorFuzzer::Options& options,
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
-};
-
-class SetDigestArgValuesGenerator : public ArgValuesGenerator {
- public:
-  explicit SetDigestArgValuesGenerator(std::string functionName) {
-    functionName_ = std::move(functionName);
-  }
-  ~SetDigestArgValuesGenerator() override = default;
-
-  std::vector<core::TypedExprPtr> generate(
-      const CallableSignature& signature,
-      const VectorFuzzer::Options& options,
-      FuzzerGenerator& rng,
-      ExpressionFuzzerState& state) override;
-
- private:
-  std::string functionName_;
 };
 /// Generates valid S2 cell ID arguments for s2_cell_* functions.
 /// Picks random face, position, and level to construct valid cell IDs via
