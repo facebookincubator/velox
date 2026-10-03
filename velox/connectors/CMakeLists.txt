@@ -33,6 +33,10 @@ if(${VELOX_ENABLE_TPCDS_CONNECTOR})
   add_subdirectory(tpcds)
 endif()
 
+if(${VELOX_ENABLE_ADBC_CONNECTOR})
+  add_subdirectory(adbc)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
