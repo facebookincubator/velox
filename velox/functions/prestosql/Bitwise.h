@@ -15,13 +15,15 @@
  */
 #pragma once
 
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 namespace facebook::velox::functions {
 
 template <typename T>
 struct BitwiseAndFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput a, TInput b) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, TInput a, TInput b) {
     result = a & b;
     return true;
   }
@@ -30,7 +32,8 @@ struct BitwiseAndFunction {
 template <typename T>
 struct BitCountFunction {
   static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, int64_t num, int32_t bits) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, int64_t num, int32_t bits) {
     VELOX_USER_CHECK(
         bits >= 2 && bits <= kMaxBits,
         "Bits specified in bit_count must be between 2 and 64, got {}",
@@ -53,7 +56,9 @@ struct BitCountFunction {
 template <typename T>
 struct BitwiseNotFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      TInput a) {
     result = ~a;
     return true;
   }
@@ -62,7 +67,8 @@ struct BitwiseNotFunction {
 template <typename T>
 struct BitwiseOrFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput a, TInput b) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, TInput a, TInput b) {
     result = a | b;
     return true;
   }
@@ -71,7 +77,8 @@ struct BitwiseOrFunction {
 template <typename T>
 struct BitwiseXorFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput a, TInput b) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, TInput a, TInput b) {
     result = a ^ b;
     return true;
   }
@@ -80,7 +87,7 @@ struct BitwiseXorFunction {
 template <typename T>
 struct BitwiseArithmeticShiftRightFunction {
   // Only support bigint inputs.
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(int64_t& result, int64_t number, int64_t shift) {
     VELOX_USER_CHECK_GE(shift, 0, "Shift must be non-negative");
     if (shift >= 63) {
@@ -98,7 +105,8 @@ struct BitwiseArithmeticShiftRightFunction {
 template <typename TExec>
 struct BitwiseLeftShiftFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, T number, int32_t shift) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(T& result, T number, int32_t shift) {
     static constexpr uint32_t kMaxShift = sizeof(T) * 8;
 
     // Return zero if 'shift' is negative or exceeds number of bits in T.
@@ -113,7 +121,8 @@ struct BitwiseLeftShiftFunction {
 template <typename TExec>
 struct BitwiseRightShiftFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, T number, int32_t shift) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(T& result, T number, int32_t shift) {
     static constexpr uint32_t kMaxShift = sizeof(T) * 8;
 
     // Return zero if 'shift' is negative or exceeds number of bits in T.
@@ -139,7 +148,8 @@ FOLLY_ALWAYS_INLINE int64_t preserveSign(T number) {
 template <typename TExec>
 struct BitwiseRightShiftArithmeticFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, T number, int32_t shift) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(T& result, T number, int32_t shift) {
     if ((uint32_t)shift >= 64) {
       if (number >= 0) {
         result = 0L;
@@ -167,7 +177,7 @@ struct BitwiseRightShiftArithmeticFunction {
 
 template <typename T>
 struct BitwiseLogicalShiftRightFunction {
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
 #if defined(__clang__)
       __attribute__((no_sanitize("integer")))
 #endif
@@ -199,7 +209,7 @@ struct BitwiseLogicalShiftRightFunction {
 
 template <typename T>
 struct BitwiseShiftLeftFunction {
-  FOLLY_ALWAYS_INLINE bool
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
 #if defined(__clang__)
       __attribute__((no_sanitize("integer")))
 #endif
