@@ -427,8 +427,9 @@ class SchemaBuilder {
       ScalarKind keyScalarKind);
 
   /// Creates a hybrid flat map builder. Every physical group owns a complete
-  /// value subtree, following FlatMap's child-type model. A projection may
-  /// omit the reserved Default group.
+  /// value subtree, following FlatMap's child-type model. A complete schema
+  /// requires the reserved Default group, which may be its only group. A
+  /// projection may omit Default but keeps at least one group.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
       bool projection = false);

@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaGenerated.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 
 namespace facebook::nimble {
@@ -563,6 +564,39 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsTruncatedGroup) {
       SchemaReader::getSchema(nodes), "Incomplete Hybrid FlatMap group");
 }
 
+TEST(SchemaBuilderTest, hybridFlatMapReadsDefaultOnlyWithoutGroupKeys) {
+  // The metadata writer omitted the empty group_keys vector.
+  flatbuffers::FlatBufferBuilder metadataBuilder;
+  metadataBuilder.Finish(
+      serialization::CreateHybridFlatMap(
+          metadataBuilder,
+          metadataBuilder.CreateVector(
+              std::vector<uint32_t>{HybridFlatMap::kDefaultGroupId}),
+          metadataBuilder.CreateVector(std::vector<uint32_t>{0})));
+  const std::vector<SchemaNode> nodes{
+      SchemaNode{
+          Kind::HybridFlatMap,
+          0,
+          ScalarKind::String,
+          std::nullopt,
+          1,
+          {{std::string{HybridFlatMap::kAttributeName},
+            std::string{
+                reinterpret_cast<const char*>(
+                    metadataBuilder.GetBufferPointer()),
+                metadataBuilder.GetSize()}}}},
+      SchemaNode{Kind::Scalar, 1, ScalarKind::String},
+      SchemaNode{Kind::Scalar, 2, ScalarKind::Bool},
+      SchemaNode{Kind::Scalar, 3, ScalarKind::Int64},
+  };
+
+  const auto schema = SchemaReader::getSchema(nodes);
+  const auto& hybridMap = schema->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 1);
+  EXPECT_EQ(hybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(hybridMap.groupAt(0).groupKeys.empty());
+}
+
 TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
   {
     SchemaBuilder builder;
@@ -576,10 +610,22 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
 
   {
     SchemaBuilder builder;
-    builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    hybridMap->addGroup(
+        0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Hybrid FlatMap requires at least 2 group(s)");
+        builder.schemaNodes(),
+        "Hybrid FlatMap single group must be Default: 0");
+  }
+
+  for (const bool projection : {false, true}) {
+    SCOPED_TRACE(projection);
+    SchemaBuilder builder;
+    builder.createHybridFlatMapTypeBuilder(ScalarKind::String, projection);
+
+    NIMBLE_ASSERT_THROW(
+        builder.schemaNodes(), "Hybrid FlatMap requires at least 1 group(s)");
   }
 
   {
@@ -590,8 +636,21 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
         {},
         builder.createScalarTypeBuilder(ScalarKind::Int64));
 
-    NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Hybrid FlatMap requires at least 2 group(s)");
+    const auto nodes = builder.schemaNodes();
+    ASSERT_EQ(nodes.size(), 4);
+    EXPECT_EQ(nodes[0].kind(), Kind::HybridFlatMap);
+    EXPECT_EQ(nodes[0].childrenCount(), 1);
+    EXPECT_EQ(nodes[1].scalarKind(), ScalarKind::String);
+    EXPECT_EQ(nodes[2].scalarKind(), ScalarKind::Bool);
+    EXPECT_EQ(nodes[3].scalarKind(), ScalarKind::Int64);
+
+    const auto schema = SchemaReader::getSchema(nodes);
+    const auto& hybridMapType = schema->asHybridFlatMap();
+    ASSERT_EQ(hybridMapType.groupCount(), 1);
+    EXPECT_EQ(hybridMapType.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_TRUE(hybridMapType.groupAt(0).groupKeys.empty());
+    EXPECT_EQ(&hybridMapType.defaultGroup(), &hybridMapType.groupAt(0));
+    EXPECT_FALSE(hybridMapType.findGroup("a").has_value());
   }
 
   {

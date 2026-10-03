@@ -62,6 +62,36 @@ std::string encodeRawMetadata(
       builder.GetSize()};
 }
 
+std::string encodeMetadataWithoutGroupKeys(
+    const std::vector<uint32_t>& groupIds,
+    const std::vector<uint32_t>& groupKeyCounts) {
+  flatbuffers::FlatBufferBuilder builder;
+  builder.Finish(
+      serialization::CreateHybridFlatMap(
+          builder,
+          builder.CreateVector(groupIds),
+          builder.CreateVector(groupKeyCounts)));
+  return {
+      reinterpret_cast<const char*>(builder.GetBufferPointer()),
+      builder.GetSize()};
+}
+
+HybridFlatMap defaultOnlyMetadata() {
+  return HybridFlatMap{
+      .groups = {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+  };
+}
+
+void validateGroups(const HybridFlatMap& hybridMap, bool hasDefault) {
+  detail::validateHybridFlatMapGroups(
+      hybridMap.groups.size(),
+      hasDefault,
+      [&hybridMap](size_t index) { return hybridMap.groups[index].groupId; },
+      [&hybridMap](size_t index) -> const auto& {
+        return hybridMap.groups[index].groupKeys;
+      });
+}
+
 TEST(HybridFlatMapTest, supportedKeyKinds) {
   for (const auto kind : {
            ScalarKind::Int8,
@@ -131,6 +161,25 @@ TEST(HybridFlatMapTest, metadataRoundTripPreservesFlattenedOrderAndBinaryKeys) {
   EXPECT_EQ(HybridFlatMap::deserialize(serialized), expected);
 }
 
+TEST(HybridFlatMapTest, metadataRoundTripsDefaultOnly) {
+  const auto expected = defaultOnlyMetadata();
+  const auto serialized = expected.serialize();
+  flatbuffers::Verifier verifier{
+      reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size()};
+  ASSERT_TRUE(verifier.VerifyBuffer<serialization::HybridFlatMap>());
+
+  const auto* flat =
+      flatbuffers::GetRoot<serialization::HybridFlatMap>(serialized.data());
+  ASSERT_NE(flat->group_ids(), nullptr);
+  EXPECT_THAT(*flat->group_ids(), ElementsAre(HybridFlatMap::kDefaultGroupId));
+  ASSERT_NE(flat->group_key_counts(), nullptr);
+  EXPECT_THAT(*flat->group_key_counts(), ElementsAre(0));
+  ASSERT_NE(flat->group_keys(), nullptr);
+  EXPECT_EQ(flat->group_keys()->size(), 0);
+
+  EXPECT_EQ(HybridFlatMap::deserialize(serialized), expected);
+}
+
 TEST(HybridFlatMapTest, rejectsOmittedVectors) {
   flatbuffers::FlatBufferBuilder builder;
   serialization::HybridFlatMapBuilder metadataBuilder{builder};
@@ -143,6 +192,18 @@ TEST(HybridFlatMapTest, rejectsOmittedVectors) {
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(bytes),
       "Hybrid FlatMap group IDs are missing");
+}
+
+TEST(HybridFlatMapTest, deserializeAcceptsOmittedGroupKeysWithoutKeys) {
+  EXPECT_EQ(
+      HybridFlatMap::deserialize(encodeMetadataWithoutGroupKeys(
+          {HybridFlatMap::kDefaultGroupId}, {0})),
+      defaultOnlyMetadata());
+
+  NIMBLE_ASSERT_THROW(
+      HybridFlatMap::deserialize(encodeMetadataWithoutGroupKeys(
+          {7, HybridFlatMap::kDefaultGroupId}, {1, 0})),
+      "Hybrid FlatMap group key counts must match group keys size");
 }
 
 TEST(HybridFlatMapTest, rejectsMalformedMetadata) {
@@ -177,6 +238,26 @@ TEST(HybridFlatMapTest, projectedConfiguredGroupRequiresKeys) {
             return projected.groups[index].groupKeys;
           }),
       "Hybrid FlatMap group must contain at least one key: 7");
+}
+
+TEST(HybridFlatMapTest, validatesMinimumGroupCount) {
+  for (const bool hasDefault : {false, true}) {
+    SCOPED_TRACE(hasDefault);
+    EXPECT_NO_THROW(validateGroups(defaultOnlyMetadata(), hasDefault));
+    NIMBLE_ASSERT_THROW(
+        validateGroups(HybridFlatMap{}, hasDefault),
+        "Hybrid FlatMap requires at least 1 group(s)");
+  }
+
+  // A projection may keep only a configured group, but a complete schema's
+  // single group must be Default.
+  const HybridFlatMap explicitOnly{
+      .groups = {{.groupId = 7, .groupKeys = {"a"}}},
+  };
+  EXPECT_NO_THROW(validateGroups(explicitOnly, /*hasDefault=*/false));
+  NIMBLE_ASSERT_THROW(
+      validateGroups(explicitOnly, /*hasDefault=*/true),
+      "Hybrid FlatMap single group must be Default: 7");
 }
 
 TEST(HybridFlatMapTest, deserializeAcceptsPhysicalProjectionMetadata) {
