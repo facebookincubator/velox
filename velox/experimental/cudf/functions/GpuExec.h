@@ -31,6 +31,8 @@ struct Time;
 class Timestamp;
 template <typename T>
 struct Variadic;
+template <typename T, bool providesCustomComparison>
+struct CustomType;
 } // namespace facebook::velox
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
@@ -98,6 +100,18 @@ struct resolver<Timestamp> {
   using in_type = GpuTimestamp;
   using out_type = GpuTimestamp;
   using null_free_in_type = GpuTimestamp;
+};
+
+/// A custom type resolves to its physical type, so TimestampWithTimezone
+/// arrives as the packed int64 the column holds. Velox wraps a comparable one
+/// in a view that reaches its Type for compare(); a kernel has no Type, so a
+/// body reads the value directly.
+template <typename T, bool providesCustomComparison>
+struct resolver<CustomType<T, providesCustomComparison>> {
+  using in_type = typename resolver<typename T::type>::in_type;
+  using out_type = typename resolver<typename T::type>::out_type;
+  using null_free_in_type =
+      typename resolver<typename T::type>::null_free_in_type;
 };
 
 /// A variadic pack resolves to a view over its element type. Only in_type is

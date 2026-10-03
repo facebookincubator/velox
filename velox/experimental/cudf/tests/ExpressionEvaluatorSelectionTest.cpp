@@ -263,9 +263,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiExtractsDateFields) {
 }
 
 // TIMESTAMP WITH TIME ZONE reaches cuDF as the int64 that packs UTC millis over
-// a zone key. No evaluator binds the logical type, and each of them would read
-// the packed bits as a number, so they all decline and the expression stays on
-// the CPU.
+// a zone key. The evaluators that would read it as a number decline, and with
+// no GPU SFI function over the type yet, the expression stays on the CPU.
 TEST_F(
     CudfExpressionSelectionTest,
     timestampWithTimeZoneIsClaimedByNoEvaluator) {
@@ -284,6 +283,7 @@ TEST_F(
     EXPECT_FALSE(ASTExpression::canEvaluate(expr));
     EXPECT_FALSE(JitExpression::canEvaluate(expr));
     EXPECT_FALSE(FunctionExpression::canEvaluate(expr));
+    EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
     EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
 

@@ -19,12 +19,18 @@
 // launchers are stand-ins that are never invoked.
 
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
+#include "velox/experimental/cudf/tests/GpuTestFunctions.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TypeCoercer.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -292,6 +298,36 @@ TEST_F(GpuFunctionRegistryTest, decimalSignaturesCarryPrecisionAndScale) {
   exec::SignatureBinder wrongType(
       *entries->front().signature, bigints, TypeCoercer::defaults());
   EXPECT_FALSE(wrongType.tryBind());
+}
+
+// TIMESTAMP WITH TIME ZONE is BIGINT underneath. The signature names the
+// logical type and the kernel is compiled for the packed int64, so a call binds
+// on a TIMESTAMP WITH TIME ZONE column alone, as the DATE registrations do on
+// theirs.
+TEST_F(GpuFunctionRegistryTest, timestampWithTimeZoneRendersItsLogicalType) {
+  // Registration parses the signature, which names the type, so the type has
+  // to be known first, as the CPU registrations of its functions ensure.
+  registerTimestampWithTimeZoneType();
+  registerGpuTestFunctions();
+
+  const auto* entries = lookup("test_millis_utc");
+  ASSERT_NE(entries, nullptr);
+  ASSERT_EQ(entries->size(), 1);
+  const auto& entry = entries->front();
+  EXPECT_EQ(
+      entry.signature->toString(), "(timestamp with time zone) -> bigint");
+  EXPECT_THAT(entry.argumentKinds, testing::ElementsAre(TypeKind::BIGINT));
+  EXPECT_EQ(entry.returnKind, TypeKind::BIGINT);
+
+  auto call = [](const TypePtr& argumentType) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(argumentType, "c0")},
+        "test_millis_utc");
+  };
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(call(TIMESTAMP_WITH_TIME_ZONE())));
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(call(BIGINT())));
 }
 
 // The four functions whose bodies use VELOX_USER_CHECK are not registered
