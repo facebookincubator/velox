@@ -19,9 +19,17 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/common/serialization/NativeSerdeIO.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+
+constexpr uint32_t kVectorHasherStateMagic = 0x56485331; // VHS1
+constexpr uint32_t kVectorHasherStateVersion = 3;
+
+} // namespace
 
 #define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
   [&]() {                                                                   \
@@ -1006,6 +1014,173 @@ void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
       break;
     }
   }
+}
+
+const common::BigintValuesUsingBloomFilter* VectorHasher::bloomFilterState()
+    const {
+  if (!bloomFilter_) {
+    return nullptr;
+  }
+  VELOX_CHECK(
+      supportsBloomFilter(),
+      "Unexpected bloom filter for VectorHasher type {}",
+      type_->toString());
+  auto* bloomFilter = dynamic_cast<const common::BigintValuesUsingBloomFilter*>(
+      bloomFilter_.get());
+  VELOX_CHECK_NOT_NULL(
+      bloomFilter, "Unexpected bloom filter implementation in VectorHasher");
+  return bloomFilter;
+}
+
+std::string VectorHasher::serializeState() const {
+  const auto* bloomFilter = bloomFilterState();
+  std::string bloomFilterData;
+  if (bloomFilter != nullptr) {
+    bloomFilter->serializeBinary(bloomFilterData);
+  }
+
+  std::vector<const UniqueValue*> valuesById;
+  if (!distinctOverflow_) {
+    valuesById.resize(uniqueValues_.size(), nullptr);
+    for (const auto& value : uniqueValues_) {
+      VELOX_CHECK_GE(value.id(), 1);
+      VELOX_CHECK_LE(value.id(), valuesById.size());
+      valuesById[value.id() - 1] = &value;
+    }
+  }
+
+  std::string data;
+  data.reserve(serializedStateSize());
+  common::NativeStringWriter writer(data);
+
+  writer.writeValue<uint32_t>(kVectorHasherStateMagic);
+  writer.writeValue<uint32_t>(kVectorHasherStateVersion);
+  writer.writeValue<uint32_t>(static_cast<uint32_t>(typeKind_));
+  writer.writeValue<bool>(typeProvidesCustomComparison_);
+  writer.writeValue<uint64_t>(rangeSize_);
+  writer.writeValue<uint64_t>(multiplier_);
+  writer.writeValue<bool>(isRange_);
+  writer.writeValue<bool>(hasRange_);
+  writer.writeValue<bool>(rangeOverflow_);
+  writer.writeValue<bool>(distinctOverflow_);
+  writer.writeValue<int64_t>(min_);
+  writer.writeValue<int64_t>(max_);
+
+  writer.writeValue<bool>(bloomFilter != nullptr);
+  if (bloomFilter != nullptr) {
+    writer.writeValue<uint32_t>(bloomFilterData.size());
+    if (!bloomFilterData.empty()) {
+      writer.write(bloomFilterData.data(), bloomFilterData.size());
+    }
+  }
+
+  if (distinctOverflow_) {
+    writer.writeValue<uint32_t>(0);
+    return data;
+  }
+
+  writer.writeValue<uint32_t>(valuesById.size());
+  for (const auto* value : valuesById) {
+    VELOX_CHECK_NOT_NULL(value, "Missing unique value for serialized id range");
+    const auto bytes = value->bytesView();
+    writer.writeValue<uint32_t>(bytes.size());
+    if (!bytes.empty()) {
+      writer.write(bytes.data(), bytes.size());
+    }
+  }
+
+  return data;
+}
+
+uint32_t VectorHasher::serializedStateSize() const {
+  // Fixed part: magic, version, type kind, custom comparison flag, range and
+  // distinct state, the bloom filter presence flag and the unique value count.
+  uint32_t size = sizeof(kVectorHasherStateMagic) +
+      sizeof(kVectorHasherStateVersion) + sizeof(uint32_t) + sizeof(bool) +
+      sizeof(rangeSize_) + sizeof(multiplier_) + sizeof(isRange_) +
+      sizeof(hasRange_) + sizeof(rangeOverflow_) + sizeof(distinctOverflow_) +
+      sizeof(min_) + sizeof(max_) + sizeof(bool) + sizeof(uint32_t);
+
+  if (const auto* bloomFilter = bloomFilterState()) {
+    // Length prefix plus the bloom filter's own binary form.
+    size += sizeof(uint32_t) + bloomFilter->serializedBinarySize();
+  }
+
+  if (!distinctOverflow_) {
+    for (const auto& value : uniqueValues_) {
+      size += sizeof(uint32_t) + value.size();
+    }
+  }
+
+  return size;
+}
+
+void VectorHasher::deserializeState(std::string_view data) {
+  common::NativeStringReader reader(data);
+  const auto magic = reader.readValue<uint32_t>();
+  const auto version = reader.readValue<uint32_t>();
+  VELOX_CHECK_EQ(magic, kVectorHasherStateMagic, "Invalid VectorHasher state");
+  VELOX_CHECK_EQ(
+      version,
+      kVectorHasherStateVersion,
+      "Unsupported VectorHasher state version: {}",
+      version);
+
+  const auto typeKind = static_cast<TypeKind>(reader.readValue<uint32_t>());
+  const auto hasCustomComparison = reader.readValue<bool>();
+  VELOX_CHECK_EQ(typeKind, typeKind_, "VectorHasher type kind mismatch");
+  VELOX_CHECK_EQ(
+      hasCustomComparison,
+      typeProvidesCustomComparison_,
+      "VectorHasher comparison mode mismatch");
+
+  rangeSize_ = reader.readValue<uint64_t>();
+  multiplier_ = reader.readValue<uint64_t>();
+  isRange_ = reader.readValue<bool>();
+  hasRange_ = reader.readValue<bool>();
+  rangeOverflow_ = reader.readValue<bool>();
+  distinctOverflow_ = reader.readValue<bool>();
+  min_ = reader.readValue<int64_t>();
+  max_ = reader.readValue<int64_t>();
+
+  bloomFilter_.reset();
+  const bool hasBloomFilter = reader.readValue<bool>();
+  if (hasBloomFilter) {
+    VELOX_CHECK(
+        supportsBloomFilter(),
+        "Unexpected bloom filter for VectorHasher type {}",
+        type_->toString());
+    const auto bloomFilterSize = reader.readValue<uint32_t>();
+    bloomFilter_ = common::BigintValuesUsingBloomFilter::deserializeBinary(
+        reader.view(bloomFilterSize));
+  }
+
+  uniqueValues_.clear();
+  uniqueValuesStorage_.clear();
+  distinctStringsBytes_ = 0;
+
+  const auto numUniqueValues = reader.readValue<uint32_t>();
+  if (!distinctOverflow_) {
+    uniqueValues_.reserve(numUniqueValues);
+    for (uint32_t id = 1; id <= numUniqueValues; ++id) {
+      const auto size = reader.readValue<uint32_t>();
+      const auto value = reader.view(size);
+
+      // 'value' points into 'data'; copyStringToLocal() moves out-of-line
+      // values into 'uniqueValuesStorage_'.
+      UniqueValue unique(value.data(), size);
+      unique.setId(id);
+      auto [iter, inserted] = uniqueValues_.insert(unique);
+      VELOX_CHECK(inserted, "Duplicate value in VectorHasher state");
+      copyStringToLocal(&*iter);
+    }
+  } else {
+    for (uint32_t i = 0; i < numUniqueValues; ++i) {
+      reader.skip(reader.readValue<uint32_t>());
+    }
+  }
+
+  VELOX_CHECK(reader.atEnd(), "Trailing bytes in VectorHasher state");
 }
 
 std::string VectorHasher::toString() const {
