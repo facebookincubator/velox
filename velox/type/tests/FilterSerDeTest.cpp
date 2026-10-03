@@ -17,8 +17,8 @@
 #include <limits>
 #include <memory>
 
-#include <velox/type/Filter.h>
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/Filter.h"
 
 #include <gtest/gtest.h>
 

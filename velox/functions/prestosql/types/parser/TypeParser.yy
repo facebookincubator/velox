@@ -34,7 +34,7 @@
 
 %code
 {
-    #include <velox/functions/prestosql/types/parser/Scanner.h>
+    #include "velox/functions/prestosql/types/parser/Scanner.h"
     #define yylex(x) scanner->lex(x)
 }
 

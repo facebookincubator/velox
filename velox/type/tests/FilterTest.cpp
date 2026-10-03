@@ -20,9 +20,9 @@
 #include <numeric>
 #include <optional>
 
-#include <velox/type/DecimalUtil.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Filter.h"
 
 #include <gtest/gtest.h>

@@ -28,13 +28,13 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
-#include <velox/common/base/Exceptions.h>
 #include "folly/CPortability.h"
 #include "folly/GLog.h"
 #include "folly/Likely.h"
 #include "folly/Random.h"
 #include "folly/SharedMutex.h"
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/memory/CustomMemoryResource.h"

@@ -16,8 +16,8 @@
 #include <string>
 
 #include <gtest/gtest.h>
-#include <velox/core/QueryConfig.h>
 #include <optional>
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
 
