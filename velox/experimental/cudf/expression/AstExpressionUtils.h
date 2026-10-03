@@ -283,8 +283,8 @@ bool isOpAndInputsSupported(
 bool isAstExprSupported(const core::TypedExprPtr& expr) {
   using Op = cudf::ast::ast_operator;
 
-  // Reject expressions with types not yet supported in AST/JIT (currently
-  // TIMESTAMP and DECIMAL).
+  // Reject expressions with types not supported in AST/JIT: TIMESTAMP,
+  // DECIMAL, and types compared through custom functions.
   if (containsAstUnsupportedType(expr)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
       LOG(WARNING) << "Expression contains a type not supported by AST/JIT: "
