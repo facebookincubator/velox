@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <bit>
 #include <numeric>
@@ -71,9 +72,9 @@ class ALPRDEncodingTest : public ::testing::Test {
   std::string_view encode(
       const std::vector<Physical>& values,
       EncodingLayout layout = makeLayout()) {
-    std::vector<T> logical;
-    for (const auto value : values) {
-      logical.push_back(std::bit_cast<T>(value));
+    ScopedVector<T> logical{values.size(), pool_.get(), options_.bufferPool};
+    for (size_t i = 0; i < values.size(); ++i) {
+      logical[i] = std::bit_cast<T>(values[i]);
     }
     return EncodingFactory::encode<T>(
         makePolicy<T>(std::move(layout)), logical, *buffer_, options_);
@@ -90,10 +91,13 @@ class ALPRDEncodingTest : public ::testing::Test {
           ? legacy::EncodingFactory(options_).create(*pool_, encoded, nullptr)
           : decoder(encoded);
       ASSERT_EQ(reader->rowCount(), expected.size());
-      std::vector<Physical> actual(expected.size());
+      ScopedVector<Physical> actual{
+          expected.size(), pool_.get(), options_.bufferPool};
+      std::fill(actual.begin(), actual.end(), 0);
       reader->materialize(actual.size(), actual.data());
-      EXPECT_EQ(
-          actual, (std::vector<Physical>{expected.begin(), expected.end()}));
+      EXPECT_THAT(
+          (std::span<const Physical>{actual}),
+          ::testing::ElementsAreArray(expected));
     }
   }
 
@@ -385,7 +389,9 @@ TYPED_TEST(ALPRDEncodingTest, nullableKeepsExistingPhysicalChildLayout) {
       values.push_back(value);
       physicalValues.push_back(std::bit_cast<Physical>(value));
     }
-    Vector<bool> notNulls(this->pool_.get(), 2 * values.size(), false);
+    ScopedVector<bool> notNulls{
+        2 * values.size(), this->pool_.get(), this->options_.bufferPool};
+    std::fill(notNulls.begin(), notNulls.end(), false);
     for (uint32_t row = 0; row < notNulls.size(); row += 2) {
       notNulls[row] = true;
     }
@@ -435,7 +441,9 @@ TYPED_TEST(ALPRDEncodingTest, nullableKeepsExistingPhysicalChildLayout) {
       if constexpr (!TypeParam::useVarint) {
         auto reader =
             legacy::EncodingFactory().create(*this->pool_, encoded, nullptr);
-        std::vector<Physical> actual(notNulls.size());
+        ScopedVector<Physical> actual{
+            notNulls.size(), this->pool_.get(), this->options_.bufferPool};
+        std::fill(actual.begin(), actual.end(), 0);
         reader->materialize(actual.size(), actual.data());
         for (size_t row = 0; row < actual.size(); ++row) {
           EXPECT_EQ(actual[row], row % 2 == 0 ? physicalValues[row / 2] : 0);
@@ -450,7 +458,9 @@ TYPED_TEST(ALPRDEncodingTest, nullableExplicitFloatingCodecs) {
   using Physical = typename TestFixture::Physical;
   std::vector<T> values;
   std::vector<Physical> expected(514, 0);
-  Vector<bool> notNulls(this->pool_.get(), expected.size(), false);
+  ScopedVector<bool> notNulls{
+      expected.size(), this->pool_.get(), this->options_.bufferPool};
+  std::fill(notNulls.begin(), notNulls.end(), false);
   for (uint32_t row = 0; row < expected.size(); row += 2) {
     const auto value = static_cast<T>(1 + row % 67) / 4;
     values.push_back(value);
@@ -477,9 +487,13 @@ TYPED_TEST(ALPRDEncodingTest, nullableExplicitFloatingCodecs) {
     ASSERT_EQ(EncodingPrefix::encodingType(child), codec);
     EXPECT_EQ(EncodingPrefix::dataType(child), TypeTraits<T>::dataType);
     auto reader = this->decoder(encoded);
-    std::vector<Physical> actual(expected.size());
+    ScopedVector<Physical> actual{
+        expected.size(), this->pool_.get(), this->options_.bufferPool};
+    std::fill(actual.begin(), actual.end(), 0);
     reader->materialize(actual.size(), actual.data());
-    EXPECT_EQ(actual, expected);
+    EXPECT_THAT(
+        (std::span<const Physical>{actual}),
+        ::testing::ElementsAreArray(expected));
   }
 }
 
@@ -493,14 +507,17 @@ TYPED_TEST(ALPRDEncodingTest, skipResetAndSliceWithLargePositions) {
   ASSERT_EQ(metadata.parameters.rightBitWidth, sizeof(Physical) * 8 - 16);
   this->check(encoded, values);
   auto reader = this->decoder(encoded);
-  std::vector<Physical> actual(values.size());
+  ScopedVector<Physical> actual{
+      values.size(), this->pool_.get(), this->options_.bufferPool};
+  std::fill(actual.begin(), actual.end(), 0);
   uint32_t position = 0;
   while (position < values.size()) {
     const auto count = std::min<uint32_t>(113, values.size() - position);
     reader->materialize(count, actual.data() + position);
     position += count;
   }
-  EXPECT_EQ(actual, values);
+  EXPECT_THAT(
+      (std::span<const Physical>{actual}), ::testing::ElementsAreArray(values));
   reader->reset();
   reader->skip(values.size() - 2);
   std::array<Physical, 2> tail;
@@ -512,16 +529,23 @@ TYPED_TEST(ALPRDEncodingTest, skipResetAndSliceWithLargePositions) {
   reader->skip(1);
   reader->materialize(0, nullptr);
   EXPECT_THROW(reader->skip(1), NimbleException);
-  for (const auto& [offset, count] : std::vector<std::pair<uint32_t, uint32_t>>{
-           {0, 31},
-           {17, 513},
-           {65'536, 1'000},
-           {uint32_t(values.size() - 5), 5}}) {
-    const auto sliced = EncodingFactory::slice(
-        encoded, offset, count, *this->buffer_, this->options_);
-    EXPECT_EQ(EncodingPrefix::encodingType(sliced), EncodingType::ALPRD);
-    this->check(
-        sliced, std::span<const Physical>(values).subspan(offset, count));
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  for (const bool useBufferPool : {false, true}) {
+    SCOPED_TRACE(useBufferPool);
+    auto options = this->options_;
+    options.bufferPool = useBufferPool ? &bufferPool : nullptr;
+    for (const auto& [offset, count] :
+         std::vector<std::pair<uint32_t, uint32_t>>{
+             {0, 31},
+             {17, 513},
+             {65'536, 1'000},
+             {uint32_t(values.size() - 5), 5}}) {
+      const auto sliced = EncodingFactory::slice(
+          encoded, offset, count, *this->buffer_, options);
+      EXPECT_EQ(EncodingPrefix::encodingType(sliced), EncodingType::ALPRD);
+      this->check(
+          sliced, std::span<const Physical>(values).subspan(offset, count));
+    }
   }
 }
 

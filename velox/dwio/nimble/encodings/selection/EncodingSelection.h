@@ -258,6 +258,12 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
   virtual ~EncodingSelectionPolicy() = default;
 };
 
+namespace detail {
+/// Returns whether an encoding can retain a logical floating-point type.
+/// Container encodings also require the policy to request logical selection.
+bool useLogicalTypeForEncoding(DataType logicalType, EncodingType encodingType);
+} // namespace detail
+
 namespace {
 template <typename T, typename S>
 std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
@@ -308,10 +314,11 @@ std::string_view EncodingSelection<T>::encodeNested(
     static_assert(
         std::is_same_v<NestedT, typename TypeTraits<LogicalT>::physicalType>);
     const auto type = nestedSelection.encodingType();
-    if (type == EncodingType::ALP || type == EncodingType::ALPRD ||
-        (useLogicalType &&
-         (type == EncodingType::Dictionary || type == EncodingType::RLE ||
-          type == EncodingType::MainlyConstant))) {
+    const bool requiresLogicalType{
+        type == EncodingType::ALP || type == EncodingType::ALPRD};
+    if ((requiresLogicalType || useLogicalType) &&
+        detail::useLogicalTypeForEncoding(
+            TypeTraits<LogicalT>::dataType, type)) {
       return EncodingFactory::encode<LogicalT>(
           std::move(nestedSelection), values, buffer, options);
     }

@@ -333,8 +333,8 @@ class ALPRDEncoding final
     uint32_t exceptionCount = 0;
     if (metadata.exceptionCount != 0) {
       // Validate exception ordering and bounds before using lower_bound.
-      Vector<uint32_t> exceptionPositions(pool);
-      Vector<uint16_t> exceptionHighParts(pool);
+      ScopedVector<uint32_t> exceptionPositions{0, pool, options.bufferPool};
+      ScopedVector<uint16_t> exceptionHighParts{0, pool, options.bufferPool};
       loadExceptions(
           *pool, metadata, options, exceptionPositions, exceptionHighParts);
       const auto* begin = exceptionPositions.data();
