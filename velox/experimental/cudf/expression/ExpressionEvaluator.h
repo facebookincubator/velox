@@ -210,6 +210,13 @@ bool canExprRunOnGpu(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
+/// Plan-time GPU eligibility for an already-typed expression when only the
+/// connector's timestamp-adjustment setting is available. This overload does
+/// not optimize the expression.
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    bool adjustTimestampToTimezone);
+
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
 std::optional<std::vector<std::string>> extractFieldPath(

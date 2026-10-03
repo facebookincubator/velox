@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
@@ -35,6 +37,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -100,6 +103,9 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
     CudfHiveConnectorTestBase::SetUp();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+    parquet::registerParquetReaderFactory();
     ExchangeSource::factories().clear();
     ExchangeSource::registerFactory(createLocalExchangeSource);
   }
@@ -173,6 +179,14 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
     auto planStats = toPlanStats(task->taskStats());
     return std::move(planStats.at("0"));
+  }
+
+  static bool wasCudfToVeloxUsed(
+      const std::shared_ptr<Task>& task,
+      const core::PlanNodeId& planNodeId) {
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& scanStats = planStats.at(planNodeId);
+    return scanStats.operatorStats.count("CudfToVelox") > 0;
   }
 
   static std::unordered_map<std::string, RuntimeMetric>
@@ -1041,6 +1055,131 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   ASSERT_NE(it, scanStats.customStats.end());
   EXPECT_EQ(it->second.sum, 0)
       << "Expected no remaining filter time when filter is fully extracted";
+}
+
+TEST_F(TableScanTest, remainingFilterEligibility) {
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto testFilter = [&](const std::string& filter,
+                        const RowVectorPtr& expected,
+                        bool expectCudfScan) {
+    SCOPED_TRACE(filter);
+
+    auto scanPlan = PlanBuilder(pool_.get())
+                        .startTableScan()
+                        .connectorId(kCudfHiveConnectorId)
+                        .outputType(rowType)
+                        .dataColumns(rowType)
+                        .assignments(assignments)
+                        .remainingFilter(filter)
+                        .endTableScan()
+                        .planNode();
+
+    std::shared_ptr<Task> task;
+    auto actual = AssertQueryBuilder(scanPlan)
+                      .config(CudfConfig::kCudfEnabled, true)
+                      .splits(makeCudfHiveConnectorSplits({filePath}))
+                      .copyResults(pool(), task);
+
+    assertEqualResults({expected}, {actual});
+    EXPECT_EQ(wasCudfToVeloxUsed(task, scanPlan->id()), expectCudfScan);
+  };
+
+  // A supported, non-extractable remaining filter keeps the scan on GPU.
+  testFilter(
+      "c0 % 2 = 0",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      true);
+
+  // An unsupported nested function falls back to the CPU Hive data source.
+  testFilter(
+      "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))",
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1})}),
+      false);
+}
+
+TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
+  auto rowType = ROW({"event_ts"}, {TIMESTAMP()});
+  auto data = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {
+              Timestamp(1767297600, 0), // 2026-01-01 20:00:00 UTC.
+              Timestamp(1767258000, 0), // 2026-01-01 09:00:00 UTC.
+          },
+          TIMESTAMP())});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto testFilter = [&](const std::string& filter,
+                        bool adjustTimestampToTimezone,
+                        const RowVectorPtr& expected,
+                        bool expectCudfScan) {
+    SCOPED_TRACE(filter);
+
+    auto scanPlan = PlanBuilder(pool_.get())
+                        .startTableScan()
+                        .connectorId(kCudfHiveConnectorId)
+                        .outputType(rowType)
+                        .dataColumns(rowType)
+                        .assignments(assignments)
+                        .remainingFilter(filter)
+                        .endTableScan()
+                        .planNode();
+
+    std::shared_ptr<Task> task;
+    auto actual = AssertQueryBuilder(scanPlan)
+                      .config(CudfConfig::kCudfEnabled, true)
+                      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+                      .config(
+                          QueryConfig::kAdjustTimestampToTimezone,
+                          adjustTimestampToTimezone ? "true" : "false")
+                      .splits(makeCudfHiveConnectorSplits({filePath}))
+                      .copyResults(pool(), task);
+
+    assertEqualResults({expected}, {actual});
+    EXPECT_EQ(wasCudfToVeloxUsed(task, scanPlan->id()), expectCudfScan);
+  };
+
+  auto firstRow = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767297600, 0)},
+          TIMESTAMP())}); // 2026-01-01 20:00:00 UTC.
+  auto noRows = makeRowVector(rowType, 0);
+
+  // Without session-timezone adjustment, day truncation is safe on GPU.
+  testFilter(
+      "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 00:00:00'",
+      false,
+      data,
+      true);
+
+  // Day truncation must use CPU session-timezone semantics when adjustment is
+  // enabled.
+  testFilter(
+      "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 18:30:00'",
+      true,
+      noRows,
+      false);
+
+  // Minute truncation is timezone-insensitive and remains eligible.
+  testFilter(
+      "date_trunc('minute', event_ts) = TIMESTAMP '2026-01-01 20:00:00'",
+      true,
+      firstRow,
+      true);
 }
 
 TEST_F(TableScanTest, decimalSubfieldFilter) {
