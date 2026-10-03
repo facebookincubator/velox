@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include <iterator>
 #include "velox/expression/EvalCtx.h"
 
 namespace facebook::velox::exec {
@@ -30,8 +31,48 @@ namespace facebook::velox::exec {
 ///        std::pow(base->valueAt<double>(row), exp->valueAt<double>(row));
 ///    });
 ///
+/// Also iterable over the decoded arguments:
+///    for (auto* decoded : decodedArgs) {
+///      ...
+///    }
+///
 class DecodedArgs {
  public:
+  /// Yields 'DecodedVector*', matching at(), by unwrapping the holders in
+  /// place.
+  class Iterator {
+   public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = DecodedVector*;
+    using difference_type = std::ptrdiff_t;
+    using pointer = DecodedVector**;
+    using reference = DecodedVector*;
+
+    Iterator() = default;
+
+    explicit Iterator(exec::LocalDecodedVector* holder) : holder_{holder} {}
+
+    DecodedVector* operator*() const {
+      return holder_->get();
+    }
+
+    Iterator& operator++() {
+      ++holder_;
+      return *this;
+    }
+
+    Iterator operator++(int) {
+      auto previous = *this;
+      ++holder_;
+      return previous;
+    }
+
+    bool operator==(const Iterator& other) const = default;
+
+   private:
+    exec::LocalDecodedVector* holder_{nullptr};
+  };
+
   DecodedArgs(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -48,6 +89,14 @@ class DecodedArgs {
 
   size_t size() const {
     return holders_.size();
+  }
+
+  Iterator begin() const {
+    return Iterator{holders_.data()};
+  }
+
+  Iterator end() const {
+    return Iterator{holders_.data() + holders_.size()};
   }
 
  private:
