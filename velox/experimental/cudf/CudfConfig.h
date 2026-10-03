@@ -40,6 +40,10 @@ struct CudfConfig {
       "cudf.jit_expression_enabled"};
   static constexpr const char* kCudfJitExpressionPriority{
       "cudf.jit_expression_priority"};
+  static constexpr const char* kCudfGpuSfiExpressionEnabled{
+      "cudf.gpu_sfi_expression_enabled"};
+  static constexpr const char* kCudfGpuSfiExpressionPriority{
+      "cudf.gpu_sfi_expression_priority"};
   static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
@@ -151,6 +155,15 @@ struct CudfConfig {
 
   /// Priority of JIT expression.
   int jitExpressionPriority{101};
+
+  /// Enable Velox simple functions compiled to CUDA kernels.
+  bool gpuSfiExpressionEnabled{true};
+
+  /// Priority of the GPU simple-function evaluator. Below AST by default,
+  /// because it launches one kernel per expression node where AST fuses a tree
+  /// into one. Raise it past astExpressionPriority to prefer Velox semantics
+  /// where the two disagree.
+  int gpuSfiExpressionPriority{75};
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
