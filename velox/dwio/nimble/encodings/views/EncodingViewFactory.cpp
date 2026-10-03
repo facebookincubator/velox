@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/DecodedFallbackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
@@ -155,6 +156,14 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        // A delta stream requires every prior value to reconstruct a given
+        // index, so it cannot be read positionally and must be materialized.
+        if (subintsplit::isDeltaStream(
+                data,
+                EncodingPrefix::prefixSize(data, options.useVarintRowCount))) {
+          return std::make_unique<DecodedFallbackEncodingView<T>>(
+              data, pool, options);
+        }
         return std::make_unique<SubIntSplitEncodingView<T>>(
             data, pool, options);
       }
