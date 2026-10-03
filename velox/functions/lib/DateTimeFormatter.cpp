@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <charconv>
 #include <cstring>
+#include <limits>
 #include "velox/common/base/CountBits.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
@@ -813,6 +814,7 @@ int getMaxDigitConsume(
 
 // If failOnError is true, throws exception for parsing error. Otherwise,
 // returns -1. Returns 0 if no parsing error.
+template <bool microsecondPrecision>
 int32_t parseFromPattern(
     FormatPattern curPattern,
     const std::string_view& input,
@@ -898,19 +900,42 @@ int32_t parseFromPattern(
     auto startPos = cur;
     int64_t number = 0;
     int maxDigitConsume = getMaxDigitConsume(curPattern, specifierNext, type);
+    const auto appendDigit = [&](char digit) {
+      const auto value = digit - '0';
+      if (number > (std::numeric_limits<int64_t>::max() - value) / 10) {
+        return false;
+      }
+      number = number * 10 + value;
+      return true;
+    };
 
     if (curPattern.specifier == DateTimeFormatSpecifier::FRACTION_OF_SECOND) {
       int count = 0;
-      while (cur < end && cur < startPos + maxDigitConsume &&
+      while (cur < end && cur - startPos < maxDigitConsume &&
              characterIsDigit(*cur)) {
-        number = number * 10 + (*cur - '0');
+        if constexpr (microsecondPrecision) {
+          if (count < 6 && !appendDigit(*cur)) {
+            return -1;
+          }
+        } else {
+          if (!appendDigit(*cur)) {
+            return -1;
+          }
+        }
         ++cur;
         ++count;
       }
-      // If the number of digits is less than 3, a simple formatter interprets
-      // it as the whole number; otherwise, it pads the number with zeros.
-      if (type != DateTimeFormatterType::STRICT_SIMPLE &&
+      if constexpr (microsecondPrecision) {
+        // Pad short fractions to six digits. Digits after the sixth were
+        // consumed but deliberately not accumulated.
+        for (int i = count; i < 6; ++i) {
+          number *= 10;
+        }
+      } else if (
+          type != DateTimeFormatterType::STRICT_SIMPLE &&
           type != DateTimeFormatterType::LENIENT_SIMPLE) {
+        // Joda and MySQL formatters pad short fractions to milliseconds.
+        // Simple formatters interpret the parsed number as whole milliseconds.
         number *= std::pow(10, 3 - count);
       }
     } else if (
@@ -925,9 +950,11 @@ int32_t parseFromPattern(
       // If more than two digits are provided, then simply read in full year
       // normally without conversion
       int count = 0;
-      while (cur < end && cur < startPos + maxDigitConsume &&
+      while (cur < end && cur - startPos < maxDigitConsume &&
              characterIsDigit(*cur)) {
-        number = number * 10 + (*cur - '0');
+        if (!appendDigit(*cur)) {
+          return -1;
+        }
         ++cur;
         ++count;
       }
@@ -951,9 +978,11 @@ int32_t parseFromPattern(
         }
       }
     } else {
-      while (cur < end && cur < startPos + maxDigitConsume &&
+      while (cur < end && cur - startPos < maxDigitConsume &&
              characterIsDigit(*cur)) {
-        number = number * 10 + (*cur - '0');
+        if (!appendDigit(*cur)) {
+          return -1;
+        }
         ++cur;
       }
     }
@@ -1094,7 +1123,16 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::FRACTION_OF_SECOND:
-        date.microsecond = number * util::kMicrosPerMsec;
+        if constexpr (microsecondPrecision) {
+          date.microsecond = number;
+        } else {
+          if (number >
+                  std::numeric_limits<int32_t>::max() / util::kMicrosPerMsec ||
+              (type == DateTimeFormatterType::STRICT_SIMPLE && number > 999)) {
+            return -1;
+          }
+          date.microsecond = number * util::kMicrosPerMsec;
+        }
         break;
 
       case DateTimeFormatSpecifier::WEEK_YEAR:
@@ -1565,6 +1603,17 @@ int32_t DateTimeFormatter::format(
 
 Expected<DateTimeResult> DateTimeFormatter::parse(
     const std::string_view& input) const {
+  return parseImpl<false>(input);
+}
+
+Expected<DateTimeResult> DateTimeFormatter::parseWithMicrosecondPrecision(
+    const std::string_view& input) const {
+  return parseImpl<true>(input);
+}
+
+template <bool microsecondPrecision>
+Expected<DateTimeResult> DateTimeFormatter::parseImpl(
+    const std::string_view& input) const {
   Date date;
   const char* cur = input.data();
   const char* end = cur + input.size();
@@ -1582,12 +1631,12 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
       case DateTimeToken::Type::kPattern:
         if (i + 1 < tokens_.size() &&
             tokens_[i + 1].type == DateTimeToken::Type::kPattern) {
-          if (parseFromPattern(
+          if (parseFromPattern<microsecondPrecision>(
                   tok.pattern, input, cur, end, date, true, type_) == -1) {
             return parseFail(input, cur, end);
           }
         } else {
-          if (parseFromPattern(
+          if (parseFromPattern<microsecondPrecision>(
                   tok.pattern, input, cur, end, date, false, type_) == -1) {
             return parseFail(input, cur, end);
           }
