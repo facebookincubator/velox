@@ -30,6 +30,7 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
@@ -71,6 +72,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -3235,6 +3237,12 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
         expr->inputs()[0]->type()->kind() == TypeKind::ROW;
   }
 
+  // Column references above only pass the packed int64 through; a cast or a
+  // registered operator would read it as a number.
+  if (hasTimestampWithTimeZoneOperand(expr)) {
+    return false;
+  }
+
   const auto opName = exprRegistryName(expr);
   if (expr->isCastKind()) {
     const auto& srcType =
@@ -3264,6 +3272,16 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     return true;
   }
   return false;
+}
+
+bool hasTimestampWithTimeZoneOperand(const core::TypedExprPtr& expr) {
+  if (isTimestampWithTimeZoneType(expr->type())) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), [](const auto& input) {
+        return isTimestampWithTimeZoneType(input->type());
+      });
 }
 
 std::optional<std::vector<std::string>> extractFieldPath(

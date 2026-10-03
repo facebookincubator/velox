@@ -293,6 +293,11 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     return false;
   }
 
+  // An AST operator would compare or cast the packed int64 bit for bit.
+  if (hasTimestampWithTimeZoneOperand(expr)) {
+    return false;
+  }
+
   // Literals and top-level field references are always supported in pure
   // AST/JIT. Nested field references are delegated to FunctionExpression so
   // computed ROW values keep Velox's dereference semantics.
