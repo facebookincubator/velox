@@ -532,11 +532,17 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   VELOX_ASSERT_THROW(
       *testSchemaImport("d2,15"),
       "Unable to convert 'd2,15' ArrowSchema decimal format to Velox decimal");
+  EXPECT_EQ(*DECIMAL(1, 0), *testSchemaImport("d:1,0,32"));
+  EXPECT_EQ(*DECIMAL(9, 2), *testSchemaImport("d:9,2,32"));
+  EXPECT_EQ(*DECIMAL(9, 9), *testSchemaImport("d:9,9,32"));
+  VELOX_ASSERT_THROW(
+      *testSchemaImport("d:10,2,32"),
+      "Precision of 32-bit decimals must not exceed 9");
   EXPECT_EQ(*DECIMAL(10, 4), *testSchemaImport("d:10,4,64"));
   EXPECT_EQ(*DECIMAL(20, 15), *testSchemaImport("d:20,15,128"));
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,256"),
-      "Conversion failed for 'd:10,4,256'. Only 64-bit and 128-bit decimal types are supported.");
+      "Conversion failed for 'd:10,4,256'. Only 32-bit, 64-bit, and 128-bit decimal types are supported.");
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,"),
       "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
