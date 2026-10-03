@@ -2461,6 +2461,57 @@ void HashProbe::checkMaxSpillLevel(
 }
 
 void HashProbe::close() {
+  SCOPE_EXIT {
+    if (lastProber_) {
+      wakeupPeerOperators();
+    }
+  };
+
+  const auto& task = operatorCtx_->task();
+  try {
+    // A downstream operator may finish before all probe input is consumed.
+    // Make an early-finishing probe participate in the current peer barrier.
+    // A spilling probe is also excluded from subsequent spill barriers.
+    const bool outputBuildRowsInParallel =
+        canOutputBuildRowsInParallel_ && needLastProbe();
+    const bool shouldSynchronize = canSpill() || outputBuildRowsInParallel;
+    if (isRunning() && shouldSynchronize &&
+        !task->hasMixedExecutionGroupJoin(joinNode_.get()) &&
+        task->isRunning()) {
+      if (lastProber_ || noMoreSpillInput_) {
+        if (canSpill()) {
+          task->retirePeerFromBarriers(planNodeId(), operatorCtx_->driver());
+        }
+      } else {
+        std::vector<std::shared_ptr<Driver>> peers;
+        const bool allFinished = canSpill() ? task->allPeersFinishedAndRetire(
+                                                  planNodeId(),
+                                                  operatorCtx_->driver(),
+                                                  nullptr,
+                                                  promises_,
+                                                  peers)
+                                            : task->allPeersFinished(
+                                                  planNodeId(),
+                                                  operatorCtx_->driver(),
+                                                  nullptr,
+                                                  promises_,
+                                                  peers);
+        if (allFinished) {
+          lastProber_ = true;
+          joinBridge_->resetUnclaimedRowContainerId();
+        }
+      }
+      if (lastProber_ && canSpill()) {
+        joinBridge_->probeFinished();
+        if (table_ != nullptr) {
+          table_->clear(true);
+        }
+      }
+    }
+  } catch (...) {
+    task->setError(std::current_exception());
+  }
+
   Operator::close();
 
   // Free up major memory usage.
@@ -2472,11 +2523,6 @@ void HashProbe::close() {
   spillOutputPartitionSet_.clear();
   spillOutputReader_.reset();
   clearBuffers();
-
-  // Fulfill any pending promises
-  if (lastProber_) {
-    wakeupPeerOperators();
-  }
 }
 
 void HashProbe::clearBuffers() {

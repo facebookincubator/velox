@@ -597,15 +597,16 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Synchronizes completion of an Operator across Drivers of 'this'.
   /// 'planNodeId' identifies the Operator within all Operators/pipelines of
-  /// 'this'.  Each Operator instance calls this once. All but the last get a
-  /// false return value and 'future' is set to a future the caller should block
-  /// on. At this point the caller should go off thread as in any blocking
-  /// situation.  The last to call gets a true return value and 'peers' is set
-  /// to all Drivers except 'caller'. 'promises' corresponds pairwise to
-  /// 'peers'. Realizing the promise will continue the peer. This effects a
-  /// synchronization barrier between Drivers of a pipeline inside one worker.
-  /// This is used for example for multithreaded hash join build to ensure all
-  /// build threads are completed before allowing the probe pipeline to proceed.
+  /// 'this'. Each participating Operator instance calls this once per barrier
+  /// round. All but the last get a false return value and 'future' is set to a
+  /// future the caller should block on. At this point the caller should go off
+  /// thread as in any blocking situation. The last to call gets a true return
+  /// value and 'peers' is set to all Drivers except 'caller'. 'promises'
+  /// corresponds pairwise to 'peers'. Realizing the promise will continue the
+  /// peer. This effects a synchronization barrier between Drivers of a pipeline
+  /// inside one worker. This is used for example for multithreaded hash join
+  /// build to ensure all build threads are completed before allowing the probe
+  /// pipeline to proceed.
   /// Throws a cancelled error if 'this' is in an error state.
   ///
   /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
@@ -616,12 +617,29 @@ class Task : public std::enable_shared_from_this<Task> {
   /// NOTE: The last peer (the one that got 'true' returned and a bunch of
   /// promises) is responsible for promises' fulfillment even in case of an
   /// exception!
+  ///
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Same as 'allPeersFinished', but also excludes 'caller' from subsequent
+  /// barriers for this plan node and pipeline. The caller still participates
+  /// in the current barrier and must not call again.
+  bool allPeersFinishedAndRetire(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Excludes 'caller' from subsequent barriers for 'planNodeId'. The caller
+  /// must have completed the current barrier already.
+  void retirePeerFromBarriers(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(
@@ -969,6 +987,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Recursive helper for 'allSplitsConsumed()' method.
   bool allSplitsConsumedHelper(const core::PlanNode* planNode) const;
+
+  bool allPeersFinishedImpl(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers,
+      bool retireCaller);
 
   // Remove the spill directory, if the Task was creating it for potential
   // spilling.
