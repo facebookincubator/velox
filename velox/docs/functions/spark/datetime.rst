@@ -172,15 +172,17 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT from_utc_timestamp('2015-07-24 07:00:00', 'America/Los_Angeles'); -- '2015-07-24 00:00:00'
 
-.. spark:function:: get_timestamp(string, dateFormat) -> timestamp
+.. spark:function:: get_timestamp(string, dateFormat) -> timestamp (ANSI compliant)
 
     Returns timestamp by parsing ``string`` according to the specified ``dateFormat``.
     The format follows Spark's
     `Datetime patterns
-    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. ::
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
+    When ``spark.ansi_enabled`` is true, a ``string`` that does not match ``dateFormat``
+    throws an error; otherwise it returns NULL. ::
 
         SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
-        SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
+        SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (ANSI OFF) / ERROR (ANSI ON)
         SELECT get_timestamp('1970-01-01', null);  -- NULL
 
 .. spark:function:: hour(timestamp) -> integer

@@ -427,6 +427,7 @@ struct GetTimestampFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
     legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
@@ -460,8 +461,9 @@ struct GetTimestampFunction {
       }
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
-    // Null as result for parsing error.
+    // A parsing error returns NULL, or throws when ANSI mode is enabled.
     if (dateTimeResult.hasError()) {
+      ansiUserFail(ansiEnabled_, "{}", dateTimeResult.error().message());
       return false;
     }
     toGMTWithGapCorrection(
@@ -482,6 +484,7 @@ struct GetTimestampFunction {
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
   bool legacyFormatter_{false};
   bool invalidFormat_{false};
+  bool ansiEnabled_{false};
 };
 
 template <typename T>
