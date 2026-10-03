@@ -222,29 +222,51 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
+TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream consumerStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+
+  // Model the intra-node UCX path: the producer allocated the packed buffer on
+  // its own stream, and the consumer wraps it with a different stream on which
+  // downstream operators read it. Dropping the vector must order the free after
+  // that work.
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW("c0", INTEGER()),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      consumerStream.view());
+  resource.reset();
+
+  vector.reset();
+
+  EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
+}
+
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
   RecordingAsyncDeviceResource resource;
   auto packedTable = makePackedTable(allocationStream.view(), resource);
 
-  // Model the intra-node UCX path: the packed buffer was allocated on
-  // allocationStream, but downstream work is associated with targetStream.
-  // The CudfVector logical stream is already targetStream, but the packed
-  // buffer's deallocation stream is still allocationStream. rebindStream must
-  // update the packed buffer even when stream_ already matches targetStream.
+  // Rebinding after construction must move the packed buffer's deallocation
+  // to the new consumer stream.
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
       ROW({"c0"}, {INTEGER()}),
       packedTable->table.num_rows(),
       std::move(packedTable),
-      targetStream.view());
+      allocationStream.view());
   resource.reset();
 
   ASSERT_TRUE(vector->rebindStream(targetStream.view()));
+  EXPECT_EQ(vector->stream().get(), targetStream.value());
   vector.reset();
 
-  EXPECT_GT(resource.deallocationCount(), 0);
+  EXPECT_EQ(resource.deallocationCount(), 1);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
