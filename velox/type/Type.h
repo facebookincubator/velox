@@ -381,9 +381,16 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
     return this->equivalent(other);
   }
 
+  void setIsDecimal() {
+    isDecimal_ = true;
+  }
+
  private:
   const TypeKind kind_;
   const bool providesCustomComparison_;
+  // Identifies ShortDecimalType and LongDecimalType. Only their constructors
+  // set it, and both classes are final.
+  bool isDecimal_ = false;
 };
 
 #undef VELOX_FLUENT_CAST
@@ -664,7 +671,9 @@ class DecimalType : public ScalarType<KIND> {
 class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
  public:
   ShortDecimalType(int precision, int scale)
-      : DecimalType<TypeKind::BIGINT>(precision, scale) {}
+      : DecimalType<TypeKind::BIGINT>(precision, scale) {
+    setIsDecimal();
+  }
 };
 
 class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
@@ -673,7 +682,9 @@ class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
   using DecimalType<TypeKind::HUGEINT>::toString;
 
   LongDecimalType(int precision, int scale)
-      : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
+      : DecimalType<TypeKind::HUGEINT>(precision, scale) {
+    setIsDecimal();
+  }
 
   static std::string toString(int128_t value, const Type& type);
 };
@@ -689,11 +700,11 @@ FOLLY_ALWAYS_INLINE const LongDecimalType& Type::asLongDecimal() const {
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isShortDecimal() const {
-  return dynamic_cast<const ShortDecimalType*>(this) != nullptr;
+  return isDecimal_ && kind_ == TypeKind::BIGINT;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isLongDecimal() const {
-  return dynamic_cast<const LongDecimalType*>(this) != nullptr;
+  return isDecimal_ && kind_ == TypeKind::HUGEINT;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isDecimal() const {
