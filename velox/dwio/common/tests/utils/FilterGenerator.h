@@ -41,7 +41,7 @@ struct FilterSpec {
       float startPct = 50,
       float selectPct = 20,
       FilterKind filterKind = FilterKind::kBigintRange,
-      bool isForRowGroupSkip = true,
+      bool isForRowGroupSkip = false,
       bool allowNulls = true)
       : field(field),
         startPct(startPct),
