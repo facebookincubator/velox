@@ -52,6 +52,25 @@ TEST(MetricsLoggerTest, stripeLoadMetricsSerializeDefaults) {
   EXPECT_EQ(obj["totalStreamSize"].asInt(), 0);
 }
 
+TEST(MetricsLoggerTest, stripeReadMetricsSerialize) {
+  StripeReadMetrics metrics{
+      .stripeIndex = 3,
+      .rowsInStripe = 1000,
+      .uniqueRowsDecoded = 100,
+      .streamCount = 5,
+      .totalStreamSize = 4096,
+      .estimatedUnusedStreamSize = 3686,
+  };
+
+  auto obj = metrics.serialize();
+  EXPECT_EQ(obj["stripeIndex"].asInt(), 3);
+  EXPECT_EQ(obj["rowsInStripe"].asInt(), 1000);
+  EXPECT_EQ(obj["uniqueRowsDecoded"].asInt(), 100);
+  EXPECT_EQ(obj["streamCount"].asInt(), 5);
+  EXPECT_EQ(obj["totalStreamSize"].asInt(), 4096);
+  EXPECT_EQ(obj["estimatedUnusedStreamSize"].asInt(), 3686);
+}
+
 // --- StripeFlushMetrics::serialize ---
 
 TEST(MetricsLoggerTest, stripeFlushMetricsSerialize) {
@@ -131,6 +150,7 @@ TEST(MetricsLoggerTest, defaultMethodsAreNoOps) {
   // These should all execute without error
   logger.logException(LogOperation::Write, "test error");
   logger.logStripeLoad(StripeLoadMetrics{});
+  logger.logStripeRead(StripeReadMetrics{});
   logger.logStripeFlush(StripeFlushMetrics{});
   logger.logFileClose(FileCloseMetrics{});
   logger.logCompressionContext("test context");

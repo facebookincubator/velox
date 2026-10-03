@@ -415,6 +415,8 @@ void BatchReader::loadNextStripe() {
     return;
   }
 
+  logStripeRead();
+
   try {
     StripeLoadMetrics metrics;
     velox::CpuWallTiming timing{};
@@ -460,6 +462,9 @@ void BatchReader::loadNextStripe() {
             // Direct-encoded stripes can omit the dictionary stream even when
             // the value stream has a stripe dictionary binding.
             dictionaryStream = std::move(streams.at(dictionaryIt->second));
+            if (dictionaryStream != nullptr) {
+              ++metrics.streamCount;
+            }
           }
           auto streamEncodingFactory = createStreamEncodingFactory(
               offsets_[i], std::move(dictionaryStream));
@@ -481,6 +486,17 @@ void BatchReader::loadNextStripe() {
     metrics.cpuUsec += timing.cpuNanos / 1000;
     metrics.wallTimeUsec += timing.wallNanos / 1000;
     logger_->logStripeLoad(metrics);
+    if (parameters_.metricsLogger != nullptr) {
+      stripeReadMetrics_ = StripeReadMetrics{
+          .stripeIndex = metrics.stripeIndex,
+          .rowsInStripe = metrics.rowsInStripe,
+          .uniqueRowsDecoded = 0,
+          .streamCount = metrics.streamCount,
+          .totalStreamSize = metrics.totalStreamSize,
+          .estimatedUnusedStreamSize = 0,
+      };
+      decodedRowRanges_.clear();
+    }
   } catch (const std::exception& e) {
     logger_->logException(LogOperation::StripeLoad, e.what());
     throw;
@@ -525,8 +541,9 @@ bool BatchReader::next(uint64_t rowCount, velox::VectorPtr& result) {
   if (parameters_.decodingTimeCallback) {
     startTime = std::chrono::steady_clock::now();
   }
+  const auto firstRowToRead = getCurrentRowInStripe();
   unitLoader_->onRead(
-      getUnitIndex(loadedStripe_.value()), getCurrentRowInStripe(), rowsToRead);
+      getUnitIndex(loadedStripe_.value()), firstRowToRead, rowsToRead);
   folly::coro::blockingWait(rootReader_->co_next(rowsToRead, result));
   if (barrier_) {
     // Wait for all reader tasks to complete.
@@ -536,6 +553,8 @@ bool BatchReader::next(uint64_t rowCount, velox::VectorPtr& result) {
     parameters_.decodingTimeCallback(
         std::chrono::steady_clock::now() - startTime.value());
   }
+
+  recordDecodedRows(firstRowToRead, rowsToRead);
 
   // Update reader state
   rowsRemainingInStripe_ -= rowsToRead;
@@ -658,7 +677,57 @@ void BatchReader::skipInCurrentStripe(uint64_t rowsToSkip) {
   folly::coro::blockingWait(rootReader_->co_skip(rowsToSkip));
 }
 
-BatchReader::~BatchReader() = default;
+void BatchReader::recordDecodedRows(uint64_t firstRow, uint64_t rowCount) {
+  if (!stripeReadMetrics_.has_value() || rowCount == 0) {
+    return;
+  }
+
+  uint64_t rangeStart = firstRow;
+  uint64_t rangeEnd = firstRow + rowCount;
+  auto it = decodedRowRanges_.lower_bound(rangeStart);
+  if (it != decodedRowRanges_.begin()) {
+    auto previous = std::prev(it);
+    if (previous->second >= rangeStart) {
+      it = previous;
+    }
+  }
+
+  while (it != decodedRowRanges_.end() && it->first <= rangeEnd) {
+    rangeStart = std::min(rangeStart, it->first);
+    rangeEnd = std::max(rangeEnd, it->second);
+    stripeReadMetrics_->uniqueRowsDecoded -= it->second - it->first;
+    it = decodedRowRanges_.erase(it);
+  }
+
+  decodedRowRanges_.emplace(rangeStart, rangeEnd);
+  stripeReadMetrics_->uniqueRowsDecoded += rangeEnd - rangeStart;
+}
+
+void BatchReader::logStripeRead() noexcept {
+  if (!stripeReadMetrics_.has_value()) {
+    return;
+  }
+
+  auto metrics = std::move(stripeReadMetrics_).value();
+  stripeReadMetrics_.reset();
+  decodedRowRanges_.clear();
+  if (metrics.rowsInStripe > 0) {
+    const auto unusedRows = metrics.rowsInStripe -
+        std::min(metrics.rowsInStripe, metrics.uniqueRowsDecoded);
+    metrics.estimatedUnusedStreamSize = static_cast<uint64_t>(
+        static_cast<unsigned __int128>(metrics.totalStreamSize) * unusedRows /
+        metrics.rowsInStripe);
+  }
+  try {
+    logger_->logStripeRead(metrics);
+  } catch (...) {
+    // Metrics must not affect reader behavior.
+  }
+}
+
+BatchReader::~BatchReader() {
+  logStripeRead();
+}
 
 std::unique_ptr<velox::dwio::common::UnitLoader> BatchReader::getUnitLoader() {
   if (lastStripe_ <= firstStripe_) {
