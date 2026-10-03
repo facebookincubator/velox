@@ -835,9 +835,10 @@ struct NextDayFunction {
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       const arg_type<Date>* /*startDate*/,
       const arg_type<Varchar>* dayOfWeek) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
     if (dayOfWeek != nullptr) {
       weekDay_ = getDayOfWeekFromString(*dayOfWeek);
       if (!weekDay_.has_value()) {
@@ -850,12 +851,18 @@ struct NextDayFunction {
       out_type<Date>& result,
       const arg_type<Date>& startDate,
       const arg_type<Varchar>& dayOfWeek) {
+    // An invalid day of week returns NULL, or throws when ANSI mode is
+    // enabled.
     if (invalidFormat_) {
+      ansiUserFail(
+          ansiEnabled_, "Illegal input for day of week: {}", dayOfWeek);
       return false;
     }
     auto weekDay = weekDay_.has_value() ? weekDay_.value()
                                         : getDayOfWeekFromString(dayOfWeek);
     if (!weekDay.has_value()) {
+      ansiUserFail(
+          ansiEnabled_, "Illegal input for day of week: {}", dayOfWeek);
       return false;
     }
     auto nextDay = getNextDate(startDate, weekDay.value());
@@ -885,6 +892,7 @@ struct NextDayFunction {
 
   std::optional<int8_t> weekDay_;
   bool invalidFormat_{false};
+  bool ansiEnabled_{false};
 };
 
 template <typename T, typename TTimestamp>
