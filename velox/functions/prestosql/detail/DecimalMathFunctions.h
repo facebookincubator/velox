@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <type_traits>
+
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
 #include "velox/type/DecimalUtil.h"
@@ -196,28 +198,36 @@ struct DecimalModulusFunction {
   template <typename R, typename A, typename B>
   void call(R& out, const A& a, const B& b) {
     VELOX_USER_CHECK_NE(b, 0, "Modulus by zero");
+    // A long operand can produce a short result, so the operands are rescaled
+    // and divided in a type wide enough for them. Only the remainder has to fit
+    // the result type, and the result's precision is sized to hold it.
+    using Intermediate = std::conditional_t<
+        (sizeof(A) > sizeof(R) || sizeof(B) > sizeof(R)),
+        int128_t,
+        R>;
     int remainderSign = 1;
-    R unsignedDividendRescaled(a);
+    Intermediate unsignedDividendRescaled(a);
     if (a < 0) {
       remainderSign *= -1;
       unsignedDividendRescaled *= -1;
     }
-    unsignedDividendRescaled = checkedMultiply<R>(
+    unsignedDividendRescaled = checkedMultiply<Intermediate>(
         unsignedDividendRescaled,
-        R(DecimalUtil::kPowersOfTen[aRescale_]),
+        Intermediate(DecimalUtil::kPowersOfTen[aRescale_]),
         "Decimal");
 
-    R unsignedDivisorRescaled(b);
+    Intermediate unsignedDivisorRescaled(b);
     if (b < 0) {
       unsignedDivisorRescaled *= -1;
     }
-    unsignedDivisorRescaled = checkedMultiply<B>(
+    unsignedDivisorRescaled = checkedMultiply<Intermediate>(
         unsignedDivisorRescaled,
-        R(DecimalUtil::kPowersOfTen[bRescale_]),
+        Intermediate(DecimalUtil::kPowersOfTen[bRescale_]),
         "Decimal");
 
-    R remainder = unsignedDividendRescaled % unsignedDivisorRescaled;
-    out = remainder * remainderSign;
+    const Intermediate remainder =
+        unsignedDividendRescaled % unsignedDivisorRescaled;
+    out = R(remainder * remainderSign);
   }
 
  private:

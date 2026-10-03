@@ -458,6 +458,23 @@ TEST_F(DecimalArithmeticTest, decimalMod) {
       {makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(20, 10)),
        makeFlatVector<int64_t>({17, 19, -17, -19}, DECIMAL(17, 15))});
 
+  // A long operand whose value needs more than 64 bits, with a short result.
+  // Only the remainder has to fit the result type; the operands do not.
+  const int128_t kTwoPow64Plus5 = HugeInt::build(1, 5);
+  const int128_t kTwoPow64Plus6 = HugeInt::build(1, 6);
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({7, -7}, DECIMAL(10, 0)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({7, -7}, DECIMAL(10, 0)),
+       makeFlatVector<int128_t>(
+           {kTwoPow64Plus5, kTwoPow64Plus5}, DECIMAL(20, 0))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({1, -1}, DECIMAL(10, 0)),
+      "mod(c0, c1)",
+      {makeFlatVector<int128_t>(
+           {kTwoPow64Plus6, -kTwoPow64Plus6}, DECIMAL(20, 0)),
+       makeFlatVector<int64_t>({7, 7}, DECIMAL(10, 0))});
+
   // short % long -> long.
   testDecimalExpr<TypeKind::HUGEINT>(
       makeFlatVector<int128_t>({0, -16, 0, -16}, DECIMAL(25, 10)),
