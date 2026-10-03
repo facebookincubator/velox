@@ -287,6 +287,62 @@ TEST_F(ToJsonTest, basicTimestamp) {
   testToJson(input, expected);
 }
 
+TEST_F(ToJsonTest, basicTimestampUtc) {
+  const std::vector<std::optional<Timestamp>> timestamps{
+      Timestamp{1'704'067'200, 123'456'000},
+      Timestamp{-1, 999'999'000},
+      std::nullopt};
+  auto data = makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP_UTC());
+  ASSERT_TRUE(data->type()->equivalent(*TIMESTAMP_UTC()));
+  auto input = makeRowVector({"ts"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"ts":"2024-01-01T00:00:00.123"})",
+       R"({"ts":"1969-12-31T23:59:59.999"})",
+       R"({})"});
+  auto array = makeArrayVector({0, 2, 2}, data);
+  auto expectedArray = makeFlatVector<std::string>(
+      {R"(["2024-01-01T00:00:00.123","1969-12-31T23:59:59.999"])",
+       R"([])",
+       R"([null])"});
+  auto map = makeMapVector(
+      {0, 2, 2},
+      makeFlatVector<std::string>({"now", "before", "missing"}),
+      data);
+  auto expectedMap = makeFlatVector<std::string>(
+      {R"({"now":"2024-01-01T00:00:00.123","before":"1969-12-31T23:59:59.999"})",
+       R"({})",
+       R"({"missing":null})"});
+  auto timestampKeys = makeMapVector(
+      {0, 1, 2},
+      makeFlatVector<Timestamp>(
+          {Timestamp{1'704'067'200, 123'456'000},
+           Timestamp{-1, 999'999'000},
+           Timestamp{0, 0}},
+          TIMESTAMP_UTC()),
+      makeFlatVector<int32_t>({1, 2, 3}));
+  auto expectedTimestampKeys = makeFlatVector<std::string>(
+      {R"({"1704067200123456":1})", R"({"-1":2})", R"({"0":3})"});
+
+  for (const auto* timeZone : {"America/Los_Angeles", "UTC", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timeZone);
+    setTimezone(timeZone);
+    testToJson(input, expected);
+    testToJson(input, "America/New_York", expected);
+    testToJson(array, expectedArray);
+    testToJson(map, expectedMap);
+    testToJson(timestampKeys, expectedTimestampKeys);
+  }
+
+  setTimezone("America/Los_Angeles");
+  testToJson(
+      makeRowVector(
+          {"ntz", "tz"}, {data, makeNullableFlatVector<Timestamp>(timestamps)}),
+      makeFlatVector<std::string>(
+          {R"({"ntz":"2024-01-01T00:00:00.123","tz":"2023-12-31T16:00:00.123-08:00"})",
+           R"({"ntz":"1969-12-31T23:59:59.999","tz":"1969-12-31T15:59:59.999-08:00"})",
+           R"({})"}));
+}
+
 TEST_F(ToJsonTest, basicDate) {
   auto data = makeNullableFlatVector<int32_t>(
       {0, 18321, -25567, 2932896, std::nullopt}, DateType::get());
