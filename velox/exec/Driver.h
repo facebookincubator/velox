@@ -777,7 +777,8 @@ using OperatorSupplier = std::function<
 /// is true, then 'data' is null, otherwise not null.
 /// @param future Returns a valid 'future' when consumer pipeline has excessive
 /// buffered data and becomes ready when the excessive data buffers get
-/// consumed.
+/// consumed. Null when the sink is closing, which it signals with a null
+/// 'data'; a consumer must not dereference it without checking 'data'.
 using Consumer = std::function<
     BlockingReason(RowVectorPtr data, bool drained, ContinueFuture* future)>;
 using ConsumerSupplier = std::function<Consumer()>;
