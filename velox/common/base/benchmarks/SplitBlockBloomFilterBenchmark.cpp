@@ -18,6 +18,7 @@
 
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
+#include <folly/hash/Hash.h>
 #include <folly/init/Init.h>
 
 #define VELOX_BENCHMARK(_make, _name, ...) \

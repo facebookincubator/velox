@@ -16,10 +16,11 @@
 
 #pragma once
 
-#include "velox/common/base/SimdUtil.h"
-
 #include <cstdint>
 #include <span>
+#include <string>
+
+#include <xsimd/xsimd.hpp>
 
 namespace facebook::velox {
 
@@ -65,11 +66,13 @@ class SplitBlockBloomFilter {
   SplitBlockBloomFilter& operator=(const SplitBlockBloomFilter&) = delete;
 
   SplitBlockBloomFilter(SplitBlockBloomFilter&&) = default;
+  SplitBlockBloomFilter& operator=(SplitBlockBloomFilter&&) = delete;
+  ~SplitBlockBloomFilter() = default;
 
   /// Insert a hash into the bloom filter.  The function used to generate this
   /// hash should be avalanching.
   void insert(uint64_t hash) {
-    auto mask = makeMask(hash);
+    auto mask = makeMask(static_cast<uint32_t>(hash));
     auto* block = blocks_[blockIndex(hash)].data;
     (xsimd::load_aligned(block) | mask).store_aligned(block);
   }
@@ -78,7 +81,7 @@ class SplitBlockBloomFilter {
   /// has not been inserted.  Never return false when the hash has been
   /// inserted.
   bool mayContain(uint64_t hash) const {
-    auto mask = makeMask(hash);
+    auto mask = makeMask(static_cast<uint32_t>(hash));
     auto block = xsimd::load_aligned(blocks_[blockIndex(hash)].data);
 #if XSIMD_WITH_AVX
     return _mm256_testc_si256(block, mask);
@@ -133,5 +136,61 @@ class SplitBlockBloomFilter {
 
   std::span<Block> const blocks_;
 };
+
+/// Provides a fixed 32-byte split-block Bloom filter with modulo block
+/// selection.
+///
+/// Leaves memory management and hashing to callers.
+/// Preserves formats that store an arbitrary number of 32-byte blocks and
+/// map hashes to blocks using modulo arithmetic.
+class ModuloSplitBlockBloomFilter {
+ public:
+  static constexpr uint32_t kNumWords{8};
+
+  /// Stores eight 32-bit words, one per probe.
+  struct Block {
+    uint32_t data[kNumWords]{};
+  };
+
+  static constexpr uint32_t kBlockSizeBytes{sizeof(Block)};
+  static constexpr uint32_t kBlockSizeBits{kBlockSizeBytes * 8};
+
+  /// Calculates the number of blocks needed for the entry count and target
+  /// bits per key.
+  static uint32_t numBlocks(uint64_t numEntries, float bitsPerKey);
+
+  /// Constructs the Bloom filter using caller-owned block memory.
+  explicit ModuloSplitBlockBloomFilter(const std::span<Block>& blocks);
+
+  ModuloSplitBlockBloomFilter(const ModuloSplitBlockBloomFilter&) = delete;
+  ModuloSplitBlockBloomFilter& operator=(const ModuloSplitBlockBloomFilter&) =
+      delete;
+
+  ModuloSplitBlockBloomFilter(ModuloSplitBlockBloomFilter&&) = default;
+  ModuloSplitBlockBloomFilter& operator=(ModuloSplitBlockBloomFilter&&) =
+      delete;
+  ~ModuloSplitBlockBloomFilter() = default;
+
+  /// Inserts an avalanching hash into the Bloom filter.
+  void insert(uint64_t hash);
+
+  /// Checks whether an avalanching hash may have been inserted.
+  bool mayContain(uint64_t hash) const;
+
+  /// Returns the number of 32-byte blocks.
+  uint32_t numBlocks() const {
+    return static_cast<uint32_t>(blocks_.size());
+  }
+
+ private:
+  uint32_t blockIndex(uint64_t hash) const {
+    return static_cast<uint32_t>((hash >> 32) % blocks_.size());
+  }
+
+  // Points to caller-owned Bloom filter blocks.
+  std::span<Block> const blocks_;
+};
+
+static_assert(sizeof(ModuloSplitBlockBloomFilter::Block) == 32);
 
 } // namespace facebook::velox
