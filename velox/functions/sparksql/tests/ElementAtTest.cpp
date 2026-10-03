@@ -17,6 +17,7 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -38,6 +39,12 @@ class ElementAtTest : public SparkFunctionBaseTest {
       return std::nullopt;
     }
     return result->valueAt(0);
+  }
+
+  void setAnsiEnabled(bool enabled) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          enabled ? "true" : "false"}});
   }
 };
 
@@ -76,4 +83,32 @@ TEST_F(ElementAtTest, allFlavors2) {
   EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
   EXPECT_EQ(elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
 }
+
+// With ANSI mode enabled, an out-of-bound array index throws. A missing map key
+// still returns NULL, and the other behaviors are the same.
+TEST_F(ElementAtTest, ansi) {
+  setAnsiEnabled(true);
+  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto mapVector = makeMapVector<int64_t, int64_t>({{{10, 10}, {11, 11}}});
+
+  EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
+  EXPECT_EQ(elementAtSimple("element_at(C0, -1)", {arrayVector}), 12);
+  EXPECT_EQ(elementAtSimple("element_at(C0, 11)", {mapVector}), 11);
+
+  VELOX_ASSERT_USER_THROW(
+      elementAtSimple("element_at(C0, 4)", {arrayVector}),
+      "Array subscript index out of bounds");
+  VELOX_ASSERT_USER_THROW(
+      elementAtSimple("element_at(C0, -4)", {arrayVector}),
+      "Array subscript index out of bounds");
+  VELOX_ASSERT_THROW(
+      elementAtSimple("element_at(C0, 0)", {arrayVector}),
+      "SQL array indices start at 1");
+  EXPECT_EQ(elementAtSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      elementAtSimple("try(element_at(C0, 4))", {arrayVector}), std::nullopt);
+}
+
 } // namespace facebook::velox::functions::sparksql::test

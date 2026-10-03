@@ -4,7 +4,8 @@ Map Functions
 
 .. spark:function:: element_at(map(K,V), key) -> V
 
-    Returns value for given ``key``, or ``NULL`` if the key is not contained in the map.
+    Returns value for given ``key``, or ``NULL`` if the key is not contained in the map,
+    regardless of Spark ANSI mode.
 
 .. spark:function:: map(K, V, K, V, ...) -> map(K,V)
 
