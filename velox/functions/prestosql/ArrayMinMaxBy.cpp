@@ -16,11 +16,11 @@
 
 #include <boost/range/irange.hpp>
 #include <folly/container/F14Set.h>
-#include <velox/type/SimpleFunctionApi.h>
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
 namespace {

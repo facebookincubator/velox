@@ -19,10 +19,10 @@
 
 #include <gmock/gmock.h>
 
-#include <velox/common/base/VeloxException.h>
-#include <velox/vector/SimpleVector.h>
+#include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
 namespace {

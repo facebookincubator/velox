@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/prestosql/Comparisons.h"
-#include <velox/common/base/Exceptions.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/SIMDComparisonUtil.h"
 #include "velox/vector/BaseVector.h"

@@ -20,9 +20,9 @@
 
 #include <type_traits>
 
-#include <velox/type/Filter.h>
 #include "velox/common/memory/RawVector.h"
 #include "velox/exec/Operator.h"
+#include "velox/type/Filter.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 

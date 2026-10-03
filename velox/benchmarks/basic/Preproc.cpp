@@ -15,7 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
-#include <velox/common/base/Exceptions.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/RegistrationHelpers.h"

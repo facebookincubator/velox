@@ -15,8 +15,8 @@
  */
 
 #include "velox/tpch/gen/TpchGen.h"
-#include <velox/tpch/gen/dbgen/include/tpch_constants.hpp>
 #include "velox/tpch/gen/DBGenIterator.h"
+#include "velox/tpch/gen/dbgen/include/tpch_constants.hpp"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::tpch {

@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include <velox/core/Expressions.h>
-#include <velox/core/ITypedExpr.h>
-#include <velox/core/PlanFragment.h>
-#include <velox/core/PlanNode.h>
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/core/Expressions.h"
 #include "velox/core/FixedPointPlanNodes.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/PlanNode.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
 #include "velox/parse/PlanNodeIdGenerator.h"

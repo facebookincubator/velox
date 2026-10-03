@@ -16,7 +16,6 @@
 #pragma once
 
 #include <boost/algorithm/string/case_conv.hpp>
-#include <velox/type/Timestamp.h>
 #include <string_view>
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/ComplexViewTypes.h"
@@ -26,6 +25,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeUnitArithmetic.h"
 #include "velox/functions/lib/TimeUtilsCore.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {

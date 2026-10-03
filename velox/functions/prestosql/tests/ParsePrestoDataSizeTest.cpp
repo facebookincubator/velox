@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <velox/common/base/VeloxException.h>
-#include <velox/vector/SimpleVector.h>
+#include "velox/common/base/VeloxException.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/SimpleVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
