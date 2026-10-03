@@ -2436,6 +2436,20 @@ TEST_F(ParquetReaderTest, readTimeMicros) {
       rowType, *readerBundle.rowReader, data, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, timeMicrosTypeMismatch) {
+  const auto fileType = ROW("time_col", TIME_MICRO_UTC());
+  const auto data = makeRowVector(
+      fileType->names(), {makeFlatVector<int64_t>({0}, TIME_MICRO_UTC())});
+  const auto sink = write(data);
+
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(ROW("time_col", BIGINT()));
+  VELOX_ASSERT_THROW(
+      createReaderInMemory(*sink, readerOptions),
+      "Converted type TIME MICRO UTC is not allowed for requested type BIGINT "
+      "for file column 'time_col'");
+}
+
 TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   const auto rowType =
       ROW({"id", "time_col", "name"}, {INTEGER(), TIME(), VARCHAR()});
