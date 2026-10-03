@@ -344,10 +344,11 @@ These functions support TIMESTAMP and DATE input types.
         SELECT months_between('1997-02-28 10:30:00', '1996-03-28 11:00:00', true); -- 11.0
         SELECT months_between('1997-02-21 10:30:00', '1996-03-21 11:00:00', true); -- 11.0
 
-.. spark:function:: next_day(startDate, dayOfWeek) -> date
+.. spark:function:: next_day(startDate, dayOfWeek) -> date (ANSI compliant)
 
     Returns the first date which is later than ``startDate`` and named as ``dayOfWeek``.
-    Returns null if ``dayOfWeek`` is invalid.
+    When ``spark.ansi_enabled`` is true, an invalid ``dayOfWeek`` throws an error;
+    otherwise it returns NULL.
     ``dayOfWeek`` is case insensitive and must be one of the following:
     ``SU``, ``SUN``, ``SUNDAY``, ``MO``, ``MON``, ``MONDAY``, ``TU``, ``TUE``, ``TUESDAY``,
     ``WE``, ``WED``, ``WEDNESDAY``, ``TH``, ``THU``, ``THURSDAY``, ``FR``, ``FRI``, ``FRIDAY``,
