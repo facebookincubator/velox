@@ -71,6 +71,68 @@ Mathematical Functions
 
     Returns the string representation of the long value ``x`` represented in binary.
 
+.. spark:function:: bround(x, d) -> [same as x]
+
+    Rounds ``x`` to ``d`` decimal places, resolving exact halfway cases toward
+    the even neighbor (HALF_EVEN). Negative ``d`` rounds to a multiple of
+    ``10 ** -d``. Omitting ``d`` is equivalent to specifying zero.
+
+    Accepts TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, and DECIMAL.
+    The scale must be a constant INTEGER expression in the inclusive interval
+    ``[-400, 400]``, or NULL. A null scale produces null. At supported scales,
+    a null input produces null. Integral and floating-point inputs retain their type.
+    Integral overflow wraps in legacy mode and raises a user error when
+    the Velox query setting ``spark.ansi_enabled`` is true.
+
+    Integrations may use ``bround(x, d, ansiEnabled)`` for TINYINT, SMALLINT,
+    INTEGER, and BIGINT inputs. The third argument is a constant BOOLEAN
+    carrying the resolved expression's ANSI mode. It overrides the query
+    setting so that analyzed or cached plans retain their original overflow
+    semantics when the session setting changes. Scale and NULL-input behavior
+    are the same as the two-argument form. This is a native integration overload,
+    not an additional Spark SQL user-facing signature; it is not available for
+    REAL, DOUBLE, or DECIMAL inputs.
+
+    Floating-point rounding uses Java's canonical decimal representation of the
+    value, rather than rounding a binary multiplication by a power of ten.
+    REAL values are widened to DOUBLE before this conversion, as in Spark.
+    NaN and infinities are unchanged; rounded zero is positive zero.
+
+    Floating-point rounding at nonzero scales targets Spark running on JDK21.
+    JDK17 can select a longer decimal representation and produce different
+    BROUND results for the same input bits. Integrations running Spark on JDK17
+    must fall back for REAL and DOUBLE inputs at nonzero scales rather than
+    assume cross-JDK equivalence. Scale zero, including the unary form, does
+    not use decimal conversion and is supported on both JDK17 and JDK21.
+    This distinction concerns the runtime JDK, not the Java bytecode target.
+    Integral and DECIMAL inputs do not use floating-point decimal conversion.
+
+    DECIMAL uses the ``decimal_bround`` special form with an explicitly
+    resolved result type. For an input DECIMAL(p, s), nonnegative ``d`` gives
+    scale ``min(s, d)`` and precision ``min(p - s + 1 + min(s, d), 38)``.
+    Negative ``d`` gives scale zero and precision
+    ``min(max(p - s + 1, -d + 1), 38)``. Rounding beyond the result's decimal
+    range raises a user error.
+
+    The interval above is an explicit native support limit, not a universal
+    Spark scale cutoff. Non-null scales outside it are rejected during
+    primitive function initialization or decimal expression construction,
+    including cases that would numerically round to zero or be unchanged.
+    Integrations must fall back outside this interval to preserve Spark's
+    scale-arithmetic errors and interpreter/codegen differences, rather than
+    clamp the scale or substitute a native numerical result.
+
+    See the `Spark 4.1.1 rounding expressions
+    <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_
+    for the reference semantics.
+
+    ::
+
+        SELECT bround(CAST(2.5 AS DOUBLE));     -- 2.0
+        SELECT bround(CAST(3.5 AS DOUBLE));     -- 4.0
+        SELECT bround(CAST(2.55 AS DOUBLE), 1); -- 2.6
+        SELECT bround(25, -1);  -- 20
+
 .. spark:function:: cbrt(x) -> double
 
     Returns the cube root of ``x``.
@@ -418,9 +480,76 @@ Mathematical Functions
 
 .. spark:function:: round(x, d) -> [same as x]
 
-    Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
-    In HALF_UP rounding, the digit 5 is rounded up.
-    Supported types for ``x`` are integral and floating point types.
+    Rounds ``x`` to ``d`` decimal places, resolving exact halfway cases away
+    from zero (HALF_UP). Negative ``d`` rounds to a multiple of ``10 ** -d``.
+    Omitting ``d`` is equivalent to specifying zero.
+
+    Accepts TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, and DECIMAL.
+    The scale must be a constant INTEGER expression in ``[-400, 400]``, or
+    NULL. A null scale produces null without evaluating ``x``. At supported
+    scales, a null input produces null. Integral and floating-point inputs
+    retain their type. Integral overflow wraps in legacy mode and raises a
+    user error when ``spark.ansi_enabled`` is true.
+
+    Integrations may use ``round(x, d, ansiEnabled)`` for integral inputs.
+    The third argument is a constant BOOLEAN carrying the resolved
+    expression's ANSI mode; it overrides the query setting, including when
+    an analyzed or cached plan is evaluated after a session-mode change.
+    This native integration overload is not an additional Spark SQL signature
+    and is unavailable for REAL, DOUBLE, and DECIMAL.
+
+    Floating-point rounding uses Java's canonical decimal representation.
+    REAL is widened to DOUBLE before conversion; the rounded decimal is
+    converted directly back to the input type. NaN and infinities are
+    unchanged, and rounded zero is positive zero.
+
+    Nonzero floating-point scales target Spark on JDK21. JDK17 may select a
+    different decimal and produce different ROUND results; integrations on
+    JDK17 must fall back for these scales. Scale zero, including the unary
+    form, supports both JDK17 and JDK21. Integral and DECIMAL inputs are not
+    affected by this distinction.
+
+    DECIMAL uses :spark:func:`decimal_round` with an explicitly resolved
+    result type. Its type inference matches :spark:func:`bround`, but exact
+    halfway cases round away from zero rather than toward the even neighbor.
+
+    The scale interval is a native qualification limit, not a Spark limit.
+    Scales outside it are rejected, even when the numerical result would
+    otherwise be zero or unchanged. Integrations must fall back rather than
+    clamp unsupported scales.
+
+    **Integration capability contract:** ``spark_round`` and
+    ``decimal_spark_round`` are native integration names for these primitive
+    and decimal implementations, respectively. They are registered by
+    ``registerRoundFunctions(prefix)`` with the same prefix and use the same
+    implementation and signatures as ``round`` and ``decimal_round``.
+    They are not additional Spark SQL functions.
+
+    Integrations must validate and emit the exact capability-specific name,
+    argument types, arity, constants and resolved output type for every ROUND
+    expression they offload. Use ``spark_round(x, d, ansiEnabled)`` for
+    integral inputs, carrying the analyzed expression's mode;
+    ``spark_round(x, d)`` for REAL/DOUBLE; and
+    ``decimal_spark_round(x, d)`` with an explicitly resolved decimal result
+    type for DECIMAL. For unary Spark ROUND, materialize ``d = 0``; integral
+    calls must still carry the captured mode. Do not append an ignored Boolean
+    argument to floating-point or decimal calls.
+
+    An older dependency can already register ``round`` and ``decimal_round``
+    with different semantics. If validation of a capability-specific call
+    fails, the integration must fall back to Spark, never retry a bare name.
+    BROUND availability is not evidence of ROUND support. Decimal validation
+    must use the special-form path, not just the primitive signature registry.
+    The capability check is mandatory even when general native expression
+    validation is disabled; an unavailable check must also trigger fallback.
+    These names still require the scale and runtime-JDK gates described above.
+
+    ::
+
+        SELECT round(CAST(0.575 AS DOUBLE), 2); -- 0.58
+        SELECT round(CAST(-2.5 AS DOUBLE));    -- -3.0
+        SELECT round(25, -1);                 -- 30
+        SELECT bround(25, -1);                -- 20
 
 .. spark:function:: sec(x) -> double
 

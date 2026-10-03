@@ -31,6 +31,7 @@ add_executable(
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
   BitwiseTest.cpp
+  BRoundTest.cpp
   CharTypeWriteSideCheckTest.cpp
   ComparisonsTest.cpp
   ConcatWsTest.cpp
@@ -71,6 +72,7 @@ add_executable(
   RandStrTest.cpp
   RandTest.cpp
   RandnTest.cpp
+  RoundTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
   SequenceTest.cpp
