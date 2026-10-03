@@ -344,10 +344,45 @@ Mathematical Functions
         SELECT not false; -- true
         SELECT not NULL; -- NULL
 
-.. spark:function:: pmod(n, m) -> [same as n]
+.. spark:function:: pmod(n, m) -> [same as n] (ANSI compliant)
 
-    Returns the positive remainder of n divided by m.
+    Returns Spark's positive modulo: compute ``r = n % m``, then return
+    ``(r + m) % m`` only when ``r < 0``, otherwise return ``r``.
+    Negative divisors can produce negative results. INTEGER and BIGINT
+    correction uses Java's wrapping addition, even in ANSI mode; TINYINT
+    and SMALLINT use INTEGER intermediates. Floating-point zero results
+    retain their sign.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    Both operands must have the same type.
+
+    Null operands return null. With ``spark.ansi_enabled=false``, zero divisors
+    return null; with ``spark.ansi_enabled=true``, they raise a division-by-zero
+    error. This setting is captured when the function is initialized.
+    Arguments use ordinary scalar evaluation. Use ``pmod_with_mode`` when
+    translating an expression that requires Spark's short-circuit evaluation.
+
+.. spark:function:: pmod_with_mode(n, m, failOnError, checkZeroBeforeLeft) -> [same as n]
+
+    Provides the same primitive arithmetic as ``pmod`` using a special form
+    that evaluates ``m`` before ``n``, at most once per selected row. The
+    final two arguments must be non-null constant BOOLEAN expressions.
+    ``failOnError`` captures the expression's ANSI mode independently of
+    the current query configuration.
+
+    A null ``m``, or a zero ``m`` when ``failOnError=false``, returns null
+    without evaluating ``n``. Otherwise ``n`` is evaluated; a null ``n``
+    returns null, and a non-null ``n`` with zero ``m`` raises an error.
+
+    Set ``checkZeroBeforeLeft=true`` to check ANSI zero divisors before
+    evaluating ``n``. This matches Spark's generated evaluation when both
+    operands are statically non-nullable. Set it to false for Spark's
+    interpreted evaluation or generated evaluation with nullable operands.
+    This distinction determines which error takes precedence if ``n`` itself
+    would fail.
+
+    This form is registered in the special-form registry, not the scalar
+    function registry. Frontends must apply Spark's numeric coercions before
+    constructing the call. DECIMAL is not supported.
 
 .. spark:function:: power(x, p) -> double
 
