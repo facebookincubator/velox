@@ -816,6 +816,19 @@ class DictionaryColumnVisitor
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
+      : DictionaryColumnVisitor(
+            filter,
+            reader,
+            rows,
+            values,
+            reader->scanState().rawState) {}
+
+  DictionaryColumnVisitor(
+      const TFilter& filter,
+      SelectiveColumnReader* reader,
+      const RowSet& rows,
+      ExtractValues values,
+      RawScanState state)
       : ColumnVisitor<T, TFilter, ExtractValues, isDense>(
             filter,
             reader,
@@ -825,7 +838,7 @@ class DictionaryColumnVisitor
             reader->fileType().type()->kind() == TypeKind::BIGINT        ? 8
                 : reader->fileType().type()->kind() == TypeKind::INTEGER ? 4
                                                                          : 2),
-        state_(reader->scanState().rawState) {}
+        state_(state) {}
 
   // Re-reads the cached scan-state snapshot from the reader. Nimble rebuilds
   // the per-chunk filter dictionary at each chunk boundary during a multi-chunk
@@ -899,6 +912,74 @@ class DictionaryColumnVisitor
       return 0;
     }
     return super::currentRow() - previous - 1;
+  }
+
+  /// Processes a batch of dictionary indices read from 'input', a separate
+  /// int32 buffer. Unlike processRun(), 'input' need not alias the output
+  /// values buffer.
+  void processBulk(const int32_t* input, int32_t numInput) {
+    if constexpr (!hasFilter() || !TFilter::deterministic || super::kHasHook) {
+      bool atEnd{false};
+      for (int32_t i = 0; i < numInput; ++i) {
+        process(input[i], atEnd);
+        if (atEnd) {
+          return;
+        }
+      }
+      return;
+    }
+
+    VELOX_DCHECK_LE(super::rowIndex_ + numInput, super::numRows_);
+    constexpr bool kFilterOnly = super::kFilterOnly;
+    constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
+    const auto initialNumValues = super::reader_->numValues();
+    auto numValues = initialNumValues;
+    auto* filterHits = super::outputRows(numInput) - initialNumValues;
+    auto* values = reinterpret_cast<T*>(super::reader_->rawValues());
+    const auto* rows = super::rows_ + super::rowIndex_;
+
+    for (int32_t offset = 0; offset < numInput; offset += kWidth) {
+      const auto width = std::min(kWidth, numInput - offset);
+      const auto indices = xsimd::load_unaligned(input + offset);
+      const auto validLanes = simd::leadingMask<int32_t>(width);
+      const auto cache = simd::maskGather<int32_t, int32_t, 1>(
+          xsimd::broadcast<int32_t>(0),
+          validLanes,
+          reinterpret_cast<const int32_t*>(filterCache() - 3),
+          indices);
+      uint16_t unknowns = simd::toBitMask(
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
+      while (unknowns) {
+        const auto lane = bits::getAndClearLastSetBit(unknowns);
+        const auto dictionaryIndex = input[offset + lane];
+        if (applyFilter(super::filter_, dict()[dictionaryIndex])) {
+          filterCache()[dictionaryIndex] = FilterResult::kSuccess;
+          passed |= 1 << lane;
+        } else {
+          filterCache()[dictionaryIndex] = FilterResult::kFailure;
+        }
+      }
+      passed &= bits::lowMask(width);
+      if (!passed) {
+        continue;
+      }
+
+      const auto numPassed = __builtin_popcount(passed);
+      simd::filter(xsimd::load_unaligned(rows + offset), passed)
+          .store_unaligned(filterHits + numValues);
+      if constexpr (!kFilterOnly) {
+        const auto selectedLanes = simd::byteSetBits(passed);
+        for (int32_t i = 0; i < numPassed; ++i) {
+          values[numValues + i] = dict()[input[offset + selectedLanes[i]]];
+        }
+      }
+      numValues += numPassed;
+    }
+
+    super::rowIndex_ += numInput;
+    super::addNumValues(numValues - initialNumValues);
   }
 
   // Processes 'numInput' dictionary indices in 'input'. Sets 'values'
