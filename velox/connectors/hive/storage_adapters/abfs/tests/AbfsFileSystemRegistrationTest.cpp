@@ -18,6 +18,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
@@ -101,6 +102,93 @@ TEST_F(AbfsFileSystemRegistrationTest, multipleCatalogsSameAccount) {
 
   // Same account configuration should result in the same cached instance
   EXPECT_EQ(fs1.get(), fs2.get());
+}
+
+TEST_F(AbfsFileSystemRegistrationTest, asyncSettingsArePartOfCacheKey) {
+  auto disabledConfig = createConfig({
+      {"fs.azure.account.auth.type.async-cache.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.async-cache.dfs.core.windows.net", "key"},
+  });
+  auto enabledConfig = createConfig({
+      {"fs.azure.account.auth.type.async-cache.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.async-cache.dfs.core.windows.net", "key"},
+      {"fs.azure.async-read.enabled", "true"},
+      {"fs.azure.async-read.disable-retries-for-test", "true"},
+      {"fs.azure.async-read.event-threads", "1"},
+  });
+  auto differentLimitsConfig = createConfig({
+      {"fs.azure.account.auth.type.async-cache.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.async-cache.dfs.core.windows.net", "key"},
+      {"fs.azure.async-read.enabled", "true"},
+      {"fs.azure.async-read.disable-retries-for-test", "true"},
+      {"fs.azure.async-read.event-threads", "2"},
+  });
+  constexpr std::string_view path =
+      "abfs://container@async-cache.dfs.core.windows.net/path";
+
+  auto disabled = filesystems::getFileSystem(path, disabledConfig);
+  auto enabled = filesystems::getFileSystem(path, enabledConfig);
+  auto differentLimits =
+      filesystems::getFileSystem(path, differentLimitsConfig);
+
+  EXPECT_NE(disabled.get(), enabled.get());
+  EXPECT_NE(enabled.get(), differentLimits.get());
+}
+
+TEST_F(AbfsFileSystemRegistrationTest, credentialsAndEndpointAreCacheKeys) {
+  auto firstConfig = createConfig({
+      {"fs.azure.account.auth.type.cache-identity.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.cache-identity.dfs.core.windows.net", "key-1"},
+      {"fs.azure.blob-endpoint", "http://127.0.0.1:10001"},
+  });
+  auto differentCredentialConfig = createConfig({
+      {"fs.azure.account.auth.type.cache-identity.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.cache-identity.dfs.core.windows.net", "key-2"},
+      {"fs.azure.blob-endpoint", "http://127.0.0.1:10001"},
+  });
+  auto differentEndpointConfig = createConfig({
+      {"fs.azure.account.auth.type.cache-identity.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.cache-identity.dfs.core.windows.net", "key-1"},
+      {"fs.azure.blob-endpoint", "http://127.0.0.1:10002"},
+  });
+  constexpr std::string_view path =
+      "abfs://container@cache-identity.dfs.core.windows.net/path";
+
+  auto first = filesystems::getFileSystem(path, firstConfig);
+  auto differentCredential =
+      filesystems::getFileSystem(path, differentCredentialConfig);
+  auto differentEndpoint =
+      filesystems::getFileSystem(path, differentEndpointConfig);
+
+  EXPECT_NE(first.get(), differentCredential.get());
+  EXPECT_NE(first.get(), differentEndpoint.get());
+}
+
+TEST_F(AbfsFileSystemRegistrationTest, cacheCannotBypassAsyncRetryGate) {
+  auto disabledConfig = createConfig({
+      {"fs.azure.account.auth.type.async-gate.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.async-gate.dfs.core.windows.net", "key"},
+  });
+  auto invalidEnabledConfig = createConfig({
+      {"fs.azure.account.auth.type.async-gate.dfs.core.windows.net",
+       "SharedKey"},
+      {"fs.azure.account.key.async-gate.dfs.core.windows.net", "key"},
+      {"fs.azure.async-read.enabled", "true"},
+  });
+  constexpr std::string_view path =
+      "abfs://container@async-gate.dfs.core.windows.net/path";
+
+  ASSERT_NE(filesystems::getFileSystem(path, disabledConfig), nullptr);
+  VELOX_ASSERT_USER_THROW(
+      filesystems::getFileSystem(path, invalidEnabledConfig),
+      "Stage 3 test-only configuration gate");
 }
 
 TEST_F(AbfsFileSystemRegistrationTest, singleCatalogMultipleAccounts) {

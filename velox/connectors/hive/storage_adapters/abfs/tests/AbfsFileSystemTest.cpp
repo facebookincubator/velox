@@ -15,8 +15,17 @@
  */
 
 #include <azure/core/io/body_stream.hpp>
+#include <folly/ScopeGuard.h>
+#include <folly/fibers/Baton.h>
+#include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <atomic>
+#include <condition_variable>
+#include <cstring>
+#include <limits>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <string_view>
 
@@ -30,6 +39,7 @@
 
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
+#include "connectors/hive/storage_adapters/abfs/DynamicSasTokenClientProvider.h"
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
@@ -57,6 +67,59 @@ struct RecordedDownload {
 struct InMemoryReadState {
   std::string data;
   std::vector<RecordedDownload> downloads;
+  std::atomic<size_t> fiberClientCreations{0};
+  int32_t fiberMaxRetries{-1};
+  std::function<void(std::chrono::milliseconds, const Azure::Core::Context&)>
+      retryDelayCallback;
+  bool blockDownloads{false};
+  size_t numDownloadsBeforeRelease{1};
+  folly::Baton<> downloadsStarted;
+  std::mutex releaseMutex;
+  std::vector<std::shared_ptr<folly::fibers::Baton>> releaseWaiters;
+  std::atomic<size_t> activeDownloads{0};
+  std::atomic<size_t> peakActiveDownloads{0};
+  bool failDownload{false};
+  bool timeoutDownload{false};
+  std::optional<size_t> responseBodyBytes;
+  size_t maxBodyReadChunk{std::numeric_limits<size_t>::max()};
+  std::function<void()> beforeDownload;
+
+  void releaseBlockedDownloads() {
+    std::vector<std::shared_ptr<folly::fibers::Baton>> waiters;
+    {
+      std::lock_guard lock(releaseMutex);
+      waiters = releaseWaiters;
+    }
+    for (const auto& waiter : waiters) {
+      waiter->post();
+    }
+  }
+};
+
+class FragmentedBodyStream final : public Azure::Core::IO::BodyStream {
+ public:
+  FragmentedBodyStream(const uint8_t* data, size_t length, size_t maxReadChunk)
+      : data_(data), length_(length), maxReadChunk_(maxReadChunk) {}
+
+  int64_t Length() const override {
+    return length_;
+  }
+
+ private:
+  size_t OnRead(
+      uint8_t* buffer,
+      size_t count,
+      const Azure::Core::Context& context) override {
+    const auto bytes = std::min({count, maxReadChunk_, length_ - offset_});
+    std::memcpy(buffer, data_ + offset_, bytes);
+    offset_ += bytes;
+    return bytes;
+  }
+
+  const uint8_t* data_;
+  size_t length_;
+  size_t maxReadChunk_;
+  size_t offset_{0};
 };
 
 class InMemoryAzureBlobClient final : public AzureBlobClient {
@@ -80,11 +143,49 @@ class InMemoryAzureBlobClient final : public AzureBlobClient {
     VELOX_CHECK_LE(offset + length, static_cast<int64_t>(state_->data.size()));
 
     state_->downloads.push_back({offset, length});
+    if (state_->beforeDownload) {
+      auto beforeDownload = std::move(state_->beforeDownload);
+      beforeDownload();
+    }
+    if (state_->failDownload) {
+      throw std::runtime_error("In-memory Blob download failed");
+    }
+    if (state_->timeoutDownload) {
+      throw Azure::Core::Http::TransportException(
+          "In-memory Blob download timed out");
+    }
+    if (state_->blockDownloads) {
+      auto releaseWaiter = std::make_shared<folly::fibers::Baton>();
+      {
+        std::lock_guard lock(state_->releaseMutex);
+        state_->releaseWaiters.push_back(releaseWaiter);
+      }
+      const auto active = ++state_->activeDownloads;
+      auto peak = state_->peakActiveDownloads.load();
+      while (active > peak &&
+             !state_->peakActiveDownloads.compare_exchange_weak(peak, active)) {
+      }
+      if (active >= state_->numDownloadsBeforeRelease) {
+        state_->downloadsStarted.post();
+      }
+      releaseWaiter->wait();
+      --state_->activeDownloads;
+    }
+
+    const auto bodyBytes = std::min(
+        static_cast<size_t>(length),
+        state_->responseBodyBytes.value_or(static_cast<size_t>(length)));
 
     Azure::Storage::Blobs::Models::DownloadBlobResult result;
-    result.BodyStream = std::make_unique<Azure::Core::IO::MemoryBodyStream>(
-        reinterpret_cast<const uint8_t*>(state_->data.data() + offset),
-        static_cast<size_t>(length));
+    const auto* body =
+        reinterpret_cast<const uint8_t*>(state_->data.data() + offset);
+    if (state_->maxBodyReadChunk == std::numeric_limits<size_t>::max()) {
+      result.BodyStream =
+          std::make_unique<Azure::Core::IO::MemoryBodyStream>(body, bodyBytes);
+    } else {
+      result.BodyStream = std::make_unique<FragmentedBodyStream>(
+          body, bodyBytes, state_->maxBodyReadChunk);
+    }
     return Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult>(
         std::move(result), nullptr);
   }
@@ -95,7 +196,7 @@ class InMemoryAzureBlobClient final : public AzureBlobClient {
 
  private:
   static constexpr std::string_view kUrl =
-      "https://unit.blob.core.windows.net/container/test-file";
+      "http://127.0.0.1:80/container/test-file";
 
   std::shared_ptr<InMemoryReadState> state_;
 };
@@ -103,6 +204,38 @@ class InMemoryAzureBlobClient final : public AzureBlobClient {
 class InMemoryAzureClientProvider final : public AzureClientProvider {
  public:
   explicit InMemoryAzureClientProvider(std::shared_ptr<InMemoryReadState> state)
+      : state_(std::move(state)) {}
+
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    return std::make_unique<InMemoryAzureBlobClient>(state_);
+  }
+
+  std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) override {
+    ++state_->fiberClientCreations;
+    state_->fiberMaxRetries = options.Retry.MaxRetries;
+    state_->retryDelayCallback = options.Retry.RetryDelayCallback;
+    return std::make_unique<InMemoryAzureBlobClient>(state_);
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("Unexpected getWriteFileClient call.");
+  }
+
+ private:
+  std::shared_ptr<InMemoryReadState> state_;
+};
+
+class SyncOnlyInMemoryAzureClientProvider final : public AzureClientProvider {
+ public:
+  explicit SyncOnlyInMemoryAzureClientProvider(
+      std::shared_ptr<InMemoryReadState> state)
       : state_(std::move(state)) {}
 
   std::unique_ptr<AzureBlobClient> getReadFileClient(
@@ -123,14 +256,27 @@ class InMemoryAzureClientProvider final : public AzureClientProvider {
 
 class TestAzureClientProvider final : public AzureClientProvider {
  public:
-  explicit TestAzureClientProvider() {
-    delegated_ = std::make_unique<SharedKeyAzureClientProvider>();
-  }
-
   std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
       const config::ConfigBase& config) override {
-    return delegated_->getReadFileClient(path, config);
+    if (config.valueExists(
+            "fs.azure.sas.fixed.token.test.dfs.core.windows.net")) {
+      return FixedSasAzureClientProvider().getReadFileClient(path, config);
+    }
+    return SharedKeyAzureClientProvider().getReadFileClient(path, config);
+  }
+
+  std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) override {
+    if (config.valueExists(
+            "fs.azure.sas.fixed.token.test.dfs.core.windows.net")) {
+      return FixedSasAzureClientProvider().getReadFileClientWithOptions(
+          path, config, options);
+    }
+    return SharedKeyAzureClientProvider().getReadFileClientWithOptions(
+        path, config, options);
   }
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
@@ -138,10 +284,149 @@ class TestAzureClientProvider final : public AzureClientProvider {
       const config::ConfigBase& config) override {
     return std::make_unique<MockDataLakeFileClient>();
   }
+};
+
+class CountingSasTokenProvider final : public SasTokenProvider {
+ public:
+  explicit CountingSasTokenProvider(std::string token)
+      : token_(std::move(token)) {}
+
+  std::string getSasToken(
+      const std::string& fileSystem,
+      const std::string& path,
+      const std::string& operation) override {
+    ++calls_;
+    return token_;
+  }
+
+  size_t calls() const {
+    return calls_;
+  }
 
  private:
-  std::unique_ptr<AzureClientProvider> delegated_;
+  const std::string token_;
+  std::atomic<size_t> calls_{0};
 };
+
+class BlockingSecondSasTokenProvider final : public SasTokenProvider {
+ public:
+  explicit BlockingSecondSasTokenProvider(std::string token)
+      : token_(std::move(token)) {}
+
+  std::string getSasToken(
+      const std::string& fileSystem,
+      const std::string& path,
+      const std::string& operation) override {
+    std::unique_lock lock(mutex_);
+    ++calls_;
+    if (calls_ == 2) {
+      secondCallStarted_ = true;
+      secondCallStartedCondition_.notify_all();
+      releaseSecondCallCondition_.wait(
+          lock, [&] { return secondCallReleased_; });
+    }
+    return token_;
+  }
+
+  bool waitForSecondCall() {
+    std::unique_lock lock(mutex_);
+    return secondCallStartedCondition_.wait_for(
+        lock, std::chrono::seconds(5), [&] { return secondCallStarted_; });
+  }
+
+  void releaseSecondCall() {
+    std::lock_guard lock(mutex_);
+    secondCallReleased_ = true;
+    releaseSecondCallCondition_.notify_all();
+  }
+
+  size_t calls() const {
+    std::lock_guard lock(mutex_);
+    return calls_;
+  }
+
+ private:
+  const std::string token_;
+  mutable std::mutex mutex_;
+  std::condition_variable secondCallStartedCondition_;
+  std::condition_variable releaseSecondCallCondition_;
+  bool secondCallStarted_{false};
+  bool secondCallReleased_{false};
+  size_t calls_{0};
+};
+
+class BlockingSasTokenProvider final : public SasTokenProvider {
+ public:
+  std::string getSasToken(
+      const std::string& fileSystem,
+      const std::string& path,
+      const std::string& operation) override {
+    std::unique_lock lock(mutex_);
+    ++calls_;
+    callbackStarted_ = true;
+    callbackStartedCondition_.notify_all();
+    releaseCallbackCondition_.wait(lock, [&] { return callbackReleased_; });
+    return "se=9999-01-01T00%3A00%3A00Z&marker=synthetic";
+  }
+
+  bool waitForCallback() {
+    std::unique_lock lock(mutex_);
+    return callbackStartedCondition_.wait_for(
+        lock, std::chrono::seconds(5), [&] { return callbackStarted_; });
+  }
+
+  void releaseCallback() {
+    std::lock_guard lock(mutex_);
+    callbackReleased_ = true;
+    releaseCallbackCondition_.notify_all();
+  }
+
+  size_t calls() const {
+    std::lock_guard lock(mutex_);
+    return calls_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable callbackStartedCondition_;
+  std::condition_variable releaseCallbackCondition_;
+  bool callbackStarted_{false};
+  bool callbackReleased_{false};
+  size_t calls_{0};
+};
+
+std::shared_ptr<const config::ConfigBase> nativeAsyncConfig(
+    size_t maxActiveRequests = 4,
+    size_t maxQueuedRequests = 4) {
+  return std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {"fs.azure.async-read.enabled", "true"},
+          {"fs.azure.async-read.disable-retries-for-test", "true"},
+          {"fs.azure.async-read.event-threads", "1"},
+          {"fs.azure.async-read.max-active-requests",
+           std::to_string(maxActiveRequests)},
+          {"fs.azure.async-read.max-queued-requests",
+           std::to_string(maxQueuedRequests)},
+      });
+}
+
+std::unique_ptr<ReadFile> openAsyncInMemoryFile(
+    std::string account,
+    const std::shared_ptr<InMemoryReadState>& state,
+    size_t maxActiveRequests = 4,
+    size_t maxQueuedRequests = 4) {
+  registerAzureClientProviderFactory(account, [state](const std::string&) {
+    return std::make_unique<InMemoryAzureClientProvider>(state);
+  });
+  AbfsFileSystem fileSystem(
+      nativeAsyncConfig(maxActiveRequests, maxQueuedRequests));
+  FileOptions options;
+  options.fileSize = state->data.size();
+  return fileSystem.openFileForRead(
+      fmt::format(
+          "abfs://container@{}.dfs.core.windows.net/test-file", account),
+      options);
+}
 
 } // namespace
 
@@ -179,7 +464,7 @@ class AbfsFileSystemTest : public testing::Test {
   static std::string generateRandomData(int size) {
     static constexpr std::string_view kCharacters =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    std::mt19937 generator(std::random_device{}());
+    thread_local std::mt19937 generator(std::random_device{}());
     std::uniform_int_distribution<size_t> distribution(
         0, kCharacters.size() - 1);
 
@@ -267,6 +552,228 @@ TEST_F(AbfsFileSystemTest, openFileForReadWithOptions) {
   readData(readFile.get());
 }
 
+TEST_F(AbfsFileSystemTest, nativeAsyncSharedKeyReadFile) {
+  auto asyncFileSystem =
+      std::make_unique<AbfsFileSystem>(azuriteServer_->hiveConfig(
+          {{"fs.azure.async-read.enabled", "true"},
+           {"fs.azure.async-read.disable-retries-for-test", "true"},
+           {"fs.azure.async-read.event-threads", "1"},
+           {"fs.azure.async-read.max-active-requests", "4"},
+           {"fs.azure.async-read.max-queued-requests", "4"},
+           {"fs.azure.async-read.max-connections-per-endpoint", "2"}}));
+  auto readFile = asyncFileSystem->openFileForRead(azuriteServer_->fileURI());
+
+  ASSERT_TRUE(readFile->hasPreadvAsync());
+  readData(readFile.get());
+
+  char firstBuffer[5];
+  char secondBuffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(firstBuffer, sizeof(firstBuffer)),
+      folly::Range<char*>(nullptr, kOneMB),
+      folly::Range<char*>(secondBuffer, sizeof(secondBuffer)),
+  };
+  auto future = readFile->preadvAsync(5, buffers);
+
+  EXPECT_EQ(std::move(future).get(), kOneMB + 10);
+  EXPECT_EQ(std::string_view(firstBuffer, sizeof(firstBuffer)), "bbbbb");
+  EXPECT_EQ(std::string_view(secondBuffer, sizeof(secondBuffer)), "ddddd");
+}
+
+TEST_F(AbfsFileSystemTest, nativeAsyncFixedSasReadFile) {
+  const auto sasToken = azuriteServer_->readSasToken();
+  const std::unordered_map<std::string, std::string> sasConfig = {
+      {"fs.azure.sas.fixed.token.test.dfs.core.windows.net", sasToken}};
+  AbfsFileSystem syncFileSystem(azuriteServer_->hiveConfig(sasConfig));
+  auto syncReadFile = syncFileSystem.openFileForRead(azuriteServer_->fileURI());
+  const auto expected = syncReadFile->pread(0, 10);
+
+  auto asyncConfig = sasConfig;
+  asyncConfig["fs.azure.async-read.enabled"] = "true";
+  asyncConfig["fs.azure.async-read.disable-retries-for-test"] = "true";
+  asyncConfig["fs.azure.async-read.event-threads"] = "1";
+  asyncConfig["fs.azure.async-read.max-active-requests"] = "4";
+  asyncConfig["fs.azure.async-read.max-queued-requests"] = "4";
+  AbfsFileSystem asyncFileSystem(azuriteServer_->hiveConfig(asyncConfig));
+  auto asyncReadFile =
+      asyncFileSystem.openFileForRead(azuriteServer_->fileURI());
+
+  ASSERT_TRUE(asyncReadFile->hasPreadvAsync());
+  char buffer[10];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+  auto future = asyncReadFile->preadvAsync(0, buffers);
+
+  EXPECT_EQ(std::move(future).get(), sizeof(buffer));
+  EXPECT_EQ(std::string_view(buffer, sizeof(buffer)), expected);
+}
+
+TEST_F(AbfsFileSystemTest, nativeAsyncDynamicSasReadFile) {
+  auto tokenProvider = std::make_shared<CountingSasTokenProvider>(
+      azuriteServer_->readSasToken());
+  registerAzureClientProviderFactory(
+      "test", [tokenProvider](const std::string&) {
+        return std::make_unique<DynamicSasTokenClientProvider>(tokenProvider);
+      });
+  auto restoreProvider = folly::makeGuard([] {
+    registerAzureClientProviderFactory("test", [](const std::string&) {
+      return std::make_unique<TestAzureClientProvider>();
+    });
+  });
+  auto config = azuriteServer_->hiveConfig(
+      {{"fs.azure.async-read.enabled", "true"},
+       {"fs.azure.async-read.disable-retries-for-test", "true"},
+       {"fs.azure.async-read.event-threads", "1"},
+       {"fs.azure.async-read.max-active-requests", "4"},
+       {"fs.azure.async-read.max-queued-requests", "4"},
+       {"fs.azure.sas.token.renew.period.for.streams", "120"}});
+  AbfsFileSystem fileSystem(config);
+  FileOptions options;
+  options.fileSize = 15 + kOneMB;
+
+  auto readFile =
+      fileSystem.openFileForRead(azuriteServer_->fileURI(), options);
+
+  ASSERT_TRUE(readFile->hasPreadvAsync());
+  EXPECT_EQ(tokenProvider->calls(), 0);
+  char buffer[10];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+  auto future = readFile->preadvAsync(0, buffers);
+
+  EXPECT_EQ(std::move(future).get(), sizeof(buffer));
+  EXPECT_EQ(std::string_view(buffer, sizeof(buffer)), "aaaaabbbbb");
+  EXPECT_EQ(tokenProvider->calls(), 1);
+}
+
+TEST_F(AbfsFileSystemTest, dynamicSasRefreshDoesNotBlockWarmSiblingRead) {
+  auto tokenProvider = std::make_shared<BlockingSecondSasTokenProvider>(
+      azuriteServer_->readSasToken());
+  registerAzureClientProviderFactory(
+      "test", [tokenProvider](const std::string&) {
+        return std::make_unique<DynamicSasTokenClientProvider>(tokenProvider);
+      });
+  auto restoreProvider = folly::makeGuard([] {
+    registerAzureClientProviderFactory("test", [](const std::string&) {
+      return std::make_unique<TestAzureClientProvider>();
+    });
+  });
+  auto config = azuriteServer_->hiveConfig(
+      {{"fs.azure.async-read.enabled", "true"},
+       {"fs.azure.async-read.disable-retries-for-test", "true"},
+       {"fs.azure.async-read.event-threads", "1"},
+       {"fs.azure.async-read.max-active-requests", "4"},
+       {"fs.azure.async-read.max-queued-requests", "4"},
+       {"fs.azure.sas.token.renew.period.for.streams", "120"}});
+  AbfsFileSystem fileSystem(config);
+  FileOptions options;
+  options.fileSize = 15 + kOneMB;
+  auto warmFile =
+      fileSystem.openFileForRead(azuriteServer_->fileURI(), options);
+  auto refreshingFile =
+      fileSystem.openFileForRead(azuriteServer_->fileURI(), options);
+
+  char warmBuffer[5];
+  const std::vector<folly::Range<char*>> warmBuffers = {
+      folly::Range<char*>(warmBuffer, sizeof(warmBuffer))};
+  EXPECT_EQ(
+      std::move(warmFile->preadvAsync(0, warmBuffers)).get(),
+      sizeof(warmBuffer));
+  EXPECT_EQ(tokenProvider->calls(), 1);
+
+  char refreshingBuffer[5];
+  const std::vector<folly::Range<char*>> refreshingBuffers = {
+      folly::Range<char*>(refreshingBuffer, sizeof(refreshingBuffer))};
+  auto refreshing = refreshingFile->preadvAsync(5, refreshingBuffers);
+  auto releaseGuard =
+      folly::makeGuard([tokenProvider] { tokenProvider->releaseSecondCall(); });
+  ASSERT_TRUE(tokenProvider->waitForSecondCall());
+
+  char siblingBuffer[5];
+  const std::vector<folly::Range<char*>> siblingBuffers = {
+      folly::Range<char*>(siblingBuffer, sizeof(siblingBuffer))};
+  auto sibling = warmFile->preadvAsync(10 + kOneMB, siblingBuffers);
+  EXPECT_EQ(
+      std::move(sibling).get(std::chrono::seconds(1)), sizeof(siblingBuffer));
+  EXPECT_EQ(std::string_view(siblingBuffer, sizeof(siblingBuffer)), "ddddd");
+
+  tokenProvider->releaseSecondCall();
+  releaseGuard.dismiss();
+  EXPECT_EQ(std::move(refreshing).get(), sizeof(refreshingBuffer));
+  EXPECT_EQ(
+      std::string_view(refreshingBuffer, sizeof(refreshingBuffer)), "bbbbb");
+  EXPECT_EQ(tokenProvider->calls(), 2);
+}
+
+TEST(AbfsReadFileTest, dynamicSasDestructionDuringRefreshIsSafe) {
+  const std::string account{"unit-dynamic-lifetime"};
+  auto tokenProvider = std::make_shared<BlockingSasTokenProvider>();
+  registerAzureClientProviderFactory(
+      account, [tokenProvider](const std::string&) {
+        return std::make_unique<DynamicSasTokenClientProvider>(tokenProvider);
+      });
+  auto configValues = nativeAsyncConfig()->rawConfigsCopy();
+  configValues[kAzureBlobEndpoint] = "http://127.0.0.1:1/account";
+  auto fileSystem = std::make_unique<AbfsFileSystem>(
+      std::make_shared<const config::ConfigBase>(std::move(configValues)));
+  FileOptions options;
+  options.fileSize = 5;
+  auto readFile = fileSystem->openFileForRead(
+      fmt::format(
+          "abfs://container@{}.dfs.core.windows.net/test-file", account),
+      options);
+  char buffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(0, buffers);
+  auto releaseGuard =
+      folly::makeGuard([tokenProvider] { tokenProvider->releaseCallback(); });
+  ASSERT_TRUE(tokenProvider->waitForCallback());
+  readFile.reset();
+  fileSystem.reset();
+
+  tokenProvider->releaseCallback();
+  releaseGuard.dismiss();
+  EXPECT_THROW(std::move(future).get(), std::runtime_error);
+  EXPECT_EQ(tokenProvider->calls(), 1);
+}
+
+TEST(AbfsReadFileTest, dynamicSasCallerCancellationDuringRefresh) {
+  const std::string account{"unit-dynamic-cancellation"};
+  auto tokenProvider = std::make_shared<BlockingSasTokenProvider>();
+  registerAzureClientProviderFactory(
+      account, [tokenProvider](const std::string&) {
+        return std::make_unique<DynamicSasTokenClientProvider>(tokenProvider);
+      });
+  auto configValues = nativeAsyncConfig()->rawConfigsCopy();
+  configValues[kAzureBlobEndpoint] = "http://127.0.0.1:1/account";
+  AbfsFileSystem fileSystem(
+      std::make_shared<const config::ConfigBase>(std::move(configValues)));
+  FileOptions options;
+  options.fileSize = 5;
+  auto readFile = fileSystem.openFileForRead(
+      fmt::format(
+          "abfs://container@{}.dfs.core.windows.net/test-file", account),
+      options);
+  char buffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(0, buffers);
+  auto releaseGuard =
+      folly::makeGuard([tokenProvider] { tokenProvider->releaseCallback(); });
+  ASSERT_TRUE(tokenProvider->waitForCallback());
+  future.cancel();
+
+  EXPECT_THROW(
+      std::move(future).get(std::chrono::seconds(1)),
+      folly::FutureCancellation);
+  tokenProvider->releaseCallback();
+  releaseGuard.dismiss();
+  EXPECT_EQ(tokenProvider->calls(), 1);
+}
+
 TEST(AbfsReadFileTest, preadvUsesSingleDownloadForBuffersWithGaps) {
   auto state = std::make_shared<InMemoryReadState>();
   state->data = "0123456789abcdefghijklmn";
@@ -335,6 +842,401 @@ TEST(AbfsReadFileTest, preadvUsesSingleDownloadForDefaultCoalescedGap) {
   EXPECT_EQ(std::string_view(secondBuffer, sizeof(secondBuffer)), "bbbb");
 }
 
+TEST(AbfsReadFileTest, asyncDisabledPreservesLegacyShortBodyResult) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  state->responseBodyBytes = 4;
+  registerAzureClientProviderFactory(
+      "unit-sync-short-body", [state](const std::string&) {
+        return std::make_unique<InMemoryAzureClientProvider>(state);
+      });
+  AbfsReadFile readFile{
+      "abfs://container@unit-sync-short-body.dfs.core.windows.net/test-file",
+      config::ConfigBase({})};
+  FileOptions options;
+  options.fileSize = state->data.size();
+  readFile.initialize(options);
+  std::array<char, 5> buffer;
+  buffer.fill('x');
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer.data(), buffer.size())};
+
+  EXPECT_EQ(readFile.preadv(0, buffers), buffer.size());
+  EXPECT_EQ(std::string_view(buffer.data(), 4), "0123");
+  EXPECT_EQ(buffer.back(), 'x');
+}
+
+TEST(AbfsReadFileTest, nativeAsyncPreadvUsesSingleDownloadWithGaps) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789abcdefghijklmn";
+
+  registerAzureClientProviderFactory("unit-async", [state](const std::string&) {
+    return std::make_unique<InMemoryAzureClientProvider>(state);
+  });
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {"fs.azure.async-read.enabled", "true"},
+          {"fs.azure.async-read.disable-retries-for-test", "true"},
+          {"fs.azure.async-read.event-threads", "1"},
+          {"fs.azure.async-read.max-active-requests", "4"},
+          {"fs.azure.async-read.max-queued-requests", "4"},
+      });
+  AbfsFileSystem fileSystem(config);
+  FileOptions options;
+  options.fileSize = state->data.size();
+  auto readFile = fileSystem.openFileForRead(
+      "abfs://container@unit-async.dfs.core.windows.net/test-file", options);
+
+  ASSERT_TRUE(readFile->hasPreadvAsync());
+  EXPECT_EQ(state->fiberMaxRetries, 0);
+  EXPECT_TRUE(state->retryDelayCallback);
+  char firstBuffer[5];
+  char secondBuffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(firstBuffer, sizeof(firstBuffer)),
+      folly::Range<char*>(nullptr, 7),
+      folly::Range<char*>(secondBuffer, sizeof(secondBuffer)),
+  };
+
+  auto future = readFile->preadvAsync(2, buffers);
+
+  EXPECT_EQ(std::move(future).get(), 17);
+  ASSERT_EQ(state->downloads.size(), 1);
+  EXPECT_EQ(state->downloads[0].offset, 2);
+  EXPECT_EQ(state->downloads[0].length, 17);
+  EXPECT_EQ(std::string_view(firstBuffer, sizeof(firstBuffer)), "23456");
+  EXPECT_EQ(std::string_view(secondBuffer, sizeof(secondBuffer)), "efghi");
+}
+
+TEST(AbfsReadFileTest, asyncDisabledDoesNotRequestFiberClient) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  registerAzureClientProviderFactory(
+      "unit-disabled", [state](const std::string&) {
+        return std::make_unique<InMemoryAzureClientProvider>(state);
+      });
+  AbfsFileSystem fileSystem(
+      std::make_shared<const config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{}));
+  FileOptions options;
+  options.fileSize = state->data.size();
+
+  auto readFile = fileSystem.openFileForRead(
+      "abfs://container@unit-disabled.dfs.core.windows.net/test-file", options);
+
+  EXPECT_FALSE(readFile->hasPreadvAsync());
+  EXPECT_EQ(state->fiberClientCreations, 0);
+}
+
+TEST(AbfsReadFileTest, asyncEnabledRequiresTestRetryGate) {
+  VELOX_ASSERT_USER_THROW(
+      AbfsFileSystem(
+          std::make_shared<const config::ConfigBase>(
+              std::unordered_map<std::string, std::string>{
+                  {"fs.azure.async-read.enabled", "true"}})),
+      "Stage 3 test-only configuration gate");
+}
+
+TEST(AbfsReadFileTest, asyncAuthResourcesAreBounded) {
+  auto tooManyWorkers = nativeAsyncConfig()->rawConfigsCopy();
+  tooManyWorkers["fs.azure.async-read.auth-threads"] = "3";
+  EXPECT_THROW(
+      AbfsFileSystem(
+          std::make_shared<const config::ConfigBase>(
+              std::move(tooManyWorkers))),
+      std::invalid_argument);
+
+  auto emptyQueue = nativeAsyncConfig()->rawConfigsCopy();
+  emptyQueue["fs.azure.async-read.max-queued-auth-refreshes"] = "0";
+  EXPECT_THROW(
+      AbfsFileSystem(
+          std::make_shared<const config::ConfigBase>(std::move(emptyQueue))),
+      std::invalid_argument);
+}
+
+TEST(AbfsReadFileTest, asyncEnabledRejectsUnsupportedProvider) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  registerAzureClientProviderFactory(
+      "unit-sync-only", [state](const std::string&) {
+        return std::make_unique<SyncOnlyInMemoryAzureClientProvider>(state);
+      });
+  AbfsFileSystem fileSystem(nativeAsyncConfig());
+  FileOptions options;
+  options.fileSize = state->data.size();
+
+  VELOX_ASSERT_USER_THROW(
+      fileSystem.openFileForRead(
+          "abfs://container@unit-sync-only.dfs.core.windows.net/test-file",
+          options),
+      "account 'unit-sync-only' with auth context 'registered provider'");
+}
+
+TEST(AbfsReadFileTest, registeredProviderContextTakesPrecedenceOverAuthConfig) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  registerAzureClientProviderFactory(
+      "unit-provider-context", [state](const std::string&) {
+        return std::make_unique<SyncOnlyInMemoryAzureClientProvider>(state);
+      });
+  auto config = nativeAsyncConfig()->rawConfigsCopy();
+  config
+      ["fs.azure.account.auth.type.unit-provider-context.dfs.core.windows.net"] =
+          "SharedKey";
+  config["fs.azure.account.key.unit-provider-context.dfs.core.windows.net"] =
+      "key";
+  AbfsFileSystem fileSystem(
+      std::make_shared<const config::ConfigBase>(std::move(config)));
+  FileOptions options;
+  options.fileSize = state->data.size();
+
+  VELOX_ASSERT_USER_THROW(
+      fileSystem.openFileForRead(
+          "abfs://container@unit-provider-context.dfs.core.windows.net/test-file",
+          options),
+      "account 'unit-provider-context' with auth context 'registered provider'");
+}
+
+TEST(AbfsReadFileTest, asyncEnabledReportsUnsupportedOAuthContext) {
+  auto config = nativeAsyncConfig()->rawConfigsCopy();
+  config["fs.azure.account.auth.type.unit-oauth.dfs.core.windows.net"] =
+      "OAuth";
+  config["fs.azure.account.oauth2.client.id.unit-oauth.dfs.core.windows.net"] =
+      "client";
+  config
+      ["fs.azure.account.oauth2.client.secret.unit-oauth.dfs.core.windows.net"] =
+          "secret";
+  config
+      ["fs.azure.account.oauth2.client.endpoint.unit-oauth.dfs.core.windows.net"] =
+          "https://login.microsoftonline.com/tenant/oauth2/token";
+  AbfsFileSystem fileSystem(
+      std::make_shared<const config::ConfigBase>(std::move(config)));
+
+  VELOX_ASSERT_USER_THROW(
+      fileSystem.openFileForRead(
+          "abfss://container@unit-oauth.dfs.core.windows.net/test-file"),
+      "account 'unit-oauth' with auth context 'OAuth'");
+}
+
+TEST(AbfsReadFileTest, nativeAsyncZeroLengthSkipsDownload) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  auto readFile = openAsyncInMemoryFile("unit-zero-length", state);
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(static_cast<char*>(nullptr), size_t{0})};
+
+  auto future = readFile->preadvAsync(3, buffers);
+
+  EXPECT_EQ(std::move(future).get(), 0);
+  EXPECT_TRUE(state->downloads.empty());
+}
+
+TEST(AbfsReadFileTest, nativeAsyncAllNullBuffersUseOneDownload) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  auto readFile = openAsyncInMemoryFile("unit-all-null", state);
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(nullptr, 3),
+      folly::Range<char*>(nullptr, 4),
+  };
+
+  auto future = readFile->preadvAsync(2, buffers);
+
+  EXPECT_EQ(std::move(future).get(), 7);
+  ASSERT_EQ(state->downloads.size(), 1);
+  EXPECT_EQ(state->downloads[0].offset, 2);
+  EXPECT_EQ(state->downloads[0].length, 7);
+}
+
+TEST(AbfsReadFileTest, nativeAsyncRejectsUnrepresentableOffset) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0";
+  auto readFile = openAsyncInMemoryFile("unit-offset-overflow", state);
+  char buffer[1];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 1, buffers);
+
+  VELOX_ASSERT_USER_THROW(
+      std::move(future).get(),
+      "ABFS read offset exceeds the Azure Blob range limit");
+}
+
+TEST(AbfsReadFileTest, nativeAsyncErrorsSettleThroughFuture) {
+  auto failureState = std::make_shared<InMemoryReadState>();
+  failureState->data = "0123456789";
+  failureState->failDownload = true;
+  auto failureReadFile = openAsyncInMemoryFile("unit-failure", failureState);
+  char failureBuffer[5];
+  const std::vector<folly::Range<char*>> failureBuffers = {
+      folly::Range<char*>(failureBuffer, sizeof(failureBuffer))};
+
+  auto failureFuture = failureReadFile->preadvAsync(0, failureBuffers);
+
+  EXPECT_THROW(std::move(failureFuture).get(), std::runtime_error);
+
+  auto shortBodyState = std::make_shared<InMemoryReadState>();
+  shortBodyState->data = "0123456789";
+  shortBodyState->responseBodyBytes = 4;
+  auto shortBodyReadFile =
+      openAsyncInMemoryFile("unit-short-body", shortBodyState);
+  char shortBodyBuffer[5];
+  const std::vector<folly::Range<char*>> shortBodyBuffers = {
+      folly::Range<char*>(shortBodyBuffer, sizeof(shortBodyBuffer))};
+
+  auto shortBodyFuture = shortBodyReadFile->preadvAsync(0, shortBodyBuffers);
+
+  EXPECT_THROW(std::move(shortBodyFuture).get(), std::runtime_error);
+}
+
+TEST(AbfsReadFileTest, nativeAsyncTimeoutSettlesThroughFuture) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  state->timeoutDownload = true;
+  auto readFile = openAsyncInMemoryFile("unit-timeout", state);
+  char buffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(0, buffers);
+
+  EXPECT_THROW(std::move(future).get(), Azure::Core::Http::TransportException);
+}
+
+TEST(AbfsReadFileTest, nativeAsyncFragmentedBodyMatchesSyncScatter) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789abcdefghijklmn";
+  state->maxBodyReadChunk = 2;
+  registerAzureClientProviderFactory(
+      "unit-fragmented", [state](const std::string&) {
+        return std::make_unique<InMemoryAzureClientProvider>(state);
+      });
+  AbfsFileSystem syncFileSystem(
+      std::make_shared<const config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{}));
+  FileOptions options;
+  options.fileSize = state->data.size();
+  auto syncReadFile = syncFileSystem.openFileForRead(
+      "abfs://container@unit-fragmented.dfs.core.windows.net/test-file",
+      options);
+  char syncFirst[3];
+  char syncSecond[5];
+  const std::vector<folly::Range<char*>> syncBuffers = {
+      folly::Range<char*>(syncFirst, sizeof(syncFirst)),
+      folly::Range<char*>(nullptr, 4),
+      folly::Range<char*>(syncSecond, sizeof(syncSecond)),
+  };
+  ASSERT_EQ(syncReadFile->preadv(1, syncBuffers), 12);
+
+  auto asyncReadFile = openAsyncInMemoryFile("unit-fragmented", state);
+  char asyncFirst[3];
+  char asyncSecond[5];
+  const std::vector<folly::Range<char*>> asyncBuffers = {
+      folly::Range<char*>(asyncFirst, sizeof(asyncFirst)),
+      folly::Range<char*>(nullptr, 4),
+      folly::Range<char*>(asyncSecond, sizeof(asyncSecond)),
+  };
+
+  auto future = asyncReadFile->preadvAsync(1, asyncBuffers);
+
+  EXPECT_EQ(std::move(future).get(), 12);
+  EXPECT_EQ(
+      std::string_view(asyncFirst, sizeof(asyncFirst)),
+      std::string_view(syncFirst, sizeof(syncFirst)));
+  EXPECT_EQ(
+      std::string_view(asyncSecond, sizeof(asyncSecond)),
+      std::string_view(syncSecond, sizeof(syncSecond)));
+  ASSERT_EQ(state->downloads.size(), 2);
+  EXPECT_EQ(state->downloads[0].length, 12);
+  EXPECT_EQ(state->downloads[1].length, 12);
+}
+
+TEST(AbfsReadFileTest, synchronousReadFromRuntimeThreadFailsThroughFuture) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  auto readFile = openAsyncInMemoryFile("unit-reentrant-sync", state);
+  state->beforeDownload = [&readFile] {
+    char nestedBuffer[1];
+    const std::vector<folly::Range<char*>> nestedBuffers = {
+        folly::Range<char*>(nestedBuffer, sizeof(nestedBuffer))};
+    readFile->preadv(0, nestedBuffers);
+  };
+  char buffer[1];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(0, buffers);
+
+  VELOX_ASSERT_THROW(
+      std::move(future).get(),
+      "Synchronous ABFS reads cannot run on an async runtime thread");
+}
+
+TEST(AbfsReadFileTest, nativeAsyncRetainsFileUntilPendingReadCompletes) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  state->blockDownloads = true;
+  auto readFile = openAsyncInMemoryFile("unit-file-lifetime", state);
+  char buffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(2, buffers);
+  ASSERT_TRUE(state->downloadsStarted.try_wait_for(std::chrono::seconds(5)));
+  EXPECT_FALSE(future.isReady());
+  readFile.reset();
+  state->releaseBlockedDownloads();
+
+  EXPECT_EQ(std::move(future).get(), sizeof(buffer));
+  EXPECT_EQ(std::string_view(buffer, sizeof(buffer)), "23456");
+}
+
+TEST(AbfsReadFileTest, nativeAsyncCancellationPropagatesToRuntime) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  state->blockDownloads = true;
+  auto readFile = openAsyncInMemoryFile("unit-future-cancellation", state);
+  char buffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buffer, sizeof(buffer))};
+
+  auto future = readFile->preadvAsync(2, buffers);
+  ASSERT_TRUE(state->downloadsStarted.try_wait_for(std::chrono::seconds(5)));
+  future.cancel();
+  state->releaseBlockedDownloads();
+
+  EXPECT_THROW(std::move(future).get(), folly::FutureCancellation);
+}
+
+TEST(AbfsReadFileTest, nativeAsyncExceedsRuntimeThreadCount) {
+  constexpr size_t kNumReads = 4;
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789";
+  state->blockDownloads = true;
+  state->numDownloadsBeforeRelease = kNumReads;
+  auto readFile =
+      openAsyncInMemoryFile("unit-concurrency", state, kNumReads, kNumReads);
+  std::array<std::array<char, 1>, kNumReads> buffers;
+  std::vector<folly::SemiFuture<uint64_t>> futures;
+  futures.reserve(kNumReads);
+  for (size_t index = 0; index < kNumReads; ++index) {
+    const std::vector<folly::Range<char*>> ranges = {
+        folly::Range<char*>(buffers[index].data(), buffers[index].size())};
+    futures.push_back(readFile->preadvAsync(index, ranges));
+  }
+
+  ASSERT_TRUE(state->downloadsStarted.try_wait_for(std::chrono::seconds(5)));
+  EXPECT_EQ(state->peakActiveDownloads, kNumReads);
+  state->releaseBlockedDownloads();
+
+  for (size_t index = 0; index < kNumReads; ++index) {
+    EXPECT_EQ(std::move(futures[index]).get(), 1);
+    EXPECT_EQ(buffers[index][0], state->data[index]);
+  }
+}
+
 TEST_F(AbfsFileSystemTest, openFileForReadWithInvalidOptions) {
   FileOptions options;
   options.fileSize = -kOneMB;
@@ -364,13 +1266,12 @@ TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
   std::uniform_int_distribution<std::size_t> distribution(
       0, sleepTimesInMicroseconds.size() - 1);
   for (int i = 0; i < 10; i++) {
-    auto thread = std::thread([&] {
-      const auto index = distribution(generator);
+    const auto sleepTime = sleepTimesInMicroseconds[distribution(generator)];
+    auto thread = std::thread([&, sleepTime] {
       while (!startThreads) {
         std::this_thread::yield();
       }
-      std::this_thread::sleep_for(
-          std::chrono::microseconds(sleepTimesInMicroseconds[index]));
+      std::this_thread::sleep_for(std::chrono::microseconds(sleepTime));
       auto readFile = abfs_->openFileForRead(azuriteServer_->fileURI());
       readData(readFile.get());
     });

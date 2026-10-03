@@ -1,0 +1,20 @@
+Stage 3 C3 source integrity
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Checks
+- Repository-pinned clang-format 21.1.2: PASS for changed ABFS C++ sources.
+- Git whitespace check: PASS.
+- LF line endings in the ext4 execution checkout: PASS.
+- Windows staging and WSL execution trees match after CRLF normalization:
+  PASS.
+- Editor diagnostics for the ABFS tree: clean.
+- Source changes outside the ABFS adapter directory: 0.
+- Base SHA: unchanged.
+
+Frozen Stage 0 benchmark CMake block, LF-normalized SHA-256
+7b4af22ec2ddc0dcb812dc9d59edceb48262f31b9594a8a4453e1e230ba50e0d
+
+The Stage 0 benchmark source remains intentionally hash-frozen and is excluded
+from Stage 3 formatting changes. No Parquet scheduler source changed.

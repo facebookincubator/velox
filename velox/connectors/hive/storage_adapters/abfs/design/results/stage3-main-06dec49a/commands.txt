@@ -1,0 +1,43 @@
+Stage 3 C3 representative commands
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Run from the WSL ext4 repository root. Build and toolchain paths below are
+repository- or home-relative placeholders; no machine-private path is retained.
+
+Ordinary Debug
+cmake --build abfs-stage1-debug --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j2
+ctest --test-dir abfs-stage1-debug \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$' \
+  --output-on-failure
+
+ASAN
+# Configure as documented by the Stage 2 sanitizer environment with Clang 20,
+# bundled Folly, and -fsanitize=address. After CMake regeneration, set the
+# generated bundled-Folly library-ASAN marker to 1 and rebuild.
+cmake --build abfs-stage2-asan-clang20-debug --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j2
+export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+ctest --test-dir abfs-stage2-asan-clang20-debug \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$' \
+  --output-on-failure
+
+TSAN
+cmake --build abfs-stage2-tsan-clang20-debug --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j2
+export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1
+setarch x86_64 -R <build>/velox_abfs_test
+setarch x86_64 -R <build>/velox_abfs_registration_test
+setarch x86_64 -R <build>/velox_abfs_stage1_transport_test
+setarch x86_64 -R <build>/velox_abfs_stage2_runtime_test
+
+Focused sanitizer matrix
+<build>/velox_abfs_test \
+  --gtest_filter='AbfsReadFileTest.nativeAsyncPreadvUsesSingleDownloadWithGaps:AbfsReadFileTest.nativeAsyncAllNullBuffersUseOneDownload:AbfsReadFileTest.nativeAsyncErrorsSettleThroughFuture:AbfsReadFileTest.nativeAsyncTimeoutSettlesThroughFuture:AbfsReadFileTest.nativeAsyncFragmentedBodyMatchesSyncScatter:AbfsReadFileTest.synchronousReadFromRuntimeThreadFailsThroughFuture:AbfsReadFileTest.nativeAsyncRetainsFileUntilPendingReadCompletes:AbfsReadFileTest.nativeAsyncExceedsRuntimeThreadCount' \
+  --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+
+For TSAN, prefix the focused binary with setarch x86_64 -R.

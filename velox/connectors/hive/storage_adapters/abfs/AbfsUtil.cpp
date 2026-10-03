@@ -18,6 +18,8 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
+#include <algorithm>
+
 namespace facebook::velox::filesystems {
 
 std::vector<CacheKey> extractCacheKeyFromConfig(
@@ -38,6 +40,23 @@ std::vector<CacheKey> extractCacheKeyFromConfig(
           key);
       cacheKeys.emplace_back(CacheKey{accountNameWithSuffix, value});
     }
+  }
+  return cacheKeys;
+}
+
+std::vector<CacheKey> extractFileSystemCacheKeyFromConfig(
+    const config::ConfigBase& config) {
+  std::vector<std::pair<std::string, std::string>> configs;
+  configs.reserve(config.rawConfigs().size());
+  for (const auto& [key, value] : config.rawConfigs()) {
+    configs.emplace_back(key, value);
+  }
+  std::sort(configs.begin(), configs.end());
+
+  std::vector<CacheKey> cacheKeys;
+  cacheKeys.reserve(configs.size());
+  for (const auto& [key, value] : configs) {
+    cacheKeys.emplace_back(key, value);
   }
   return cacheKeys;
 }
