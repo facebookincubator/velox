@@ -107,6 +107,11 @@ target_link_libraries(
 )
 
 add_library(velox_expression_runner ExpressionRunner.cpp)
+# ExpressionRunner.cpp includes velox/parse/QueryPlanner.h, which pulls in
+# <duckdb.hpp>. The vendored DuckDB headers do not compile as C++23 (constexpr
+# ~unique_ptr over an incomplete duckdb::QueryNode). ExpressionRunner.h does not
+# leak the DuckDB include, so consumers of this library stay C++23.
+set_target_properties(velox_expression_runner PROPERTIES CXX_STANDARD 20)
 velox_add_test_headers(velox_expression_runner ExpressionRunner.h)
 target_link_libraries(
   velox_expression_runner

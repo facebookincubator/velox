@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/vector/arrow/Abi.h"
 #include "velox/vector/arrow/Bridge.h"
 
 #include "velox/common/base/tests/GTestUtils.h"

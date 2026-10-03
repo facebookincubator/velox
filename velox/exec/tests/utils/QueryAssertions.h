@@ -15,6 +15,12 @@
  */
 #pragma once
 #include <chrono>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
@@ -22,10 +28,17 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
-#ifdef BLOCK_SIZE
-#undef BLOCK_SIZE
-#endif
-#include <duckdb.hpp> // @manual
+// Forward declare the DuckDB types used below instead of including
+// <duckdb.hpp>. The vendored DuckDB headers do not compile as C++23 (their
+// inline SelectStatement constructor instantiates unique_ptr<QueryNode> with an
+// incomplete type, which C++23's constexpr ~unique_ptr rejects). Keeping the
+// heavy, non-C++23 header out of this widely-included test utility lets the
+// vast majority of tests build as C++23; only QueryAssertions.cpp (and the few
+// TUs that use DuckDB directly) are compiled as C++20.
+namespace duckdb {
+class DuckDB;
+class MaterializedQueryResult;
+} // namespace duckdb
 
 namespace facebook::velox::exec::test {
 
