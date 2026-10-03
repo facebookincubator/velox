@@ -311,7 +311,7 @@ int32_t UnsafeRowFast::arrayRowSize(
 
   int32_t rowSize = kFieldWidth + nullBytes;
   if (fixedWidth) {
-    return rowSize + size * elements.valueBytes();
+    return alignBytes(rowSize + size * elements.valueBytes());
   }
 
   rowSize += size * kFieldWidth;
@@ -343,7 +343,7 @@ int32_t UnsafeRowFast::serializeAsArray(
 
   auto childSize = fixedWidth ? elements.valueBytes() : kFieldWidth;
 
-  int64_t variableWidthOffset = fixedWidthOffset + size * childSize;
+  int32_t variableWidthOffset = fixedWidthOffset + size * childSize;
 
   if (elements.supportsBulkCopy_) {
     if (elements.decoded_.mayHaveNulls()) {
@@ -354,7 +354,7 @@ int32_t UnsafeRowFast::serializeAsArray(
       }
     }
     elements.serializeFixedWidth(offset, size, buffer + fixedWidthOffset);
-    return variableWidthOffset;
+    return alignBytes(variableWidthOffset);
   }
 
   for (auto i = 0; i < size; ++i) {
@@ -369,7 +369,8 @@ int32_t UnsafeRowFast::serializeAsArray(
             offset + i, buffer + variableWidthOffset);
 
         // Write size and offset.
-        uint64_t sizeAndOffset = variableWidthOffset << 32 | serializedBytes;
+        uint64_t sizeAndOffset =
+            static_cast<uint64_t>(variableWidthOffset) << 32 | serializedBytes;
         reinterpret_cast<uint64_t*>(buffer + fixedWidthOffset)[i] =
             sizeAndOffset;
 
@@ -377,7 +378,7 @@ int32_t UnsafeRowFast::serializeAsArray(
       }
     }
   }
-  return variableWidthOffset;
+  return alignBytes(variableWidthOffset);
 }
 
 int32_t UnsafeRowFast::rowRowSize(vector_size_t index) const {
