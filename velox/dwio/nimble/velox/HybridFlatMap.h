@@ -70,7 +70,8 @@ class HybridFlatMap {
   /// preceding groups.
   std::string serialize() const;
 
-  /// Deserializes and validates groups produced by `serialize()`.
+  /// Deserializes and validates groups produced by `serialize()`. Also accepts
+  /// an omitted `group_keys` vector when no group has keys.
   static HybridFlatMap deserialize(std::string_view serialized);
 
   /// Deserializes the reserved metadata attribute, leaving `attributes`
@@ -97,12 +98,17 @@ void validateHybridFlatMapGroups(
     bool hasDefault,
     GroupIdAt groupIdAt,
     GroupKeysAt groupKeysAt) {
-  const auto minGroupCount = 1 + static_cast<size_t>(hasDefault);
   NIMBLE_CHECK_GE(
-      groupCount,
-      minGroupCount,
-      "Hybrid FlatMap requires at least {} group(s).",
-      minGroupCount);
+      groupCount, size_t{1}, "Hybrid FlatMap requires at least 1 group(s).");
+  // Default alone is valid because it holds every key. A projection may keep a
+  // single configured group, so only a complete schema requires its single
+  // group to be Default.
+  if (hasDefault && groupCount == 1) {
+    NIMBLE_CHECK(
+        HybridFlatMap::isDefaultGroup(groupIdAt(0)),
+        "Hybrid FlatMap single group must be Default: {}.",
+        groupIdAt(0));
+  }
   folly::F14FastSet<uint32_t> groupIds;
   folly::F14FastSet<std::string> keys;
   bool foundDefault{false};
