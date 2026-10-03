@@ -27,9 +27,13 @@ namespace facebook::velox::memory {
 ArbitrationOperation::ArbitrationOperation(
     ScopedArbitrationParticipant&& participant,
     uint64_t requestBytes,
-    uint64_t timeoutNs)
+    uint64_t timeoutNs,
+    folly::CancellationToken taskToken,
+    folly::CancellationToken operationToken)
     : requestBytes_(requestBytes),
       timeoutNs_(timeoutNs),
+      taskToken_(std::move(taskToken)),
+      operationToken_(std::move(operationToken)),
       createTimeNs_(getCurrentTimeNano()),
       participant_(std::move(participant)) {
   VELOX_CHECK_GT(requestBytes_, 0);

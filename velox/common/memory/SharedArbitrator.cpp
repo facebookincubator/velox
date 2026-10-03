@@ -409,7 +409,13 @@ SharedArbitrator::~SharedArbitrator() {
 void SharedArbitrator::startArbitration(ArbitrationOperation* op) {
   updateArbitrationRequestStats();
   ++numRunning_;
-  op->start();
+  try {
+    op->start();
+  } catch (...) {
+    --numRunning_;
+    updateArbitrationFailureStats();
+    throw;
+  }
 }
 
 void SharedArbitrator::finishArbitration(ArbitrationOperation* op) {
@@ -824,8 +830,13 @@ ArbitrationOperation SharedArbitrator::createArbitrationOperation(
 
   auto participant = getParticipant(pool->name());
   VELOX_CHECK(participant.has_value());
+  const auto* cancellation = memoryAllocationCancellationContext();
   return ArbitrationOperation(
-      std::move(participant.value()), requestBytes, maxArbitrationTimeNs_);
+      std::move(participant.value()),
+      requestBytes,
+      maxArbitrationTimeNs_,
+      cancellation ? cancellation->taskToken : folly::CancellationToken{},
+      cancellation ? cancellation->operationToken : folly::CancellationToken{});
 }
 
 void SharedArbitrator::growCapacity(MemoryPool* pool, uint64_t requestBytes) {
@@ -846,6 +857,7 @@ void SharedArbitrator::growCapacity(MemoryPool* pool, uint64_t requestBytes) {
 void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
   TestValue::adjust(
       "facebook::velox::memory::SharedArbitrator::growCapacity", this);
+  checkIfAllocationCancelled(op);
   checkIfAborted(op);
   checkIfTimeout(op);
 
@@ -937,6 +949,7 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
 
 void SharedArbitrator::startAndWaitGlobalArbitration(ArbitrationOperation& op) {
   checkGlobalArbitrationEnabled();
+  checkIfAllocationCancelled(op);
   checkIfTimeout(op);
 
   std::unique_ptr<ArbitrationWait> arbitrationWait;
@@ -973,13 +986,53 @@ void SharedArbitrator::startAndWaitGlobalArbitration(ArbitrationOperation& op) {
     SCOPE_EXIT {
       op.participant()->clearGlobalArbitrationGrowCapacity();
     };
+    SCOPE_EXIT {
+      removeGlobalArbitrationWaiter(op.participant()->id());
+      // A grant may race callback registration. If setup throws before the
+      // normal path takes ownership, return the granted capacity rather than
+      // losing it when the waiter is destroyed.
+      if (allocatedBytes == 0 && arbitrationWait->allocatedBytes != 0) {
+        freeCapacity(arbitrationWait->allocatedBytes);
+      }
+    };
     VELOX_CHECK_NOT_NULL(arbitrationWait);
     op.recordGlobalArbitrationStartTime();
     wakeupGlobalArbitrationThread();
 
-    const bool timeout =
-        !std::move(arbitrationWaitFuture)
-             .wait(std::chrono::microseconds(op.timeoutNs() / 1'000));
+    bool timeout{false};
+    if (!op.canBeCancelled()) {
+      timeout = !std::move(arbitrationWaitFuture)
+                     .wait(std::chrono::microseconds(op.timeoutNs() / 1'000));
+    } else {
+      TestValue::adjust(
+          "facebook::velox::memory::SharedArbitrator::registerAllocationCancellationCallbacks",
+          &op);
+      std::atomic_bool cancelledWhileWaiting{false};
+      auto cancel = [&]() {
+        if (removeGlobalArbitrationWaiter(op.participant()->id())) {
+          cancelledWhileWaiting = true;
+        }
+      };
+      std::unique_ptr<folly::CancellationCallback> taskCallback;
+      std::unique_ptr<folly::CancellationCallback> operationCallback;
+      if (op.taskCancellationToken().canBeCancelled()) {
+        taskCallback = std::make_unique<folly::CancellationCallback>(
+            op.taskCancellationToken(), cancel);
+      }
+      if (op.operationCancellationToken().canBeCancelled()) {
+        operationCallback = std::make_unique<folly::CancellationCallback>(
+            op.operationCancellationToken(), cancel);
+      }
+      timeout = !std::move(arbitrationWaitFuture)
+                     .wait(std::chrono::microseconds(op.timeoutNs() / 1'000));
+      taskCallback.reset();
+      operationCallback.reset();
+      if (cancelledWhileWaiting) {
+        VELOX_FAIL(
+            "Memory allocation cancelled while waiting for global arbitration on {}",
+            op.participant()->name());
+      }
+    }
     if (timeout) {
       VELOX_MEM_LOG(ERROR)
           << op.participant()->name()
@@ -1118,6 +1171,14 @@ uint64_t SharedArbitrator::getGlobalArbitrationTarget() {
 void SharedArbitrator::checkIfAborted(ArbitrationOperation& op) {
   if (op.participant()->aborted()) {
     VELOX_MEM_POOL_ABORTED("Memory pool {} aborted", op.participant()->name());
+  }
+}
+
+void SharedArbitrator::checkIfAllocationCancelled(ArbitrationOperation& op) {
+  if (op.cancellationRequested()) {
+    VELOX_FAIL(
+        "Memory allocation cancelled during arbitration on {}",
+        op.participant()->name());
   }
 }
 
@@ -1506,7 +1567,8 @@ void SharedArbitrator::resumeGlobalArbitrationWaitersLocked(
   }
 }
 
-void SharedArbitrator::removeGlobalArbitrationWaiter(uint64_t id) {
+bool SharedArbitrator::removeGlobalArbitrationWaiter(uint64_t id) {
+  bool removed{false};
   ContinuePromise resume = ContinuePromise::makeEmpty();
   {
     std::lock_guard<std::mutex> l(stateMutex_);
@@ -1515,11 +1577,13 @@ void SharedArbitrator::removeGlobalArbitrationWaiter(uint64_t id) {
       VELOX_CHECK_EQ(it->second->allocatedBytes, 0);
       resume = std::move(it->second->resumePromise);
       globalArbitrationWaiters_.erase(it);
+      removed = true;
     }
   }
   if (resume.valid()) {
     resume.setValue();
   }
+  return removed;
 }
 
 void SharedArbitrator::freeReservedCapacityLocked(uint64_t& bytes) {

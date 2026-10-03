@@ -20,6 +20,7 @@
 #include <gmock/gmock.h>
 #include <re2/re2.h>
 #include <deque>
+#include <future>
 #include <vector>
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
@@ -3217,6 +3218,359 @@ DEBUG_ONLY_TEST_F(
           .numReclaims,
       0);
   arbitratorHelper.waitForGlobalArbitrationToFinish();
+}
+
+DEBUG_ONLY_TEST_F(
+    MockSharedArbitrationTest,
+    allocationCancellationRemovesGlobalWaiterWithoutAbort) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = kCapacity, .arbitrationTimeoutNs = 30'000'000'000UL});
+  auto task1 = addTask(kCapacity);
+  auto* op1 = task1->addMemoryOp(true);
+  op1->allocate(kCapacity / 2);
+  auto task2 = addTask(kCapacity);
+  auto* op2 = task2->addMemoryOp(true);
+  op2->allocate(kCapacity / 2);
+
+  folly::EventCount globalStarted;
+  std::atomic_bool globalStartedFlag{false};
+  folly::EventCount releaseGlobal;
+  std::atomic_bool releaseGlobalFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator*) {
+            globalStartedFlag = true;
+            globalStarted.notifyAll();
+            releaseGlobal.await([&]() { return releaseGlobalFlag.load(); });
+          })));
+
+  folly::CancellationSource cancellation;
+  std::atomic_bool sawArbitrationContext{true};
+  auto allocation = std::async(std::launch::async, [&]() -> std::string {
+    ScopedMemoryAllocationCancellationContext context{
+        cancellation.getToken(), folly::CancellationToken{}};
+    sawArbitrationContext = underMemoryArbitration();
+    try {
+      op1->allocate(kCapacity / 4);
+      return "";
+    } catch (const std::exception& error) {
+      return error.what();
+    }
+  });
+
+  globalStarted.await([&]() { return globalStartedFlag.load(); });
+  cancellation.requestCancellation();
+  const bool cancelledPromptly =
+      allocation.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  if (!cancelledPromptly) {
+    releaseGlobalFlag = true;
+    releaseGlobal.notifyAll();
+  }
+  const auto error = allocation.get();
+  ASSERT_TRUE(cancelledPromptly);
+  EXPECT_FALSE(sawArbitrationContext);
+  EXPECT_THAT(error, HasSubstr("Memory allocation cancelled"));
+
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  EXPECT_EQ(helper.numGlobalArbitrationWaiters(), 0);
+  auto participant = helper.getParticipant(task1->pool()->name());
+  EXPECT_FALSE(participant->aborted());
+
+  releaseGlobalFlag = true;
+  releaseGlobal.notifyAll();
+  helper.waitForGlobalArbitrationToFinish();
+
+  op2->freeAll();
+  op1->allocate(kCapacity / 4);
+  EXPECT_EQ(op1->pool()->usedBytes(), 3 * kCapacity / 4);
+}
+
+DEBUG_ONLY_TEST_F(
+    MockSharedArbitrationTest,
+    allocationCancellationRemovesParticipantWaiter) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = kCapacity, .arbitrationTimeoutNs = 30'000'000'000UL});
+  auto task = addTask(kCapacity);
+  auto* op = task->addMemoryOp(true);
+
+  folly::EventCount firstStarted;
+  std::atomic_bool firstStartedFlag{false};
+  folly::EventCount releaseFirst;
+  std::atomic_bool releaseFirstFlag{false};
+  folly::EventCount secondQueued;
+  std::atomic_bool secondQueuedFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::growCapacity",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator*) {
+            if (!firstStartedFlag.exchange(true)) {
+              firstStarted.notifyAll();
+              releaseFirst.await([&]() { return releaseFirstFlag.load(); });
+            }
+          })));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::ArbitrationParticipant::registerAllocationCancellationCallbacks",
+      std::function<void(ArbitrationOperation*)>([&](ArbitrationOperation*) {
+        secondQueuedFlag = true;
+        secondQueued.notifyAll();
+      }));
+
+  auto first =
+      std::async(std::launch::async, [&]() { op->allocate(kCapacity / 4); });
+  firstStarted.await([&]() { return firstStartedFlag.load(); });
+
+  folly::CancellationSource cancellation;
+  auto second = std::async(std::launch::async, [&]() -> std::string {
+    ScopedMemoryAllocationCancellationContext context{
+        folly::CancellationToken{}, cancellation.getToken()};
+    try {
+      op->allocate(kCapacity / 4);
+      return "";
+    } catch (const std::exception& error) {
+      return error.what();
+    }
+  });
+  secondQueued.await([&]() { return secondQueuedFlag.load(); });
+  cancellation.requestCancellation();
+  const bool cancelledPromptly =
+      second.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  if (!cancelledPromptly) {
+    releaseFirstFlag = true;
+    releaseFirst.notifyAll();
+  }
+  const auto error = second.get();
+  ASSERT_TRUE(cancelledPromptly);
+  EXPECT_THAT(error, HasSubstr("Memory allocation cancelled"));
+  EXPECT_EQ(arbitrator_->stats().numFailures, 1);
+
+  releaseFirstFlag = true;
+  releaseFirst.notifyAll();
+  first.get();
+
+  op->allocate(kCapacity / 4);
+  EXPECT_EQ(op->pool()->usedBytes(), kCapacity / 2);
+}
+
+DEBUG_ONLY_TEST_F(
+    MockSharedArbitrationTest,
+    allocationCancellationCallbackFailureCleansGlobalWaiter) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = kCapacity, .arbitrationTimeoutNs = 30'000'000'000UL});
+  auto task1 = addTask(kCapacity);
+  auto* op1 = task1->addMemoryOp(true);
+  op1->allocate(kCapacity / 2);
+  auto task2 = addTask(kCapacity);
+  auto* op2 = task2->addMemoryOp(true);
+  op2->allocate(kCapacity / 2);
+
+  folly::EventCount globalStarted;
+  std::atomic_bool globalStartedFlag{false};
+  folly::EventCount releaseGlobal;
+  std::atomic_bool releaseGlobalFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator*) {
+            globalStartedFlag = true;
+            globalStarted.notifyAll();
+            releaseGlobal.await([&]() { return releaseGlobalFlag.load(); });
+          })));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::registerAllocationCancellationCallbacks",
+      std::function<void(ArbitrationOperation*)>([&](ArbitrationOperation*) {
+        globalStarted.await([&]() { return globalStartedFlag.load(); });
+        VELOX_FAIL("injected callback failure");
+      }));
+
+  folly::CancellationSource cancellation;
+  auto allocation = std::async(std::launch::async, [&]() -> std::string {
+    ScopedMemoryAllocationCancellationContext context{
+        folly::CancellationToken{}, cancellation.getToken()};
+    try {
+      op1->allocate(kCapacity / 4);
+      return "";
+    } catch (const std::exception& error) {
+      return error.what();
+    }
+  });
+
+  const auto error = allocation.get();
+  EXPECT_THAT(error, HasSubstr("injected callback failure"));
+  globalStarted.await([&]() { return globalStartedFlag.load(); });
+
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  EXPECT_EQ(helper.numGlobalArbitrationWaiters(), 0);
+  EXPECT_FALSE(helper.getParticipant(task1->pool()->name())->aborted());
+
+  releaseGlobalFlag = true;
+  releaseGlobal.notifyAll();
+  helper.waitForGlobalArbitrationToFinish();
+}
+
+DEBUG_ONLY_TEST_F(
+    MockSharedArbitrationTest,
+    allocationCancellationCallbackFailureCleansParticipantWaiter) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = kCapacity, .arbitrationTimeoutNs = 30'000'000'000UL});
+  auto task = addTask(kCapacity);
+  auto* op = task->addMemoryOp(true);
+
+  folly::EventCount firstStarted;
+  std::atomic_bool firstStartedFlag{false};
+  folly::EventCount releaseFirst;
+  std::atomic_bool releaseFirstFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::growCapacity",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator*) {
+            if (!firstStartedFlag.exchange(true)) {
+              firstStarted.notifyAll();
+              releaseFirst.await([&]() { return releaseFirstFlag.load(); });
+            }
+          })));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::ArbitrationParticipant::registerAllocationCancellationCallbacks",
+      std::function<void(ArbitrationOperation*)>([](ArbitrationOperation*) {
+        VELOX_FAIL("injected callback failure");
+      }));
+
+  auto first =
+      std::async(std::launch::async, [&]() { op->allocate(kCapacity / 4); });
+  firstStarted.await([&]() { return firstStartedFlag.load(); });
+
+  folly::CancellationSource cancellation;
+  auto second = std::async(std::launch::async, [&]() -> std::string {
+    ScopedMemoryAllocationCancellationContext context{
+        folly::CancellationToken{}, cancellation.getToken()};
+    try {
+      op->allocate(kCapacity / 4);
+      return "";
+    } catch (const std::exception& error) {
+      return error.what();
+    }
+  });
+  EXPECT_THAT(second.get(), HasSubstr("injected callback failure"));
+  EXPECT_EQ(arbitrator_->stats().numFailures, 1);
+
+  releaseFirstFlag = true;
+  releaseFirst.notifyAll();
+  first.get();
+
+  op->allocate(kCapacity / 4);
+  EXPECT_EQ(op->pool()->usedBytes(), kCapacity / 2);
+}
+
+TEST_F(MockSharedArbitrationTest, allocationCancellationContextIsScoped) {
+  EXPECT_EQ(memoryAllocationCancellationContext(), nullptr);
+  folly::CancellationSource taskCancellation;
+  folly::CancellationSource operationCancellation;
+  {
+    ScopedMemoryAllocationCancellationContext outer{
+        taskCancellation.getToken(), {}};
+    const auto* outerContext = memoryAllocationCancellationContext();
+    EXPECT_FALSE(underMemoryArbitration());
+    EXPECT_TRUE(outerContext->canBeCancelled());
+    EXPECT_FALSE(outerContext->cancellationRequested());
+    {
+      ScopedMemoryAllocationCancellationContext inner{
+          {}, operationCancellation.getToken()};
+      EXPECT_NE(memoryAllocationCancellationContext(), outerContext);
+      operationCancellation.requestCancellation();
+      EXPECT_TRUE(
+          memoryAllocationCancellationContext()->cancellationRequested());
+    }
+    EXPECT_EQ(memoryAllocationCancellationContext(), outerContext);
+    EXPECT_FALSE(outerContext->cancellationRequested());
+    taskCancellation.requestCancellation();
+    EXPECT_TRUE(outerContext->cancellationRequested());
+  }
+  EXPECT_EQ(memoryAllocationCancellationContext(), nullptr);
+}
+
+TEST_F(MockSharedArbitrationTest, allocationAlreadyCancelledDoesNotAbortPool) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory({.memoryCapacity = kCapacity});
+  auto task = addTask(kCapacity);
+  auto* op = task->addMemoryOp(true);
+  folly::CancellationSource cancellation;
+  cancellation.requestCancellation();
+  {
+    ScopedMemoryAllocationCancellationContext context{
+        cancellation.getToken(), {}};
+    VELOX_ASSERT_THROW(
+        op->allocate(kCapacity / 4), "Memory allocation cancelled");
+  }
+  EXPECT_EQ(op->pool()->usedBytes(), 0);
+  EXPECT_FALSE(task->pool()->aborted());
+  op->allocate(kCapacity / 4);
+  EXPECT_EQ(op->pool()->usedBytes(), kCapacity / 4);
+}
+
+DEBUG_ONLY_TEST_F(
+    MockSharedArbitrationTest,
+    allocationCallbackFailureReturnsGrantedCapacity) {
+  constexpr int64_t kCapacity = 256 * MB;
+  setupMemory(
+      {.memoryCapacity = kCapacity, .arbitrationTimeoutNs = 30'000'000'000UL});
+  auto task1 = addTask(kCapacity);
+  auto* op1 = task1->addMemoryOp(true);
+  op1->allocate(kCapacity / 2);
+  auto task2 = addTask(kCapacity);
+  auto* op2 = task2->addMemoryOp(true);
+  op2->allocate(kCapacity / 2);
+
+  folly::EventCount globalStarted;
+  std::atomic_bool globalStartedFlag{false};
+  folly::EventCount releaseGlobal;
+  std::atomic_bool releaseGlobalFlag{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
+      std::function<void(const SharedArbitrator*)>(
+          [&](const SharedArbitrator*) {
+            globalStartedFlag = true;
+            globalStarted.notifyAll();
+            releaseGlobal.await([&]() { return releaseGlobalFlag.load(); });
+          }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::registerAllocationCancellationCallbacks",
+      std::function<void(ArbitrationOperation*)>([&](ArbitrationOperation*) {
+        globalStarted.await([&]() { return globalStartedFlag.load(); });
+        // Fulfil the waiting request before throwing during callback setup.
+        // The capacity grant must be returned even though its waiter has
+        // already been removed from the global waiting list.
+        op2->freeAll();
+        arbitrator_->shrinkCapacity(kCapacity / 2, false, false);
+        test::SharedArbitratorTestHelper helper(arbitrator_);
+        VELOX_CHECK_EQ(helper.numGlobalArbitrationWaiters(), 0);
+        VELOX_FAIL("injected failure after capacity grant");
+      }));
+  folly::CancellationSource cancellation;
+  auto allocation = std::async(std::launch::async, [&]() -> std::string {
+    ScopedMemoryAllocationCancellationContext context{
+        {}, cancellation.getToken()};
+    try {
+      op1->allocate(kCapacity / 4);
+      return "";
+    } catch (const std::exception& error) {
+      return error.what();
+    }
+  });
+  const auto error = allocation.get();
+  releaseGlobalFlag = true;
+  releaseGlobal.notifyAll();
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  helper.waitForGlobalArbitrationToFinish();
+  EXPECT_THAT(error, HasSubstr("injected failure after capacity grant"));
+  EXPECT_EQ(op1->pool()->usedBytes(), kCapacity / 2);
+  EXPECT_EQ(arbitrator_->stats().freeCapacityBytes, kCapacity / 2);
+  EXPECT_FALSE(task1->pool()->aborted());
+  op1->allocate(kCapacity / 4);
+  EXPECT_EQ(op1->pool()->usedBytes(), 3 * kCapacity / 4);
 }
 
 DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, globalArbitrationTimeout) {

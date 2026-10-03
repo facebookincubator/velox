@@ -145,6 +145,8 @@ class NoopArbitrator : public MemoryArbitrator {
 };
 
 thread_local MemoryArbitrationContext* arbitrationCtx{nullptr};
+thread_local const MemoryAllocationCancellationContext*
+    allocationCancellationCtx{nullptr};
 } // namespace
 
 std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
@@ -483,6 +485,27 @@ ScopedMemoryArbitrationContext::ScopedMemoryArbitrationContext()
 
 ScopedMemoryArbitrationContext::~ScopedMemoryArbitrationContext() {
   arbitrationCtx = savedArbitrationCtx_;
+}
+
+ScopedMemoryAllocationCancellationContext::
+    ScopedMemoryAllocationCancellationContext(
+        folly::CancellationToken taskToken,
+        folly::CancellationToken operationToken)
+    : savedContext_(allocationCancellationCtx),
+      context_{
+          .taskToken = std::move(taskToken),
+          .operationToken = std::move(operationToken)} {
+  allocationCancellationCtx = &context_;
+}
+
+ScopedMemoryAllocationCancellationContext::
+    ~ScopedMemoryAllocationCancellationContext() {
+  allocationCancellationCtx = savedContext_;
+}
+
+const MemoryAllocationCancellationContext*
+memoryAllocationCancellationContext() {
+  return allocationCancellationCtx;
 }
 
 const MemoryArbitrationContext* memoryArbitrationContext() {
