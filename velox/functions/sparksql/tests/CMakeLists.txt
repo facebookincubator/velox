@@ -84,6 +84,7 @@ add_executable(
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
+  ToCsvTest.cpp
   ToJsonTest.cpp
   ToPrettyStringTest.cpp
   TransformTest.cpp
