@@ -390,7 +390,14 @@ set_target_properties(
   PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
 )
 velox_cudf_use_gpu_shadows(velox_cudf_gpu_function_semantics_test)
-target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
+target_link_libraries(
+  velox_cudf_gpu_function_semantics_test
+  cudf::cudf
+  fmt::fmt
+  GTest::gmock
+  gtest
+  gtest_main
+)
 add_test(
   NAME velox_cudf_gpu_function_semantics_test
   COMMAND velox_cudf_gpu_function_semantics_test
