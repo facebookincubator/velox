@@ -98,3 +98,12 @@ TEST(PaimonDeletionFileTest, zeroLengthAndCardinalityThrows) {
       PaimonDeletionFile("del.bin", 0, 0, 0),
       "PaimonDeletionFile length must be > 0");
 }
+
+TEST(PaimonDeletionFileTest, rejectsRangeOverflow) {
+  VELOX_ASSERT_THROW(
+      PaimonDeletionFile("dv", std::numeric_limits<int64_t>::max(), 1, 1),
+      "offset + length overflow");
+  auto obj = PaimonDeletionFile("dv", 0, 16, 1).serialize();
+  obj["offset"] = -1;
+  VELOX_ASSERT_THROW(PaimonDeletionFile::create(obj), "out of range");
+}

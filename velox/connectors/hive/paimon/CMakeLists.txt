@@ -18,11 +18,14 @@ velox_add_library(
   PaimonDataFileMeta.cpp
   PaimonDeletionFile.cpp
   PaimonRowKind.cpp
+  PaimonTableHandle.cpp
   HEADERS
   PaimonConnectorSplit.h
   PaimonDataFileMeta.h
   PaimonDeletionFile.h
   PaimonRowKind.h
+  PaimonTableHandle.h
+  PaimonMetadata.h
 )
 
 velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connector fmt::fmt)

@@ -1,0 +1,439 @@
+{
+  "paimonCommit": "e28c6582c6c864b82c22b6bb4768c092aeafdebd",
+  "paimonVersion": "2.2-SNAPSHOT",
+  "schemaId": 0,
+  "append": {
+    "snapshotId": 3,
+    "splits": [
+      {
+        "snapshotId": 3,
+        "bucket": 0,
+        "partition": "east",
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-0.parquet",
+            "fileSize": 1344,
+            "rowCount": 4,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 3,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117783224,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "9566193dba527c8abec088fd380a362671065316d5660477ec788e9494d18fce"
+          },
+          {
+            "filePath": "data-1.parquet",
+            "fileSize": 1216,
+            "rowCount": 2,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 1,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784045,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "42373e450cf7600a38546146c43da8ea6032afbed52b3b349f487d19a3fa352f"
+          }
+        ],
+        "rows": [
+          [
+            1,
+            "alpha",
+            1.25,
+            true,
+            10000000000,
+            "east"
+          ],
+          [
+            2,
+            "dup",
+            2.5,
+            false,
+            20000000000,
+            "east"
+          ],
+          [
+            2,
+            "dup",
+            2.5,
+            false,
+            20000000000,
+            "east"
+          ],
+          [
+            3,
+            null,
+            null,
+            null,
+            null,
+            "east"
+          ],
+          [
+            4,
+            "beta",
+            -3.5,
+            true,
+            -9223372036854775808,
+            "east"
+          ],
+          [
+            5,
+            "",
+            0.0,
+            false,
+            9223372036854775807,
+            "east"
+          ]
+        ]
+      },
+      {
+        "snapshotId": 3,
+        "bucket": 0,
+        "partition": "",
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-2.parquet",
+            "fileSize": 1226,
+            "rowCount": 1,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 0,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784278,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "c6f3c7802ea2d80866b38b7b139530cb5be4fdcfc7ef7770314ed98f844cefcb"
+          }
+        ],
+        "rows": [
+          [
+            7,
+            "empty-partition",
+            7.0,
+            false,
+            7,
+            ""
+          ]
+        ]
+      },
+      {
+        "snapshotId": 3,
+        "bucket": 0,
+        "partition": null,
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-3.parquet",
+            "fileSize": 1209,
+            "rowCount": 1,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 0,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784293,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "740962eece299018525c27af362ea80f41b6c230902058d9b2cd05811b3376f7"
+          }
+        ],
+        "rows": [
+          [
+            6,
+            "null-partition",
+            6.0,
+            true,
+            0,
+            null
+          ]
+        ]
+      }
+    ],
+    "rows": [
+      [
+        1,
+        "alpha",
+        1.25,
+        true,
+        10000000000,
+        "east"
+      ],
+      [
+        2,
+        "dup",
+        2.5,
+        false,
+        20000000000,
+        "east"
+      ],
+      [
+        2,
+        "dup",
+        2.5,
+        false,
+        20000000000,
+        "east"
+      ],
+      [
+        3,
+        null,
+        null,
+        null,
+        null,
+        "east"
+      ],
+      [
+        4,
+        "beta",
+        -3.5,
+        true,
+        -9223372036854775808,
+        "east"
+      ],
+      [
+        5,
+        "",
+        0.0,
+        false,
+        9223372036854775807,
+        "east"
+      ],
+      [
+        7,
+        "empty-partition",
+        7.0,
+        false,
+        7,
+        ""
+      ],
+      [
+        6,
+        "null-partition",
+        6.0,
+        true,
+        0,
+        null
+      ]
+    ]
+  },
+  "cow": {
+    "snapshotId": 4,
+    "splits": [
+      {
+        "snapshotId": 4,
+        "bucket": 0,
+        "partition": "",
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-2.parquet",
+            "fileSize": 1226,
+            "rowCount": 1,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 0,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784278,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "c6f3c7802ea2d80866b38b7b139530cb5be4fdcfc7ef7770314ed98f844cefcb"
+          }
+        ],
+        "rows": [
+          [
+            7,
+            "empty-partition",
+            7.0,
+            false,
+            7,
+            ""
+          ]
+        ]
+      },
+      {
+        "snapshotId": 4,
+        "bucket": 0,
+        "partition": null,
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-3.parquet",
+            "fileSize": 1209,
+            "rowCount": 1,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 0,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784293,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "740962eece299018525c27af362ea80f41b6c230902058d9b2cd05811b3376f7"
+          }
+        ],
+        "rows": [
+          [
+            6,
+            "null-partition",
+            6.0,
+            true,
+            0,
+            null
+          ]
+        ]
+      },
+      {
+        "snapshotId": 4,
+        "bucket": 0,
+        "partition": "east",
+        "rawConvertible": true,
+        "files": [
+          {
+            "filePath": "data-4.parquet",
+            "fileSize": 1380,
+            "rowCount": 5,
+            "schemaId": 0,
+            "fileFormat": "parquet",
+            "level": 0,
+            "minSequenceNumber": 0,
+            "maxSequenceNumber": 4,
+            "deleteRowCount": 0,
+            "creationTimeMs": 1791117784730,
+            "fileType": "DATA",
+            "sourceType": "APPEND",
+            "sha256": "ff5194c4932436d4effbe184c0edbcd61fd3e4b240f4b66e78ce01e6a90352c4"
+          }
+        ],
+        "rows": [
+          [
+            1,
+            "alpha",
+            1.25,
+            true,
+            10000000000,
+            "east"
+          ],
+          [
+            2,
+            "dup",
+            2.5,
+            false,
+            20000000000,
+            "east"
+          ],
+          [
+            2,
+            "dup",
+            2.5,
+            false,
+            20000000000,
+            "east"
+          ],
+          [
+            4,
+            "beta-updated",
+            -3.5,
+            true,
+            -9223372036854775808,
+            "east"
+          ],
+          [
+            5,
+            "",
+            0.0,
+            false,
+            9223372036854775807,
+            "east"
+          ]
+        ]
+      }
+    ],
+    "rows": [
+      [
+        7,
+        "empty-partition",
+        7.0,
+        false,
+        7,
+        ""
+      ],
+      [
+        6,
+        "null-partition",
+        6.0,
+        true,
+        0,
+        null
+      ],
+      [
+        1,
+        "alpha",
+        1.25,
+        true,
+        10000000000,
+        "east"
+      ],
+      [
+        2,
+        "dup",
+        2.5,
+        false,
+        20000000000,
+        "east"
+      ],
+      [
+        2,
+        "dup",
+        2.5,
+        false,
+        20000000000,
+        "east"
+      ],
+      [
+        4,
+        "beta-updated",
+        -3.5,
+        true,
+        -9223372036854775808,
+        "east"
+      ],
+      [
+        5,
+        "",
+        0.0,
+        false,
+        9223372036854775807,
+        "east"
+      ]
+    ]
+  },
+  "emptyFile": {
+    "filePath": "empty.parquet",
+    "fileSize": 226,
+    "rowCount": 0,
+    "schemaId": 0,
+    "fileFormat": "parquet",
+    "level": 0,
+    "minSequenceNumber": 0,
+    "maxSequenceNumber": 0,
+    "deleteRowCount": 0,
+    "creationTimeMs": 0,
+    "fileType": "DATA",
+    "sourceType": "APPEND",
+    "sha256": "a76ccdc914005686487d825120d5931c5f63283b515e90b28c500a76dacd8886"
+  }
+}

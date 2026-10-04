@@ -24,55 +24,24 @@
 
 #include <folly/CPortability.h>
 
+#include "velox/connectors/hive/FileProperties.h"
 #include "velox/connectors/hive/paimon/PaimonDeletionFile.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Represents a single Paimon file (data or changelog) within a split.
-/// Mirrors Apache Paimon's DataFileMeta structure.
-///
-/// Both data files and changelog files use the same physical file format
-/// (Parquet, ORC, Nimble) and carry the same metadata. The distinction is
-/// captured by `type`:
-///   - kData: regular data file (current state of records).
-///   - kChangelog: changelog file with RowKind (+I/-U/+U/-D) for streaming.
+/// A data or changelog file in a planner-supplied Paimon split. File role and
+/// origin are independent of the physical DWIO format and per-row RowKind.
 struct PaimonDataFile {
-  /// Whether this file is a data file or a changelog file. Both use the
-  /// same physical format — this enum distinguishes their semantic role.
-  ///
-  /// Data files contain the current state of records. Changelog files
-  /// contain the change history with RowKind tags. The coordinator sends
-  /// data files for batch reads and changelog files for streaming reads
-  /// (when changelog-producer=lookup is configured).
   enum class Type {
-    /// Regular data file containing current record state.
     kData,
-
-    /// Changelog file containing records tagged with RowKind (+I/-U/+U/-D).
-    /// Only produced when changelog-producer=lookup is configured on the table.
-    /// The coordinator sends these for streaming reads instead of data files.
     kChangelog,
   };
 
-  /// Origin of a Paimon file — how it was produced, not what it contains.
-  /// Mirrors Paimon's DataFileMeta.FileSource enum.
-  ///
-  /// This does NOT indicate whether the file contains `_rowkind`. The presence
-  /// of `_rowkind` depends on the changelog mode (upsert vs input changelog),
-  /// not the source type.
+  /// Normalized origin from Paimon's DataFileMeta.FileSource. The caller is
+  /// responsible for interpreting historical metadata with a missing source.
   enum class Source {
-    /// File produced by a normal write (flush/append).
     kAppend,
-
-    /// File produced by compaction. This could be:
-    ///   - Without changelog-producer=lookup: a regular data file (same as
-    ///     kAppend but produced by compaction instead of a write).
-    ///   - With changelog-producer=lookup: compaction produces TWO files —
-    ///     (1) a data file (no `_rowkind` in upsert mode) and (2) a separate
-    ///     changelog file (with `_rowkind` containing correct +I/-U/+U/-D).
-    ///     Both are marked kCompact. The coordinator sends the right one based
-    ///     on the read mode (data file for batch, changelog file for
-    ///     streaming).
     kCompact,
   };
 
@@ -97,39 +66,30 @@ struct PaimonDataFile {
   /// Number of rows in this file.
   uint64_t rowCount{0};
 
-  /// LSM-tree level of this file. Level 0 contains the newest (unflushed)
-  /// data; higher levels contain progressively more compacted data. Within
-  /// level 0, files CAN have overlapping keys. Within level 1+, compaction
-  /// guarantees non-overlapping key ranges across files.
-  /// Always 0 for append-only tables (no compaction).
+  /// Historical table schema identity, unrelated to the wire or format version.
+  std::optional<int64_t> schemaId;
+
+  /// Per-file physical format. When absent, the explicitly supplied split
+  /// format applies; the executor never infers it from the filename.
+  std::optional<dwio::common::FileFormat> fileFormat;
+
+  /// Optional content-equivalent read location and filesystem access context.
+  std::string physicalFilePath;
+  std::optional<FileProperties> properties;
+
+  /// LSM level from Paimon metadata. This alone does not establish sorted-run
+  /// boundaries or prove that a primary-key file can be read raw.
   int32_t level{0};
 
-  /// Sequence number range of records in this file. Auto-generated per-commit,
-  /// monotonically increasing. For level 0 files, min == max (single commit).
-  /// For compacted files (level 1+), min < max (merged from multiple commits).
-  /// Used during merge-on-read to resolve duplicate keys — higher sequence
-  /// number wins. Per-file metadata only (not per-row); after compaction,
-  /// per-row sequence attribution is lost but LSM level order makes it
-  /// unnecessary.
+  /// Sequence bounds summarize the per-row versions; they do not replace the
+  /// _SEQUENCE_NUMBER column in a primary-key file, including after compaction.
   int64_t minSequenceNumber{0};
   int64_t maxSequenceNumber{0};
 
-  /// Number of rows in this file with RowKind = DELETE or UPDATE_BEFORE.
-  /// row_count = addRowCount + deleteRowCount, where addRowCount is the
-  /// number of INSERT or UPDATE_AFTER rows.
-  ///
-  /// Only applicable to primary-key tables. Append-only tables have no
-  /// _rowkind column and every row is implicitly +I, so deleteRowCount is
-  /// always 0.
-  ///
-  /// This is independent of deletionFile — deleteRowCount counts changelog
-  /// records stored inside the file, while deletionFile is an external bitmap
-  /// of positionally deleted rows.
-  ///
-  /// Used to determine rawConvertible: if deleteRowCount > 0, the file
-  /// contains changelog records and cannot be read raw (needs RowKind
-  /// filtering during merge-on-read).
-  int64_t deleteRowCount{0};
+  /// Number of DELETE / UPDATE_BEFORE records, independent of positional DV
+  /// deletions. Missing means unknown, not zero. Ordinary append semantics can
+  /// establish that rows are inserts; PK raw reads require a known zero count.
+  std::optional<int64_t> deleteRowCount;
 
   /// Timestamp (epoch millis) when this file was created.
   int64_t creationTimeMs{0};
@@ -152,6 +112,7 @@ struct PaimonDataFile {
   std::string toString() const;
   folly::dynamic serialize() const;
   static PaimonDataFile create(const folly::dynamic& obj);
+  void validate() const;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

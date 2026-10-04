@@ -15,91 +15,76 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileSplitReader.h"
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Reader for rawConvertible Paimon splits. Extends FileSplitReader to handle
-/// Paimon-specific concerns:
-///
-///   - Multi-file iteration: A single Paimon split may contain multiple data
-///     files (one per LSM level in a bucket). This reader iterates through
-///     all files sequentially, transparently advancing to the next file when
-///     the current one is exhausted.
-///
-///   - Deletion vectors: Roaring bitmaps marking deleted row positions within
-///     a data file. Loaded in prepareSplit(), applied in next() via
-///     Mutation.deletedRows (same pattern as IcebergSplitReader). (NYI)
-///
-///   - _rowkind system column: Change type (+I/-U/+U/-D) for changelog files
-///     and input changelog mode. Handled in adaptColumns(). (NYI)
-///
-/// Also serves as the building block for PaimonMergeReader, which composes
-/// multiple PaimonSplitReaders to perform merge-on-read for primary-key
-/// tables with rawConvertible=false.
-class PaimonSplitReader : public FileSplitReader {
+/// Concatenates ordinary raw files, preserving duplicate rows. Each physical
+/// reader owns a fresh ScanSpec, reader options and DWIO lifecycle. At most one
+/// physical reader is active, and empty/filtered files yield between advances.
+class PaimonSplitReader final : public FileScanReader {
  public:
-  /// @param fileSplit FileConnectorSplit for the first data file (set by
-  ///        FileDataSource::addSplit before calling createSplitReader).
-  /// @param paimonSplit The full Paimon split. PaimonSplitReader builds
-  ///        FileConnectorSplits for all data files internally.
   PaimonSplitReader(
-      const std::shared_ptr<const FileConnectorSplit>& fileSplit,
-      std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
-      const FileTableHandlePtr& tableHandle,
+      std::shared_ptr<const PaimonConnectorSplit> split,
+      std::shared_ptr<const PaimonTableHandle> table,
+      std::unordered_map<std::string, std::optional<std::string>>
+          partitionValues,
       const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
-      const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
-      const RowTypePtr& readerOutputType,
-      const std::shared_ptr<io::IoStatistics>& dataIoStats,
-      const std::shared_ptr<io::IoStatistics>& metadataIoStats,
-      const std::shared_ptr<IoStats>& ioStats,
+      const ConnectorQueryCtx* ctx,
+      std::shared_ptr<const FileConfig> config,
+      RowTypePtr outputType,
+      std::shared_ptr<io::IoStatistics> dataIoStats,
+      std::shared_ptr<io::IoStatistics> metadataIoStats,
+      std::shared_ptr<IoStats> ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      dwio::common::RuntimeStats& stats,
+      std::function<FileScanState()> makeScanState,
+      folly::F14FastSet<std::string> remainingFilterColumns);
 
-  ~PaimonSplitReader() override = default;
-
-  /// Saves metadata filter and runtime stats for use by
-  /// ensureFileSplitReader(). File validation is done in the constructor.
-  void prepareSplit(
-      std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStats& runtimeStats,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      override;
-
-  /// Reads from the current file. When a file is exhausted, transparently
-  /// advances to the next file in the split. Returns 0 only when all files
-  /// are exhausted.
-  uint64_t next(uint64_t size, VectorPtr& output) override;
+  ScanReadResult next(uint64_t maxRows, ContinueFuture& future) override;
+  void resetFilterCaches() override;
+  void addDynamicFilter(
+      column_index_t channel,
+      const std::shared_ptr<common::Filter>& filter) override;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override;
+  int64_t estimatedRowSize() const override;
+  bool allPrefetchIssued() const override;
+  void resetSplit() override;
+  void cancel() override;
+  void setConnectorQueryCtx(const ConnectorQueryCtx* ctx) override;
+  const FileConnectorSplit* currentFileSplit() const override;
 
  private:
-  // Builds a FileConnectorSplit from a PaimonDataFile.
-  std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
-      const PaimonDataFile& dataFile) const;
+  class PhysicalReader;
+  void openFile();
+  void finishFile();
 
-  // Ensures a file split reader is ready to produce rows. If the current
-  // reader is exhausted, advances to the next non-empty file. Returns true
-  // if a reader is ready, false when all files are exhausted.
-  bool ensureFileSplitReader();
+  const std::shared_ptr<const PaimonConnectorSplit> split_;
+  const std::shared_ptr<const PaimonTableHandle> table_;
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionValues_;
+  const std::unordered_map<std::string, FileColumnHandlePtr>* const
+      partitionKeys_;
+  const ConnectorQueryCtx* const ctx_;
+  const std::shared_ptr<const FileConfig> config_;
+  const RowTypePtr outputType_;
+  const std::shared_ptr<io::IoStatistics> dataIoStats_;
+  const std::shared_ptr<io::IoStatistics> metadataIoStats_;
+  const std::shared_ptr<IoStats> ioStats_;
+  FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+  dwio::common::RuntimeStats& stats_;
+  const std::function<FileScanState()> makeScanState_;
+  const folly::F14FastSet<std::string> remainingFilterColumns_;
 
-  // Cleans up the current file reader after it is exhausted and advances
-  // currentFileIndex_ so ensureFileSplitReader() opens the next file.
-  void finishFileSplitReader();
-
-  const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
-
-  // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
-  // Used to switch the base reader between files during iteration.
-  std::vector<std::shared_ptr<FileConnectorSplit>> fileSplits_;
-
-  // Index of the next data file to open.
-  size_t currentFileIndex_{0};
-
-  // Saved from prepareSplit() for re-use when advancing to subsequent files.
-  std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  dwio::common::RuntimeStats* runtimeStats_{nullptr};
+  size_t fileIndex_{0};
+  std::shared_ptr<FileConnectorSplit> fileSplit_;
+  FileScanState state_;
+  std::unique_ptr<FileSplitReader> reader_;
+  VectorPtr output_;
+  RowVectorPtr emptyOutput_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

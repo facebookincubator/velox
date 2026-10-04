@@ -13,6 +13,28 @@
 # limitations under the License.
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  add_executable(velox_hive_paimon_connector_test Main.cpp PaimonConnectorTest.cpp)
+  add_test(velox_hive_paimon_connector_test velox_hive_paimon_connector_test)
+  target_link_libraries(
+    velox_hive_paimon_connector_test
+    velox_hive_paimon_connector
+    velox_exec_test_lib
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    velox_dwio_orc_reader
+    GTest::gtest
+    GTest::gmock
+  )
+  if(VELOX_ENABLE_PARQUET)
+    target_compile_definitions(
+      velox_hive_paimon_connector_test
+      PRIVATE
+        VELOX_ENABLE_PARQUET
+        PAIMON_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/append"
+    )
+    target_link_libraries(velox_hive_paimon_connector_test velox_dwio_parquet_reader)
+  endif()
+
   add_executable(velox_hive_paimon_split_test PaimonConnectorSplitTest.cpp)
   add_test(velox_hive_paimon_split_test velox_hive_paimon_split_test)
 

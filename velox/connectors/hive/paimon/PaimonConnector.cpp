@@ -19,6 +19,12 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
+void PaimonConnector::registerSerDe() {
+  PaimonTableHandle::registerSerDe();
+  PaimonColumnHandle::registerSerDe();
+  PaimonConnectorSplit::registerSerDe();
+}
+
 PaimonConnector::PaimonConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
@@ -39,6 +45,25 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
       ioExecutor_,
       connectorQueryCtx,
       paimonConfig_);
+}
+
+std::unique_ptr<DataSink> PaimonConnector::createDataSink(
+    RowTypePtr /*inputType*/,
+    ConnectorInsertTableHandlePtr /*insertHandle*/,
+    ConnectorQueryCtx* /*ctx*/,
+    CommitStrategy /*commitStrategy*/) {
+  VELOX_UNSUPPORTED("Paimon task writer is not yet implemented");
+}
+
+std::shared_ptr<IndexSource> PaimonConnector::createIndexSource(
+    const RowTypePtr& /*inputType*/,
+    const std::vector<
+        std::shared_ptr<core::IndexLookupCondition>>& /*conditions*/,
+    const RowTypePtr& /*outputType*/,
+    const ConnectorTableHandlePtr& /*tableHandle*/,
+    const ColumnHandleMap& /*columnHandles*/,
+    ConnectorQueryCtx* /*ctx*/) {
+  VELOX_UNSUPPORTED("Paimon index lookup is not yet implemented");
 }
 
 } // namespace facebook::velox::connector::hive::paimon

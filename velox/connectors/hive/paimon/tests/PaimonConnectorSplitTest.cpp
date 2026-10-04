@@ -75,6 +75,114 @@ TEST_F(PaimonConnectorSplitTest, basic) {
   EXPECT_EQ(split->partitionKeys().at("dt"), "2024-01-01");
 }
 
+TEST_F(PaimonConnectorSplitTest, versionedInputAndLegacyWire) {
+  PaimonDataFile file;
+  file.path = "data.parquet";
+  file.size = 1024;
+  file.schemaId = 0;
+  file.fileFormat = FileFormat::PARQUET;
+  PaimonPartition partitions{
+      {0, variant(TypeKind::VARCHAR)},
+      {1, variant(std::string(""))},
+      {2, variant(std::numeric_limits<int32_t>::min())},
+      {3, variant(std::numeric_limits<int64_t>::max())},
+      {4, variant(true)}};
+  PaimonConnectorSplit split(
+      kConnectorId,
+      7,
+      PaimonTableType::kAppendOnly,
+      FileFormat::PARQUET,
+      {file, file},
+      {},
+      -1,
+      true,
+      false,
+      partitions);
+  EXPECT_EQ(split.size(), 2048);
+  auto copy = PaimonConnectorSplit::create(split.serialize());
+  EXPECT_EQ(copy->size(), split.size());
+  EXPECT_EQ(copy->partitionValues(), partitions);
+  EXPECT_EQ(copy->wireVersion(), 1);
+  EXPECT_EQ(copy->readMode(), "SNAPSHOT");
+  EXPECT_FALSE(copy->cacheable);
+  EXPECT_FALSE(copy->dataFiles()[0].deleteRowCount.has_value());
+
+  auto legacy = split.serialize();
+  for (const auto* field :
+       {"wireVersion",
+        "splitType",
+        "readMode",
+        "cacheable",
+        "partitionValues"}) {
+    legacy.erase(field);
+  }
+  copy = PaimonConnectorSplit::create(legacy);
+  EXPECT_EQ(copy->wireVersion(), 0);
+  EXPECT_EQ(copy->readMode(), "SNAPSHOT");
+  EXPECT_TRUE(copy->cacheable);
+}
+
+TEST_F(PaimonConnectorSplitTest, invalidMetadataAndOverflow) {
+  PaimonDataFile file;
+  file.path = "data.parquet";
+  file.size = 1;
+  PaimonConnectorSplit split(
+      kConnectorId,
+      7,
+      PaimonTableType::kAppendOnly,
+      FileFormat::PARQUET,
+      {file},
+      {},
+      0);
+  const auto valid = split.serialize();
+  for (const auto* field : {"snapshotId", "wireVersion"}) {
+    auto wire = valid;
+    wire[field] = -1;
+    VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "out of range");
+  }
+  for (auto bucket : {int64_t{-2}, int64_t{1} << 32}) {
+    auto wire = valid;
+    wire["tableBucketNumber"] = bucket;
+    VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "out of range");
+  }
+  for (const auto* field : {"readMode", "splitType"}) {
+    auto wire = valid;
+    wire.erase(field);
+    EXPECT_ANY_THROW(PaimonConnectorSplit::create(wire));
+  }
+  auto wire = valid;
+  wire["splitType"] = "CHAIN";
+  VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "splitType");
+  wire = valid;
+  wire["partitionValues"] = folly::dynamic::array(
+      folly::dynamic::object("fieldId", 0)(
+          "value", variant(int32_t{1}).serialize()));
+  wire["partitionValues"][0]["value"]["value"] = int64_t{1} << 32;
+  VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "out of range");
+  wire["partitionValues"][0]["value"] = variant(true).serialize();
+  wire["partitionValues"][0]["value"]["value"] = "false";
+  VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "must be a boolean");
+  wire["partitionValues"][0]["value"] = variant(std::string("")).serialize();
+  wire["partitionValues"][0]["fieldId"] = int64_t{1} << 32;
+  VELOX_ASSERT_THROW(PaimonConnectorSplit::create(wire), "out of range");
+  wire["partitionValues"][0]["fieldId"] = 0;
+  wire["partitionValues"].push_back(wire["partitionValues"][0]);
+  VELOX_ASSERT_THROW(
+      PaimonConnectorSplit::create(wire), "Duplicate Paimon partition fieldId");
+  auto largeFile = file;
+  largeFile.size = std::numeric_limits<int64_t>::max();
+  VELOX_ASSERT_THROW(
+      PaimonConnectorSplit(
+          kConnectorId,
+          7,
+          PaimonTableType::kAppendOnly,
+          FileFormat::PARQUET,
+          {largeFile, file},
+          {},
+          0),
+      "split size overflow");
+}
+
 TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
   PaimonDataFile file0;
   file0.path = "s3://bucket/table/data-001.nimble";

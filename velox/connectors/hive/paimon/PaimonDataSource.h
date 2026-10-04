@@ -17,25 +17,12 @@
 
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-class PaimonConnectorSplit;
-
-/// Paimon-specific data source that extends FileDataSource.
-///
-/// Acts as an orchestrator that selects the right reading strategy based on
-/// split properties:
-///
-///   rawConvertible=true (append-only or fully-compacted primary-key):
-///     Creates a PaimonSplitReader that handles multi-file iteration,
-///     deletion vectors, and _rowkind internally. FileDataSource::next()
-///     drives the read loop — no override needed.
-///
-///   rawConvertible=false (primary-key with overlapping keys):
-///     Merge path. A PaimonMergeReader opens all files simultaneously and
-///     performs a sorted merge by primary key, deduplicating by sequence
-///     number. Not yet implemented.
+/// Executes a complete, caller-planned Paimon split. The common data source
+/// retains responsibility for expression evaluation and final projection.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
@@ -47,17 +34,14 @@ class PaimonDataSource : public FileDataSource {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<PaimonConfig>& paimonConfig);
 
-  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+  void setFromDataSource(std::unique_ptr<DataSource> source) override;
 
  protected:
-  /// Creates a PaimonSplitReader with all data files from the Paimon split.
-  /// Called by FileDataSource::addSplit() during split initialization.
-  std::unique_ptr<FileSplitReader> createSplitReader() override;
+  std::unique_ptr<FileScanReader> createScanReader() override;
 
  private:
-  // The original Paimon split. Stored so createSplitReader() can access
-  // the full list of data files.
-  std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
+  std::shared_ptr<const PaimonTableHandle> paimonTable_;
+  std::optional<int64_t> snapshotId_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

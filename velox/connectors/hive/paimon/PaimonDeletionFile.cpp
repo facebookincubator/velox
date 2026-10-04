@@ -16,6 +16,7 @@
 #include "velox/connectors/hive/paimon/PaimonDeletionFile.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/hive/paimon/PaimonMetadata.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -30,6 +31,11 @@ PaimonDeletionFile::PaimonDeletionFile(
       cardinality(_cardinality) {
   VELOX_CHECK_GT(length, 0, "PaimonDeletionFile length must be > 0");
   VELOX_CHECK_GT(cardinality, 0, "PaimonDeletionFile cardinality must be > 0");
+  constexpr uint64_t max = std::numeric_limits<int64_t>::max();
+  VELOX_USER_CHECK_LE(offset, max, "Paimon DV offset out of range");
+  VELOX_USER_CHECK_LE(
+      length, max - offset, "Paimon DV offset + length overflow");
+  VELOX_USER_CHECK_LE(cardinality, max, "Paimon DV cardinality out of range");
 }
 
 std::string PaimonDeletionFile::toString() const {
@@ -54,9 +60,9 @@ folly::dynamic PaimonDeletionFile::serialize() const {
 PaimonDeletionFile PaimonDeletionFile::create(const folly::dynamic& obj) {
   return PaimonDeletionFile(
       obj["path"].asString(),
-      static_cast<uint64_t>(obj["offset"].asInt()),
-      static_cast<uint64_t>(obj["length"].asInt()),
-      static_cast<uint64_t>(obj["cardinality"].asInt()));
+      paimonInt(obj, "offset"),
+      paimonInt(obj, "length"),
+      paimonInt(obj, "cardinality"));
 }
 
 } // namespace facebook::velox::connector::hive::paimon

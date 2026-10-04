@@ -25,6 +25,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileScanReader.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -55,6 +56,36 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 };
 
 class FileConfig;
+
+struct FileScanOptions {
+  bool allowSampling{true};
+  bool applyLowercaseColumnNames{true};
+};
+
+/// Immutable query inputs and filter decomposition. Physical ScanSpecs are
+/// mutable, per-reader state and must not replace the original logical
+/// predicates, which later reader modes may need to evaluate after merging.
+struct FileScanPlan {
+  RowTypePtr outputType;
+  ColumnHandleMap assignments;
+  common::SubfieldFilters originalFilters;
+  core::TypedExprPtr originalRemainingFilter;
+  common::SubfieldFilters fileFilters;
+  core::TypedExprPtr remainingFilter;
+  double sampleRate{1};
+
+  static std::shared_ptr<const FileScanPlan> create(
+      const RowTypePtr& outputType,
+      const FileTableHandlePtr& table,
+      const ColumnHandleMap& assignments,
+      core::ExpressionEvaluator* evaluator,
+      const FileScanOptions& options);
+};
+
+struct FileScanState {
+  std::shared_ptr<common::ScanSpec> scanSpec;
+  std::shared_ptr<common::MetadataFilter> metadataFilter;
+};
 
 /// Base class for file-based data sources that read from columnar file formats
 /// (ORC, Parquet, etc.) using FileSplitReader. Provides the common scan
@@ -88,7 +119,8 @@ class FileDataSource : public DataSource {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<FileConfig>& fileConfig);
+      const std::shared_ptr<FileConfig>& fileConfig,
+      FileScanOptions scanOptions = {});
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -117,6 +149,8 @@ class FileDataSource : public DataSource {
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
+  void cancel() override;
+
   int64_t estimatedRowSize() override;
 
   const common::SubfieldFilters* getFilters() const override {
@@ -130,6 +164,16 @@ class FileDataSource : public DataSource {
  protected:
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
 
+  virtual std::unique_ptr<FileScanReader> createScanReader();
+
+  /// Build independent physical state from the immutable column / filter
+  /// inputs. Callers supporting extraction must configure it on the new spec.
+  FileScanState newFileScanState() const;
+
+  const folly::F14FastSet<std::string>& remainingFilterColumns() const {
+    return remainingFilterColumns_;
+  }
+
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
@@ -137,10 +181,12 @@ class FileDataSource : public DataSource {
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<FileConnectorSplit> split_;
+  std::shared_ptr<ConnectorSplit> activeSplit_;
+  std::shared_ptr<const FileScanPlan> scanPlan_;
   FileTableHandlePtr tableHandle_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
-  std::unique_ptr<FileSplitReader> splitReader_;
+  std::unique_ptr<FileScanReader> splitReader_;
 
   /// Output type from file reader. This is different from outputType_ in that
   /// it contains column names before assignment, and columns that are only used
@@ -167,6 +213,8 @@ class FileDataSource : public DataSource {
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
   common::SubfieldFilters filters_;
+  std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
+      dynamicFilters_;
 
   const exec::ExprSet* remainingFilterExprSet() const {
     return remainingFilterExprSet_.get();

@@ -86,7 +86,7 @@ TEST(PaimonDataFileTest, serializeDefaultValues) {
   EXPECT_EQ(deserialized.level, 0);
   EXPECT_EQ(deserialized.minSequenceNumber, 0);
   EXPECT_EQ(deserialized.maxSequenceNumber, 0);
-  EXPECT_EQ(deserialized.deleteRowCount, 0);
+  EXPECT_FALSE(deserialized.deleteRowCount.has_value());
   EXPECT_EQ(deserialized.creationTimeMs, 0);
   EXPECT_EQ(deserialized.type, PaimonDataFile::Type::kData);
   EXPECT_EQ(deserialized.source, PaimonDataFile::Source::kAppend);
@@ -135,7 +135,7 @@ TEST(PaimonDataFileTest, defaultValues) {
   EXPECT_EQ(file.level, 0);
   EXPECT_EQ(file.minSequenceNumber, 0);
   EXPECT_EQ(file.maxSequenceNumber, 0);
-  EXPECT_EQ(file.deleteRowCount, 0);
+  EXPECT_FALSE(file.deleteRowCount.has_value());
   EXPECT_EQ(file.creationTimeMs, 0);
   EXPECT_EQ(file.type, PaimonDataFile::Type::kData);
   EXPECT_EQ(file.source, PaimonDataFile::Source::kAppend);
@@ -208,4 +208,73 @@ TEST(PaimonDataFileTest, sourceStreamAndFormat) {
 
   EXPECT_EQ(fmt::format("{}", PaimonDataFile::Source::kAppend), "APPEND");
   EXPECT_EQ(fmt::format("{}", PaimonDataFile::Source::kCompact), "COMPACT");
+}
+
+TEST(PaimonDataFileTest, inputContractRoundTrip) {
+  PaimonDataFile file;
+  file.path = "immutable.parquet";
+  file.physicalFilePath = "replica.parquet";
+  file.size = 4096;
+  file.rowCount = 10;
+  file.schemaId = 7;
+  file.fileFormat = dwio::common::FileFormat::PARQUET;
+  file.properties = FileProperties{};
+  file.properties->fileSize = 4096;
+  file.properties->modificationTime = 123;
+  file.properties->readRangeHint = 512;
+  file.properties->extraFileInfo =
+      std::make_shared<std::string>("opaque file info");
+  file.properties->fileReadOps["access-context"] = "per-file";
+  auto wire = file.serialize();
+  auto copy = PaimonDataFile::create(wire);
+  EXPECT_EQ(copy.schemaId, 7);
+  EXPECT_EQ(copy.fileFormat, dwio::common::FileFormat::PARQUET);
+  EXPECT_EQ(copy.physicalFilePath, file.physicalFilePath);
+  EXPECT_EQ(copy.properties->serialize(), file.properties->serialize());
+  EXPECT_FALSE(copy.deleteRowCount.has_value());
+  wire.erase("deleteRowCount");
+  EXPECT_FALSE(PaimonDataFile::create(wire).deleteRowCount.has_value());
+  wire["deleteRowCount"] = 0;
+  EXPECT_EQ(PaimonDataFile::create(wire).deleteRowCount, 0);
+}
+
+TEST(PaimonDataFileTest, rejectsInvalidNumericMetadata) {
+  PaimonDataFile file;
+  file.path = "data.parquet";
+  file.size = 4096;
+  file.rowCount = 10;
+  file.schemaId = 0;
+  const auto valid = file.serialize();
+  for (const auto* field :
+       {"fileSize", "rowCount", "level", "schemaId", "deleteRowCount"}) {
+    SCOPED_TRACE(field);
+    auto obj = valid;
+    obj[field] = -1;
+    VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "out of range");
+  }
+  auto obj = valid;
+  obj["level"] = int64_t{1} << 32;
+  VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "out of range");
+  obj = valid;
+  obj["deleteRowCount"] = 11;
+  VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "exceeds rowCount");
+  obj = valid;
+  obj["fileSize"] = 1.5;
+  VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "must be an int64");
+  for (const auto* field :
+       {"minSequenceNumber", "maxSequenceNumber", "creationTimeMs"}) {
+    obj = valid;
+    obj[field] = 1.5;
+    VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "must be an int64");
+  }
+  for (const auto* field : {"fileSize", "readRangeHint", "modificationTime"}) {
+    obj = valid;
+    obj["properties"] = folly::dynamic::object(field, 1.5);
+    VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "must be an int64");
+  }
+  obj = valid;
+  obj["fileFormat"] = "unknown-format";
+  VELOX_ASSERT_THROW(PaimonDataFile::create(obj), "fileFormat is unknown");
+  file.size = std::numeric_limits<uint64_t>::max();
+  VELOX_ASSERT_THROW(file.serialize(), "fileSize out of range");
 }

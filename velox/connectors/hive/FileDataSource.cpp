@@ -61,6 +61,32 @@ void addOperationStatsToRuntimeStats(
 
 } // namespace
 
+std::shared_ptr<const FileScanPlan> FileScanPlan::create(
+    const RowTypePtr& outputType,
+    const FileTableHandlePtr& table,
+    const ColumnHandleMap& assignments,
+    core::ExpressionEvaluator* evaluator,
+    const FileScanOptions& options) {
+  auto plan = std::make_shared<FileScanPlan>();
+  plan->outputType = outputType;
+  plan->assignments = assignments;
+  plan->originalRemainingFilter = table->remainingFilter();
+  for (const auto& [field, filter] : table->subfieldFilters()) {
+    plan->originalFilters.emplace(field.clone(), filter->clone());
+    plan->fileFilters.emplace(field.clone(), filter->clone());
+  }
+  plan->sampleRate = table->sampleRate();
+  plan->remainingFilter = extractFiltersFromRemainingFilter(
+      plan->originalRemainingFilter,
+      evaluator,
+      plan->fileFilters,
+      plan->sampleRate);
+  VELOX_USER_CHECK(
+      options.allowSampling || plan->sampleRate == 1,
+      "Physical sampling is not supported by this table format");
+  return plan;
+}
+
 void FileDataSource::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
     case FileColumnHandle::ColumnType::kRegular:
@@ -87,7 +113,8 @@ FileDataSource::FileDataSource(
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<FileConfig>& fileConfig)
+    const std::shared_ptr<FileConfig>& fileConfig,
+    FileScanOptions scanOptions)
     : fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
@@ -96,6 +123,8 @@ FileDataSource::FileDataSource(
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
+  scanPlan_ = FileScanPlan::create(
+      outputType, tableHandle_, assignments, expressionEvaluator_, scanOptions);
 
   folly::F14FastMap<std::string_view, const FileColumnHandle*> columnHandles;
   // Column handles keyed on the table column name.
@@ -146,22 +175,19 @@ FileDataSource::FileDataSource(
     columnPostProcessors_.push_back(handle->postProcessor());
   }
 
-  if (fileConfig_->isFileColumnNamesReadAsLowerCase(
+  if (scanOptions.applyLowercaseColumnNames &&
+      fileConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties())) {
     checkColumnNameLowerCase(outputType_);
     checkColumnNameLowerCase(tableHandle_->subfieldFilters(), infoColumns_);
     checkColumnNameLowerCase(tableHandle_->remainingFilter());
   }
 
-  for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
-    filters_.emplace(k.clone(), v);
+  for (const auto& [k, v] : scanPlan_->fileFilters) {
+    filters_.emplace(k.clone(), v->clone());
   }
-  double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = extractFiltersFromRemainingFilter(
-      tableHandle_->remainingFilter(),
-      expressionEvaluator_,
-      filters_,
-      sampleRate);
+  const auto sampleRate = scanPlan_->sampleRate;
+  const auto& remainingFilter = scanPlan_->remainingFilter;
   if (sampleRate != 1) {
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }
@@ -216,22 +242,9 @@ FileDataSource::FileDataSource(
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
-  scanSpec_ = makeScanSpec(
-      readerOutputType_,
-      subfields_,
-      filters_,
-      /*indexColumns=*/{},
-      tableHandle_->dataColumns(),
-      partitionKeys_,
-      infoColumns_,
-      specialColumns_,
-      fileConfig_->readStatsBasedFilterReorderDisabled(
-          connectorQueryCtx_->sessionProperties()),
-      pool_);
-  if (remainingFilter) {
-    metadataFilter_ = std::make_shared<common::MetadataFilter>(
-        *scanSpec_, *remainingFilter, expressionEvaluator_);
-  }
+  auto state = newFileScanState();
+  scanSpec_ = std::move(state.scanSpec);
+  metadataFilter_ = std::move(state.metadataFilter);
 
   // Detect extraction columns and reconfigure scanSpec_ if needed.
   bool hasExtractions = false;
@@ -282,6 +295,30 @@ FileDataSource::FileDataSource(
   dataIoStats_ = std::make_shared<io::IoStatistics>();
   metadataIoStats_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<IoStats>();
+}
+
+FileScanState FileDataSource::newFileScanState() const {
+  FileScanState state;
+  state.scanSpec = makeScanSpec(
+      readerOutputType_,
+      subfields_,
+      filters_,
+      /*indexColumns=*/{},
+      tableHandle_->dataColumns(),
+      partitionKeys_,
+      infoColumns_,
+      specialColumns_,
+      fileConfig_->readStatsBasedFilterReorderDisabled(
+          connectorQueryCtx_->sessionProperties()),
+      pool_);
+  if (scanPlan_->remainingFilter) {
+    state.metadataFilter = std::make_shared<common::MetadataFilter>(
+        *state.scanSpec, *scanPlan_->remainingFilter, expressionEvaluator_);
+  }
+  for (const auto& [channel, filter] : dynamicFilters_) {
+    state.scanSpec->getChildByChannel(channel).setFilter(filter);
+  }
+  return state;
 }
 
 void FileDataSource::configureExtractionColumns() {
@@ -409,59 +446,58 @@ std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
 
 void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK_NULL(
-      split_,
+      activeSplit_,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = checkedPointerCast<FileConnectorSplit>(split);
+  activeSplit_ = std::move(split);
 
-  VLOG(1) << "Adding split " << split_->toString();
+  VLOG(1) << "Adding split " << activeSplit_->toString();
 
   if (splitReader_) {
     splitReader_.reset();
   }
 
-  splitReader_ = createSplitReader();
+  splitReader_ = createScanReader();
+}
+
+std::unique_ptr<FileScanReader> FileDataSource::createScanReader() {
+  split_ = checkedPointerCast<FileConnectorSplit>(activeSplit_);
+  auto reader = createSplitReader();
 
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
-  splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
-  readerOutputType_ = splitReader_->readerOutputType();
+  reader->configureReaderOptions(randomSkip_);
+  reader->setRemainingFilterColumns(remainingFilterColumns_);
+  reader->prepareSplit(metadataFilter_, runtimeStats_);
+  readerOutputType_ = reader->readerOutputType();
+  return std::make_unique<FileSplitReaderAdapter>(
+      std::move(reader),
+      readerProducedType_ ? readerProducedType_ : readerOutputType_,
+      pool_);
 }
 
 std::optional<RowVectorPtr> FileDataSource::next(
     uint64_t size,
-    velox::ContinueFuture& /*future*/) {
-  VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
+    velox::ContinueFuture& future) {
+  VELOX_CHECK(
+      activeSplit_ != nullptr, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
   TestValue::adjust(
       "facebook::velox::connector::hive::FileDataSource::next", this);
 
-  if (splitReader_->emptySplit()) {
-    resetSplit();
-    return nullptr;
+  auto result = splitReader_->next(size, future);
+  completedRows_ += result.physicalRowsScanned;
+  if (result.state == ScanReadResult::State::kBlocked) {
+    VELOX_CHECK(future.valid(), "Blocked scan reader must provide a future");
+    return std::nullopt;
   }
-
-  // Subclass reader may add extra columns to reader output (e.g. for bucket
-  // conversion or delta update).
-  auto& outputRowType =
-      readerProducedType_ ? readerProducedType_ : readerOutputType_;
-  auto needsExtraColumn = [&] {
-    return output_->asUnchecked<RowVector>()->childrenSize() <
-        outputRowType->size();
-  };
-  if (!output_ || needsExtraColumn()) {
-    output_ = BaseVector::create(outputRowType, 0, pool_);
-  }
-
-  const auto rowsScanned = splitReader_->next(size, output_);
-  completedRows_ += rowsScanned;
-  if (rowsScanned == 0) {
+  if (result.state == ScanReadResult::State::kEnd) {
     splitReader_->updateRuntimeStats(runtimeStats_);
     resetSplit();
     return nullptr;
   }
+  VELOX_CHECK_NOT_NULL(result.rows, "Data scan result must own a RowVector");
+  output_ = std::move(result.rows);
 
   VELOX_CHECK(
       !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
@@ -482,7 +518,7 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   if (remainingFilterExprSet_) {
     rowsRemaining = evaluateRemainingFilter(rowVector);
-    VELOX_CHECK_LE(rowsRemaining, rowsScanned);
+    VELOX_CHECK_LE(rowsRemaining, rowVector->size());
     if (rowsRemaining == 0) {
       // No rows passed the remaining filter.
       return getEmptyOutput();
@@ -495,7 +531,8 @@ std::optional<RowVectorPtr> FileDataSource::next(
   }
 
   if (outputType_->size() == 0) {
-    return exec::wrap(rowsRemaining, remainingIndices, rowVector);
+    return std::make_shared<RowVector>(
+        pool_, outputType_, nullptr, rowsRemaining, std::vector<VectorPtr>{});
   }
 
   std::vector<VectorPtr> outputColumns;
@@ -523,9 +560,10 @@ void FileDataSource::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
   fieldSpec.setFilter(filter);
+  dynamicFilters_[outputChannel] = filter;
   scanSpec_->resetCachedValues(true);
   if (splitReader_) {
-    splitReader_->resetFilterCaches();
+    splitReader_->addDynamicFilter(outputChannel, filter);
   }
 }
 
@@ -549,11 +587,12 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
     fileEvent.tableName = tableHandle_->name();
     fileEvent.dbName = tableHandle_->dbName();
   }
-  if (split_) {
-    fileEvent.filePath = split_->filePath;
-    fileEvent.fileFormat = split_->fileFormat;
-    if (!split_->partitionKeys.empty()) {
-      fileEvent.partitionKeys = &split_->partitionKeys;
+  if (const auto* file =
+          splitReader_ ? splitReader_->currentFileSplit() : nullptr) {
+    fileEvent.filePath = file->filePath;
+    fileEvent.fileFormat = file->fileFormat;
+    if (!file->partitionKeys.empty()) {
+      fileEvent.partitionKeys = &file->partitionKeys;
     }
   }
   scanBatchCallback_(fileEvent);
@@ -561,7 +600,11 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
 
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
-  auto res = runtimeStats_.toRuntimeMetricMap();
+  auto snapshot = runtimeStats_;
+  if (activeSplit_ && splitReader_) {
+    splitReader_->updateRuntimeStats(snapshot);
+  }
+  auto res = snapshot.toRuntimeMetricMap();
   io::addIoStatsToRuntimeStats(*dataIoStats_, "", res);
   io::addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
@@ -596,6 +639,7 @@ void FileDataSource::setFromDataSource(
   VELOX_CHECK_NOT_NULL(source, "Bad DataSource type");
 
   split_ = std::move(source->split_);
+  activeSplit_ = std::move(source->activeSplit_);
   runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
   runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
@@ -654,8 +698,21 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 
 void FileDataSource::resetSplit() {
   split_.reset();
+  activeSplit_.reset();
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.
+}
+
+void FileDataSource::cancel() {
+  if (splitReader_) {
+    if (activeSplit_) {
+      splitReader_->updateRuntimeStats(runtimeStats_);
+    }
+    splitReader_->cancel();
+  }
+  output_.reset();
+  split_.reset();
+  activeSplit_.reset();
 }
 
 } // namespace facebook::velox::connector::hive

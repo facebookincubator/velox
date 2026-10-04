@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "id": 0,
+  "fields": [
+    {
+      "id": 0,
+      "name": "id",
+      "type": "INT"
+    },
+    {
+      "id": 1,
+      "name": "Payload",
+      "type": "STRING"
+    },
+    {
+      "id": 2,
+      "name": "amount",
+      "type": "DOUBLE"
+    },
+    {
+      "id": 3,
+      "name": "active",
+      "type": "BOOLEAN"
+    },
+    {
+      "id": 4,
+      "name": "big",
+      "type": "BIGINT"
+    },
+    {
+      "id": 5,
+      "name": "p",
+      "type": "STRING"
+    }
+  ],
+  "highestFieldId": 5,
+  "partitionKeys": [
+    "p"
+  ],
+  "primaryKeys": [],
+  "options": {
+    "bucket": "-1",
+    "file.compression": "snappy",
+    "write-only": "true",
+    "file.format": "parquet"
+  },
+  "timeMillis": 1791117780349
+}

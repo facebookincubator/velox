@@ -15,132 +15,247 @@
  */
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
 
-#include <limits>
+#include "velox/connectors/hive/FileConfig.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
+class PaimonSplitReader::PhysicalReader final : public FileSplitReader {
+ public:
+  PhysicalReader(const PaimonSplitReader& owner, const PaimonDataFile& file)
+      : FileSplitReader(
+            owner.fileSplit_,
+            owner.table_,
+            owner.partitionKeys_,
+            owner.ctx_,
+            owner.config_,
+            owner.outputType_,
+            owner.dataIoStats_,
+            owner.metadataIoStats_,
+            owner.ioStats_,
+            owner.fileHandleFactory_,
+            owner.executor_,
+            owner.state_.scanSpec),
+        file_(file),
+        table_(owner.table_) {}
+
+  void prepareSplit(
+      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      dwio::common::RuntimeStats& stats,
+      const folly::F14FastMap<std::string, std::string>& ops) override {
+    createReader(ops);
+    VELOX_USER_CHECK_NOT_NULL(
+        baseReader_, "Invalid Paimon data file: {}", file_.path);
+    if (const auto rows = baseReader_->numberOfRows()) {
+      VELOX_USER_CHECK_EQ(
+          *rows,
+          file_.rowCount,
+          "Paimon rowCount disagrees with file footer: {}",
+          file_.path);
+    }
+    const auto& schema = table_->targetSchema();
+    const auto& physical = baseReader_->rowType();
+    for (auto i = 0; i < schema.fieldIds.size(); ++i) {
+      const auto& name = schema.rowType->nameOf(i);
+      const auto index = physical->getChildIdxIfExists(name);
+      const auto& partitionIds = table_->partitionFieldIds();
+      const auto isPartition =
+          std::find(
+              partitionIds.begin(), partitionIds.end(), schema.fieldIds[i]) !=
+          partitionIds.end();
+      VELOX_USER_CHECK(
+          index.has_value() || isPartition,
+          "Paimon field '{}' missing from same-schema file '{}'",
+          name,
+          file_.path);
+      if (index) {
+        VELOX_USER_CHECK(
+            physical->childAt(*index)->equivalent(*schema.rowType->childAt(i)),
+            "Paimon physical type disagrees with schema for '{}' in '{}'",
+            name,
+            file_.path);
+      }
+    }
+    auto adapted = getAdaptedRowType();
+    if (!checkIfSplitIsEmpty(stats)) {
+      createRowReader(
+          std::move(metadataFilter), std::move(adapted), std::nullopt);
+    }
+  }
+
+ protected:
+  void configureBaseReaderOptions() override {
+    FileSplitReader::configureBaseReaderOptions();
+    // Schema identity, spelling and mapping are table-format semantics; session
+    // settings for a generic file scan cannot silently change them.
+    baseReaderOpts_.setColumnMappingMode(
+        dwio::common::ColumnMappingMode::kName);
+    baseReaderOpts_.setFileColumnNamesReadAsLowerCase(false);
+    baseReaderOpts_.setAllowEmptyFile(false);
+  }
+
+  void validateFileSize(uint64_t actualSize) const override {
+    VELOX_USER_CHECK_EQ(
+        actualSize,
+        file_.size,
+        "Paimon fileSize disagrees with opened file: {}",
+        file_.path);
+  }
+
+ private:
+  const PaimonDataFile& file_;
+  const std::shared_ptr<const PaimonTableHandle> table_;
+};
+
 PaimonSplitReader::PaimonSplitReader(
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
-    std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
-    const FileTableHandlePtr& tableHandle,
+    std::shared_ptr<const PaimonConnectorSplit> split,
+    std::shared_ptr<const PaimonTableHandle> table,
+    std::unordered_map<std::string, std::optional<std::string>> partitionValues,
     const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
-    const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
-    const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& dataIoStats,
-    const std::shared_ptr<io::IoStatistics>& metadataIoStats,
-    const std::shared_ptr<IoStats>& ioStats,
+    const ConnectorQueryCtx* ctx,
+    std::shared_ptr<const FileConfig> config,
+    RowTypePtr outputType,
+    std::shared_ptr<io::IoStatistics> dataIoStats,
+    std::shared_ptr<io::IoStatistics> metadataIoStats,
+    std::shared_ptr<IoStats> ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec)
-    : FileSplitReader(
-          fileSplit,
-          tableHandle,
-          partitionKeys,
-          connectorQueryCtx,
-          fileConfig,
-          readerOutputType,
-          dataIoStats,
-          metadataIoStats,
-          ioStats,
-          fileHandleFactory,
-          executor,
-          scanSpec),
-      paimonSplit_(std::move(paimonSplit)) {
-  // Validate all data files upfront.
-  for (const auto& dataFile : paimonSplit_->dataFiles()) {
-    VELOX_CHECK(
-        !dataFile.deletionFile.has_value(),
-        "Paimon deletion vector reading is not yet implemented. "
-        "File '{}' has a deletion vector with {} deleted rows.",
-        dataFile.path,
-        dataFile.deletionFile.has_value() ? dataFile.deletionFile->cardinality
-                                          : 0);
-    VELOX_CHECK_EQ(
-        dataFile.type,
-        PaimonDataFile::Type::kData,
-        "Paimon changelog file reading is not yet supported. "
-        "File '{}' has type {}.",
-        dataFile.path,
-        dataFile.type);
-  }
+    dwio::common::RuntimeStats& stats,
+    std::function<FileScanState()> makeScanState,
+    folly::F14FastSet<std::string> remainingFilterColumns)
+    : split_(std::move(split)),
+      table_(std::move(table)),
+      partitionValues_(std::move(partitionValues)),
+      partitionKeys_(partitionKeys),
+      ctx_(ctx),
+      config_(std::move(config)),
+      outputType_(std::move(outputType)),
+      dataIoStats_(std::move(dataIoStats)),
+      metadataIoStats_(std::move(metadataIoStats)),
+      ioStats_(std::move(ioStats)),
+      fileHandleFactory_(fileHandleFactory),
+      executor_(executor),
+      stats_(stats),
+      makeScanState_(std::move(makeScanState)),
+      remainingFilterColumns_(std::move(remainingFilterColumns)) {}
 
-  // Build FileConnectorSplits for all data files so we can switch between
-  // them during multi-file iteration.
-  const auto& dataFiles = paimonSplit_->dataFiles();
-  fileSplits_.reserve(dataFiles.size());
-  for (const auto& dataFile : dataFiles) {
-    fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
-  }
+void PaimonSplitReader::openFile() {
+  const auto& file = split_->dataFiles()[fileIndex_];
+  fileSplit_ = std::make_shared<FileConnectorSplit>(
+      split_->connectorId,
+      file.path,
+      file.fileFormat.value_or(split_->fileFormat()),
+      0,
+      file.size,
+      0,
+      split_->cacheable,
+      file.properties,
+      partitionValues_,
+      dwio::common::ColumnMappingMode::kName);
+  fileSplit_->physicalFilePath = file.physicalFilePath;
+  state_ = makeScanState_();
+  reader_ = std::make_unique<PhysicalReader>(*this, file);
+  reader_->configureReaderOptions(nullptr);
+  reader_->setRemainingFilterColumns(remainingFilterColumns_);
+  const auto ops = file.properties
+      ? file.properties->fileReadOps
+      : folly::F14FastMap<std::string, std::string>{};
+  reader_->prepareSplit(state_.metadataFilter, stats_, ops);
 }
 
-void PaimonSplitReader::prepareSplit(
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStats& runtimeStats,
-    const folly::F14FastMap<std::string, std::string>& /*fileReadOps*/) {
-  // Save for re-use when advancing to subsequent files.
-  metadataFilter_ = std::move(metadataFilter);
-  runtimeStats_ = &runtimeStats;
+void PaimonSplitReader::finishFile() {
+  if (reader_) {
+    reader_->updateRuntimeStats(stats_);
+    output_.reset();
+    reader_.reset();
+    state_ = {};
+  }
+  ++fileIndex_;
 }
 
-uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  while (ensureFileSplitReader()) {
-    // When deletion vectors are implemented, apply the deletion bitmap
-    // here via Mutation.deletedRows, following the same pattern as
-    // IcebergSplitReader::next().
-    const auto rowsRead = FileSplitReader::next(size, output);
-    if (rowsRead > 0) {
-      return rowsRead;
+ScanReadResult PaimonSplitReader::next(
+    uint64_t maxRows,
+    ContinueFuture& /*future*/) {
+  VELOX_CHECK_GT(maxRows, 0);
+  if (fileIndex_ == split_->dataFiles().size()) {
+    return {ScanReadResult::State::kEnd, nullptr};
+  }
+  if (!reader_) {
+    openFile();
+  }
+  if (!reader_->emptySplit()) {
+    if (!output_) {
+      output_ = BaseVector::create(outputType_, 0, ctx_->memoryPool());
     }
-    // Current file exhausted, try the next one.
-    finishFileSplitReader();
-  }
-  return 0;
-}
-
-bool PaimonSplitReader::ensureFileSplitReader() {
-  if (baseReader_ != nullptr) {
-    VELOX_CHECK_NOT_NULL(baseRowReader_);
-    return true;
-  }
-  VELOX_CHECK_NULL(baseRowReader_);
-
-  while (currentFileIndex_ < fileSplits_.size()) {
-    // Point to the current file.
-    fileSplit_ = fileSplits_[currentFileIndex_];
-
-    // Initialize the base reader for this file.
-    FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
-    if (!emptySplit_) {
-      return true;
+    const auto scanned = reader_->next(maxRows, output_);
+    if (scanned > 0) {
+      return {
+          ScanReadResult::State::kData,
+          std::static_pointer_cast<RowVector>(output_),
+          scanned};
     }
-    ++currentFileIndex_;
   }
-  return false; // All files exhausted.
+  finishFile();
+  // Bounded progress even if a split contains many empty or safely pruned
+  // files.
+  if (!emptyOutput_) {
+    emptyOutput_ = RowVector::createEmpty(outputType_, ctx_->memoryPool());
+  }
+  return {ScanReadResult::State::kData, emptyOutput_};
 }
 
-void PaimonSplitReader::finishFileSplitReader() {
-  VELOX_CHECK_LT(currentFileIndex_, fileSplits_.size());
-  VELOX_CHECK_NOT_NULL(baseReader_);
-  VELOX_CHECK_NOT_NULL(baseRowReader_);
-  ++currentFileIndex_;
-  baseReader_ = nullptr;
-  baseRowReader_ = nullptr;
-  emptySplit_ = false;
+void PaimonSplitReader::resetFilterCaches() {
+  if (reader_) {
+    reader_->resetFilterCaches();
+  }
 }
 
-std::shared_ptr<FileConnectorSplit> PaimonSplitReader::makeFileConnectorSplit(
-    const PaimonDataFile& dataFile) const {
-  return std::make_shared<FileConnectorSplit>(
-      paimonSplit_->connectorId,
-      dataFile.path,
-      paimonSplit_->fileFormat(),
-      /*_start=*/0,
-      /*_length=*/std::numeric_limits<uint64_t>::max(),
-      /*splitWeight=*/0,
-      /*cacheable=*/true,
-      /*_properties=*/std::nullopt,
-      paimonSplit_->partitionKeys());
+void PaimonSplitReader::addDynamicFilter(
+    column_index_t channel,
+    const std::shared_ptr<common::Filter>& filter) {
+  if (reader_) {
+    state_.scanSpec->getChildByChannel(channel).setFilter(filter);
+    state_.scanSpec->resetCachedValues(true);
+    reader_->resetFilterCaches();
+  }
+}
+
+void PaimonSplitReader::updateRuntimeStats(
+    dwio::common::RuntimeStats& stats) const {
+  if (reader_) {
+    reader_->updateRuntimeStats(stats);
+  }
+}
+
+int64_t PaimonSplitReader::estimatedRowSize() const {
+  return reader_ ? reader_->estimatedRowSize() : DataSource::kUnknownRowSize;
+}
+
+bool PaimonSplitReader::allPrefetchIssued() const {
+  return fileIndex_ == split_->dataFiles().size() ||
+      (fileIndex_ + 1 == split_->dataFiles().size() && reader_ &&
+       reader_->allPrefetchIssued());
+}
+
+void PaimonSplitReader::resetSplit() {
+  VELOX_CHECK_EQ(fileIndex_, split_->dataFiles().size());
+  fileSplit_.reset();
+}
+
+void PaimonSplitReader::cancel() {
+  // FileDataSource archives the active reader's statistics before cancellation.
+  output_.reset();
+  reader_.reset();
+  state_ = {};
+  fileIndex_ = split_->dataFiles().size();
+  fileSplit_.reset();
+}
+
+void PaimonSplitReader::setConnectorQueryCtx(const ConnectorQueryCtx* /*ctx*/) {
+  VELOX_UNSUPPORTED("Paimon split preload/state takeover is not supported");
+}
+
+const FileConnectorSplit* PaimonSplitReader::currentFileSplit() const {
+  return fileSplit_.get();
 }
 
 } // namespace facebook::velox::connector::hive::paimon

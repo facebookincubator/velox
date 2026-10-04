@@ -27,6 +27,8 @@ namespace facebook::velox::connector::hive::paimon {
 /// Reuses HiveConnector's ORC/Parquet readers directly — no Arrow bridge.
 class PaimonConnector final : public HiveConnector {
  public:
+  static void registerSerDe();
+
   PaimonConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
@@ -38,6 +40,29 @@ class PaimonConnector final : public HiveConnector {
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
+
+  bool supportsSplitPreload() const override {
+    return false;
+  }
+
+  bool supportsIndexLookup() const override {
+    return false;
+  }
+
+  std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr insertHandle,
+      ConnectorQueryCtx* ctx,
+      CommitStrategy commitStrategy) override;
+
+  std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          conditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* ctx) override;
 
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;

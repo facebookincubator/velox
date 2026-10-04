@@ -135,6 +135,10 @@ class FileSplitReader {
     return readerOutputType_;
   }
 
+  const std::shared_ptr<const FileConnectorSplit>& fileSplit() const {
+    return fileSplit_;
+  }
+
   std::string toString() const;
 
  protected:
@@ -200,6 +204,10 @@ class FileSplitReader {
   /// (e.g., HiveSplitReader) override to call the Hive-specific version
   /// that also applies serde options.
   virtual void configureBaseReaderOptions();
+
+  /// Table formats can validate authoritative file metadata before DWIO reads
+  /// a footer. The default file connector does not impose an expected size.
+  virtual void validateFileSize(uint64_t /*size*/) const {}
 
   /// Virtual hook called by createRowReader() to set format-specific row
   /// reader options on baseRowReaderOpts_. The base implementation calls the

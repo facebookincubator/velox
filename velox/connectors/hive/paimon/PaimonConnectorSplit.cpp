@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/hive/paimon/PaimonMetadata.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -50,26 +51,65 @@ PaimonConnectorSplit::PaimonConnectorSplit(
     const std::vector<PaimonDataFile>& dataFiles,
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
     std::optional<int32_t> tableBucketNumber,
-    bool rawConvertible)
-    : ConnectorSplit(connectorId),
+    bool rawConvertible,
+    bool cacheable,
+    PaimonPartition partitionValues,
+    std::string readMode,
+    int32_t wireVersion)
+    : ConnectorSplit(connectorId, 0, cacheable),
       snapshotId_(snapshotId),
       tableType_(tableType),
       fileFormat_(fileFormat),
       dataFiles_(dataFiles),
       partitionKeys_(std::move(partitionKeys)),
       tableBucketNumber_(tableBucketNumber),
-      rawConvertible_(rawConvertible) {
+      rawConvertible_(rawConvertible),
+      partitionValues_(std::move(partitionValues)),
+      readMode_(std::move(readMode)),
+      wireVersion_(wireVersion) {
   VELOX_CHECK(
       !dataFiles_.empty(), "PaimonConnectorSplit requires non-empty dataFiles");
 
-  if (rawConvertible_) {
-    for (const auto& file : dataFiles_) {
-      VELOX_CHECK_EQ(
-          file.deleteRowCount,
+  VELOX_USER_CHECK(
+      wireVersion_ == 0 || wireVersion_ == 1,
+      "Unsupported Paimon split wireVersion: {}",
+      wireVersion_);
+  VELOX_USER_CHECK_EQ(
+      readMode_, "SNAPSHOT", "Paimon supports only SNAPSHOT reads");
+  VELOX_USER_CHECK_GE(snapshotId_, 0, "Paimon snapshotId out of range");
+  if (tableBucketNumber_) {
+    VELOX_USER_CHECK_GE(
+        *tableBucketNumber_,
+        -1,
+        "Paimon bucket out of range (only -1 is a sentinel)");
+  }
+  VELOX_USER_CHECK(
+      partitionKeys_.empty() || partitionValues_.empty(),
+      "Paimon partition must have exactly one encoding");
+  for (const auto& [fieldId, value] : partitionValues_) {
+    VELOX_USER_CHECK_GE(fieldId, 0, "Paimon partition fieldId out of range");
+    VELOX_USER_CHECK(
+        value.kind() == TypeKind::VARCHAR ||
+            value.kind() == TypeKind::BOOLEAN ||
+            value.kind() == TypeKind::INTEGER ||
+            value.kind() == TypeKind::BIGINT,
+        "Unsupported Paimon typed partition value");
+  }
+  for (const auto& file : dataFiles_) {
+    file.validate();
+    VELOX_USER_CHECK_LE(
+        file.size,
+        std::numeric_limits<int64_t>::max() - size_,
+        "Paimon split size overflow");
+    size_ += file.size;
+    if (rawConvertible_ && file.deleteRowCount) {
+      VELOX_USER_CHECK_EQ(
+          *file.deleteRowCount,
           0,
-          "rawConvertible split cannot have files with deleteRowCount > 0: {}",
-          file.toString());
+          "rawConvertible split cannot have files with deleteRowCount > 0");
     }
+    // Raw convertibility is a planner hint. Unknown deletion counts must reach
+    // the capability check, where a KV fallback can later be selected.
   }
 }
 
@@ -99,6 +139,16 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
   obj["snapshotId"] = snapshotId_;
   obj["tableType"] = paimonTableTypeString(tableType_);
   obj["rawConvertible"] = rawConvertible_;
+  obj["wireVersion"] = wireVersion_;
+  obj["splitType"] = "DATA_FILES";
+  obj["readMode"] = readMode_;
+  obj["cacheable"] = cacheable;
+  folly::dynamic partitionValues = folly::dynamic::array;
+  for (const auto& [id, value] : partitionValues_) {
+    partitionValues.push_back(
+        folly::dynamic::object("fieldId", id)("value", value.serialize()));
+  }
+  obj["partitionValues"] = std::move(partitionValues);
 
   folly::dynamic filesArray = folly::dynamic::array;
   for (const auto& file : dataFiles_) {
@@ -126,7 +176,7 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
 std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
-  const auto snapshotId = obj["snapshotId"].asInt();
+  const auto snapshotId = paimonInt(obj, "snapshotId");
   const auto tableType = paimonTableTypeFromString(obj["tableType"].asString());
   const auto rawConvertible = obj["rawConvertible"].asBool();
 
@@ -144,10 +194,60 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
 
   const auto tableBucketNumber = obj["tableBucketNumber"].isNull()
       ? std::nullopt
-      : std::optional<int32_t>(obj["tableBucketNumber"].asInt());
+      : std::optional<int32_t>(paimonInt(
+            obj, "tableBucketNumber", -1, std::numeric_limits<int32_t>::max()));
 
   const auto fileFormat =
       dwio::common::toFileFormat(obj["fileFormat"].asString());
+
+  PaimonPartition partitionValues;
+  if (obj.count("partitionValues")) {
+    for (const auto& item : obj["partitionValues"]) {
+      const auto id =
+          paimonInt(item, "fieldId", 0, std::numeric_limits<int32_t>::max());
+      const auto& value = item["value"];
+      const auto type = value["type"].asString();
+      VELOX_USER_CHECK(
+          type == "VARCHAR" || type == "BOOLEAN" || type == "INTEGER" ||
+              type == "BIGINT",
+          "Unsupported Paimon typed partition value: {}",
+          type);
+      if (value["type"] == "INTEGER" && !value["value"].isNull()) {
+        paimonInt(
+            value,
+            "value",
+            std::numeric_limits<int32_t>::min(),
+            std::numeric_limits<int32_t>::max());
+      }
+      if (type == "BIGINT" && !value["value"].isNull()) {
+        paimonInt(value, "value", std::numeric_limits<int64_t>::min());
+      }
+      if (type == "BOOLEAN" && !value["value"].isNull()) {
+        VELOX_USER_CHECK(
+            value["value"].isBool(),
+            "Paimon BOOLEAN partition must be a boolean");
+      }
+      if (type == "VARCHAR" && !value["value"].isNull()) {
+        VELOX_USER_CHECK(
+            value["value"].isString(),
+            "Paimon VARCHAR partition must be a string");
+      }
+      VELOX_USER_CHECK(
+          partitionValues.emplace(id, variant::create(value)).second,
+          "Duplicate Paimon partition fieldId: {}",
+          id);
+    }
+  }
+  const auto version =
+      obj.count("wireVersion") ? paimonInt(obj, "wireVersion", 0, 1) : 0;
+  VELOX_USER_CHECK(
+      version == 0 || obj.count("readMode"),
+      "Paimon split readMode is required");
+  if (version == 1 || obj.count("splitType")) {
+    VELOX_USER_CHECK(
+        obj.count("splitType") && obj["splitType"] == "DATA_FILES",
+        "Unsupported or missing Paimon splitType");
+  }
 
   return std::make_shared<PaimonConnectorSplit>(
       connectorId,
@@ -157,7 +257,11 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
       dataFiles,
       std::move(partitionKeys),
       tableBucketNumber,
-      rawConvertible);
+      rawConvertible,
+      obj.count("cacheable") ? obj["cacheable"].asBool() : true,
+      std::move(partitionValues),
+      obj.count("readMode") ? obj["readMode"].asString() : "SNAPSHOT",
+      version);
 }
 
 // static

@@ -254,6 +254,7 @@ void FileSplitReader::createReader(
     }
     throw;
   }
+  validateFileSize(fileHandleCachePtr->file->size());
 
   // Here we keep adding new entries to CacheTTLController when new fileHandles
   // are generated, if CacheTTLController was created. Creator of
