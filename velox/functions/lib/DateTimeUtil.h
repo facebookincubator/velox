@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/Macros.h"
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/Timestamp.h"
@@ -31,7 +32,7 @@ namespace facebook::velox::functions {
 /// difference between '2020-01-31' and '2020-02-01' is 0 day.
 /// This is useful for Spark compatibility, as Spark does not respect the last
 /// day of a year-month.
-FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
@@ -182,7 +183,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   VELOX_UNREACHABLE();
 }
 
-FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
@@ -211,8 +212,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
 }
 
 /// Returns toDate - fromDate expressed in terms of unit.
-FOLLY_ALWAYS_INLINE
-int64_t diffDate(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t diffDate(
     const DateTimeUnit unit,
     const int32_t fromDate,
     const int32_t toDate) {
@@ -239,8 +239,8 @@ int64_t diffDate(
 ///
 /// 2020-02-29 + (1 year) = 2021-02-28
 /// 2021-02-28 - (1 year) = 2020-02-28
-FOLLY_ALWAYS_INLINE
-int32_t addToDate(int32_t input, DateTimeUnit unit, int32_t value) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
+addToDate(int32_t input, DateTimeUnit unit, int32_t value) {
   // TODO: Handle overflow and underflow with 64-bit representation
   if (value == 0) {
     return input;
@@ -277,7 +277,7 @@ int32_t addToDate(int32_t input, DateTimeUnit unit, int32_t value) {
   return outDate.time_since_epoch().count();
 }
 
-FOLLY_ALWAYS_INLINE Timestamp
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp
 addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
   // TODO: Handle overflow and underflow with 64-bit representation.
   if (value == 0) {
@@ -351,7 +351,7 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
           timestamp.getNanos() % Timestamp::kNanosecondsInMillisecond);
 }
 
-FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     DateTimeUnit unit,
     int32_t value,
     const Timestamp& timestamp,
