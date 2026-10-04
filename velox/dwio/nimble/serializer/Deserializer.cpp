@@ -505,30 +505,35 @@ void Deserializer::createDeserializersForType(
     const auto& hybridMap = type.asHybridFlatMap();
     for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
       const auto& group = hybridMap.groupAt(i);
-      const auto keyOffset = group.keyDescriptor.offset();
+      const auto keyPresenceOffset = group.keyPresenceDescriptor.offset();
       const auto inMapOffset = group.inMapDescriptor.offset();
-      if (!shouldDecodeStream(keyOffset)) {
+      if (!shouldDecodeStream(keyPresenceOffset)) {
         NIMBLE_CHECK(
             !shouldDecodeStream(inMapOffset),
-            "Hybrid FlatMap key and in-map streams must be selected together.");
+            "Hybrid FlatMap key-presence and in-map streams must be selected "
+            "together.");
         continue;
       }
       NIMBLE_CHECK(
           shouldDecodeStream(inMapOffset),
-          "Hybrid FlatMap key and in-map streams must be selected together.");
+          "Hybrid FlatMap key-presence and in-map streams must be selected "
+          "together.");
 
-      const ScalarType keyType{group.keyDescriptor};
-      const bool insertedKey = deserializerMap_
-                                   .emplace(
-                                       keyOffset,
-                                       std::make_unique<BatchedStreamDecoder>(
-                                           keyType,
-                                           /*isInMapStream=*/false,
-                                           options_.bufferPoolCapacity,
-                                           pool_))
-                                   .second;
+      const ScalarType keyPresenceType{group.keyPresenceDescriptor};
+      const bool insertedKeyPresence =
+          deserializerMap_
+              .emplace(
+                  keyPresenceOffset,
+                  std::make_unique<BatchedStreamDecoder>(
+                      keyPresenceType,
+                      /*isInMapStream=*/false,
+                      options_.bufferPoolCapacity,
+                      pool_))
+              .second;
       NIMBLE_CHECK(
-          insertedKey, "Duplicate hybrid FlatMap stream offset {}.", keyOffset);
+          insertedKeyPresence,
+          "Duplicate hybrid FlatMap stream offset {}.",
+          keyPresenceOffset);
       const ScalarType inMapType{group.inMapDescriptor};
       const bool insertedInMap = deserializerMap_
                                      .emplace(

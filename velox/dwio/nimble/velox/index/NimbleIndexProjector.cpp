@@ -1009,9 +1009,9 @@ NimbleIndexProjector::plannedStripeRanges(size_t stripeOffset) const {
 
 RowRange NimbleIndexProjector::stripeRowRangeToPack(size_t stripeOffset) const {
   const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
-  // Hybrid FlatMap key catalogs, in-map bits, and values are key-major. They
-  // cannot be sliced as one contiguous row range, so retain the complete
-  // physical batch and let the kTablet row range restrict materialization.
+  // Hybrid FlatMap key-presence bitmaps, in-map bits, and values describe one
+  // key-major batch. They cannot be sliced as one contiguous row range, so
+  // retain the complete batch and let the kTablet range restrict output.
   if (hasProjectedHybridFlatMaps_ ||
       ctx_.options->maxOverfetchRowsRatio >= 1.0) {
     return stripeRange;

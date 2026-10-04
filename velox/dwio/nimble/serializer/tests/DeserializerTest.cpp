@@ -96,6 +96,7 @@ class DeserializerTest : public ::testing::Test {
   template <typename TKey>
   void verifyDefaultOnlyRoundTrip(
       const std::vector<std::string>& inputMaps,
+      const std::vector<std::string>& expectedGroupKeys,
       const std::vector<KeySelection>& selections) {
     velox::test::VectorMaker vectorMaker{pool_.get()};
     const auto makeInput = [&](const std::vector<std::string>& maps) {
@@ -135,7 +136,7 @@ class DeserializerTest : public ::testing::Test {
           roundTripSchema->asRow().childAt(0)->asHybridFlatMap();
       ASSERT_EQ(hybridMap.groupCount(), 1);
       EXPECT_EQ(hybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
-      EXPECT_TRUE(hybridMap.groupAt(0).groupKeys.empty());
+      EXPECT_EQ(hybridMap.groupAt(0).groupKeys, expectedGroupKeys);
     }
 
     Deserializer deserializer{deserializerSchema, pool_.get()};
@@ -295,7 +296,9 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   EXPECT_EQ(hybridMap.groupAt(1).groupId, 1);
   EXPECT_EQ(hybridMap.groupAt(1).groupKeys, (std::vector<std::string>{"3"}));
   EXPECT_EQ(hybridMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(hybridMap.groupAt(2).groupKeys.empty());
+  EXPECT_EQ(
+      hybridMap.groupAt(2).groupKeys,
+      (std::vector<std::string>{"99", "100", "101"}));
 
   SchemaSerializer schemaSerializer;
   const auto deserializerSchema =
@@ -372,8 +375,8 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       std::vector<std::string_view>{
           serialized, newDefaultSerialized, secondSerialized},
       output);
-  // The first and third batches repeat keys, but each decode barrier must load
-  // an independent key catalog.
+  // Every batch decodes against the final accumulated schema. Earlier
+  // key-presence bitmaps omit later trailing Default keys.
   ASSERT_EQ(
       output->size(),
       input->size() + newDefaultInput->size() + secondInput->size());
@@ -404,6 +407,7 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
   // and one key repeats across rows.
   verifyDefaultOnlyRoundTrip<int64_t>(
       {"{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"},
+      {"9", "1", "2"},
       {
           {.subfield = "features[1]",
            .expectedMaps = {"{1: 10}", "null", "{}", "{1: 11}"}},
@@ -412,6 +416,7 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
       });
   verifyDefaultOnlyRoundTrip<std::string>(
       {R"({"a": 10, "i": 90})", "null", "{}", R"({"b": null, "a": 11})"},
+      {"i", "a", "b"},
       {
           {.subfield = R"(features["a"])",
            .expectedMaps = {R"({"a": 10})", "null", "{}", R"({"a": 11})"}},

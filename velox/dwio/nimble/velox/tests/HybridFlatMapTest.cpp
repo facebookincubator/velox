@@ -36,7 +36,8 @@ HybridFlatMap metadata() {
                    {"feature,with:delimiters|and;slashes/",
                     std::string{"prefix\0suffix", 13}}},
               {.groupId = 11, .groupKeys = {"C"}},
-              {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+              {.groupId = HybridFlatMap::kDefaultGroupId,
+               .groupKeys = {"seen-second", "seen-first"}},
           },
   };
 }
@@ -150,13 +151,15 @@ TEST(HybridFlatMapTest, metadataRoundTripPreservesFlattenedOrderAndBinaryKeys) {
   EXPECT_THAT(
       *flat->group_ids(), ElementsAre(7, 11, HybridFlatMap::kDefaultGroupId));
   ASSERT_NE(flat->group_key_counts(), nullptr);
-  EXPECT_THAT(*flat->group_key_counts(), ElementsAre(2, 1, 0));
+  EXPECT_THAT(*flat->group_key_counts(), ElementsAre(2, 1, 2));
   ASSERT_NE(flat->group_keys(), nullptr);
-  ASSERT_EQ(flat->group_keys()->size(), 3);
+  ASSERT_EQ(flat->group_keys()->size(), 5);
   EXPECT_EQ(flat->group_keys()->Get(0)->str(), expected.groups[0].groupKeys[0]);
   EXPECT_EQ(flat->group_keys()->Get(1)->str(), expected.groups[0].groupKeys[1]);
   EXPECT_EQ(flat->group_keys()->Get(1)->size(), 13);
   EXPECT_EQ(flat->group_keys()->Get(2)->str(), "C");
+  EXPECT_EQ(flat->group_keys()->Get(3)->str(), "seen-second");
+  EXPECT_EQ(flat->group_keys()->Get(4)->str(), "seen-first");
 
   EXPECT_EQ(HybridFlatMap::deserialize(serialized), expected);
 }
