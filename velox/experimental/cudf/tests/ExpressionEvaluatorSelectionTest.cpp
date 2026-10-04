@@ -110,7 +110,7 @@ std::unique_ptr<cudf::column> allNullLaunch(
     const gpu_sfi::GpuFunctionInstance& /*instance*/,
     cudf::size_type numRows,
     cudf::data_type outputType,
-    uint8_t* /*declinedRows*/,
+    int32_t* /*worstKind*/,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::make_fixed_width_column(

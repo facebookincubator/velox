@@ -16,15 +16,10 @@
 
 #pragma once
 
-#include "velox/common/base/Exceptions.h"
+#include <rmm/device_scalar.hpp>
+#include <rmm/resource_ref.hpp>
 
-#include <cudf/aggregation.hpp>
-#include <cudf/column/column_view.hpp>
-#include <cudf/reduction.hpp>
-#include <cudf/scalar/scalar.hpp>
-#include <cudf/utilities/error.hpp>
-
-#include <rmm/device_uvector.hpp>
+#include <cuda/stream_ref>
 
 #include <cstdint>
 #include <optional>
@@ -41,66 +36,48 @@ enum class ErrorClass : uint8_t {
   kRuntimeError = 2,
 };
 
-/// Collects the rows GPU simple-function launches declined during one
-/// evaluation of one expression tree. A caller passes one only if it can act on
-/// a declined row, by re-evaluating on the CPU so that Velox raises the error;
-/// without one, a launch keeps its results. Only the owner of the whole tree
-/// can decide, since a conditional above a node may discard exactly the rows
-/// that node declined.
+/// Collects whether GPU simple-function launches declined a row during one
+/// evaluation of one expression tree, and the worst class they hit. A caller
+/// passes one only if it can act on a declined row, by re-evaluating the batch
+/// on the CPU so that Velox raises the error; without one, a launch keeps its
+/// results. Only the owner of the whole tree can decide, since a conditional
+/// above a node may discard exactly the rows that node declined.
+///
+/// One device word covers the tree: the owner re-evaluates the whole batch on
+/// the CPU, so which row was declined is never read on the host.
 class GpuSfiErrors {
  public:
   GpuSfiErrors(cuda::stream_ref stream, rmm::device_async_resource_ref mr)
       : stream_(stream), mr_(mr) {}
 
-  /// The buffer a launch records into: one byte per row, holding an
-  /// ErrorClass, shared by every launch in this evaluation so that it covers
-  /// the whole tree. A launch writes only nonzero bytes, so a later launch
-  /// cannot clear an earlier mark; when two decline a row, the last one wins.
-  uint8_t* declinedRows(cudf::size_type numRows) {
-    if (!buffer_.has_value()) {
-      buffer_.emplace(numRows, stream_, mr_);
-      // device_uvector is uninitialized, and a nonzero byte declines its row.
-      CUDF_CUDA_TRY(
-          cudaMemsetAsync(buffer_->data(), 0, buffer_->size(), stream_.get()));
+  /// The word a launch records into, shared by every launch in this
+  /// evaluation. A launch raises it with atomicMax, so a later launch cannot
+  /// lower what an earlier one recorded.
+  int32_t* worstKind() {
+    if (!worstKind_.has_value()) {
+      // Zero is kNone. A memset, where setting a value would copy it from
+      // pageable host memory.
+      worstKind_.emplace(stream_, mr_);
+      worstKind_->set_value_to_zero_async(stream_);
     }
-    VELOX_CHECK_LE(
-        static_cast<std::size_t>(numRows),
-        buffer_->size(),
-        "A launch under one evaluation has more rows than the first");
-    return buffer_->data();
+    return worstKind_->data();
   }
 
-  /// Reduces the recorded bytes to the worst class in the batch. Called once by
-  /// the owner after every launch is queued, since reading a device scalar
-  /// synchronizes the stream. The classes are ordered, so the maximum answers
-  /// both whether a row was declined and whether a TRY may swallow it.
+  /// Reads the word back. Called once by the owner after every launch is
+  /// queued, since reading device memory synchronizes the stream. The classes
+  /// are ordered, so the maximum answers both whether a row was declined and
+  /// whether a TRY may swallow it.
   ErrorClass resolve() {
-    if (!buffer_.has_value()) {
+    if (!worstKind_.has_value()) {
       return ErrorClass::kNone;
     }
-    auto worst = cudf::reduce(
-        cudf::column_view{
-            cudf::data_type{cudf::type_id::UINT8},
-            static_cast<cudf::size_type>(buffer_->size()),
-            buffer_->data(),
-            nullptr,
-            0},
-        *cudf::make_max_aggregation<cudf::reduce_aggregation>(),
-        cudf::data_type{cudf::type_id::UINT8},
-        stream_,
-        mr_);
-    auto const* scalar =
-        static_cast<cudf::numeric_scalar<uint8_t>*>(worst.get());
-    if (!scalar->is_valid(stream_)) {
-      return ErrorClass::kNone;
-    }
-    return static_cast<ErrorClass>(scalar->value(stream_));
+    return static_cast<ErrorClass>(worstKind_->value(stream_));
   }
 
  private:
   cuda::stream_ref stream_;
   rmm::device_async_resource_ref mr_;
-  std::optional<rmm::device_uvector<uint8_t>> buffer_;
+  std::optional<rmm::device_scalar<int32_t>> worstKind_;
 };
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

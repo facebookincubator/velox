@@ -68,17 +68,18 @@ struct GpuFunctionInstance {
 /// Evaluates one registered function over a row range. Instantiated behind the
 /// shadow boundary, once per function and argument types.
 ///
-/// `declinedRows` is one byte per row, zeroed by the caller, where the launch
-/// records a failed check as a GpuErrorKind; null turns collection off. A
-/// declined row's value is meaningless and its validity bit is cleared. When
-/// the instance's initialize() failed a check, the launch runs no body and
-/// declines every row the function applies to, which requires `declinedRows`.
+/// `worstKind` is one device word, zeroed by the caller, that the launch raises
+/// with atomicMax to the GpuErrorKind of any check a row failed; null turns
+/// collection off. A declined row's value is meaningless: the caller discards
+/// the evaluation once the word is nonzero. When the instance's initialize()
+/// failed a check, the launch runs no body and fails every row the function
+/// applies to with that check's kind, which requires `worstKind`.
 using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     const std::vector<GpuArgView>& arguments,
     const GpuFunctionInstance& instance,
     cudf::size_type numRows,
     cudf::data_type outputType,
-    uint8_t* declinedRows,
+    int32_t* worstKind,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
