@@ -15,9 +15,11 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/types/GpuCustomTypeView.cuh"
 #include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace facebook::velox {
 template <typename P, typename S>
@@ -31,6 +33,8 @@ struct Time;
 class Timestamp;
 template <typename T>
 struct Variadic;
+template <typename T, bool providesCustomComparison>
+struct CustomType;
 } // namespace facebook::velox
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
@@ -98,6 +102,20 @@ struct resolver<Timestamp> {
   using in_type = GpuTimestamp;
   using out_type = GpuTimestamp;
   using null_free_in_type = GpuTimestamp;
+};
+
+/// A custom type resolves to its physical type, so TimestampWithTimezone is
+/// the packed int64 the column holds. As on the CPU, one with a custom
+/// comparison arrives in a view a body dereferences with operator*, and whose
+/// comparisons follow the type's order. A result is always the physical type.
+template <typename T, bool providesCustomComparison>
+struct resolver<CustomType<T, providesCustomComparison>> {
+  using in_type = std::conditional_t<
+      providesCustomComparison,
+      GpuCustomTypeView<T>,
+      typename resolver<typename T::type>::in_type>;
+  using out_type = typename resolver<typename T::type>::out_type;
+  using null_free_in_type = in_type;
 };
 
 /// A variadic pack resolves to a view over its element type. Only in_type is

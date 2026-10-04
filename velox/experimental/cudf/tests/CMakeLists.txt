@@ -335,19 +335,45 @@ velox_add_cudf_test(
 
 add_subdirectory(iceberg)
 
-# Host-only checks of the GpuExec type resolver and the GPU proxy types: POD
-# layout, equality, and type mappings.
-add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
+# Host-only checks of the GpuExec type resolver, the GPU proxy types, the
+# custom-type view and the BitUtil shadow's helpers.
+add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp GpuShadowBitUtilTest.cpp)
 add_test(
   NAME velox_cudf_gpu_types_test
   COMMAND velox_cudf_gpu_types_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
-target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+target_link_libraries(velox_cudf_gpu_types_test velox_type velox_type_tz gtest gtest_main)
+
+# Test-only GPU simple functions over types the production registrations do
+# not cover yet, compiled as velox_cudf_gpu_simple_functions is: with the
+# gpu_shadows/ include path and the same device flags.
+add_library(velox_cudf_gpu_test_functions GpuTestFunctions.cu)
+velox_add_test_headers(velox_cudf_gpu_test_functions GpuTestFunctions.h)
+set_target_properties(
+  velox_cudf_gpu_test_functions
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(
+  velox_cudf_gpu_test_functions
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_test_functions
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+target_link_libraries(
+  velox_cudf_gpu_test_functions
+  PRIVATE cudf::cudf velox_cudf_gpu_function_bridge
+)
 
 # GPU SFI registry, on the host: the launchers are stand-ins that are never
-# invoked.
+# invoked. Resolving a call through GpuSfiExpression reaches the expression
+# stack, hence the default test libraries.
 add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
 add_test(
   NAME velox_cudf_gpu_function_registry_test
@@ -360,7 +386,9 @@ set_tests_properties(
 )
 target_link_libraries(
   velox_cudf_gpu_function_registry_test
+  velox_cudf_gpu_test_functions
   velox_cudf_gpu_function_bridge
+  ${CUDF_TEST_DEFAULT_LIBS}
   velox_functions_prestosql
   GTest::gmock
   gtest
