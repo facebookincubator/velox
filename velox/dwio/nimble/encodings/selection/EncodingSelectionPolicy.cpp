@@ -176,9 +176,10 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
 }
 
 bool detail::useLogicalTypeForEncoding(
-    DataType logicalType,
+    DataType logicalDataType,
     EncodingType encodingType) {
-  if (logicalType != DataType::Float && logicalType != DataType::Double) {
+  if (logicalDataType != DataType::Float &&
+      logicalDataType != DataType::Double) {
     return false;
   }
   return encodingType == EncodingType::ALP ||

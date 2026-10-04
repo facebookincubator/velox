@@ -180,27 +180,10 @@ TrainedSplit trainSplit(
     std::span<const PhysicalType> values,
     uint32_t numRows,
     const Encoding::Options& options,
-    EncodingSelectionPolicyBase* policy) {
+    const ALPRDEncodingBase::ChildPolicies& childPolicies) {
   using Base = ALPRDEncodingBase;
   NIMBLE_CHECK(!values.empty(), "ALPRD training requires non-empty input.");
   NIMBLE_CHECK_LE(values.size(), numRows);
-  std::unique_ptr<EncodingSelectionPolicyBase> defaultPolicy;
-  if (policy == nullptr) {
-    defaultPolicy =
-        ManualEncodingSelectionPolicyFactory{
-            ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors(),
-            std::nullopt}
-            .createPolicy(TypeTraits<PhysicalType>::dataType);
-    policy = defaultPolicy.get();
-  }
-  auto codesPolicy = policy->create<uint16_t>(
-      EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes);
-  auto rightPartsPolicy = policy->create<PhysicalType>(
-      EncodingType::ALPRD, EncodingIdentifiers::ALPRD::RightParts);
-  auto positionsPolicy = policy->create<uint32_t>(
-      EncodingType::ALPRD, EncodingIdentifiers::ALPRD::ExceptionPositions);
-  auto highPartsPolicy = policy->create<uint16_t>(
-      EncodingType::ALPRD, EncodingIdentifiers::ALPRD::ExceptionHighParts);
 
   const auto sampleSize = std::min<uint32_t>(values.size(), Base::kSampleSize);
   std::array<PhysicalType, Base::kSampleSize> sample{};
@@ -348,23 +331,23 @@ TrainedSplit trainSplit(
     const auto numExceptions = candidate.numExceptions;
     const std::array<uint64_t, 4> childSizes{
         detail::EncodingSizeEstimation<uint16_t>::estimateSelectedSize(
-            *codesPolicy, {codes.data(), sampleSize}, numRows, options),
+            *childPolicies.codes, {codes.data(), sampleSize}, numRows, options),
         detail::EncodingSizeEstimation<PhysicalType>::estimateSelectedSize(
-            *rightPartsPolicy,
+            *childPolicies.rightParts,
             {rightParts.data(), sampleSize},
             numRows,
             options),
         numExceptions == 0
             ? 0
             : detail::EncodingSizeEstimation<uint32_t>::estimateSelectedSize(
-                  *positionsPolicy,
+                  *childPolicies.exceptionPositions,
                   {exceptionPositions.data(), sampleExceptions},
                   numExceptions,
                   options),
         numExceptions == 0
             ? 0
             : detail::EncodingSizeEstimation<uint16_t>::estimateSelectedSize(
-                  *highPartsPolicy,
+                  *childPolicies.exceptionHighParts,
                   {exceptionHighParts.data(), sampleExceptions},
                   numExceptions,
                   options),
@@ -380,7 +363,51 @@ TrainedSplit trainSplit(
   return best;
 }
 
+template <typename PhysicalType>
+TrainedSplit trainSplit(
+    std::span<const PhysicalType> values,
+    uint32_t numRows,
+    const Encoding::Options& options,
+    EncodingSelectionPolicyBase* policy) {
+  NIMBLE_CHECK(!values.empty(), "ALPRD training requires non-empty input.");
+  NIMBLE_CHECK_LE(values.size(), numRows);
+  std::unique_ptr<EncodingSelectionPolicyBase> defaultPolicy;
+  if (policy == nullptr) {
+    defaultPolicy =
+        ManualEncodingSelectionPolicyFactory{
+            ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors(),
+            std::nullopt}
+            .createPolicy(TypeTraits<PhysicalType>::dataType);
+    policy = defaultPolicy.get();
+  }
+  return trainSplit(
+      values,
+      numRows,
+      options,
+      ALPRDEncodingBase::ChildPolicies{
+          .codes = policy->create<uint16_t>(
+              EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
+          .rightParts = policy->create<PhysicalType>(
+              EncodingType::ALPRD, EncodingIdentifiers::ALPRD::RightParts),
+          .exceptionPositions = policy->create<uint32_t>(
+              EncodingType::ALPRD,
+              EncodingIdentifiers::ALPRD::ExceptionPositions),
+          .exceptionHighParts = policy->create<uint16_t>(
+              EncodingType::ALPRD,
+              EncodingIdentifiers::ALPRD::ExceptionHighParts),
+      });
+}
+
 } // namespace
+
+template <typename PhysicalType>
+ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
+    std::span<const PhysicalType> values,
+    const Encoding::Options& options,
+    const ChildPolicies& childPolicies) {
+  NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+  return trainSplit(values, values.size(), options, childPolicies).parameters;
+}
 
 template <typename PhysicalType>
 ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
@@ -403,6 +430,16 @@ std::optional<uint64_t> ALPRDEncodingBase::estimateSize(
   return trainSplit(sampleValues, numTotalRows, options, policy).size;
 }
 
+template ALPRDEncodingBase::Parameters
+ALPRDEncodingBase::selectParameters<uint32_t>(
+    std::span<const uint32_t>,
+    const Encoding::Options&,
+    const ALPRDEncodingBase::ChildPolicies&);
+template ALPRDEncodingBase::Parameters
+ALPRDEncodingBase::selectParameters<uint64_t>(
+    std::span<const uint64_t>,
+    const Encoding::Options&,
+    const ALPRDEncodingBase::ChildPolicies&);
 template ALPRDEncodingBase::Parameters
 ALPRDEncodingBase::selectParameters<uint32_t>(
     std::span<const uint32_t>,

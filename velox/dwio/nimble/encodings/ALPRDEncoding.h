@@ -89,6 +89,25 @@ class ALPRDEncodingBase {
   /// Maximum number of input values inspected by split training.
   static constexpr uint32_t kSampleSize = 1'024;
 
+  /// Owns the child selection policies used for split training.
+  struct ChildPolicies {
+    /// Selects the uint16 dictionary-code encoding.
+    std::unique_ptr<EncodingSelectionPolicyBase> codes;
+    /// Selects the uint32/uint64 low-part encoding.
+    std::unique_ptr<EncodingSelectionPolicyBase> rightParts;
+    /// Selects the uint32 exception-position encoding.
+    std::unique_ptr<EncodingSelectionPolicyBase> exceptionPositions;
+    /// Selects the uint16 exception-high-part encoding.
+    std::unique_ptr<EncodingSelectionPolicyBase> exceptionHighParts;
+  };
+
+  /// Trains the split using the supplied child selection policies.
+  template <typename PhysicalType>
+  static Parameters selectParameters(
+      std::span<const PhysicalType> values,
+      const Encoding::Options& options,
+      const ChildPolicies& childPolicies);
+
   /// Trains the split and dictionary using estimated serialized child sizes.
   /// A null policy uses the existing default child candidates.
   template <typename PhysicalType>
@@ -254,8 +273,23 @@ class ALPRDEncoding final
     if (values.empty()) {
       NIMBLE_INCOMPATIBLE_ENCODING("ALPRD cannot encode empty data.");
     }
-    const auto parameters =
-        selectParameters(values, options, &selection.policy());
+    const auto parameters = selectParameters(
+        values,
+        options,
+        ChildPolicies{
+            .codes = selection.template createNestedPolicy<uint16_t>(
+                EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
+            .rightParts = selection.template createNestedPolicy<physicalType>(
+                EncodingType::ALPRD, EncodingIdentifiers::ALPRD::RightParts),
+            .exceptionPositions =
+                selection.template createNestedPolicy<uint32_t>(
+                    EncodingType::ALPRD,
+                    EncodingIdentifiers::ALPRD::ExceptionPositions),
+            .exceptionHighParts =
+                selection.template createNestedPolicy<uint16_t>(
+                    EncodingType::ALPRD,
+                    EncodingIdentifiers::ALPRD::ExceptionHighParts),
+        });
     const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
     ScopedVector<uint16_t> codes(rowCount, pool, options.bufferPool);

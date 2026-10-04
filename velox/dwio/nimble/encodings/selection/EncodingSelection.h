@@ -114,11 +114,6 @@ class EncodingSelection {
     return selectionResult_.encodingType;
   }
 
-  /// Provides the policy used to estimate the selected encoding's children.
-  EncodingSelectionPolicyBase& policy() const {
-    return *selectionPolicy_;
-  }
-
   const Statistics<T>& statistics() const noexcept {
     return statistics_;
   }
@@ -261,7 +256,9 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
 namespace detail {
 /// Returns whether an encoding can retain a logical floating-point type.
 /// Container encodings also require the policy to request logical selection.
-bool useLogicalTypeForEncoding(DataType logicalType, EncodingType encodingType);
+bool useLogicalTypeForEncoding(
+    DataType logicalDataType,
+    EncodingType encodingType);
 } // namespace detail
 
 namespace {
@@ -282,20 +279,16 @@ std::string_view EncodingSelection<T>::encodeNested(
       encodingType(), nestedEncodingIdentifier);
   auto statistics = Statistics<NestedT>::create(values);
   EncodingSelectionResult selectionResult{};
-  bool useLogicalType{false};
-  if constexpr (isFloatingPointType<LogicalT>()) {
-    static_assert(
-        std::is_same_v<NestedT, typename TypeTraits<LogicalT>::physicalType>);
-    useLogicalType = nestedPolicy->useLogicalTypeForNestedEncoding();
-    if (useLogicalType) {
-      nestedPolicy = selectionPolicy_->template create<LogicalT>(
-          encodingType(), nestedEncodingIdentifier);
-      selectionResult =
-          static_cast<EncodingSelectionPolicy<LogicalT>*>(nestedPolicy.get())
-              ->select(values, statistics, options);
-    }
-  }
-  if (!useLogicalType) {
+  const bool useLogicalType{
+      isFloatingPointType<LogicalT>() &&
+      nestedPolicy->useLogicalTypeForNestedEncoding()};
+  if (useLogicalType) {
+    nestedPolicy = selectionPolicy_->template create<LogicalT>(
+        encodingType(), nestedEncodingIdentifier);
+    selectionResult =
+        static_cast<EncodingSelectionPolicy<LogicalT>*>(nestedPolicy.get())
+            ->select(values, statistics, options);
+  } else {
     selectionResult =
         static_cast<EncodingSelectionPolicy<NestedT>*>(nestedPolicy.get())
             ->select(values, statistics, options);
