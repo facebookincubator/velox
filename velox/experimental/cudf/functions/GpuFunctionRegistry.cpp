@@ -91,6 +91,7 @@ bool registerGpuKernel(
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
     GpuFunctionInstanceSpec instanceSpec,
+    bool dependsOnSessionTimeZone,
     bool overwrite) {
   auto veloxSignature = toVeloxSignature(signature);
 
@@ -116,6 +117,7 @@ bool registerGpuKernel(
       }
       existing->launch = launch;
       existing->instanceSpec = instanceSpec;
+      existing->dependsOnSessionTimeZone = dependsOnSessionTimeZone;
       continue;
     }
 
@@ -125,7 +127,8 @@ bool registerGpuKernel(
             launch,
             instanceSpec,
             signature.argumentKinds,
-            signature.returnKind});
+            signature.returnKind,
+            dependsOnSessionTimeZone});
   }
   return registeredAll;
 }

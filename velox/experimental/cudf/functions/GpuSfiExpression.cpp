@@ -274,6 +274,12 @@ bool GpuSfiExpression::canEvaluate(const core::TypedExprPtr& expr) {
   return resolve(expr) != nullptr;
 }
 
+bool GpuSfiExpression::dependsOnSessionTimeZone(
+    const core::TypedExprPtr& expr) {
+  const auto* resolved = resolve(expr);
+  return resolved != nullptr && resolved->dependsOnSessionTimeZone;
+}
+
 std::shared_ptr<CudfExpression> GpuSfiExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
@@ -430,7 +436,15 @@ void registerGpuSfiEvaluator(int priority) {
          const core::QueryConfig& config) {
         return GpuSfiExpression::create(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/true,
       /*overwrite=*/false);
+}
+
+void registerGpuSfiSessionTimeZoneSensitivity() {
+  registerSessionTimeZoneSensitivity(
+      kGpuSfiEvaluatorName, [](const core::TypedExprPtr& expr) {
+        return GpuSfiExpression::dependsOnSessionTimeZone(expr);
+      });
 }
 
 } // namespace facebook::velox::cudf_velox

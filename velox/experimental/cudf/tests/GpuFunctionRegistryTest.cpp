@@ -246,6 +246,7 @@ TEST_F(GpuFunctionRegistryTest, namesAndCollisions) {
               registration.signature,
               registration.launch,
               noInitialize(),
+              /*dependsOnSessionTimeZone=*/false,
               registration.overwrite),
           registration.accepted);
     }
@@ -294,7 +295,11 @@ TEST_F(GpuFunctionRegistryTest, signatures) {
     SCOPED_TRACE(testCase.rendered);
     clearGpuFunctionRegistry();
     ASSERT_TRUE(registerGpuKernel(
-        {"f"}, testCase.signature, launcherA, noInitialize()));
+        {"f"},
+        testCase.signature,
+        launcherA,
+        noInitialize(),
+        /*dependsOnSessionTimeZone=*/false));
     const auto& signature = *gpuFunctionRegistry().at("f").front().signature;
     EXPECT_EQ(signature.toString(), testCase.rendered);
 
@@ -314,11 +319,24 @@ TEST_F(GpuFunctionRegistryTest, signatures) {
   }
 }
 
+// The signature with its "constant " markers dropped. A GPU registration may
+// narrow an argument the CPU reads per row to a constant it reads in
+// initialize(); the type sets must agree either way.
+std::string withoutConstantMarkers(std::string signature) {
+  static constexpr std::string_view kMarker = "constant ";
+  for (auto at = signature.find(kMarker); at != std::string::npos;
+       at = signature.find(kMarker, at)) {
+    signature.erase(at, kMarker.size());
+  }
+  return signature;
+}
+
 // The Presto registration mirrors RegistrationHelpers.h type set for type set,
 // so every GPU signature is one Velox registers under the same name on the CPU,
 // which SignatureBinder matches calls against; the explicit rows pin the type
-// sets per helper, the aliases, both round arities, the decimal functions, and
-// the checked bitwise functions.
+// sets per helper, the aliases, both round arities, the decimal functions, the
+// checked bitwise functions, and the date and time functions over the types
+// the CPU registers them for.
 TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
   registerPrestoGpuFunctions("");
 
@@ -333,11 +351,13 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
     SCOPED_TRACE(name);
     std::vector<std::string> cpuSignatures;
     for (const auto* signature : facebook::velox::getFunctionSignatures(name)) {
-      cpuSignatures.push_back(signature->toString());
+      cpuSignatures.push_back(withoutConstantMarkers(signature->toString()));
     }
     for (const auto& entry : entries) {
       EXPECT_THAT(
-          cpuSignatures, testing::Contains(entry.signature->toString()));
+          cpuSignatures,
+          testing::Contains(
+              withoutConstantMarkers(entry.signature->toString())));
     }
   }
 
@@ -351,46 +371,71 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
   };
   auto unaryNumericAndDecimal = unaryNumeric;
   unaryNumericAndDecimal.push_back("(decimal(i1,i5)) -> decimal(i2,i6)");
-  const std::vector<std::pair<std::string, std::vector<std::string>>> expected =
-      {
-          // PlusFunction for floating point, CheckedPlusFunction for integers,
-          // and the decimal function.
-          {"plus",
-           {"(bigint,bigint) -> bigint",
-            "(decimal(i1,i5),decimal(i2,i6)) -> decimal(i3,i7)",
-            "(double,double) -> double",
-            "(integer,integer) -> integer",
-            "(real,real) -> real",
-            "(smallint,smallint) -> smallint",
-            "(tinyint,tinyint) -> tinyint"}},
-          {"abs", unaryNumeric},
-          // Velox registers the numeric ceil under both names and the decimal
-          // one under "ceil" alone.
-          {"ceil", unaryNumericAndDecimal},
-          {"ceiling", unaryNumeric},
-          {"ln", {"(double) -> double"}},
-          {"is_nan", {"(double) -> boolean"}},
-          // Two floating-point types at two arities, and a decimal signature
-          // per arity.
-          {"truncate",
-           {"(decimal(i1,i5),integer) -> decimal(i1,i5)",
-            "(decimal(i1,i5)) -> decimal(i2,i6)",
-            "(double) -> double",
-            "(double,integer) -> double",
-            "(real) -> real",
-            "(real,integer) -> real"}},
-          {"and", {"(boolean...) -> boolean"}},
-          // Every integral pair widens to bigint, as the CPU's bitwise
-          // registration does.
-          {"bit_count",
-           {"(bigint,bigint) -> bigint",
-            "(integer,integer) -> bigint",
-            "(smallint,smallint) -> bigint",
-            "(tinyint,tinyint) -> bigint"}},
-          {"bitwise_arithmetic_shift_right", {"(bigint,bigint) -> bigint"}},
-          {"bitwise_shift_left", {"(bigint,bigint,bigint) -> bigint"}},
-          {"bitwise_logical_shift_right", {"(bigint,bigint,bigint) -> bigint"}},
-      };
+  const std::vector<std::pair<std::string, std::vector<std::string>>> expected = {
+      // PlusFunction for floating point, CheckedPlusFunction for integers,
+      // and the decimal function.
+      {"plus",
+       {"(bigint,bigint) -> bigint",
+        "(decimal(i1,i5),decimal(i2,i6)) -> decimal(i3,i7)",
+        "(double,double) -> double",
+        "(integer,integer) -> integer",
+        "(real,real) -> real",
+        "(smallint,smallint) -> smallint",
+        "(tinyint,tinyint) -> tinyint"}},
+      {"abs", unaryNumeric},
+      // Velox registers the numeric ceil under both names and the decimal
+      // one under "ceil" alone.
+      {"ceil", unaryNumericAndDecimal},
+      {"ceiling", unaryNumeric},
+      {"ln", {"(double) -> double"}},
+      {"is_nan", {"(double) -> boolean"}},
+      // Two floating-point types at two arities, and a decimal signature
+      // per arity.
+      {"truncate",
+       {"(decimal(i1,i5),integer) -> decimal(i1,i5)",
+        "(decimal(i1,i5)) -> decimal(i2,i6)",
+        "(double) -> double",
+        "(double,integer) -> double",
+        "(real) -> real",
+        "(real,integer) -> real"}},
+      {"and", {"(boolean...) -> boolean"}},
+      // Every integral pair widens to bigint, as the CPU's bitwise
+      // registration does.
+      {"bit_count",
+       {"(bigint,bigint) -> bigint",
+        "(integer,integer) -> bigint",
+        "(smallint,smallint) -> bigint",
+        "(tinyint,tinyint) -> bigint"}},
+      {"bitwise_arithmetic_shift_right", {"(bigint,bigint) -> bigint"}},
+      {"bitwise_shift_left", {"(bigint,bigint,bigint) -> bigint"}},
+      {"bitwise_logical_shift_right", {"(bigint,bigint,bigint) -> bigint"}},
+      // The calendar functions, over the three types the CPU registers
+      // them for.
+      {"year",
+       {"(date) -> bigint",
+        "(timestamp with time zone) -> bigint",
+        "(timestamp) -> bigint"}},
+      {"timezone_hour", {"(timestamp with time zone) -> bigint"}},
+      // A constant argument renders as Velox renders Constant<T>.
+      {"from_unixtime",
+       {"(double) -> timestamp",
+        "(double,bigint,bigint) -> timestamp with time zone",
+        "(double,constant varchar) -> timestamp with time zone"}},
+      {"at_timezone",
+       {"(timestamp with time zone,constant varchar) -> timestamp with time zone"}},
+      {"date_trunc",
+       {"(constant varchar,date) -> date",
+        "(constant varchar,timestamp with time zone) -> timestamp with time zone",
+        "(constant varchar,timestamp) -> timestamp"}},
+      {"between",
+       {"(bigint,bigint,bigint) -> boolean",
+        "(double,double,double) -> boolean",
+        "(integer,integer,integer) -> boolean",
+        "(real,real,real) -> boolean",
+        "(smallint,smallint,smallint) -> boolean",
+        "(timestamp with time zone,timestamp with time zone,timestamp with time zone) -> boolean",
+        "(tinyint,tinyint,tinyint) -> boolean"}},
+  };
   for (const auto& [name, signatures] : expected) {
     SCOPED_TRACE(name);
     EXPECT_THAT(
