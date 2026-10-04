@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -275,18 +276,6 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
   // RMM deallocates results' buffers on this stream after repeat() finishes
   // reading the mean and count columns.
   return std::move(result->release()[0]);
-}
-
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool containsMap(const TypePtr& type) {
@@ -651,8 +640,15 @@ bool CudfWindow::canRunOnGPU(
           (baseName == "min" || baseName == "max") &&
           (argumentType->isArray() || argumentType->isMap() ||
            argumentType->isRow());
+      // cuDF orders the physical representation, so min and max over a
+      // custom-comparison type would break ties by zone key where Velox keeps
+      // the first value seen.
+      const bool customComparisonMinMax =
+          (baseName == "min" || baseName == "max") &&
+          containsCustomComparison(argumentType);
 
-      if (unsupportedRealSum || unsupportedAverage || unsupportedNestedMinMax) {
+      if (unsupportedRealSum || unsupportedAverage || unsupportedNestedMinMax ||
+          customComparisonMinMax) {
         if (reason) {
           *reason = fmt::format(
               "{} does not support input type {} on cuDF",
