@@ -35,12 +35,14 @@ class NestedAlpSizeEstimation {
 
   /// Returns the selected child's estimated bytes, including its prefix and
   /// padding. Read factors influence selection but are not part of this size.
+  /// The policy supplies child choices; its selection methods may update
+  /// internal state.
   template <typename T>
   static uint64_t estimateChildSize(
-      EncodingSelectionPolicyBase& policy,
       std::span<const typename TypeTraits<T>::physicalType> sampleValues,
       uint32_t numTotalRows,
-      const Encoding::Options& options);
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase& policy);
 
   /// Estimates a floating-point Dictionary, RLE or MainlyConstant candidate
   /// using its value-child policy. Samples the derived child from the complete

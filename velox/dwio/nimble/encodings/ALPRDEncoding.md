@@ -39,11 +39,13 @@ select ALP or ALP_RD through their inherited or explicitly overridden candidates
 Parent estimation includes that floating-point child choice. Ancestor encoding
 filters apply as usual.
 
-The policy hook `useLogicalTypeForNestedEncoding()` requests logical
+The policy hook `hasFloatingPointEncodingCandidates()` reports whether
+configured candidates or replayed layouts include ALP or ALP_RD. This includes
+nested candidate overrides and replay fallback policies. Callers use logical
 floating-point types for nested encoding selection and the corresponding
-container cost estimates. Its default is `false`. The selected encoding
-determines which type is serialized. NULL handling remains the responsibility
-of the enclosing Nullable wrapper.
+container cost estimates when the hook returns `true`. Its default is `false`.
+The selected encoding determines which type is serialized. NULL handling
+remains the responsibility of the enclosing Nullable wrapper.
 
 A Nullable wrapper retains physical selection and type tags by default. When
 its policy enables ALP or ALP_RD, the data child uses logical floating-point

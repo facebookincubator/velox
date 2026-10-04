@@ -111,7 +111,7 @@ std::optional<uint64_t> ALPEncoding<T>::estimateSizeFromSample(
       EncodingType::ALP, EncodingIdentifiers::ALP::EncodedValues);
   const uint64_t nestedEncodedValuesSize =
       detail::NestedAlpSizeEstimation::estimateChildSize<uint64_t>(
-          *encodedPolicy, encodedValues, rowCount, options);
+          encodedValues, rowCount, options, *encodedPolicy);
   const uint64_t exceptionCount =
       (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
   uint64_t exceptionPositionsSize{0};
@@ -121,12 +121,12 @@ std::optional<uint64_t> ALPEncoding<T>::estimateSizeFromSample(
         EncodingType::ALP, EncodingIdentifiers::ALP::ExceptionPositions);
     exceptionPositionsSize =
         detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
-            *positionsPolicy, exceptionPositions, exceptionCount, options);
+            exceptionPositions, exceptionCount, options, *positionsPolicy);
     auto valuesPolicy = policy->create<physicalType>(
         EncodingType::ALP, EncodingIdentifiers::ALP::ExceptionValues);
     exceptionValuesSize =
         detail::NestedAlpSizeEstimation::estimateChildSize<physicalType>(
-            *valuesPolicy, exceptionValues, exceptionCount, options);
+            exceptionValues, exceptionCount, options, *valuesPolicy);
   }
   const uint64_t metadataSize = kHeaderSize +
       (exceptionCount > 0 ? varint::varintSize(exceptionCount) : 0) +

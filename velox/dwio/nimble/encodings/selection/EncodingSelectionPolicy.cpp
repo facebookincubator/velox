@@ -39,25 +39,58 @@ ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors(
   return candidates;
 }
 
-#define INSTANTIATE_CANDIDATES(T)                                 \
-  template std::vector<std::pair<EncodingType, float>>            \
-  ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors( \
-      const Encoding::Options&) const
+template <typename T>
+/* static */ bool
+ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate(
+    const std::vector<std::pair<EncodingType, float>>& candidates) {
+  return std::any_of(
+      candidates.begin(), candidates.end(), [](const auto& entry) {
+        return entry.first == EncodingType::ALP ||
+            entry.first == EncodingType::ALPRD;
+      });
+}
 
-INSTANTIATE_CANDIDATES(int8_t);
-INSTANTIATE_CANDIDATES(uint8_t);
-INSTANTIATE_CANDIDATES(int16_t);
-INSTANTIATE_CANDIDATES(uint16_t);
-INSTANTIATE_CANDIDATES(int32_t);
-INSTANTIATE_CANDIDATES(uint32_t);
-INSTANTIATE_CANDIDATES(int64_t);
-INSTANTIATE_CANDIDATES(uint64_t);
-INSTANTIATE_CANDIDATES(float);
-INSTANTIATE_CANDIDATES(double);
-INSTANTIATE_CANDIDATES(bool);
-INSTANTIATE_CANDIDATES(std::string_view);
+template <typename T>
+/* static */ bool
+ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(
+    const EncodingLayout& layout) {
+  if (layout.encodingType() == EncodingType::ALP ||
+      layout.encodingType() == EncodingType::ALPRD) {
+    return true;
+  }
+  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+    if (layout.child(i) && layoutHasFloatingPointEncoding(*layout.child(i))) {
+      return true;
+    }
+  }
+  return false;
+}
 
-#undef INSTANTIATE_CANDIDATES
+#define INSTANTIATE_POLICY_METHODS(T)                                  \
+  template std::vector<std::pair<EncodingType, float>>                 \
+  ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors(      \
+      const Encoding::Options&) const;                                 \
+  template bool                                                        \
+  ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate( \
+      const std::vector<std::pair<EncodingType, float>>&);             \
+  template bool                                                        \
+  ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(  \
+      const EncodingLayout&)
+
+INSTANTIATE_POLICY_METHODS(int8_t);
+INSTANTIATE_POLICY_METHODS(uint8_t);
+INSTANTIATE_POLICY_METHODS(int16_t);
+INSTANTIATE_POLICY_METHODS(uint16_t);
+INSTANTIATE_POLICY_METHODS(int32_t);
+INSTANTIATE_POLICY_METHODS(uint32_t);
+INSTANTIATE_POLICY_METHODS(int64_t);
+INSTANTIATE_POLICY_METHODS(uint64_t);
+INSTANTIATE_POLICY_METHODS(float);
+INSTANTIATE_POLICY_METHODS(double);
+INSTANTIATE_POLICY_METHODS(bool);
+INSTANTIATE_POLICY_METHODS(std::string_view);
+
+#undef INSTANTIATE_POLICY_METHODS
 
 /* static */ std::vector<std::pair<EncodingType, float>>
 ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {
@@ -229,19 +262,6 @@ bool detail::useLogicalTypeForEncoding(
       encodingType == EncodingType::Dictionary ||
       encodingType == EncodingType::RLE ||
       encodingType == EncodingType::MainlyConstant;
-}
-
-bool detail::layoutUsesAlp(const EncodingLayout& layout) {
-  if (layout.encodingType() == EncodingType::ALP ||
-      layout.encodingType() == EncodingType::ALPRD) {
-    return true;
-  }
-  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
-    if (layout.child(i) && layoutUsesAlp(*layout.child(i))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 } // namespace facebook::nimble

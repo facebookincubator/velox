@@ -181,10 +181,11 @@ class EncodingSelectionPolicyBase {
 
   virtual ~EncodingSelectionPolicyBase() = default;
 
-  /// Requests logical floating-point types for nested encoding selection.
-  /// Defaults to physical selection to preserve existing layouts.
-  /// The selected encoding determines which type is serialized.
-  virtual bool useLogicalTypeForNestedEncoding() const {
+  /// Reports whether configured candidates or replayed layouts contain ALP or
+  /// ALPRD. Callers use logical floating-point types for nested selection and
+  /// container cost estimation when this is true. Defaults to false to preserve
+  /// physical selection and existing layouts.
+  virtual bool hasFloatingPointEncodingCandidates() const {
     return false;
   }
 
@@ -262,10 +263,10 @@ std::string_view EncodingSelection<T>::encodeNested(
       encodingType(), nestedEncodingIdentifier);
   auto statistics = Statistics<NestedT>::create(values);
   EncodingSelectionResult selectionResult{};
-  const bool useLogicalType{
+  const bool selectWithLogicalType{
       isFloatingPointType<LogicalT>() &&
-      nestedPolicy->useLogicalTypeForNestedEncoding()};
-  if (useLogicalType) {
+      nestedPolicy->hasFloatingPointEncodingCandidates()};
+  if (selectWithLogicalType) {
     nestedPolicy = selectionPolicy_->template create<LogicalT>(
         encodingType(), nestedEncodingIdentifier);
     selectionResult =
@@ -292,9 +293,10 @@ std::string_view EncodingSelection<T>::encodeNested(
     const auto type = nestedSelection.encodingType();
     const bool requiresLogicalType{
         type == EncodingType::ALP || type == EncodingType::ALPRD};
-    if ((requiresLogicalType || useLogicalType) &&
-        detail::useLogicalTypeForEncoding(
-            TypeTraits<LogicalT>::dataType, type)) {
+    if (requiresLogicalType ||
+        (selectWithLogicalType &&
+         detail::useLogicalTypeForEncoding(
+             TypeTraits<LogicalT>::dataType, type))) {
       return EncodingFactory::encode<LogicalT>(
           std::move(nestedSelection), values, buffer, options);
     }

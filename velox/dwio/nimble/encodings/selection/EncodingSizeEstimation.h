@@ -67,9 +67,11 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
-  /// Estimates size from the full input and its statistics. A supplied policy
-  /// provides child candidates for ALP, ALPRD and their floating-point
-  /// containers.
+  /// Estimates size from the full input and its statistics. Child costs for
+  /// ALP, ALPRD and floating-point containers depend on candidates, read
+  /// factors, nested overrides and replayed layouts supplied by the policy.
+  /// These are not captured by values, statistics or options, so the policy is
+  /// needed to estimate the child choices available to the writer.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       std::span<const physicalType> values,
@@ -85,7 +87,7 @@ struct EncodingSizeEstimation {
           return ALPRDEncodingBase::estimateSize(
               values, values.size(), options, policy);
         }
-        if (policy->useLogicalTypeForNestedEncoding()) {
+        if (policy->hasFloatingPointEncodingCandidates()) {
           if (auto size = NestedAlpSizeEstimation::estimateContainerSize<T>(
                   encodingType, values, statistics, options, *policy)) {
             return size;

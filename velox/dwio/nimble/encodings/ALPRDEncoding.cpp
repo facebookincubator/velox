@@ -370,29 +370,29 @@ TrainedSplit SplitTraining<PhysicalType>::train() {
     const auto numExceptions = candidate.numExceptions;
     const std::array<uint64_t, 4> childSizes{
         detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-            *childPolicies_.codes,
             {codes_.data(), numSamples_},
             numRows_,
-            options_),
+            options_,
+            *childPolicies_.codes),
         detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
-            *childPolicies_.rightParts,
             {rightParts_.data(), numSamples_},
             numRows_,
-            options_),
+            options_,
+            *childPolicies_.rightParts),
         numExceptions == 0
             ? 0
             : detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
-                  *childPolicies_.exceptionPositions,
                   {exceptionPositions_.data(), sampleExceptions},
                   numExceptions,
-                  options_),
+                  options_,
+                  *childPolicies_.exceptionPositions),
         numExceptions == 0
             ? 0
             : detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-                  *childPolicies_.exceptionHighParts,
                   {exceptionHighParts_.data(), sampleExceptions},
                   numExceptions,
-                  options_),
+                  options_,
+                  *childPolicies_.exceptionHighParts),
     };
     const auto size = splitSize(
         parameters.dictionarySize,

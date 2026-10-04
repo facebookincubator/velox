@@ -359,10 +359,10 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
 
 template <typename T>
 uint64_t NestedAlpSizeEstimation::estimateChildSize(
-    EncodingSelectionPolicyBase& policy,
     std::span<const typename TypeTraits<T>::physicalType> sampleValues,
     uint32_t numTotalRows,
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    EncodingSelectionPolicyBase& policy) {
   return SampledCost<T>{policy, sampleValues, numTotalRows, options}
       .selectedSize();
 }
@@ -380,30 +380,30 @@ std::optional<uint64_t> NestedAlpSizeEstimation::estimateContainerSize(
 }
 
 template uint64_t NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-    EncodingSelectionPolicyBase&,
     std::span<const uint16_t>,
     uint32_t,
-    const Encoding::Options&);
+    const Encoding::Options&,
+    EncodingSelectionPolicyBase&);
 template uint64_t NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
-    EncodingSelectionPolicyBase&,
     std::span<const uint32_t>,
     uint32_t,
-    const Encoding::Options&);
+    const Encoding::Options&,
+    EncodingSelectionPolicyBase&);
 template uint64_t NestedAlpSizeEstimation::estimateChildSize<uint64_t>(
-    EncodingSelectionPolicyBase&,
     std::span<const uint64_t>,
     uint32_t,
-    const Encoding::Options&);
+    const Encoding::Options&,
+    EncodingSelectionPolicyBase&);
 template uint64_t NestedAlpSizeEstimation::estimateChildSize<float>(
-    EncodingSelectionPolicyBase&,
     std::span<const uint32_t>,
     uint32_t,
-    const Encoding::Options&);
+    const Encoding::Options&,
+    EncodingSelectionPolicyBase&);
 template uint64_t NestedAlpSizeEstimation::estimateChildSize<double>(
-    EncodingSelectionPolicyBase&,
     std::span<const uint64_t>,
     uint32_t,
-    const Encoding::Options&);
+    const Encoding::Options&,
+    EncodingSelectionPolicyBase&);
 
 template std::optional<uint64_t>
 NestedAlpSizeEstimation::estimateContainerSize<float>(
