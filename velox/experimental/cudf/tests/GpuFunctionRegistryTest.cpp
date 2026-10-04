@@ -373,14 +373,38 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
   unaryNumericAndDecimal.push_back("(decimal(i1,i5)) -> decimal(i2,i6)");
   const std::vector<std::pair<std::string, std::vector<std::string>>> expected = {
       // PlusFunction for floating point, CheckedPlusFunction for integers,
-      // and the decimal function.
+      // the decimal function, and the interval operators over TIMESTAMP
+      // and TIMESTAMP WITH TIME ZONE in both operand orders.
       {"plus",
+       {"(bigint,bigint) -> bigint",
+        "(decimal(i1,i5),decimal(i2,i6)) -> decimal(i3,i7)",
+        "(double,double) -> double",
+        "(integer,integer) -> integer",
+        "(interval day to second,timestamp with time zone) -> timestamp with time zone",
+        "(interval day to second,timestamp) -> timestamp",
+        "(interval year to month,timestamp with time zone) -> timestamp with time zone",
+        "(interval year to month,timestamp) -> timestamp",
+        "(real,real) -> real",
+        "(smallint,smallint) -> smallint",
+        "(timestamp with time zone,interval day to second) -> timestamp with time zone",
+        "(timestamp with time zone,interval year to month) -> timestamp with time zone",
+        "(timestamp,interval day to second) -> timestamp",
+        "(timestamp,interval year to month) -> timestamp",
+        "(tinyint,tinyint) -> tinyint"}},
+      // minus also subtracts two timestamps into an interval.
+      {"minus",
        {"(bigint,bigint) -> bigint",
         "(decimal(i1,i5),decimal(i2,i6)) -> decimal(i3,i7)",
         "(double,double) -> double",
         "(integer,integer) -> integer",
         "(real,real) -> real",
         "(smallint,smallint) -> smallint",
+        "(timestamp with time zone,interval day to second) -> timestamp with time zone",
+        "(timestamp with time zone,interval year to month) -> timestamp with time zone",
+        "(timestamp with time zone,timestamp with time zone) -> interval day to second",
+        "(timestamp,interval day to second) -> timestamp",
+        "(timestamp,interval year to month) -> timestamp",
+        "(timestamp,timestamp) -> interval day to second",
         "(tinyint,tinyint) -> tinyint"}},
       {"abs", unaryNumeric},
       // Velox registers the numeric ceil under both names and the decimal
@@ -427,6 +451,14 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
        {"(constant varchar,date) -> date",
         "(constant varchar,timestamp with time zone) -> timestamp with time zone",
         "(constant varchar,timestamp) -> timestamp"}},
+      {"date_add",
+       {"(constant varchar,bigint,date) -> date",
+        "(constant varchar,bigint,timestamp with time zone) -> timestamp with time zone",
+        "(constant varchar,bigint,timestamp) -> timestamp"}},
+      {"date_diff",
+       {"(constant varchar,date,date) -> bigint",
+        "(constant varchar,timestamp with time zone,timestamp with time zone) -> bigint",
+        "(constant varchar,timestamp,timestamp) -> bigint"}},
       {"between",
        {"(bigint,bigint,bigint) -> boolean",
         "(double,double,double) -> boolean",
@@ -466,6 +498,45 @@ TEST_F(GpuFunctionRegistryTest, timestampWithTimeZoneRendersItsLogicalType) {
         "test_millis_utc");
   };
   EXPECT_TRUE(GpuSfiExpression::canEvaluate(call(TIMESTAMP_WITH_TIME_ZONE())));
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(call(BIGINT())));
+}
+
+// The interval types are INTEGER and BIGINT underneath. A signature names the
+// logical type and the kernel is compiled for the physical one, so a call
+// binds on an interval column and not on a plain integer of the same width.
+TEST_F(GpuFunctionRegistryTest, intervalsRenderTheirLogicalTypes) {
+  registerPrestoGpuFunctions("");
+
+  const auto& entries = gpuFunctionRegistry().at("plus");
+  const auto find = [&](const std::string& signature) {
+    return std::find_if(
+        entries.begin(), entries.end(), [&](const GpuFunctionEntry& entry) {
+          return entry.signature->toString() == signature;
+        });
+  };
+  const auto months = find("(timestamp,interval year to month) -> timestamp");
+  ASSERT_NE(months, entries.end());
+  EXPECT_THAT(
+      months->argumentKinds,
+      testing::ElementsAre(TypeKind::TIMESTAMP, TypeKind::INTEGER));
+  EXPECT_EQ(months->returnKind, TypeKind::TIMESTAMP);
+  const auto millis = find("(timestamp,interval day to second) -> timestamp");
+  ASSERT_NE(millis, entries.end());
+  EXPECT_THAT(
+      millis->argumentKinds,
+      testing::ElementsAre(TypeKind::TIMESTAMP, TypeKind::BIGINT));
+
+  auto call = [](const TypePtr& intervalType) {
+    return std::make_shared<core::CallTypedExpr>(
+        TIMESTAMP(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(TIMESTAMP(), "c0"),
+            std::make_shared<core::FieldAccessTypedExpr>(intervalType, "c1")},
+        "plus");
+  };
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(call(INTERVAL_YEAR_MONTH())));
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(call(INTERVAL_DAY_TIME())));
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(call(INTEGER())));
   EXPECT_FALSE(GpuSfiExpression::canEvaluate(call(BIGINT())));
 }
 

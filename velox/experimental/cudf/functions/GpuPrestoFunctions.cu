@@ -48,6 +48,48 @@ void registerGpuCalendarField(const std::vector<std::string>& aliases) {
   registerGpuFunction<Fn, int64_t, TimestampWithTimezone>(aliases);
 }
 
+/// Registers the interval operators over one timestamp type, in both operand
+/// orders, and the difference of two values, as registerTimestampPlusInterval
+/// and registerTimestampMinusInterval register them.
+template <typename TTimestamp>
+void registerGpuTimestampIntervalOperators(const std::string& prefix) {
+  registerGpuFunction<
+      TimestampPlusInterval,
+      TTimestamp,
+      TTimestamp,
+      IntervalDayTime>({prefix + "plus"});
+  registerGpuFunction<
+      TimestampPlusInterval,
+      TTimestamp,
+      TTimestamp,
+      IntervalYearMonth>({prefix + "plus"});
+  registerGpuFunction<
+      IntervalPlusTimestamp,
+      TTimestamp,
+      IntervalDayTime,
+      TTimestamp>({prefix + "plus"});
+  registerGpuFunction<
+      IntervalPlusTimestamp,
+      TTimestamp,
+      IntervalYearMonth,
+      TTimestamp>({prefix + "plus"});
+  registerGpuFunction<
+      TimestampMinusInterval,
+      TTimestamp,
+      TTimestamp,
+      IntervalDayTime>({prefix + "minus"});
+  registerGpuFunction<
+      TimestampMinusInterval,
+      TTimestamp,
+      TTimestamp,
+      IntervalYearMonth>({prefix + "minus"});
+  registerGpuFunction<
+      TimestampMinusFunction,
+      IntervalDayTime,
+      TTimestamp,
+      TTimestamp>({prefix + "minus"});
+}
+
 } // namespace
 
 void registerPrestoGpuFunctions(const std::string& prefix) {
@@ -282,6 +324,43 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       Constant<Varchar>,
       TimestampWithTimezone>({prefix + "date_trunc"});
+
+  // --- Datetime arithmetic -------------------------------------------------
+  // Velox's own date_add, date_diff and interval operators, converting through
+  // the device zone's to_local(), to_sys() and correct_nonexistent_time(). The
+  // unit binds only as a literal, as above. DATE plus or minus an interval is
+  // declared in DateTimeFunctions.h, which this unit cannot include, and stays
+  // with the function tier.
+  registerGpuFunction<
+      DateAddFunction,
+      Timestamp,
+      Constant<Varchar>,
+      int64_t,
+      Timestamp>({prefix + "date_add"});
+  registerGpuFunction<DateAddFunction, Date, Constant<Varchar>, int64_t, Date>(
+      {prefix + "date_add"});
+  registerGpuFunction<
+      DateAddFunction,
+      TimestampWithTimezone,
+      Constant<Varchar>,
+      int64_t,
+      TimestampWithTimezone>({prefix + "date_add"});
+  registerGpuFunction<
+      DateDiffFunction,
+      int64_t,
+      Constant<Varchar>,
+      Timestamp,
+      Timestamp>({prefix + "date_diff"});
+  registerGpuFunction<DateDiffFunction, int64_t, Constant<Varchar>, Date, Date>(
+      {prefix + "date_diff"});
+  registerGpuFunction<
+      DateDiffFunction,
+      int64_t,
+      Constant<Varchar>,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "date_diff"});
+  registerGpuTimestampIntervalOperators<Timestamp>(prefix);
+  registerGpuTimestampIntervalOperators<TimestampWithTimezone>(prefix);
 
   // --- Logical -------------------------------------------------------------
   // See GpuLogicalFunctions.cuh. TODO: register is_null for every input type,
