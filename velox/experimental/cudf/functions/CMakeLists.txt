@@ -67,6 +67,17 @@ set_target_properties(
   PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
 )
 
+# Host half of the time zone conversions, compiled against real Velox: the
+# device table of a zone is built from the tz::TimeZone the CPU resolves, and
+# the session zone is read from QueryConfig. A shadow translation unit reaches
+# it only through the POD-only GpuTimeZone.h and GpuTimeZoneDatabase.h.
+add_library(velox_cudf_gpu_sfi_host GpuTimeZone.cpp GpuTimeZoneDatabase.cpp)
+
+target_link_libraries(
+  velox_cudf_gpu_sfi_host
+  PRIVATE cudf::cudf velox_core velox_exception velox_functions_lib velox_type_tz
+)
+
 target_link_libraries(velox_cudf_gpu_simple_functions PRIVATE cudf::cudf velox_cudf_gpu_shadows)
 
 # Host side, without the shadow include path, so it sees real Velox headers. It

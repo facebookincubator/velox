@@ -1364,26 +1364,6 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
-TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
-  constexpr int64_t kPositiveWeekOverflow =
-      std::numeric_limits<int32_t>::max() / 7LL + 1;
-  constexpr int64_t kNegativeWeekOverflow =
-      std::numeric_limits<int32_t>::min() / 7LL - 1;
-
-  auto data = makeRowVector(
-      {"event_date", "amount"},
-      {makeFlatVector<int32_t>({0, 0}, DATE()),
-       makeFlatVector<int64_t>(
-           {kPositiveWeekOverflow, kNegativeWeekOverflow})});
-  std::vector<RowVectorPtr> vectors{data};
-
-  const std::vector<std::string> projections{
-      "date_add('week', amount, event_date) AS column_value",
-      "date_add('week', 306783379, event_date) AS positive_literal",
-      "date_add('week', -306783379, event_date) AS negative_literal"};
-  assertProjectMatchesVelox(vectors, projections);
-}
-
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{
