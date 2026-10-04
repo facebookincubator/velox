@@ -30,8 +30,6 @@ class DateTruncFunction : public CudfFunction {
  public:
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  static bool isTimezoneSensitive(const core::TypedExprPtr& expr);
-
   DateTruncFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(

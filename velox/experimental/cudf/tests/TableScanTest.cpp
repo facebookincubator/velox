@@ -2419,13 +2419,13 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       data,
       true);
 
-  // Day truncation must use CPU session-timezone semantics when adjustment is
-  // enabled.
+  // With adjustment enabled, day truncation runs on GPU SFI in the session
+  // time zone, as Velox truncates.
   testFilter(
       "date_trunc('day', event_ts) = TIMESTAMP '2026-01-01 18:30:00'",
       true,
       noRows,
-      false);
+      true);
 
   // Minute truncation runs on GPU SFI with the comparison above it. With
   // adjustment enabled the literal is Asia/Kolkata time, so 01:30 on January 2

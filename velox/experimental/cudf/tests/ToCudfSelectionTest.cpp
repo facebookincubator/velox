@@ -435,7 +435,10 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesInputTypeForZeroColumns) {
   EXPECT_THAT(fromVeloxTypes, testing::Each(ROW({}, {})->toString()));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
+// GPU SFI runs Velox's own date_add over TIMESTAMP, so the projection stays on
+// the GPU. Without GPU SFI the call stays on the CPU; see
+// CudfExpressionSelectionTest.sensitiveCallsStayOnTheCpuWithoutGpuSfi.
+TEST_F(ToCudfSelectionTest, prestoDateAddTimestampUsesGpuSfi) {
   auto input = makeRowVector(
       {"amount", "event_ts"},
       {makeFlatVector<int64_t>({1, 2, -1, 13}),
@@ -454,11 +457,14 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+// GPU SFI runs Velox's own date_trunc, which applies the session time zone,
+// so the projection stays on the GPU. Without GPU SFI the call stays on the
+// CPU; see CudfExpressionSelectionTest.sensitiveCallsStayOnTheCpuWithoutGpuSfi.
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesGpuSfi) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -476,8 +482,8 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
       .countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
@@ -504,9 +510,11 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
+// A comparison above date_trunc runs with it on GPU SFI under a session time
+// zone, and returns the CPU's result.
 TEST_F(
     ToCudfSelectionTest,
-    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+    nestedPrestoDateTruncTimestampAdjustTimezoneUsesGpuSfi) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -523,15 +531,21 @@ TEST_F(
   ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
 
-  std::shared_ptr<Task> fallbackTask;
-  AssertQueryBuilder(plan)
-      .config("cudf.enabled", true)
-      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
-      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
-      .countResults(fallbackTask);
-
-  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+  std::shared_ptr<Task> cpuTask;
+  const auto expected =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", false)
+          .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool(), cpuTask);
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(cpuTask));
+  auto zonedTask = AssertQueryBuilder(plan)
+                       .config("cudf.enabled", true)
+                       .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+                       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+                       .assertResults(expected);
+  ASSERT_TRUE(wasCudfFilterProjectUsed(zonedTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(zonedTask));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
