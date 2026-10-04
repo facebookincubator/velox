@@ -37,14 +37,16 @@ enum class ErrorClass : uint8_t {
 };
 
 /// Collects whether GPU simple-function launches declined a row during one
-/// evaluation of one expression tree, and the worst class they hit. A caller
-/// passes one only if it can act on a declined row, by re-evaluating the batch
-/// on the CPU so that Velox raises the error; without one, a launch keeps its
-/// results. Only the owner of the whole tree can decide, since a conditional
-/// above a node may discard exactly the rows that node declined.
+/// evaluation, and the worst class they hit. A caller passes one only if it
+/// can act on a declined row, by re-evaluating the batch on the CPU so that
+/// Velox raises the error; without one, a launch keeps its results. Only the
+/// owner of the whole tree can decide, since a conditional above a node may
+/// discard exactly the rows that node declined.
 ///
-/// One device word covers the tree: the owner re-evaluates the whole batch on
-/// the CPU, so which row was declined is never read on the host.
+/// One device word covers the evaluation, whether that is one expression tree
+/// or every tree the owner discards together on a decline: the owner
+/// re-evaluates the whole batch on the CPU, so which row was declined is never
+/// read on the host.
 class GpuSfiErrors {
  public:
   GpuSfiErrors(cuda::stream_ref stream, rmm::device_async_resource_ref mr)
