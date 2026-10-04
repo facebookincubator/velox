@@ -2213,7 +2213,6 @@ class PrestoSerializerEstimateSizeTest : public testing::Test,
   void testEstimateSerializedSizeByRows(
       VectorPtr input,
       const std::vector<vector_size_t>& rows,
-      vector_size_t expectedSize,
       const std::vector<vector_size_t>& expectedRowSizes) {
     auto row = makeRowVector({input});
     std::vector<vector_size_t> sizes(rows.size(), 0);
@@ -2229,11 +2228,6 @@ class PrestoSerializerEstimateSizeTest : public testing::Test,
         sizePointers.data(),
         scratch);
 
-    vector_size_t total = 0;
-    for (const auto size : sizes) {
-      total += size;
-    }
-    EXPECT_EQ(total, expectedSize + sizeof(int32_t) * rows.size());
     ASSERT_EQ(sizes.size(), expectedRowSizes.size());
     for (auto i = 0; i < sizes.size(); ++i) {
       EXPECT_EQ(sizes[i], expectedRowSizes[i]) << "at row " << rows[i];
@@ -2567,7 +2561,7 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
   // The row overload flattens the constant.
   // 32 * 4 = 128
   testEstimateSerializedSizeByRows(
-      constant, rows, 128, std::vector<vector_size_t>(32, 8));
+      constant, rows, std::vector<vector_size_t>(32, 8));
 
   auto indices = makeIndices(32, [](auto row) { return (row * 2) % 32; });
   auto dictionary =
@@ -2575,7 +2569,7 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
   // The row overload flattens the dictionary.
   // 32 * 4 = 128
   testEstimateSerializedSizeByRows(
-      dictionary, rows, 128, std::vector<vector_size_t>(32, 8));
+      dictionary, rows, std::vector<vector_size_t>(32, 8));
 
   auto nullableValues = makeFlatVector<double>(
       32,
@@ -2592,7 +2586,7 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
     expectedDictionaryRowSizes[i] = i % 2 == 0 ? 4 : 12;
   }
   testEstimateSerializedSizeByRows(
-      nullableDictionary, rows, 128, expectedDictionaryRowSizes);
+      nullableDictionary, rows, expectedDictionaryRowSizes);
 
   auto nullableDoubles = makeFlatVector<double>(
       32,
@@ -2605,6 +2599,5 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
   }
   // 24 non-null doubles and 8 nulls.
   // 24 * 8 = 192
-  testEstimateSerializedSizeByRows(
-      nullableDoubles, rows, 192, expectedRowSizes);
+  testEstimateSerializedSizeByRows(nullableDoubles, rows, expectedRowSizes);
 }

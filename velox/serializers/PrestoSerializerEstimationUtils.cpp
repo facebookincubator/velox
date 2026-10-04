@@ -29,12 +29,10 @@ void estimateSerializedSizeByRows(
     bool flatten,
     bool includeNullBitmap);
 
-// Attribute each null bitmap byte to the first of its eight rows.
+// Only range-based estimates include bitmaps, and all size pointers within a
+// range refer to the same accumulator.
 void addNullBitmapSize(vector_size_t** sizes, int32_t numRows) {
-  constexpr auto kBitsPerByte = 8;
-  for (auto byte = 0; byte < bits::nbytes(numRows); ++byte) {
-    *sizes[byte * kBitsPerByte] += 1;
-  }
+  *sizes[0] += bits::nbytes(numRows);
 }
 
 template <TypeKind Kind>
