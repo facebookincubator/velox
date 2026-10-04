@@ -334,6 +334,70 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
+// MultiRange child null policies are ignored. Flatten nested MultiRanges and
+// omit IsNull leaves before building the non-null value predicate.
+void collectValueFilters(
+    const common::Filter& filter,
+    std::vector<const common::Filter*>& filters) {
+  if (filter.kind() == common::FilterKind::kIsNull) {
+    return;
+  }
+  if (filter.kind() != common::FilterKind::kMultiRange) {
+    filters.push_back(&filter);
+    return;
+  }
+  const auto& children =
+      static_cast<const common::MultiRange&>(filter).filters();
+  VELOX_CHECK(!children.empty(), "MultiRange filter must not be empty");
+  for (const auto& child : children) {
+    collectValueFilters(*child, filters);
+  }
+}
+
+cudf::ast::expression const& createAlwaysFalseExpr(
+    const cudf::ast::column_reference& columnRef,
+    cudf::ast::tree& tree) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
+}
+
+cudf::ast::expression const& createAstFromSubfieldFilterImpl(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema);
+
+cudf::ast::expression const& createAstFromFiltersOr(
+    const common::Subfield& subfield,
+    const std::vector<const common::Filter*>& filters,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  VELOX_CHECK(!filters.empty(), "Filters must not be empty");
+
+  std::vector<const cudf::ast::expression*> exprRefs;
+  exprRefs.reserve(filters.size());
+  for (const auto* subFilter : filters) {
+    auto const& subExpr = createAstFromSubfieldFilterImpl(
+        subfield, *subFilter, tree, scalars, inputRowSchema);
+    exprRefs.push_back(&subExpr);
+  }
+
+  const cudf::ast::expression* result = exprRefs[0];
+  for (size_t i = 1; i < exprRefs.size(); ++i) {
+    result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
+  }
+  return *result;
+}
+
 cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const common::Subfield& subfield,
     const common::Filter& filter,
@@ -471,38 +535,25 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
       return tree.push(Operation{Op::NOT, nullCheck});
     }
 
-    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kBigintMultiRange: {
+      auto* multiRange = static_cast<const common::BigintMultiRange*>(&filter);
+      std::vector<const common::Filter*> ranges;
+      ranges.reserve(multiRange->ranges().size());
+      for (const auto& range : multiRange->ranges()) {
+        ranges.push_back(range.get());
+      }
+      return createAstFromFiltersOr(
+          subfield, ranges, tree, scalars, inputRowSchema);
+    }
+
     case common::FilterKind::kMultiRange: {
-      // Both multi-range types recurse into sub-filters and combine with OR.
-      std::vector<const common::Filter*> subFilters;
-      if (filter.kind() == common::FilterKind::kBigintMultiRange) {
-        auto* multiRange =
-            static_cast<const common::BigintMultiRange*>(&filter);
-        for (const auto& range : multiRange->ranges()) {
-          subFilters.push_back(range.get());
-        }
-      } else {
-        auto* multiRange = static_cast<const common::MultiRange*>(&filter);
-        for (const auto& f : multiRange->filters()) {
-          subFilters.push_back(f.get());
-        }
+      std::vector<const common::Filter*> valueFilters;
+      collectValueFilters(filter, valueFilters);
+      if (valueFilters.empty()) {
+        return createAlwaysFalseExpr(columnRef, tree);
       }
-      VELOX_CHECK(!subFilters.empty(), "MultiRange filter must not be empty");
-
-      std::vector<const cudf::ast::expression*> exprRefs;
-      exprRefs.reserve(subFilters.size());
-      for (const auto* subFilter : subFilters) {
-        auto const& subExpr = createAstFromSubfieldFilterImpl(
-            subfield, *subFilter, tree, scalars, inputRowSchema);
-        exprRefs.push_back(&subExpr);
-      }
-
-      const cudf::ast::expression* result = exprRefs[0];
-      for (size_t i = 1; i < exprRefs.size(); ++i) {
-        result =
-            &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
-      }
-      return *result;
+      return createAstFromFiltersOr(
+          subfield, valueFilters, tree, scalars, inputRowSchema);
     }
 
     case common::FilterKind::kNegatedBigintRange: {

@@ -14,9 +14,20 @@
 
 # RPCNode is part of velox_core (in core/PlanNode.h)
 
-velox_add_library(velox_rpc_error_classification HEADERS RpcErrorClassification.h)
+velox_add_library(
+  velox_rpc_error_classification
+  RpcErrorClassification.cpp
+  HEADERS
+  RpcErrorClassification.h
+)
 
-velox_link_libraries(velox_rpc_error_classification Folly::folly FBThrift::thriftcpp2)
+velox_link_libraries(
+  velox_rpc_error_classification
+  velox_rpc_types
+  velox_common_base
+  Folly::folly
+  FBThrift::thriftcpp2
+)
 
 velox_add_library(
   velox_rpc_state
@@ -29,21 +40,24 @@ velox_add_library(
 
 velox_link_libraries(
   velox_rpc_state
+  velox_rpc_error_classification
   velox_rpc_types
   velox_common_base
   velox_future
+  velox_memory
   velox_vector
   Folly::folly
 )
 
 velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
-velox_link_libraries(velox_rpc_rate_limiter velox_future)
+velox_link_libraries(velox_rpc_rate_limiter velox_future velox_test_util)
 
 velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
+  velox_rpc_error_classification
   velox_rpc_state
   velox_rpc_rate_limiter
   velox_async_rpc_function
@@ -66,13 +80,23 @@ velox_add_library(
 velox_link_libraries(velox_rpc_plan_node_translator velox_rpc_operator velox_exec)
 
 if(${VELOX_BUILD_TESTING})
+  velox_add_library(
+    velox_response_simulator
+    tests/ResponseSimulator.cpp
+    HEADERS
+    tests/ResponseSimulator.h
+  )
+
+  velox_link_libraries(velox_response_simulator velox_rpc_types Folly::folly)
+
   velox_add_library(velox_demo_rpc_function tests/DemoRPCFunction.cpp)
 
   velox_link_libraries(
     velox_demo_rpc_function
-    velox_mock_rpc_client
+    velox_response_simulator
     velox_expression_functions
     velox_async_rpc_function
+    Folly::folly
   )
 
   velox_add_library(

@@ -3516,6 +3516,22 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
           "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
           std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
           std::optional<int32_t>(14)));
+
+  // The parent-to-child zoom span limit depends on the input geometry and the
+  // requested zoom, so it is a user error and must be catchable by try(). The
+  // same limit reached through bing_tile_children already reports a user error.
+  {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "2"}});
+    VELOX_ASSERT_USER_THROW(
+        evaluateOnce<int64_t>(
+            "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+            std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+            std::optional<int32_t>(14)),
+        "Difference between parent zoom");
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "7"}});
+  }
 }
 
 TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {

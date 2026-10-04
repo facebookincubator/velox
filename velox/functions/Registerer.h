@@ -39,11 +39,13 @@ using ParameterBinder = TempWrapper<T<exec::VectorExec, TArgs...>>;
 // 'overwrite' is false, the current UDF is not registered with this alias.
 // This method returns true if all 'aliases' are registered successfully. It
 // returns false if any alias in 'aliases' already exists in the registry and
-// is not overwritten.
+// is not overwritten. 'defaultOwner' is recorded for the function only when
+// the UDF does not declare an owner of its own.
 template <typename Func, typename TReturn, typename... TArgs>
 bool registerFunction(
     const std::vector<std::string>& aliases = {},
-    bool overwrite = true) {
+    bool overwrite = true,
+    std::string_view defaultOwner = {}) {
   using funcClass = typename Func::template udf<exec::VectorExec>;
   using holderClass = core::UDFHolder<
       funcClass,
@@ -51,7 +53,8 @@ bool registerFunction(
       TReturn,
       ConstantChecker<TArgs...>,
       typename UnwrapConstantType<TArgs>::type...>;
-  return exec::registerSimpleFunction<holderClass>(aliases, {}, overwrite);
+  return exec::registerSimpleFunction<holderClass>(
+      aliases, {}, overwrite, defaultOwner);
 }
 
 // New registration function; mostly a copy from the function above, but taking
@@ -62,7 +65,8 @@ template <template <class> typename Func, typename TReturn, typename... TArgs>
 bool registerFunction(
     const std::vector<std::string>& aliases = {},
     const std::vector<exec::SignatureVariable>& constraints = {},
-    bool overwrite = true) {
+    bool overwrite = true,
+    std::string_view defaultOwner = {}) {
   using funcClass = Func<exec::VectorExec>;
   using holderClass = core::UDFHolder<
       funcClass,
@@ -71,7 +75,7 @@ bool registerFunction(
       ConstantChecker<TArgs...>,
       typename UnwrapConstantType<TArgs>::type...>;
   return exec::registerSimpleFunction<holderClass>(
-      aliases, constraints, overwrite);
+      aliases, constraints, overwrite, defaultOwner);
 }
 
 } // namespace facebook::velox

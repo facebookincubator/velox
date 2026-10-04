@@ -592,7 +592,14 @@ class RowContainer {
   /// There is a barrier but tsan does not know this.
   enum class ProbeType { kAll, kProbed, kNotProbed };
 
-  template <ProbeType probeType>
+  // Software-prefetch look-ahead for listRows() on x86, in bytes. A fixed byte
+  // distance keeps the run-ahead stable across row widths. Exposed as a
+  // template parameter so benchmarks can sweep the real scan implementation.
+  static constexpr int32_t kListRowsPrefetchDistanceBytes = 2'048;
+
+  template <
+      ProbeType probeType,
+      int32_t prefetchDistanceBytes = kListRowsPrefetchDistanceBytes>
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
   __attribute__((__no_sanitize__("thread")))
@@ -621,6 +628,18 @@ class RowContainer {
            reinterpret_cast<uintptr_t>(range.data()));
       auto row = iter->rowOffset;
       while (row + rowSize <= limit) {
+        // Tuned and validated on x86 only; unmeasured on other architectures.
+#if defined(__x86_64__)
+        // Use integer arithmetic to avoid out-of-bounds pointer arithmetic when
+        // the target lies past the current range; the hint itself is
+        // non-faulting for an invalid target on x86.
+        if constexpr (prefetchDistanceBytes > 0) {
+          __builtin_prefetch(
+              reinterpret_cast<const char*>(
+                  reinterpret_cast<uintptr_t>(data) + row +
+                  prefetchDistanceBytes));
+        }
+#endif
         rows[count++] = data + row +
             (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
         VELOX_DCHECK_EQ(

@@ -31,7 +31,7 @@ class S3Config;
 /// AWS C++ SDK allows streaming writes via the MultiPart upload API.
 /// Multipart upload allows you to upload a single object as a set of parts.
 /// Each part is a contiguous portion of the object's data.
-/// While AWS and Minio support different sizes for each
+/// While AWS and Silo support different sizes for each
 /// part (only requiring a minimum of 5MB - but not enforced), Apache Ozone
 /// enforces the minimum 5MB (smaller parts are ignored), and Cloudflare R2
 /// requires that every part be exactly equal (except for the last part). We set

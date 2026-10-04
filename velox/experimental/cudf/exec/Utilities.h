@@ -75,6 +75,10 @@ namespace facebook::velox::cudf_velox {
  * are also properly synchronized. The input tables are consumed and deallocated
  * after synchronization.
  *
+ * Input ownership is released one output batch at a time after stream-safe
+ * deallocation ordering has been established. This avoids retaining the full
+ * input set while all output batches are materialized.
+ *
  * @param tables Input vector of CUDF tables to concatenate (consumed during
  * operation)
  * @param tableType Velox type representation for creating empty tables when
@@ -82,7 +86,6 @@ namespace facebook::velox::cudf_velox {
  * @param stream CUDA stream for asynchronous operations and memory management
  * @return Vector of concatenated tables (multiple if input exceeded size
  * limits)
- *
  */
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(

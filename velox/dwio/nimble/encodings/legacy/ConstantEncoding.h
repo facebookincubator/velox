@@ -76,7 +76,8 @@ ConstantEncoding<T>::ConstantEncoding(
     : TypedEncoding<T, physicalType>(memoryPool, data) {
   const char* pos = data.data() + EncodingPrefix::kFixedPrefixSize;
   value_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(), "Unexpected constant encoding end");
 }
 
 template <typename T>
@@ -126,7 +127,7 @@ std::string_view ConstantEncoding<T>::encode(
     NIMBLE_INCOMPATIBLE_ENCODING("ConstantEncoding cannot be empty.");
   }
 
-  if (selection.statistics().uniqueCounts().value().size() != 1) {
+  if (!selection.statistics().isConstant()) {
     NIMBLE_INCOMPATIBLE_ENCODING("ConstantEncoding requires constant data.");
   }
 

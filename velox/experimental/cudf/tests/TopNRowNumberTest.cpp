@@ -28,6 +28,7 @@ class TopNRowNumberTest : public OperatorTestBase {
  public:
   void SetUp() override {
     OperatorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -266,6 +267,10 @@ TEST_F(TopNRowNumberTest, manySmallBatchesStaggeredPartitions) {
 }
 
 TEST_F(TopNRowNumberTest, rankFallsBackToCpu) {
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 2, 2}),
       makeFlatVector<int64_t>({10, 20, 30, 40}),

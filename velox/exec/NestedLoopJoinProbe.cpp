@@ -809,9 +809,8 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // Check the state of peer operators. Only the last driver (operator) running
   // this code will survive and move on to process build mismatches.
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  std::vector<std::shared_ptr<Operator>> peerOperators;
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     setState(ProbeOperatorState::kWaitForPeers);
     return;
@@ -823,16 +822,15 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   VELOX_CHECK_EQ(buildIndex_, 0);
 
   // Colect and merge the build mismatch selectivity vectors from all peers.
-  for (auto& peer : peers) {
-    auto* op = peer->findOperator(planNodeId());
-    auto* probe = dynamic_cast<NestedLoopJoinProbe*>(op);
+  for (const auto& peer : peerOperators) {
+    auto* probe = peer->as<NestedLoopJoinProbe>();
     VELOX_CHECK_NOT_NULL(probe);
     for (auto i = 0; i < buildMatched_.size(); ++i) {
       buildMatched_[i].select(probe->buildMatched_[i]);
       probeSideEmpty_ &= probe->probeSideEmpty_;
     }
   }
-  peers.clear();
+  peerOperators.clear();
   for (auto& matched : buildMatched_) {
     matched.updateBounds();
   }

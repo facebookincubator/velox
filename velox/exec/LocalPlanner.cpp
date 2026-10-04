@@ -23,6 +23,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
+#include "velox/exec/FixedPointOperators.h"
 #include "velox/exec/GroupId.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
@@ -148,7 +149,11 @@ OperatorSupplier makeOutputSinkSupplier(ConsumerSupplier consumerSupplier) {
     return [consumerSupplier = std::move(consumerSupplier)](
                int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<CallbackSink>(
-          operatorId, ctx, consumerSupplier());
+          operatorId,
+          ctx,
+          consumerSupplier(),
+          /*startedCb=*/nullptr,
+          /*planNodeId=*/"N/A");
     };
   }
   return nullptr;
@@ -195,7 +200,12 @@ OperatorSupplier makeMergeSinkSupplier(
     };
 
     return std::make_unique<CallbackSink>(
-        operatorId, ctx, std::move(consumerCb), std::move(startCb), planNodeId);
+        operatorId,
+        ctx,
+        std::move(consumerCb),
+        std::move(startCb),
+        planNodeId,
+        core::PlanNode::Boundary::kInput);
   };
 }
 
@@ -275,7 +285,12 @@ OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
       // node; give it the node id so its stats aggregate into that node and
       // tracing can associate it.
       return std::make_unique<CallbackSink>(
-          operatorId, ctx, consumer, /*startedCb=*/nullptr, planNodeId);
+          operatorId,
+          ctx,
+          consumer,
+          /*startedCb=*/nullptr,
+          planNodeId,
+          core::PlanNode::Boundary::kInput);
     };
   }
 
@@ -728,6 +743,22 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
               ctx->task->planFragment().taskUniqueId.value_or(
                   assignUniqueIdNode->taskUniqueId()),
               ctx->task->uniqueRowIdPool()));
+    } else if (
+        auto fixedPoint =
+            std::dynamic_pointer_cast<const core::FixedPointNode>(planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), fixedPoint));
+    } else if (
+        auto stateSource =
+            std::dynamic_pointer_cast<const core::StateSourceNode>(planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), stateSource));
+    } else if (
+        auto stateHashJoin =
+            std::dynamic_pointer_cast<const core::StateHashJoinNode>(
+                planNode)) {
+      operators.push_back(
+          FixedPointOperators::create(id, ctx.get(), stateHashJoin));
     } else if (
         const auto traceScanNode =
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {

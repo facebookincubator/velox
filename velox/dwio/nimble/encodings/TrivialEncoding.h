@@ -277,7 +277,7 @@ TrivialEncoding<T>::TrivialEncoding(
   } else {
     NIMBLE_CHECK_EQ(
         reinterpret_cast<const char*>(values_ + this->rowCount()),
-        data.end(),
+        data.data() + data.size(),
         "Unexpected trivial encoding end");
   }
 }
@@ -353,7 +353,8 @@ std::string_view TrivialEncoding<T>::slice(
         buffer.getMemoryPool(),
         compressionType,
         TypeTraits<T>::dataType,
-        {sourcePos, static_cast<size_t>(encoded.end() - sourcePos)},
+        {sourcePos,
+         static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)},
         options.decompressCounter(),
         options.bufferPool);
     sourcePos = uncompressed->template as<char>();
@@ -398,33 +399,13 @@ void TrivialEncoding<T>::bulkScan(
       values[i] = values_[selectedRows[i] + offset];
     }
   }
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<T*>(visitor.reader().rawValues());
-  }
-  int32_t numValues = visitor.reader().numValues();
-  int32_t* filterHits;
   if constexpr (V::kHasFilter) {
-    NIMBLE_DCHECK_EQ(visitor.reader().numRows(), numValues, "");
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  } else {
-    filterHits = nullptr;
+    NIMBLE_DCHECK_EQ(
+        visitor.reader().numRows(), visitor.reader().numValues(), "");
   }
-  velox::dwio::common::
-      processFixedWidthRun<T, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   row_ += selectedRows[numSelected - 1] - currentRow + 1;
-  if constexpr (!V::kHasHook) {
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
   visitor.setRowIndex(visitor.numRows());
 }
 

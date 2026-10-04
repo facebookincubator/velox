@@ -28,20 +28,29 @@ namespace facebook::velox::functions {
 namespace {
 
 template <template <class> class T, typename TReturn>
-void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, Varchar, Varchar>(aliases);
-  registerFunction<T, TReturn, Varbinary, Varbinary>(aliases);
-  registerFunction<T, TReturn, bool, bool>(aliases);
-  registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
+void registerNonSimdizableScalar(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner) {
+  registerFunction<T, TReturn, Varchar, Varchar>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Varbinary, Varbinary>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, bool, bool>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Timestamp, Timestamp>(
+      aliases, {}, true, defaultOwner);
   registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
-      aliases);
-  registerFunction<T, TReturn, Time, Time>(aliases);
-  registerFunction<T, TReturn, TimeWithTimezone, TimeWithTimezone>(aliases);
-  registerFunction<T, TReturn, IPAddress, IPAddress>(aliases);
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Time, Time>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, TimeWithTimezone, TimeWithTimezone>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, IPAddress, IPAddress>(
+      aliases, {}, true, defaultOwner);
 }
 } // namespace
 
-void registerComparisonFunctions(const std::string& prefix) {
+void registerComparisonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // Comparison functions also need TimestampWithTimezoneType,
   // independent of DateTimeFunctions
   registerTimestampWithTimeZoneType();
@@ -49,98 +58,114 @@ void registerComparisonFunctions(const std::string& prefix) {
   registerIPAddressType();
   registerIPPrefixType();
 
-  registerNonSimdizableScalar<EqFunction, bool>({prefix + "eq"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_eq, prefix + "eq");
-  registerFunction<EqFunction, bool, Generic<T1>, Generic<T1>>({prefix + "eq"});
+  registerNonSimdizableScalar<EqFunction, bool>({prefix + "eq"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_eq, prefix + "eq", defaultOwner);
+  registerFunction<EqFunction, bool, Generic<T1>, Generic<T1>>(
+      {prefix + "eq"}, {}, true, defaultOwner);
 
-  registerNonSimdizableScalar<NeqFunction, bool>({prefix + "neq"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_neq, prefix + "neq");
+  registerNonSimdizableScalar<NeqFunction, bool>(
+      {prefix + "neq"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_neq, prefix + "neq", defaultOwner);
   registerFunction<NeqFunction, bool, Generic<T1>, Generic<T1>>(
-      {prefix + "neq"});
+      {prefix + "neq"}, {}, true, defaultOwner);
 
-  registerNonSimdizableScalar<LtFunction, bool>({prefix + "lt"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lt, prefix + "lt");
+  registerNonSimdizableScalar<LtFunction, bool>({prefix + "lt"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_lt, prefix + "lt", defaultOwner);
   registerFunction<LtFunction, bool, Orderable<T1>, Orderable<T1>>(
-      {prefix + "lt"});
+      {prefix + "lt"}, {}, true, defaultOwner);
 
-  registerNonSimdizableScalar<GtFunction, bool>({prefix + "gt"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gt, prefix + "gt");
+  registerNonSimdizableScalar<GtFunction, bool>({prefix + "gt"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_gt, prefix + "gt", defaultOwner);
   registerFunction<GtFunction, bool, Orderable<T1>, Orderable<T1>>(
-      {prefix + "gt"});
+      {prefix + "gt"}, {}, true, defaultOwner);
 
-  registerNonSimdizableScalar<LteFunction, bool>({prefix + "lte"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lte, prefix + "lte");
+  registerNonSimdizableScalar<LteFunction, bool>(
+      {prefix + "lte"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_lte, prefix + "lte", defaultOwner);
   registerFunction<LteFunction, bool, Orderable<T1>, Orderable<T1>>(
-      {prefix + "lte"});
+      {prefix + "lte"}, {}, true, defaultOwner);
 
-  registerNonSimdizableScalar<GteFunction, bool>({prefix + "gte"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, prefix + "gte");
+  registerNonSimdizableScalar<GteFunction, bool>(
+      {prefix + "gte"}, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_simd_comparison_gte, prefix + "gte", defaultOwner);
   registerFunction<GteFunction, bool, Orderable<T1>, Orderable<T1>>(
-      {prefix + "gte"});
+      {prefix + "gte"}, {}, true, defaultOwner);
 
   registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
-      {prefix + "distinct_from"});
+      {prefix + "distinct_from"}, {}, true, defaultOwner);
 
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, int16_t, int16_t, int16_t>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, int32_t, int32_t, int32_t>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, int64_t, int64_t, int64_t>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, double, double, double>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, float, float, float>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, Varchar, Varchar, Varchar>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, Date, Date, Date>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, Timestamp, Timestamp, Timestamp>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, Time, Time, Time>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       TimeWithTimezone,
       TimeWithTimezone,
-      TimeWithTimezone>({prefix + "between"});
+      TimeWithTimezone>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       LongDecimal<P1, S1>,
       LongDecimal<P1, S1>,
-      LongDecimal<P1, S1>>({prefix + "between"});
+      LongDecimal<P1, S1>>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P1, S1>>({prefix + "between"});
+      ShortDecimal<P1, S1>>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       IntervalDayTime,
       IntervalDayTime,
-      IntervalDayTime>({prefix + "between"});
+      IntervalDayTime>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       IntervalYearMonth,
       IntervalYearMonth,
-      IntervalYearMonth>({prefix + "between"});
+      IntervalYearMonth>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<
       BetweenFunction,
       bool,
       TimestampWithTimezone,
       TimestampWithTimezone,
-      TimestampWithTimezone>({prefix + "between"});
+      TimestampWithTimezone>({prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, IPAddress, IPAddress, IPAddress>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, IPPrefix, IPPrefix, IPPrefix>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnknownValue,
+      UnknownValue,
+      UnknownValue>({prefix + "between"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

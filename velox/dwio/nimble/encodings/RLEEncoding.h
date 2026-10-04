@@ -246,7 +246,7 @@ class RLEEncodingBase
     const std::string_view runLengthsData{pos, runLengthsSize};
     pos += runLengthsSize;
     const std::string_view runValuesData{
-        pos, static_cast<size_t>(encoded.end() - pos)};
+        pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
     auto slicedRuns =
         sliceRuns(runLengthsData, offset, length, buffer, options);
@@ -391,7 +391,8 @@ class RLEEncodingBase
     constexpr uint32_t kRunLengthChunkSize{256};
     const auto maxRunLengthChunkSize =
         std::min({runCount, length, kRunLengthChunkSize});
-    Vector<uint32_t> runLengths{pool, maxRunLengthChunkSize};
+    ScopedVector<uint32_t> runLengths{
+        maxRunLengthChunkSize, pool, options.bufferPool};
     RLESliceRuns result;
     uint32_t row{0};
     for (uint32_t run = 0; run < runCount;) {
@@ -868,7 +869,7 @@ RLEEncoding<T>::RLEEncoding(
   auto valuesView = std::string_view{
       internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart(),
       static_cast<size_t>(
-          data.end() -
+          data.data() + data.size() -
           internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart())};
   valuesEncoding_ =
       EncodingFactory().create(pool, valuesView, stringBufferFactory, options);

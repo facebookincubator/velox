@@ -242,6 +242,15 @@ std::string scalarValueToString(
   using T = typename TypeTraits<kind>::NativeType;
   return PrestoTypes::valueToString(decoded.valueAt<T>(index), type);
 }
+
+template <>
+std::string scalarValueToString<TypeKind::UNKNOWN>(
+    const DecodedVector& /*decoded*/,
+    vector_size_t /*index*/,
+    const TypePtr& /*type*/) {
+  // UNKNOWN values are semantically equivalent to NULL
+  return "null";
+}
 } // namespace
 
 std::string PrestoTypes::valueToString(
@@ -266,7 +275,7 @@ std::string PrestoTypes::valueToString(
   }
 
   if (type->isPrimitiveType()) {
-    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
         scalarValueToString, type->kind(), decoded, index, type);
   }
 

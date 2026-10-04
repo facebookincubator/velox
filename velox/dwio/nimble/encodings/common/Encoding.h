@@ -105,6 +105,10 @@ struct ReadWithVisitorParams {
   // Number of rows scanned so far.  Contains rows scanned in previous chunks
   // during this read call as well.
   vector_size_t numScanned;
+
+  // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
+  // instead of the two-pass DictionaryIndicesHook fallback.
+  bool dictionaryAwareReads{false};
 };
 
 class Encoding {
@@ -156,6 +160,21 @@ class Encoding {
     /// encoding selection. False by default; do not enable for production
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
+
+    /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
+    /// splitting it into bit ranges, keeping whichever form encodes smaller.
+    ///
+    /// A monotone counter's low bits are maximally random viewed absolutely
+    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
+    /// compress them while the delta form is trivial. This mirrors OpenZL,
+    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
+    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
+    /// huge unsigned values.
+    ///
+    /// Delta-encoded streams can only be read sequentially from row 0, so
+    /// skip() and readWithVisitor() reject them. Do not enable for production
+    /// until restatement points are added.
+    bool subIntSplitDeltaPreTransform{false};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
@@ -790,6 +809,51 @@ void readWithVisitorFast(
         innerRows.size(),
         outerRows.data());
     encoding.skip(tailSkip);
+  }
+}
+
+// Post-decode fast path: filters decoded values and routes them to the output.
+//
+// Non-hook paths (ExtractToReader / DropValues):
+//   - Redirects 'values' to the reader's rawValues buffer.
+//   - With filter: SIMD-tests values, compacts passing values and rows.
+//   - Without filter: all rows pass.
+//   - Advances numValues via addNumValues.
+//
+// Hook paths (ExtractToHook / ExtractToGenericHook):
+//   - 'values' stays as the caller's staging buffer (not rawValues).
+//   - Forwards decoded values to hook.addValues().
+//   - Does NOT call addNumValues (hook manages its own output).
+template <bool kScatter, typename T, typename V>
+void applyFixedWidthRun(
+    V& visitor,
+    const vector_size_t* selectedRows,
+    vector_size_t numSelected,
+    const vector_size_t* scatterRows,
+    T* values,
+    vector_size_t numRows) {
+  if constexpr (!V::kHasHook) {
+    values = reinterpret_cast<T*>(visitor.reader().rawValues());
+  }
+  auto numValues = visitor.reader().numValues();
+  int32_t* filterHits = nullptr;
+  if constexpr (V::kHasFilter) {
+    filterHits = visitor.outputRows(numSelected) - numValues;
+  }
+  velox::dwio::common::
+      processFixedWidthRun<T, V::kFilterOnly, kScatter, V::dense>(
+          velox::RowSet(selectedRows, numSelected),
+          0,
+          numSelected,
+          scatterRows,
+          values,
+          filterHits,
+          numValues,
+          visitor.filter(),
+          visitor.hook());
+  if constexpr (!V::kHasHook) {
+    visitor.addNumValues(
+        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
   }
 }
 

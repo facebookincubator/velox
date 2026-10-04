@@ -1870,7 +1870,7 @@ std::vector<std::string> PatternMetadata::parseSubstrings(
   if (RE2::FullMatch(full, fullPattern)) {
     while (RE2::PartialMatch(full, subPattern, &cur)) {
       substrings.push_back(std::string(cur));
-      full = re2::StringPiece(cur.end(), full.end() - cur.end());
+      full = re2::StringPiece(cur.data() + cur.size(), full.end() - cur.end());
     }
   }
   return substrings;

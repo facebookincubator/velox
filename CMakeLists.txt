@@ -353,7 +353,7 @@ if(VELOX_ENABLE_S3)
   if(AWSSDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
   endif()
-  find_package(AWSSDK 1.11.654 REQUIRED COMPONENTS s3;identity-management)
+  find_package(AWSSDK 1.11.806 REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
 endif()
 
@@ -695,6 +695,13 @@ endif()
 
 velox_set_source(simdjson)
 velox_resolve_dependency(simdjson 4.1.0)
+
+# libxml2 backs the Spark XPath functions and is only needed when Spark
+# functions are enabled.
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  velox_set_source(LibXml2)
+  velox_resolve_dependency(LibXml2)
+endif()
 
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)

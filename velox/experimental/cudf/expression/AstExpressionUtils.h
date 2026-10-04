@@ -69,9 +69,13 @@ void extractArrayLiterals(
     vector_size_t size) {
   auto elements = arrayVector->elements();
 
+  // TODO: When the in-list contains both non-null and null elements,
+  // non-matching rows should return NULL (not false) per Presto
+  // three-valued IN semantics. Currently null elements are skipped
+  // by extractArrayLiterals, so the null contribution is lost.
+  // Tracked in https://github.com/facebookincubator/velox/issues/18560.
   for (auto i = offset; i < offset + size; ++i) {
     if (elements->isNullAt(i)) {
-      // Skip null values for IN expressions
       continue;
     } else {
       literals.emplace_back(createLiteral(elements, scalars, i));
@@ -99,8 +103,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
       auto index = constantVector->index();
       auto size = arrayVector->sizeAt(index);
       if (size == 0) {
-        // Return empty vector for empty array
-        return literals;
+        VELOX_USER_FAIL("IN list must not be empty");
       }
 
       auto offset = arrayVector->offsetAt(index);
@@ -110,6 +113,10 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
       if (elements->isScalar()) {
         literals.reserve(size);
         extractArrayLiterals(arrayVector, literals, scalars, offset, size);
+      } else if (elements->typeKind() == TypeKind::UNKNOWN) {
+        // An untyped null list (e.g. `x IN (NULL)` parsed as ARRAY<UNKNOWN>)
+        // contains only null elements. Leaving the literal list empty routes
+        // the caller to the null-only IN path, which yields NULL.
       } else if (elements->typeKind() == TypeKind::ARRAY) {
         // Nested arrays not supported in IN expressions
         VELOX_FAIL("Nested arrays not supported in IN expressions");
@@ -618,8 +625,22 @@ cudf::ast::expression const& AstContext::pushExprToTree(
           exprVec.push_back(&logicalNode);
         }
 
+        // Null-array IN semantics per Presto: `x IN NULL` returns NULL
+        // regardless of x. Materialize via the fill/precompute path so the
+        // output column carries a proper null validity mask for downstream
+        // operators (e.g. count(column)).
         if (exprVec.empty()) {
-          VELOX_FAIL("Empty IN list");
+          auto nullBoolean = BaseVector::createNullConstant(BOOLEAN(), 1, pool);
+          createLiteral(nullBoolean, scalars);
+          std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
+          // Anchor the fill column to the side the IN operand references, not
+          // unconditionally to side 0: a join probe side may have zero columns
+          // while the operand references the build side.
+          int sideIdx = findExpressionSide(expr);
+          if (sideIdx < 0) {
+            sideIdx = 0;
+          }
+          return addPrecomputeInstructionOnSide(sideIdx, 0, fillExpr, "");
         }
 
         auto* result = exprVec[0];

@@ -39,6 +39,10 @@ namespace facebook::nimble::serde {
 /// needed for the requested top-level rows. It preserves the schema while
 /// preparing compact server-side payloads for wire transfer without
 /// materializing values into Velox vectors.
+///
+/// Hybrid FlatMap streams are key-major and cannot be sliced by one contiguous
+/// top-level row range. A full serialized batch may pass through unchanged;
+/// callers of the raw-stream API must retain the complete batch instead.
 class StreamSlicer {
  public:
   /// Controls raw-stream input and sliced output formats.
@@ -75,8 +79,8 @@ class StreamSlicer {
     /// buffer supplied to slice().
     std::vector<std::string_view> streams;
 
-    /// Indicates whether the stream set needs a row null-barrier on read.
-    bool requiresNullBarrier{false};
+    /// Indicates whether the stream set must be decoded independently.
+    bool requiredBarrier{false};
   };
 
   /// Returns compact raw streams containing rows [offset, offset + length).
@@ -118,7 +122,7 @@ class StreamSlicer {
       Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
-  // Slices one stream descriptor and propagates null-barrier requirements.
+  // Slices one stream descriptor and propagates barrier requirements.
   void sliceDescriptor(
       const StreamDescriptor& descriptor,
       Range range,

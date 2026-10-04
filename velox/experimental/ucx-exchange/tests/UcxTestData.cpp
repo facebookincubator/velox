@@ -49,7 +49,7 @@ std::string BaseTableGenerator::genRandomStr(size_t len) {
 template <typename T>
 std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<T>& hostValues,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   size_t numRows = hostValues.size();
 
   // Allocate a device buffer of the correct size
@@ -62,7 +62,7 @@ std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
       hostValues.data(),
       numRows * sizeof(T),
       cudaMemcpyHostToDevice,
-      stream.value());
+      stream.get());
 
   // Build the cudf::column from the device buffer
   return std::make_unique<cudf::column>(
@@ -76,34 +76,34 @@ std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
 // Explicit template instantiations
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<int8_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<int16_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<int32_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<int64_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<uint8_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<uint16_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<uint32_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<uint64_t>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<float>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
     const std::vector<double>& hostValues,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 std::unique_ptr<cudf::column> BaseTableGenerator::makeStringsColumn(
     const std::vector<std::string>& hostStrings) {
@@ -172,7 +172,7 @@ template <typename T>
 std::vector<T> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   maxRows = columnView.size() < maxRows ? columnView.size() : maxRows;
   const T* ptrData = columnView.data<T>();
   auto hostVec = cudf::detail::make_host_vector_async(
@@ -186,48 +186,48 @@ std::vector<T> BaseTableGenerator::getColVector(
 template std::vector<int8_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<int16_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<int32_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<int64_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<uint8_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<uint16_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<uint32_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<uint64_t> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<float> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 template std::vector<double> BaseTableGenerator::getColVector(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 std::vector<std::string> BaseTableGenerator::getStringCol(
     const cudf::column_view& columnView,
     cudf::size_type maxRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::strings_column_view strColView{columnView};
   maxRows = strColView.size() < maxRows ? strColView.size() : maxRows;
 
@@ -290,8 +290,7 @@ void UcxTestData::initialize(
   VLOG(3) << "- UcxTestData::initialize";
 }
 
-std::unique_ptr<cudf::table> UcxTestData::makeTable(
-    rmm::cuda_stream_view stream) {
+std::unique_ptr<cudf::table> UcxTestData::makeTable(cuda::stream_ref stream) {
   std::vector<std::unique_ptr<cudf::column>> columns;
 
   // Column 0: INT32 (integers)
@@ -310,7 +309,7 @@ bool UcxTestData::verifyTable(
     const cudf::table_view& table,
     size_t startRow,
     size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (table.num_columns() != 3) {
     VLOG(0) << "UcxTestData::verifyTable: expected 3 columns, got "
             << table.num_columns();
@@ -400,7 +399,7 @@ void WideTestTable::initialize(size_t numRows) {
 
 void WideTestTable::addNumericColumns(
     std::vector<std::unique_ptr<cudf::column>>& columns,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   columns.push_back(makeNumericColumn(int8Data_, stream));
   columns.push_back(makeNumericColumn(int16Data_, stream));
   columns.push_back(makeNumericColumn(int32Data_, stream));
@@ -414,8 +413,7 @@ void WideTestTable::addNumericColumns(
   columns.push_back(makeNumericColumn(boolData_, stream));
 }
 
-std::unique_ptr<cudf::table> WideTestTable::makeTable(
-    rmm::cuda_stream_view stream) {
+std::unique_ptr<cudf::table> WideTestTable::makeTable(cuda::stream_ref stream) {
   std::vector<std::unique_ptr<cudf::column>> columns;
   addNumericColumns(columns, stream);
   return std::make_unique<cudf::table>(std::move(columns));
@@ -425,7 +423,7 @@ bool WideTestTable::verifyNumericColumns(
     const cudf::table_view& table,
     size_t startRow,
     size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Verify numeric columns (columns 0-10)
   auto rxInt8 = getColVector<int8_t>(table.column(0), numRows, stream);
   auto rxInt16 = getColVector<int16_t>(table.column(1), numRows, stream);
@@ -465,7 +463,7 @@ bool WideTestTable::verifyTable(
     const cudf::table_view& table,
     size_t startRow,
     size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (table.num_columns() != 11) {
     VLOG(0) << "WideTestTable::verifyTable: expected 11 columns, got "
             << table.num_columns();
@@ -506,7 +504,7 @@ void WideComplexTestTable::initialize(size_t numRows) {
 }
 
 std::unique_ptr<cudf::table> WideComplexTestTable::makeTable(
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   std::vector<std::unique_ptr<cudf::column>> columns;
 
   // Add numeric columns from base class
@@ -529,7 +527,7 @@ bool WideComplexTestTable::verifyTable(
     const cudf::table_view& table,
     size_t startRow,
     size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (table.num_columns() != 13) {
     VLOG(0) << "WideComplexTestTable::verifyTable: expected 13 columns, got "
             << table.num_columns();

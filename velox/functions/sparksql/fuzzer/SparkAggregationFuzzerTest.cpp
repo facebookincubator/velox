@@ -22,6 +22,7 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -45,6 +46,10 @@ DEFINE_string(
     "If specified, Fuzzer will only choose functions from "
     "this comma separated list of function names "
     "(e.g: --only \"min\" or --only \"sum,avg\").");
+
+DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
+
+DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -71,8 +76,13 @@ int main(int argc, char** argv) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
+  // Must install a real arbitrator. With the default options the manager gets
+  // a NoopArbitrator, so the test-only spill hooks reach
+  // memory::testingRunArbitration() and reclaim nothing, which leaves hash
+  // aggregation -- the one operator here that spills only under arbitration --
+  // never spilling.
+  facebook::velox::exec::test::setupMemory(
+      FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
 
   // Spark reference execution uses gRPC and can be sensitive to large
   // payloads. Keep generated input sizes modest to reduce transport and

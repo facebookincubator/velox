@@ -118,14 +118,44 @@ class QueryConfig {
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
-  /// provided session timezone (if any).
+  /// provided session timezone (if any). Casts from TIMESTAMP WITH TIME ZONE to
+  /// TIMESTAMP return the UTC instant when this property is true.
   VELOX_QUERY_CONFIG(
       kAdjustTimestampToTimezone,
       adjustTimestampToTimezone,
       "adjust_timestamp_to_session_timezone",
       bool,
       false,
-      "Adjust timezone-less timestamp conversions to session timezone.")
+      "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
+
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE use the session
+  /// time zone, so values that compare equal produce equal results. If false,
+  /// they use each value's embedded time zone. The timezone_hour and
+  /// timezone_minute functions always report the offset stored in the value.
+  /// When adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use
+  /// the session zone when this property is true and the embedded zone when it
+  /// is false.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kUseSessionTimezoneForTimestampWithTimezone,
+      "use_session_timezone_for_timestamp_with_timezone",
+      bool,
+      false,
+      "Render TIMESTAMP WITH TIME ZONE values in the session timezone (true) or each value's embedded zone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or embedded zone (false).")
+
+  /// Returns the explicitly configured value, or the inverse of the deprecated
+  /// legacy property when the new property is absent.
+  bool useSessionTimezoneForTimestampWithTimezone() const;
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated config key retained while downstream callers migrate.
+  static constexpr const char* kLegacyTimestampWithTimezone =
+      "legacy_timestamp_with_timezone";
+
+  /// Legacy API. Prefer useSessionTimezoneForTimestampWithTimezone().
+  bool legacyTimestampWithTimezone() const {
+    return !useSessionTimezoneForTimestampWithTimezone();
+  }
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
@@ -508,6 +538,22 @@ class QueryConfig {
       uint32_t,
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
+
+  /// MergeJoin normally buffers both sides of an equal-key group before
+  /// emitting, so its memory is proportional to the sum of the two groups. For
+  /// inner and left joins the left group does not need to be resident: each
+  /// left row is joined against the whole right group and can then be
+  /// discarded. With this set, such joins retain only the left batch currently
+  /// being consumed and the one before it, kept to extend the group, bounding
+  /// left-side retention to two batches instead of the whole key group. Set to
+  /// false to restore buffering of the whole group.
+  VELOX_QUERY_CONFIG(
+      kMergeJoinStreamLeftSide,
+      mergeJoinStreamLeftSide,
+      "merge_join_stream_left_side",
+      bool,
+      true,
+      "Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group.")
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time

@@ -28,6 +28,8 @@ namespace facebook::velox::cudf_velox {
 
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
+bool canMakeCudfDefaultScalar(const TypePtr& type);
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(

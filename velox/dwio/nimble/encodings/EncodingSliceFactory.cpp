@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -335,6 +336,22 @@ std::string_view sliceFsst(
   return FsstEncoding::slice(encoded, offset, length, buffer, options);
 }
 
+std::string_view sliceALPRD(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_FLOATING_POINT_DATA_TYPE_OR(
+      dataType,
+      T,
+      ALPRDEncoding<T>::slice(encoded, offset, length, buffer, options),
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ALPRD encoding only supports float and double data types, got {}.",
+          dataType));
+}
+
 std::string_view sliceALP(
     std::string_view encoded,
     DataType dataType,
@@ -406,6 +423,8 @@ std::string_view EncodingSliceFactory::slice(
       return sliceFsst(encoded, dataType, offset, length, buffer, options);
     case EncodingType::ALP:
       return sliceALP(encoded, dataType, offset, length, buffer, options);
+    case EncodingType::ALPRD:
+      return sliceALPRD(encoded, dataType, offset, length, buffer, options);
     case EncodingType::Nullable:
       return sliceNullable(encoded, dataType, offset, length, buffer, options);
     case EncodingType::SparseBool:

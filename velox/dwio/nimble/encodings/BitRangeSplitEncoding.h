@@ -401,7 +401,7 @@ detail::BitRangeSplitEncodingBase::parseHeader(
   const uint8_t physicalBits = is32Bit ? 32 : 64;
 
   const char* cursor = encoded.data() + prefixSize;
-  const char* const encodedEnd = encoded.end();
+  const char* const encodedEnd = encoded.data() + encoded.size();
   const auto numSections = encoding::read<uint8_t>(cursor);
   NIMBLE_CHECK_FILE_GT(numSections, 0, "BitRangeSplit must contain sections.");
   const auto descriptorBytes =

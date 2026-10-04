@@ -685,6 +685,49 @@ class MainlyConstantEncodingBase
           .slicedIsCommon = sliceResult.sliced,
       };
     }
+    if (encodingType == EncodingType::Trivial) {
+      NIMBLE_CHECK_EQ(
+          EncodingPrefix::dataType(encoded),
+          DataType::Bool,
+          "MainlyConstant isCommon child must be boolean.");
+      const uint32_t prefixSize =
+          EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+      const auto compression =
+          static_cast<CompressionType>(encoded[prefixSize]);
+      if (compression == CompressionType::Uncompressed) {
+        // Trivial<Bool>-Uncompressed lays out the packed bitmap directly after
+        // the prefix + 1 byte compression marker, so popcount it in place --
+        // no encoding instantiation, no materialize, no allocation. The
+        // compressed branch keeps the materialize fallback below.
+        //
+        // countBits() below issues whole machine-word loads and can touch up
+        // to 7 bytes past the semantic bitmap end -- that's why FixedBitArray
+        // reserves a 7-byte slop on the writer side. The fallback path picked
+        // this up implicitly via TrivialEncoding<Bool>'s constructor check;
+        // we re-assert it here so a truncated/corrupted isCommon child fails
+        // loud instead of reading OOB.
+        NIMBLE_CHECK_GE(
+            encoded.size(),
+            static_cast<size_t>(prefixSize) + sizeof(uint8_t) +
+                FixedBitArray::bufferSize(rowEnd, 1),
+            "Trivial<Bool> isCommon child is smaller than the packed bitmap "
+            "the reader would touch (including uint64_t word-read slop).");
+        const auto* packed = reinterpret_cast<const uint64_t*>(
+            encoded.data() + prefixSize + sizeof(uint8_t));
+        const auto numCommonBeforeSlice = static_cast<uint32_t>(
+            velox::bits::countBits(packed, 0, static_cast<int32_t>(offset)));
+        const auto numCommonInSlice =
+            static_cast<uint32_t>(velox::bits::countBits(
+                packed,
+                static_cast<int32_t>(offset),
+                static_cast<int32_t>(rowEnd)));
+        return {
+            .numCommonBeforeSlice = numCommonBeforeSlice,
+            .numCommonInSlice = numCommonInSlice,
+            .slicedIsCommon = {},
+        };
+      }
+    }
 
     auto* pool = &buffer.getMemoryPool();
     auto encoding = EncodingFactory{options}.create(
@@ -723,7 +766,7 @@ class MainlyConstantEncodingBase
     const std::string_view otherValues{pos, otherValuesSize};
     pos += otherValuesSize;
     const std::string_view commonValue{
-        pos, static_cast<size_t>(encoded.end() - pos)};
+        pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
@@ -891,7 +934,9 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
       *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   this->commonValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
 }
 
 template <typename T>

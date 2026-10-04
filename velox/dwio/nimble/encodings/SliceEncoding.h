@@ -249,6 +249,19 @@ class SliceEncoding final
         encoding_->debugString(offset + 2));
   }
 
+  /// Returns the signed value delta added to every materialized value at
+  /// decode time. Zero when wrap() folded the shift into the inner encoding
+  /// at write time.
+  int64_t valueDelta() const noexcept {
+    return valueDelta_;
+  }
+
+  /// Returns the raw bytes of the inner encoding, stored verbatim after the
+  /// SliceEncoding header.
+  std::string_view innerEncoding() const noexcept {
+    return inner_;
+  }
+
   /// Wraps `encoded` so that a consumer sees `length` rows starting at
   /// `offset`, without slicing it. `encoded` is copied into `buffer`.
   ///

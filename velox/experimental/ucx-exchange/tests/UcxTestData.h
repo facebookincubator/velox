@@ -18,8 +18,8 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/table/table.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <stddef.h>
+#include <cuda/stream>
 
 #include <memory>
 #include <string>
@@ -57,8 +57,7 @@ class BaseTableGenerator {
   /// @brief Create a cudf table from the generated data.
   /// @param stream The CUDA stream to use.
   /// @return A unique pointer to the created cudf table.
-  virtual std::unique_ptr<cudf::table> makeTable(
-      rmm::cuda_stream_view stream) = 0;
+  virtual std::unique_ptr<cudf::table> makeTable(cuda::stream_ref stream) = 0;
 
   /// @brief Verify that the received table matches the generated data.
   /// @param table The table to verify.
@@ -70,7 +69,7 @@ class BaseTableGenerator {
       const cudf::table_view& table,
       size_t startRow,
       size_t numRows,
-      rmm::cuda_stream_view stream) = 0;
+      cuda::stream_ref stream) = 0;
 
   // ----- Helper methods for creating cudf columns -----
 
@@ -81,7 +80,7 @@ class BaseTableGenerator {
   template <typename T>
   static std::unique_ptr<cudf::column> makeNumericColumn(
       const std::vector<T>& hostValues,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// @brief Create a strings column from a vector of host strings.
   static std::unique_ptr<cudf::column> makeStringsColumn(
@@ -97,13 +96,13 @@ class BaseTableGenerator {
   static std::vector<T> getColVector(
       const cudf::column_view& columnView,
       cudf::size_type maxRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// @brief Retrieve strings from a strings column to host memory.
   static std::vector<std::string> getStringCol(
       const cudf::column_view& columnView,
       cudf::size_type maxRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 };
 
 /// @brief Original test data structure with narrow schema (INT32, FLOAT64,
@@ -138,13 +137,13 @@ class UcxTestData : public BaseTableGenerator {
     return numRows_;
   }
 
-  std::unique_ptr<cudf::table> makeTable(rmm::cuda_stream_view stream) override;
+  std::unique_ptr<cudf::table> makeTable(cuda::stream_ref stream) override;
 
   bool verifyTable(
       const cudf::table_view& table,
       size_t startRow,
       size_t numRows,
-      rmm::cuda_stream_view stream) override;
+      cuda::stream_ref stream) override;
 
   // Legacy accessors for backward compatibility with existing tests
   std::shared_ptr<std::vector<std::string>> getStrings() {
@@ -227,20 +226,20 @@ class WideTestTable : public BaseTableGenerator {
     return numRows_;
   }
 
-  std::unique_ptr<cudf::table> makeTable(rmm::cuda_stream_view stream) override;
+  std::unique_ptr<cudf::table> makeTable(cuda::stream_ref stream) override;
 
   bool verifyTable(
       const cudf::table_view& table,
       size_t startRow,
       size_t numRows,
-      rmm::cuda_stream_view stream) override;
+      cuda::stream_ref stream) override;
 
  protected:
   /// @brief Helper to add numeric columns to a column vector.
   /// Can be used by derived classes to build tables with additional columns.
   void addNumericColumns(
       std::vector<std::unique_ptr<cudf::column>>& columns,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// @brief Helper to verify numeric columns in a table.
   /// @param table The table view to verify.
@@ -252,7 +251,7 @@ class WideTestTable : public BaseTableGenerator {
       const cudf::table_view& table,
       size_t startRow,
       size_t numRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Data storage for numeric column types
   std::vector<int8_t> int8Data_;
@@ -320,13 +319,13 @@ class WideComplexTestTable : public WideTestTable {
     return kRowType;
   }
 
-  std::unique_ptr<cudf::table> makeTable(rmm::cuda_stream_view stream) override;
+  std::unique_ptr<cudf::table> makeTable(cuda::stream_ref stream) override;
 
   bool verifyTable(
       const cudf::table_view& table,
       size_t startRow,
       size_t numRows,
-      rmm::cuda_stream_view stream) override;
+      cuda::stream_ref stream) override;
 
  protected:
   // Additional data storage for complex column types

@@ -400,7 +400,7 @@ BenchmarkState prepareBenchmark() {
       state.schema,
       state.selectedSubfields,
       state.pool.get(),
-      DeserializerOptions{.hasHeader = true});
+      DeserializerOptions{});
   return state;
 }
 
