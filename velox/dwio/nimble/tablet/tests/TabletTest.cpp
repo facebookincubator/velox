@@ -2523,7 +2523,7 @@ class TabletWithIndexTest : public TabletTest {
   // startRow = first row >= key, endRow = total file rows.
   // Keys beyond all partitions produce empty results.
   static void verifyClusterIndexLookups(
-      const nimble::ClusterIndex* index,
+      const nimble::ClusterIndexBase* index,
       const std::vector<LookupTestCase>& testCases) {
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(fmt::format("key '{}'", testCase.key));
@@ -2748,6 +2748,8 @@ TEST_P(TabletWithIndexTest, singleGroup) {
       });
 
   nimble::Buffer buffer{*pool_};
+  std::vector<uint32_t> expectedStripeSizes;
+  expectedStripeSizes.reserve(3);
 
   // Write stripe 1: Total rows: 100
   // Stream 0: 3 chunks (rows: 30, 45, 25)
@@ -2776,7 +2778,10 @@ TEST_P(TabletWithIndexTest, singleGroup) {
         {.rowCount = 50, .key = "bbb"},
         {.rowCount = 50, .key = "ccc"},
     });
+    const auto stripeStartOffset = tabletWriter->size();
     tabletWriter->writeStripe(100, std::move(streams));
+    expectedStripeSizes.push_back(
+        static_cast<uint32_t>(tabletWriter->size() - stripeStartOffset));
   }
 
   // Write stripe 2: Total rows: 200
@@ -2809,7 +2814,10 @@ TEST_P(TabletWithIndexTest, singleGroup) {
         {.rowCount = 50, .key = "fff"},
         {.rowCount = 50, .key = "ggg"},
     });
+    const auto stripeStartOffset = tabletWriter->size();
     tabletWriter->writeStripe(200, std::move(streams));
+    expectedStripeSizes.push_back(
+        static_cast<uint32_t>(tabletWriter->size() - stripeStartOffset));
   }
 
   // Write stripe 3: Total rows: 150
@@ -2840,7 +2848,10 @@ TEST_P(TabletWithIndexTest, singleGroup) {
     indexHelper.addStripe({
         {.rowCount = 150, .key = "hhh"},
     });
+    const auto stripeStartOffset = tabletWriter->size();
     tabletWriter->writeStripe(150, std::move(streams));
+    expectedStripeSizes.push_back(
+        static_cast<uint32_t>(tabletWriter->size() - stripeStartOffset));
   }
 
   tabletWriter->close();
@@ -2861,12 +2872,19 @@ TEST_P(TabletWithIndexTest, singleGroup) {
   EXPECT_EQ(tablet->stripeRowCount(0), 100);
   EXPECT_EQ(tablet->stripeRowCount(1), 200);
   EXPECT_EQ(tablet->stripeRowCount(2), 150);
+  const std::vector<uint32_t> stripeSizes{
+      tablet->stripeSize(0),
+      tablet->stripeSize(1),
+      tablet->stripeSize(2),
+  };
+  EXPECT_THAT(stripeSizes, ::testing::ElementsAreArray(expectedStripeSizes));
+  NIMBLE_ASSERT_THROW(tablet->stripeSize(3), "Stripe index out of bounds");
 
   // Verify index section exists
   EXPECT_TRUE(tablet->hasOptionalSection(std::string(nimble::kIndexSection)));
 
   // Verify the index is available
-  const nimble::ClusterIndex* index = tablet->clusterIndex();
+  const nimble::ClusterIndexBase* index = tablet->clusterIndex();
   ASSERT_NE(index, nullptr);
 
   // Verify only one index group is created
@@ -3261,7 +3279,7 @@ TEST_P(TabletWithIndexTest, multipleGroups) {
   EXPECT_TRUE(tablet->hasOptionalSection(std::string(nimble::kIndexSection)));
 
   // Verify the index is available
-  const nimble::ClusterIndex* index = tablet->clusterIndex();
+  const nimble::ClusterIndexBase* index = tablet->clusterIndex();
   ASSERT_NE(index, nullptr);
 
   // Verify 3 index groups are created (one per stripe)
@@ -3696,7 +3714,7 @@ TEST_P(TabletWithIndexTest, singleGroupWithEmptyStream) {
   EXPECT_TRUE(tablet->hasOptionalSection(std::string(nimble::kIndexSection)));
 
   // Verify the index is available
-  const nimble::ClusterIndex* index = tablet->clusterIndex();
+  const nimble::ClusterIndexBase* index = tablet->clusterIndex();
   ASSERT_NE(index, nullptr);
 
   // Verify only one index group is created
@@ -4122,7 +4140,7 @@ TEST_P(TabletWithIndexTest, multipleGroupsWithEmptyStream) {
   EXPECT_TRUE(tablet->hasOptionalSection(std::string(nimble::kIndexSection)));
 
   // Verify the index is available
-  const nimble::ClusterIndex* index = tablet->clusterIndex();
+  const nimble::ClusterIndexBase* index = tablet->clusterIndex();
   ASSERT_NE(index, nullptr);
 
   // Verify 4 index groups are created (one per stripe)
@@ -4528,7 +4546,7 @@ TEST_P(TabletWithIndexTest, streamDeduplication) {
   EXPECT_TRUE(tablet->hasOptionalSection(std::string(nimble::kIndexSection)));
 
   // Verify the index is available
-  const nimble::ClusterIndex* index = tablet->clusterIndex();
+  const nimble::ClusterIndexBase* index = tablet->clusterIndex();
   ASSERT_NE(index, nullptr);
 
   // Verify only one index group is created

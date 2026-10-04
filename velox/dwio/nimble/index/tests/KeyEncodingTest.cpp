@@ -81,7 +81,11 @@ class KeyEncodingTest : public ::testing::TestWithParam<EncodingType> {
         });
     // Guards against the encoding silently degrading to Trivial, which would
     // make the /Prefix instantiation test the same path twice.
-    EXPECT_EQ(keyEncoding->encodingType(), GetParam());
+    if (GetParam() == EncodingType::Trivial) {
+      EXPECT_NE(dynamic_cast<TrivialKeyEncoding*>(keyEncoding.get()), nullptr);
+    } else {
+      EXPECT_NE(dynamic_cast<PrefixKeyEncoding*>(keyEncoding.get()), nullptr);
+    }
     return keyEncoding;
   }
 

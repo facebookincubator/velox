@@ -240,7 +240,7 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(
       SchemaDeserializer::deserialize(schemaWithEmptyMetadata),
-      "Hybrid FlatMap requires at least two groups");
+      "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(

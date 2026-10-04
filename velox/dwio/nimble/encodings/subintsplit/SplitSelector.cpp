@@ -22,6 +22,14 @@
 
 #include "velox/dwio/nimble/encodings/subintsplit/CostModel.h"
 
+// Planner context:
+//
+//   samples -> active bits -> candidate boundaries -> cost grid -> DP -> plan
+//
+// The grid contains only retained boundary pairs. The dynamic program still
+// receives both active-range edges and a full-range fallback, so pruning can
+// bound work without producing an incomplete partition.
+
 namespace facebook::nimble::subintsplit {
 namespace {
 

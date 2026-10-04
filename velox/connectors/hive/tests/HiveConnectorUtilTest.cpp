@@ -130,19 +130,14 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
 TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   config::ConfigBase sessionProperties({});
-  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-      pool_.get(),
-      pool_.get(),
-      &sessionProperties,
-      nullptr,
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "query.HiveConnectorUtilTest",
-      "task.HiveConnectorUtilTest",
-      "planNodeId.HiveConnectorUtilTest",
-      0,
-      "");
+  auto connectorQueryCtx = connector::ConnectorQueryCtx::Builder()
+                               .operatorPool(pool_.get())
+                               .connectorPool(pool_.get())
+                               .sessionProperties(&sessionProperties)
+                               .queryId("query.HiveConnectorUtilTest")
+                               .taskId("task.HiveConnectorUtilTest")
+                               .planNodeId("planNodeId.HiveConnectorUtilTest")
+                               .build();
   auto hiveConfig =
       std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
@@ -369,19 +364,14 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
           {"hive.parquet.footer_speculative_io_size", "8888"},
           {"unrelated.unused", "3"},
       }};
-  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-      pool_.get(),
-      pool_.get(),
-      &sessionProperties,
-      nullptr,
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "query.HiveConnectorUtilTest",
-      "task.HiveConnectorUtilTest",
-      "planNodeId.HiveConnectorUtilTest",
-      0,
-      "");
+  auto connectorQueryCtx = connector::ConnectorQueryCtx::Builder()
+                               .operatorPool(pool_.get())
+                               .connectorPool(pool_.get())
+                               .sessionProperties(&sessionProperties)
+                               .queryId("query.HiveConnectorUtilTest")
+                               .taskId("task.HiveConnectorUtilTest")
+                               .planNodeId("planNodeId.HiveConnectorUtilTest")
+                               .build();
 
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kOrcFooterSpeculativeIoSize] = "1111";
@@ -468,6 +458,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 1111);
   }
 
+#ifdef VELOX_ENABLE_PARQUET
   // Test Parquet format.
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
@@ -487,6 +478,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 7777);
     EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 6666);
   }
+#endif
 
   // Test Nimble format.
   {
@@ -523,19 +515,14 @@ TEST_F(HiveConnectorUtilTest, cacheMetadataSessionOverride) {
         std::unordered_map<std::string, std::string>{
             {hive::HiveConfig::kCacheMetadataSession,
              enabled ? "true" : "false"}});
-    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        &sessionProperties,
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.HiveConnectorUtilTest",
-        "task.HiveConnectorUtilTest",
-        "planNodeId.HiveConnectorUtilTest",
-        0,
-        "");
+    auto connectorQueryCtx = connector::ConnectorQueryCtx::Builder()
+                                 .operatorPool(pool_.get())
+                                 .connectorPool(pool_.get())
+                                 .sessionProperties(&sessionProperties)
+                                 .queryId("query.HiveConnectorUtilTest")
+                                 .taskId("task.HiveConnectorUtilTest")
+                                 .planNodeId("planNodeId.HiveConnectorUtilTest")
+                                 .build();
     auto hiveConfig =
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
@@ -577,19 +564,14 @@ TEST_F(HiveConnectorUtilTest, cacheIndexSessionOverride) {
         std::unordered_map<std::string, std::string>{
             {hive::HiveConfig::kCacheIndexSession,
              enabled ? "true" : "false"}});
-    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        &sessionProperties,
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.HiveConnectorUtilTest",
-        "task.HiveConnectorUtilTest",
-        "planNodeId.HiveConnectorUtilTest",
-        0,
-        "");
+    auto connectorQueryCtx = connector::ConnectorQueryCtx::Builder()
+                                 .operatorPool(pool_.get())
+                                 .connectorPool(pool_.get())
+                                 .sessionProperties(&sessionProperties)
+                                 .queryId("query.HiveConnectorUtilTest")
+                                 .taskId("task.HiveConnectorUtilTest")
+                                 .planNodeId("planNodeId.HiveConnectorUtilTest")
+                                 .build();
     auto hiveConfig =
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
@@ -640,19 +622,14 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
 
-    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        &sessionProperties,
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.HiveConnectorUtilTest",
-        "task.HiveConnectorUtilTest",
-        "planNodeId.HiveConnectorUtilTest",
-        0,
-        "");
+    auto connectorQueryCtx = connector::ConnectorQueryCtx::Builder()
+                                 .operatorPool(pool_.get())
+                                 .connectorPool(pool_.get())
+                                 .sessionProperties(&sessionProperties)
+                                 .queryId("query.HiveConnectorUtilTest")
+                                 .taskId("task.HiveConnectorUtilTest")
+                                 .planNodeId("planNodeId.HiveConnectorUtilTest")
+                                 .build();
 
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);

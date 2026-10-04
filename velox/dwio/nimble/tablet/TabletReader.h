@@ -34,7 +34,7 @@
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
 #include "velox/dwio/nimble/index/ChunkStats.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
-#include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/index/DenseIndexRegistry.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
@@ -126,7 +126,7 @@ class StripeIdentifier {
   std::shared_ptr<ChunkStatsGroup> chunkStats_;
 };
 
-using index::ClusterIndex;
+using index::ClusterIndexBase;
 
 /// Provides read access to a tablet written by a TabletWriter.
 /// Example usage to read all streams from stripe 0 in a file:
@@ -284,8 +284,13 @@ class TabletReader {
         chunkStats_->groupMetadata(stripeGroupIndex).size() > 0;
   }
 
+  /// Returns true when this file's chunk statistics support read pruning.
+  bool supportsChunkStatsPruning() const {
+    return chunkStats_ != nullptr && chunkStats_->supportsChunkStatsPruning();
+  }
+
   // Returns the cluster index if available, nullptr otherwise.
-  const ClusterIndex* clusterIndex() const {
+  const ClusterIndexBase* clusterIndex() const {
     return clusterIndex_.get();
   }
 
@@ -399,6 +404,15 @@ class TabletReader {
 
   uint64_t stripeOffset(uint32_t stripe) const {
     return stripeOffsets_[stripe];
+  }
+
+  /// Returns the physical byte span of `stripe`, covering every stream it
+  /// holds. The writer records it as the bytes appended while writing the
+  /// stripe, so it stays correct for the last stripe, where no following
+  /// stripe offset bounds it.
+  uint32_t stripeSize(uint32_t stripe) const {
+    NIMBLE_CHECK_LT(stripe, stripeCount_, "Stripe index out of bounds");
+    return stripeSizes_[stripe];
   }
 
   /// Returns the byte offset of `streamId` within `stripe` (relative to the
@@ -659,6 +673,7 @@ class TabletReader {
   uint64_t tabletRowCount_{0};
   uint32_t stripeCount_{0};
   const uint64_t* stripeOffsets_{nullptr};
+  const uint32_t* stripeSizes_{nullptr};
   // Prefix sum of stripe row counts for O(log n) rowToStripe lookup.
   // stripeRows_[i] = total rows in stripes [0, i).
   // Size is stripeCount_ + 1, with stripeRows_[0] = 0.
@@ -666,7 +681,7 @@ class TabletReader {
 
   // Index related fields.
   std::vector<index::IndexDescriptor> indexDescriptors_;
-  std::unique_ptr<ClusterIndex> clusterIndex_;
+  std::unique_ptr<ClusterIndexBase> clusterIndex_;
   FileProperties properties_{false, false, {}};
 
   std::unique_ptr<index::DenseIndexRegistry> denseIndexRegistry_;

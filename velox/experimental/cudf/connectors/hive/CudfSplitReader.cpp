@@ -227,6 +227,8 @@ CudfSplitReader::CudfSplitReader(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
       hiveConfig.maxCoalescedDistanceBytes(sessionProperties));
+  caseInsensitiveColumnNames_ =
+      hiveConfig.isFileColumnNamesReadAsLowerCase(sessionProperties);
 }
 
 CudfSplitReader::~CudfSplitReader() {
@@ -575,6 +577,10 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
           .timestamp_type(cudfHiveConfig_->timestampType())
+          // cuDF currently only folds ASCII letters, unlike the CPU reader's
+          // UTF-8 folding, so non-ASCII names (rare case) that differ in case
+          // do not match.
+          .case_sensitive_names(not caseInsensitiveColumnNames_)
           .build();
 
   // Set skip_bytes and num_bytes if available

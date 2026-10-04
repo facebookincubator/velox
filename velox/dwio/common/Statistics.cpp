@@ -327,6 +327,12 @@ RuntimeStats::toRuntimeMetricMap() const {
   if (processedStrides > 0) {
     result.emplace("processedStrides", RuntimeMetric(processedStrides));
   }
+  if (chunkSkippedRows > 0) {
+    result.emplace(kChunkSkippedRows, RuntimeMetric(chunkSkippedRows));
+  }
+  if (processedRows > 0) {
+    result.emplace(kProcessedRows, RuntimeMetric(processedRows));
+  }
   if (footerBufferOverread > 0) {
     result.emplace(
         "footerBufferOverread",
