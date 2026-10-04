@@ -19,7 +19,9 @@
 #include <string>
 
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/StringView.h"
+#include "velox/type/TimestampCalendar.h"
 
 namespace folly {
 struct dynamic;
@@ -320,7 +322,10 @@ struct Timestamp {
   ///
   /// This function is guaranteed to give same result as std::timegm when it is
   /// successful.
-  static int64_t calendarUtcToEpoch(const std::tm& tm);
+  VELOX_GPU_COMPATIBLE static int64_t calendarUtcToEpoch(const std::tm& tm) {
+    static_assert(sizeof(decltype(tm.tm_year)) == 4);
+    return calendar::calendarUtcToEpoch(tm);
+  }
 
   /// Truncates a Timestamp value to the specified precision.
   static Timestamp truncate(Timestamp ts, TimestampPrecision precision) {
