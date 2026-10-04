@@ -24,6 +24,7 @@
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/DateTimeUnitArithmetic.h"
 #include "velox/functions/lib/TimeUtilsCore.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -111,10 +112,6 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
     bool throwIfInvalid,
     bool allowMicro = false,
     bool allowAbbreviated = false);
-
-/// Adjusts the given date time object to the start of the specified date time
-/// unit (e.g., year, quarter, month, week, day, hour, minute).
-void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit);
 
 /// Returns timestamp with seconds adjusted to the nearest lower multiple of the
 /// specified interval. If the given seconds is negative and not an exact
