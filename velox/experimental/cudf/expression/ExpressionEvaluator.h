@@ -210,6 +210,14 @@ bool canExprRunOnGpu(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
+/// True when `expr` yields TIMESTAMP WITH TIME ZONE or takes it as a direct
+/// input. cuDF sees the type as INT64 holding UTC millis shifted over a zone
+/// key, so an evaluator that reads the number compares or converts the packed
+/// bits. Only an evaluator that binds the logical type, as GPU SFI does through
+/// the function signature, may claim such a node; the others decline it so the
+/// operator stays on the CPU.
+bool hasTimestampWithTimeZoneOperand(const core::TypedExprPtr& expr);
+
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
 std::optional<std::vector<std::string>> extractFieldPath(
