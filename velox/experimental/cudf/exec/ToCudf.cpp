@@ -31,6 +31,7 @@
 #include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 
 #include "folly/Conv.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -361,6 +362,10 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+  // Registering a function parses its signature, and one naming TIMESTAMP
+  // WITH TIME ZONE needs the type known first. The device translation unit
+  // that registers them cannot depend on the host type library.
+  registerTimestampWithTimeZoneType();
   if (CudfConfig::getInstance().gpuSfiExpressionEnabled) {
     // The evaluator's canEvaluate() looks calls up in this registry, so the
     // functions must be registered first.

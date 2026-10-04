@@ -20,11 +20,15 @@
 // that are never invoked.
 
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
+#include "velox/experimental/cudf/tests/GpuTestFunctions.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TypeCoercer.h"
 
 #include <folly/String.h>
@@ -180,6 +184,8 @@ class GpuFunctionRegistryTest : public ::testing::Test {
  protected:
   void SetUp() override {
     clearGpuFunctionRegistry();
+    // Also registers TIMESTAMP WITH TIME ZONE, which the GPU registration
+    // needs known to parse a signature naming it.
     functions::prestosql::registerAllScalarFunctions();
   }
 };
@@ -385,6 +391,32 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
     EXPECT_THAT(
         signaturesOf(name), testing::UnorderedElementsAreArray(signatures));
   }
+}
+
+// TIMESTAMP WITH TIME ZONE is BIGINT underneath. The signature names the
+// logical type and the kernel is compiled for the packed int64, so a call binds
+// on a TIMESTAMP WITH TIME ZONE column alone, as the DATE registrations do on
+// theirs.
+TEST_F(GpuFunctionRegistryTest, timestampWithTimeZoneRendersItsLogicalType) {
+  registerGpuTestFunctions();
+
+  const auto& entries = gpuFunctionRegistry().at("test_millis_utc");
+  ASSERT_EQ(entries.size(), 1);
+  const auto& entry = entries.front();
+  EXPECT_EQ(
+      entry.signature->toString(), "(timestamp with time zone) -> bigint");
+  EXPECT_THAT(entry.argumentKinds, testing::ElementsAre(TypeKind::BIGINT));
+  EXPECT_EQ(entry.returnKind, TypeKind::BIGINT);
+
+  auto call = [](const TypePtr& argumentType) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(argumentType, "c0")},
+        "test_millis_utc");
+  };
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(call(TIMESTAMP_WITH_TIME_ZONE())));
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(call(BIGINT())));
 }
 
 // Resolves the same decimal calls through Velox's CPU registry and the GPU one

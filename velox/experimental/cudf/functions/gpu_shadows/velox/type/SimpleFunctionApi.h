@@ -28,6 +28,10 @@
 
 namespace facebook::velox {
 
+// Defined in Type.h, which not every shadow translation unit reaches; named
+// here as a template argument alone.
+struct Time;
+
 /// SimpleTypeTrait template.
 
 template <typename P, typename S>
@@ -63,6 +67,19 @@ struct SimpleTypeTrait<IntervalYearMonth>
 template <>
 struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
   static constexpr const char* name = "TIME";
+};
+
+// T is also a simple type that represent the physical type of the custom type.
+template <typename T, bool providesCustomComparison>
+struct SimpleTypeTrait<CustomType<T, providesCustomComparison>>
+    : public SimpleTypeTrait<typename T::type> {
+  using physical_t = SimpleTypeTrait<typename T::type>;
+  static constexpr TypeKind typeKind = physical_t::typeKind;
+  static constexpr bool isPrimitiveType = physical_t::isPrimitiveType;
+  static constexpr bool isFixedWidth = physical_t::isFixedWidth;
+
+  // This is different than the physical type name.
+  static constexpr const char* name = T::typeName;
 };
 
 // SimpleTypeTrait<TimeMicroUtc> is the one specialisation not carried over:
