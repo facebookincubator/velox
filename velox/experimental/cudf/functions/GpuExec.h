@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/experimental/cudf/types/GpuCustomTypeView.cuh"
-#include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
 #include <cstdint>
 #include <type_traits>
@@ -30,7 +29,7 @@ struct Date;
 struct IntervalDayTime;
 struct IntervalYearMonth;
 struct Time;
-class Timestamp;
+struct Timestamp;
 struct StringView;
 struct Varchar;
 template <typename T>
@@ -101,11 +100,13 @@ struct resolver<Time> {
   using null_free_in_type = int64_t;
 };
 
+/// Velox's own Timestamp, as on the CPU: its members are device-callable, and
+/// the adapter converts a cuDF column's one integer per row to and from it.
 template <>
 struct resolver<Timestamp> {
-  using in_type = GpuTimestamp;
-  using out_type = GpuTimestamp;
-  using null_free_in_type = GpuTimestamp;
+  using in_type = Timestamp;
+  using out_type = Timestamp;
+  using null_free_in_type = Timestamp;
 };
 
 /// Velox's own StringView, as on the CPU. Only a constant VARCHAR argument is

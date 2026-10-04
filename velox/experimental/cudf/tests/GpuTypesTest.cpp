@@ -15,16 +15,14 @@
  */
 
 #include "velox/experimental/cudf/functions/GpuExec.h"
-#include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/SimpleFunctionTags.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 #include <gtest/gtest.h>
-
-#include <vector>
 
 namespace facebook::velox::gpu {
 namespace {
@@ -36,8 +34,8 @@ constexpr bool resolvesTo =
     std::is_same_v<typename GpuExec::resolver<T>::out_type, Expected> &&
     std::is_same_v<typename GpuExec::resolver<T>::null_free_in_type, Expected>;
 
-// Passes primitives through and maps each Velox type tag to the physical type
-// a kernel reads.
+// Passes primitives through, maps each Velox type tag to the physical type a
+// kernel reads, and keeps Velox's own Timestamp, as on the CPU.
 TEST(GpuTypesTest, resolver) {
   static_assert(resolvesTo<bool, bool>);
   static_assert(resolvesTo<int32_t, int32_t>);
@@ -50,37 +48,7 @@ TEST(GpuTypesTest, resolver) {
   static_assert(resolvesTo<Time, int64_t>);
   static_assert(resolvesTo<ShortDecimal<P1, S1>, int64_t>);
   static_assert(resolvesTo<LongDecimal<P1, S1>, __int128>);
-  static_assert(resolvesTo<Timestamp, GpuTimestamp>);
-}
-
-// Orders by seconds, then by nanos, and defaults to the epoch.
-TEST(GpuTypesTest, gpuTimestampOrdering) {
-  EXPECT_EQ(GpuTimestamp{}.seconds, 0);
-  EXPECT_EQ(GpuTimestamp{}.nanos, 0u);
-
-  // Strictly ascending, so the result of each operator on a pair follows from
-  // the positions alone.
-  const std::vector<GpuTimestamp> ascending = {
-      {-1, 999'999'999},
-      {0, 0},
-      {0, 1},
-      {100, 500},
-      {100, 600},
-      {101, 0},
-  };
-  for (size_t i = 0; i < ascending.size(); ++i) {
-    for (size_t j = 0; j < ascending.size(); ++j) {
-      SCOPED_TRACE(testing::Message() << "i=" << i << " j=" << j);
-      const auto& left = ascending[i];
-      const auto& right = ascending[j];
-      EXPECT_EQ(left == right, i == j);
-      EXPECT_EQ(left != right, i != j);
-      EXPECT_EQ(left < right, i < j);
-      EXPECT_EQ(left <= right, i <= j);
-      EXPECT_EQ(left > right, i > j);
-      EXPECT_EQ(left >= right, i >= j);
-    }
-  }
+  static_assert(resolvesTo<Timestamp, Timestamp>);
 }
 
 // A VARCHAR argument arrives as Velox's own StringView, as on the CPU, and a

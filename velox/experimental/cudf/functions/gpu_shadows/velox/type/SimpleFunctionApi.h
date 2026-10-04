@@ -28,8 +28,8 @@
 
 namespace facebook::velox {
 
-// Defined in Type.h, which not every shadow translation unit reaches; named
-// here as a template argument alone.
+// Defined in Type.h, which the device side only declares; named here as a
+// template argument alone.
 struct Time;
 
 /// SimpleTypeTrait template.
