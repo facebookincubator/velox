@@ -315,9 +315,12 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
     case DateTimeUnit::kMonth:
     case DateTimeUnit::kWeek:
     case DateTimeUnit::kDay: {
-      const int32_t inDate =
-          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
-              .count();
+      // Round toward negative infinity so that a timestamp before the epoch
+      // keeps its calendar day; rounding toward zero would move it to the
+      // next day.
+      const int32_t inDate = std::chrono::floor<date::days>(inTimestamp)
+                                 .time_since_epoch()
+                                 .count();
       const int32_t outDate = addToDate(inDate, unit, value);
       outTimestamp =
           inTimestamp + date::days(checkedMinus<int32_t>(outDate, inDate));

@@ -3071,6 +3071,21 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
           1,
           Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
 
+  // Timestamps before the epoch keep the calendar day of their local time,
+  // so the month arithmetic starts from November 30, not December 1.
+  EXPECT_EQ(
+      parseTimestamp("1969-12-30 12:00:00"),
+      dateAdd("month", 1, parseTimestamp("1969-11-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-02-28 12:00:00"),
+      dateAdd("month", 1, parseTimestamp("1969-01-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-05-28 12:00:00"),
+      dateAdd("quarter", 1, parseTimestamp("1969-02-28 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1968-02-28 12:00:00"),
+      dateAdd("year", -1, parseTimestamp("1969-02-28 12:00:00")));
+
   // Test for daylight saving. Daylight saving in US starts at 2021-03-14
   // 02:00:00 PST.
   // When adjust_timestamp_to_timezone is off, no Daylight saving occurs
