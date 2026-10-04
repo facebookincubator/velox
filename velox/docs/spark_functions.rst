@@ -80,22 +80,22 @@ for :doc:`all <functions/spark/coverage>` functions.
     :spark:func:`array_compact`                         :spark:func:`expm1`                                 :spark:func:`regexp_instr`                              :spark:func:`covar_samp`
     :spark:func:`array_contains`                        :spark:func:`factorial`                             :spark:func:`regexp_replace`                            :spark:func:`first`
     :spark:func:`array_distinct`                        :spark:func:`filter`                                :spark:func:`remainder`                                 :spark:func:`first_ignore_null`
-    :spark:func:`array_except`                          :spark:func:`find_in_set`                           :spark:func:`repeat`                                    :spark:func:`kurtosis`
-    :spark:func:`array_insert`                          :spark:func:`flatten`                               :spark:func:`replace`                                   :spark:func:`last`
-    :spark:func:`array_intersect`                       :spark:func:`floor`                                 :spark:func:`reverse`                                   :spark:func:`last_ignore_null`
-    :spark:func:`array_join`                            :spark:func:`forall`                                :spark:func:`rint`                                      :spark:func:`max`
-    :spark:func:`array_max`                             :spark:func:`format_number`                         :spark:func:`rlike`                                     :spark:func:`max_by`
-    :spark:func:`array_min`                             :spark:func:`from_unixtime`                         :spark:func:`round`                                     :spark:func:`min`
-    :spark:func:`array_position`                        :spark:func:`from_utc_timestamp`                    :spark:func:`rpad`                                      :spark:func:`min_by`
-    :spark:func:`array_prepend`                         :spark:func:`get`                                   :spark:func:`rtrim`                                     :spark:func:`mode`
-    :spark:func:`array_remove`                          :spark:func:`get_json_object`                       :spark:func:`sec`                                       :spark:func:`regr_replacement`
-    :spark:func:`array_repeat`                          :spark:func:`get_timestamp`                         :spark:func:`second`                                    :spark:func:`skewness`
-    :spark:func:`array_sort`                            :spark:func:`greaterthan`                           :spark:func:`sequence`                                  :spark:func:`stddev`
-    :spark:func:`array_sort_desc`                       :spark:func:`greaterthanorequal`                    :spark:func:`sha1`                                      :spark:func:`stddev_samp`
-    :spark:func:`array_union`                           :spark:func:`greatest`                              :spark:func:`sha2`                                      :spark:func:`sum`
-    :spark:func:`arrays_zip`                            :spark:func:`hash`                                  :spark:func:`shiftleft`                                 :spark:func:`var_samp`
-    :spark:func:`ascii`                                 :spark:func:`hash_with_seed`                        :spark:func:`shiftright`                                :spark:func:`variance`
-    :spark:func:`asin`                                  :spark:func:`hex`                                   :spark:func:`shuffle`
+    :spark:func:`array_except`                          :spark:func:`find_in_set`                           :spark:func:`repeat`                                    :spark:func:`histogram_numeric`
+    :spark:func:`array_insert`                          :spark:func:`flatten`                               :spark:func:`replace`                                   :spark:func:`kurtosis`
+    :spark:func:`array_intersect`                       :spark:func:`floor`                                 :spark:func:`reverse`                                   :spark:func:`last`
+    :spark:func:`array_join`                            :spark:func:`forall`                                :spark:func:`rint`                                      :spark:func:`last_ignore_null`
+    :spark:func:`array_max`                             :spark:func:`format_number`                         :spark:func:`rlike`                                     :spark:func:`max`
+    :spark:func:`array_min`                             :spark:func:`from_unixtime`                         :spark:func:`round`                                     :spark:func:`max_by`
+    :spark:func:`array_position`                        :spark:func:`from_utc_timestamp`                    :spark:func:`rpad`                                      :spark:func:`min`
+    :spark:func:`array_prepend`                         :spark:func:`get`                                   :spark:func:`rtrim`                                     :spark:func:`min_by`
+    :spark:func:`array_remove`                          :spark:func:`get_json_object`                       :spark:func:`sec`                                       :spark:func:`mode`
+    :spark:func:`array_repeat`                          :spark:func:`get_timestamp`                         :spark:func:`second`                                    :spark:func:`regr_replacement`
+    :spark:func:`array_sort`                            :spark:func:`greaterthan`                           :spark:func:`sequence`                                  :spark:func:`skewness`
+    :spark:func:`array_sort_desc`                       :spark:func:`greaterthanorequal`                    :spark:func:`sha1`                                      :spark:func:`stddev`
+    :spark:func:`array_union`                           :spark:func:`greatest`                              :spark:func:`sha2`                                      :spark:func:`stddev_samp`
+    :spark:func:`arrays_zip`                            :spark:func:`hash`                                  :spark:func:`shiftleft`                                 :spark:func:`sum`
+    :spark:func:`ascii`                                 :spark:func:`hash_with_seed`                        :spark:func:`shiftright`                                :spark:func:`var_samp`
+    :spark:func:`asin`                                  :spark:func:`hex`                                   :spark:func:`shuffle`                                   :spark:func:`variance`
     :spark:func:`asinh`                                 :spark:func:`hour`                                  :spark:func:`sign`
     :spark:func:`assert_not_null`                       :spark:func:`hypot`                                 :spark:func:`sin`
     :spark:func:`atan`                                  :spark:func:`initcap`                               :spark:func:`sinh`
