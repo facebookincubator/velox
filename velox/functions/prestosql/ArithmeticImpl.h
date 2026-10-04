@@ -19,6 +19,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
@@ -43,9 +44,14 @@ namespace facebook::velox::functions {
 /// number to the rounded fraction for small numbers.
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
+/// 'scaleFactor' is 10^decimals when the caller has already computed it. A
+/// caller whose 'decimals' is constant computes the power once per batch
+/// instead of once per row; the result is the same either way.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum
-round(const TNum& number, const TDecimals& decimals = 0) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
+    const TNum& number,
+    const TDecimals& decimals = 0,
+    std::optional<double> scaleFactor = std::nullopt) {
   static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
 
   if constexpr (std::is_integral_v<TNum>) {
@@ -68,7 +74,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
   // For negative 'decimals', we aren't going to lose any precision - we divide
   // first (multiply by factor which is < 1.0).
   if (decimals < 0) {
-    const double factor = std::pow(10, decimals);
+    const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
     return std::round(number * factor) / factor;
   }
 
@@ -78,7 +84,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
   if (fraction == 0.0)
     return number;
 
-  const double factor = std::pow(10, decimals);
+  const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
 
   // Smaller numbers are less affected by precision loss being multiplied by the
   // factor, but more affected by precision loss by adding truncated number to
