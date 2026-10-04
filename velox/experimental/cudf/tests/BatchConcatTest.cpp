@@ -45,7 +45,7 @@ class EstimatedSizeCudfVector final : public CudfVector {
       TypePtr type,
       vector_size_t size,
       std::unique_ptr<cudf::table>&& table,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       uint64_t estimatedSizeBytes)
       : CudfVector(pool, type, size, std::move(table), stream),
         estimatedSizeBytes_(estimatedSizeBytes) {}
