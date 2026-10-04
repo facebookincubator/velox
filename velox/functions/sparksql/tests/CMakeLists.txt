@@ -32,6 +32,7 @@ add_executable(
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
   BitwiseTest.cpp
+  CanonicalFloatingPoint.cpp
   CharTypeWriteSideCheckTest.cpp
   ComparisonsTest.cpp
   ConcatWsTest.cpp
@@ -102,7 +103,7 @@ add_executable(
   VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp
 )
-velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h)
+velox_add_test_headers(velox_functions_spark_test CanonicalFloatingPoint.h JsonTestUtil.h)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 
