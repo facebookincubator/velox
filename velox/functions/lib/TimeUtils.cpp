@@ -16,6 +16,10 @@
 
 #include "velox/functions/lib/TimeUtils.h"
 
+#include <boost/algorithm/string/case_conv.hpp>
+
+#include "velox/core/QueryConfig.h"
+
 namespace facebook::velox::functions {
 
 const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames{
@@ -25,6 +29,20 @@ const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames{
     {"tue", 5},      {"wed", 6},    {"thursday", 0}, {"friday", 1},
     {"saturday", 2}, {"sunday", 3}, {"monday", 4},   {"tuesday", 5},
     {"wednesday", 6}};
+
+const tz::TimeZone* getSessionTimeZone(const core::QueryConfig& config) {
+  return getSessionTimeZone(config.sessionTimezone());
+}
+
+const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
+  if (config.adjustTimestampToTimezone()) {
+    auto sessionTzName = config.sessionTimezone();
+    if (!sessionTzName.empty()) {
+      return tz::locateZone(sessionTzName);
+    }
+  }
+  return nullptr;
+}
 
 std::optional<DateTimeUnit> fromDateTimeUnitString(
     StringView unitString,
@@ -85,45 +103,4 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
 static_assert(kMaxEpochSeconds == Timestamp::kMaxSeconds);
 static_assert(kMinEpochSeconds == Timestamp::kMinSeconds);
 
-Timestamp truncateTimestamp(
-    Timestamp timestamp,
-    DateTimeUnit unit,
-    const tz::TimeZone* timeZone) {
-  switch (unit) {
-    // Units up to a minute truncate the UTC value directly: time zone offsets
-    // and daylight saving shifts are whole minutes.
-    case DateTimeUnit::kMicrosecond:
-    case DateTimeUnit::kMillisecond:
-    case DateTimeUnit::kSecond:
-    case DateTimeUnit::kMinute: {
-      const auto truncated = truncateEpochTime(
-          {timestamp.getSeconds(), timestamp.getNanos()}, unit);
-      return Timestamp(truncated.seconds, truncated.nanos);
-    }
-
-    // Hour truncation has to handle the corner case of daylight savings time
-    // boundaries. Since conversions from local timezone to UTC may be
-    // ambiguous, we need to be carefull about the roundtrip of converting to
-    // local time and back. So what we do is to calculate the truncation delta
-    // in UTC, then applying it to the input timestamp.
-    case DateTimeUnit::kHour: {
-      const int64_t localSeconds = getSeconds(timestamp, timeZone);
-      const int64_t secondsDelta =
-          localSeconds - truncateEpochTime({localSeconds, 0}, unit).seconds;
-      return Timestamp(timestamp.getSeconds() - secondsDelta, 0);
-    }
-
-    // For the truncations below, we may first need to convert to the local
-    // timestamp, truncate, then convert back to GMT.
-    default: {
-      const EpochTime local{
-          getSeconds(timestamp, timeZone), timestamp.getNanos()};
-      Timestamp result(truncateEpochTime(local, unit).seconds, 0);
-      if (timeZone != nullptr) {
-        result.toGMT(*timeZone);
-      }
-      return result;
-    }
-  }
-}
 } // namespace facebook::velox::functions
