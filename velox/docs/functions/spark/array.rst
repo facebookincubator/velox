@@ -228,6 +228,13 @@ Array Functions
         SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
         SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
 
+    -0.0 and 0.0 are treated as equal, and so are all NaNs. Floating-point
+    values in the result, including nested ones, are returned in canonical
+    form: -0.0 as 0.0 and every NaN as the canonical NaN. ::
+
+        SELECT array_union(array(-0.0), array(0.0)); -- [0.0]
+        SELECT array_union(array(array(-0.0)), array(array(0.0))); -- [[0.0]]
+
 .. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
     Returns the merge of the given arrays, element-wise into a single array of rows.
