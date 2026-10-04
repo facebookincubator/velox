@@ -159,7 +159,8 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       static_cast<const void*>(column.head<uint8_t>()),
       column.null_mask(),
       column.offset(),
-      isConstant};
+      isConstant,
+      gpu_sfi::ticksPerSecond(column.type())};
 }
 
 // The physical value of a non-null constant as the bytes GpuConstantArgument
@@ -171,6 +172,11 @@ std::vector<std::byte> constantBytes(const BaseVector& vector) {
   if constexpr (std::is_same_v<T, StringView>) {
     const auto* begin = reinterpret_cast<const std::byte*>(value.data());
     return {begin, begin + value.size()};
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    const int64_t parts[2] = {
+        value.getSeconds(), static_cast<int64_t>(value.getNanos())};
+    const auto* begin = reinterpret_cast<const std::byte*>(parts);
+    return {begin, begin + sizeof(parts)};
   } else {
     const auto* begin = reinterpret_cast<const std::byte*>(&value);
     return {begin, begin + sizeof(T)};
