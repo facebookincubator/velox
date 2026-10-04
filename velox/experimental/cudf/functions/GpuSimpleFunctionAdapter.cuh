@@ -31,6 +31,7 @@
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/utilities/bit.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/device_buffer.hpp>
@@ -323,11 +324,27 @@ struct GpuUDFHolder {
 
 namespace detail {
 
+/// The descriptors of a call with a fixed number of arguments, passed to the
+/// kernel by value: a parameter block holds 4 KiB and a descriptor 24 bytes, so
+/// the launch copies nothing to the device. Each slot is indexed with a
+/// constant once inlined, so it is read from parameter space. A call with a
+/// variadic tail uploads its descriptors instead, since the tail's view indexes
+/// them at run time, which would force the block into local memory.
+template <std::size_t N>
+struct GpuArgumentPack {
+  GpuArgView views[N];
+
+  __device__ const GpuArgView& operator[](std::size_t i) const {
+    return views[i];
+  }
+};
+
 /// True when the argument at slot I is null at this row. A variadic slot is
-/// never null; the function reads nullity per element.
-template <typename TIn>
+/// never null; the function reads nullity per element. `TArguments` is a
+/// GpuArgumentPack or a device pointer to uploaded descriptors.
+template <typename TIn, typename TArguments>
 __device__ inline bool
-slotIsNull(const GpuArgView* arguments, std::size_t i, cudf::size_type row) {
+slotIsNull(const TArguments& arguments, std::size_t i, cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return false;
   } else {
@@ -338,9 +355,9 @@ slotIsNull(const GpuArgView* arguments, std::size_t i, cudf::size_type row) {
 /// The argument to pass for slot I to call() or callNullFree(). A variadic
 /// pack is last in a signature, so it is the tail of the descriptor array. A
 /// scalar comes back as a reference into the column, a view by value.
-template <typename TIn>
+template <typename TIn, typename TArguments>
 __device__ inline decltype(auto) slotArg(
-    const GpuArgView* arguments,
+    const TArguments& arguments,
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
@@ -353,9 +370,9 @@ __device__ inline decltype(auto) slotArg(
 
 /// The argument to pass for slot I to callNullable(): a null scalar is a null
 /// pointer, and a variadic pack is passed by value.
-template <typename TIn>
+template <typename TIn, typename TArguments>
 __device__ inline auto slotNullableArg(
-    const GpuArgView* arguments,
+    const TArguments& arguments,
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
@@ -382,12 +399,17 @@ __device__ inline GpuErrorKind raisedError() {
 /// When `collecting`, so does a failed check: the value came from data the
 /// check rejected, and the owner raises the error from the CPU. Without a
 /// collector the launch keeps the value, since nobody can act on the failure.
-template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
+template <
+    typename Holder,
+    typename TOut,
+    typename TArguments,
+    typename... TIn,
+    std::size_t... I>
 __device__ bool evaluateRow(
     typename Holder::udf_struct_t fn,
     TOut* out,
     bool collecting,
-    const GpuArgView* arguments,
+    const TArguments& arguments,
     int32_t numArgs,
     cudf::size_type row,
     std::index_sequence<I...>) {
@@ -416,6 +438,8 @@ __device__ bool evaluateRow(
   return ok;
 }
 
+/// Every lane takes part in the warp votes below: no thread returns before
+/// them, and the block size is a multiple of the warp size.
 constexpr unsigned kFullWarpMask = 0xffff'ffffu;
 constexpr int kWarpSize = 32;
 static_assert(
@@ -468,14 +492,14 @@ __device__ inline void recordValidity(
 /// row can be null; `worstKind` is null when the caller does not collect. A
 /// thread past the last row runs the whole kernel rather than returning: the
 /// warp votes and the block count below need every thread of the block.
-template <typename Holder, typename TOut, typename... TIn>
+template <typename Holder, typename TOut, typename TArguments, typename... TIn>
 __global__ void simpleFunctionKernel(
     typename Holder::udf_struct_t fn,
     TOut* out,
     cudf::bitmask_type* validity,
     cudf::size_type* nullCount,
     int32_t* worstKind,
-    const GpuArgView* arguments,
+    TArguments arguments,
     int32_t numArgs,
     cudf::size_type numRows) {
   // Before the bounds check: every thread of the block owns a byte, with or
@@ -486,7 +510,7 @@ __global__ void simpleFunctionKernel(
   auto const hasRow = row < numRows;
   bool valid = false;
   if (hasRow) {
-    valid = evaluateRow<Holder, TOut, TIn...>(
+    valid = evaluateRow<Holder, TOut, TArguments, TIn...>(
         fn,
         out,
         worstKind != nullptr,
@@ -511,6 +535,46 @@ template <typename Holder, typename TReturn, typename... TArgs>
 struct GpuSimpleFunctionAdapter {
   using TOut = typename gpu::GpuExec::resolver<TReturn>::out_type;
 
+  /// The physical type the kernel reads an argument as.
+  template <typename T>
+  using TIn = typename gpu::GpuExec::resolver<T>::in_type;
+
+  /// Whether the signature ends in a variadic pack, which decides how the
+  /// argument descriptors reach the kernel.
+  static constexpr bool kHasVariadicTail =
+      (isGpuVariadicView<TIn<TArgs>>::value || ...);
+
+  /// Queues the kernel, with the descriptors as a GpuArgumentPack or as a
+  /// device pointer.
+  template <typename TArguments>
+  static void launchKernel(
+      const typename Holder::udf_struct_t& fn,
+      TOut* out,
+      cudf::bitmask_type* validity,
+      cudf::size_type* nullCount,
+      int32_t* worstKind,
+      const TArguments& arguments,
+      int32_t numArgs,
+      cudf::size_type numRows,
+      cuda::stream_ref stream) {
+    detail::simpleFunctionKernel<Holder, TOut, TArguments, TIn<TArgs>...>
+        // One byte of dynamic shared memory per thread for the error sink,
+        // requested whether or not this launch collects, since the check sites
+        // cannot tell.
+        <<<detail::gridSize(numRows),
+           detail::kBlockSize,
+           detail::kBlockSize * sizeof(uint8_t),
+           stream.get()>>>(
+            fn,
+            out,
+            validity,
+            nullCount,
+            worstKind,
+            arguments,
+            numArgs,
+            numRows);
+  }
+
   static std::unique_ptr<cudf::column> launch(
       const std::vector<GpuArgView>& arguments,
       const GpuFunctionInstance& instance,
@@ -532,9 +596,6 @@ struct GpuSimpleFunctionAdapter {
     if (numRows == 0) {
       return out;
     }
-
-    auto deviceArguments = cudf::detail::make_device_uvector_async(
-        arguments, stream, cudf::get_current_device_resource_ref());
 
     // Validity is recorded only when a row can be null for an answer: an
     // argument carries nulls, or the function can return false. A declined row
@@ -558,26 +619,44 @@ struct GpuSimpleFunctionAdapter {
       nullCount->set_value_to_zero_async(stream);
     }
 
-    detail::simpleFunctionKernel<
-        Holder,
-        TOut,
-        typename gpu::GpuExec::resolver<TArgs>::in_type...>
-        // One byte of dynamic shared memory per thread for the error sink,
-        // requested whether or not this launch collects, since the check sites
-        // cannot tell.
-        <<<detail::gridSize(numRows),
-           detail::kBlockSize,
-           detail::kBlockSize * sizeof(uint8_t),
-           stream.get()>>>(
-            fn,
-            out->mutable_view().template data<TOut>(),
-            needsValidity ? static_cast<cudf::bitmask_type*>(validity.data())
-                          : nullptr,
-            needsValidity ? nullCount->data() : nullptr,
-            worstKind,
-            deviceArguments.data(),
-            static_cast<int32_t>(arguments.size()),
-            numRows);
+    auto* const outData = out->mutable_view().template data<TOut>();
+    auto* const validityData = needsValidity
+        ? static_cast<cudf::bitmask_type*>(validity.data())
+        : nullptr;
+    auto* const nullCountData = needsValidity ? nullCount->data() : nullptr;
+    auto const numArgs = static_cast<int32_t>(arguments.size());
+    if constexpr (kHasVariadicTail) {
+      // Freed in stream order, so it outlives the kernel.
+      auto deviceArguments = cudf::detail::make_device_uvector_async(
+          arguments, stream, cudf::get_current_device_resource_ref());
+      launchKernel<const GpuArgView*>(
+          fn,
+          outData,
+          validityData,
+          nullCountData,
+          worstKind,
+          deviceArguments.data(),
+          numArgs,
+          numRows,
+          stream);
+    } else {
+      CUDF_EXPECTS(
+          arguments.size() == sizeof...(TArgs),
+          "GPU simple function launched with the wrong number of arguments");
+      detail::GpuArgumentPack<std::max<std::size_t>(sizeof...(TArgs), 1)>
+          pack{};
+      std::copy(arguments.begin(), arguments.end(), pack.views);
+      launchKernel(
+          fn,
+          outData,
+          validityData,
+          nullCountData,
+          worstKind,
+          pack,
+          numArgs,
+          numRows,
+          stream);
+    }
 
     if (needsValidity) {
       // Reading the count synchronizes the stream, the one synchronization a
