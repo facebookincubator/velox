@@ -59,6 +59,11 @@ bool AggregateCompanionFunctionBase::isReducing() const {
   return fn_->isReducing();
 }
 
+void AggregateCompanionFunctionBase::setConstantInputs(
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->setConstantInputs(constantInputs);
+}
+
 void AggregateCompanionFunctionBase::setAllocatorInternal(
     HashStringAllocator* allocator) {
   fn_->setAllocator(allocator);
