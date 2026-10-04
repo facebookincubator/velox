@@ -131,11 +131,12 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
   return nullptr;
 }
 
-// Forms the descriptor the kernel reads an argument through.
+// Forms the descriptor the kernel reads an argument through. A mask with no
+// null set is dropped, so that the launch does not record validity for it.
 GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
   return GpuArgView{
       static_cast<const void*>(column.head<uint8_t>()),
-      column.null_mask(),
+      column.null_count() > 0 ? column.null_mask() : nullptr,
       column.offset(),
       isConstant};
 }
@@ -306,25 +307,14 @@ ColumnOrView GpuSfiExpression::eval(
   const GpuFunctionInstance instance{
       instance_.empty() ? nullptr : instance_.data(),
       static_cast<int32_t>(instance_.size())};
-  if (errors == nullptr) {
-    // No owner can act on a declined row, so the launch does not collect:
-    // nulling the row would turn the error into a different answer.
-    return launch_(
-        argViews,
-        instance,
-        numRows,
-        outputType_,
-        /*declinedRows=*/nullptr,
-        stream,
-        mr);
-  }
-
-  // Every launch in this evaluation records into the owner's buffer, which the
-  // owner reads once; reading a device scalar here would synchronize the
-  // stream.
-  auto* const declinedRows = errors->declinedRows(numRows);
+  // Without an owner that can act on a declined row the launch does not
+  // collect: dropping the row's value would turn the error into a different
+  // answer. With one, every launch in this evaluation records into the owner's
+  // word, which the owner reads once; reading it here would synchronize the
+  // stream per node.
+  auto* const worstKind = errors == nullptr ? nullptr : errors->worstKind();
   return launch_(
-      argViews, instance, numRows, outputType_, declinedRows, stream, mr);
+      argViews, instance, numRows, outputType_, worstKind, stream, mr);
 }
 
 void GpuSfiExpression::close() {
