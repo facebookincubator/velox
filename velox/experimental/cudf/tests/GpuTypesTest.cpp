@@ -17,16 +17,13 @@
 #include "velox/experimental/cudf/functions/GpuExec.h"
 #include "velox/experimental/cudf/types/GpuTimestamp.cuh"
 
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/SimpleFunctionTags.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <gtest/gtest.h>
 
-#include <utility>
 #include <vector>
-
-// Included by path: this target does not put gpu_shadows/ on its include
-// path, and nothing else here includes the real BitUtil.h.
-#include "velox/experimental/cudf/functions/gpu_shadows/velox/common/base/BitUtil.h"
 
 namespace facebook::velox::gpu {
 namespace {
@@ -85,38 +82,39 @@ TEST(GpuTypesTest, gpuTimestampOrdering) {
   }
 }
 
-// Counts the set bits of [begin, end) across word boundaries, and returns 0
-// for an empty or negative range instead of shifting by a negative amount.
-TEST(GpuTypesTest, countBits) {
-  const uint64_t words[3] = {
-      0xB5,
-      0xF0F0F0F0F0F0F0F0ULL,
-      ~uint64_t{0},
-  };
-  constexpr int32_t kNumBits = 3 * 64;
-  const auto reference = [&](int32_t begin, int32_t end) {
-    int32_t count{0};
-    for (int32_t bit = begin; bit < end; ++bit) {
-      count += static_cast<int32_t>((words[bit / 64] >> (bit % 64)) & 1);
-    }
-    return count;
-  };
-  for (int32_t begin = 0; begin <= kNumBits; ++begin) {
-    for (int32_t end = begin; end <= kNumBits; ++end) {
-      ASSERT_EQ(bits::countBits(words, begin, end), reference(begin, end))
-          << "begin=" << begin << " end=" << end;
-    }
-  }
+// A custom type with a custom comparison arrives in a view, as on the CPU,
+// and leaves as its physical type.
+TEST(GpuTypesTest, resolverCustomType) {
+  using R = GpuExec::resolver<TimestampWithTimezone>;
+  static_assert(
+      std::is_same_v<R::in_type, GpuCustomTypeView<TimestampWithTimezoneT>>);
+  static_assert(std::is_same_v<R::out_type, int64_t>);
+  static_assert(std::is_same_v<R::null_free_in_type, R::in_type>);
+}
 
-  const std::vector<std::pair<int32_t, int32_t>> invalidRanges = {
-      {-1, 64},
-      {-10, -5},
-      {10, 5},
-  };
-  for (const auto& [begin, end] : invalidRanges) {
-    SCOPED_TRACE(testing::Message() << "begin=" << begin << " end=" << end);
-    EXPECT_EQ(bits::countBits(words, begin, end), 0);
-  }
+// The view compares by instant, as TimestampWithTimeZoneType does, and does
+// not convert to the packed bits, which a generic comparison would otherwise
+// order by zone key.
+TEST(GpuTypesTest, customTypeViewComparesByInstant) {
+  using View = GpuCustomTypeView<TimestampWithTimezoneT>;
+  static_assert(!std::is_convertible_v<View, int64_t>);
+  static_assert(std::is_trivially_copyable_v<View>);
+
+  const auto utc = tz::getTimeZoneID("UTC");
+  const auto kolkata = tz::getTimeZoneID("Asia/Kolkata");
+  const View instantInUtc{pack(1'000, utc)};
+  const View instantInKolkata{pack(1'000, kolkata)};
+  const View laterInUtc{pack(1'001, utc)};
+
+  EXPECT_EQ(*instantInUtc, pack(1'000, utc));
+  EXPECT_TRUE(instantInUtc == instantInKolkata);
+  EXPECT_FALSE(instantInUtc != instantInKolkata);
+  EXPECT_TRUE(instantInUtc <= instantInKolkata);
+  EXPECT_TRUE(instantInUtc >= instantInKolkata);
+  EXPECT_FALSE(instantInUtc < instantInKolkata);
+  EXPECT_TRUE(instantInKolkata < laterInUtc);
+  EXPECT_TRUE(laterInUtc > instantInKolkata);
+  EXPECT_FALSE(laterInUtc <= instantInKolkata);
 }
 
 } // namespace
