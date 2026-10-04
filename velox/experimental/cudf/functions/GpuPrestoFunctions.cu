@@ -169,9 +169,9 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuFunction<GpuIsNullFunction, bool, bool>({prefix + "is_null"});
 
   // --- Decimal -------------------------------------------------------------
-  // Five type combinations each, as registerDecimalBinary registers them, with
-  // Velox's result precision and scale constraints. initialize() derives the
-  // rescale factors from the argument types.
+  // The type combinations registerDecimalBinary and registerDecimalModulus
+  // register, with Velox's result precision and scale constraints.
+  // initialize() derives the rescale factors from the argument types.
   registerGpuDecimalBinary<functions::detail::DecimalPlusFunction>(
       {prefix + "plus"}, plusMinusConstraints());
   registerGpuDecimalBinary<functions::detail::DecimalMinusFunction>(
@@ -180,7 +180,7 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
       {prefix + "multiply"}, multiplyConstraints());
   registerGpuDecimalBinary<functions::detail::DecimalDivideFunction>(
       {prefix + "divide"}, divideConstraints());
-  registerGpuDecimalBinary<functions::detail::DecimalModulusFunction>(
+  registerGpuDecimalModulus<functions::detail::DecimalModulusFunction>(
       {prefix + "mod"}, modulusConstraints());
 
   registerGpuDecimalToInteger<functions::detail::DecimalFloorFunction>(

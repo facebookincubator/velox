@@ -34,6 +34,8 @@
 
 #include <cuda_runtime_api.h>
 
+#include <folly/ScopeGuard.h>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -84,6 +86,23 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
   // included.
   void assertGpuRaisesCpuError(const core::PlanNodePtr& plan) {
     test_utils::assertGpuRaisesCpuError(plan, pool());
+  }
+
+  // Asserts that every projection of `plan` is ineligible for the GPU at plan
+  // time, so the operator stays on the CPU, and that the query still returns
+  // the CPU's result with the cuDF operators registered.
+  void assertProjectRunsOnCpu(const core::PlanNodePtr& plan) {
+    auto queryCtx = core::QueryCtx::create();
+    for (const auto& projection :
+         plan->as<core::ProjectNode>()->projections()) {
+      SCOPED_TRACE(projection->toString());
+      EXPECT_FALSE(canExprRunOnGpu(projection, queryCtx.get(), pool()));
+    }
+    CudfConfig::getInstance().allowCpuFallback = true;
+    SCOPE_EXIT {
+      CudfConfig::getInstance().allowCpuFallback = false;
+    };
+    assertCpuAndGpuAgree(plan);
   }
 };
 
@@ -1125,13 +1144,9 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
   assertCpuAndGpuDivideByZero(scalarColumnPlan);
 }
 
-// Overflow and division by zero can both happen in a single launch, since the
-// kernel evaluates every row before the host reads the shared status flag.
-// toDecimalBinaryOpStatus ranks division by zero above overflow, so the GPU
-// reports it for either row ordering. The CPU stops at the first failing row
-// instead, so it reports whichever failure sorts first. Both orderings are
-// covered because a single ordering cannot distinguish ranking by kind from
-// reporting whichever row failed first.
+// Overflow and division by zero in the same batch. The GPU declines the batch
+// and Velox re-evaluates it on the CPU, which stops at the first failing row,
+// so the error is the one whose row comes first. Both orderings are covered.
 TEST_F(CudfDecimalTest, decimalDivideOverflowAndDivideByZeroPrecedence) {
   // Rescaling 9e37 by 1e6 overflows int128, and a zero divisor trips division
   // by zero. Each row fails exactly one way, so the batch sets both bits.
@@ -1427,6 +1442,9 @@ TEST_F(CudfDecimalTest, decimalArithmeticWithScalarLeft) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+// A null decimal literal operand. GPU SFI declines a call with a null literal
+// and no other evaluator takes decimal arithmetic, so the projection runs on
+// the CPU.
 TEST_F(CudfDecimalTest, decimalDivideNullScalar) {
   auto input = makeRowVector(
       {"a"},
@@ -1444,20 +1462,10 @@ TEST_F(CudfDecimalTest, decimalDivideNullScalar) {
                   })
                   .planNode();
 
-  unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  registerCudf();
-
-  auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-
-  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  assertProjectRunsOnCpu(plan);
 }
 
-// A null scalar operand must yield an all-null result for ADD/SUB/MUL/MOD in
-// both operand positions (the scalar's validity, not its payload, drives the
-// output). Verified against CPU results.
+// The same for ADD/SUB/MUL/MOD in both operand positions.
 TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
   auto input = makeRowVector(
       {"a"},
@@ -1481,15 +1489,7 @@ TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
                   })
                   .planNode();
 
-  unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  registerCudf();
-
-  auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-
-  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  assertProjectRunsOnCpu(plan);
 }
 
 // Velox comparison functions require both arguments to have the same type
@@ -2278,10 +2278,9 @@ TEST_F(CudfDecimalTest, decimalFloorCeilTruncateCpuGpuParity) {
   }
 }
 
-// Modulo by a zero divisor must fail fast with a distinct "Modulus by zero"
-// error, kept separate from the decimal-overflow status, matching Velox CPU.
-// Covers column and scalar divisors in both operand positions and asserts the
-// CPU and GPU paths raise the same error kind.
+// Modulo by a zero divisor must raise a distinct "Modulus by zero" error,
+// matching Velox CPU. Covers column and scalar divisors in both operand
+// positions and asserts the CPU and GPU paths raise the same error kind.
 TEST_F(CudfDecimalTest, decimalModuloByZero) {
   auto assertCpuAndGpuThrow = [&](const auto& plan) {
     unregisterCudf();
@@ -2330,12 +2329,9 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
           .planNode());
 }
 
-// The overflow status is a single batch-wide device flag. Each thread ORs
-// failing rows into a register and flushes once with atomicOr, so a single-row
-// input never exercises concurrent updates. This uses a multi-block input
-// (> 1 thread block) with several overflowing
-// rows interleaved with non-overflowing and null rows, including an overflowing
-// row under a null mask. The batch must still fail fast, matching Velox CPU.
+// A multi-block input (> 1 thread block) with several overflowing rows
+// interleaved with non-overflowing and null rows, including an overflowing row
+// under a null mask. The batch must still fail, matching Velox CPU.
 TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
   constexpr int32_t kRows = 2048;
   const auto big = 9 * DecimalUtil::kPowersOfTen[37];

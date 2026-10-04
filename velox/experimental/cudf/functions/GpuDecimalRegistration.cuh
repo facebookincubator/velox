@@ -16,8 +16,9 @@
 
 // Decimal registration helpers, shaped after the ones in
 // velox/functions/prestosql/DecimalFunctions.cpp. A decimal function registers
-// five type combinations, and its result precision and scale are expressions
-// over the argument ones; the constraint strings are copied from that file.
+// five type combinations (modulus six), and its result precision and scale are
+// expressions over the argument ones; the constraint strings are copied from
+// that file.
 #pragma once
 
 #include "velox/experimental/cudf/functions/GpuSimpleFunctionAdapter.cuh"
@@ -70,6 +71,56 @@ void registerGpuDecimalBinary(
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
       ShortDecimal<P2, S2>>(aliases, constraints);
+}
+
+/// The six combinations Velox registers for decimal modulus, whose result is
+/// never wider than its operands: a short result can have a long operand, and
+/// two short operands never need a long result. Matches registerDecimalModulus.
+template <template <class> typename Func>
+void registerGpuDecimalModulus(
+    const std::vector<std::string>& aliases,
+    const Constraints& constraints) {
+  // (short, short) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases, constraints);
+
+  // (short, long) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>(aliases, constraints);
+
+  // (long, short) -> short
+  registerGpuFunction<
+      Func,
+      ShortDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases, constraints);
+
+  // (short, long) -> long
+  registerGpuFunction<
+      Func,
+      LongDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>(aliases, constraints);
+
+  // (long, short) -> long
+  registerGpuFunction<
+      Func,
+      LongDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>(aliases, constraints);
+
+  // (long, long) -> long
+  registerGpuFunction<
+      Func,
+      LongDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      LongDecimal<P2, S2>>(aliases, constraints);
 }
 
 // The expressions below are Velox's, from DecimalFunctions.cpp, built from the
