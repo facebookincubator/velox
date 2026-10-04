@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
+
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
@@ -184,6 +186,66 @@ TEST_F(TextReaderTest, basic) {
     EXPECT_TRUE(result->equalValueAt(expected.get(), i, 9 + i));
   }
   ASSERT_EQ(rowReader->next(10, result), 0);
+}
+
+// Header lines are skipped only by the split that starts at offset 0.
+TEST_F(TextReaderTest, readRangesWithSkipRows) {
+  auto type =
+      ROW({{"id", BIGINT()}, {"org_id", BIGINT()}, {"deleted", TINYINT()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+
+  // 15 rows of 10 bytes each, with ids 11 to 25. Treat the first rows as
+  // header lines.
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_10_bytes_per_row");
+  auto readFile = std::make_shared<LocalReadFile>(path);
+
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  const int bytesPerRow = 10;
+
+  auto readIds = [&](uint64_t skipRows, uint64_t offset, uint64_t length) {
+    dwio::common::RowReaderOptions rowReaderOptions;
+    rowReaderOptions.range(offset, length);
+    rowReaderOptions.setSkipRows(skipRows);
+    setScanSpec(*type, rowReaderOptions);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+    VectorPtr result;
+    std::vector<int64_t> ids;
+    while (rowReader->next(1024, result) > 0) {
+      auto* idVector =
+          result->as<RowVector>()->childAt(0)->asFlatVector<int64_t>();
+      for (vector_size_t i = 0; i < result->size(); ++i) {
+        ids.push_back(idVector->valueAt(i));
+      }
+    }
+    return ids;
+  };
+
+  // The first split skips the header lines. Later splits keep all their rows.
+  EXPECT_THAT(
+      readIds(1, 0, 5 * bytesPerRow), testing::ElementsAre(12, 13, 14, 15, 16));
+  EXPECT_THAT(
+      readIds(1, 5 * bytesPerRow, 5 * bytesPerRow),
+      testing::ElementsAre(17, 18, 19, 20, 21));
+  EXPECT_THAT(
+      readIds(1, 10 * bytesPerRow, 5 * bytesPerRow),
+      testing::ElementsAre(22, 23, 24, 25));
+
+  EXPECT_THAT(
+      readIds(2, 0, 5 * bytesPerRow), testing::ElementsAre(13, 14, 15, 16));
+  EXPECT_THAT(
+      readIds(2, 5 * bytesPerRow, 5 * bytesPerRow),
+      testing::ElementsAre(17, 18, 19, 20, 21));
+  EXPECT_THAT(
+      readIds(2, 10 * bytesPerRow, 5 * bytesPerRow),
+      testing::ElementsAre(22, 23, 24, 25));
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {

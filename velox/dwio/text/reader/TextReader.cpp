@@ -179,11 +179,12 @@ TextRowReader::TextRowReader(
         contents_->fileLength - streamPosition_,
         dwio::common::LogType::STREAM);
 
+    // Header lines are at the start of the file, so only the split that starts
+    // at offset 0 skips them. Other splits start after a partial line.
     if (pos_ != 0) {
       unreadData_.clear();
       (void)skipLine();
-    }
-    if (opts.skipRows() > 0) {
+    } else if (opts.skipRows() > 0) {
       (void)seekToRow(opts.skipRows());
     }
   } else {
