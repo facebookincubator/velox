@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -27,6 +28,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -479,6 +481,43 @@ TEST_P(MultiThreadedHashJoinTest, allTypes) {
       .referenceQuery(
           "SELECT t_k0, t_k1, t_k2, t_k3, t_k4, t_k5, t_k6, t_data, u_k0, u_k1, u_k2, u_k3, u_k4, u_k5, u_k6, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1 AND t_k2 = u_k2 AND t_k3 = u_k3 AND t_k4 = u_k4 AND t_k5 = u_k5 AND t_k6 = u_k6")
       .run();
+}
+
+// cuDF would hash the two zone encodings of one instant to different keys, so
+// the join must stay on the CPU.
+TEST_F(HashJoinTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto probe = keys.makeRowsInZone(
+      {"t_k", "t_v"}, "America/Los_Angeles", {1, 2, 3}, {1, 2, 3});
+  auto build =
+      keys.makeRowsInZone({"u_k", "u_v"}, "UTC", {1, 2, 4}, {10, 20, 40});
+
+  struct TestCase {
+    core::JoinType joinType;
+    std::vector<std::string> outputLayout;
+  };
+  const std::vector<TestCase> testCases = {
+      {core::JoinType::kInner, {"t_v", "u_v"}},
+      {core::JoinType::kLeft, {"t_v", "u_v"}},
+      {core::JoinType::kLeftSemiFilter, {"t_v"}},
+      {core::JoinType::kAnti, {"t_v"}},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(core::JoinTypeName::toName(testCase.joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    keys.assertFallsBackToCpu(
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"t_k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "",
+                testCase.outputLayout,
+                testCase.joinType)
+            .planNode(),
+        exec::OperatorType::kHashProbe);
+  }
 }
 
 TEST_P(MultiThreadedHashJoinTest, filter) {
