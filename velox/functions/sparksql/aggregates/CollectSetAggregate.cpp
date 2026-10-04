@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/NormalizeFloatingPoint.h"
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -21,6 +22,10 @@ namespace {
 // Spark collect_set aggregate with runtime ignoreNulls flag.
 // The ignoreNulls_ flag is initialized via setConstantInputs() from the
 // constant boolean argument provided at plan construction time.
+//
+// -0.0 and 0.0 are equal, and so are all NaNs. REAL and DOUBLE values in the
+// result, including nested ones, are returned in canonical form: -0.0 as 0.0
+// and every NaN as the canonical NaN (SPARK-57298).
 template <
     typename T,
     typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
@@ -30,8 +35,18 @@ class SparkCollectSetAggregate
   using SBase = SetBaseAggregate<T, false, false, AccumulatorType>;
 
  public:
-  explicit SparkCollectSetAggregate(const TypePtr& resultType)
-      : Base(resultType) {}
+  SparkCollectSetAggregate(
+      const TypePtr& resultType,
+      bool normalizeFloatingPoint)
+      : Base(resultType), normalizeFloatingPoint_(normalizeFloatingPoint) {}
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    Base::extractValues(groups, numGroups, result);
+    if (normalizeFloatingPoint_) {
+      *result = normalizeFloatingPoint(*result, SBase::allocator_->pool());
+    }
+  }
 
   void setConstantInputs(
       const std::vector<VectorPtr>& constantInputs) override {
@@ -197,53 +212,61 @@ class SparkCollectSetAggregate
   // Only used in addRawInput (partial/single step); intermediate/final
   // steps always preserve all elements from the partial output.
   bool ignoreNulls_{true};
+
+  // True if the input type contains REAL or DOUBLE.
+  const bool normalizeFloatingPoint_;
 };
 
 std::unique_ptr<exec::Aggregate> createSetAgg(
     const TypeKind typeKind,
     const TypePtr& inputType,
     const TypePtr& resultType) {
+  const bool normalize = containsFloatingPoint(*inputType);
   switch (typeKind) {
     case TypeKind::BOOLEAN:
-      return std::make_unique<SparkCollectSetAggregate<bool>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<bool>>(
+          resultType, normalize);
     case TypeKind::TINYINT:
-      return std::make_unique<SparkCollectSetAggregate<int8_t>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<int8_t>>(
+          resultType, normalize);
     case TypeKind::SMALLINT:
-      return std::make_unique<SparkCollectSetAggregate<int16_t>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<int16_t>>(
+          resultType, normalize);
     case TypeKind::INTEGER:
-      return std::make_unique<SparkCollectSetAggregate<int32_t>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<int32_t>>(
+          resultType, normalize);
     case TypeKind::BIGINT:
-      return std::make_unique<SparkCollectSetAggregate<int64_t>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<int64_t>>(
+          resultType, normalize);
     case TypeKind::HUGEINT:
       VELOX_CHECK(
           inputType->isLongDecimal(),
           "Non-decimal use of HUGEINT is not supported");
-      return std::make_unique<SparkCollectSetAggregate<int128_t>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<int128_t>>(
+          resultType, normalize);
     case TypeKind::REAL:
-      return std::make_unique<SparkCollectSetAggregate<
-          float,
-          velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<float>>>(
-          resultType);
+      return std::make_unique<SparkCollectSetAggregate<float>>(
+          resultType, normalize);
     case TypeKind::DOUBLE:
-      return std::make_unique<SparkCollectSetAggregate<
-          double,
-          velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<double>>>(
-          resultType);
+      return std::make_unique<SparkCollectSetAggregate<double>>(
+          resultType, normalize);
     case TypeKind::TIMESTAMP:
       VELOX_DCHECK(inputType->equivalent(*TIMESTAMP()));
-      return std::make_unique<SparkCollectSetAggregate<Timestamp>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<Timestamp>>(
+          resultType, normalize);
     case TypeKind::VARBINARY:
       [[fallthrough]];
     case TypeKind::VARCHAR:
-      return std::make_unique<SparkCollectSetAggregate<StringView>>(resultType);
+      return std::make_unique<SparkCollectSetAggregate<StringView>>(
+          resultType, normalize);
     case TypeKind::ARRAY:
       [[fallthrough]];
     case TypeKind::ROW:
       return std::make_unique<SparkCollectSetAggregate<ComplexType>>(
-          resultType);
+          resultType, normalize);
     case TypeKind::UNKNOWN:
       return std::make_unique<SparkCollectSetAggregate<UnknownValue>>(
-          resultType);
+          resultType, normalize);
     default:
       VELOX_UNSUPPORTED("Unsupported type {}", TypeKindName::toName(typeKind));
   }
