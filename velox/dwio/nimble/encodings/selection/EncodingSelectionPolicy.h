@@ -129,7 +129,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
     NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-    return selectImpl(values, values.size(), statistics, options, true);
+    return selectImpl(
+        values, values.size(), statistics, options, /*isSample=*/false);
   }
 
   EncodingSelectionResult select(
@@ -137,7 +138,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       uint32_t numTotalRows,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
-    return selectImpl(sampleValues, numTotalRows, statistics, options, false);
+    return selectImpl(
+        sampleValues, numTotalRows, statistics, options, /*isSample=*/true);
   }
 
   EncodingSelectionResult selectNullable(
@@ -208,15 +210,14 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
  private:
-  // Uses one level of child-policy lookahead for a full input. Sampled child
-  // selection keeps existing container heuristics, bounding repeated training
-  // across candidate trees. Actual child writes select again on their input.
+  // Keeps the input kind separate from its row count: a sample can contain
+  // every row of a small input.
   EncodingSelectionResult selectImpl(
       std::span<const physicalType> values,
       uint32_t numRows,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options,
-      bool refineNestedCandidates) {
+      bool isSample) {
     NIMBLE_CHECK_LE(values.size(), numRows);
     if (values.empty()) {
       return {
@@ -260,13 +261,15 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
-      auto* nestedPolicy = encodingType == EncodingType::ALPRD ||
-              (refineNestedCandidates && useLogicalTypeForNestedEncoding())
-          ? this
-          : nullptr;
       const auto estimatedSize =
           detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, numRows, statistics, options, nestedPolicy);
+              encodingType,
+              values,
+              numRows,
+              statistics,
+              options,
+              *this,
+              isSample);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;

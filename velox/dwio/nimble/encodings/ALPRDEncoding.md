@@ -141,8 +141,9 @@ read factors, and explicit layout bindings. No candidate payload is encoded.
 The final score includes the ALP_RD prefix, dictionary entries, exception count,
 child-length varints and selected child sizes. Scalar sizes include prefix
 options and FixedBitWidth's seven padding bytes. Estimation and encoding share
-this training routine. Equal final costs prefer narrower low parts; equal
-scalar layouts within a split prefer the smaller dictionary.
+an ALP_RD-local training object that owns the bounded sample and split scratch
+storage. Equal final costs prefer narrower low parts; equal scalar layouts
+within a split prefer the smaller dictionary.
 
 ### Size estimation from samples
 
@@ -183,10 +184,12 @@ and child-length varints are added once to the selected child estimates.
 Sampling, the bounded shortlist and existing composite child estimates remain
 heuristics. Floating-point container estimates sample their derived value
 stream and retain the existing heuristics for integer or boolean sibling
-streams. The manual policy uses one level of child-policy lookahead: sampled
+streams. The estimator uses one level of child-policy lookahead for full input;
+the policy supplies candidates and compares their estimated costs. Sampled
 child selection uses existing container heuristics instead of recursively
-training every possible encoding tree. The writer selects again on the actual
-child input at each level. Generic compression is not predicted, matching
+training every possible encoding tree, even when the sample contains all rows
+of a small input. The writer selects again on the actual child input at each
+level. Generic compression is not predicted, matching
 Nimble's existing in-memory selection objective.
 Neither training nor automatic selection guarantees the smallest serialized payload.
 The full input is encoded against the selected dictionary; unsampled keys

@@ -166,6 +166,32 @@ std::optional<uint64_t> EncodingSizeEstimation<T>::estimateSize(
     uint32_t numTotalRows,
     const Statistics<physicalType>& statistics,
     const Encoding::Options& options,
+    EncodingSelectionPolicyBase& policy,
+    bool isSample) {
+  // Refine floating-point containers for full input when the policy requests
+  // logical selection. Sampled child selection keeps existing container
+  // heuristics, bounding repeated training across candidate trees. ALPRD's
+  // bounded split training always uses the supplied child policies.
+  auto* nestedPolicy = encodingType == EncodingType::ALPRD ||
+          (!isSample && policy.useLogicalTypeForNestedEncoding())
+      ? &policy
+      : nullptr;
+  return estimateSize(
+      encodingType,
+      sampleValues,
+      numTotalRows,
+      statistics,
+      options,
+      nestedPolicy);
+}
+
+template <typename T>
+std::optional<uint64_t> EncodingSizeEstimation<T>::estimateSize(
+    EncodingType encodingType,
+    std::span<const physicalType> sampleValues,
+    uint32_t numTotalRows,
+    const Statistics<physicalType>& statistics,
+    const Encoding::Options& options,
     EncodingSelectionPolicyBase* policy) {
   if constexpr (isFloatingPointType<T>()) {
     if (encodingType == EncodingType::ALPRD) {
@@ -286,7 +312,8 @@ uint64_t EncodingSizeEstimation<T>::estimateSelectedSize(
       uint32_t,                                                             \
       const Statistics<TypeTraits<T>::physicalType>&,                       \
       const Encoding::Options&,                                             \
-      EncodingSelectionPolicyBase*);                                        \
+      EncodingSelectionPolicyBase&,                                         \
+      bool);                                                                \
   template uint64_t EncodingSizeEstimation<T>::estimateSelectedSize(        \
       EncodingSelectionPolicyBase&,                                         \
       std::span<const TypeTraits<T>::physicalType>,                         \

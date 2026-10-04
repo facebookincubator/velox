@@ -175,103 +175,137 @@ uint64_t splitSize(
   return size;
 }
 
+// Owns the bounded sample and scratch storage for one ALPRD training run.
 template <typename PhysicalType>
-TrainedSplit trainSplit(
+class SplitTraining {
+ public:
+  // Samples the input while retaining positions in the target full stream.
+  SplitTraining(
+      std::span<const PhysicalType> values,
+      uint32_t numRows,
+      const Encoding::Options& options,
+      const ALPRDEncodingBase::ChildPolicies& childPolicies);
+
+  // Shortlists splits with scalar costs, then scores their selected children.
+  TrainedSplit train();
+
+ private:
+  using Base = ALPRDEncodingBase;
+
+  // Number of values represented by the sample in the target payload.
+  const uint32_t numRows_;
+  // Samples remain bounded even when the input span contains all values.
+  const uint32_t numSamples_;
+  // Borrows the caller's options and child policies for this training run.
+  const Encoding::Options& options_;
+  const Base::ChildPolicies& childPolicies_;
+  // Original sampled bits and their mapped positions in the target payload.
+  std::array<PhysicalType, Base::kSampleSize> sample_{};
+  std::array<uint32_t, Base::kSampleSize> samplePositions_{};
+  // Reuses split components and frequency storage across candidate widths.
+  std::array<PhysicalType, Base::kSampleSize> rightParts_{};
+  std::array<uint16_t, Base::kSampleSize> highParts_{};
+  std::array<uint16_t, Base::kSampleSize> sortedHighParts_{};
+  std::array<std::pair<uint16_t, uint32_t>, Base::kSampleSize> frequencies_{};
+  // Holds the sampled codes and exceptions for the candidate being scored.
+  std::array<uint16_t, Base::kSampleSize> codes_{};
+  std::array<uint32_t, Base::kSampleSize> exceptionPositions_{};
+  std::array<uint16_t, Base::kSampleSize> exceptionHighParts_{};
+};
+
+template <typename PhysicalType>
+SplitTraining<PhysicalType>::SplitTraining(
     std::span<const PhysicalType> values,
     uint32_t numRows,
     const Encoding::Options& options,
-    const ALPRDEncodingBase::ChildPolicies& childPolicies) {
-  using Base = ALPRDEncodingBase;
+    const ALPRDEncodingBase::ChildPolicies& childPolicies)
+    : numRows_{numRows},
+      numSamples_{std::min<uint32_t>(values.size(), Base::kSampleSize)},
+      options_{options},
+      childPolicies_{childPolicies} {
   NIMBLE_CHECK(!values.empty(), "ALPRD training requires non-empty input.");
-  NIMBLE_CHECK_LE(values.size(), numRows);
-
-  const auto sampleSize = std::min<uint32_t>(values.size(), Base::kSampleSize);
-  std::array<PhysicalType, Base::kSampleSize> sample{};
-  std::array<uint32_t, Base::kSampleSize> samplePositions{};
-  std::array<PhysicalType, Base::kSampleSize> rightParts{};
-  std::array<uint16_t, Base::kSampleSize> highParts{};
-  std::array<uint16_t, Base::kSampleSize> sortedHighParts{};
-  std::array<uint16_t, Base::kSampleSize> codes{};
-  std::array<uint32_t, Base::kSampleSize> exceptionPositions{};
-  std::array<uint16_t, Base::kSampleSize> exceptionHighParts{};
-  std::array<std::pair<uint16_t, uint32_t>, Base::kSampleSize> frequencies{};
-  for (uint32_t i = 0; i < sampleSize; ++i) {
-    const auto index = detail::sampledRowIndex(i, sampleSize, values.size());
-    sample[i] = values[index];
-    samplePositions[i] = uint64_t{index} * numRows / values.size();
+  NIMBLE_CHECK_LE(values.size(), numRows_);
+  for (uint32_t i = 0; i < numSamples_; ++i) {
+    const auto index = detail::sampledRowIndex(i, numSamples_, values.size());
+    sample_[i] = values[index];
+    samplePositions_[i] = uint64_t{index} * numRows_ / values.size();
   }
+}
 
+template <typename PhysicalType>
+TrainedSplit SplitTraining<PhysicalType>::train() {
   std::vector<SplitCandidate> candidates;
   candidates.reserve(Base::kMaxHighBitWidth * Base::kMaxDictionarySize);
   for (uint8_t highBitWidth = 1; highBitWidth <= Base::kMaxHighBitWidth;
        ++highBitWidth) {
     const uint8_t rightBitWidth = sizeof(PhysicalType) * 8 - highBitWidth;
     const auto mask = (PhysicalType{1} << rightBitWidth) - 1;
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      rightParts[i] = sample[i] & mask;
-      highParts[i] = sample[i] >> rightBitWidth;
-      sortedHighParts[i] = highParts[i];
+    for (uint32_t i = 0; i < numSamples_; ++i) {
+      rightParts_[i] = sample_[i] & mask;
+      highParts_[i] = sample_[i] >> rightBitWidth;
+      sortedHighParts_[i] = highParts_[i];
     }
-    std::sort(sortedHighParts.begin(), sortedHighParts.begin() + sampleSize);
+    std::sort(sortedHighParts_.begin(), sortedHighParts_.begin() + numSamples_);
     uint32_t numPrefixes{0};
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      if (i == 0 || sortedHighParts[i] != sortedHighParts[i - 1]) {
-        frequencies[numPrefixes++] = {sortedHighParts[i], 1};
+    for (uint32_t i = 0; i < numSamples_; ++i) {
+      if (i == 0 || sortedHighParts_[i] != sortedHighParts_[i - 1]) {
+        frequencies_[numPrefixes++] = {sortedHighParts_[i], 1};
       } else {
-        ++frequencies[numPrefixes - 1].second;
+        ++frequencies_[numPrefixes - 1].second;
       }
     }
     const auto maxDictionarySize =
         std::min<uint32_t>(numPrefixes, Base::kMaxDictionarySize);
     std::partial_sort(
-        frequencies.begin(),
-        frequencies.begin() + maxDictionarySize,
-        frequencies.begin() + numPrefixes,
+        frequencies_.begin(),
+        frequencies_.begin() + maxDictionarySize,
+        frequencies_.begin() + numPrefixes,
         [](const auto& lhs, const auto& rhs) {
           return lhs.second != rhs.second ? lhs.second > rhs.second
                                           : lhs.first < rhs.first;
         });
     const auto rightSize = scalarChildSize<PhysicalType>(
-        {rightParts.data(), sampleSize}, numRows, options);
+        {rightParts_.data(), numSamples_}, numRows_, options_);
     for (uint8_t dictionarySize = 1; dictionarySize <= maxDictionarySize;
          ++dictionarySize) {
       uint32_t sampleExceptions{0};
-      for (uint32_t i = 0; i < sampleSize; ++i) {
+      for (uint32_t i = 0; i < numSamples_; ++i) {
         uint16_t code{0};
         while (code < dictionarySize &&
-               frequencies[code].first != highParts[i]) {
+               frequencies_[code].first != highParts_[i]) {
           ++code;
         }
         if (code == dictionarySize) {
-          exceptionPositions[sampleExceptions] = samplePositions[i];
-          exceptionHighParts[sampleExceptions++] = highParts[i];
+          exceptionPositions_[sampleExceptions] = samplePositions_[i];
+          exceptionHighParts_[sampleExceptions++] = highParts_[i];
           code = 0;
         }
-        codes[i] = code;
+        codes_[i] = code;
       }
       const uint32_t numExceptions =
-          (uint64_t{sampleExceptions} * numRows + sampleSize - 1) / sampleSize;
+          (uint64_t{sampleExceptions} * numRows_ + numSamples_ - 1) /
+          numSamples_;
       const std::array<uint64_t, 4> childSizes{
           scalarChildSize<uint16_t>(
-              {codes.data(), sampleSize}, numRows, options),
+              {codes_.data(), numSamples_}, numRows_, options_),
           rightSize,
           numExceptions == 0
               ? 0
               : scalarChildSize<uint32_t>(
-                    {exceptionPositions.data(), sampleExceptions},
+                    {exceptionPositions_.data(), sampleExceptions},
                     numExceptions,
-                    options),
+                    options_),
           numExceptions == 0
               ? 0
               : scalarChildSize<uint16_t>(
-                    {exceptionHighParts.data(), sampleExceptions},
+                    {exceptionHighParts_.data(), sampleExceptions},
                     numExceptions,
-                    options),
+                    options_),
       };
       Base::Parameters parameters{
           .rightBitWidth = rightBitWidth, .dictionarySize = dictionarySize};
       for (uint8_t i = 0; i < dictionarySize; ++i) {
-        parameters.dictionary[i] = frequencies[i].first;
+        parameters.dictionary[i] = frequencies_[i].first;
       }
       // Equivalent scalar layouts must not crowd out other split shapes. On
       // ties keep the narrower right part, as in the final scoring below.
@@ -289,7 +323,11 @@ TrainedSplit trainSplit(
              childSizes,
              numExceptions,
              splitSize(
-                 dictionarySize, numRows, numExceptions, childSizes, options)});
+                 dictionarySize,
+                 numRows_,
+                 numExceptions,
+                 childSizes,
+                 options_)});
       }
     }
   }
@@ -313,47 +351,54 @@ TrainedSplit trainSplit(
     const auto& parameters = candidate.parameters;
     const auto mask = (PhysicalType{1} << parameters.rightBitWidth) - 1;
     uint32_t sampleExceptions{0};
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      rightParts[i] = sample[i] & mask;
-      const uint16_t high = sample[i] >> parameters.rightBitWidth;
+    for (uint32_t i = 0; i < numSamples_; ++i) {
+      rightParts_[i] = sample_[i] & mask;
+      const uint16_t high = sample_[i] >> parameters.rightBitWidth;
       uint16_t code{0};
       while (code < parameters.dictionarySize &&
              parameters.dictionary[code] != high) {
         ++code;
       }
       if (code == parameters.dictionarySize) {
-        exceptionPositions[sampleExceptions] = samplePositions[i];
-        exceptionHighParts[sampleExceptions++] = high;
+        exceptionPositions_[sampleExceptions] = samplePositions_[i];
+        exceptionHighParts_[sampleExceptions++] = high;
         code = 0;
       }
-      codes[i] = code;
+      codes_[i] = code;
     }
     const auto numExceptions = candidate.numExceptions;
     const std::array<uint64_t, 4> childSizes{
         detail::EncodingSizeEstimation<uint16_t>::estimateSelectedSize(
-            *childPolicies.codes, {codes.data(), sampleSize}, numRows, options),
+            *childPolicies_.codes,
+            {codes_.data(), numSamples_},
+            numRows_,
+            options_),
         detail::EncodingSizeEstimation<PhysicalType>::estimateSelectedSize(
-            *childPolicies.rightParts,
-            {rightParts.data(), sampleSize},
-            numRows,
-            options),
+            *childPolicies_.rightParts,
+            {rightParts_.data(), numSamples_},
+            numRows_,
+            options_),
         numExceptions == 0
             ? 0
             : detail::EncodingSizeEstimation<uint32_t>::estimateSelectedSize(
-                  *childPolicies.exceptionPositions,
-                  {exceptionPositions.data(), sampleExceptions},
+                  *childPolicies_.exceptionPositions,
+                  {exceptionPositions_.data(), sampleExceptions},
                   numExceptions,
-                  options),
+                  options_),
         numExceptions == 0
             ? 0
             : detail::EncodingSizeEstimation<uint16_t>::estimateSelectedSize(
-                  *childPolicies.exceptionHighParts,
-                  {exceptionHighParts.data(), sampleExceptions},
+                  *childPolicies_.exceptionHighParts,
+                  {exceptionHighParts_.data(), sampleExceptions},
                   numExceptions,
-                  options),
+                  options_),
     };
     const auto size = splitSize(
-        parameters.dictionarySize, numRows, numExceptions, childSizes, options);
+        parameters.dictionarySize,
+        numRows_,
+        numExceptions,
+        childSizes,
+        options_);
     if (size < best.size ||
         (size == best.size &&
          parameters.rightBitWidth < best.parameters.rightBitWidth)) {
@@ -380,7 +425,7 @@ TrainedSplit trainSplit(
             .createPolicy(TypeTraits<PhysicalType>::dataType);
     policy = defaultPolicy.get();
   }
-  return trainSplit(
+  return SplitTraining<PhysicalType>{
       values,
       numRows,
       options,
@@ -395,7 +440,8 @@ TrainedSplit trainSplit(
           .exceptionHighParts = policy->create<uint16_t>(
               EncodingType::ALPRD,
               EncodingIdentifiers::ALPRD::ExceptionHighParts),
-      });
+      }}
+      .train();
 }
 
 } // namespace
@@ -406,7 +452,10 @@ ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     const Encoding::Options& options,
     const ChildPolicies& childPolicies) {
   NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-  return trainSplit(values, values.size(), options, childPolicies).parameters;
+  return SplitTraining<PhysicalType>{
+      values, static_cast<uint32_t>(values.size()), options, childPolicies}
+      .train()
+      .parameters;
 }
 
 template <typename PhysicalType>
