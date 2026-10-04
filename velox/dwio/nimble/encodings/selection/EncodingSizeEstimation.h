@@ -42,11 +42,6 @@ namespace facebook::nimble {
 
 namespace detail {
 
-/// Chooses a deterministic point within an evenly sized sampling interval.
-/// Varies offsets to avoid repeatedly observing one phase of periodic input.
-uint32_t
-sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
-
 /// Estimates encoded data size for encoding selection. Estimates are heuristic
 /// and are not expected to match the serialized size exactly.
 template <typename T>
@@ -71,12 +66,28 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
-  /// Estimates size from the full input and its statistics.
+  /// Estimates size from the full input and its statistics. A supplied policy
+  /// provides child candidates for ALPRD and its floating-point containers.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase* policy = nullptr) {
+    if constexpr (isFloatingPointType<T>()) {
+      if (policy != nullptr) {
+        if (encodingType == EncodingType::ALPRD) {
+          return ALPRDEncodingBase::estimateSize(
+              values, values.size(), options, policy);
+        }
+        if (policy->useLogicalTypeForNestedEncoding()) {
+          if (auto size = ALPRDEncodingBase::estimateNestedSize<T>(
+                  encodingType, values, statistics, options, *policy)) {
+            return size;
+          }
+        }
+      }
+    }
     if constexpr (isNumericType<physicalType>()) {
       return estimateNumericSize(encodingType, values, statistics, options);
     } else if constexpr (isBoolType<physicalType>()) {
@@ -89,44 +100,7 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
-  /// Projects selection costs for numTotalRows values from sampleValues and
-  /// its statistics. The sample may contain the full input. Scalar range and
-  /// constant estimates use the full row count; other existing estimates scale
-  /// their sampled payload. The estimator uses the policy for ALPRD and, for
-  /// full input, eligible floating-point containers. isSample distinguishes a
-  /// sampled selection even when sampleValues contains every input row.
-  /// No candidate is encoded.
-  static std::optional<uint64_t> estimateSize(
-      EncodingType encodingType,
-      std::span<const physicalType> sampleValues,
-      uint32_t numTotalRows,
-      const Statistics<physicalType>& statistics,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase& policy,
-      bool isSample);
-
-  /// Estimates the bytes written for numTotalRows values by the child chosen
-  /// by policy using sampleValues, before generic compression. Corrects FBW's
-  /// padding and scalar prefix sizes without changing the policy's established
-  /// scoring of existing codecs.
-  static uint64_t estimateSelectedSize(
-      EncodingSelectionPolicyBase& policy,
-      std::span<const physicalType> sampleValues,
-      uint32_t numTotalRows,
-      const Encoding::Options& options);
-
  private:
-  /// Estimates size using the supplied policy for ALPRD and floating-point
-  /// value children. A null policy retains existing container heuristics.
-  /// Selected explicit layouts also use this path without candidate gating.
-  static std::optional<uint64_t> estimateSize(
-      EncodingType encodingType,
-      std::span<const physicalType> sampleValues,
-      uint32_t numTotalRows,
-      const Statistics<physicalType>& statistics,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase* policy);
-
   static std::optional<uint64_t> estimateNumericSize(
       const EncodingType encodingType,
       const uint64_t entryCount,

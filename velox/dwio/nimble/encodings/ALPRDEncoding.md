@@ -147,11 +147,19 @@ within a split prefer the smaller dictionary.
 
 ### Size estimation from samples
 
-The sample-based selection and size-estimation APIs distinguish `sampleValues`
-from `numTotalRows`. The former contains the observed values; its size is the
-sample row count. The latter is the total row count of the stream being
-estimated. For example, 1,024 sampled values can represent a stream containing
-1,000,000 values. The sample may also contain the full input.
+ALP_RD's internal cost model distinguishes `sampleValues` from `numTotalRows`.
+The former contains the observed values; its size is the sample row count. The
+latter is the total row count of the stream being estimated. For example,
+1,024 sampled values can represent a stream containing 1,000,000 values. The
+sample may also contain the full input.
+
+The local cost model reads a manual child policy's effective candidates and
+read factors, estimates each candidate for the full stream, and then compares
+`estimatedSize * readFactor`. Replayed and custom policies select through their
+existing `select(values, statistics, options)` interface; the model retains
+that selection and projects its cost when needed. A policy-provided size is
+reused only when the sample contains the full stream. Sampling and target row
+counts do not extend the selection policy's virtual interface.
 
 For codecs using the generic extrapolation path, the estimate is:
 
@@ -184,12 +192,11 @@ and child-length varints are added once to the selected child estimates.
 Sampling, the bounded shortlist and existing composite child estimates remain
 heuristics. Floating-point container estimates sample their derived value
 stream and retain the existing heuristics for integer or boolean sibling
-streams. The estimator uses one level of child-policy lookahead for full input;
-the policy supplies candidates and compares their estimated costs. Sampled
-child selection uses existing container heuristics instead of recursively
-training every possible encoding tree, even when the sample contains all rows
-of a small input. The writer selects again on the actual child input at each
-level. Generic compression is not predicted, matching
+streams. Full-input container estimates use one level of child-policy
+lookahead. The local sampled cost model uses existing container heuristics
+instead of recursively training every possible encoding tree, even when the
+sample contains all rows of a small input. The writer selects again on the
+actual child input at each level. Generic compression is not predicted, matching
 Nimble's existing in-memory selection objective.
 Neither training nor automatic selection guarantees the smallest serialized payload.
 The full input is encoded against the selected dictionary; unsampled keys

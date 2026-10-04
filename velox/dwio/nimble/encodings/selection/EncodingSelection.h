@@ -226,23 +226,6 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) = 0;
 
-  /// Selects an encoding from sampleValues representing a stream containing
-  /// numTotalRows values. The sample row count is sampleValues.size(). Policies
-  /// that project costs can override this; other policies retain their
-  /// selection behavior without presenting a sample-sized estimate as a full
-  /// size.
-  virtual EncodingSelectionResult select(
-      std::span<const physicalType> sampleValues,
-      uint32_t numTotalRows,
-      const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
-    auto result = select(sampleValues, statistics, options);
-    if (numTotalRows != sampleValues.size()) {
-      result.estimatedSize.reset();
-    }
-    return result;
-  }
-
   /// Same as the |select()| method above, but for nullable values.
   virtual EncodingSelectionResult selectNullable(
       std::span<const physicalType> values,

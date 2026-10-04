@@ -267,6 +267,48 @@ TYPED_TEST(ALPRDSelectionTest, estimatesLargeInputFromBoundedSample) {
   }
 }
 
+TYPED_TEST(ALPRDSelectionTest, projectsChildCostsBeforeSelection) {
+  const auto values = this->makeValues(65'536, 2);
+  ScopedVector<uint16_t> codes{
+      values.size(), this->pool_.get(), this->options_.bufferPool};
+  for (uint32_t i = 0; i < codes.size(); ++i) {
+    codes[i] = i % 2;
+  }
+  for (auto exactBits : {false, true}) {
+    SCOPED_TRACE(exactBits);
+    this->options_.fixedBitWidthUseExactBits = exactBits;
+    const ReadFactors children{
+        {EncodingType::FixedBitWidth, 1},
+        {EncodingType::Trivial, exactBits ? 0.064f : 0.501f},
+    };
+    ManualEncodingSelectionPolicy<uint16_t> codePolicy{
+        children, std::nullopt, EncodingIdentifiers::ALPRD::Codes};
+    // These weights favor Trivial for the sample but FixedBitWidth for the
+    // full code stream, where its fixed overhead is amortized over more rows.
+    for (uint32_t numRows : {1'024, 65'536}) {
+      const auto input = std::span<const uint16_t>{codes}.first(numRows);
+      const auto result = codePolicy.select(
+          input, Statistics<uint16_t>::create(input), this->options_);
+      ASSERT_EQ(
+          result.encodingType,
+          numRows == 1'024 ? EncodingType::Trivial
+                           : EncodingType::FixedBitWidth);
+    }
+
+    const auto result =
+        this->select(values, {{EncodingType::ALPRD, 1}}, children);
+    ASSERT_TRUE(result.estimatedSize);
+    const auto encoded = this->encode(
+        values, this->policy({{EncodingType::ALPRD, 1}}, children));
+    const auto layout = EncodingLayoutCapture::capture(encoded, this->options_);
+    ASSERT_EQ(layout.encodingType(), EncodingType::ALPRD);
+    ASSERT_TRUE(layout.child(0));
+    EXPECT_EQ(layout.child(0)->encodingType(), EncodingType::FixedBitWidth);
+    EXPECT_NEAR(*result.estimatedSize, encoded.size(), encoded.size() * 0.02);
+    this->check(encoded, values);
+  }
+}
+
 TYPED_TEST(ALPRDSelectionTest, estimatesPeriodicInput) {
   using PhysicalType = typename TestFixture::PhysicalType;
   using T = typename TestFixture::T;

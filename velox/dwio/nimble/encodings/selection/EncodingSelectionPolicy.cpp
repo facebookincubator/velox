@@ -17,6 +17,48 @@
 
 namespace facebook::nimble {
 
+template <typename T>
+std::vector<std::pair<EncodingType, float>>
+ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors(
+    const Encoding::Options& options) const {
+  auto candidates = candidateEncodingReadFactors_;
+  // TODO: Remove this opt-in once ALP is production-ready for default
+  // selection.
+  if constexpr (isFloatingPointType<T>()) {
+    if (options.allowNestedAlpSelection &&
+        (identifier_ == EncodingIdentifiers::Dictionary::Alphabet ||
+         identifier_ == EncodingIdentifiers::MainlyConstant::OtherValues ||
+         identifier_ == EncodingIdentifiers::RunLength::RunValues) &&
+        std::none_of(
+            candidates.begin(), candidates.end(), [](const auto& entry) {
+              return entry.first == EncodingType::ALP;
+            })) {
+      candidates.emplace_back(EncodingType::ALP, 1.0);
+    }
+  }
+  return candidates;
+}
+
+#define INSTANTIATE_CANDIDATES(T)                                 \
+  template std::vector<std::pair<EncodingType, float>>            \
+  ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors( \
+      const Encoding::Options&) const
+
+INSTANTIATE_CANDIDATES(int8_t);
+INSTANTIATE_CANDIDATES(uint8_t);
+INSTANTIATE_CANDIDATES(int16_t);
+INSTANTIATE_CANDIDATES(uint16_t);
+INSTANTIATE_CANDIDATES(int32_t);
+INSTANTIATE_CANDIDATES(uint32_t);
+INSTANTIATE_CANDIDATES(int64_t);
+INSTANTIATE_CANDIDATES(uint64_t);
+INSTANTIATE_CANDIDATES(float);
+INSTANTIATE_CANDIDATES(double);
+INSTANTIATE_CANDIDATES(bool);
+INSTANTIATE_CANDIDATES(std::string_view);
+
+#undef INSTANTIATE_CANDIDATES
+
 /* static */ std::vector<std::pair<EncodingType, float>>
 ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {
   return {
