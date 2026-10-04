@@ -70,8 +70,13 @@ exec::FunctionSignaturePtr toVeloxSignature(
     }
   }
   builder.returnType(signature.returnType);
-  for (const auto& argumentType : signature.argumentTypes) {
-    builder.argumentType(argumentType);
+  for (std::size_t i = 0; i < signature.argumentTypes.size(); ++i) {
+    if (i < signature.constantArguments.size() &&
+        signature.constantArguments[i]) {
+      builder.constantArgumentType(signature.argumentTypes[i]);
+    } else {
+      builder.argumentType(signature.argumentTypes[i]);
+    }
   }
   if (signature.variadicTail) {
     builder.variableArity();

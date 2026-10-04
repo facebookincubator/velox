@@ -31,8 +31,12 @@ struct IntervalDayTime;
 struct IntervalYearMonth;
 struct Time;
 class Timestamp;
+struct StringView;
+struct Varchar;
 template <typename T>
 struct Variadic;
+template <typename T>
+struct Constant;
 template <typename T, bool providesCustomComparison>
 struct CustomType;
 } // namespace facebook::velox
@@ -103,6 +107,22 @@ struct resolver<Timestamp> {
   using out_type = GpuTimestamp;
   using null_free_in_type = GpuTimestamp;
 };
+
+/// Velox's own StringView, as on the CPU. Only a constant VARCHAR argument is
+/// supported, read by initialize() on the host; a kernel hands a body an empty
+/// view, since it cannot read a strings column. There is no out_type: a kernel
+/// cannot write one either.
+template <>
+struct resolver<Varchar> {
+  using in_type = StringView;
+  using out_type = void;
+  using null_free_in_type = StringView;
+};
+
+/// A constant argument resolves as its underlying type; the registration marks
+/// it constant in the signature so that only a literal binds to it.
+template <typename T>
+struct resolver<Constant<T>> : resolver<T> {};
 
 /// A custom type resolves to its physical type, so TimestampWithTimezone is
 /// the packed int64 the column holds. As on the CPU, one with a custom

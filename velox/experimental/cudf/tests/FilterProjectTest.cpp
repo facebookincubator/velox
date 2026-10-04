@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/GpuTestFunctions.h"
 #include "velox/experimental/cudf/tests/utils/CpuErrorParity.h"
 #include "velox/experimental/cudf/tests/utils/PreferGpuSfi.h"
 
@@ -3397,6 +3398,42 @@ TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
               .planNode();
     cudf_velox::test_utils::assertGpuRaisesCpuError(plan, pool());
   }
+}
+
+// A literal argument's value reaches the function's initialize(), and a column
+// in the same position does not. The test function answers with what
+// initialize() saw, so the kernel's output is the only evidence. Built as typed
+// expressions because the CPU has no such function to parse against.
+TEST_F(CudfFilterProjectTest, literalArgumentsReachInitialize) {
+  cudf_velox::gpu_sfi::registerGpuTestFunctions();
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3}), makeFlatVector<int64_t>({7, 8, 9})});
+
+  auto column = [](const std::string& name) {
+    return std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), name);
+  };
+  auto call = [](std::vector<core::TypedExprPtr> inputs) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(), std::move(inputs), "test_initialize_constant");
+  };
+
+  auto withLiteral = PlanBuilder()
+                         .values({data})
+                         .projectExpressions({call(
+                             {column("c0"),
+                              std::make_shared<core::ConstantTypedExpr>(
+                                  BIGINT(), Variant(int64_t{42}))})})
+                         .planNode();
+  AssertQueryBuilder(withLiteral)
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({42, 42, 42})}));
+
+  auto withColumn =
+      PlanBuilder()
+          .values({data})
+          .projectExpressions({call({column("c0"), column("c1")})})
+          .planNode();
+  AssertQueryBuilder(withColumn)
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({-1, -1, -1})}));
 }
 
 } // namespace
