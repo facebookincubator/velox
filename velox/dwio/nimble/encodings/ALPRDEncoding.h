@@ -127,17 +127,6 @@ class ALPRDEncodingBase {
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 
-  /// Estimates a floating-point Dictionary, RLE or MainlyConstant candidate
-  /// using its value-child policy, which may select ALPRD. The input contains
-  /// every value; the derived child is sampled internally.
-  template <typename T>
-  static std::optional<uint64_t> estimateNestedSize(
-      EncodingType encodingType,
-      std::span<const typename TypeTraits<T>::physicalType> values,
-      const Statistics<typename TypeTraits<T>::physicalType>& statistics,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase& policy);
-
  protected:
   /// Creates a child decoder and rejects NULL wrappers within ALPRD streams.
   static std::unique_ptr<Encoding> createChild(

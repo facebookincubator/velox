@@ -39,8 +39,8 @@ using EncodingSelectionPolicyCreator =
     std::function<std::unique_ptr<EncodingSelectionPolicyBase>(DataType)>;
 
 namespace detail {
-/// Checks whether a layout tree contains ALPRD.
-bool layoutUsesAlprd(const EncodingLayout& layout);
+/// Checks whether a layout tree contains ALP or ALPRD.
+bool layoutUsesAlp(const EncodingLayout& layout);
 } // namespace detail
 
 // The following enables encoding selection debug messages. By default, these
@@ -229,14 +229,15 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
   bool useLogicalTypeForNestedEncoding() const override {
-    const auto containsAlprd = [](const auto& factors) {
+    const auto containsAlp = [](const auto& factors) {
       return std::any_of(factors.begin(), factors.end(), [](const auto& entry) {
-        return entry.first == EncodingType::ALPRD;
+        return entry.first == EncodingType::ALP ||
+            entry.first == EncodingType::ALPRD;
       });
     };
-    return containsAlprd(candidateEncodingReadFactors_) ||
+    return containsAlp(candidateEncodingReadFactors_) ||
         (nestedEncodingReadFactorsOverride_ &&
-         containsAlprd(*nestedEncodingReadFactorsOverride_));
+         containsAlp(*nestedEncodingReadFactorsOverride_));
   }
 
   const std::vector<std::pair<EncodingType, float>>&
@@ -551,7 +552,7 @@ class ReplayedEncodingSelectionPolicy
   }
 
   bool useLogicalTypeForNestedEncoding() const override {
-    return detail::layoutUsesAlprd(encodingLayout_) ||
+    return detail::layoutUsesAlp(encodingLayout_) ||
         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
             ->useLogicalTypeForNestedEncoding();
   }

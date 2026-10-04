@@ -530,117 +530,20 @@ class ALPEncoding final
     return {reserved, encodingSize};
   }
 
+  /// Estimates the complete input using bounded sampling and the supplied
+  /// child policy. A null policy uses the default encoding candidates.
   static std::optional<uint64_t> estimateSize(
       std::span<const physicalType> values,
-      const Encoding::Options& options = {}) {
-    if (values.empty()) {
-      return std::nullopt;
-    }
+      const Encoding::Options& options = {},
+      EncodingSelectionPolicyBase* policy = nullptr);
 
-    const uint64_t rowCount = values.size();
-    const uint32_t sampleSize = estimateSampleSize(rowCount);
-
-    std::vector<physicalType> sampledValues;
-    sampledValues.reserve(sampleSize);
-    // Select evenly spaced input positions without accumulating rounding error.
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
-      sampledValues.push_back(values[inputIndex]);
-    }
-
-    return estimateSizeFromSample(rowCount, sampledValues, options);
-  }
-
+  /// Estimates rowCount values from a representative sample. Projects each
+  /// child candidate before selection and adds ALP metadata once.
   static std::optional<uint64_t> estimateSizeFromSample(
       uint64_t rowCount,
       std::span<const physicalType> sampledValues,
-      const Encoding::Options& options = {}) {
-    NIMBLE_CHECK_GT(rowCount, 0, "ALP estimation requires non-empty input.");
-    NIMBLE_CHECK(
-        !sampledValues.empty(), "ALP estimation requires a non-empty sample.");
-    NIMBLE_CHECK_LE(
-        sampledValues.size(),
-        rowCount,
-        "ALP sample size cannot exceed the input row count.");
-
-    const uint64_t sampleSize = sampledValues.size();
-
-    std::vector<cppDataType> logicalValues;
-    logicalValues.reserve(sampleSize);
-    for (const auto value : sampledValues) {
-      logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
-    }
-
-    const auto [exponent, factor] = findBestExponentFactorByCount(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
-
-    std::vector<uint64_t> encodedValues;
-    encodedValues.reserve(sampleSize);
-    std::vector<uint32_t> exceptionPositions;
-    exceptionPositions.reserve(sampleSize);
-    std::vector<physicalType> exceptionValues;
-    exceptionValues.reserve(sampleSize);
-    uint64_t sampleExceptionCount{0};
-    for (auto i = 0; i < sampleSize; ++i) {
-      if (!canRepresentExactly(
-              logicalValues[i],
-              sampledValues[static_cast<size_t>(i)],
-              exponent,
-              factor)) {
-        encodedValues.push_back(0);
-        exceptionPositions.push_back(
-            sampledValueIndex(i, rowCount, sampleSize));
-        exceptionValues.push_back(sampledValues[static_cast<size_t>(i)]);
-        ++sampleExceptionCount;
-        continue;
-      }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues.push_back(velox::ZigZag::encode(encoded));
-    }
-
-    const auto encodedStats = Statistics<uint64_t>::create(
-        std::span<const uint64_t>{encodedValues.data(), encodedValues.size()});
-    // Model the inexpensive scalar candidates without recursively estimating
-    // complex nested encodings.
-    const uint64_t nestedEncodedValuesSize = std::min(
-        FixedBitWidthEncoding<uint64_t>::estimateSize(
-            rowCount, encodedStats, options),
-        TrivialEncoding<uint64_t>::estimateSize(rowCount));
-    const uint64_t exceptionCount =
-        (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
-    uint64_t exceptionPositionsSize{0};
-    uint64_t exceptionValuesSize{0};
-    if (exceptionCount > 0) {
-      const auto positionStats = Statistics<uint32_t>::create(
-          std::span<const uint32_t>{
-              exceptionPositions.data(), exceptionPositions.size()});
-      exceptionPositionsSize = std::min(
-          TrivialEncoding<uint32_t>::estimateSize(exceptionCount),
-          FixedBitWidthEncoding<uint32_t>::estimateSize(
-              exceptionCount, positionStats, options));
-
-      const auto valueStats = Statistics<physicalType>::create(
-          std::span<const physicalType>{
-              exceptionValues.data(), exceptionValues.size()});
-      exceptionValuesSize = std::min(
-          TrivialEncoding<physicalType>::estimateSize(exceptionCount),
-          FixedBitWidthEncoding<physicalType>::estimateSize(
-              exceptionCount, valueStats, options));
-    }
-    const uint64_t metadataSize = kHeaderSize +
-        (exceptionCount > 0 ? varint::varintSize(exceptionCount) : 0) +
-        varint::varintSize(nestedEncodedValuesSize) +
-        (exceptionCount > 0 ? varint::varintSize(exceptionPositionsSize) +
-                 varint::varintSize(exceptionValuesSize)
-                            : 0);
-    return Encoding::serializePrefixSize(
-               static_cast<uint32_t>(rowCount), options.useVarintRowCount) +
-        metadataSize + nestedEncodedValuesSize + exceptionPositionsSize +
-        exceptionValuesSize;
-  }
+      const Encoding::Options& options = {},
+      EncodingSelectionPolicyBase* policy = nullptr);
 
   static uint32_t estimateSampleSize(uint64_t rowCount) {
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);

@@ -35,7 +35,7 @@ This is a type constraint, not a global exclusion between ALP and ALP_RD in a
 larger encoding tree.
 
 Dictionary alphabets, RLE run values, and MainlyConstant uncommon values can
-select ALP_RD through their inherited or explicitly overridden candidates.
+select ALP or ALP_RD through their inherited or explicitly overridden candidates.
 Parent estimation includes that floating-point child choice. Ancestor encoding
 filters apply as usual.
 
@@ -46,10 +46,11 @@ determines which type is serialized. NULL handling remains the responsibility
 of the enclosing Nullable wrapper.
 
 A Nullable wrapper retains physical selection and type tags by default. When
-its policy enables ALP_RD, the data child uses logical floating-point selection
-so ALP_RD and floating-point containers remain eligible. Containers containing
-ALP_RD retain their logical type during layout replay. Leaf encodings other
-than ALP/ALP_RD keep their physical tags. Explicit ALP/ALP_RD layouts also retain
+its policy enables ALP or ALP_RD, the data child uses logical floating-point
+selection so both encodings and floating-point containers remain eligible.
+Containers containing ALP or ALP_RD retain their logical type during layout
+replay. Leaf encodings other than ALP/ALP_RD keep their physical tags. Explicit
+ALP/ALP_RD layouts also retain
 the logical type. The default nullable layout is unchanged.
 
 ## Binary layout
@@ -147,16 +148,19 @@ within a split prefer the smaller dictionary.
 
 ### Size estimation from samples
 
-ALP_RD's internal cost model distinguishes `sampleValues` from `numTotalRows`.
-The former contains the observed values; its size is the sample row count. The
+ALP and ALP_RD share a child-cost model in `NestedAlpSizeEstimation`. The model
+distinguishes `sampleValues` from `numTotalRows`. The former contains the
+observed values; its size is the sample row count. The
 latter is the total row count of the stream being estimated. For example,
 1,024 sampled values can represent a stream containing 1,000,000 values. The
 sample may also contain the full input.
 
-The local cost model reads a manual child policy's effective candidates and
+The shared cost model reads a manual child policy's effective candidates and
 read factors, estimates each candidate for the full stream, and then compares
-`estimatedSize * readFactor`. Replayed and custom policies select through their
-existing `select(values, statistics, options)` interface; the model retains
+`estimatedSize * readFactor`. The parent sums the selected children's estimated
+bytes; read factors affect the choice, not the byte count. Replayed and custom
+policies select through their existing `select(values, statistics, options)`
+interface; the model retains
 that selection and projects its cost when needed. A policy-provided size is
 reused only when the sample contains the full stream. Sampling and target row
 counts do not extend the selection policy's virtual interface.
@@ -178,9 +182,20 @@ the selected child's size is then corrected for the actual prefix option.
 
 Codec-specific models handle costs that do not follow this formula. Constant
 stores its value once and only adjusts the prefix. Trivial, FixedBitWidth and
-SimdForBitpack use the total row count with sample statistics. ALP uses its own
-sample-based estimator. Selected FixedBitWidth child sizes also include the
-padding required by the serialized representation.
+SimdForBitpack use the total row count with sample statistics. ALP transforms
+its sample with its own exponent and factor, then estimates its three children
+using this same policy-aware model. Selected FixedBitWidth child sizes include
+the padding required by the serialized representation.
+
+ALP's encoded integer stream represents `numTotalRows` values. Its exception
+positions and original exception values each represent
+`ceil(sampleExceptions * numTotalRows / numSampleRows)` values. ALP adds its
+prefix, control word, exception count and child-length varints once. This
+aligns its size estimates with the configured child candidates, read factors
+and replayed layouts. Its size estimator varies the offset within each sampling
+interval to avoid aliasing periodic input. The writer's exponent/factor
+training algorithm is unchanged.
+An estimate without a supplied policy uses the default child candidates.
 
 ALP_RD estimates its four children separately. Codes and right parts each
 represent `numTotalRows` values. The two exception streams each represent
@@ -193,7 +208,7 @@ Sampling, the bounded shortlist and existing composite child estimates remain
 heuristics. Floating-point container estimates sample their derived value
 stream and retain the existing heuristics for integer or boolean sibling
 streams. Full-input container estimates use one level of child-policy
-lookahead. The local sampled cost model uses existing container heuristics
+lookahead. The shared sampled cost model uses existing container heuristics
 instead of recursively training every possible encoding tree, even when the
 sample contains all rows of a small input. The writer selects again on the
 actual child input at each level. Generic compression is not predicted, matching

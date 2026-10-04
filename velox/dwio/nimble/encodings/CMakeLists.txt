@@ -66,6 +66,7 @@ add_library(
   common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
+  selection/NestedAlpSizeEstimation.cpp
   selection/Statistics.cpp
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h

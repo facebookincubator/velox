@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 
 namespace facebook::nimble {
 
@@ -67,7 +68,8 @@ struct EncodingSizeEstimation {
   }
 
   /// Estimates size from the full input and its statistics. A supplied policy
-  /// provides child candidates for ALPRD and its floating-point containers.
+  /// provides child candidates for ALP, ALPRD and their floating-point
+  /// containers.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       std::span<const physicalType> values,
@@ -76,12 +78,15 @@ struct EncodingSizeEstimation {
       EncodingSelectionPolicyBase* policy = nullptr) {
     if constexpr (isFloatingPointType<T>()) {
       if (policy != nullptr) {
+        if (encodingType == EncodingType::ALP) {
+          return ALPEncoding<T>::estimateSize(values, options, policy);
+        }
         if (encodingType == EncodingType::ALPRD) {
           return ALPRDEncodingBase::estimateSize(
               values, values.size(), options, policy);
         }
         if (policy->useLogicalTypeForNestedEncoding()) {
-          if (auto size = ALPRDEncodingBase::estimateNestedSize<T>(
+          if (auto size = NestedAlpSizeEstimation::estimateContainerSize<T>(
                   encodingType, values, statistics, options, *policy)) {
             return size;
           }

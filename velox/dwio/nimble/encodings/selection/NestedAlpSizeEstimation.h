@@ -24,6 +24,36 @@
 
 namespace facebook::nimble::detail {
 
+/// Shares sampled child-cost estimates between ALP and ALPRD. Manual policies
+/// compare each candidate at full-stream size; other policies retain their
+/// selected layouts. Parameter training remains specific to each encoding.
+class NestedAlpSizeEstimation {
+ public:
+  /// Picks a deterministic offset within an evenly sized sampling interval.
+  static uint32_t
+  sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
+
+  /// Returns the selected child's estimated bytes, including its prefix and
+  /// padding. Read factors influence selection but are not part of this size.
+  template <typename T>
+  static uint64_t estimateChildSize(
+      EncodingSelectionPolicyBase& policy,
+      std::span<const typename TypeTraits<T>::physicalType> sampleValues,
+      uint32_t numTotalRows,
+      const Encoding::Options& options);
+
+  /// Estimates a floating-point Dictionary, RLE or MainlyConstant candidate
+  /// using its value-child policy. Samples the derived child from the complete
+  /// input; returns nullopt for other encoding types.
+  template <typename T>
+  static std::optional<uint64_t> estimateContainerSize(
+      EncodingType encodingType,
+      std::span<const typename TypeTraits<T>::physicalType> values,
+      const Statistics<typename TypeTraits<T>::physicalType>& statistics,
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase& policy);
+};
+
 /// Estimates the nested ALP size from all physical values when `T` is a
 /// floating-point type and nested ALP selection is enabled. Returns
 /// `std::nullopt` when nested ALP is not eligible.

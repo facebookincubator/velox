@@ -231,12 +231,13 @@ bool detail::useLogicalTypeForEncoding(
       encodingType == EncodingType::MainlyConstant;
 }
 
-bool detail::layoutUsesAlprd(const EncodingLayout& layout) {
-  if (layout.encodingType() == EncodingType::ALPRD) {
+bool detail::layoutUsesAlp(const EncodingLayout& layout) {
+  if (layout.encodingType() == EncodingType::ALP ||
+      layout.encodingType() == EncodingType::ALPRD) {
     return true;
   }
   for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
-    if (layout.child(i) && layoutUsesAlprd(*layout.child(i))) {
+    if (layout.child(i) && layoutUsesAlp(*layout.child(i))) {
       return true;
     }
   }

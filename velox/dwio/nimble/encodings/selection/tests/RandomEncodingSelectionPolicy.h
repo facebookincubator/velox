@@ -136,10 +136,12 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
   bool useLogicalTypeForNestedEncoding() const override {
-    return std::find(
-               candidateEncodingTypes_.begin(),
-               candidateEncodingTypes_.end(),
-               EncodingType::ALPRD) != candidateEncodingTypes_.end();
+    return std::any_of(
+        candidateEncodingTypes_.begin(),
+        candidateEncodingTypes_.end(),
+        [](EncodingType type) {
+          return type == EncodingType::ALP || type == EncodingType::ALPRD;
+        });
   }
 
  protected:
