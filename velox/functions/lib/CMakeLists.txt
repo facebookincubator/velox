@@ -50,6 +50,7 @@ velox_add_library(
   KllSketch.cpp
   MapConcat.cpp
   MapFromEntries.cpp
+  NormalizeFloatingPoint.cpp
   Re2Functions.cpp
   Repeat.cpp
   Sequence.cpp
@@ -78,6 +79,7 @@ velox_add_library(
   MakeRowFromMap.h
   MapConcat.h
   MapFromEntries.h
+  NormalizeFloatingPoint.h
   Re2Functions.h
   RegistrationHelpers.h
   Repeat.h
