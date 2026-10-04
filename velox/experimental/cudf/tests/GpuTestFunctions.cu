@@ -42,11 +42,71 @@ struct GpuMillisUtcFunction {
   }
 };
 
+// Returns what initialize() saw for the second argument: its value when it was
+// a constant, -1 otherwise. The row's own arguments are ignored, so the result
+// can only come from the instance.
+template <typename T>
+struct GpuInitializeConstantFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<int64_t>* /*first*/,
+      const arg_type<int64_t>* second) {
+    if (second != nullptr) {
+      constant_ = *second;
+    }
+  }
+
+  VELOX_GPU_COMPATIBLE void call(
+      int64_t& result,
+      const arg_type<int64_t>& /*first*/,
+      const arg_type<int64_t>& /*second*/) {
+    result = constant_;
+  }
+
+  int64_t constant_{-1};
+};
+
+// Returns the length of the constant string initialize() saw, -1 when it saw
+// none. The string is declared Constant<Varchar>, so a column never binds.
+template <typename T>
+struct GpuConstantVarcharLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<int64_t>* /*first*/,
+      const arg_type<Varchar>* text) {
+    if (text != nullptr) {
+      length_ = text->size();
+    }
+  }
+
+  VELOX_GPU_COMPATIBLE void call(
+      int64_t& result,
+      const arg_type<int64_t>& /*first*/,
+      const arg_type<Varchar>& /*text*/) {
+    result = length_;
+  }
+
+  int64_t length_{-1};
+};
+
 } // namespace
 
 void registerGpuTestFunctions() {
   registerGpuFunction<GpuMillisUtcFunction, int64_t, TimestampWithTimezone>(
       {"test_millis_utc"});
+  registerGpuFunction<GpuInitializeConstantFunction, int64_t, int64_t, int64_t>(
+      {"test_initialize_constant"});
+  registerGpuFunction<
+      GpuConstantVarcharLengthFunction,
+      int64_t,
+      int64_t,
+      Constant<Varchar>>({"test_constant_varchar_length"});
 }
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

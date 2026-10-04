@@ -26,6 +26,7 @@
 
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/TypeCoercer.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -35,11 +36,13 @@
 #include <rmm/device_uvector.hpp>
 
 #include <algorithm>
+#include <deque>
 
 namespace facebook::velox::cudf_velox {
 namespace {
 
 using gpu_sfi::GpuArgView;
+using gpu_sfi::GpuConstantArgument;
 using gpu_sfi::GpuFunctionInstance;
 using gpu_sfi::GpuFunctionInstanceSpec;
 using gpu_sfi::GpuLaunchFn;
@@ -85,6 +88,22 @@ bool physicalTypesMatch(
   return true;
 }
 
+// True when every argument the signature declares constant is a literal. The
+// kernel reads such an argument only through what initialize() derived from
+// it, so a column there would be silently ignored.
+bool constantArgumentsAreLiterals(
+    const exec::FunctionSignature& signature,
+    const core::TypedExprPtr& expr) {
+  const auto& constants = signature.constantArguments();
+  const auto& inputs = expr->inputs();
+  for (std::size_t i = 0; i < inputs.size() && i < constants.size(); ++i) {
+    if (constants[i] && !inputs[i]->isConstantKind()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
   if (expr->kind() != core::ExprKind::kCall) {
     return nullptr;
@@ -123,6 +142,9 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
     if (returnType == nullptr || !returnType->equivalent(*expr->type())) {
       continue;
     }
+    if (!constantArgumentsAreLiterals(*entry.signature, expr)) {
+      continue;
+    }
     // A decimal signature cannot tell a short-decimal kernel from a long one.
     if (physicalTypesMatch(entry, argumentTypes, returnType)) {
       return &entry;
@@ -140,11 +162,65 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       isConstant};
 }
 
+// The physical value of a non-null constant as the bytes GpuConstantArgument
+// describes.
+template <TypeKind Kind>
+std::vector<std::byte> constantBytes(const BaseVector& vector) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  const T value = vector.as<SimpleVector<T>>()->valueAt(0);
+  if constexpr (std::is_same_v<T, StringView>) {
+    const auto* begin = reinterpret_cast<const std::byte*>(value.data());
+    return {begin, begin + value.size()};
+  } else {
+    const auto* begin = reinterpret_cast<const std::byte*>(&value);
+    return {begin, begin + sizeof(T)};
+  }
+}
+
+// The constant arguments of a call as initialize() receives them: a value for
+// each non-null literal of a primitive type, nothing for any other input.
+class ConstantArguments {
+ public:
+  ConstantArguments(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
+    for (const auto& input : expr->inputs()) {
+      if (!input->isConstantKind() || !input->type()->isPrimitiveType()) {
+        descriptors_.push_back(GpuConstantArgument{nullptr, 0});
+        continue;
+      }
+      const auto* constant = input->asUnchecked<core::ConstantTypedExpr>();
+      const auto vector = constant->hasValueVector()
+          ? constant->valueVector()
+          : constant->toConstantVector(pool);
+      if (vector->isNullAt(0)) {
+        descriptors_.push_back(GpuConstantArgument{nullptr, 0});
+        continue;
+      }
+      values_.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          constantBytes, input->type()->kind(), *vector));
+      descriptors_.push_back(
+          GpuConstantArgument{
+              values_.back().data(),
+              static_cast<int32_t>(values_.back().size())});
+    }
+  }
+
+  const std::vector<GpuConstantArgument>& descriptors() const {
+    return descriptors_;
+  }
+
+ private:
+  // Owns the bytes the descriptors point at.
+  std::deque<std::vector<std::byte>> values_;
+  std::vector<GpuConstantArgument> descriptors_;
+};
+
 // Runs the function's initialize() once, at compile time, with this call
-// site's argument types, as SimpleFunctionAdapter does in its constructor.
+// site's argument types and constant values, as SimpleFunctionAdapter does in
+// its constructor.
 std::vector<std::byte> makeInstance(
     const GpuFunctionInstanceSpec& spec,
     const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
     const core::QueryConfig& config) {
   if (spec.initialize == nullptr) {
     // No initialize(): the kernel default-constructs the instance.
@@ -166,8 +242,9 @@ std::vector<std::byte> makeInstance(
       expr->toString(),
       spec.alignment);
 
+  const ConstantArguments constants(expr, pool);
   std::vector<std::byte> instance(spec.size);
-  spec.initialize(instance.data(), inputTypes, config);
+  spec.initialize(instance.data(), inputTypes, config, constants.descriptors());
   return instance;
 }
 
@@ -252,7 +329,7 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
 
   return std::make_shared<GpuSfiExpression>(
       resolved->launch,
-      makeInstance(resolved->instanceSpec, expr, config),
+      makeInstance(resolved->instanceSpec, expr, pool, config),
       veloxToCudfDataType(expr->type()),
       std::move(arguments),
       std::move(constants),

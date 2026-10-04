@@ -36,6 +36,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -71,6 +72,7 @@ GpuFunctionSignature doubleBinary() {
       "double",
       {"double", "double"},
       /*variadicTail=*/false,
+      /*constantArguments=*/{},
       /*integerVariables=*/{},
       /*variableConstraints=*/{},
       /*argumentKinds=*/{TypeKind::DOUBLE, TypeKind::DOUBLE},
@@ -82,6 +84,7 @@ GpuFunctionSignature bigintBinary() {
       "bigint",
       {"bigint", "bigint"},
       /*variadicTail=*/false,
+      /*constantArguments=*/{},
       /*integerVariables=*/{},
       /*variableConstraints=*/{},
       /*argumentKinds=*/{TypeKind::BIGINT, TypeKind::BIGINT},
@@ -95,6 +98,7 @@ GpuFunctionSignature decimalBinary(TypeKind kind) {
       "decimal(i1,i5)",
       {"decimal(i1,i5)", "decimal(i1,i5)"},
       /*variadicTail=*/false,
+      /*constantArguments=*/{},
       // Named once per occurrence, as the device side collects them; the
       // builder rejects a redeclaration, so the duplicates must be dropped.
       /*integerVariables=*/{"i1", "i5", "i1", "i5", "i1", "i5"},
@@ -271,6 +275,7 @@ TEST_F(GpuFunctionRegistryTest, signatures) {
            "boolean",
            {"boolean"},
            /*variadicTail=*/true,
+           /*constantArguments=*/{},
            /*integerVariables=*/{},
            /*variableConstraints=*/{},
            /*argumentKinds=*/{TypeKind::BOOLEAN},
@@ -515,11 +520,88 @@ TEST_F(GpuFunctionRegistryTest, decimalInstancesAreInitialized) {
     std::vector<std::byte> instance(spec.size);
     const std::vector<TypePtr> arguments{DECIMAL(20, left), DECIMAL(20, right)};
     const core::QueryConfig config{{}};
-    spec.initialize(instance.data(), arguments, config);
+    spec.initialize(instance.data(), arguments, config, /*constants=*/{});
     const auto wider = std::max(left, right);
     EXPECT_EQ(static_cast<int>(instance[0]), wider - left);
     EXPECT_EQ(static_cast<int>(instance[1]), wider - right);
   }
+}
+
+// The first bytes of an instance, read back as the integer the test function
+// stores there.
+int64_t leadingInt64(const std::vector<std::byte>& instance) {
+  int64_t value{};
+  std::memcpy(&value, instance.data(), sizeof(value));
+  return value;
+}
+
+// initialize() receives the value of each constant argument and null for the
+// others, as on the CPU; the instance is what the kernel later reads.
+TEST_F(GpuFunctionRegistryTest, constantArgumentsReachInitialize) {
+  registerGpuTestFunctions();
+  const core::QueryConfig config{{}};
+
+  const auto& spec =
+      gpuFunctionRegistry().at("test_initialize_constant").front().instanceSpec;
+  ASSERT_NE(spec.initialize, nullptr);
+  const std::vector<TypePtr> bigints{BIGINT(), BIGINT()};
+
+  const int64_t value{42};
+  std::vector<std::byte> withConstant(spec.size);
+  spec.initialize(
+      withConstant.data(),
+      bigints,
+      config,
+      {GpuConstantArgument{nullptr, 0},
+       GpuConstantArgument{&value, sizeof(value)}});
+  EXPECT_EQ(leadingInt64(withConstant), 42);
+
+  std::vector<std::byte> withoutConstant(spec.size);
+  spec.initialize(
+      withoutConstant.data(),
+      bigints,
+      config,
+      {GpuConstantArgument{nullptr, 0}, GpuConstantArgument{nullptr, 0}});
+  EXPECT_EQ(leadingInt64(withoutConstant), -1);
+
+  // A string arrives as its characters.
+  const auto& textSpec = gpuFunctionRegistry()
+                             .at("test_constant_varchar_length")
+                             .front()
+                             .instanceSpec;
+  const std::string zone{"America/Los_Angeles"};
+  std::vector<std::byte> withText(textSpec.size);
+  textSpec.initialize(
+      withText.data(),
+      {BIGINT(), VARCHAR()},
+      config,
+      {GpuConstantArgument{nullptr, 0},
+       GpuConstantArgument{zone.data(), static_cast<int32_t>(zone.size())}});
+  EXPECT_EQ(leadingInt64(withText), static_cast<int64_t>(zone.size()));
+}
+
+// Constant<T> renders as Velox renders it, and a call binds only when that
+// argument is a literal: the kernel reads it through initialize() alone.
+TEST_F(GpuFunctionRegistryTest, constantArgumentBindsOnlyALiteral) {
+  registerGpuTestFunctions();
+
+  EXPECT_THAT(
+      signaturesOf("test_constant_varchar_length"),
+      testing::ElementsAre("(bigint,constant varchar) -> bigint"));
+
+  auto call = [](const core::TypedExprPtr& text) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"), text},
+        "test_constant_varchar_length");
+  };
+  EXPECT_TRUE(
+      GpuSfiExpression::canEvaluate(
+          call(std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "UTC"))));
+  EXPECT_FALSE(
+      GpuSfiExpression::canEvaluate(
+          call(std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"))));
 }
 
 } // namespace

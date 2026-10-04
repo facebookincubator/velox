@@ -19,6 +19,7 @@
 
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/SimpleFunctionTags.h"
+#include "velox/type/StringView.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 #include <gtest/gtest.h>
@@ -80,6 +81,15 @@ TEST(GpuTypesTest, gpuTimestampOrdering) {
       EXPECT_EQ(left >= right, i >= j);
     }
   }
+}
+
+// A VARCHAR argument arrives as Velox's own StringView, as on the CPU, and a
+// kernel produces none.
+TEST(GpuTypesTest, resolverVarchar) {
+  using R = GpuExec::resolver<Varchar>;
+  static_assert(std::is_same_v<R::in_type, StringView>);
+  static_assert(std::is_same_v<R::null_free_in_type, StringView>);
+  static_assert(std::is_same_v<R::out_type, void>);
 }
 
 // A custom type with a custom comparison arrives in a view, as on the CPU,
