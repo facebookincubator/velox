@@ -18,6 +18,7 @@
 #include <string>
 
 #include "velox/common/base/Macros.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
