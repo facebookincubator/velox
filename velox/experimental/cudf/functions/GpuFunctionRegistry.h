@@ -53,10 +53,15 @@ struct GpuArgView {
 
 /// Evaluates one registered function over a row range. Instantiated behind the
 /// shadow boundary, once per function and argument types.
+///
+/// `declinedRows` is one byte per row, zeroed by the caller, where the launch
+/// records a failed check as a GpuErrorKind; null turns collection off. A
+/// declined row's value is meaningless and its validity bit is cleared.
 using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     const std::vector<GpuArgView>& arguments,
     cudf::size_type numRows,
     cudf::data_type outputType,
+    uint8_t* declinedRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 

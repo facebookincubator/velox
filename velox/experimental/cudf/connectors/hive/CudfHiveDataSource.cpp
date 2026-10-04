@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/CpuFilterFallback.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -319,12 +320,26 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     for (auto& col : cudfTableColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterResult =
-        cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());
+    gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
+    auto filterResult = cudfRemainingFilterExpression_->eval(
+        inputViews, stream, get_temp_mr(), /*finalize=*/true, &errors);
+    // Checked before the retention mask drops the declined row.
+    std::unique_ptr<cudf::column> recovered;
+    if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+      recovered = reevaluateFilterOnCpu(
+          optimizedRemainingFilter_,
+          getTableRowType(),
+          inputViews,
+          cpuRemainingFilter_,
+          expressionEvaluator_,
+          pool_,
+          stream);
+    }
+    auto mask = recovered != nullptr ? recovered->view() : asView(filterResult);
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_retention_mask(
-        *originalTable, asView(filterResult), stream, get_output_mr());
+        *originalTable, mask, stream, get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);

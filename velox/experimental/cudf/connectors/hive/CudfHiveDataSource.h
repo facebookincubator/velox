@@ -29,6 +29,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
+#include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 
 #include <cudf/ast/expressions.hpp>
@@ -139,6 +140,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // next(). Null when there is no remaining filter.
   std::shared_ptr<velox::cudf_velox::CudfExpression>
       cudfRemainingFilterExpression_;
+
+  // The same filter compiled for Velox, built on the first batch in which a
+  // GPU SFI kernel declines a row; see reevaluateFilterOnCpu.
+  std::unique_ptr<velox::exec::ExprSet> cpuRemainingFilter_;
 
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 

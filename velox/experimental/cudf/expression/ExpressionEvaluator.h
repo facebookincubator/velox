@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+#include "velox/experimental/cudf/functions/GpuSfiErrors.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/expression/FunctionSignature.h"
@@ -142,7 +143,8 @@ class CudfExpression {
       std::vector<cudf::column_view> inputColumnViews,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false) = 0;
+      bool finalize = false,
+      gpu_sfi::GpuSfiErrors* errors = nullptr) = 0;
 };
 
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
@@ -159,7 +161,8 @@ class FunctionExpression : public CudfExpression {
       std::vector<cudf::column_view> inputColumnViews,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false) override;
+      bool finalize = false,
+      gpu_sfi::GpuSfiErrors* errors = nullptr) override;
 
   void close() override;
 
