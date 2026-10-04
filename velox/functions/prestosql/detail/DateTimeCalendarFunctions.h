@@ -20,6 +20,7 @@
 #include <string_view>
 #include <vector>
 
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeUtil.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -40,13 +41,13 @@ template <typename T>
 struct ToUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       double& result,
       const arg_type<Timestamp>& timestamp) {
     result = toUnixtime(timestamp);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       double& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto milliseconds = unpackMillisUtc(*timestampWithTimezone);
@@ -59,7 +60,7 @@ struct FromUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // (double) -> timestamp
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       Timestamp& result,
       const arg_type<double>& unixtime) {
     result = fromUnixtime(unixtime);
@@ -76,7 +77,7 @@ struct FromUnixtimeFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<double>& unixtime,
       const arg_type<Varchar>& timeZone) {
@@ -98,7 +99,7 @@ struct FromUnixtimeFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<double>& unixtime,
       const arg_type<int64_t>& hours,
@@ -116,7 +117,7 @@ struct FromUnixtimeFunction {
 namespace {
 
 // Returns the embedded zone's UTC offset at the represented instant.
-FOLLY_ALWAYS_INLINE int64_t
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
 getTimeZoneOffsetSeconds(int64_t timestampWithTimezone) {
   const auto* embeddedZone =
       tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
@@ -141,8 +142,7 @@ struct TimestampWithTimezoneSupport {
   // Converts timestampWithTimezone to a timestamp representing the same
   // instant in the render zone. If `asGMT` is true, returns the GMT time at
   // that instant.
-  FOLLY_ALWAYS_INLINE
-  Timestamp toTimestamp(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp toTimestamp(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       bool asGMT = false) {
     auto timestamp = unpackTimestampUtc(*timestampWithTimezone);
@@ -167,7 +167,7 @@ struct TimestampWithTimezoneSupport {
 
   // Returns the embedded zone under legacy behavior, the session zone
   // otherwise.
-  FOLLY_ALWAYS_INLINE const tz::TimeZone* renderZone(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE const tz::TimeZone* renderZone(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) const {
     VELOX_CHECK(
         renderZone_.has_value(),
@@ -207,7 +207,7 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
     this->initializeTimeZoneSupport(config);
   }
 
-  FOLLY_ALWAYS_INLINE Status
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Status
   call(out_type<Date>& result, const arg_type<Varchar>& date) {
     auto days = util::fromDateString(date, util::ParseMode::kPrestoCast);
     if (days.hasError()) {
@@ -218,13 +218,13 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
     return Status::OK();
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Timestamp>& timestamp) {
     result = util::toDate(timestamp, timeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     result = util::toDate(this->toTimestamp(timestampWithTimezone), nullptr);
@@ -241,17 +241,19 @@ struct WeekFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getWeek(timestamp, this->timeZone_, false);
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getWeek(Timestamp::fromDate(date), nullptr, false);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -266,21 +268,24 @@ struct YearFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t getYear(const std::tm& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  getYear(const std::tm& time) {
     return 1900 + time.tm_year;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getYear(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -295,21 +300,24 @@ struct QuarterFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t getQuarter(const std::tm& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  getQuarter(const std::tm& time) {
     return time.tm_mon / 3 + 1;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getQuarter(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getQuarter(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -324,21 +332,24 @@ struct MonthFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t getMonth(const std::tm& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  getMonth(const std::tm& time) {
     return 1 + time.tm_mon;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getMonth(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getMonth(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -353,17 +364,19 @@ struct DayFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_mday;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDateTime(date).tm_mday;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -378,7 +391,7 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Timestamp>& timestamp) {
     auto dt = getDateTime(timestamp, this->timeZone_);
@@ -391,7 +404,7 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
     result = daysSinceEpochFromDate.value();
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date) {
     auto dt = getDateTime(date);
@@ -404,7 +417,7 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
     result = lastDayOfMonthSinceEpoch.value();
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -423,14 +436,14 @@ template <typename T>
 struct TimestampMinusFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Timestamp>& a,
       const arg_type<Timestamp>& b) {
     result = a.toMillis() - b.toMillis();
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<TimestampWithTimezone>& a,
       const arg_type<TimestampWithTimezone>& b) {
@@ -442,7 +455,7 @@ template <typename T>
 struct TimestampPlusInterval : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& a,
       const arg_type<IntervalDayTime>& b)
@@ -465,7 +478,7 @@ struct TimestampPlusInterval : public TimestampWithTimezoneSupport<T> {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
       const arg_type<IntervalYearMonth>& interval) {
@@ -473,7 +486,7 @@ struct TimestampPlusInterval : public TimestampWithTimezoneSupport<T> {
         timestamp, DateTimeUnit::kMonth, interval, sessionTimeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalDayTime>& interval) {
@@ -488,7 +501,7 @@ struct TimestampPlusInterval : public TimestampWithTimezoneSupport<T> {
     this->initializeTimeZoneSupport(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalYearMonth>& interval) {
@@ -508,7 +521,7 @@ template <typename T>
 struct IntervalPlusTimestamp : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<IntervalDayTime>& a,
       const arg_type<Timestamp>& b)
@@ -531,7 +544,7 @@ struct IntervalPlusTimestamp : public TimestampWithTimezoneSupport<T> {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<IntervalYearMonth>& interval,
       const arg_type<Timestamp>& timestamp) {
@@ -539,7 +552,7 @@ struct IntervalPlusTimestamp : public TimestampWithTimezoneSupport<T> {
         timestamp, DateTimeUnit::kMonth, interval, sessionTimeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<IntervalDayTime>& interval,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
@@ -554,7 +567,7 @@ struct IntervalPlusTimestamp : public TimestampWithTimezoneSupport<T> {
     this->initializeTimeZoneSupport(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<IntervalYearMonth>& interval,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
@@ -574,7 +587,7 @@ template <typename T>
 struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& a,
       const arg_type<IntervalDayTime>& b)
@@ -597,7 +610,7 @@ struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
       const arg_type<IntervalYearMonth>& interval) {
@@ -605,7 +618,7 @@ struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
         timestamp, DateTimeUnit::kMonth, -interval, sessionTimeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalDayTime>& interval) {
@@ -621,7 +634,7 @@ struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
     this->initializeTimeZoneSupport(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalYearMonth>& interval) {
@@ -644,21 +657,24 @@ struct DayOfWeekFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t getDayOfWeek(const std::tm& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  getDayOfWeek(const std::tm& time) {
     return time.tm_wday == 0 ? 7 : time.tm_wday;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDayOfWeek(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -673,21 +689,24 @@ struct DayOfYearFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t getDayOfYear(const std::tm& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  getDayOfYear(const std::tm& time) {
     return time.tm_yday + 1;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDayOfYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDayOfYear(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -702,7 +721,8 @@ struct YearOfWeekFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE int64_t computeYearOfWeek(const std::tm& dateTime) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
+  computeYearOfWeek(const std::tm& dateTime) {
     int isoWeekDay = dateTime.tm_wday == 0 ? 7 : dateTime.tm_wday;
     // The last few days in December may belong to the next year if they are
     // in the same week as the next January 1 and this January 1 is a Thursday
@@ -723,17 +743,19 @@ struct YearOfWeekFunction : public InitSessionTimezone<T>,
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = computeYearOfWeek(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = computeYearOfWeek(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -748,24 +770,28 @@ struct HourFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDateTime(date).tm_hour;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_hour;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Time>& time) {
     VELOX_USER_CHECK(
         time >= 0 && time < kMillisInDay,
         "TIME value {} is out of range [0, 86400000)",
@@ -783,24 +809,28 @@ struct MinuteFunction : public InitSessionTimezone<T>,
   using InitSessionTimezone<T>::initialize;
   using TimestampWithTimezoneSupport<T>::initialize;
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_min;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDateTime(date).tm_min;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_min;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Time>& time) {
     VELOX_USER_CHECK(
         time >= 0 && time < kMillisInDay,
         "TIME value {} is out of valid range [0, 86399999]",
@@ -815,24 +845,28 @@ template <typename T>
 struct SecondFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date) {
     result = getDateTime(date).tm_sec;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Time>& time) {
     VELOX_USER_CHECK(
         time >= 0 && time < kMillisInDay,
         "TIME value {} is out of range [0, 86400000)",
@@ -847,27 +881,29 @@ template <typename T>
 struct MillisecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Date>& /*date*/) {
     // Dates do not have millisecond granularity.
     result = 0;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto timestamp = unpackTimestampUtc(*timestampWithTimezone);
     result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Time>& time) {
     VELOX_USER_CHECK(
         time >= 0 && time < kMillisInDay,
         "TIME value {} is out of range [0, 86400000)",
@@ -878,13 +914,13 @@ struct MillisecondFunction {
 };
 
 namespace {
-inline bool isDateUnit(const DateTimeUnit unit) {
+VELOX_GPU_COMPATIBLE inline bool isDateUnit(const DateTimeUnit unit) {
   return unit == DateTimeUnit::kDay || unit == DateTimeUnit::kMonth ||
       unit == DateTimeUnit::kQuarter || unit == DateTimeUnit::kYear ||
       unit == DateTimeUnit::kWeek;
 }
 
-inline std::optional<DateTimeUnit> getDateUnit(
+VELOX_GPU_COMPATIBLE inline std::optional<DateTimeUnit> getDateUnit(
     const StringView& unitString,
     bool throwIfInvalid) {
   std::optional<DateTimeUnit> unit =
@@ -898,7 +934,7 @@ inline std::optional<DateTimeUnit> getDateUnit(
   return unit;
 }
 
-inline std::optional<DateTimeUnit> getTimestampUnit(
+VELOX_GPU_COMPATIBLE inline std::optional<DateTimeUnit> getTimestampUnit(
     const StringView& unitString) {
   std::optional<DateTimeUnit> unit =
       fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
@@ -910,7 +946,7 @@ inline std::optional<DateTimeUnit> getTimestampUnit(
   return unit;
 }
 
-inline std::optional<DateTimeUnit> getTimeUnit(
+VELOX_GPU_COMPATIBLE inline std::optional<DateTimeUnit> getTimeUnit(
     const StringView& unitString,
     bool throwIfInvalid = true) {
   std::optional<DateTimeUnit> unit =
@@ -930,7 +966,7 @@ inline std::optional<DateTimeUnit> getTimeUnit(
   return std::nullopt;
 }
 
-inline void checkValueInInt32Range(int64_t value) {
+VELOX_GPU_COMPATIBLE inline void checkValueInInt32Range(int64_t value) {
   if (value != static_cast<int32_t>(value)) {
     VELOX_UNSUPPORTED(
         "Value should be in range [{}, {}]",
@@ -997,7 +1033,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Timestamp>& timestamp) {
@@ -1010,7 +1046,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     result = truncateTimestamp(timestamp, unit, timeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Date>& date) {
@@ -1029,7 +1065,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
@@ -1078,7 +1114,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     result = pack(resultMillis, unpackZoneKeyId(*timestampWithTimezone));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Time>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Time>& time) {
@@ -1133,7 +1169,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
@@ -1165,7 +1201,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
@@ -1188,7 +1224,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
@@ -1202,7 +1238,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     result = addToDate(date, unit, static_cast<int32_t>(value));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Time>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
@@ -1280,7 +1316,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Timestamp>& timestamp1,
@@ -1291,7 +1327,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     result = diffTimestamp(unit, timestamp1, timestamp2, sessionTimeZone_);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Date>& date1,
@@ -1303,7 +1339,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     result = diffDate(unit, date1, date2);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<TimestampWithTimezone>& timestampWithTz1,
@@ -1328,7 +1364,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Time>& time1,
@@ -1348,7 +1384,7 @@ template <typename T>
 struct TimeZoneHourFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& input) {
     auto offset = getTimeZoneOffsetSeconds(*input);
@@ -1360,7 +1396,7 @@ template <typename T>
 struct TimeZoneMinuteFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& input) {
     auto offset = getTimeZoneOffsetSeconds(*input);
@@ -1385,7 +1421,7 @@ struct AtTimezoneFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& tsWithTz,
       const arg_type<Varchar>& timezone) {
@@ -1423,7 +1459,7 @@ struct AtTimezoneConvertToTimestampFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<Varchar>& timezone) {
