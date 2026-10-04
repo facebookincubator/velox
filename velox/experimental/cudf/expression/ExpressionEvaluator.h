@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+#include "velox/experimental/cudf/functions/GpuSfiErrors.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/expression/FunctionSignature.h"
@@ -142,7 +143,8 @@ class CudfExpression {
       std::vector<cudf::column_view> inputColumnViews,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false) = 0;
+      bool finalize = false,
+      gpu_sfi::GpuSfiErrors* errors = nullptr) = 0;
 };
 
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
@@ -152,13 +154,15 @@ class FunctionExpression : public CudfExpression {
   static std::shared_ptr<FunctionExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false) override;
+      bool finalize = false,
+      gpu_sfi::GpuSfiErrors* errors = nullptr) override;
 
   void close() override;
 
@@ -188,10 +192,16 @@ class FunctionExpression : public CudfExpression {
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
 /// first.
+///
+/// `config` is the session query config. Evaluators that compile Velox simple
+/// functions need it because Velox hands initialize() a QueryConfig, so a
+/// function whose setup depends on a session setting resolves it the same way
+/// it would on the CPU path.
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config);
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
 /// the OperatorAdapters and the aggregation validators. Optimizes the
@@ -209,6 +219,14 @@ bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
+
+/// True when `expr` yields TIMESTAMP WITH TIME ZONE or takes it as a direct
+/// input. cuDF sees the type as INT64 holding UTC millis shifted over a zone
+/// key, so an evaluator that reads the number compares or converts the packed
+/// bits. Only an evaluator that binds the logical type, as GPU SFI does through
+/// the function signature, may claim such a node; the others decline it so the
+/// operator stays on the CPU.
+bool hasTimestampWithTimeZoneOperand(const core::TypedExprPtr& expr);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.

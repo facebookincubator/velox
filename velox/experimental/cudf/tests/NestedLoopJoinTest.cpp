@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -1964,4 +1965,29 @@ TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuildAndOutput) {
                   .planNode();
 
   AssertQueryBuilder(plan).assertResults(makeRowVector(ROW({}), 6));
+}
+
+// A device check that fails in a nested loop join condition raises Velox's
+// error rather than dropping the row. Decimal division puts the condition on
+// GPU SFI, since the AST evaluator does not take decimals.
+TEST_F(CudfNestedLoopJoinTest, declinedRowInAJoinConditionRaisesTheCpuError) {
+  auto probeVectors = {makeRowVector(
+      {"t_val"}, {makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2))})};
+  auto buildVectors = {makeRowVector(
+      {"u_val"}, {makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2))})};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors})
+                          .planNode(),
+                      "cast(t_val / u_val as double) > 1.0",
+                      {"t_val", "u_val"})
+                  .planNode();
+
+  // Every pairing with the zero divisor fails.
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()), "Division by zero");
 }

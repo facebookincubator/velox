@@ -293,6 +293,11 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     return false;
   }
 
+  // An AST operator would compare or cast the packed int64 bit for bit.
+  if (hasTimestampWithTimeZoneOperand(expr)) {
+    return false;
+  }
+
   // Literals and top-level field references are always supported in pure
   // AST/JIT. Nested field references are delegated to FunctionExpression so
   // computed ROW values keep Velox's dereference semantics.
@@ -397,6 +402,10 @@ struct AstContext {
       precomputeInstructions;
   memory::MemoryPool* pool;
   const core::TypedExprPtr rootExpr;
+  /// Forwarded to createCudfExpression when a subexpression is delegated, so a
+  /// delegated evaluator resolves session settings the same way a top-level
+  /// one does.
+  const core::QueryConfig& config;
 
   cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
@@ -534,7 +543,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0;
     }
-    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], pool);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], pool, config);
     VELOX_CHECK_NOT_NULL(
         node, "Failed to compile sub-expression: {}", expr->toString());
     return addPrecomputeInstructionOnSide(
@@ -713,12 +723,16 @@ int AstContext::findExpressionSide(const core::TypedExprPtr& expr) const {
   return foundSide;
 }
 
+/// `errors` is forwarded to compiled nodes evaluated here, so a delegated GPU
+/// SFI node can report a declined row. It is null when the owner cannot act on
+/// one, as for joins, whose predicate is consumed inside a fused cuDF call.
 std::vector<ColumnOrView> precomputeSubexpressions(
     const std::vector<cudf::column_view>& inputColumnViews,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    gpu_sfi::GpuSfiErrors* errors = nullptr) {
   std::vector<ColumnOrView> precomputedColumns;
   precomputedColumns.reserve(precomputeInstructions.size());
 
@@ -733,10 +747,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
     // If a compiled cudf node is available, evaluate it directly.
     if (cudf_expression) {
       auto result = cudf_expression->eval(
-          inputColumnViews,
-          stream,
-          get_output_mr(),
-          /*finalize=*/true);
+          inputColumnViews, stream, get_output_mr(), /*finalize=*/true, errors);
       precomputedColumns.push_back(std::move(result));
       continue;
     }

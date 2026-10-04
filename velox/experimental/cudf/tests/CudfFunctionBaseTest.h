@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/functions/GpuSfiErrors.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -72,15 +73,27 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         input, pool_.get(), stream, mr);
     auto optimized =
         expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator =
-        createCudfExpression(optimized, input->rowType(), pool_.get());
+    auto filterEvaluator = createCudfExpression(
+        optimized,
+        input->rowType(),
+        pool_.get(),
+        execCtx_.queryCtx()->queryConfig());
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());
     for (auto& col : ownedColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterColumn = filterEvaluator->eval(inputViews, stream, mr);
+    // A declined row means a device check failed. Operators re-run such a
+    // batch through Velox; a bare evaluator cannot, so the test fails instead.
+    gpu_sfi::GpuSfiErrors errors(stream, mr);
+    auto filterColumn = filterEvaluator->eval(
+        inputViews, stream, mr, /*finalize=*/true, &errors);
+    VELOX_CHECK(
+        errors.resolve() == gpu_sfi::ErrorClass::kNone,
+        "A GPU SFI kernel declined a row while evaluating {}: a check in the "
+        "function body failed, so the result is not a value Velox would return",
+        optimized->toString());
     auto filterColumnView = asView(filterColumn);
     cudf::table_view resultTable({filterColumnView});
     // Preserve logical Velox output types, e.g. VARBINARY, when converting

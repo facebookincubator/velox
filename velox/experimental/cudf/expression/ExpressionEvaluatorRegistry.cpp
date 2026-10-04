@@ -36,13 +36,17 @@ bool registerCudfExpressionEvaluator(
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
+    bool honorsSessionTimeZone,
     bool overwrite) {
   auto& registry = getCudfExpressionEvaluatorRegistry();
   if (!overwrite && registry.find(name) != registry.end()) {
     return false;
   }
   registry[name] = CudfExpressionEvaluatorEntry{
-      priority, std::move(canEvaluate), std::move(create)};
+      priority,
+      std::move(canEvaluate),
+      std::move(create),
+      honorsSessionTimeZone};
   return true;
 }
 
@@ -68,9 +72,11 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return FunctionExpression::create(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return FunctionExpression::create(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/false,
       /*overwrite=*/false);
 
   registeredBuiltins = true;

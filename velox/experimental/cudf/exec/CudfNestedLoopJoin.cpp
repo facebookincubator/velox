@@ -242,17 +242,20 @@ void CudfNestedLoopJoinProbe::initialize() {
   // Optimize (rewrites + constant folding) the join condition before building
   // the AST so CudfFunctions never see scalar-only operand sets. This carries
   // over the constant folding the exec::ExprSet used to perform.
-  const auto optimizedCondition = expression::optimize(
-      joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  const auto& config = queryCtx->queryConfig();
+  const auto optimizedCondition =
+      expression::optimize(joinNode_->joinCondition(), queryCtx, pool);
   VELOX_CHECK_NOT_NULL(optimizedCondition);
 
   if (hasNonAstSubexprSpanningBothSides(
           optimizedCondition, probeType_, buildType_)) {
     useAstFilter_ = false;
-    filterEvaluator_ = createCudfExpression(
-        optimizedCondition,
-        facebook::velox::type::concatRowTypes({probeType_, buildType_}),
-        pool);
+    filterRowType_ =
+        facebook::velox::type::concatRowTypes({probeType_, buildType_});
+    cpuFilterSource_ = optimizedCondition;
+    filterEvaluator_ =
+        createCudfExpression(optimizedCondition, filterRowType_, pool, config);
     hasFilter_ = true;
     return;
   }
@@ -268,7 +271,8 @@ void CudfNestedLoopJoinProbe::initialize() {
       buildType_,
       leftPrecomputeInstructions_,
       rightPrecomputeInstructions_,
-      pool);
+      pool,
+      config);
 
   // Set hasFilter_ only after the AST has been fully built so that a throw
   // from createAstTree() does not leave the operator marked as having a filter
@@ -578,8 +582,22 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
       filterEvaluator_,
       "Join filter evaluator must be initialized before "
       "crossJoinConditionalIndices");
-  auto filterColumn = filterEvaluator_->eval(combinedViews, stream, mr);
-  auto mask = asView(filterColumn);
+  gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
+  auto filterColumn = filterEvaluator_->eval(
+      combinedViews, stream, mr, /*finalize=*/true, &errors);
+  // Checked before the mask drops the declined row.
+  std::unique_ptr<cudf::column> recovered;
+  if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+    recovered = reevaluateFilterOnCpu(
+        cpuFilterSource_,
+        filterRowType_,
+        combinedViews,
+        cpuFilter_,
+        operatorCtx_->execCtx(),
+        operatorCtx_->pool(),
+        stream);
+  }
+  auto mask = recovered != nullptr ? recovered->view() : asView(filterColumn);
 
   auto filteredProbeIndices = cudf::apply_retention_mask(
       cudf::table_view{{probeIndices->view()}}, mask, stream, mr);
