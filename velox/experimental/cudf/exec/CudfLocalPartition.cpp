@@ -16,7 +16,9 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -27,6 +29,9 @@
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
 
+#include <folly/String.h>
+
+#include <cstring>
 #include <limits>
 
 namespace facebook::velox::cudf_velox {
@@ -51,19 +56,55 @@ int64_t retainedBytes(const CudfVector& vector) {
       "CudfVector is too large for local exchange byte accounting");
   return static_cast<int64_t>(bytes);
 }
+
+// Recovers the hash partition key channels from the "HASH(key1, key2, ...)"
+// form of the spec, which builds its hash function directly and exposes the
+// keys through its string form only.
+std::vector<column_index_t> hashPartitionKeyChannels(
+    const core::LocalPartitionNode& planNode) {
+  const std::string spec = planNode.partitionFunctionSpec().toString();
+  std::vector<column_index_t> channels;
+  const size_t start = spec.find("HASH(");
+  if (start == std::string::npos) {
+    return channels;
+  }
+  const size_t keysBegin = start + std::strlen("HASH(");
+  const size_t end = spec.find(')', keysBegin);
+  if (end == std::string::npos) {
+    return channels;
+  }
+  std::vector<std::string> keys;
+  folly::split(',', spec.substr(keysBegin, end - keysBegin), keys);
+  const auto& rowType = planNode.outputType();
+  for (const auto& key : keys) {
+    channels.push_back(rowType->getChildIdx(folly::trimWhitespace(key).str()));
+  }
+  return channels;
+}
 } // namespace
 
 bool CudfLocalPartition::shouldReplace(
     const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
-  // Only replace for Hash, Round Robin, and Round Robin Row-Wise Partitioning.
-  if (isAnyOf<
-          exec::HashPartitionFunctionSpec,
-          exec::RoundRobinPartitionFunctionSpec,
-          core::GatherPartitionFunctionSpec>(
-          &planNode->partitionFunctionSpec())) {
+  const auto& partitionSpec = planNode->partitionFunctionSpec();
+  if (dynamic_cast<const exec::HashPartitionFunctionSpec*>(&partitionSpec)) {
+    const auto& rowType = planNode->outputType();
+    for (const auto channel : hashPartitionKeyChannels(*planNode)) {
+      if (containsCustomComparison(rowType->childAt(channel))) {
+        LOG_FALLBACK(
+            "LocalPartition key type provides a custom comparison: {}",
+            rowType->childAt(channel)->toString());
+        return false;
+      }
+    }
     return true;
   }
-  std::string spec = planNode->partitionFunctionSpec().toString();
+  // Only replace for Round Robin and Round Robin Row-Wise Partitioning.
+  if (isAnyOf<
+          exec::RoundRobinPartitionFunctionSpec,
+          core::GatherPartitionFunctionSpec>(&partitionSpec)) {
+    return true;
+  }
+  std::string spec = partitionSpec.toString();
   if (spec.find("ROUND ROBIN ROW") != std::string::npos) {
     return true;
   }
@@ -88,53 +129,14 @@ CudfLocalPartition::CudfLocalPartition(
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
-  // Following is IMO a hacky way to get the partition key indices. It is to
-  // workaround the fact that the partition spec constructs the hash function
-  // directly and has no public methods to get the partition key indices.
-
-  // When the operator is of type kRepartition, the partition spec is a string
-  // in the format "HASH(key1, key2, ...)"
-  // We're going to extract the keys between HASH( and ) and find their indices
-  // in the output row type.
-
   // When operator is of type kGather, we don't need to store any partition key
   // indices because we're going to merge all the incoming streams together.
-
-  // Get partition function specification string
   std::string spec = planNode->partitionFunctionSpec().toString();
   auto* hashFunctionSpec = dynamic_cast<const exec::HashPartitionFunctionSpec*>(
       &planNode->partitionFunctionSpec());
 
-  // Only parse keys if it's a hash function
   if (hashFunctionSpec) {
-    // Extract keys between HASH( and )
-    size_t start = spec.find("HASH(") + 5;
-    size_t end = spec.find(")", start);
-    if (start != std::string::npos && end != std::string::npos) {
-      std::string keysStr = spec.substr(start, end - start);
-
-      // Split by comma to get individual keys.
-      std::vector<std::string> keys;
-      size_t pos = 0;
-      while ((pos = keysStr.find(",")) != std::string::npos) {
-        std::string key = keysStr.substr(0, pos);
-        keys.push_back(key);
-        keysStr.erase(0, pos + 1);
-      }
-      keys.push_back(keysStr); // Add the last key.
-
-      // Find field indices for each key.
-      const auto& rowType = planNode->outputType();
-      for (const auto& key : keys) {
-        auto trimmedKey = key;
-        // Trim whitespace
-        trimmedKey.erase(0, trimmedKey.find_first_not_of(" "));
-        trimmedKey.erase(trimmedKey.find_last_not_of(" ") + 1);
-
-        auto fieldIndex = rowType->getChildIdx(trimmedKey);
-        partitionKeyIndices_.push_back(fieldIndex);
-      }
-    }
+    partitionKeyIndices_ = hashPartitionKeyChannels(*planNode);
     partitionFunctionType_ = PartitionFunctionType::kHash;
   } else if (
       dynamic_cast<const exec::RoundRobinPartitionFunctionSpec*>(

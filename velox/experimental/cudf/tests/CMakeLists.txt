@@ -80,7 +80,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_aggregation_test
   SOURCES Main.cpp AggregationTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
@@ -184,6 +184,7 @@ velox_add_cudf_test(
     velox_vector_fuzzer
     Folly::folly
     fmt::fmt
+    velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
@@ -208,25 +209,25 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_local_merge_test
   SOURCES Main.cpp LocalMergeTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_mark_distinct_test
   SOURCES Main.cpp MarkDistinctTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_nested_loop_join_test
   SOURCES Main.cpp NestedLoopJoinTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_custom_types_for_testing
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_custom_types_for_testing velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
@@ -238,7 +239,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_order_by_test
   SOURCES Main.cpp OrderByTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt velox_cudf_exec_test_lib
 )
 
 if(VELOX_ENABLE_S3)
@@ -304,25 +305,25 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_topnrownumber_test
   SOURCES Main.cpp TopNRowNumberTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt velox_cudf_exec_test_lib
 )
 
 velox_add_cudf_test(
   NAME velox_cudf_window_test
   SOURCES Main.cpp WindowTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window velox_cudf_exec_test_lib
 )
 
 add_subdirectory(iceberg)

@@ -36,6 +36,7 @@
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -71,28 +72,6 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
-
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (size_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool containsCustomComparison(const core::TypedExprPtr& expression) {
-  if (containsCustomComparison(expression->type())) {
-    return true;
-  }
-  return std::any_of(
-      expression->inputs().begin(),
-      expression->inputs().end(),
-      [](const auto& input) { return containsCustomComparison(input); });
-}
 
 bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
   return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
@@ -399,6 +378,14 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
+    if (keysUseCustomComparison(joinPlanNode->leftKeys()) ||
+        keysUseCustomComparison(joinPlanNode->rightKeys())) {
+      LOG_FALLBACK(
+          "HashJoin key type provides a custom comparison, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     // Disabling null-aware anti join with filter until we implement it right
     if (joinPlanNode->joinType() == core::JoinType::kAnti &&
         joinPlanNode->isNullAware() && joinPlanNode->filter()) {
@@ -543,10 +530,9 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (containsCustomComparison(joinPlanNode->joinCondition())) {
+      if (exprUsesCustomComparison(joinPlanNode->joinCondition())) {
         LOG_FALLBACK(
-            "NestedLoopJoin condition has custom comparison semantics, "
-            "PlanNode id: {}",
+            "NestedLoopJoin condition uses a custom comparison type, PlanNode id: {}",
             planNode->id());
         return false;
       }
@@ -661,8 +647,18 @@ class OrderByAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::OrderByNode>(planNode) !=
-        nullptr;
+    auto orderByNode =
+        std::dynamic_pointer_cast<const core::OrderByNode>(planNode);
+    if (!orderByNode) {
+      return false;
+    }
+    if (keysUseCustomComparison(orderByNode->sortingKeys())) {
+      LOG_FALLBACK(
+          "OrderBy sorting key type provides a custom comparison, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -701,7 +697,17 @@ class TopNAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::TopNNode>(planNode) != nullptr;
+    auto topNNode = std::dynamic_pointer_cast<const core::TopNNode>(planNode);
+    if (!topNNode) {
+      return false;
+    }
+    if (keysUseCustomComparison(topNNode->sortingKeys())) {
+      LOG_FALLBACK(
+          "TopN sorting key type provides a custom comparison, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -742,6 +748,13 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     auto node =
         std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
     if (!node) {
+      return false;
+    }
+    if (keysUseCustomComparison(node->partitionKeys()) ||
+        keysUseCustomComparison(node->sortingKeys())) {
+      LOG_FALLBACK(
+          "TopNRowNumber key type provides a custom comparison, PlanNode id: {}",
+          planNode->id());
       return false;
     }
     return node->rankFunction() ==
@@ -1024,8 +1037,18 @@ class MarkDistinctAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode) !=
-        nullptr;
+    auto markDistinctNode =
+        std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
+    if (!markDistinctNode) {
+      return false;
+    }
+    if (keysUseCustomComparison(markDistinctNode->distinctKeys())) {
+      LOG_FALLBACK(
+          "MarkDistinct key type provides a custom comparison, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -1095,6 +1118,25 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
 
 /// CallbackSinkAdapter - Keeps original operator (accepts GPU input when part
 /// of LocalMergeNode)
+namespace {
+// Returns the LocalMergeNode that CudfLocalMerge can execute, or nullptr. The
+// sink that feeds a LocalMerge accepts device vectors only when the merge
+// itself runs on the GPU, so both adapters decide through this function.
+std::shared_ptr<const core::LocalMergeNode> gpuLocalMergeNode(
+    const core::PlanNodePtr& planNode) {
+  auto localMergeNode =
+      std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+  if (localMergeNode &&
+      keysUseCustomComparison(localMergeNode->sortingKeys())) {
+    LOG_FALLBACK(
+        "LocalMerge sorting key type provides a custom comparison, PlanNode id: {}",
+        planNode->id());
+    return nullptr;
+  }
+  return localMergeNode;
+}
+} // namespace
+
 class CallbackSinkAdapter : public OperatorAdapter {
  public:
   CallbackSinkAdapter() : OperatorAdapter("CallbackSink") {}
@@ -1107,9 +1149,7 @@ class CallbackSinkAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    auto supported = planNode &&
-        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-            nullptr &&
+    auto supported = gpuLocalMergeNode(planNode) != nullptr &&
         !subtreeHasUnsupportedType(planNode);
     if (!supported) {
       LOG_FALLBACK(
@@ -1153,9 +1193,7 @@ class LocalMergeAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return planNode &&
-        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-        nullptr &&
+    return gpuLocalMergeNode(planNode) != nullptr &&
         !subtreeHasUnsupportedType(planNode);
   }
 

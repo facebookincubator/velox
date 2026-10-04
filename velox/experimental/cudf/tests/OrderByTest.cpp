@@ -16,10 +16,12 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -278,6 +280,23 @@ TEST_F(OrderByTest, multipleKeys) {
       orderById,
       "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST, c1 DESC NULLS FIRST",
       {0, 1});
+}
+
+// cuDF would rank the zone key between two encodings of one instant where
+// Velox ranks 'id', so the sort must stay on the CPU.
+TEST_F(OrderByTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  for (const auto& key : {"k ASC NULLS LAST", "k DESC NULLS FIRST"}) {
+    SCOPED_TRACE(key);
+    keys.assertFallsBackToCpuInOrder(
+        PlanBuilder()
+            .values({data})
+            .orderBy({key, "id ASC NULLS LAST"}, false)
+            .planNode(),
+        exec::OperatorType::kOrderBy);
+  }
 }
 
 TEST_F(OrderByTest, multiBatchResult) {

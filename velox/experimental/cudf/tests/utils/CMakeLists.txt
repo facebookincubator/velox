@@ -17,6 +17,7 @@ add_library(
   CudfHiveConnectorTestBase.cpp
   CudfPlanBuilder.cpp
   CudfTpcdsQueryBuilder.cpp
+  CustomComparisonKeys.cpp
 )
 
 target_link_libraries(
@@ -37,4 +38,8 @@ target_link_libraries(
   velox_s3fs
   velox_test_util
   velox_vector_test_lib
+  gmock
+  gtest
 )
+
+velox_add_test_headers(velox_cudf_exec_test_lib CustomComparisonKeys.h)

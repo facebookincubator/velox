@@ -16,8 +16,10 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -164,6 +166,32 @@ TEST_F(LocalMergeTest, localMerge) {
 
   testTwoKeys(vectors, "c0", "c3");
   testTwoKeys(vectors, "c3", "c0");
+}
+
+// cuDF would merge the two zone encodings of one instant by zone key where
+// Velox merges them by 'id', so the merge must stay on the CPU.
+TEST_F(LocalMergeTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto losAngeles =
+      keys.makeRowsInZone({"k", "id"}, "America/Los_Angeles", {1, 2}, {0, 2});
+  auto utc = keys.makeRowsInZone({"k", "id"}, "UTC", {1, 2}, {1, 3});
+
+  for (const auto& key : {"k ASC NULLS LAST", "k DESC NULLS FIRST"}) {
+    SCOPED_TRACE(key);
+    const std::vector<std::string> sortingKeys = {key, "id ASC NULLS LAST"};
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto sorted = [&](const RowVectorPtr& rows) {
+      return PlanBuilder(planNodeIdGenerator)
+          .values({rows})
+          .orderBy(sortingKeys, true)
+          .planNode();
+    };
+    keys.assertFallsBackToCpuInOrder(
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge(sortingKeys, {sorted(losAngeles), sorted(utc)})
+            .planNode(),
+        exec::OperatorType::kLocalMerge);
+  }
 }
 
 TEST_F(LocalMergeTest, offByOne) {
