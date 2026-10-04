@@ -161,6 +161,7 @@ void registerAstEvaluator(int priority) {
          const core::QueryConfig& config) {
         return std::make_shared<ASTExpression>(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/false,
       /*overwrite=*/false);
 }
 

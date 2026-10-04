@@ -162,11 +162,16 @@ struct GpuFunctionInstanceSpec {
 /// with the same name and signature is replaced when `overwrite` is true and
 /// otherwise kept, returning false. Entries differing in signature coexist as
 /// overloads. GpuFunctionLookup.h reads the result.
+///
+/// `dependsOnSessionTimeZone` marks a function whose result for a TIMESTAMP
+/// argument depends on the session time zone, which initialize() reads; the
+/// evaluator keeps such a call away from evaluators that read TIMESTAMP as UTC.
 bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
     GpuFunctionInstanceSpec instanceSpec,
+    bool dependsOnSessionTimeZone,
     bool overwrite = true);
 
 /// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu

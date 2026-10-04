@@ -337,6 +337,14 @@ struct GpuUDFHolder {
 
   static constexpr bool hasInitialize = hasTemplateInitialize<Fn>::value;
 
+  /// True when the result for a TIMESTAMP argument depends on the session time
+  /// zone: the struct runs initialize(), where Velox hands it the QueryConfig,
+  /// over a TIMESTAMP argument. InitSessionTimezone's descendants are the
+  /// common case; DateTruncFunction reads the zone into a member of its own,
+  /// which a test on the base class alone would miss.
+  static constexpr bool dependsOnSessionTimeZone =
+      hasInitialize && (std::is_same_v<exec_arg_type<TArgs>, Timestamp> || ...);
+
   // TODO(gpu-sfi-initialize): Detect the initialize() overload that takes a
   // memory::MemoryPool* after config, trying the pool-free one first as
   // UDFHolder does. A function using it today runs on a default-constructed
@@ -730,6 +738,7 @@ bool registerGpuFunction(
           Holder::hasInitialize ? &Holder::initializeInstance : nullptr,
           static_cast<int32_t>(sizeof(Fn)),
           static_cast<int32_t>(alignof(Fn))},
+      Holder::dependsOnSessionTimeZone,
       overwrite);
 }
 
