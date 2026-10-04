@@ -27,9 +27,16 @@
 #include "velox/experimental/cudf/functions/GpuErrorSink.cuh"
 #endif
 
+#include <cstddef>
 #include <cstdint>
 
 namespace facebook::velox::bits {
+
+// Declared, not defined: the std::hash and folly::hasher specialisations in
+// StringView.h and Timestamp.h name them, and no shadow translation unit
+// hashes either type. A call would fail to link.
+uint64_t hashBytes(uint64_t seed, const char* data, size_t size);
+uint64_t hashMix(uint64_t upper, uint64_t lower) noexcept;
 
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
   return __builtin_popcountll(value);

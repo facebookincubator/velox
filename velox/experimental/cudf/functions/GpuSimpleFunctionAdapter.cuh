@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/functions/GpuVariadicView.h"
 
 #include "velox/core/Metaprogramming.h"
+#include "velox/type/StringView.h"
 #include "velox/type/TypeKind.h"
 
 #include <cudf/column/column_factories.hpp>
@@ -39,7 +40,9 @@
 #include <cctype>
 #include <cstring>
 #include <new>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -128,6 +131,21 @@ struct SignatureType<Variadic<T>> {
   }
 };
 
+/// A constant argument contributes its underlying type; the signature marks
+/// the position constant, as Velox's TypeAnalysis does for Constant<T>.
+template <typename T>
+struct SignatureType<Constant<T>> {
+  static std::string name() {
+    return SignatureType<T>::name();
+  }
+  static void collectVariables(std::vector<std::string>& variables) {
+    SignatureType<T>::collectVariables(variables);
+  }
+  static constexpr TypeKind kind() {
+    return SignatureType<T>::kind();
+  }
+};
+
 /// Every variable named anywhere in the signature, in declaration order. May
 /// contain duplicates; the host drops them.
 template <typename... T>
@@ -136,6 +154,53 @@ std::vector<std::string> signatureVariables() {
   (SignatureType<T>::collectVariables(variables), ...);
   return variables;
 }
+
+/// The entry for argument `i`, or an absent one past the end: the host
+/// supplies one entry per argument of the call, and a variadic function
+/// declares fewer.
+inline GpuConstantArgument constantAt(
+    const std::vector<GpuConstantArgument>& constants,
+    std::size_t i) {
+  return i < constants.size() ? constants[i] : GpuConstantArgument{nullptr, 0};
+}
+
+/// A constant argument's value in the form initialize() takes it, rebuilt on
+/// the host from the bytes the real-Velox side supplied, as
+/// SimpleFunctionAdapter decodes one row of the constant vector. Holds the
+/// value only for the initialize() call, like Velox's.
+template <typename TIn>
+class ConstantArgument {
+ public:
+  explicit ConstantArgument(const GpuConstantArgument& constant) {
+    if (constant.data == nullptr) {
+      return;
+    }
+    if constexpr (isGpuVariadicView<TIn>::value) {
+      // A pack has no single value.
+    } else if constexpr (std::is_same_v<TIn, StringView>) {
+      value_.emplace(static_cast<const char*>(constant.data), constant.size);
+    } else if constexpr (gpu::isGpuCustomTypeView<TIn>::value) {
+      // The physical value, wrapped as the kernel wraps a column element.
+      typename TIn::physical_type value;
+      if (constant.size == sizeof(value)) {
+        std::memcpy(&value, constant.data, sizeof(value));
+        value_.emplace(value);
+      }
+    } else if (constant.size == sizeof(TIn)) {
+      TIn value;
+      std::memcpy(&value, constant.data, sizeof(TIn));
+      value_.emplace(value);
+    }
+  }
+
+  /// Null when the argument is not a constant, as Velox passes it.
+  const TIn* pointer() const {
+    return value_.has_value() ? &*value_ : nullptr;
+  }
+
+ private:
+  std::optional<TIn> value_;
+};
 
 } // namespace detail
 
@@ -254,20 +319,35 @@ struct GpuUDFHolder {
   // UDFHolder does. A function using it today runs on a default-constructed
   // instance. None registered here does.
 
-  /// Passes null for every constant argument value, as Velox does for a
-  /// non-constant argument; no registered function reads them.
-  /// TODO(gpu-sfi-initialize): Pass constant argument values through.
+  /// Runs initialize() with the value of each constant argument and null for
+  /// the others, as SimpleFunctionAdapter does.
   static void initializeInstance(
       void* storage,
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config) {
+      const core::QueryConfig& config,
+      const std::vector<GpuConstantArgument>& constants) {
     auto* fn = new (storage) Fn{};
     if constexpr (hasInitialize) {
-      fn->initialize(
+      initializeWithConstants(
+          *fn,
           inputTypes,
           config,
-          static_cast<const exec_arg_type<TArgs>*>(nullptr)...);
+          constants,
+          std::index_sequence_for<TArgs...>{});
     }
+  }
+
+  template <std::size_t... I>
+  static void initializeWithConstants(
+      Fn& fn,
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const std::vector<GpuConstantArgument>& constants,
+      std::index_sequence<I...>) {
+    std::tuple<detail::ConstantArgument<exec_arg_type<TArgs>>...> values{
+        detail::ConstantArgument<exec_arg_type<TArgs>>(
+            detail::constantAt(constants, I))...};
+    fn.initialize(inputTypes, config, std::get<I>(values).pointer()...);
   }
 
   /// The instance is trivially copyable and small, so it reaches the device by
@@ -312,6 +392,7 @@ struct GpuUDFHolder {
         detail::SignatureType<TReturn>::name(),
         {detail::SignatureType<TArgs>::name()...},
         (detail::isVariadicArg<TArgs>::value || ...),
+        {isConstantType<TArgs>::value...},
         detail::signatureVariables<TReturn, TArgs...>(),
         /*variableConstraints=*/{},
         {detail::SignatureType<TArgs>::kind()...},
@@ -344,6 +425,10 @@ __device__ inline decltype(auto) slotArg(
     cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else if constexpr (std::is_same_v<TIn, StringView>) {
+    // A string slot is a Constant<> that initialize() has already read, and
+    // GpuArgView cannot describe a strings column, so nothing is read here.
+    return StringView{};
   } else if constexpr (gpu::isGpuCustomTypeView<TIn>::value) {
     // Wrapped on the way out of the column, so the view need not share the
     // element's layout.
@@ -361,8 +446,11 @@ __device__ inline auto slotNullableArg(
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
-  // A null pointer stands for a null input here, and a wrapped custom-type
-  // value has no storage in the column to point at.
+  // A null pointer stands for a null input here, and an empty string view or
+  // a wrapped custom-type value has no storage in the column to point at.
+  static_assert(
+      !std::is_same_v<TIn, StringView>,
+      "String arguments to callNullable() are not supported yet");
   static_assert(
       !gpu::isGpuCustomTypeView<TIn>::value,
       "Custom type arguments to callNullable() are not supported yet");
@@ -558,6 +646,17 @@ bool registerGpuFunction(
   using Fn = Func<gpu::GpuExec>;
   using Holder = GpuUDFHolder<Fn, TReturn, TArgs...>;
   using Adapter = GpuSimpleFunctionAdapter<Holder, TReturn, TArgs...>;
+
+  // The kernel never reads a string slot; see the resolver for Varchar.
+  static_assert(
+      ((!std::is_same_v<
+            typename gpu::GpuExec::resolver<TArgs>::in_type,
+            StringView> ||
+        isConstantType<TArgs>::value) &&
+       ...),
+      "A VARCHAR argument has to be declared Constant<Varchar>: a kernel "
+      "cannot read a strings column, so only a literal that initialize() "
+      "resolves is supported.");
 
   auto signature = Holder::signature();
   signature.variableConstraints = std::move(constraints);
