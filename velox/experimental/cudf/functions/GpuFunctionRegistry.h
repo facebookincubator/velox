@@ -82,11 +82,23 @@ using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+/// A constant argument's value for initialize(), as the bytes of its physical
+/// representation in host memory: the native value of a fixed-width type and
+/// the characters of a string. `data` is null for an argument that is not a
+/// constant or is a null literal, which initialize() then sees as a null
+/// pointer, as Velox passes it.
+struct GpuConstantArgument {
+  const void* data;
+  int32_t size;
+};
+
 /// Runs the function's initialize() over `instance`, which the caller has
 /// sized and aligned per the registration. Compiled behind the shadow
 /// boundary, so the kernel and initialize() share one instantiation of the
 /// function struct; initialize() binds `*inputTypes[i]` only to a
-/// `const Type&`, which needs no complete type.
+/// `const Type&`, which needs no complete type. `constants` holds one entry
+/// per argument of the call, and need only cover the arguments the function
+/// declares.
 ///
 /// Returns the GpuErrorKind of the first check initialize() failed, or kNone.
 /// A failed check does not stop initialize(), as it does not stop a kernel's
@@ -94,7 +106,8 @@ using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
 using GpuInitializeFn = uint8_t (*)(
     void* instance,
     const std::vector<TypePtr>& inputTypes,
-    const core::QueryConfig& config);
+    const core::QueryConfig& config,
+    const std::vector<GpuConstantArgument>& constants);
 
 /// Argument and return types as lowercase Velox type names, e.g. "double",
 /// derived from SimpleTypeTrait<T>::name.
@@ -104,6 +117,10 @@ struct GpuFunctionSignature {
   /// When true the last entry of argumentTypes is the element type of a
   /// variadic pack, matching any number of trailing arguments, including none.
   bool variadicTail{false};
+  /// One flag per entry of argumentTypes: true where the function declared
+  /// Constant<T>, so that only a literal binds and initialize() always
+  /// receives its value.
+  std::vector<bool> constantArguments;
   /// Integer variables named by the type strings, such as i1 and i5 in
   /// "decimal(i1,i5)". May contain duplicates.
   std::vector<std::string> integerVariables;

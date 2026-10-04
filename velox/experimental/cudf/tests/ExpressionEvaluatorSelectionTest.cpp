@@ -80,28 +80,32 @@ class SessionConfigFunction : public CudfFunction {
 uint8_t initializeFailsUserCheck(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
   return static_cast<uint8_t>(gpu_sfi::ErrorClass::kUserError);
 }
 
 uint8_t initializeFailsRuntimeCheck(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
   return static_cast<uint8_t>(gpu_sfi::ErrorClass::kRuntimeError);
 }
 
 uint8_t initializeThrowsUserError(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
   VELOX_USER_FAIL("Unknown time zone: Mars/Olympus");
 }
 
 uint8_t initializeThrowsRuntimeError(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
   VELOX_FAIL("Instance state is inconsistent");
 }
 
@@ -418,6 +422,7 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiInitializeFailures) {
       "bigint",
       {"bigint"},
       /*variadicTail=*/false,
+      /*constantArguments=*/{false},
       /*integerVariables=*/{},
       /*variableConstraints=*/{},
       /*argumentKinds=*/{TypeKind::BIGINT},
