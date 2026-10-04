@@ -29,16 +29,18 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
-#include <cudf/transform.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <rmm/device_uvector.hpp>
+#include <rmm/device_buffer.hpp>
+#include <rmm/device_scalar.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <new>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -375,14 +377,16 @@ __device__ inline GpuErrorKind raisedError() {
   return static_cast<GpuErrorKind>(gpuErrorBytes[threadIdx.x]);
 }
 
-/// Evaluates one row. `valid` is null only when no argument can be null and the
-/// function cannot decline a row.
+/// Evaluates one row and returns whether it has a value. A null input under
+/// default null behavior and a body returning false leave the row without one.
+/// When `collecting`, so does a failed check: the value came from data the
+/// check rejected, and the owner raises the error from the CPU. Without a
+/// collector the launch keeps the value, since nobody can act on the failure.
 template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
-__device__ void evaluateRow(
+__device__ bool evaluateRow(
     typename Holder::udf_struct_t fn,
     TOut* out,
-    bool* valid,
-    uint8_t* declinedRows,
+    bool collecting,
     const GpuArgView* arguments,
     int32_t numArgs,
     cudf::size_type row,
@@ -393,10 +397,7 @@ __device__ void evaluateRow(
   if constexpr (Holder::isDefaultNullBehavior) {
     // call() and callNullFree() are never shown a null.
     if ((slotIsNull<TIn>(arguments, I, row) || ...)) {
-      if (valid != nullptr) {
-        valid[row] = false;
-      }
-      return;
+      return false;
     }
     ok =
         Holder::invoke(fn, result, slotArg<TIn>(arguments, numArgs, I, row)...);
@@ -406,31 +407,74 @@ __device__ void evaluateRow(
         fn, result, slotNullableArg<TIn>(arguments, numArgs, I, row)...);
   }
 
-  // A declined row's value came from data a check rejected, so it is not
-  // written. Returning false means the function has no value for the row;
-  // declining means the host still has to raise an error. Rows are declined
-  // only when the caller collects; otherwise the launch keeps its result.
-  if (declinedRows != nullptr) {
-    auto const raised = raisedError();
-    if (raised != GpuErrorKind::kNone) {
-      declinedRows[row] = static_cast<uint8_t>(raised);
-      ok = false;
-    }
+  if (collecting && raisedError() != GpuErrorKind::kNone) {
+    return false;
   }
   if (ok) {
     out[row] = result;
   }
-  if (valid != nullptr) {
-    valid[row] = ok;
+  return ok;
+}
+
+constexpr unsigned kFullWarpMask = 0xffff'ffffu;
+constexpr int kWarpSize = 32;
+static_assert(
+    kBlockSize % kWarpSize == 0,
+    "Each warp has to cover one whole validity word");
+
+/// Raises the evaluation's error word to the worst kind any row of this warp
+/// hit. Every lane votes, so a clean warp costs one vote and a failing warp one
+/// atomic, rather than one per failed row. Both votes are warp-uniform.
+__device__ inline void recordDeclines(int32_t* worstKind) {
+  auto const raised = raisedError();
+  auto const anyRaised =
+      __ballot_sync(kFullWarpMask, raised != GpuErrorKind::kNone);
+  if (anyRaised == 0) {
+    return;
+  }
+  auto const anyRuntime =
+      __ballot_sync(kFullWarpMask, raised == GpuErrorKind::kRuntimeError);
+  if (threadIdx.x % kWarpSize == 0) {
+    atomicMax(
+        worstKind,
+        static_cast<int32_t>(
+            anyRuntime != 0 ? GpuErrorKind::kRuntimeError
+                            : GpuErrorKind::kUserError));
   }
 }
 
+/// Writes this warp's validity bits as one mask word and adds the block's null
+/// count to the column's. A warp covers exactly one word because the block
+/// size is a multiple of the warp size; the bits past the last row stay clear,
+/// as cudf::detail::valid_if leaves them.
+__device__ inline void recordValidity(
+    cudf::bitmask_type* validity,
+    cudf::size_type* nullCount,
+    bool valid,
+    bool hasRow,
+    cudf::size_type row) {
+  auto const word = __ballot_sync(kFullWarpMask, valid);
+  // Lane 0 holds the word's first row, so its row exists iff the word does.
+  if (threadIdx.x % kWarpSize == 0 && hasRow) {
+    validity[cudf::word_index(row)] = word;
+  }
+  auto const numNulls = __syncthreads_count(hasRow && !valid);
+  if (threadIdx.x == 0 && numNulls > 0) {
+    atomicAdd(nullCount, numNulls);
+  }
+}
+
+/// Evaluates every row. `validity` and `nullCount` are null together, when no
+/// row can be null; `worstKind` is null when the caller does not collect. A
+/// thread past the last row runs the whole kernel rather than returning: the
+/// warp votes and the block count below need every thread of the block.
 template <typename Holder, typename TOut, typename... TIn>
 __global__ void simpleFunctionKernel(
     typename Holder::udf_struct_t fn,
     TOut* out,
-    bool* valid,
-    uint8_t* declinedRows,
+    cudf::bitmask_type* validity,
+    cudf::size_type* nullCount,
+    int32_t* worstKind,
     const GpuArgView* arguments,
     int32_t numArgs,
     cudf::size_type numRows) {
@@ -439,18 +483,24 @@ __global__ void simpleFunctionKernel(
   clearRaisedError();
   auto const row = static_cast<cudf::size_type>(
       blockIdx.x * static_cast<unsigned>(blockDim.x) + threadIdx.x);
-  if (row >= numRows) {
-    return;
+  auto const hasRow = row < numRows;
+  bool valid = false;
+  if (hasRow) {
+    valid = evaluateRow<Holder, TOut, TIn...>(
+        fn,
+        out,
+        worstKind != nullptr,
+        arguments,
+        numArgs,
+        row,
+        std::index_sequence_for<TIn...>{});
   }
-  evaluateRow<Holder, TOut, TIn...>(
-      fn,
-      out,
-      valid,
-      declinedRows,
-      arguments,
-      numArgs,
-      row,
-      std::index_sequence_for<TIn...>{});
+  if (worstKind != nullptr) {
+    recordDeclines(worstKind);
+  }
+  if (validity != nullptr) {
+    recordValidity(validity, nullCount, valid, hasRow, row);
+  }
 }
 
 } // namespace detail
@@ -466,7 +516,7 @@ struct GpuSimpleFunctionAdapter {
       const GpuFunctionInstance& instance,
       cudf::size_type numRows,
       cudf::data_type outputType,
-      uint8_t* declinedRows,
+      int32_t* worstKind,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     // Retypes the instance in the only translation unit that can name its
@@ -486,21 +536,27 @@ struct GpuSimpleFunctionAdapter {
     auto deviceArguments = cudf::detail::make_device_uvector_async(
         arguments, stream, cudf::get_current_device_resource_ref());
 
-    // Validity only has to be recorded when something can produce a null: an
-    // argument that carries a mask, or a function that can decline a row.
+    // Validity is recorded only when a row can be null for an answer: an
+    // argument carries nulls, or the function can return false. A declined row
+    // is not a third source, although the kernel leaves it without a value: the
+    // owner discards the whole evaluation and re-runs it on the CPU, so the
+    // only reader of that row is a parent node of the same discarded
+    // evaluation. Recording validity would cost every node a stream
+    // synchronization for the null count.
     auto const anyNullable = std::any_of(
         arguments.begin(), arguments.end(), [](const GpuArgView& argument) {
           return argument.nullMask != nullptr;
         });
-    // A declined row is nulled, so collecting errors makes validity necessary
-    // even for a function that can otherwise never produce one.
-    auto const needsValidity =
-        anyNullable || !Holder::alwaysSucceeds || declinedRows != nullptr;
+    auto const needsValidity = anyNullable || !Holder::alwaysSucceeds;
 
-    rmm::device_uvector<bool> valid(
-        needsValidity ? numRows : 0,
-        stream,
-        cudf::get_current_device_resource_ref());
+    rmm::device_buffer validity;
+    std::optional<rmm::device_scalar<cudf::size_type>> nullCount;
+    if (needsValidity) {
+      validity = cudf::create_null_mask(
+          numRows, cudf::mask_state::UNINITIALIZED, stream, mr);
+      nullCount.emplace(stream, cudf::get_current_device_resource_ref());
+      nullCount->set_value_to_zero_async(stream);
+    }
 
     detail::simpleFunctionKernel<
         Holder,
@@ -515,21 +571,22 @@ struct GpuSimpleFunctionAdapter {
            stream.get()>>>(
             fn,
             out->mutable_view().template data<TOut>(),
-            needsValidity ? valid.data() : nullptr,
-            declinedRows,
+            needsValidity ? static_cast<cudf::bitmask_type*>(validity.data())
+                          : nullptr,
+            needsValidity ? nullCount->data() : nullptr,
+            worstKind,
             deviceArguments.data(),
             static_cast<int32_t>(arguments.size()),
             numRows);
 
     if (needsValidity) {
-      auto validColumn = cudf::column_view(
-          cudf::data_type{cudf::type_id::BOOL8},
-          numRows,
-          valid.data(),
-          nullptr,
-          0);
-      auto [mask, nullCount] = cudf::bools_to_mask(validColumn, stream, mr);
-      out->set_null_mask(std::move(*mask), nullCount);
+      // Reading the count synchronizes the stream, the one synchronization a
+      // nullable node pays. A column without nulls keeps no mask, so a parent
+      // does not record validity for a mask that would be all ones.
+      auto const numNulls = nullCount->value(stream);
+      if (numNulls > 0) {
+        out->set_null_mask(std::move(validity), numNulls);
+      }
     }
     return out;
   }
