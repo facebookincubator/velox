@@ -19,6 +19,7 @@
 #include <string>
 
 #include <glog/logging.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "folly/lang/Hint.h"
 
@@ -373,9 +374,9 @@ TEST_F(SimpleFunctionTest, namedRow) {
   const auto input = makeRowVector({makeFlatVector<int64_t>(
       rowVectorCol1.size(), [](auto row) { return row; })});
   const auto namedRow = evaluate<RowVector>("named_row_writer_func(c0)", input);
-  EXPECT_EQ(
+  EXPECT_THAT(
       namedRow->type()->asRow().names(),
-      std::vector<std::string>({"first", "second"}));
+      testing::ElementsAre("first", "second"));
 
   assertEqualVectors(
       vectorMaker_.flatVector(rowVectorCol1),

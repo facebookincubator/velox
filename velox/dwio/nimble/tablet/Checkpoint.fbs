@@ -1,0 +1,98 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+include "Footer.fbs";
+
+namespace facebook.nimble.serialization;
+
+/// Builder state spilled by an index writer whose index has no incremental
+/// on-disk form, such as the hash, sorted and vector indexes. A suspended
+/// file omits those sections rather than materializing a whole-file index
+/// mid-write, so a resumed writer needs the builder state to carry on.
+///
+/// The payload is private to the index implementation that produced it and
+/// is never interpreted by the reader. It becomes dead bytes once the file
+/// is finalized and the real index section is written.
+table IndexSpill {
+  /// Matches index::IndexFamily. Held as a scalar so the tablet layer does
+  /// not depend on the index layer.
+  family:uint8;
+
+  /// Index implementation name, matching the name the finalized index
+  /// section would carry.
+  name:string;
+
+  /// Version of the spill payload, owned by the index implementation. A
+  /// version the implementation does not recognize must be rejected rather
+  /// than guessed at.
+  state_version:uint32;
+
+  /// Location of the spilled payload.
+  state:MetadataSection;
+}
+
+/// Builder state for a file-scope shared dictionary captured mid-write. The
+/// payload is private to the dictionary implementation and becomes dead bytes
+/// once finalization writes the `columnar.dictionaries` catalog.
+table DictionarySpill {
+  /// Identifier matching the dictionary_id the finalized catalog records.
+  dictionary_id:uint32;
+
+  /// Nimble DataType of the alphabet values.
+  data_type:uint8;
+
+  /// Version of the spill payload, owned by the dictionary implementation.
+  state_version:uint32;
+
+  /// Location of the spilled builder state.
+  state:MetadataSection;
+}
+
+/// Marks a Nimble file as suspended rather than finalized: closed so that a
+/// later writer can reopen it for append, instead of sealed.
+///
+/// A suspended file has a valid footer and remains structurally inspectable.
+/// It may omit serving artifacts that require the complete file, such as the
+/// finalized index and shared-dictionary catalogs. A resumed writer rebuilds
+/// ordinary state from the sections a reader already consumes and restores
+/// only the remaining builder state from this table.
+///
+/// Presence of the enclosing `columnar.checkpoint` optional section is the
+/// signal that a file is not final. A finalized file never carries it.
+table Checkpoint {
+  /// Format version of this table.
+  checkpoint_version:uint32;
+
+  /// Spilled builder state for the indexes this file did not materialize.
+  index_spills:[IndexSpill];
+
+  /// Next stream offset SchemaBuilder would allocate. Not recoverable from
+  /// `columnar.schema` alone: stripe-scope shared dictionaries take offsets
+  /// through allocateStreamOffset() that have no SchemaNode, so
+  /// max(SchemaNode.offset) + 1 undercounts whenever one is in use. Reading
+  /// it from here avoids deriving it from schema plus
+  /// `columnar.dictionaries`, where a dictionary stream that was allocated
+  /// and never used would be missing, since hasUsedDictionary() drops those
+  /// from the catalog. Getting that derivation wrong collides stream ids,
+  /// which reads back clean and returns wrong data.
+  next_stream_offset:uint32;
+
+  /// Partially built file-scope shared dictionaries. Finalization converts
+  /// them into the serving-ready `columnar.dictionaries` catalog.
+  dictionary_spills:[DictionarySpill];
+}
+
+root_type Checkpoint;

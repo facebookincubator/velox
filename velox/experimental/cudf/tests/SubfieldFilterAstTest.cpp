@@ -104,10 +104,10 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 
       for (int i = 0; i < vector->size(); ++i) {
         if (fieldVec->isNullAt(i)) {
-          if (filter.testNull()) {
-            EXPECT_FALSE(boolVector->isNullAt(i)) << "Mismatch at row " << i;
-            EXPECT_TRUE(boolVector->valueAt(i)) << "Mismatch at row " << i;
-          }
+          EXPECT_EQ(
+              filter.testNull(),
+              !boolVector->isNullAt(i) && boolVector->valueAt(i))
+              << "Null mismatch at row " << i;
           continue;
         }
 
@@ -161,7 +161,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
           default:
             veloxExpected = true;
         }
-        bool cudfGot = boolVector->valueAt(i);
+        bool cudfGot = !boolVector->isNullAt(i) && boolVector->valueAt(i);
         EXPECT_EQ(veloxExpected, cudfGot)
             << "Mismatch at row " << i << " for " << columnName;
       }
@@ -902,6 +902,84 @@ INSTANTIATE_TEST_SUITE_P(
 // MultiRange tests (FilterKind::kMultiRange)
 // MultiRange wraps arbitrary sub-filters with OR semantics. Common use case:
 // not-equal predicates represented as (< X) OR (> X).
+TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
+  const std::string columnName = "c0";
+  const auto rowType = ROW(columnName, DOUBLE());
+  auto vector = makeRowVector(
+      {columnName},
+      {makeNullableFlatVector<double>(
+          {std::nullopt,
+           -1,
+           0,
+           1,
+           2,
+           std::numeric_limits<double>::quiet_NaN()})});
+  const common::Subfield subfield(columnName);
+  auto check = [&](const common::Filter& filter, size_t expectedIsNullCount) {
+    SCOPED_TRACE(filter.toString());
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expr =
+        createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
+    size_t isNullCount = 0;
+    for (size_t i = 0; i < tree.size(); ++i) {
+      const auto* operation =
+          dynamic_cast<const cudf::ast::operation*>(&tree[i]);
+      isNullCount += operation != nullptr &&
+          operation->get_operator() == cudf::ast::ast_operator::IS_NULL;
+    }
+    EXPECT_EQ(isNullCount, expectedIsNullCount);
+    testFilterExecution(rowType, columnName, filter, vector, expr);
+  };
+
+  check(common::IsNull(), 1);
+  check(common::IsNotNull(), 1);
+  for (const bool nullAllowed : {false, true}) {
+    for (const bool childNullAllowed : {false, true}) {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(
+          std::make_unique<common::DoubleRange>(
+              0, false, false, 1, false, false, childNullAllowed));
+      common::MultiRange filter(std::move(filters), nullAllowed);
+      check(filter, nullAllowed);
+
+      std::vector<std::unique_ptr<common::Filter>> outerFilters;
+      outerFilters.push_back(filter.clone());
+      outerFilters.push_back(
+          std::make_unique<common::DoubleRange>(
+              2, false, false, 3, false, false, childNullAllowed));
+      check(
+          common::MultiRange(std::move(outerFilters), !nullAllowed),
+          !nullAllowed);
+    }
+
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(std::make_unique<common::IsNull>());
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
+    }
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(std::make_unique<common::IsNotNull>());
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
+    }
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNotNull>());
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
+    }
+  }
+}
+
 TEST_F(SubfieldFilterAstTest, multiRangeDoubleNotEqual) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DOUBLE()}});
@@ -938,6 +1016,9 @@ TEST_F(SubfieldFilterAstTest, multiRangeDoubleNotEqual) {
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   ASSERT_GT(tree.size(), 0UL) << "No expressions created for MultiRange";
+  const auto* root = dynamic_cast<const cudf::ast::operation*>(&expr);
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(root->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_OR);
   // Each range has one bounded side, so 2 scalars total
   EXPECT_EQ(scalars.size(), 2UL)
       << "Expected 2 scalars for double != filter (< 5.0 OR > 5.0)";
@@ -1088,6 +1169,14 @@ TEST_F(SubfieldFilterAstTest, emptyMultiRangeThrows) {
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   EXPECT_THROW(
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType),
+      VeloxException);
+
+  std::vector<std::unique_ptr<common::Filter>> children;
+  children.push_back(std::move(filter));
+  children.push_back(std::make_unique<common::IsNull>());
+  common::MultiRange nested(std::move(children), /*nullAllowed=*/true);
+  EXPECT_THROW(
+      createAstFromSubfieldFilter(subfield, nested, tree, scalars, rowType),
       VeloxException);
 }
 

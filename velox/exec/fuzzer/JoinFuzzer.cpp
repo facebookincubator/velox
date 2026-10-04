@@ -381,6 +381,9 @@ RowVectorPtr JoinFuzzer::execute(
   for (const auto& [planNodeId, nodeSplits] : plan.splits) {
     builder.splits(planNodeId, nodeSplits);
   }
+  for (const auto& [key, value] : plan.queryConfigs) {
+    builder.config(key, value);
+  }
 
   if (plan.executionStrategy == core::ExecutionStrategy::kGrouped) {
     builder.executionStrategy(core::ExecutionStrategy::kGrouped);
@@ -587,6 +590,17 @@ void addPlansForInputType(
     if (joinMaker.supportsFlippingMergeJoin()) {
       plans.push_back(
           joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::FLIPPED));
+    }
+    if (joinMaker.supportsStreamingLeftSide()) {
+      // Same plan, but the left side of an equal-key group is buffered whole
+      // rather than streamed, which the plans above do by default. The results
+      // have to be identical, so any difference the fuzzer reports is a bug in
+      // the streaming path.
+      auto buffered =
+          joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::NATURAL);
+      buffered.queryConfigs[core::QueryConfig::kMergeJoinStreamLeftSide] =
+          "false";
+      plans.push_back(std::move(buffered));
     }
   }
 
@@ -801,6 +815,16 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       if (joinMaker.supportsFlippingMergeJoin()) {
         altPlans.push_back(joinMaker.makeMergeJoinWithTableScan(
             JoinMaker::JoinOrder::FLIPPED));
+      }
+      if (joinMaker.supportsStreamingLeftSide()) {
+        // As above, but over table scans, so the streaming path also gets
+        // compared against split-driven input and whatever spilling is
+        // injected.
+        auto buffered =
+            joinMaker.makeMergeJoinWithTableScan(JoinMaker::JoinOrder::NATURAL);
+        buffered.queryConfigs[core::QueryConfig::kMergeJoinStreamLeftSide] =
+            "false";
+        altPlans.push_back(std::move(buffered));
       }
     }
 

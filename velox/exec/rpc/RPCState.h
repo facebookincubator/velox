@@ -27,6 +27,7 @@
 #include <folly/futures/Future.h>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/exec/rpc/CongestionController.h"
 #include "velox/vector/BaseVector.h"
@@ -71,6 +72,33 @@ class RPCState {
  public:
   // ===== Data structures =====
 
+  /// Accounts response-retained bytes while the operator owns them.
+  class PayloadMemoryCharge {
+   public:
+    PayloadMemoryCharge() = default;
+    PayloadMemoryCharge(
+        std::shared_ptr<memory::MemoryPool> pool,
+        int64_t bytes);
+    PayloadMemoryCharge(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge& operator=(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge(const PayloadMemoryCharge&) = delete;
+    PayloadMemoryCharge& operator=(const PayloadMemoryCharge&) = delete;
+    ~PayloadMemoryCharge();
+
+    int64_t bytes() const noexcept {
+      return bytes_;
+    }
+
+   private:
+    // Releases the external-memory charge while retaining pool lifetime.
+    void release() noexcept;
+
+    // Keeps the accounting destination alive through charge release.
+    std::shared_ptr<memory::MemoryPool> pool_;
+    // Stores the amount paired with one external allocation report.
+    int64_t bytes_{0};
+  };
+
   /// Location of a row within an input batch.
   struct RowLocation {
     int32_t batchIndex{0};
@@ -81,19 +109,31 @@ class RPCState {
   struct ReadyRow {
     int64_t rowId{0};
     RowLocation location;
+    /// Accounts external memory retained by response.
+    PayloadMemoryCharge charge;
     RPCResponse response;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
   };
 
+  /// Pairs completed responses with their query-pool memory charge.
+  /// The charge remains alive while the responses retain accounted memory.
+  struct CompletedBatch {
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
+    /// Responses produced by one completed batch dispatch.
+    std::vector<RPCResponse> responses;
+  };
+
   /// A batch of rows waiting for RPC response.
   struct PendingBatch {
     int64_t batchId;
-    folly::SemiFuture<std::vector<RPCResponse>> future;
+    folly::SemiFuture<CompletedBatch> future;
+    int64_t admissionUnits{1};
     /// Row locations for mapping responses back to input batch positions.
-    /// Stored at batch level instead of per-row in a map, since callBatch()
-    /// returns responses in the same order as requests.
+    /// Stored at batch level instead of per-row in a map. RPCOperator scatters
+    /// flushBatch() responses into request order before adding the batch.
     std::vector<RowLocation> rowLocations;
     /// Monotonic dispatch time (nanos, steady_clock).
     int64_t dispatchTimeNs{0};
@@ -108,8 +148,11 @@ class RPCState {
   /// A batch with completed RPC responses.
   struct ReadyBatch {
     int64_t batchId{0};
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
     std::vector<RPCResponse> responses;
     std::optional<std::string> error;
+    int64_t admissionUnits{1};
     /// Row locations carried from PendingBatch for response-to-input mapping.
     std::vector<RowLocation> rowLocations;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
@@ -117,13 +160,16 @@ class RPCState {
     int64_t rttNs{0};
   };
 
-  /// Snapshot of all operator-visible state at close() time, captured under a
-  /// single lock acquisition for consistency.
+  /// Snapshot of all operator-visible state, captured under a single lock
+  /// acquisition for consistency. Taken at close() for the final runtime
+  /// stats, and while the operator is running (from an arbitrary thread) so
+  /// RPC progress is observable before the operator finishes.
   struct OperatorSnapshot {
     // Congestion controller.
     int64_t windowLimit{0};
     int64_t baselineRttNs{0};
     int64_t numShrinks{0};
+    int64_t numOverloadShrinks{0};
     int64_t peakInFlight{0};
     // Transport RTT.
     int64_t rttMinNs{0};
@@ -131,9 +177,20 @@ class RPCState {
     int64_t numRttSamples{0};
     // Streaming mode.
     RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
+    // Units dispatched but not yet completed.
+    int64_t inFlight{0};
+    // Monotonic count of completions signaled by the RPC transport, bumped
+    // from the completion callbacks (executor threads) rather than from the
+    // driver. A driver parked on kWaitForRPC cannot advance any operator
+    // counter, so this is the only value that moves while a backend is
+    // trickling responses back.
+    int64_t numCompletionsSignaled{0};
   };
 
-  RPCState() = default;
+  explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
+      : pool_(std::move(pool)) {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
 
   // ===== Configuration =====
   // These must be called before any dispatch (single-threaded init phase).
@@ -185,7 +242,7 @@ class RPCState {
 
   /// Drop every retained input vector, regardless of activeRowCount.
   ///
-  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// Called from RPCOperator::close() and ~RPCOperator(). In-flight RPC
   /// callbacks hold a shared_ptr to this object, so it can outlive the
   /// operator, the Task and the query's memory pools. The input vectors were
   /// allocated from upstream operators' pools, so holding them past teardown
@@ -198,6 +255,13 @@ class RPCState {
   /// deposit RPCResponse values and never read flatColumns, which is read
   /// solely by the driver thread when building output.
   void releaseAllInputBatches();
+
+  /// Stops accepting completions and releases all retained resources.
+  /// Idempotent.
+  void close();
+
+  /// Charges externally allocated response bytes against the query pool.
+  [[nodiscard]] PayloadMemoryCharge chargePayloadBytes(int64_t bytes);
 
   // ===== PER_ROW mode API =====
 
@@ -257,14 +321,17 @@ class RPCState {
   /// mutex_ internally.
   ///
   /// @param selfPtr Shared pointer to this RPCState (prevent destruction).
-  /// @param future The SemiFuture from client->callBatch().
+  /// @param future The normalized SemiFuture produced from
+  ///        AsyncRPCFunction::flushBatch().
   /// @param rowLocations Locations mapping each request to its input batch
   ///        position. Stored on the PendingBatch and carried through to
   ///        ReadyBatch, eliminating per-row rowLocations_ map overhead.
+  /// @param admissionUnits Backend concurrency slots reserved for this batch.
   void addPendingBatch(
       std::shared_ptr<RPCState> selfPtr,
       folly::SemiFuture<std::vector<RPCResponse>> future,
-      std::vector<RowLocation> rowLocations);
+      std::vector<RowLocation> rowLocations,
+      int64_t admissionUnits);
 
   /// Atomically try to poll a ready batch, check finish, or wait. Thread-safe.
   /// Called from the driver thread in isBlocked().
@@ -286,6 +353,21 @@ class RPCState {
   // ===== Common =====
 
   /// Signal that no more rows will be dispatched. Thread-safe.
+  /// Fails if any completed row could not be queued. Every terminal path --
+  /// the claim loop and the drain's finish check -- asks this, because a short
+  /// result that reports success is indistinguishable downstream from a
+  /// correct one. Called on the driver thread, where throwing is a query
+  /// error rather than a lost exception.
+  void checkNoDroppedRowsLocked() const;
+
+  /// Simulates a completed row that could not be queued, which is otherwise
+  /// only reachable under a real allocation failure. Used to prove the finish
+  /// path fails rather than returning a short result.
+  void testingDropCompletedRow() {
+    std::lock_guard<std::mutex> l(mutex_);
+    ++droppedRows_;
+  }
+
   void setNoMoreInput();
 
   /// Returns true when all work is complete. Thread-safe.
@@ -354,6 +436,12 @@ class RPCState {
   // Input batch storage (shared across PER_ROW and BATCH modes)
   std::vector<InputBatchRef> inputBatches_;
 
+  // Reset by close(). Completion callbacks copy it only while reporting a
+  // charge, so memory arbitration runs without holding mutex_.
+  std::shared_ptr<memory::MemoryPool> pool_;
+  // Rejects completions after close() has detached the operator's resources.
+  bool closed_{false};
+
   // PER_ROW state
   std::deque<ReadyRow> readyRows_;
 
@@ -371,8 +459,20 @@ class RPCState {
   // against window_.limit().
   int64_t inFlight_{0};
 
+  // Rows that completed but could not be queued, because queueing them threw
+  // under memory pressure. Checked at the finish condition: a short result
+  // that reports success is worse than a failed query, since nothing
+  // downstream can tell the difference.
+  int64_t droppedRows_{0};
+
   // High-water mark of inFlight_ across the lifetime of this RPCState.
   int64_t peakInFlight_{0};
+
+  // Monotonic count of completions signaled by the RPC transport. Bumped from
+  // the completion callbacks, which run on the client's executor threads, so
+  // it keeps advancing while the driver is parked on kWaitForRPC and no
+  // operator counter can move.
+  int64_t numCompletionsSignaled_{0};
 
   // Accumulated RTT measurements across all completed units.
   int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};

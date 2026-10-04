@@ -17,6 +17,8 @@
 #include "velox/exec/trace/TraceUtil.h"
 
 #include <folly/json.h>
+#include <algorithm>
+#include <array>
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
@@ -151,6 +153,34 @@ std::vector<std::string> getTaskIds(
     taskIds.emplace_back(findLastPathNode(taskDir));
   }
   return taskIds;
+}
+
+bool isCredentialConfigKey(std::string_view key) {
+  // Matched exactly rather than by a pattern such as `*_key` or `*token*`.
+  // TaskTraceMetadataReader feeds these entries straight back into a
+  // core::QueryConfig for replay, so redacting a typed entry -- for instance
+  // `prefixsort_normalized_key_max_bytes` or
+  // `throw_exception_on_duplicate_map_keys` -- would make replay throw while
+  // parsing the placeholder as an integer or a bool. A pattern would also
+  // redact `hive.session-credential-keys`, which lists key names and carries
+  // no secret. The properties that entry *names* do carry secrets; they are
+  // redacted in TaskTraceWriter, which can ask the connector for them.
+  //
+  // Keep in sync with AI_FUNCTION_KEY_EXTRA_CRED_KEYS in
+  // fbcode/datainfra/presto/py/client_lib.py, which is the coordinator-side
+  // allowlist of extra-credential names forwarded to workers, and with the
+  // reads in velox/exec/rpc/facebook/functions/FbLlmInference.cpp,
+  // FbEmbedding.cpp and velox/exec/rpc/facebook/MetaGenBatchRPCClient.cpp. The
+  // Python list cannot be imported here and those C++ call sites live under
+  // facebook/, which this open-sourced file must not depend on.
+  static constexpr std::array<std::string_view, 3> kCredentialConfigKeys{
+      "crypto_auth_tokens_metagen",
+      "metagen_key",
+      "model_api_key",
+  };
+  return std::find(
+             kCredentialConfigKeys.begin(), kCredentialConfigKeys.end(), key) !=
+      kCredentialConfigKeys.end();
 }
 
 folly::dynamic getTaskMetadata(

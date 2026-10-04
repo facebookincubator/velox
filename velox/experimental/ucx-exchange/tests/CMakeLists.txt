@@ -15,6 +15,7 @@
 add_executable(
   ucx_exchange_test
   UcxOutputQueueManagerTest.cpp
+  UcxPartitionedOutputTest.cpp
   UcxExchangeTest.cpp
   Main.cpp
   UcxTestHelpers.cpp
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_vector_fuzzer
   gtest
   gtest_main
+  gmock
   Folly::folly
   fmt::fmt
   ucxx::ucxx

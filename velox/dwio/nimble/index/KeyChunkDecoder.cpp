@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
 
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/compression/Compression.h"
@@ -23,13 +24,15 @@ namespace facebook::nimble::index {
 
 std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
     std::unique_ptr<velox::dwio::common::SeekableInputStream> inputStream,
-    velox::memory::MemoryPool& pool,
-    velox::BufferPtr& dataBuffer) {
+    const KeyReaderFactory& readerFactory,
+    velox::BufferPtr& dataBuffer,
+    velox::memory::MemoryPool* pool) {
+  NIMBLE_CHECK_NOT_NULL(pool);
   const void* buf;
   int bufLen{0};
-  NIMBLE_CHECK(inputStream->Next(&buf, &bufLen));
+  NIMBLE_CHECK(velox::checkedNotNull(inputStream.get())->Next(&buf, &bufLen));
   NIMBLE_CHECK_GE(bufLen, kChunkHeaderSize);
-  const auto* header = static_cast<const char*>(buf);
+  const auto* header = velox::checkedNotNull(static_cast<const char*>(buf));
   const auto chunkHeader = readChunkHeader(header);
   NIMBLE_CHECK(
       chunkHeader.compressionType == CompressionType::Uncompressed ||
@@ -56,16 +59,20 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
     // is appended to stringBuffers so the returned DecodedKeyChunk holds its
     // own reference (co-owned with the caller's slot).
     if (dataBuffer == nullptr || dataBuffer->capacity() < dataLen) {
-      dataBuffer = velox::AlignedBuffer::allocate<char>(dataLen, &pool);
+      dataBuffer = velox::AlignedBuffer::allocate<char>(dataLen, pool);
     }
     dataBuffer->setSize(dataLen);
-    auto* dest = dataBuffer->asMutable<char>();
+    auto* dest = velox::checkedNotNull(dataBuffer->asMutable<char>());
     std::memcpy(dest, header, bufLen);
     int copied = bufLen;
     while (copied < static_cast<int>(dataLen)) {
-      NIMBLE_CHECK(inputStream->Next(&buf, &bufLen));
+      NIMBLE_CHECK(
+          velox::checkedNotNull(inputStream.get())->Next(&buf, &bufLen));
       const int toCopy = std::min(bufLen, static_cast<int>(dataLen) - copied);
-      std::memcpy(dest + copied, buf, toCopy);
+      std::memcpy(
+          velox::checkedNotNull(dest) + copied,
+          velox::checkedNotNull(static_cast<const char*>(buf)),
+          toCopy);
       copied += toCopy;
     }
     chunkData = dest;
@@ -79,7 +86,7 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
   std::string_view encodedData{chunkData, dataLen};
   if (chunkHeader.compressionType != CompressionType::Uncompressed) {
     auto uncompressed = Compression::uncompress(
-        pool,
+        *pool,
         chunkHeader.compressionType,
         DataType::String,
         encodedData,
@@ -96,17 +103,15 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
   }
 
   auto* raw = result.get();
-  result->encoding = KeyEncoding::create(
-      pool, encodedData, [raw, &pool](uint32_t totalLength) {
-        auto& buffer = raw->stringBuffers.emplace_back(
-            velox::AlignedBuffer::allocate<char>(totalLength, &pool));
+  result->reader = readerFactory(
+      encodedData,
+      [raw, pool](uint32_t totalLength) {
+        auto& buffer = velox::checkedNotNull(raw)->stringBuffers.emplace_back(
+            velox::AlignedBuffer::allocate<char>(totalLength, pool));
         return buffer->asMutable<void>();
-      });
-  NIMBLE_CHECK(
-      result->encoding->encodingType() == EncodingType::Trivial ||
-          result->encoding->encodingType() == EncodingType::Prefix,
-      "Unsupported encoding type: {}",
-      result->encoding->encodingType());
+      },
+      pool);
+  NIMBLE_CHECK_NOT_NULL(result->reader);
   return result;
 }
 

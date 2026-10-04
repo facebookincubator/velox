@@ -864,4 +864,30 @@ TEST(StreamDataUtilTest, isConstantBoolStream) {
   EXPECT_FALSE(isConstantBoolStream(std::string_view("\1\0\1", 3)));
 }
 
+TEST(StreamDataUtilTest, isAllTrueBoolStream) {
+  // All-true.
+  EXPECT_TRUE(isAllTrueBoolStream(std::string_view("\1\1\1", 3)));
+  EXPECT_TRUE(isAllTrueBoolStream(std::string_view("\1", 1)));
+
+  // All-false.
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\0\0\0", 3)));
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\0", 1)));
+
+  // Mixed, with the false byte at either end.
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\0\1", 2)));
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\1\0", 2)));
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\1\0\1", 3)));
+
+  // Empty. isConstantBoolStream() calls this constant, and the two answers
+  // differ on purpose: an omitted all-true in-map stream and an omitted
+  // all-false one tell the reader opposite things, so an empty stream cannot
+  // count as all-true.
+  EXPECT_FALSE(isAllTrueBoolStream(""));
+  EXPECT_TRUE(isConstantBoolStream(""));
+
+  // The other case where the two disagree: all-false is constant, not all-true.
+  EXPECT_TRUE(isConstantBoolStream(std::string_view("\0\0", 2)));
+  EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\0\0", 2)));
+}
+
 } // namespace facebook::nimble

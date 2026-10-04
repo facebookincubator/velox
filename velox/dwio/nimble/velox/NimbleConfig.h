@@ -52,6 +52,14 @@ class Config : public velox::config::ConfigBase {
   static Entry<float> ENCODING_SELECTION_COMPRESSION_ACCEPT_RATIO;
   static Entry<const std::vector<std::pair<EncodingType, float>>>
       COMPRESSION_ACCEPT_RATIO_OVERRIDES;
+
+  /// Compressor the writer applies to encoded streams, by name (see
+  /// toCompressionType): "Uncompressed", "Zstd", "MetaInternal", "Lz4",
+  /// "OpenZL". Empty (default) keeps the built-in default, which is
+  /// MetaInternal internally and Zstd in OSS. Set it to pin a compressor
+  /// explicitly -- "Zstd" is how a table opts out of Zstrong/OpenZL.
+  static Entry<std::string> COMPRESSION_TYPE;
+
   static Entry<uint64_t> ZSTD_COMPRESSION_MIN_SIZE;
   static Entry<uint64_t> ZSTRONG_COMPRESSION_MIN_SIZE;
   static Entry<uint32_t> ZSTRONG_COMPRESSION_LEVEL;
@@ -80,6 +88,24 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint64_t> CHUNKING_WRITER_MIN_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_MAX_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE;
+  static Entry<bool> CHUNKING_WRITER_EAGER_CHUNKING;
+
+  /// VARCHAR subfield paths whose value streams prefer FSST, falling back to
+  /// Trivial when FSST misses its compression target. FSST and its fallback use
+  /// the normal encoding compression policy. Paths use Velox subfield syntax:
+  /// nested ROW fields use '.', while ARRAY elements and MAP values use '[*]'.
+  /// Examples: top_level, nested.target, items[*], properties[*], and
+  /// metadata[*].label. Targeting a cluster-index key is rejected; non-key
+  /// paths are resolved against the stored schema. Targeting the same value
+  /// stream with shared dictionary encoding is rejected. This option does not
+  /// change other streams.
+  /// A field whose literal name contains Velox subfield separators such as
+  /// '.', or any path containing ',', cannot be expressed by this
+  /// comma-delimited SerDe option.
+  /// EXPERIMENTAL: Do not enable for production tables without consulting the
+  /// Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<const std::vector<std::string>> FSST_COLUMNS;
 
   /// Selects and tunes the writer flush policy via a comma-separated
   /// "key:value" spec whose "type" key chooses the policy. An absent key keeps
@@ -242,6 +268,9 @@ class Config : public velox::config::ConfigBase {
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
+
+  /// Maps to WriterOptions::enableStreamChecksums.
+  static Entry<bool> ENABLE_STREAM_CHECKSUMS;
 
   static constexpr const char* kNimbleWriteTargetRawStripeSize =
       "nimble_write_target_raw_stripe_size";

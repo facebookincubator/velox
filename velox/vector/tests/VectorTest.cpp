@@ -1350,9 +1350,7 @@ TEST_F(VectorTest, copyFromAllNulls) {
   };
 
   // Copy to BIGINT.
-  test([&]() {
-    return makeFlatVector<int64_t>(size, [](auto row) { return row; });
-  });
+  test([&]() { return makeFlatIdentityVector<int64_t>(size); });
 
   // Copy to BOOLEAN.
   test([&]() {
@@ -1407,9 +1405,7 @@ TEST_F(VectorTest, copyFromUnknown) {
   };
 
   // Copy to BIGINT.
-  test([&]() {
-    return makeFlatVector<int64_t>(size, [](auto row) { return row; });
-  });
+  test([&]() { return makeFlatIdentityVector<int64_t>(size); });
 
   // Copy to BOOLEAN.
   test([&]() {
@@ -1440,7 +1436,7 @@ TEST_F(VectorTest, copyFromUnknown) {
   // Copy to ROW.
   test([&]() {
     return makeRowVector({
-        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(size),
         makeFlatVector<double>(size, [](auto row) { return row * 0.1; }),
     });
   });
@@ -2179,8 +2175,7 @@ TEST_F(VectorTest, multipleDictionariesOverLazy) {
       pool(),
       INTEGER(),
       size,
-      std::make_unique<TestingLoader>(
-          makeFlatVector<int32_t>(size, [](auto row) { return row; })));
+      std::make_unique<TestingLoader>(makeFlatIdentityVector<int32_t>(size)));
 
   auto dict = BaseVector::wrapInDictionary(
       nullptr,
@@ -2199,7 +2194,7 @@ TEST_F(VectorTest, selectiveLoadingOfLazyDictionaryNested) {
   vector_size_t size = 10;
   auto indices =
       makeIndices(size, [&](auto row) { return (row % 2 == 0) ? row : 0; });
-  auto data = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto data = makeFlatIdentityVector<int32_t>(size);
 
   auto loader = std::make_unique<TestingLoader>(data);
   auto loaderPtr = loader.get();
@@ -2234,8 +2229,7 @@ TEST_F(VectorTest, nestedLazy) {
         pool(),
         INTEGER(),
         size,
-        std::make_unique<TestingLoader>(
-            makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+        std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   };
   auto lazy = makeLazy();
   auto dict = BaseVector::wrapInDictionary(
@@ -2276,8 +2270,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       pool(),
       INTEGER(),
       size,
-      std::make_unique<TestingLoader>(
-          makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+      std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
   auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
@@ -3261,7 +3254,7 @@ TEST_F(VectorTest, containsNullAtStructs) {
 }
 
 TEST_F(VectorTest, mutableValues) {
-  auto vector = makeFlatVector<int64_t>(1'000, [](auto row) { return row; });
+  auto vector = makeFlatIdentityVector<int64_t>(1'000);
 
   auto* rawValues = vector->rawValues();
   vector->mutableValues();
@@ -4060,7 +4053,7 @@ TEST_F(VectorTest, ensureNullRowsEmpty) {
 }
 
 TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
-  auto iota = makeFlatVector<int64_t>(10, folly::identity);
+  auto iota = makeFlatIdentityVector<int64_t>(10);
   auto output = RowVector::pushDictionaryToRowVectorLeaves(iota);
   ASSERT_EQ(output, iota);
 

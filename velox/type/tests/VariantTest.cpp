@@ -706,6 +706,30 @@ TEST(VariantTest, nullVariant) {
       nullVariant.isTypeCompatible(ROW({DATE(), BIGINT(), TIMESTAMP()})));
 }
 
+TEST(VariantTest, estimateValueSize) {
+  EXPECT_EQ(Variant::null(TypeKind::BIGINT).estimateValueSize(), 0);
+  EXPECT_EQ(Variant{int64_t{1}}.estimateValueSize(), sizeof(int64_t));
+  EXPECT_EQ(Variant{"abc"}.estimateValueSize(), 3);
+  EXPECT_EQ(
+      Variant::opaque(std::make_shared<std::string>("abc")).estimateValueSize(),
+      0);
+
+  const auto nested = Variant::row({
+      Variant::array({
+          Variant{int32_t{1}},
+          Variant{int32_t{2}},
+          Variant::null(TypeKind::INTEGER),
+      }),
+      Variant::map({
+          {Variant{"a"}, Variant{int64_t{1}}},
+          {Variant{"bc"}, Variant{int64_t{2}}},
+      }),
+  });
+  EXPECT_EQ(
+      nested.estimateValueSize(),
+      2 * sizeof(int32_t) + 3 + 2 * sizeof(int64_t));
+}
+
 /// Test Variant::equalsWithEpsilon by summing up large 64-bit integers (> 15
 /// digits long) into double in different order to get slightly different
 /// results due to loss of precision.

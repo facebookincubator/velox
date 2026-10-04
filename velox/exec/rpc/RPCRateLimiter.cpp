@@ -17,8 +17,11 @@
 #include "velox/exec/rpc/RPCRateLimiter.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 #include <vector>
+
+#include "velox/common/testutil/TestValue.h"
 
 #define RPC_RATE_LIMITER_LOG(severity) LOG(severity) << "[RPC_RATE_LIMITER] "
 #define RPC_RATE_LIMITER_VLOG(level) VLOG(level) << "[RPC_RATE_LIMITER] "
@@ -31,6 +34,18 @@ namespace {
 std::atomic<int64_t>& defaultCapacityRef() {
   static std::atomic<int64_t> capacity{20};
   return capacity;
+}
+
+// Reports a contained teardown failure without allowing diagnostics to escape
+// the noexcept token-release path.
+void logReleaseFailure(
+    std::string_view admissionKey,
+    std::string_view stage) noexcept {
+  try {
+    RPC_RATE_LIMITER_LOG(ERROR)
+        << "release[" << admissionKey << "] failed during " << stage;
+  } catch (...) {
+  }
 }
 } // namespace
 
@@ -48,7 +63,7 @@ RPCRateLimiter::Token& RPCRateLimiter::Token::operator=(
   return *this;
 }
 
-RPCRateLimiter::Token::~Token() {
+RPCRateLimiter::Token::~Token() noexcept {
   if (owner_ != nullptr) {
     owner_->release();
   }
@@ -56,8 +71,8 @@ RPCRateLimiter::Token::~Token() {
 
 // --- RPCRateLimiter ---
 
-RPCRateLimiter::RPCRateLimiter(std::string tierKey)
-    : tierKey_{std::move(tierKey)} {}
+RPCRateLimiter::RPCRateLimiter(std::string admissionKey)
+    : admissionKey_{std::move(admissionKey)} {}
 
 void RPCRateLimiter::setDefaultCapacity(int64_t capacity) {
   defaultCapacityRef().store(capacity);
@@ -108,11 +123,11 @@ void RPCRateLimiter::initializeOnce(
           wanted.ceiling != config_.ceiling) {
         // Per backend, not LOG_FIRST_N: that is process-wide, so the first
         // backend to take this path would silence the warning for every other
-        // one even though the message names a specific tier.
+        // one even though the message names a specific backend.
         if (!loggedDivergentSettings_) {
           loggedDivergentSettings_ = true;
           RPC_RATE_LIMITER_LOG(WARNING)
-              << "backend " << tierKey_
+              << "admission key " << admissionKey_
               << " is already initialized; ignoring different settings from a "
                  "later query. One configuration is shared by every query on a "
                  "backend, and it is fixed by the first of them.";
@@ -166,7 +181,7 @@ void RPCRateLimiter::applyMutationLocked(
   if (was != config_.adaptive) {
     RPC_RATE_LIMITER_LOG(WARNING)
         << "adaptive capacity " << (config_.adaptive ? "ENABLED" : "DISABLED")
-        << " for backend " << tierKey_ << " (floor=" << config_.floor
+        << " for admission key " << admissionKey_ << " (floor=" << config_.floor
         << ", decrease=" << config_.decreaseFactor << ")";
   }
 }
@@ -204,9 +219,9 @@ void RPCRateLimiter::notePeakPending(int64_t pending) {
 RPCRateLimiter::Token RPCRateLimiter::acquire() {
   const int64_t pending = ++pending_;
   notePeakPending(pending);
-  RPC_RATE_LIMITER_VLOG(2) << "acquire[" << tierKey_
+  RPC_RATE_LIMITER_VLOG(2) << "acquire[" << admissionKey_
                            << "]: pending=" << pending;
-  return Token{this};
+  return Token{tokenConstructionKey_, this};
 }
 
 std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
@@ -246,7 +261,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
   for (int64_t i = 0; i < take; ++i) {
     // One token per slot: each releases exactly one on destruction, so the
     // bulk grant unwinds row by row as the requests complete.
-    granted.emplace_back(this);
+    granted.emplace_back(tokenConstructionKey_, this);
   }
   return granted;
 }
@@ -263,12 +278,12 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
   const int64_t capacity = capacityLocked();
   if (pending < capacity) {
     RPC_RATE_LIMITER_VLOG(2)
-        << "admitOrWait[" << tierKey_ << "]: admitted (pending=" << pending
+        << "admitOrWait[" << admissionKey_ << "]: admitted (pending=" << pending
         << ", capacity=" << capacity << ")";
     result.admitted = true;
     return result;
   }
-  RPC_RATE_LIMITER_VLOG(1) << "admitOrWait[" << tierKey_
+  RPC_RATE_LIMITER_VLOG(1) << "admitOrWait[" << admissionKey_
                            << "]: waiting (pending=" << pending
                            << ", capacity=" << capacity << "), waiter #"
                            << waiters_.size();
@@ -311,8 +326,9 @@ void RPCRateLimiter::onOverload() {
   if (lowWater_ == 0 || next < lowWater_) {
     lowWater_ = next;
   }
-  RPC_RATE_LIMITER_VLOG(1) << "RPC congestion: capacity[" << tierKey_ << "] "
-                           << current << " -> " << next << " (overload)";
+  RPC_RATE_LIMITER_VLOG(1) << "RPC congestion: capacity[" << admissionKey_
+                           << "] " << current << " -> " << next
+                           << " (overload)";
 }
 
 void RPCRateLimiter::onSuccess(int64_t units) {
@@ -347,7 +363,7 @@ void RPCRateLimiter::onSuccess(int64_t units) {
   }
 }
 
-void RPCRateLimiter::release() {
+void RPCRateLimiter::release() noexcept {
   // Saturate at zero. A token can outlive testingReset(), which zeroes the
   // count; without the floor its release would drive pending_ negative and
   // make available() report more capacity than exists.
@@ -355,27 +371,37 @@ void RPCRateLimiter::release() {
   while (pending > 0 && !pending_.compare_exchange_weak(pending, pending - 1)) {
   }
   pending = std::max<int64_t>(0, pending - 1);
-  RPC_RATE_LIMITER_VLOG(2) << "release[" << tierKey_
-                           << "]: pending=" << pending;
-
-  // Hold the lock across check-and-dequeue. Otherwise a waiter parked by
-  // admitOrWait() between the capacity read and the dequeue would be missed:
-  // with the lock held it is either already queued and gets this slot, or it
-  // observes the decremented count and never parks.
-  //
-  // One waiter per release (FIFO), to avoid a thundering herd.
   std::optional<ContinuePromise> toNotify;
-  {
+  try {
+    RPC_RATE_LIMITER_VLOG(2)
+        << "release[" << admissionKey_ << "]: pending=" << pending;
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::rpc::RPCRateLimiter::release", this);
+
+    // Hold the lock across check-and-dequeue. Otherwise a waiter parked by
+    // admitOrWait() between the capacity read and the dequeue would be missed:
+    // with the lock held it is either already queued and gets this slot, or it
+    // observes the decremented count and never parks.
+    //
+    // One waiter per release (FIFO), to avoid a thundering herd.
     std::lock_guard<std::mutex> l(mutex_);
     if (pending < capacityLocked() && !waiters_.empty()) {
-      RPC_RATE_LIMITER_VLOG(1) << "release[" << tierKey_ << "]: waking 1 of "
-                               << waiters_.size() << " waiters";
+      RPC_RATE_LIMITER_VLOG(1)
+          << "release[" << admissionKey_ << "]: waking 1 of " << waiters_.size()
+          << " waiters";
       toNotify = std::move(waiters_.front());
       waiters_.pop_front();
     }
+  } catch (...) {
+    logReleaseFailure(admissionKey_, "waiter selection");
+    return;
   }
   if (toNotify.has_value()) {
-    toNotify->setValue();
+    try {
+      toNotify->setValue();
+    } catch (...) {
+      logReleaseFailure(admissionKey_, "waiter notification");
+    }
   }
 }
 
@@ -392,17 +418,20 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
 // --- RPCRateLimiterRegistry ---
 
 RPCRateLimiterRegistry& RPCRateLimiterRegistry::global() {
-  static RPCRateLimiterRegistry registry;
-  return registry;
+  // Intentionally leaked: tokens are captured into continuations that can be
+  // destroyed during process teardown, so the registry must outlive static
+  // destruction for the process-lifetime guarantee above to hold.
+  static auto* registry = new RPCRateLimiterRegistry();
+  return *registry;
 }
 
-RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& tierKey) {
+RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& admissionKey) {
   // Fast path: the backend already exists, so concurrent lookups from every
   // driver share the lock rather than serializing. Values are held by
   // unique_ptr, so the reference outlives later insertions.
   {
     std::shared_lock<std::shared_mutex> rl(mutex_);
-    auto it = backends_.find(tierKey);
+    auto it = backends_.find(admissionKey);
     if (it != backends_.end()) {
       return *it->second;
     }
@@ -410,12 +439,12 @@ RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& tierKey) {
   // Slow path: first sight of this backend. Re-check under the exclusive lock
   // in case another thread created it between the two locks.
   std::unique_lock<std::shared_mutex> wl(mutex_);
-  auto it = backends_.find(tierKey);
+  auto it = backends_.find(admissionKey);
   if (it != backends_.end()) {
     return *it->second;
   }
-  auto [inserted, _] =
-      backends_.emplace(tierKey, std::make_unique<RPCRateLimiter>(tierKey));
+  auto [inserted, _] = backends_.emplace(
+      admissionKey, std::make_unique<RPCRateLimiter>(admissionKey));
   return *inserted->second;
 }
 
@@ -426,7 +455,7 @@ void RPCRateLimiterRegistry::testingReset() {
   // operator that acquired them and release through a back-pointer, so
   // destroying a RPCRateLimiter that still has outstanding tokens would leave
   // them writing through a dangling pointer.
-  for (auto& [tierKey, admission] : backends_) {
+  for (auto& [admissionKey, admission] : backends_) {
     admission->testingReset();
   }
 }

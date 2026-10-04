@@ -177,6 +177,11 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   BitRangeSplit = 25,
+  /// Encodes floating-point high bits using a small dictionary and preserves
+  /// low bits in a separate integer stream. Selected through explicit layouts.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  ALPRD = 26,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
@@ -226,6 +231,8 @@ std::string toString(CompressionType compressionType);
 CompressionType toCompressionType(std::string_view name);
 std::ostream& operator<<(std::ostream& out, CompressionType compressionType);
 
+/// Written to disk verbatim in the postscript, so an existing enumerator's
+/// number can never change.
 enum class ChecksumType : uint8_t { XXH3_64 = 0 };
 
 std::string toString(ChecksumType type);

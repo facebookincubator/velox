@@ -329,6 +329,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::HuffmanEncoding, dataType);
     }
+    case EncodingType::ALPRD:
+      // ALPRD and its integer children use the shared implementation. Calling
+      // the base factory on this object also preserves the decoding options.
+      return ::facebook::nimble::EncodingFactory::create(
+          memoryPool, data, std::move(stringBufferFactory));
     case EncodingType::ALP: {
       switch (dataType) {
         case DataType::Float:

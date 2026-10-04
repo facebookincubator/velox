@@ -112,6 +112,29 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
   return cudf::data_type{cudf::type_id::EMPTY};
 }
 
+bool canMakeCudfDefaultScalar(const TypePtr& type) {
+  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
+    return false;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(

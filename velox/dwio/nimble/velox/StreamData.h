@@ -84,6 +84,16 @@ class StreamData {
     return false;
   }
 
+  /// Returns whether this stream must remain one encoding chunk per stripe.
+  bool noChunking() const {
+    return noChunking_;
+  }
+
+  /// Keeps metadata that readers consume atomically in one stripe chunk.
+  void disableChunking() {
+    noChunking_ = true;
+  }
+
   virtual void reset() = 0;
 
   virtual void materialize() {}
@@ -94,6 +104,8 @@ class StreamData {
 
  private:
   const StreamDescriptorBuilder& descriptor_;
+  // Marks metadata that readers consume atomically with sibling streams.
+  bool noChunking_{false};
 };
 
 class MutableStreamData : public StreamData {
@@ -509,6 +521,14 @@ inline bool isConstantBoolStream(std::string_view data) {
   }
   // Check all-false: no non-zero byte found.
   return ::memchr(data.data(), 1, data.size()) == nullptr;
+}
+
+/// Returns true if the boolean stream data is non-empty and every byte is
+/// true. Distinguished from isConstantBoolStream because an omitted all-true
+/// in-map stream and an omitted all-false one mean opposite things to the
+/// reader, so the two constants cannot share a code path.
+inline bool isAllTrueBoolStream(std::string_view data) {
+  return !data.empty() && ::memchr(data.data(), 0, data.size()) == nullptr;
 }
 
 } // namespace facebook::nimble
