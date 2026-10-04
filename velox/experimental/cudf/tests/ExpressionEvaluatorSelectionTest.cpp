@@ -126,6 +126,13 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiCanEvaluate) {
   const std::vector<Case> cases = {
       {"bitwise_and(a, b)", true},
       {"d + d", true},
+      // Integral arithmetic binds the Checked* structs, as Presto does on the
+      // CPU.
+      {"a + b", true},
+      {"a - b", true},
+      {"a * b", true},
+      {"a / b", true},
+      {"negate(a)", true},
       // The decimal-places argument is INTEGER, while an integer literal
       // parses as BIGINT; a coerced plan carries the cast.
       {"round(d)", true},
@@ -207,7 +214,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiSelection) {
     if (evaluator == Evaluator::kNone) {
       continue;
     }
-    auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+    auto cudfExpr = createCudfExpression(
+        expr, rowType_, pool_.get(), queryCtx_->queryConfig());
     ASSERT_NE(cudfExpr, nullptr);
     EXPECT_EQ(
         dynamic_cast<GpuSfiExpression*>(cudfExpr.get()) != nullptr,

@@ -21,6 +21,11 @@
 
 #include "folly/CPortability.h"
 #include "velox/common/base/Macros.h"
+// Only under nvcc: a host build, such as GpuTypesTest, cannot parse the sink's
+// __shared__ declaration and keeps BitUtil's full behaviour.
+#if defined(__CUDACC__)
+#include "velox/experimental/cudf/functions/GpuErrorSink.cuh"
+#endif
 
 #include <cstdint>
 
@@ -34,6 +39,15 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
 // negative bound yields 0 rather than shifting a negative operand.
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
 countBits(const uint64_t* bits, int32_t begin, int32_t end) {
+#if defined(__CUDACC__)
+  // A failed VELOX_USER_CHECK does not stop a device body, so BitCountFunction
+  // reaches here with a width its check rejected. The row is declined and its
+  // count discarded, so return before that width can send a read past the one
+  // word the caller holds.
+  if (cudf_velox::gpu_sfi::gpuRowFailed()) {
+    return 0;
+  }
+#endif
   if (begin < 0 || end <= begin) {
     return 0;
   }

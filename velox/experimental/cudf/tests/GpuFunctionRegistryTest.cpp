@@ -43,6 +43,7 @@ std::unique_ptr<cudf::column> launcherA(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
+    uint8_t*,
     cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
@@ -52,6 +53,7 @@ std::unique_ptr<cudf::column> launcherB(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
+    uint8_t*,
     cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
@@ -223,8 +225,8 @@ TEST_F(GpuFunctionRegistryTest, signatures) {
 // The Presto registration mirrors RegistrationHelpers.h type set for type set,
 // so every GPU signature is one Velox registers under the same name on the CPU,
 // which SignatureBinder matches calls against; the explicit rows pin the type
-// sets per helper, the aliases, both round arities, and the functions held back
-// because their VELOX_USER_CHECKs would be no-ops. TODO(gpu-sfi-checks).
+// sets per helper, the aliases, both round arities, and the checked bitwise
+// functions.
 TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
   functions::prestosql::registerAllScalarFunctions();
   registerPrestoGpuFunctions("");
@@ -250,7 +252,14 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
 
   const std::vector<std::pair<std::string, std::vector<std::string>>> expected =
       {
-          {"plus", {"(double,double) -> double", "(real,real) -> real"}},
+          // PlusFunction for floating point, CheckedPlusFunction for integers.
+          {"plus",
+           {"(bigint,bigint) -> bigint",
+            "(double,double) -> double",
+            "(integer,integer) -> integer",
+            "(real,real) -> real",
+            "(smallint,smallint) -> smallint",
+            "(tinyint,tinyint) -> tinyint"}},
           {"abs",
            {"(bigint) -> bigint",
             "(double) -> double",
@@ -268,10 +277,16 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrations) {
             "(real) -> real",
             "(real,integer) -> real"}},
           {"and", {"(boolean...) -> boolean"}},
-          {"bit_count", {}},
-          {"bitwise_arithmetic_shift_right", {}},
-          {"bitwise_shift_left", {}},
-          {"bitwise_logical_shift_right", {}},
+          // Every integral pair widens to bigint, as the CPU's bitwise
+          // registration does.
+          {"bit_count",
+           {"(bigint,bigint) -> bigint",
+            "(integer,integer) -> bigint",
+            "(smallint,smallint) -> bigint",
+            "(tinyint,tinyint) -> bigint"}},
+          {"bitwise_arithmetic_shift_right", {"(bigint,bigint) -> bigint"}},
+          {"bitwise_shift_left", {"(bigint,bigint,bigint) -> bigint"}},
+          {"bitwise_logical_shift_right", {"(bigint,bigint,bigint) -> bigint"}},
       };
   for (const auto& [name, signatures] : expected) {
     SCOPED_TRACE(name);

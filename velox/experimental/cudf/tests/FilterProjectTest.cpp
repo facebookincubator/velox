@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/CpuErrorParity.h"
+#include "velox/experimental/cudf/tests/utils/PreferGpuSfi.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -3147,6 +3149,173 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Integral arithmetic and the checked bitwise functions on GPU SFI return the
+// CPU's result when every check passes, and when a check fails only in a branch
+// the condition excludes: a GPU conditional computes both branches for every
+// row, so `c0 + c0` overflows on the device for the excluded row, and
+// re-running the whole expression through Velox, not the subtree, returns the
+// CPU's answer.
+TEST_F(CudfFilterProjectTest, deviceChecksDoNotRaiseWhereTheCpuDoesNot) {
+  // Integral arithmetic would otherwise go to the AST evaluator, which carries
+  // no checks.
+  cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  // Number, shift and width: a negative number inside the width, then a shift
+  // that reaches the width and the full 64 bits, which pass every check.
+  auto bitwise = makeRowVector({
+      makeFlatVector<int64_t>({-9, 9}),
+      makeFlatVector<int64_t>({3, 63}),
+      makeFlatVector<int64_t>({8, 64}),
+  });
+  struct Case {
+    const char* what;
+    RowVectorPtr data;
+    const char* projection;
+  };
+  const std::vector<Case> cases{
+      {"clean rows",
+       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}),
+       "c0 + c0 AS c1"},
+      {"masked overflow",
+       makeRowVector({makeFlatVector<int64_t>({1, kMax})}),
+       "if(c0 = 1, c0 + c0, c0) AS c1"},
+      {"bit_count", bitwise, "bit_count(c0, c2) AS out"},
+      {"arithmetic shift right",
+       bitwise,
+       "bitwise_arithmetic_shift_right(c0, c1) AS out"},
+      {"shift left", bitwise, "bitwise_shift_left(c0, c1, c2) AS out"},
+      {"logical shift right",
+       bitwise,
+       "bitwise_logical_shift_right(c0, c1, c2) AS out"},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.what);
+    assertProjectMatchesVelox({testCase.data}, {testCase.projection});
+  }
+}
+
+// No cuDF evaluator claims "try", so a tree containing it stays on the CPU and
+// TRY behaves as Velox's. If an evaluator ever claims it, a declined row must
+// become a null rather than an error, and this test fails first.
+TEST_F(CudfFilterProjectTest, tryIsNotGpuEligible) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2)),
+      makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2)),
+  });
+
+  auto plan =
+      PlanBuilder().values({data}).project({"try(c0 / c1) AS c2"}).planNode();
+
+  // The fixture forbids CPU fallback, so a plan the GPU cannot take fails.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // With fallback, Velox runs it: 1.00 / 0.05 = 20.00 and the division by zero
+  // becomes a null. Re-registered because the adapter reads the flag then.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    config.allowCpuFallback = previousFallback;
+    cudf_velox::registerCudf();
+  };
+  cudf_velox::unregisterCudf();
+  config.allowCpuFallback = true;
+  cudf_velox::registerCudf();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({2000, std::nullopt}, DECIMAL(12, 2))});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Every reachable check in the Checked* integral operators and the checked
+// bitwise functions raises Velox's own user error, message included, in a
+// projection and in a filter, where the failure is detected before the
+// declined row is dropped.
+TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
+  // Integral arithmetic would otherwise go to the AST evaluator, which carries
+  // no checks.
+  cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
+
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  constexpr auto kMin = std::numeric_limits<int64_t>::min();
+
+  // The second row of each pair fails, next to a clean first row.
+  auto integral = makeRowVector({
+      makeFlatVector<int64_t>({1, kMax}),
+      makeFlatVector<int64_t>({1, 0}),
+  });
+  auto extremes = makeRowVector({
+      makeFlatVector<int64_t>({1, kMin}),
+      makeFlatVector<int64_t>({1, 1}),
+  });
+  // Number, shift and width, each failing row tripping one check only: a
+  // negative shift, with a number that 8 bits cannot hold for bit_count, and a
+  // width outside 2..64 with a clean shift.
+  auto negativeShift = makeRowVector({
+      makeFlatVector<int64_t>({9, 200}),
+      makeFlatVector<int64_t>({3, -1}),
+      makeFlatVector<int64_t>({8, 8}),
+  });
+  auto narrowBits = makeRowVector({
+      makeFlatVector<int64_t>({9, 9}),
+      makeFlatVector<int64_t>({3, 3}),
+      makeFlatVector<int64_t>({8, 1}),
+  });
+  struct Case {
+    const char* what;
+    RowVectorPtr data;
+    const char* expression;
+    bool isFilter;
+  };
+
+  const std::vector<Case> cases{
+      {"checkedPlus", integral, "c0 + c0", false},
+      {"checkedMinus", extremes, "c0 - c1", false},
+      {"checkedMultiply", integral, "c0 * c0", false},
+      {"checkedDivide", integral, "c0 / c1", false},
+      {"checkedModulus", integral, "c0 % c1", false},
+      {"checkedNegate", extremes, "negate(c0)", false},
+      {"filter", integral, "c0 / c1 > 1", true},
+      {"bitCountNumber", negativeShift, "bit_count(c0, c2)", false},
+      {"bitCountBits", narrowBits, "bit_count(c0, c2)", false},
+      // Widths past the one word a number occupies, as a constant so every
+      // row fails: the device runs on after the width check and must not read
+      // past the number.
+      {"bitCountOneWordPast", narrowBits, "bit_count(c0, 65)", false},
+      {"bitCountFarPast", narrowBits, "bit_count(c0, 1048576)", false},
+      {"bitCountMaxWidth", narrowBits, "bit_count(c0, 2147483647)", false},
+      {"arithmeticShiftRightShift",
+       negativeShift,
+       "bitwise_arithmetic_shift_right(c0, c1)",
+       false},
+      {"shiftLeftShift",
+       negativeShift,
+       "bitwise_shift_left(c0, c1, c2)",
+       false},
+      {"shiftLeftBits", narrowBits, "bitwise_shift_left(c0, c1, c2)", false},
+      {"logicalShiftRightShift",
+       negativeShift,
+       "bitwise_logical_shift_right(c0, c1, c2)",
+       false},
+      {"logicalShiftRightBits",
+       narrowBits,
+       "bitwise_logical_shift_right(c0, c1, c2)",
+       false},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.what);
+    auto builder = PlanBuilder().values({testCase.data});
+    auto plan = testCase.isFilter
+        ? builder.filter(testCase.expression).planNode()
+        : builder.project({fmt::format("{} AS out", testCase.expression)})
+              .planNode();
+    cudf_velox::test_utils::assertGpuRaisesCpuError(plan, pool());
+  }
 }
 
 } // namespace

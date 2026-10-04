@@ -21,12 +21,18 @@
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 #include "velox/experimental/cudf/tests/MapOnDevice.h"
 
+// For FOLLY_ALWAYS_INLINE, which the checked-arithmetic structs carry.
+#include "folly/CPortability.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
@@ -198,6 +204,127 @@ TEST(GpuFunctionSemanticsTest, roundAndTruncateAgreeWithHostBitForBit) {
     EXPECT_EQ(bits(got[i].rounded), bits(expectedRound));
     EXPECT_EQ(bits(got[i].truncated), bits(expectedTruncate));
   }
+}
+
+// ---------------------------------------------------------------------------
+// A check that fails
+// ---------------------------------------------------------------------------
+
+struct CheckedAddCase {
+  int64_t a;
+  int64_t b;
+};
+
+struct CheckedAddResult {
+  int64_t value;
+  uint8_t raised;
+};
+
+// Does what the adapter's kernel does around a function body: clear this
+// thread's error byte, run the body, read the byte back.
+__global__ void checkedAddRecordingErrors(
+    const CheckedAddCase* cases,
+    CheckedAddResult* out,
+    int count) {
+  gpuErrorBytes[threadIdx.x] = static_cast<uint8_t>(GpuErrorKind::kNone);
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count) {
+    return;
+  }
+  int64_t value{-1};
+  facebook::velox::functions::CheckedPlusFunction<GpuExec>{}.call(
+      value, cases[i].a, cases[i].b);
+  out[i].value = value;
+  out[i].raised = gpuErrorBytes[threadIdx.x];
+}
+
+// An overflow inside checkedPlus reaches VELOX_ARITHMETIC_ERROR, which records
+// the row on the device as a user error, as it is on the CPU, so a TRY may
+// swallow it; a clean row is not declined by its neighbour's failure.
+TEST(GpuFunctionSemanticsTest, aFailedCheckIsRecordedPerRow) {
+  constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+  constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+  const std::vector<CheckedAddCase> cases{
+      {1, 2},
+      {kMax, 1},
+      {3, 4},
+      {kMin, -1},
+      {kMax, 0},
+      {-1, -1},
+  };
+
+  auto got = mapOnDevice<CheckedAddCase, CheckedAddResult>(
+      cases, [&](const CheckedAddCase* in, CheckedAddResult* out, int count) {
+        checkedAddRecordingErrors<<<1, count, count * sizeof(uint8_t)>>>(
+            in, out, count);
+      });
+
+  for (size_t i = 0; i < cases.size(); ++i) {
+    SCOPED_TRACE(fmt::format("case {}: {} + {}", i, cases[i].a, cases[i].b));
+    // The host's overflow test decides which rows must be declined.
+    int64_t sum{};
+    if (__builtin_add_overflow(cases[i].a, cases[i].b, &sum)) {
+      EXPECT_EQ(got[i].raised, static_cast<uint8_t>(GpuErrorKind::kUserError));
+    } else {
+      EXPECT_EQ(got[i].raised, static_cast<uint8_t>(GpuErrorKind::kNone));
+      EXPECT_EQ(got[i].value, sum);
+    }
+  }
+}
+
+struct BitRange {
+  int32_t begin;
+  int32_t end;
+};
+
+// Counts the bits of each range over two words, 9 then all ones, with this
+// thread's error byte holding `errorByte`: clean, or set as a failed check
+// leaves it. A count that enters the second word shows as 64 or more.
+__global__ void countBitsWithErrorByte(
+    const BitRange* ranges,
+    int32_t* out,
+    int count,
+    uint8_t errorByte) {
+  gpuErrorBytes[threadIdx.x] = errorByte;
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count) {
+    return;
+  }
+  const uint64_t words[2] = {9, ~uint64_t{0}};
+  out[i] =
+      facebook::velox::bits::countBits(words, ranges[i].begin, ranges[i].end);
+}
+
+// The BitUtil.h shadow keeps the real countBits across words while the row is
+// clean. Once a check has failed, the body runs on and BitCountFunction passes
+// a width its check rejected, so the count must return before it reads past
+// the one word that caller holds.
+TEST(GpuFunctionSemanticsTest, countBitsReadsNothingAfterAFailedCheck) {
+  const auto countWith = [](const std::vector<BitRange>& ranges,
+                            GpuErrorKind errorKind) {
+    return mapOnDevice<BitRange, int32_t>(
+        ranges, [&](const BitRange* in, int32_t* out, int count) {
+          countBitsWithErrorByte<<<1, count, count * sizeof(uint8_t)>>>(
+              in, out, count, static_cast<uint8_t>(errorKind));
+        });
+  };
+
+  const std::vector<BitRange> withinTheWords{
+      {0, 8}, {0, 64}, {0, 65}, {0, 128}, {70, 100}};
+  EXPECT_THAT(
+      countWith(withinTheWords, GpuErrorKind::kNone),
+      testing::ElementsAre(2, 2, 3, 66, 30));
+
+  // Past the second word too: nothing may be read for these to pass.
+  const std::vector<BitRange> rejectedWidths{
+      {0, 8},
+      {0, 65},
+      {0, 1'048'576},
+      {0, std::numeric_limits<int32_t>::max()},
+  };
+  EXPECT_THAT(
+      countWith(rejectedWidths, GpuErrorKind::kUserError),
+      testing::ElementsAre(0, 0, 0, 0));
 }
 
 } // namespace
