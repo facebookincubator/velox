@@ -440,15 +440,19 @@ CudfFilterProject::project(
     inputViews.push_back(col->view());
   }
   std::vector<ColumnOrView> columns;
+  // One word for the whole batch: resolve() synchronizes the stream, and a
+  // declined row discards every projection's result anyway. Each projection
+  // reads only the input columns, so a declined row in one cannot reach
+  // another.
+  gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
   for (auto& projectEvaluator : projectEvaluators_) {
-    gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
     columns.push_back(projectEvaluator->eval(
         inputViews, stream, get_output_mr(), true, &errors));
-    // Checked per projection so the later ones are never launched, and so the
-    // input columns are still whole -- the identity moves below have not run.
-    if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
-      return std::nullopt;
-    }
+  }
+  // Checked while the input columns are still whole -- the identity moves
+  // below have not run.
+  if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+    return std::nullopt;
   }
 
   // Rearrange columns to match outputType_
