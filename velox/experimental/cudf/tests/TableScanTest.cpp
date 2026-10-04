@@ -2427,7 +2427,7 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       noRows,
       false);
 
-  // Minute truncation is timezone-insensitive and remains eligible. With
+  // Minute truncation runs on GPU SFI with the comparison above it. With
   // adjustment enabled the literal is Asia/Kolkata time, so 01:30 on January 2
   // there is the first row's 20:00 UTC on January 1.
   testFilter(

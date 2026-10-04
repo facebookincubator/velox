@@ -310,6 +310,33 @@ void collectReferencedInputFields(
   }
 }
 
+// Defined below.
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr);
+
+// True when Velox would read TIMESTAMP arguments in the session time zone.
+bool sessionTimeZoneApplies(const core::QueryConfig& config) {
+  return config.adjustTimestampToTimezone() &&
+      !config.sessionTimezone().empty();
+}
+
+// True when `entry` can evaluate `expr` with Velox's result under the session
+// `config`. While the session time zone applies, an evaluator that reads
+// TIMESTAMP as UTC is not offered a tree containing a call such as
+// hour(timestamp).
+bool canEvaluateUnder(
+    const CudfExpressionEvaluatorEntry& entry,
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  if (!entry.canEvaluate) {
+    return false;
+  }
+  if (!entry.honorsSessionTimeZone && sessionTimeZoneApplies(config) &&
+      containsSessionTimeZoneSensitiveCall(expr)) {
+    return false;
+  }
+  return entry.canEvaluate(expr, config);
+}
+
 // Returns the highest-priority evaluator entry that can handle `expr`, or
 // nullptr when none can.
 const CudfExpressionEvaluatorEntry* findBestEvaluator(
@@ -320,7 +347,7 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr, config)) {
+    if (canEvaluateUnder(entry, expr, config)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }
@@ -387,7 +414,7 @@ bool canBeEvaluatedByCudf(
 
   bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr, config)) {
+    if (canEvaluateUnder(entry, expr, config)) {
       supported = true;
       break;
     }
@@ -4124,6 +4151,19 @@ bool requiresCpuForTimezone(
     return true;
   }
   return false;
+}
+
+// True when the tree holds a call whose result depends on the session time
+// zone, such as year(timestamp), as the registered sensitivity predicates
+// report it.
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr) {
+  if (isSessionTimeZoneSensitiveCall(expr)) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(),
+      expr->inputs().end(),
+      containsSessionTimeZoneSensitiveCall);
 }
 
 // Returns true if 'expr' must stay on the CPU because it holds a cast whose

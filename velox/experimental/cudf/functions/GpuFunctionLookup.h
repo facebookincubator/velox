@@ -39,6 +39,9 @@ struct GpuFunctionEntry {
   /// signature and differ here; every decimal function does.
   std::vector<TypeKind> argumentKinds;
   TypeKind returnKind{TypeKind::UNKNOWN};
+  /// True when the result for a TIMESTAMP argument depends on the session
+  /// time zone; see registerGpuKernel().
+  bool dependsOnSessionTimeZone{false};
 };
 
 /// Every registration made so far, keyed by lowercased function name.
