@@ -164,7 +164,14 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       VELOX_UNREACHABLE(
           "Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalYearMonth()) {
-      VELOX_FAIL("Interval year month not supported");
+      // A count of months as the plain integer it is stored as: cuDF has no
+      // month interval.
+      if constexpr (std::is_same_v<T, int32_t>) {
+        auto scalar = std::make_unique<cudf::numeric_scalar<T>>(
+            value, !isNull, stream, mr);
+        stream.sync();
+        return scalar;
+      }
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {

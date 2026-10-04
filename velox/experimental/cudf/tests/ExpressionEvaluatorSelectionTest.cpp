@@ -328,7 +328,8 @@ TEST_F(CudfExpressionSelectionTest, sessionTimeZoneSensitivityIsRegistered) {
       {{"ts", TIMESTAMP()},
        {"date", DATE()},
        {"d", DOUBLE()},
-       {"tz0", TIMESTAMP_WITH_TIME_ZONE()}});
+       {"tz0", TIMESTAMP_WITH_TIME_ZONE()},
+       {"days", INTERVAL_DAY_TIME()}});
   struct Case {
     std::string sql;
     bool dependsOnSessionTimeZone;
@@ -340,12 +341,20 @@ TEST_F(CudfExpressionSelectionTest, sessionTimeZoneSensitivityIsRegistered) {
       {"minute(ts)", true},
       {"date_trunc('hour', ts)", true},
       {"date_trunc('second', ts)", true},
+      {"date_add('day', 1, ts)", true},
+      {"date_diff('day', ts, ts)", true},
       {"second(ts)", false},
       {"millisecond(ts)", false},
       {"to_unixtime(ts)", false},
       {"year(date)", false},
+      {"date_add('day', 1, date)", false},
       {"from_unixtime(d)", false},
       {"year(tz0)", false},
+      {"date_add('day', 1, tz0)", false},
+      // The interval operators read the zone only for a count of months.
+      {"ts + days", false},
+      {"ts + INTERVAL 1 MONTH", true},
+      {"ts - ts", false},
   };
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.sql);
@@ -355,7 +364,6 @@ TEST_F(CudfExpressionSelectionTest, sessionTimeZoneSensitivityIsRegistered) {
         GpuSfiExpression::dependsOnSessionTimeZone(expr),
         testCase.dependsOnSessionTimeZone);
   }
-
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
@@ -371,6 +379,97 @@ TEST_F(CudfExpressionSelectionTest, sessionTimeZoneSensitivityIsRegistered) {
         expr, rowType, pool_.get(), queryCtx_->queryConfig());
     EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
   }
+}
+
+// GPU SFI claims date_trunc, date_add, date_diff and the interval operators
+// over TIMESTAMP, DATE and TIMESTAMP WITH TIME ZONE, including the DATE forms
+// the function tier also implements, which it outranks.
+TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsDateArithmetic) {
+  auto rowType = ROW(
+      {{"ts", TIMESTAMP()},
+       {"d", DATE()},
+       {"tz", TIMESTAMP_WITH_TIME_ZONE()},
+       {"days", INTERVAL_DAY_TIME()},
+       {"months", INTERVAL_YEAR_MONTH()},
+       {"n", BIGINT()}});
+  for (const auto& sql :
+       {"date_trunc('day', ts)",
+        "date_trunc('month', d)",
+        "date_trunc('hour', tz)",
+        "date_add('day', n, ts)",
+        "date_add('month', 1, d)",
+        "date_add('year', n, tz)",
+        "date_diff('second', ts, ts)",
+        "date_diff('week', d, d)",
+        "date_diff('quarter', tz, tz)",
+        "ts + days",
+        "days + ts",
+        "ts - days",
+        "ts + months",
+        "months + ts",
+        "ts - months",
+        "ts - ts",
+        "tz + days",
+        "days + tz",
+        "tz - days",
+        "tz + months",
+        "months + tz",
+        "tz - months",
+        "tz - tz"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    auto cudfExpr = createCudfExpression(
+        expr, rowType, pool_.get(), queryCtx_->queryConfig());
+    EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
+  }
+}
+
+// The function tier implements date_trunc on TIMESTAMP as well, reading UTC.
+// While the session time zone applies, the call is GPU SFI's alone, whatever
+// the priorities say: with GPU SFI demoted below the function tier it still
+// answers, and the function tier takes the call only once the zone no longer
+// applies.
+TEST_F(
+    CudfExpressionSelectionTest,
+    dateTruncOnTimestampFollowsTheSessionTimeZone) {
+  auto rowType = ROW({{"ts", TIMESTAMP()}});
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  auto expr = optimizeTypedExpr(
+      "date_trunc('day', ts)", rowType, queryCtx_.get(), execCtx_.get());
+  ASSERT_TRUE(FunctionExpression::canEvaluate(expr));
+
+  auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto gpuSfi = registry.at(kGpuSfiEvaluatorName);
+  registry.at(kGpuSfiEvaluatorName).priority =
+      registry.at("function").priority - 1;
+  SCOPE_EXIT {
+    registry.at(kGpuSfiEvaluatorName) = gpuSfi;
+  };
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  EXPECT_NE(
+      dynamic_cast<GpuSfiExpression*>(
+          createCudfExpression(
+              expr, rowType, pool_.get(), queryCtx_->queryConfig())
+              .get()),
+      nullptr);
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  EXPECT_NE(
+      dynamic_cast<FunctionExpression*>(
+          createCudfExpression(
+              expr, rowType, pool_.get(), queryCtx_->queryConfig())
+              .get()),
+      nullptr);
 }
 
 // Which calls depend on the session time zone is knowledge of the GPU SFI
@@ -400,7 +499,8 @@ TEST_F(CudfExpressionSelectionTest, sensitiveCallsStayOnTheCpuWithoutGpuSfi) {
       {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
   });
-  for (const auto& sql : {"year(ts)", "date_trunc('day', ts)"}) {
+  for (const auto& sql :
+       {"year(ts)", "date_trunc('day', ts)", "date_add('day', 1, ts)"}) {
     SCOPED_TRACE(sql);
     auto expr =
         optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
@@ -427,11 +527,18 @@ TEST_F(CudfExpressionSelectionTest, unitAndZoneColumnsLeaveTheCallToTheCpu) {
        {"d", DATE()},
        {"tz", TIMESTAMP_WITH_TIME_ZONE()},
        {"unit", VARCHAR()},
-       {"dbl", DOUBLE()}});
+       {"dbl", DOUBLE()},
+       {"n", BIGINT()}});
   for (const auto& sql :
        {"date_trunc(unit, ts)",
         "date_trunc(unit, d)",
         "date_trunc(unit, tz)",
+        "date_add(unit, n, ts)",
+        "date_add(unit, n, d)",
+        "date_add(unit, n, tz)",
+        "date_diff(unit, ts, ts)",
+        "date_diff(unit, d, d)",
+        "date_diff(unit, tz, tz)",
         "at_timezone(tz, unit)",
         "from_unixtime(dbl, unit)"}) {
     SCOPED_TRACE(sql);

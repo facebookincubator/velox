@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
-#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
@@ -3355,46 +3354,6 @@ std::unordered_set<std::string> referencedInputFields(
 
 namespace {
 
-// True if the expression tree contains a timezone-sensitive date_trunc call.
-// date_trunc on a timestamp needs the session timezone when
-// adjust_timestamp_to_session_timezone is enabled, which cuDF cannot honor, so
-// such trees must stay on CPU.
-bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
-  const auto dateTruncName =
-      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
-  if (expr->kind() == core::ExprKind::kCall &&
-      exprRegistryName(expr) == dateTruncName &&
-      DateTruncFunction::isTimezoneSensitive(expr)) {
-    return true;
-  }
-  for (const auto& input : expr->inputs()) {
-    if (containsTimezoneSensitiveDateTrunc(input)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// True if `expr` must fall back to CPU because it contains a timezone-sensitive
-// date_trunc while the session enables adjust_timestamp_to_session_timezone,
-// which cuDF cannot honor. False when `queryCtx` is null or the config is
-// disabled.
-bool requiresCpuForTimezone(
-    const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx) {
-  if (queryCtx == nullptr ||
-      !queryCtx->queryConfig().adjustTimestampToTimezone()) {
-    return false;
-  }
-  if (containsTimezoneSensitiveDateTrunc(expr)) {
-    LOG_FALLBACK(
-        "date_trunc(timestamp) requires CPU evaluation when "
-        "adjust_timestamp_to_session_timezone is enabled");
-    return true;
-  }
-  return false;
-}
-
 // True when the tree holds a call whose result depends on the session time
 // zone, such as year(timestamp), as the registered sensitivity predicates
 // report it.
@@ -3424,8 +3383,7 @@ bool canExprRunOnGpu(
       : expr;
   const bool sessionTimeZone =
       queryCtx != nullptr && sessionTimeZoneApplies(queryCtx->queryConfig());
-  return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked, sessionTimeZone);
+  return canBeEvaluatedByCudf(checked, sessionTimeZone);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(

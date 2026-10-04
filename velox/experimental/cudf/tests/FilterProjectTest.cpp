@@ -37,10 +37,12 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 #include <folly/ScopeGuard.h>
+#include <gmock/gmock.h>
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <unordered_map>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -672,6 +674,35 @@ class CudfFilterProjectTest : public OperatorTestBase {
     assertPlanMatchesVelox(plan);
   }
 
+  // Runs `plan` under `configs` on the CPU and on the GPU and requires the
+  // same error of the same class, with `message` in it. A declined batch is
+  // re-evaluated through Velox, so the GPU's error is Velox's own.
+  void assertGpuRaisesCpuError(
+      const core::PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& configs,
+      const std::string& message) {
+    struct Raised {
+      std::string message;
+      bool userError;
+    };
+    const auto run = [&]() -> Raised {
+      try {
+        AssertQueryBuilder(plan).configs(configs).copyResults(pool());
+      } catch (const VeloxException& error) {
+        return {error.message(), error.isUserError()};
+      }
+      ADD_FAILURE() << "Expected an error";
+      return {"", false};
+    };
+    cudf_velox::unregisterCudf();
+    const auto cpu = run();
+    cudf_velox::registerCudf();
+    EXPECT_THAT(cpu.message, testing::HasSubstr(message));
+    const auto gpu = run();
+    EXPECT_EQ(gpu.message, cpu.message);
+    EXPECT_EQ(gpu.userError, cpu.userError);
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -1201,6 +1232,105 @@ TEST_F(CudfFilterProjectTest, timestampWithTimeZoneChecksRaiseTheCpuError) {
            makeFlatVector<int64_t>({5, 5})}));
 }
 
+// The checks the date arithmetic can fail each raise the CPU's error for a
+// declined row: a truncation whose local day begins in a gap and a month onto
+// a skipped local time (America/Sao_Paulo moved its clocks forward at the
+// midnight of 2018-11-04; the interval operators do not move past a gap as
+// date_add does), an unknown unit, a unit the overload rejects, a count beyond
+// int32 and a result past the type's range.
+TEST_F(CudfFilterProjectTest, dateArithmeticChecksRaiseTheCpuError) {
+  // 2018-11-04T03:00:00Z, when Sao_Paulo's clocks moved from midnight to one,
+  // and the local midnight a month before it.
+  constexpr int64_t kSkippedMidnight = 1'541'300'400;
+  constexpr int64_t kMonthBefore = 1'538'622'000;
+  const std::unordered_map<std::string, std::string> saoPaulo{
+      {core::QueryConfig::kSessionTimezone, "America/Sao_Paulo"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  };
+  const auto utc = tz::getTimeZoneID("UTC");
+  // The second row of each input fails, next to a clean first row.
+  const auto timestamps = [&](int64_t seconds) {
+    return makeRowVector(
+        {makeFlatVector<Timestamp>({Timestamp(0, 0), Timestamp(seconds, 0)})});
+  };
+  auto afterTheGap = timestamps(kSkippedMidnight + 1);
+  auto monthBefore = timestamps(kMonthBefore);
+  auto ts = timestamps(1'700'000'000);
+  auto dates = makeRowVector({makeFlatVector<int32_t>({0, 18'262}, DATE())});
+  auto zoned = makeRowVector({makeFlatVector<int64_t>(
+      {pack(0, utc), pack(1'000, utc)}, TIMESTAMP_WITH_TIME_ZONE())});
+  auto longIntervals = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(0, utc), pack(0, utc)}, TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>({1, 4'000'000'000'000'000}, INTERVAL_DAY_TIME()),
+  });
+
+  struct Case {
+    RowVectorPtr data;
+    const char* projection;
+    std::unordered_map<std::string, std::string> configs;
+    const char* message;
+  };
+  const std::vector<Case> cases{
+      {afterTheGap, "date_trunc('day', c0)", saoPaulo, "is in a gap"},
+      {monthBefore, "c0 + INTERVAL 1 MONTH", saoPaulo, "is in a gap"},
+      {ts, "date_add('fortnight', 1, c0)", {}, "Unsupported datetime unit"},
+      {ts, "date_diff('fortnight', c0, c0)", {}, "Unsupported datetime unit"},
+      {ts, "date_trunc('millisecond', c0)", {}, "not a valid TIMESTAMP field"},
+      {dates, "date_trunc('hour', c0)", {}, "not a valid DATE field"},
+      {dates, "date_add('hour', 1, c0)", {}, "not a valid DATE field"},
+      {dates, "date_diff('minute', c0, c0)", {}, "not a valid DATE field"},
+      {ts, "date_add('day', 2147483648, c0)", {}, "Value should be in range"},
+      {ts, "date_add('year', 2147483647, c0)", {}, "Year is out of range"},
+      {zoned, "date_add('year', 2147483647, c0)", {}, "Year is out of range"},
+      {dates, "date_add('day', 2147483647, c0)", {}, "Date is out of range"},
+      {longIntervals, "c0 + c1", {}, "TimestampWithTimeZone overflow"},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.projection);
+    auto plan = PlanBuilder()
+                    .values({testCase.data})
+                    .project({fmt::format("{} AS out", testCase.projection)})
+                    .planNode();
+    assertGpuRaisesCpuError(plan, testCase.configs, testCase.message);
+  }
+}
+
+// A planner delivers `c0 + INTERVAL 1 MONTH` as a literal of INTERVAL YEAR TO
+// MONTH, which GPU SFI reads through a one-row column as it reads any
+// literal; a column of the type cannot cross to cuDF, which has no month
+// interval. The fixture forbids CPU fallback, so these run on the GPU or fail.
+TEST_F(CudfFilterProjectTest, intervalLiteralsRunOnGpu) {
+  // 2024-01-31, 2024-02-29 and the epoch, where the end-of-month rules act.
+  const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
+  const std::vector<VectorPtr> columns{
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(1'706'659'200, 0),
+           Timestamp(1'709'164'800, 123'000'000),
+           Timestamp(0, 0),
+           std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {pack(1'706'659'200'000, losAngeles),
+           pack(1'709'164'800'123, losAngeles),
+           pack(0, losAngeles),
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  };
+  for (const auto& column : columns) {
+    SCOPED_TRACE(column->type()->toString());
+    assertPlanMatchesVelox(
+        PlanBuilder()
+            .values({makeRowVector({column})})
+            .project(
+                {"c0 + INTERVAL 1 MONTH",
+                 "INTERVAL 13 MONTH + c0",
+                 "c0 - INTERVAL 12 MONTH",
+                 "c0 + INTERVAL 1 DAY",
+                 "c0 - INTERVAL 1 MILLISECOND"})
+            .planNode());
+  }
+}
+
 // A TIMESTAMP result the output column's unit cannot hold is declined on the
 // device, so the CPU's value stands for the row: from_unixtime(1e18) clamps to
 // the last millisecond a Timestamp holds, far past the nanosecond column's
@@ -1530,40 +1660,36 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+// A count beyond int32 raises Velox's own error, whether the count is a
+// literal or a column: the GPU declines the row and the CPU reports it.
 TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
-  // Literal value that exceeds int32 range; checked at eval time by
-  // checkedScaleValue -> checkValueInInt32Range.
   auto data = makeRowVector(
       {"event_date"},
       {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
-  std::vector<RowVectorPtr> vectors{data};
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"date_add('day', 2147483648, event_date) AS r"})
-                  .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "date_add value is out of range");
+  assertGpuRaisesCpuError(
+      PlanBuilder()
+          .values({data})
+          .project({"date_add('day', 2147483648, event_date) AS r"})
+          .planNode(),
+      {},
+      "Value should be in range");
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
-  // Column value that exceeds int32 range; checked at eval time by
-  // checkValueRange on the GPU.
   auto data = makeRowVector(
       {"event_date", "amount"},
       {makeFlatVector<int32_t>(
            {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
        makeFlatVector<int64_t>({1, std::numeric_limits<int64_t>::max()})});
-  std::vector<RowVectorPtr> vectors{data};
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"date_add('day', amount, event_date) AS r"})
-                  .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "date_add value is out of range");
+  assertGpuRaisesCpuError(
+      PlanBuilder()
+          .values({data})
+          .project({"date_add('day', amount, event_date) AS r"})
+          .planNode(),
+      {},
+      "Value should be in range");
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
@@ -1581,6 +1707,32 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
       "date_add('day', amount, event_date) AS plus_day",
       "date_add('month', amount, event_date) AS plus_month"};
   assertProjectMatchesVelox(vectors, projections);
+}
+
+// A count of weeks that fits an int32 while the days it adds do not: Velox
+// raises for the date that leaves the type's range, and so must the GPU.
+TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowRaisesTheCpuError) {
+  constexpr int64_t kPositiveWeekOverflow =
+      std::numeric_limits<int32_t>::max() / 7LL + 1;
+  constexpr int64_t kNegativeWeekOverflow =
+      std::numeric_limits<int32_t>::min() / 7LL - 1;
+
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>({0, 0}, DATE()),
+       makeFlatVector<int64_t>(
+           {kPositiveWeekOverflow, kNegativeWeekOverflow})});
+
+  for (const auto& projection :
+       {"date_add('week', amount, event_date) AS column_value",
+        "date_add('week', 306783379, event_date) AS positive_literal",
+        "date_add('week', -306783379, event_date) AS negative_literal"}) {
+    SCOPED_TRACE(projection);
+    assertGpuRaisesCpuError(
+        PlanBuilder().values({data}).project({projection}).planNode(),
+        {},
+        "Date is out of range after arithmetic");
+  }
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {

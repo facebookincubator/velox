@@ -18,10 +18,11 @@
 //
 // On the device a tz::TimeZone is a GpuTimeZone in device memory. The host
 // builds one per Velox zone from the database the CPU reads, hands a function
-// struct its pointer in initialize(), and the conversions Timestamp::toGMT()
-// and toTimezone() make run over its table. locateZone(id) reads a device copy
-// of the whole database, which each translation unit owns and uploads to a
-// device before its first kernel there that may resolve a zone.
+// struct its pointer in initialize(), and the conversions the real bodies make
+// through to_local(), to_sys(), correct_nonexistent_time() and
+// Timestamp::toGMT() and toTimezone() run over its table. locateZone(id) reads
+// a device copy of the whole database, which each translation unit owns and
+// uploads to a device before its first kernel there that may resolve a zone.
 //
 // The host side of a shadow translation unit must not resolve a zone through
 // this header. The inline functions here share their host symbols with the
@@ -97,31 +98,65 @@ class TimeZone final : public cudf_velox::gpu_sfi::GpuTimeZone {
   TimeZone(const TimeZone&) = delete;
   TimeZone& operator=(const TimeZone&) = delete;
 
-  /// The local wall-clock time of an instant, as Timestamp::toTimezone() reads
-  /// it.
-  VELOX_GPU_COMPATIBLE seconds toLocalChecked(seconds timestamp) const {
+  /// The local wall-clock time of an instant. A fraction of a second is
+  /// carried over whole, so the last second before an offset change reads
+  /// with the offset before it, as the seconds form reads it on the CPU.
+  VELOX_GPU_COMPATIBLE seconds to_local(seconds timestamp) const {
     return seconds(toLocal(timestamp.count()));
   }
+  VELOX_GPU_COMPATIBLE milliseconds to_local(milliseconds timestamp) const {
+    return milliseconds(toLocalMillis(timestamp.count()));
+  }
 
-  /// The instant of a local wall-clock time, as Timestamp::toGMT() reads it: a
-  /// time an offset decrease repeats resolves to the earlier instant, and one
-  /// an offset increase skipped is the user error the CPU raises.
-  VELOX_GPU_COMPATIBLE seconds toSysChecked(seconds timestamp) const {
+  /// The instant of a local wall-clock time. A time an offset decrease
+  /// repeats resolves to the earlier instant, which is kEarliest's and what
+  /// toSysChecked() picks; no registered struct passes kFail, under which the
+  /// CPU raises for a repeated time, and none passes kLatest, which declines
+  /// the row. A time an offset increase skipped is the user error
+  /// toSysChecked() raises, under every choice: the CPU returns the gap's
+  /// first instant under kEarliest, which the table lookup does not report,
+  /// and the registered structs move such a time past the gap through
+  /// correct_nonexistent_time() before converting it.
+  VELOX_GPU_COMPATIBLE seconds
+  to_sys(seconds timestamp, TChoose choose = TChoose::kFail) const {
+    VELOX_CHECK(
+        choose != TChoose::kLatest, "to_sys(kLatest) has no device form");
     const UtcInstant instant = toUtc(timestamp.count());
     VELOX_USER_CHECK(
         instant.exists, "Local time is in a gap: {}", timestamp.count());
     return seconds(instant.utcSeconds);
   }
+  VELOX_GPU_COMPATIBLE milliseconds
+  to_sys(milliseconds timestamp, TChoose choose = TChoose::kFail) const {
+    VELOX_CHECK(
+        choose != TChoose::kLatest, "to_sys(kLatest) has no device form");
+    const UtcMillis instant = toUtcMillis(timestamp.count());
+    VELOX_USER_CHECK(
+        instant.exists, "Local time is in a gap: {}", timestamp.count());
+    return milliseconds(instant.utcMillis);
+  }
+
+  /// A local time an offset increase skipped, moved past the gap by the size
+  /// of the increase; any other local time unchanged.
+  VELOX_GPU_COMPATIBLE seconds
+  correct_nonexistent_time(seconds timestamp) const {
+    return seconds(correctNonexistent(timestamp.count()));
+  }
+
+  /// to_local(), as Timestamp::toTimezone() reads it.
+  VELOX_GPU_COMPATIBLE seconds toLocalChecked(seconds timestamp) const {
+    return to_local(timestamp);
+  }
+
+  /// to_sys() resolving a repeated time to the earlier instant and raising for
+  /// a skipped one, as Timestamp::toGMT() reads it.
+  VELOX_GPU_COMPATIBLE seconds toSysChecked(seconds timestamp) const {
+    return to_sys(timestamp, TChoose::kEarliest);
+  }
 
   // Host-only members of the real class, declared so that the host-only bodies
   // naming them parse. None is defined: a call fails to link rather than run
   // against a zone this side cannot see.
-  seconds to_sys(seconds timestamp, TChoose choose = TChoose::kFail) const;
-  milliseconds to_sys(milliseconds timestamp, TChoose choose = TChoose::kFail)
-      const;
-  seconds to_local(seconds timestamp) const;
-  milliseconds to_local(milliseconds timestamp) const;
-  seconds correct_nonexistent_time(seconds timestamp) const;
   const std::string& name() const;
   int16_t id() const;
   std::optional<std::chrono::minutes> offset() const;
