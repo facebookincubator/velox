@@ -74,26 +74,9 @@ class SessionConfigFunction : public CudfFunction {
   const core::QueryConfig config_;
 };
 
-// Stand-ins for a GPU simple function's initialize(). Two report a check they
-// failed, as one behind the GPU shadow does; two throw, as a callee compiled
-// outside it does.
-uint8_t initializeFailsUserCheck(
-    void* /*instance*/,
-    const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/,
-    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
-  return static_cast<uint8_t>(gpu_sfi::ErrorClass::kUserError);
-}
-
-uint8_t initializeFailsRuntimeCheck(
-    void* /*instance*/,
-    const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& /*config*/,
-    const std::vector<gpu_sfi::GpuConstantArgument>& /*constants*/) {
-  return static_cast<uint8_t>(gpu_sfi::ErrorClass::kRuntimeError);
-}
-
-uint8_t initializeThrowsUserError(
+// Stand-ins for a GPU simple function's initialize() that fails a check, which
+// throws the Velox error as on the CPU.
+void initializeThrowsUserError(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
     const core::QueryConfig& /*config*/,
@@ -101,7 +84,7 @@ uint8_t initializeThrowsUserError(
   VELOX_USER_FAIL("Unknown time zone: Mars/Olympus");
 }
 
-uint8_t initializeThrowsRuntimeError(
+void initializeThrowsRuntimeError(
     void* /*instance*/,
     const std::vector<TypePtr>& /*inputTypes*/,
     const core::QueryConfig& /*config*/,
@@ -449,10 +432,6 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiInitializeFailures) {
   };
 
   VELOX_ASSERT_RUNTIME_THROW(
-      create("initialize_fails_runtime_check", &initializeFailsRuntimeCheck),
-      "GPU simple function failed a runtime check in initialize(): "
-      "initialize_fails_runtime_check");
-  VELOX_ASSERT_RUNTIME_THROW(
       create("initialize_throws_runtime_error", &initializeThrowsRuntimeError),
       "Instance state is inconsistent");
 
@@ -466,22 +445,15 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiInitializeFailures) {
       mr);
   const auto noRows =
       cudf::make_empty_column(cudf::data_type{cudf::type_id::INT64});
-  const std::vector<std::pair<std::string, gpu_sfi::GpuInitializeFn>>
-      userFailures = {
-          {"initialize_fails_user_check", &initializeFailsUserCheck},
-          {"initialize_throws_user_error", &initializeThrowsUserError},
-      };
-  for (const auto& [name, initialize] : userFailures) {
-    SCOPED_TRACE(name);
-    auto expression = create(name, initialize);
-    VELOX_ASSERT_USER_THROW(
-        expression->eval({oneRow->view()}, stream, mr),
-        "GPU simple function failed a check in initialize(), and its caller "
-        "cannot re-evaluate the rows on the CPU to raise the error: " +
-            name);
-    // Velox raises nothing on a batch with no rows.
-    expression->eval({noRows->view()}, stream, mr);
-  }
+  auto expression =
+      create("initialize_throws_user_error", &initializeThrowsUserError);
+  VELOX_ASSERT_USER_THROW(
+      expression->eval({oneRow->view()}, stream, mr),
+      "GPU simple function failed a check in initialize(), and its caller "
+      "cannot re-evaluate the rows on the CPU to raise the error: "
+      "initialize_throws_user_error");
+  // Velox raises nothing on a batch with no rows.
+  expression->eval({noRows->view()}, stream, mr);
 }
 
 // registerCudf() registers GPU SFI at the configured priority.

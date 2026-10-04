@@ -159,7 +159,8 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       static_cast<const void*>(column.head<uint8_t>()),
       column.null_mask(),
       column.offset(),
-      isConstant};
+      isConstant,
+      gpu_sfi::ticksPerSecond(column.type())};
 }
 
 // The physical value of a non-null constant as the bytes GpuConstantArgument
@@ -171,6 +172,11 @@ std::vector<std::byte> constantBytes(const BaseVector& vector) {
   if constexpr (std::is_same_v<T, StringView>) {
     const auto* begin = reinterpret_cast<const std::byte*>(value.data());
     return {begin, begin + value.size()};
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    const int64_t parts[2] = {
+        value.getSeconds(), static_cast<int64_t>(value.getNanos())};
+    const auto* begin = reinterpret_cast<const std::byte*>(parts);
+    return {begin, begin + sizeof(parts)};
   } else {
     const auto* begin = reinterpret_cast<const std::byte*>(&value);
     return {begin, begin + sizeof(T)};
@@ -252,20 +258,12 @@ InitializedInstance makeInstance(
   const ConstantArguments constants(expr, pool);
   InitializedInstance instance{std::vector<std::byte>(spec.size)};
   try {
-    instance.initializeError = static_cast<gpu_sfi::ErrorClass>(spec.initialize(
-        instance.bytes.data(), inputTypes, config, constants.descriptors()));
+    spec.initialize(
+        instance.bytes.data(), inputTypes, config, constants.descriptors());
   } catch (const VeloxRuntimeError&) {
     throw;
   } catch (const std::exception&) {
-    // Thrown by a callee compiled outside the shadow, with the real checks.
     instance.initializeError = gpu_sfi::ErrorClass::kUserError;
-  }
-  // A check behind the shadow records its class rather than throwing, so the
-  // runtime error is raised here, without the message Velox's check carries.
-  if (instance.initializeError == gpu_sfi::ErrorClass::kRuntimeError) {
-    VELOX_FAIL(
-        "GPU simple function failed a runtime check in initialize(): {}",
-        expr->toString());
   }
   return instance;
 }

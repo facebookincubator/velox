@@ -20,10 +20,10 @@
 // that are never invoked.
 
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
-#include "velox/experimental/cudf/functions/GpuSfiErrors.h"
 #include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/GpuTestFunctions.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/SignatureBinder.h"
@@ -531,7 +531,7 @@ TEST_F(GpuFunctionRegistryTest, decimalKernelsAreKeyedByPhysicalType) {
 // A decimal function's rescale factors come from initialize(), so its
 // registration carries a sized, initializable instance that derives them from
 // the argument scales, while a function without initialize() registers none. A
-// check initialize() fails is reported with its class rather than ignored.
+// check initialize() fails throws Velox's error, as on the CPU.
 TEST_F(GpuFunctionRegistryTest, decimalInstancesAreInitialized) {
   registerPrestoGpuFunctions("");
 
@@ -552,9 +552,7 @@ TEST_F(GpuFunctionRegistryTest, decimalInstancesAreInitialized) {
     std::vector<std::byte> instance(spec.size);
     const std::vector<TypePtr> arguments{DECIMAL(20, left), DECIMAL(20, right)};
     const core::QueryConfig config{{}};
-    EXPECT_EQ(
-        spec.initialize(instance.data(), arguments, config, /*constants=*/{}),
-        static_cast<uint8_t>(ErrorClass::kNone));
+    spec.initialize(instance.data(), arguments, config, /*constants=*/{});
     const auto wider = std::max(left, right);
     EXPECT_EQ(static_cast<int>(instance[0]), wider - left);
     EXPECT_EQ(static_cast<int>(instance[1]), wider - right);
@@ -566,24 +564,19 @@ TEST_F(GpuFunctionRegistryTest, decimalInstancesAreInitialized) {
   const auto& divideSpec = decimalEntriesOf("divide").front()->instanceSpec;
   ASSERT_NE(divideSpec.initialize, nullptr);
   const core::QueryConfig config{{}};
-  struct Case {
-    TypePtr divisor;
-    ErrorClass expected;
-  };
-  for (const auto& [divisor, expected] : std::vector<Case>{
-           {DECIMAL(38, 10), ErrorClass::kNone},
-           {DECIMAL(38, 20), ErrorClass::kUserError},
-       }) {
-    SCOPED_TRACE(divisor->toString());
-    std::vector<std::byte> instance(divideSpec.size);
-    EXPECT_EQ(
-        divideSpec.initialize(
-            instance.data(),
-            {DECIMAL(18, 0), divisor},
-            config,
-            /*constants=*/{}),
-        static_cast<uint8_t>(expected));
-  }
+  std::vector<std::byte> instance(divideSpec.size);
+  divideSpec.initialize(
+      instance.data(),
+      {DECIMAL(18, 0), DECIMAL(38, 10)},
+      config,
+      /*constants=*/{});
+  VELOX_ASSERT_USER_THROW(
+      divideSpec.initialize(
+          instance.data(),
+          {DECIMAL(18, 0), DECIMAL(38, 20)},
+          config,
+          /*constants=*/{}),
+      "Decimal overflow");
 }
 
 // The first bytes of an instance, read back as the integer the test function

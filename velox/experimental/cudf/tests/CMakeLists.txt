@@ -143,7 +143,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_decimal_arithmetic_device_test
   SOURCES DecimalArithmeticDeviceTest.cu
-  LIBS cudf::cudf Folly::folly
+  LIBS cudf::cudf Folly::folly velox_cudf_gpu_sfi_host
 )
 set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
 velox_cudf_use_gpu_shadows(velox_cudf_decimal_arithmetic_device_test)
@@ -353,8 +353,8 @@ velox_add_cudf_test(
 
 add_subdirectory(iceberg)
 
-# Host-only checks of the GpuExec type resolver, GpuTimestamp, the custom-type
-# view and the BitUtil.h shadow's helpers.
+# Host-only checks of the GpuExec type resolver, the custom-type view and the
+# BitUtil.h shadow's helpers.
 velox_add_cudf_test(
   NAME velox_cudf_gpu_types_test
   SOURCES GpuTypesTest.cpp GpuShadowBitUtilTest.cpp
@@ -410,6 +410,8 @@ set_target_properties(
 velox_cudf_use_gpu_shadows(velox_cudf_gpu_function_semantics_test)
 target_link_libraries(
   velox_cudf_gpu_function_semantics_test
+  velox_cudf_gpu_sfi_host
+  velox_type_tz
   cudf::cudf
   fmt::fmt
   GTest::gmock
