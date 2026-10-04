@@ -80,95 +80,26 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
   return std::nullopt;
 }
 
-void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit) {
-  switch (unit) {
-    case DateTimeUnit::kYear:
-      dateTime.tm_mon = 0;
-      dateTime.tm_yday = 0;
-      [[fallthrough]];
-    case DateTimeUnit::kQuarter:
-      dateTime.tm_mon = dateTime.tm_mon / 3 * 3;
-      [[fallthrough]];
-    case DateTimeUnit::kMonth:
-      dateTime.tm_mday = 1;
-      dateTime.tm_hour = 0;
-      dateTime.tm_min = 0;
-      dateTime.tm_sec = 0;
-      break;
-    case DateTimeUnit::kWeek:
-      // Subtract the truncation.
-      dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
-      // Setting the day of the week to Monday.
-      dateTime.tm_wday = 1;
-
-      // If the adjusted day of the month falls in the previous month
-      // Move to the previous month.
-      if (dateTime.tm_mday < 1) {
-        dateTime.tm_mon -= 1;
-
-        // If the adjusted month falls in the previous year
-        // Set to December and Move to the previous year.
-        if (dateTime.tm_mon < 0) {
-          dateTime.tm_mon = 11;
-          dateTime.tm_year -= 1;
-        }
-
-        // Calculate the correct day of the month based on the number of days
-        // in the adjusted month.
-        static const int daysInMonth[] = {
-            31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-        int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
-
-        // Adjust for leap year if February.
-        if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
-            ((dateTime.tm_year + 1900) % 100 != 0 ||
-             (dateTime.tm_year + 1900) % 400 == 0)) {
-          daysInPrevMonth = 29;
-        }
-        // Set to the correct day in the previous month.
-        dateTime.tm_mday += daysInPrevMonth;
-      }
-      dateTime.tm_hour = 0;
-      dateTime.tm_min = 0;
-      dateTime.tm_sec = 0;
-      break;
-    case DateTimeUnit::kDay:
-      dateTime.tm_hour = 0;
-      [[fallthrough]];
-    case DateTimeUnit::kHour:
-      dateTime.tm_min = 0;
-      [[fallthrough]];
-    case DateTimeUnit::kMinute:
-      dateTime.tm_sec = 0;
-      break;
-    default:
-      VELOX_UNREACHABLE();
-  }
-}
+// The device-compatible arithmetic restates the Timestamp bounds; keep the two
+// in step.
+static_assert(kMaxEpochSeconds == Timestamp::kMaxSeconds);
+static_assert(kMinEpochSeconds == Timestamp::kMinSeconds);
 
 Timestamp truncateTimestamp(
     Timestamp timestamp,
     DateTimeUnit unit,
     const tz::TimeZone* timeZone) {
-  Timestamp result;
   switch (unit) {
-    // For seconds ,millisecond, microsecond we just truncate the nanoseconds
-    // part of the timestamp; no timezone conversion required.
+    // Units up to a minute truncate the UTC value directly: time zone offsets
+    // and daylight saving shifts are whole minutes.
     case DateTimeUnit::kMicrosecond:
-      return Timestamp(
-          timestamp.getSeconds(), timestamp.getNanos() / 1000 * 1000);
-
     case DateTimeUnit::kMillisecond:
-      return Timestamp(
-          timestamp.getSeconds(), timestamp.getNanos() / 1000000 * 1000000);
-
     case DateTimeUnit::kSecond:
-      return Timestamp(timestamp.getSeconds(), 0);
-
-    // Same for minutes; timezones and daylight savings time are at least in
-    // the granularity of 30 mins, so we can just truncate the epoch directly.
-    case DateTimeUnit::kMinute:
-      return adjustEpoch(timestamp.getSeconds(), 60);
+    case DateTimeUnit::kMinute: {
+      const auto truncated = truncateEpochTime(
+          {timestamp.getSeconds(), timestamp.getNanos()}, unit);
+      return Timestamp(truncated.seconds, truncated.nanos);
+    }
 
     // Hour truncation has to handle the corner case of daylight savings time
     // boundaries. Since conversions from local timezone to UTC may be
@@ -176,28 +107,23 @@ Timestamp truncateTimestamp(
     // local time and back. So what we do is to calculate the truncation delta
     // in UTC, then applying it to the input timestamp.
     case DateTimeUnit::kHour: {
-      auto epochToAdjust = getSeconds(timestamp, timeZone);
-      auto secondsDelta =
-          epochToAdjust - adjustEpoch(epochToAdjust, 60 * 60).getSeconds();
+      const int64_t localSeconds = getSeconds(timestamp, timeZone);
+      const int64_t secondsDelta =
+          localSeconds - truncateEpochTime({localSeconds, 0}, unit).seconds;
       return Timestamp(timestamp.getSeconds() - secondsDelta, 0);
     }
 
     // For the truncations below, we may first need to convert to the local
     // timestamp, truncate, then convert back to GMT.
-    case DateTimeUnit::kDay:
-      result = adjustEpoch(getSeconds(timestamp, timeZone), 24 * 60 * 60);
-      break;
-
-    default:
-      auto dateTime = getDateTime(timestamp, timeZone);
-      adjustDateTime(dateTime, unit);
-      result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
-      break;
+    default: {
+      const EpochTime local{
+          getSeconds(timestamp, timeZone), timestamp.getNanos()};
+      Timestamp result(truncateEpochTime(local, unit).seconds, 0);
+      if (timeZone != nullptr) {
+        result.toGMT(*timeZone);
+      }
+      return result;
+    }
   }
-
-  if (timeZone != nullptr) {
-    result.toGMT(*timeZone);
-  }
-  return result;
 }
 } // namespace facebook::velox::functions

@@ -2998,6 +2998,17 @@ TEST_F(DateTimeFunctionsTest, dateAddDate) {
       parseDate("2019-02-28"), dateAdd("quarter", -4, parseDate("2020-02-29")));
   EXPECT_EQ(
       parseDate("2018-02-28"), dateAdd("year", -2, parseDate("2020-02-29")));
+
+  // A result outside the DATE range is an error, not a wrapped day count.
+  VELOX_ASSERT_USER_THROW(
+      dateAdd("day", 1, parseDate("5881580-07-11")),
+      "Date is out of range after arithmetic");
+  VELOX_ASSERT_USER_THROW(
+      dateAdd("day", -1, parseDate("-5877641-06-23")),
+      "Date is out of range after arithmetic");
+  VELOX_ASSERT_USER_THROW(
+      dateAdd("year", INT32_MAX, parseDate("1970-01-01")),
+      "Year is out of range after arithmetic");
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
@@ -3017,6 +3028,11 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
   VELOX_ASSERT_THROW(
       dateAdd("invalid_unit", 1, ts),
       "Unsupported datetime unit: invalid_unit");
+
+  // A result outside the Timestamp range is an error, not a wrapped value.
+  VELOX_ASSERT_USER_THROW(
+      dateAdd("millisecond", 86'400'000, Timestamp::max()),
+      "Timestamp is out of range after arithmetic");
 
   // Simple tests
   EXPECT_EQ(
@@ -3868,6 +3884,11 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
   EXPECT_EQ(
       292277024,
       dateDiff("year", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
+
+  // A difference that does not fit in 64 bits is an error, not a wrapped value.
+  VELOX_ASSERT_USER_THROW(
+      dateDiff("millisecond", Timestamp::min(), Timestamp::max()),
+      "Timestamp difference overflows in milliseconds");
 
   // Simple tests
   EXPECT_EQ(
