@@ -26,7 +26,9 @@
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <set>
 #include "velox/parse/TypeResolver.h"
 
 DEFINE_uint32(seed, 0, "");
@@ -346,10 +348,18 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   TableEvolutionFuzzer::QueryCoverage query;
   query.pushdown.numQueries = 1;
   query.pushdown.skippedSplits = 1;
+  query.pushdown.chunkSkippedRows = 20;
+  query.pushdown.processedRows = 50;
+  query.pushdown.numQueriesWithChunkSkipping = 1;
+  query.pushdown.processedRowsWithChunkSkipping = 50;
   query.pushdown.numQueriesWithValueHook = 1;
   query.pushdown.numValuesLoadedToValueHook = 42;
   query.pushdown.numQueriesWithRemainingFilterEvaluation = 1;
   query.reference.numQueries = 1;
+  query.reference.chunkSkippedRows = 5;
+  query.reference.processedRows = 40;
+  query.reference.numQueriesWithChunkSkipping = 1;
+  query.reference.processedRowsWithChunkSkipping = 40;
   query.hasSubfieldFilters = true;
   query.hasRemainingFilter = true;
   query.hasFilterOnlyColumns = true;
@@ -374,6 +384,7 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
 
   TableEvolutionFuzzer::QueryCoverage bothAggregationPlansActivatedQuery;
   bothAggregationPlansActivatedQuery.pushdown.numQueries = 1;
+  bothAggregationPlansActivatedQuery.pushdown.processedRows = 30;
   bothAggregationPlansActivatedQuery.pushdown.numQueriesWithValueHook = 1;
   bothAggregationPlansActivatedQuery.pushdown.numValuesLoadedToValueHook = 30;
   bothAggregationPlansActivatedQuery.reference.numQueries = 1;
@@ -391,6 +402,7 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   rowReductionQuery.pushdown.numQueries = 1;
   rowReductionQuery.pushdown.numQueriesWithRemainingFilterEvaluation = 1;
   rowReductionQuery.reference.numQueries = 1;
+  rowReductionQuery.reference.processedRows = 25;
   rowReductionQuery.hasRemainingFilter = true;
   rowReductionQuery.filterTypes = {"INTEGER"};
   rowReductionQuery.remainingFilterTypes = {"INTEGER"};
@@ -434,6 +446,14 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   EXPECT_EQ(coverage.numVerificationsPassed, 3);
   EXPECT_EQ(coverage.numVerificationsFailed, 1);
   EXPECT_EQ(coverage.numOriginalVerificationsPassed, 1);
+  EXPECT_EQ(coverage.pushdown.chunkSkippedRows, 20);
+  EXPECT_EQ(coverage.pushdown.processedRows, 80);
+  EXPECT_EQ(coverage.pushdown.numQueriesWithChunkSkipping, 1);
+  EXPECT_EQ(coverage.pushdown.processedRowsWithChunkSkipping, 50);
+  EXPECT_EQ(coverage.reference.chunkSkippedRows, 5);
+  EXPECT_EQ(coverage.reference.processedRows, 65);
+  EXPECT_EQ(coverage.reference.numQueriesWithChunkSkipping, 1);
+  EXPECT_EQ(coverage.reference.processedRowsWithChunkSkipping, 40);
 
   const auto& filters = coverage.queryShapes.filters;
   EXPECT_EQ(filters.numRequested, 4);
@@ -502,6 +522,26 @@ TEST(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
   EXPECT_NO_THROW(fuzzer.run());
 }
 
+TEST(TableEvolutionFuzzerTest, propagatesGeneratedFilesValidatorFailure) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  bool queryObserved = false;
+  config.generatedFilesValidator = [](const auto& files) {
+    EXPECT_FALSE(files.empty());
+    std::set<std::string> paths;
+    for (const auto& file : files) {
+      EXPECT_TRUE(paths.insert(file.path).second);
+    }
+    VELOX_FAIL("Generated file validation failed");
+  };
+  config.queryCoverageObserver = [&](const auto&) { queryObserved = true; };
+
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260929);
+  VELOX_ASSERT_THROW(fuzzer.run(), "Generated file validation failed");
+  EXPECT_FALSE(queryObserved);
+}
+
 TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
   gflags::FlagSaver flagSaver;
   FLAGS_enable_oom_injection_write_path = true;
@@ -523,6 +563,46 @@ TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
   EXPECT_NO_THROW(fuzzer.run());
 #endif
   EXPECT_FALSE(observerCalled);
+}
+
+// Generated grouping keys and aggregate operands are pasted into expression
+// strings that the parser reads back, so every column name has to be quoted.
+// Unquoted, a name that is a SQL keyword fails to parse, and one that does not
+// lex as a bare identifier loses the offending prefix and silently binds to a
+// different column.
+TEST(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
+  EXPECT_EQ(TableEvolutionFuzzer::quoteIdentifier("table"), "\"table\"");
+  EXPECT_EQ(
+      TableEvolutionFuzzer::quoteIdentifier("1_ensemble_prediction"),
+      "\"1_ensemble_prediction\"");
+  EXPECT_EQ(
+      TableEvolutionFuzzer::quoteIdentifier("odd\"name"), "\"odd\"\"name\"");
+
+  auto schema = ROW(
+      {{"table", BIGINT()},
+       {"window", BIGINT()},
+       {"1_ensemble_prediction", BIGINT()}});
+
+  bool sawAggregate = false;
+  for (uint32_t seed = 0; seed < 64; ++seed) {
+    FuzzerGenerator rng(seed);
+    const auto config =
+        TableEvolutionFuzzer::generateAggregationConfig(schema, rng, {});
+    if (!config.has_value()) {
+      continue;
+    }
+    // Grouping keys stay raw: they are resolved by direct field lookup, not by
+    // parsing, so quoting them would make the lookup miss.
+    for (const auto& groupingKey : config->groupingKeys) {
+      EXPECT_THAT(schema->names(), testing::Contains(groupingKey));
+    }
+    for (const auto& aggregate : config->aggregates) {
+      sawAggregate = true;
+      EXPECT_THAT(aggregate, testing::HasSubstr("(\""));
+      EXPECT_THAT(aggregate, testing::EndsWith("\")"));
+    }
+  }
+  EXPECT_TRUE(sawAggregate);
 }
 
 // A column is "used by aggregation" if it is a grouping key or appears in an

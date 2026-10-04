@@ -28,7 +28,9 @@
 #include "velox/dwio/nimble/encodings/legacy/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/TrivialEncoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include <folly/coro/Collect.h>
 #include "velox/common/testutil/TestValue.h"
@@ -4483,7 +4485,7 @@ class FlatMapFieldReaderBase : public FieldReader {
     uint32_t nonNullCount = count;
 
     if constexpr (hasNull) {
-      std::array<bool, kSkipBatchSize> buffer;
+      std::array<bool, kSkipBatchSize> buffer{};
       nonNullCount = 0;
       while (count > 0) {
         auto readSize = std::min(count, kSkipBatchSize);
@@ -5409,6 +5411,586 @@ class MergedFlatMapFieldReaderFactory final
   }
 };
 
+// Parameters for constructing one physical Hybrid FlatMap group reader.
+struct HybridFlatMapGroupReaderParams {
+  // Non-owning view into the Hybrid FlatMap schema owned by the factory.
+  std::reference_wrapper<const HybridFlatMapType::Group> group;
+
+  // Creates the reader for the group's shared value stream.
+  std::unique_ptr<FieldReaderFactory> valueReader;
+
+  // Contains keys named by the feature selector.
+  folly::F14FastSet<std::string> selectedKeys;
+
+  // Interprets selectedKeys as an inclusion or exclusion set.
+  SelectionMode selectionMode{SelectionMode::Exclude};
+};
+
+template <typename T>
+using HybridFlatMapKey = std::
+    conditional_t<std::is_same_v<T, velox::StringView>, std::string_view, T>;
+
+// Marks a selected key that is absent from a particular non-null map row.
+constexpr velox::vector_size_t kAbsentHybridFlatMapValueIndex =
+    std::numeric_limits<velox::vector_size_t>::max();
+
+template <typename T>
+class HybridFlatMapGroupReader {
+  using DecodedKey = HybridFlatMapKey<T>;
+
+ public:
+  HybridFlatMapGroupReader(
+      const HybridFlatMapGroupReaderParams& parameters,
+      const HybridFlatMapType::Group& group,
+      const HybridFlatMapType& hybridMap,
+      Decoder* keyDecoder,
+      Decoder* inMapDecoder,
+      std::unique_ptr<FieldReader> valueReader,
+      velox::memory::MemoryPool* pool)
+      : group_{group},
+        hybridMap_{hybridMap},
+        keyDecoder_{keyDecoder},
+        inMapDecoder_{inMapDecoder},
+        valueReader_{std::move(valueReader)},
+        selectedKeys_{parameters.selectedKeys},
+        selectionMode_{parameters.selectionMode},
+        inMap_{pool} {}
+
+  // Serializer Hybrid FlatMap batches are decode barriers, so each metadata
+  // decoder contains one encoded chunk in this decode run.
+  folly::coro::Task<void> co_load() {
+    if (loaded_) {
+      co_return;
+    }
+    NIMBLE_CHECK_EQ(
+        inMapDecoder_ == nullptr,
+        keyDecoder_ == nullptr,
+        "Hybrid FlatMap key and in-map streams must be present together.");
+    loaded_ = true;
+
+    const auto readMetadataChunk =
+        [&]<typename Values>(
+            Decoder* decoder, Values& values, std::string_view streamName) {
+          const auto rowCount = decoder->remainingRows();
+          values.resize(rowCount);
+          if (rowCount > 0) {
+            decoder->next(
+                rowCount,
+                values.data(),
+                [streamName]() -> void* {
+                  NIMBLE_FILE_FAIL(
+                      "Hybrid FlatMap {} stream must not contain nulls.",
+                      streamName);
+                },
+                scratchBuffers_,
+                /*scatterOutputBitmap=*/nullptr);
+          }
+          NIMBLE_CHECK_FILE_EQ(
+              decoder->remainingRows(),
+              0,
+              "Hybrid FlatMap {} stream must have one encoded chunk per decode "
+              "run.",
+              streamName);
+        };
+
+    keys_.clear();
+    if (keyDecoder_ != nullptr) {
+      readMetadataChunk(keyDecoder_, keys_, "key");
+    }
+
+    inMap_.clear();
+    if (inMapDecoder_ != nullptr) {
+      readMetadataChunk(inMapDecoder_, inMap_, "in-map");
+    }
+
+    if (keys_.empty()) {
+      NIMBLE_CHECK(
+          inMap_.empty(), "Hybrid FlatMap group has in-map rows without keys.");
+      co_return;
+    }
+
+    const auto keyCount = static_cast<uint32_t>(keys_.size());
+    const auto inMapCount = static_cast<uint32_t>(inMap_.size());
+    NIMBLE_CHECK_EQ(
+        inMapCount % keyCount,
+        0,
+        "Hybrid FlatMap in-map count is not divisible by key count.");
+    nonNullRowCount_ = inMapCount / keyCount;
+
+    valueIndices_.assign(inMapCount, kAbsentHybridFlatMapValueIndex);
+    folly::F14FastSet<std::string> seenKeys;
+    selectedKeyIndices_.reserve(
+        selectionMode_ == SelectionMode::Include ? selectedKeys_.size()
+                                                 : keyCount);
+    velox::vector_size_t numValues{0};
+    for (uint32_t keyIndex = 0; keyIndex < keyCount; ++keyIndex) {
+      const auto keyName = keyNameAt(keyIndex);
+      const bool uniqueKey = seenKeys.insert(keyName).second;
+      NIMBLE_CHECK_FILE(
+          uniqueKey,
+          "Duplicate key '{}' in hybrid FlatMap group {}.",
+          keyName,
+          group_.groupId);
+      if (!HybridFlatMap::isDefaultGroup(group_.groupId)) {
+        NIMBLE_CHECK_FILE(
+            std::binary_search(
+                group_.groupKeys.begin(), group_.groupKeys.end(), keyName),
+            "Key '{}' does not belong to hybrid FlatMap group {}.",
+            keyName,
+            group_.groupId);
+      } else {
+        // Default has no declared group keys. Validate its decoded keys against
+        // every configured group in the parent schema instead.
+        NIMBLE_CHECK_FILE(
+            !hybridMap_.findGroup(keyName).has_value(),
+            "Hybrid FlatMap key '{}' is configured in a non-Default group "
+            "but appears in the Default group's key stream.",
+            keyName);
+      }
+      const bool selected = selectionMode_ == SelectionMode::Include
+          ? selectedKeys_.contains(keyName)
+          : !selectedKeys_.contains(keyName);
+      const auto keyOffset = keyIndex * nonNullRowCount_;
+      bool hasPresentValue{false};
+      if (selected) {
+        selectedKeyIndices_.push_back(keyIndex);
+        for (uint32_t row = 0; row < nonNullRowCount_; ++row) {
+          const auto cell = keyOffset + row;
+          if (inMap_[cell]) {
+            valueIndices_[cell] = numValues;
+            ++numValues;
+            hasPresentValue = true;
+          }
+        }
+      } else {
+        for (uint32_t row = 0; row < nonNullRowCount_; ++row) {
+          if (inMap_[keyOffset + row]) {
+            ++numValues;
+            hasPresentValue = true;
+          }
+        }
+      }
+      NIMBLE_CHECK_FILE(
+          hasPresentValue,
+          "Hybrid FlatMap key '{}' has no present rows.",
+          keyName);
+    }
+
+    NIMBLE_CHECK_NOT_NULL(valueReader_, "Missing hybrid FlatMap value reader.");
+    co_await valueReader_->co_next(
+        numValues, values_, /*scatterBitmap=*/nullptr);
+    NIMBLE_CHECK_EQ(
+        values_->size(), numValues, "Hybrid FlatMap value count mismatch.");
+    co_return;
+  }
+
+  // Emits every selected key for the next `count` non-null parent rows. Each
+  // callback receives the key, the group's shared decoded value vector, and a
+  // row-local lookup that returns the decoded value index or the max sentinel
+  // when the key is absent. Advances the group cursor by `count`.
+  template <typename Consumer>
+  void appendSources(uint32_t count, const Consumer& consumer) {
+    if (count == 0) {
+      return;
+    }
+    // co_load() represents both a missing key stream and a zero-key stream as
+    // an empty key catalog.
+    if (keys_.empty()) {
+      nextNonNullRow_ += count;
+      return;
+    }
+    NIMBLE_CHECK_LE(
+        nextNonNullRow_ + count,
+        nonNullRowCount_,
+        "Hybrid FlatMap read exceeds group row count.");
+    for (const auto keyIndex : selectedKeyIndices_) {
+      consumer(keyAt(keyIndex), values_, [&](uint32_t row) {
+        return valueIndices_
+            [keyIndex * nonNullRowCount_ + nextNonNullRow_ + row];
+      });
+    }
+    nextNonNullRow_ += count;
+  }
+
+  void skip(uint32_t count) {
+    if (count == 0) {
+      return;
+    }
+    if (!keys_.empty()) {
+      NIMBLE_CHECK_LE(
+          nextNonNullRow_ + count,
+          nonNullRowCount_,
+          "Hybrid FlatMap skip exceeds group row count.");
+    }
+    nextNonNullRow_ += count;
+  }
+
+  void reset() {
+    // co_load() drains the complete physical group. nextNonNullRow_ only tracks
+    // the selected parent-row window and may stop before nonNullRowCount_.
+    if (keyDecoder_ != nullptr) {
+      keyDecoder_->reset();
+    }
+    if (inMapDecoder_ != nullptr) {
+      inMapDecoder_->reset();
+    }
+    if (valueReader_ != nullptr) {
+      valueReader_->reset();
+    }
+    loaded_ = false;
+    nextNonNullRow_ = 0;
+    nonNullRowCount_ = 0;
+    keys_.clear();
+    selectedKeyIndices_.clear();
+    valueIndices_.clear();
+    values_.reset();
+    scratchBuffers_.clear();
+    inMap_.clear();
+  }
+
+ private:
+  std::string keyNameAt(size_t index) const {
+    if constexpr (std::is_same_v<T, velox::StringView>) {
+      return std::string(keys_[index]);
+    } else {
+      return std::to_string(static_cast<int64_t>(keys_[index]));
+    }
+  }
+
+  DecodedKey keyAt(size_t index) const {
+    return keys_[index];
+  }
+
+  // Non-owning schema view for this physical group; the schema outlives this
+  // reader.
+  const HybridFlatMapType::Group& group_;
+  // Non-owning parent schema used to reject configured keys in Default.
+  const HybridFlatMapType& hybridMap_;
+  // Non-owning decoder for this group's key catalog. It is null exactly when
+  // inMapDecoder_ is null.
+  Decoder* const keyDecoder_;
+  // Non-owning decoder for key-major presence bits. It is null exactly when
+  // keyDecoder_ is null.
+  Decoder* const inMapDecoder_;
+  // Owns the reader for values shared by every key in this group.
+  std::unique_ptr<FieldReader> valueReader_;
+  // Requested feature names interpreted according to selectionMode_.
+  const folly::F14FastSet<std::string> selectedKeys_;
+  // Controls whether selectedKeys_ is an inclusion or exclusion set. An empty
+  // exclusion set selects every key.
+  const SelectionMode selectionMode_;
+  // Decoded key-major presence bits. Cell (key, row) is at
+  // key * nonNullRowCount_ + row.
+  Vector<bool> inMap_;
+  // True after the current batch's key, presence, and value streams have been
+  // decoded.
+  bool loaded_{false};
+  // Next row to emit in compact non-null parent-row space.
+  uint32_t nextNonNullRow_{0};
+  // Number of compact non-null parent rows represented by inMap_.
+  uint32_t nonNullRowCount_{0};
+  // Complete decoded key catalog for the current group batch.
+  std::vector<DecodedKey> keys_;
+  // Indices into keys_ retained by the client feature selection.
+  std::vector<uint32_t> selectedKeyIndices_;
+  // Maps each key-major presence cell to values_, or the absent sentinel.
+  std::vector<velox::vector_size_t> valueIndices_;
+  // Decoded present values in key-major stream order.
+  velox::VectorPtr values_;
+  // Retains backing storage for decoded string keys until reset().
+  std::vector<velox::BufferPtr> scratchBuffers_;
+};
+
+template <typename T, bool hasNull>
+class HybridFlatMapFieldReader final : public FieldReader {
+  using SourceKey = HybridFlatMapKey<T>;
+
+ public:
+  HybridFlatMapFieldReader(
+      velox::TypePtr type,
+      Decoder* decoder,
+      std::vector<std::unique_ptr<HybridFlatMapGroupReader<T>>>
+          hybridGroupReaders,
+      Vector<bool>& boolBuffer,
+      velox::memory::MemoryPool* pool)
+      : FieldReader{*pool, std::move(type), decoder},
+        hybridGroupReaders_{std::move(hybridGroupReaders)},
+        boolBuffer_{boolBuffer} {}
+
+  std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
+    // TODO: Estimate row size from the selected Hybrid FlatMap groups.
+    // Returning nullopt forces BatchReader to use its conservative estimate,
+    // which can reduce data warehouse scan throughput.
+    return std::nullopt;
+  }
+
+  folly::coro::Task<void> co_next(
+      uint32_t rowCount,
+      velox::VectorPtr& output,
+      const velox::bits::Bitmap* scatterBitmap) final {
+    // Group cursors advance over one contiguous row window, so this reader
+    // cannot honor scattered output positions.
+    NIMBLE_CHECK_NULL(scatterBitmap, "unexpected scatterBitmap");
+
+    // Output rows include null maps, while group inMap bitmaps contain entries
+    // only for non-null maps. Keep both counts for the two coordinate spaces.
+    auto* vector = VectorInitializer<velox::MapVector>::initialize(
+        type_, rowCount, pool_, output);
+    vector->resize(rowCount);
+    const auto nonNullCount = loadNulls(rowCount, vector);
+
+    // Normalize selected keys from every group into key-major sources. Each
+    // rowValueIndices maps each compact non-null-row ordinal to an index in
+    // the source's decoded values vector.
+    struct KeySource {
+      SourceKey key;
+      velox::VectorPtr values;
+      std::vector<velox::vector_size_t> rowValueIndices;
+    };
+    std::vector<KeySource> sources;
+
+    // co_load() decodes a group's complete payload once. The append call then
+    // advances only the window of non-null rows requested by this co_next().
+    for (auto& group : hybridGroupReaders_) {
+      co_await group->co_load();
+      group->appendSources(
+          nonNullCount,
+          [&](SourceKey key,
+              const velox::VectorPtr& values,
+              const auto& valueAt) {
+            KeySource source{
+                .key = key,
+                .values = values,
+                .rowValueIndices =
+                    std::vector<velox::vector_size_t>(nonNullCount),
+            };
+            for (uint32_t row = 0; row < nonNullCount; ++row) {
+              source.rowValueIndices[row] = valueAt(row);
+            }
+            sources.push_back(std::move(source));
+          });
+    }
+
+    // First transpose pass: count present key sources per output row to derive
+    // row-major offsets and the total flattened child cardinality.
+    auto* rawSizes =
+        vector->sizes()->template asMutable<velox::vector_size_t>();
+    auto* rawOffsets =
+        vector->offsets()->template asMutable<velox::vector_size_t>();
+    velox::vector_size_t totalEntries{0};
+    uint32_t nonNullRow{0};
+    for (uint32_t row = 0; row < rowCount; ++row) {
+      rawOffsets[row] = totalEntries;
+      if (isNullRow(row)) {
+        rawSizes[row] = 0;
+        continue;
+      }
+      velox::vector_size_t size{0};
+      for (const auto& source : sources) {
+        size += source.rowValueIndices[nonNullRow] !=
+            kAbsentHybridFlatMapValueIndex;
+      }
+      rawSizes[row] = size;
+      totalEntries += size;
+      ++nonNullRow;
+    }
+    NIMBLE_CHECK_EQ(nonNullRow, nonNullCount);
+
+    // Allocate flattened key and value children after their exact size is
+    // known, then initialize one row-local write cursor from each map offset.
+    auto& keysVector = vector->mapKeys();
+    auto* flatKeys = VectorInitializer<velox::FlatVector<T>>::initialize(
+        std::static_pointer_cast<const velox::MapType>(type_)->keyType(),
+        totalEntries,
+        pool_,
+        keysVector);
+    flatKeys->prepareForReuse();
+    flatKeys->resize(totalEntries, false);
+    flatKeys->resetNulls();
+
+    auto& valuesVector = vector->mapValues();
+    velox::BaseVector::prepareForReuse(valuesVector, totalEntries);
+    mapWritePositions_.assign(rawOffsets, rawOffsets + rowCount);
+    // Second transpose pass: place key-major sources into row-major map slots
+    // and bulk-copy each source's selected values into the same positions.
+    for (const auto& source : sources) {
+      copyRanges_.clear();
+      nonNullRow = 0;
+      for (uint32_t row = 0; row < rowCount; ++row) {
+        if (isNullRow(row)) {
+          continue;
+        }
+        const auto sourceIndex = source.rowValueIndices[nonNullRow++];
+        if (sourceIndex == kAbsentHybridFlatMapValueIndex) {
+          continue;
+        }
+        const auto target = mapWritePositions_[row]++;
+        if constexpr (std::is_same_v<T, velox::StringView>) {
+          flatKeys->set(target, velox::StringView{source.key});
+        } else {
+          flatKeys->set(target, source.key);
+        }
+        copyRanges_.push_back({sourceIndex, target, 1});
+      }
+      NIMBLE_DCHECK_EQ(nonNullRow, nonNullCount);
+      // A key present in the group payload can be absent from every row in the
+      // current window, leaving this source with no ranges to copy.
+      if (copyRanges_.empty()) {
+        continue;
+      }
+      NIMBLE_CHECK_NOT_NULL(source.values);
+      valuesVector->copyRanges(source.values.get(), copyRanges_);
+    }
+
+    // Publish the populated children only after all source ranges are copied.
+    vector->setKeysAndValues(std::move(keysVector), std::move(valuesVector));
+    co_return;
+  }
+
+  folly::coro::Task<void> co_skip(uint32_t count) final {
+    uint32_t nonNullCount = count;
+    if constexpr (hasNull) {
+      std::array<bool, kSkipBatchSize> buffer{};
+      nonNullCount = 0;
+      while (count > 0) {
+        const auto readSize = std::min(count, kSkipBatchSize);
+        nonNullCount += readBooleanValues(decoder_, buffer.data(), readSize);
+        count -= readSize;
+      }
+    }
+    for (auto& group : hybridGroupReaders_) {
+      co_await group->co_load();
+      group->skip(nonNullCount);
+    }
+    co_return;
+  }
+
+  void reset() final {
+    FieldReader::reset();
+    for (auto& group : hybridGroupReaders_) {
+      group->reset();
+    }
+  }
+
+ private:
+  // boolBuffer_ is populated only for nullable readers. This compile-time
+  // branch prevents non-nullable readers from accessing it and adds no
+  // runtime branch to either specialization.
+  bool isNullRow(uint32_t row) const {
+    if constexpr (hasNull) {
+      return !boolBuffer_[row];
+    }
+    return false;
+  }
+
+  uint32_t loadNulls(uint32_t rowCount, velox::BaseVector* vector) {
+    if constexpr (hasNull) {
+      zeroNulls(vector, rowCount);
+      auto* nullBuffer = ensureNulls(vector, rowCount);
+      velox::bits::BitmapBuilder bitmap{nullBuffer, rowCount};
+      boolBuffer_.resize(rowCount);
+      const auto nonNullCount = readBooleanValues(
+          decoder_, boolBuffer_.data(), rowCount, [&](auto i) {
+            bitmap.set(i);
+          });
+      if (nonNullCount == rowCount) {
+        vector->resetNulls();
+      } else {
+        vector->setNullCount(rowCount - nonNullCount);
+      }
+      return nonNullCount;
+    }
+    vector->resetNulls();
+    return rowCount;
+  }
+
+  std::vector<std::unique_ptr<HybridFlatMapGroupReader<T>>> hybridGroupReaders_;
+  Vector<bool>& boolBuffer_;
+  std::vector<velox::vector_size_t> mapWritePositions_;
+  std::vector<velox::BaseVector::CopyRange> copyRanges_;
+};
+
+template <typename T>
+class HybridFlatMapFieldReaderFactory final : public FieldReaderFactory {
+ public:
+  HybridFlatMapFieldReaderFactory(
+      velox::TypePtr veloxType,
+      const Type* type,
+      std::vector<HybridFlatMapGroupReaderParams> hybridGroupParams,
+      velox::memory::MemoryPool* pool)
+      : FieldReaderFactory(std::move(veloxType), type, pool),
+        hybridGroupParams_{std::move(hybridGroupParams)},
+        boolBuffer_{pool_} {}
+
+  std::unique_ptr<FieldReader> createReader(
+      const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
+      final {
+    const auto& hybridMap = nimbleType_->asHybridFlatMap();
+    auto nulls = getDecoder(decoders, hybridMap.nullsDescriptor());
+    std::vector<std::unique_ptr<HybridFlatMapGroupReader<T>>>
+        hybridGroupReaders;
+    hybridGroupReaders.reserve(hybridGroupParams_.size());
+    for (auto& parameters : hybridGroupParams_) {
+      const auto& group = parameters.group.get();
+      hybridGroupReaders.push_back(
+          std::make_unique<HybridFlatMapGroupReader<T>>(
+              parameters,
+              group,
+              hybridMap,
+              getDecoder(decoders, group.keyDescriptor),
+              getDecoder(decoders, group.inMapDescriptor),
+              parameters.valueReader->createReader(decoders),
+              pool_));
+    }
+    if (nulls == nullptr) {
+      return std::make_unique<HybridFlatMapFieldReader<T, false>>(
+          veloxType_, nulls, std::move(hybridGroupReaders), boolBuffer_, pool_);
+    }
+    return std::make_unique<HybridFlatMapFieldReader<T, true>>(
+        veloxType_, nulls, std::move(hybridGroupReaders), boolBuffer_, pool_);
+  }
+
+ private:
+  std::vector<HybridFlatMapGroupReaderParams> hybridGroupParams_;
+  Vector<bool> boolBuffer_;
+};
+
+std::unique_ptr<FieldReaderFactory> createHybridFlatMapReaderFactory(
+    velox::memory::MemoryPool* pool,
+    velox::TypeKind keyKind,
+    velox::TypePtr veloxType,
+    const Type* type,
+    std::vector<HybridFlatMapGroupReaderParams> hybridGroupParams) {
+  switch (keyKind) {
+#define SCALAR_CASE(veloxKind, fieldType)                                \
+  case velox::TypeKind::veloxKind:                                       \
+    return std::make_unique<HybridFlatMapFieldReaderFactory<fieldType>>( \
+        std::move(veloxType), type, std::move(hybridGroupParams), pool)
+
+    SCALAR_CASE(TINYINT, int8_t);
+    SCALAR_CASE(SMALLINT, int16_t);
+    SCALAR_CASE(INTEGER, int32_t);
+    SCALAR_CASE(BIGINT, int64_t);
+    SCALAR_CASE(VARCHAR, velox::StringView);
+#undef SCALAR_CASE
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_UNSUPPORTED("Unsupported hybrid FlatMap key type: {}.", keyKind);
+  }
+  NIMBLE_UNREACHABLE("Unknown hybrid FlatMap key type: {}.", keyKind);
+}
+
 std::unique_ptr<FieldReaderFactory> createFlatMapReaderFactory(
     velox::memory::MemoryPool* pool,
     velox::TypeKind keyKind,
@@ -5500,6 +6082,18 @@ velox::TypePtr inferType(
 // TODO: use field reader params or another flag to control creating legacy
 // string field reader.
 using GetDecodePool = std::function<velox::memory::MemoryPool*()>;
+
+std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
+    const FieldReaderParams& parameters,
+    DecodePlanBuilder* decodePlanBuilder,
+    const GetDecodePool& getDecodePool,
+    const std::shared_ptr<const Type>& nimbleType,
+    const std::shared_ptr<const velox::dwio::common::TypeWithId>& veloxType,
+    std::vector<uint32_t>& offsets,
+    const std::function<bool(uint32_t)>& isSelected,
+    size_t level,
+    const std::string* name,
+    velox::memory::MemoryPool* pool);
 
 std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
     const FieldReaderParams& parameters,
@@ -5709,12 +6303,26 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
     case velox::TypeKind::MAP: {
       NIMBLE_CHECK(
           nimbleType->isMap() || nimbleType->isFlatMap() ||
-              nimbleType->isSlidingWindowMap(),
+              nimbleType->isHybridFlatMap() || nimbleType->isSlidingWindowMap(),
           "Provided schema doesn't match file schema.");
       NIMBLE_CHECK_EQ(
           veloxType->size(),
           2,
           "Velox map type should have exactly two children.");
+
+      if (nimbleType->isHybridFlatMap()) {
+        return createHybridFlatMapFieldReaderFactory(
+            parameters,
+            decodePlanBuilder,
+            getDecodePool,
+            nimbleType,
+            veloxType,
+            offsets,
+            isSelected,
+            level,
+            name,
+            pool);
+      }
 
       if (nimbleType->isMap()) {
         const auto& nimbleMap = nimbleType->asMap();
@@ -5953,6 +6561,98 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
     default:
       NIMBLE_UNSUPPORTED("Unsupported type: {}", veloxType->type()->kindName());
   }
+}
+
+std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
+    const FieldReaderParams& parameters,
+    DecodePlanBuilder* decodePlanBuilder,
+    const GetDecodePool& getDecodePool,
+    const std::shared_ptr<const Type>& nimbleType,
+    const std::shared_ptr<const velox::dwio::common::TypeWithId>& veloxType,
+    std::vector<uint32_t>& offsets,
+    const std::function<bool(uint32_t)>& isSelected,
+    size_t level,
+    const std::string* name,
+    velox::memory::MemoryPool* pool) {
+  NIMBLE_CHECK(
+      level == 1 && name != nullptr,
+      "Hybrid FlatMap is only supported as a top-level field.");
+  NIMBLE_CHECK_EQ(
+      veloxType->type()->kind(),
+      velox::TypeKind::MAP,
+      "Hybrid FlatMap requires a Velox MAP type.");
+  // TODO: Support reading Hybrid FlatMap as struct output.
+  NIMBLE_CHECK(
+      !parameters.readFlatMapFieldAsStruct.contains(*name),
+      "Hybrid FlatMap does not support struct output.");
+
+  const auto& hybridMap = nimbleType->asHybridFlatMap();
+  offsets.emplace_back(hybridMap.nullsDescriptor().offset());
+  const auto features = parameters.flatMapFeatureSelector.find(*name);
+  const bool hasFeatureSelection =
+      features != parameters.flatMapFeatureSelector.end();
+  folly::F14FastSet<std::string> selectedKeys;
+  SelectionMode selectionMode{SelectionMode::Exclude};
+  if (hasFeatureSelection) {
+    selectedKeys.insert(
+        features->second.features.begin(), features->second.features.end());
+    selectionMode = features->second.mode;
+  }
+
+  const auto& valueType = veloxType->childAt(1);
+  std::vector<HybridFlatMapGroupReaderParams> hybridGroupParams;
+  hybridGroupParams.reserve(hybridMap.groupCount());
+  const auto shouldReadGroup = [&](const auto& group) {
+    if (selectionMode == SelectionMode::Exclude) {
+      return HybridFlatMap::isDefaultGroup(group.groupId) ||
+          std::any_of(
+                 group.groupKeys.begin(),
+                 group.groupKeys.end(),
+                 [&](const auto& key) { return !selectedKeys.contains(key); });
+    }
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      return std::any_of(
+          selectedKeys.begin(), selectedKeys.end(), [&](const auto& key) {
+            return !hybridMap.findGroup(key).has_value();
+          });
+    }
+    return std::any_of(
+        group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
+          return selectedKeys.contains(key);
+        });
+  };
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& group = hybridMap.groupAt(i);
+    if (!shouldReadGroup(group)) {
+      continue;
+    }
+    offsets.push_back(group.keyDescriptor.offset());
+    offsets.push_back(group.inMapDescriptor.offset());
+    auto valueReader = createFieldReaderFactory(
+        parameters,
+        decodePlanBuilder,
+        getDecodePool,
+        group.valueType,
+        valueType,
+        offsets,
+        isSelected,
+        level + 1,
+        nullptr,
+        pool);
+    hybridGroupParams.push_back(
+        HybridFlatMapGroupReaderParams{
+            .group = group,
+            .valueReader = std::move(valueReader),
+            .selectedKeys = selectedKeys,
+            .selectionMode = selectionMode,
+        });
+  }
+  return createHybridFlatMapReaderFactory(
+      pool,
+      veloxType->childAt(0)->type()->kind(),
+      veloxType->type(),
+      nimbleType.get(),
+      std::move(hybridGroupParams));
 }
 
 } // namespace

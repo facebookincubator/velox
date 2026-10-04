@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <utility>
 
 #include <folly/executors/InlineExecutor.h>
@@ -55,6 +56,41 @@ void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
   }
 }
 } // namespace
+
+RPCState::PayloadMemoryCharge::PayloadMemoryCharge(
+    std::shared_ptr<memory::MemoryPool> pool,
+    int64_t bytes)
+    : pool_(std::move(pool)), bytes_(bytes) {
+  VELOX_CHECK_GT(bytes_, 0);
+  VELOX_CHECK_NOT_NULL(pool_);
+  pool_->reportExternalAllocation(bytes_);
+}
+
+RPCState::PayloadMemoryCharge::PayloadMemoryCharge(
+    PayloadMemoryCharge&& other) noexcept
+    : pool_(std::move(other.pool_)), bytes_(std::exchange(other.bytes_, 0)) {}
+
+RPCState::PayloadMemoryCharge& RPCState::PayloadMemoryCharge::operator=(
+    PayloadMemoryCharge&& other) noexcept {
+  if (this != &other) {
+    release();
+    pool_ = std::move(other.pool_);
+    bytes_ = std::exchange(other.bytes_, 0);
+  }
+  return *this;
+}
+
+RPCState::PayloadMemoryCharge::~PayloadMemoryCharge() {
+  release();
+}
+
+void RPCState::PayloadMemoryCharge::release() noexcept {
+  if (pool_ != nullptr && bytes_ > 0) {
+    pool_->reportExternalFree(bytes_);
+  }
+  pool_.reset();
+  bytes_ = 0;
+}
 
 // ===== Configuration =====
 // These setters are called during RPCOperator construction, before any
@@ -135,6 +171,46 @@ void RPCState::releaseAllInputBatches() {
   }
   RPC_STATE_VLOG(1) << "releaseAllInputBatches: dropped "
                     << inputBatches_.size() << " input batches";
+}
+
+void RPCState::close() {
+  std::vector<ContinuePromise> waiters;
+  std::vector<InputBatchRef> inputBatches;
+  std::deque<ReadyRow> readyRows;
+  std::deque<PendingBatch> pendingBatches;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return;
+    }
+    closed_ = true;
+    inputBatches = std::move(inputBatches_);
+    readyRows = std::move(readyRows_);
+    pendingBatches = std::move(pendingBatches_);
+    waiters = takeWaitersLocked();
+    pool_.reset();
+  }
+  inputBatches.clear();
+  readyRows.clear();
+  pendingBatches.clear();
+  fulfillWaiters(waiters);
+}
+
+RPCState::PayloadMemoryCharge RPCState::chargePayloadBytes(int64_t bytes) {
+  if (bytes == 0) {
+    return {};
+  }
+  std::shared_ptr<memory::MemoryPool> pool;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return {};
+    }
+    VELOX_CHECK_GT(bytes, 0);
+    pool = pool_;
+  }
+  VELOX_CHECK_NOT_NULL(pool);
+  return PayloadMemoryCharge{std::move(pool), bytes};
 }
 
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
@@ -227,26 +303,35 @@ void RPCState::completeRow(
     RPCResponse response,
     int64_t rttNs) {
   std::vector<ContinuePromise> waiters;
+  ReadyRow readyRow{
+      .rowId = rowId,
+      .location = location,
+      .charge = {},
+      .response = std::move(response),
+      .rttNs = rttNs,
+  };
+  bool accountingFailed = false;
+  try {
+    readyRow.charge = chargePayloadBytes(readyRow.response.retainedBytes());
+  } catch (...) {
+    accountingFailed = true;
+  }
+
   {
     std::lock_guard<std::mutex> l(mutex_);
-    // Decrement before queueing so an allocation failure becomes a terminally
-    // observable lost completion. Catching bad_alloc below also lets execution
-    // reach waiter handoff, where the driver can report droppedRows_ instead of
+    // A response that cannot be accounted or queued is terminally dropped.
+    // Retire its in-flight slot before recording the drop so the awakened
+    // driver can reach the finish check and report the query error instead of
     // remaining parked.
     inFlight_--;
     ++numCompletionsSignaled_;
-    try {
-      readyRows_.push_back(
-          ReadyRow{
-              .rowId = rowId,
-              .location = location,
-              .response = std::move(response),
-              .rttNs = rttNs});
-    } catch (const std::bad_alloc&) {
-      // Nothing here may allocate: this already runs under an allocation
-      // failure, on a detached continuation. Bump a counter and leave the
-      // reporting to the driver thread -- logging here could throw again and
-      // strand the waiters woken below.
+    if (!closed_ && !accountingFailed) {
+      try {
+        readyRows_.push_back(std::move(readyRow));
+      } catch (...) {
+        ++droppedRows_;
+      }
+    } else if (!closed_ && accountingFailed) {
       ++droppedRows_;
     }
 
@@ -353,9 +438,16 @@ void RPCState::addPendingBatch(
           .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
           .thenValue([state = selfPtr,
                       completionTimeNs](std::vector<RPCResponse> responses) {
-            completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
-            RPC_STATE_VLOG(1)
-                << "Batch completed with " << responses.size() << " responses";
+            const auto completedAtNs = steadyNowNs();
+            CompletedBatch completed{
+                .charge = {}, .responses = std::move(responses)};
+            const auto retainedBytes =
+                velox::rpc::totalResponseRetainedBytes(completed.responses);
+            RPC_STATE_VLOG(1) << "Batch completed with "
+                              << completed.responses.size() << " responses";
+            completed.charge = state->chargePayloadBytes(retainedBytes);
+            completionTimeNs->store(completedAtNs, std::memory_order_relaxed);
+
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
@@ -363,7 +455,7 @@ void RPCState::addPendingBatch(
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
-            return responses;
+            return completed;
           })
           .thenError([state = selfPtr,
                       completionTimeNs](folly::exception_wrapper ew) {
@@ -379,8 +471,7 @@ void RPCState::addPendingBatch(
             // the wake leaves every blocked driver parked forever.
             fulfillWaiters(waiters);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
-            return folly::makeSemiFuture<std::vector<RPCResponse>>(
-                std::move(ew));
+            return folly::makeSemiFuture<CompletedBatch>(std::move(ew));
           })
           .semi();
 
@@ -418,9 +509,10 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
   // drops — never a torn read.
   result.rttNs = it->completionTimeNs->load(std::memory_order_relaxed) -
       it->dispatchTimeNs;
-
   try {
-    result.responses = std::move(it->future).get();
+    auto completed = std::move(it->future).get();
+    result.charge = std::move(completed.charge);
+    result.responses = std::move(completed.responses);
     RPC_STATE_VLOG(1) << "extractReadyBatchLocked: batchId=" << result.batchId
                       << " ready with " << result.responses.size()
                       << " responses";

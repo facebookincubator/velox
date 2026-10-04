@@ -78,6 +78,7 @@ velox_add_library(
   TimeWithTimezoneRegistration.h
   TimeWithTimezoneType.h
   TimestampWithTimeZoneRegistration.h
+  TimestampWithTimeZoneRenderZone.h
   TimestampWithTimeZoneType.h
   UuidRegistration.h
   UuidType.h

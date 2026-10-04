@@ -341,6 +341,7 @@ target_link_libraries(
   velox_vector_fuzzer
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
 )
 
 add_test(

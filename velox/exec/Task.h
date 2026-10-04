@@ -400,9 +400,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// yet.
   uint64_t timeSinceTerminationMs() const;
 
-  /// Returns the total number of drivers in the output pipeline, e.g. the
-  /// pipeline that produces the results.
+  /// Returns the number of task output streams. An ordinary task has one per
+  /// output driver; a task running a fixed-point loop has one.
   uint32_t numOutputDrivers() const {
+    if (fixedPoint_ != nullptr) {
+      return 1;
+    }
     return numDrivers(getOutputPipelineId());
   }
 

@@ -60,6 +60,11 @@ class ArrayAggAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Retains one element for each input row.
+    return false;
+  }
+
   bool supportsToIntermediate() const override {
     return true;
   }

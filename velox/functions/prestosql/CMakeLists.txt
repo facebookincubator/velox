@@ -92,6 +92,7 @@ velox_add_library(
   DateTimeFunctions.h
   DateTimeImpl.h
   DecimalFunctions.h
+  detail/DecimalMathFunctions.h
   DistanceFunctions.h
   DotProduct.h
   EnumFunctions.h

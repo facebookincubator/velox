@@ -44,13 +44,14 @@ velox_link_libraries(
   velox_rpc_types
   velox_common_base
   velox_future
+  velox_memory
   velox_vector
   Folly::folly
 )
 
 velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
-velox_link_libraries(velox_rpc_rate_limiter velox_future)
+velox_link_libraries(velox_rpc_rate_limiter velox_future velox_test_util)
 
 velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 

@@ -1446,7 +1446,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
 TEST_F(OrderByTest, planNodeStats) {
   // A LocalMerge node is implemented by the LocalMerge operator plus a
   // CallbackSink per source pipeline that feeds its merge sources.
-  auto data = makeRowVector({makeFlatVector<int32_t>(50, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int32_t>(50)});
 
   auto plan = PlanBuilder()
                   .values({data}, /*parallelizable=*/true)

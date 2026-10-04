@@ -91,6 +91,10 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     }
 
     case TypeKind::MAP:
+      VELOX_CHECK(
+          requestedType->isMap(),
+          "Requested type must be map; file declares MAP but requested type is {}",
+          requestedType->toString());
       return std::make_unique<MapColumnReader>(
           columnReaderOptions, requestedType, fileType, params, scanSpec);
 

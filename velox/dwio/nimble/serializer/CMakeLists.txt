@@ -65,8 +65,10 @@ target_link_libraries(
   nimble_stream_data
   nimble_serializer_options
   nimble_encodings
+  nimble_velox_schema
   nimble_common
   velox_memory
+  lz4
 )
 
 add_library(nimble_stream_data_parser StreamDataParser.cpp StreamDataParser.h)

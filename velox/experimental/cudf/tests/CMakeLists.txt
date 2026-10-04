@@ -108,6 +108,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_gpu_capabilities_test
+  SOURCES Main.cpp GpuCapabilitiesTest.cpp
+  LIBS velox_cudf_exec Folly::folly
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_split_reader_test
   SOURCES Main.cpp CudfSplitReaderTest.cpp
   LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
@@ -155,6 +161,12 @@ velox_add_cudf_test(
   NAME velox_cudf_function_registry_test
   SOURCES Main.cpp FunctionRegistryTest.cpp
   LIBS velox_cudf_expression velox_cudf_exec velox_exec velox_exec_test_lib velox_test_util
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_resources_test
+  SOURCES Main.cpp GpuResourcesTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(

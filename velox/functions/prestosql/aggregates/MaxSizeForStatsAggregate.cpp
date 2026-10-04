@@ -233,7 +233,9 @@ void registerMaxDataSizeForStatsAggregate(
 
         return std::make_unique<MaxSizeForStatsAggregate>(resultType);
       },
-      {.ignoreDuplicates = true, .orderSensitive = false},
+      {.ignoreDuplicates = true,
+       .orderSensitive = false,
+       .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

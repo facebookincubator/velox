@@ -118,26 +118,44 @@ class QueryConfig {
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
-  /// provided session timezone (if any).
+  /// provided session timezone (if any). Casts from TIMESTAMP WITH TIME ZONE to
+  /// TIMESTAMP return the UTC instant when this property is true.
   VELOX_QUERY_CONFIG(
       kAdjustTimestampToTimezone,
       adjustTimestampToTimezone,
       "adjust_timestamp_to_session_timezone",
       bool,
       false,
-      "Adjust timezone-less timestamp conversions to session timezone.")
+      "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
 
-  /// If true, functions that read a TIMESTAMP WITH TIME ZONE render each value
-  /// in its own embedded time zone (legacy behavior). If false, they render the
-  /// UTC instant in the session time zone, so values that compare equal produce
-  /// equal results.
-  VELOX_QUERY_CONFIG(
-      kLegacyTimestampWithTimezone,
-      legacyTimestampWithTimezone,
-      "legacy_timestamp_with_timezone",
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE use the session
+  /// time zone, so values that compare equal produce equal results. If false,
+  /// they use each value's embedded time zone. The timezone_hour and
+  /// timezone_minute functions always report the offset stored in the value.
+  /// When adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use
+  /// the session zone when this property is true and the embedded zone when it
+  /// is false.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kUseSessionTimezoneForTimestampWithTimezone,
+      "use_session_timezone_for_timestamp_with_timezone",
       bool,
-      true,
-      "Render TIMESTAMP WITH TIME ZONE values in each value's embedded zone (true) or the session timezone (false).")
+      false,
+      "Render TIMESTAMP WITH TIME ZONE values in the session timezone (true) or each value's embedded zone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or embedded zone (false).")
+
+  /// Returns the explicitly configured value, or the inverse of the deprecated
+  /// legacy property when the new property is absent.
+  bool useSessionTimezoneForTimestampWithTimezone() const;
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated config key retained while downstream callers migrate.
+  static constexpr const char* kLegacyTimestampWithTimezone =
+      "legacy_timestamp_with_timezone";
+
+  /// Legacy API. Prefer useSessionTimezoneForTimestampWithTimezone().
+  bool legacyTimestampWithTimezone() const {
+    return !useSessionTimezoneForTimestampWithTimezone();
+  }
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.

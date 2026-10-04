@@ -72,6 +72,10 @@ struct TextPayload {
   std::string text;
 
   explicit TextPayload(std::string value) : text(std::move(value)) {}
+
+  int64_t retainedBytes() const noexcept {
+    return static_cast<int64_t>(text.capacity());
+  }
 };
 
 /// Wraps text as a response payload. Returns the payload by value: it is
@@ -183,6 +187,23 @@ class AsyncRPCFunction {
   /// than a service tier, such as a credential discriminator or tenant.
   virtual std::string admissionKey() const {
     return "";
+  }
+
+  /// Returns how many retry attempts this function's transports have
+  /// scheduled since the function was created, summed across them. A
+  /// transport retrying a request holds the row open without resolving its
+  /// future, so both the dispatch and the completion counters stand still for
+  /// however long the retry sequence runs. This is what distinguishes that
+  /// from a backend that has stopped answering.
+  ///
+  /// Called from the task stats collector thread while the driver runs, so an
+  /// override must read thread-safe state. Must be monotonically increasing
+  /// and scoped to this function instance: a caller reading it for liveness
+  /// takes movement as proof that this operator is still working.
+  ///
+  /// Defaults to 0 for functions whose transport does not retry.
+  virtual int64_t numRetriesAttempted() const {
+    return 0;
   }
 
   // ── PER_ROW mode ──────────────────────────────────────────────

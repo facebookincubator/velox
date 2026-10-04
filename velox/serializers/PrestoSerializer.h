@@ -90,6 +90,9 @@ class PrestoVectorSerde : public VectorSerde {
 
   PrestoVectorSerde() : VectorSerde(kSerdeKind) {}
 
+  /// Estimates the number of columnar channels used to serialize 'rowType'.
+  static uint64_t estimateColumnarChannels(const RowType& rowType);
+
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   void estimateSerializedSize(

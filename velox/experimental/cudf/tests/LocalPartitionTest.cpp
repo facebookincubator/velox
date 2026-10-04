@@ -15,13 +15,18 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cudf/partitioning.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <folly/ScopeGuard.h>
 
@@ -112,13 +117,13 @@ TEST_F(LocalPartitionTest, gather) {
            .singleAggregation({}, {"min(c0)", "max(c0)"})
            .planNode();
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  AssertQueryBuilder queryBuilder(op);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
-  task = queryBuilder.assertResults("SELECT -71, 152");
+  task = queryBuilder.assertResults({Variant(-71), Variant(152)});
 }
 
 TEST_F(LocalPartitionTest, partition) {
@@ -167,6 +172,94 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto task =
       queryBuilder.assertResults("SELECT c0, max(c0) FROM tmp GROUP BY 1");
+}
+
+TEST_F(LocalPartitionTest, hashAfterRemoteHashUsesAllLocalDrivers) {
+  // Model remote cuDF partitioning before the local exchange. Repeated keys
+  // also verify that local routing preserves grouping correctness.
+  constexpr vector_size_t kRows = 16384;
+  auto input = makeRowVector({makeFlatSequence<int64_t>(0, kRows / 2, kRows)});
+  auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
+  auto table = cudf_velox::with_arrow::toCudfTable(
+      input, pool(), stream, cudf::get_current_device_resource_ref());
+  for (const auto& [remoteCount, localCount] :
+       {std::pair{4, 2}, std::pair{8, 2}, std::pair{4, 4}}) {
+    auto [partitioned, offsets] = cudf::hash_partition(
+        table->view(),
+        {0},
+        remoteCount,
+        cudf::hash_id::HASH_MURMUR3,
+        cudf::DEFAULT_HASH_SEED,
+        stream,
+        cudf::get_current_device_resource_ref());
+    std::vector<int64_t> keys(kRows);
+    ASSERT_EQ(
+        cudaMemcpyAsync(
+            keys.data(),
+            partitioned->view().column(0).data<int64_t>(),
+            keys.size() * sizeof(int64_t),
+            cudaMemcpyDeviceToHost,
+            stream.get()),
+        cudaSuccess);
+    stream.sync();
+    for (int remote = 0; remote < remoteCount; ++remote) {
+      SCOPED_TRACE(
+          fmt::format(
+              "remoteCount={}, localCount={}, remote={}",
+              remoteCount,
+              localCount,
+              remote));
+      std::vector<int64_t> partitionKeys(
+          keys.begin() + offsets[remote], keys.begin() + offsets[remote + 1]);
+      ASSERT_GT(partitionKeys.size(), 256);
+      auto partitionInput =
+          makeRowVector({makeFlatVector<int64_t>(partitionKeys)});
+      createDuckDbTable({partitionInput});
+      core::PlanNodeId localId;
+      core::PlanNodeId aggId;
+      auto plan = PlanBuilder()
+                      .values({partitionInput})
+                      .localPartition({"c0"})
+                      .capturePlanNodeId(localId)
+                      .singleAggregation({"c0"}, {"count(1)"})
+                      .capturePlanNodeId(aggId)
+                      .planNode();
+      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                      .maxDrivers(localCount)
+                      .config(
+                          core::QueryConfig::kMaxLocalExchangePartitionCount,
+                          std::to_string(localCount))
+                      .config(
+                          cudf_velox::CudfFromVelox::kGpuBatchSizeRows,
+                          std::to_string(kRows))
+                      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+
+      bool sawLocalPartition = false;
+      bool sawAggregation = false;
+      for (const auto& pipeline : task->taskStats().pipelineStats) {
+        for (const auto& op : pipeline.operatorStats) {
+          if (op.planNodeId == localId &&
+              op.operatorType == "CudfLocalPartition") {
+            sawLocalPartition = true;
+            EXPECT_EQ(op.numDrivers, 1);
+            EXPECT_EQ(op.inputVectors, 1);
+            EXPECT_EQ(op.inputPositions, partitionKeys.size());
+          }
+          if (op.planNodeId == aggId &&
+              op.operatorType == "CudfGroupbySINGLE") {
+            sawAggregation = true;
+            EXPECT_EQ(op.numDrivers, localCount);
+            EXPECT_EQ(op.inputPositions, partitionKeys.size());
+            // One producer batch produces at most one batch per local queue.
+            // Thus all drivers must be fed to observe localCount input batches.
+            EXPECT_EQ(op.inputVectors, localCount);
+          }
+        }
+      }
+      EXPECT_TRUE(sawLocalPartition);
+      EXPECT_TRUE(sawAggregation);
+    }
+  }
 }
 
 // The hive partition function spec is not one that

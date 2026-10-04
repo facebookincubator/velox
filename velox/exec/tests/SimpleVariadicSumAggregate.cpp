@@ -131,6 +131,7 @@ exec::AggregateRegistrationResult registerSimpleVariadicSumAggregate(
         return std::make_unique<SimpleAggregateAdapter<VariadicSumAggregate>>(
             step, argTypes, resultType);
       },
+      {.ignoreNullInputs = true},
       true /*registerCompanionFunctions*/,
       true /*overwrite*/);
 }
