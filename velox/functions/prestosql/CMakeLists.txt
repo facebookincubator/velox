@@ -64,6 +64,7 @@ velox_add_library(
   SplitToMap.cpp
   StringFunctions.cpp
   Subscript.cpp
+  TimeIntervalYearMonth.cpp
   ToUtf8.cpp
   Transform.cpp
   TransformWithIndex.cpp
@@ -92,6 +93,7 @@ velox_add_library(
   DateTimeFunctions.h
   DateTimeImpl.h
   DecimalFunctions.h
+  detail/DateTimeCalendarFunctions.h
   detail/DecimalMathFunctions.h
   DistanceFunctions.h
   DotProduct.h
@@ -141,6 +143,7 @@ velox_add_library(
   SplitToMultiMap.h
   StringFunctions.h
   TDigestFunctions.h
+  TimeIntervalYearMonth.h
   URIParser.h
   URLFunctions.h
   UuidFunctions.h
