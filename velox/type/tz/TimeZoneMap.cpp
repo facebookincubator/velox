@@ -385,15 +385,22 @@ void validateRange(time_point<std::chrono::milliseconds> timePoint) {
 }
 
 std::string getTimeZoneName(int64_t timeZoneID) {
-  return locateZone(timeZoneID, true)->name();
+  // Reject ids that do not fit in int16_t before narrowing; otherwise an id
+  // such as 65536 + 1825 would alias id 1825.
+  if (timeZoneID < 0 || timeZoneID > std::numeric_limits<int16_t>::max()) {
+    VELOX_FAIL("Unable to resolve timeZoneID '{}'", timeZoneID);
+  }
+  return locateZone(static_cast<int16_t>(timeZoneID), true)->name();
 }
 
 const TimeZone* locateZone(int16_t timeZoneID, bool failOnError) {
   const auto& timeZoneDatabase = getTimeZoneDatabase();
 
-  // Check if timeZoneID does not exceed the vector size or is one of the
-  // "holes".
-  if (timeZoneID > timeZoneDatabase.size() ||
+  // Reject ids outside the vector, then the "holes" left by zones that are
+  // missing from the local tzdata. The sign check comes first so the size
+  // comparison is between two non-negative values.
+  if (timeZoneID < 0 ||
+      static_cast<size_t>(timeZoneID) >= timeZoneDatabase.size() ||
       timeZoneDatabase[timeZoneID] == nullptr) {
     if (failOnError) {
       VELOX_FAIL("Unable to resolve timeZoneID '{}'", timeZoneID);
@@ -456,6 +463,10 @@ int16_t getTimeZoneID(int32_t offsetMinutes) {
   } else {
     return offsetMinutes - kMinOffset;
   }
+}
+
+int16_t maxTimeZoneID() {
+  return static_cast<int16_t>(getTimeZoneDatabase().size() - 1);
 }
 
 std::vector<int16_t> getTimeZoneIDs() {
