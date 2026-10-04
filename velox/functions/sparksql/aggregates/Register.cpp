@@ -25,6 +25,7 @@
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
 #include "velox/functions/sparksql/aggregates/CovarianceAggregate.h"
+#include "velox/functions/sparksql/aggregates/HistogramNumericAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
 #include "velox/functions/sparksql/aggregates/VarianceAggregate.h"
@@ -77,6 +78,7 @@ void registerAggregateFunctions(
   registerVarianceAggregate(prefix, withCompanionFunctions, overwrite);
   registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxPercentileAggregate(prefix, withCompanionFunctions, overwrite);
+  registerHistogramNumericAggregates(prefix, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql
