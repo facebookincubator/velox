@@ -15,23 +15,29 @@
  */
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <functional>
+#include <limits>
 #include <ostream>
 #include <string>
 
+#include <fmt/format.h>
+#include <folly/hash/Hash.h>
+
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Macros.h"
 #include "velox/type/StringView.h"
 #include "velox/type/TimestampCalendar.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace folly {
 struct dynamic;
 }
 
 namespace facebook::velox {
-
-namespace tz {
-class TimeZone;
-}
 
 enum class TimestampPrecision : int8_t {
   kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
@@ -99,17 +105,15 @@ struct Timestamp {
   // Presto's Timestamp is stored in one 64-bit signed integer for
   // milliseconds, this range ensures that Timestamp's range in Velox will not
   // be smaller than Presto, and can make Timestamp::toString work correctly.
-  static constexpr int64_t kMaxSeconds =
-      std::numeric_limits<int64_t>::max() / kMillisecondsInSecond;
-  static constexpr int64_t kMinSeconds =
-      std::numeric_limits<int64_t>::min() / kMillisecondsInSecond - 1;
+  static constexpr int64_t kMaxSeconds = INT64_MAX / kMillisecondsInSecond;
+  static constexpr int64_t kMinSeconds = INT64_MIN / kMillisecondsInSecond - 1;
 
   // Nanoseconds should be less than 1 second.
   static constexpr uint64_t kMaxNanos = 999'999'999;
 
-  constexpr Timestamp() : seconds_(0), nanos_(0) {}
+  VELOX_GPU_COMPATIBLE constexpr Timestamp() : seconds_(0), nanos_(0) {}
 
-  Timestamp(int64_t seconds, uint64_t nanos)
+  VELOX_GPU_COMPATIBLE Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
     VELOX_USER_DCHECK_GE(
         seconds, kMinSeconds, "Timestamp seconds out of range");
@@ -122,19 +126,22 @@ struct Timestamp {
   /// and the number of nanoseconds.
   static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
 
-  // date is the number of days since unix epoch.
-  static Timestamp fromDate(int32_t date);
+  /// Creates a timestamp at midnight UTC of the given number of days since the
+  /// Unix epoch.
+  VELOX_GPU_COMPATIBLE static Timestamp fromDate(int32_t date) {
+    return Timestamp(static_cast<int64_t>(date) * kSecondsInDay, 0);
+  }
 
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
 
   static Timestamp create(const folly::dynamic& obj);
 
-  int64_t getSeconds() const {
+  VELOX_GPU_COMPATIBLE int64_t getSeconds() const {
     return seconds_;
   }
 
-  uint64_t getNanos() const {
+  VELOX_GPU_COMPATIBLE uint64_t getNanos() const {
     return nanos_;
   }
 
@@ -156,7 +163,7 @@ struct Timestamp {
   }
 
   // Keep it in header for getting inlined.
-  int64_t toMillis() const {
+  VELOX_GPU_COMPATIBLE int64_t toMillis() const {
     // We use int128_t to make sure the computation does not overflow since
     // there are cases such that seconds*1000 does not fit in int64_t,
     // but seconds*1000 + nanos does, an example is Timestamp::minMillis().
@@ -174,7 +181,7 @@ struct Timestamp {
   }
 
   // Keep it in header for getting inlined.
-  int64_t toMillisAllowOverflow() const {
+  VELOX_GPU_COMPATIBLE int64_t toMillisAllowOverflow() const {
     // Similar to the above toMillis() except that overflowed integer is allowed
     // as result.
     auto result = seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
@@ -182,7 +189,7 @@ struct Timestamp {
   }
 
   // Keep it in header for getting inlined.
-  int64_t toMicros() const {
+  VELOX_GPU_COMPATIBLE int64_t toMicros() const {
     // We use int128_t to make sure the computation does not overflows since
     // there are cases such that a negative seconds*1000000 does not fit in
     // int64_t, but seconds*1000000 + nanos does. An example is
@@ -227,7 +234,7 @@ struct Timestamp {
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
   toTimePointMs(bool allowOverflow = false) const;
 
-  static Timestamp fromMillis(int64_t millis) {
+  VELOX_GPU_COMPATIBLE static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
       return Timestamp(millis / 1'000, (millis % 1'000) * 1'000'000);
     }
@@ -236,7 +243,7 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
-  static Timestamp fromMillisNoError(int64_t millis)
+  VELOX_GPU_COMPATIBLE static Timestamp fromMillisNoError(int64_t millis)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
       __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -251,7 +258,7 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
-  static Timestamp fromMicros(int64_t micros) {
+  VELOX_GPU_COMPATIBLE static Timestamp fromMicros(int64_t micros) {
     if (micros >= 0 || micros % 1'000'000 == 0) {
       return Timestamp(micros / 1'000'000, (micros % 1'000'000) * 1'000);
     }
@@ -260,7 +267,7 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
-  static Timestamp fromMicrosNoError(int64_t micros)
+  VELOX_GPU_COMPATIBLE static Timestamp fromMicrosNoError(int64_t micros)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
       __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -275,7 +282,7 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
-  static Timestamp fromNanos(int64_t nanos) {
+  VELOX_GPU_COMPATIBLE static Timestamp fromNanos(int64_t nanos) {
     if (nanos >= 0 || nanos % 1'000'000'000 == 0) {
       return Timestamp(nanos / 1'000'000'000, nanos % 1'000'000'000);
     }
@@ -284,29 +291,28 @@ struct Timestamp {
     return Timestamp(second, nano);
   }
 
-  static const Timestamp minMillis() {
+  VELOX_GPU_COMPATIBLE static const Timestamp minMillis() {
     // The minimum Timestamp that toMillis() method will not overflow.
     // Used to calculate the minimum value of the Presto timestamp.
-    constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
     return Timestamp(
         kMinSeconds,
-        (kMin % kMillisecondsInSecond + kMillisecondsInSecond) *
+        (INT64_MIN % kMillisecondsInSecond + kMillisecondsInSecond) *
             kNanosecondsInMillisecond);
   }
 
-  static const Timestamp maxMillis() {
+  VELOX_GPU_COMPATIBLE static const Timestamp maxMillis() {
     // The maximum Timestamp that toMillis() method will not overflow.
     // Used to calculate the maximum value of the Presto timestamp.
-    constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
     return Timestamp(
-        kMaxSeconds, kMax % kMillisecondsInSecond * kNanosecondsInMillisecond);
+        kMaxSeconds,
+        INT64_MAX % kMillisecondsInSecond * kNanosecondsInMillisecond);
   }
 
-  static const Timestamp min() {
+  VELOX_GPU_COMPATIBLE static const Timestamp min() {
     return Timestamp(kMinSeconds, 0);
   }
 
-  static const Timestamp max() {
+  VELOX_GPU_COMPATIBLE static const Timestamp max() {
     return Timestamp(kMaxSeconds, kMaxNanos);
   }
 
@@ -361,26 +367,31 @@ struct Timestamp {
       char* const startPosition);
 
   /// Assuming the timestamp represents a time at zone, converts it to the GMT
-  /// time at the same moment. For example:
+  /// time at the same moment. An ambiguous local time resolves to the earlier
+  /// instant and a nonexistent one is a user error, as in Presto. For example:
   ///
   ///  Timestamp ts{0, 0};
-  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toGMT(*tz::locateZone("America/Los_Angeles"));
   ///  ts.toString(); // returns January 1, 1970 08:00:00
-  void toGMT(const tz::TimeZone& zone);
+  VELOX_GPU_COMPATIBLE void toGMT(const tz::TimeZone& zone) {
+    seconds_ = zone.toSysChecked(std::chrono::seconds(seconds_)).count();
+  }
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
   /// the same moment at zone. For example:
   ///
   ///  Timestamp ts{0, 0};
-  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toTimezone(*tz::locateZone("America/Los_Angeles"));
   ///  ts.toString(); // returns December 31, 1969 16:00:00
-  void toTimezone(const tz::TimeZone& zone);
+  VELOX_GPU_COMPATIBLE void toTimezone(const tz::TimeZone& zone) {
+    seconds_ = zone.toLocalChecked(std::chrono::seconds(seconds_)).count();
+  }
 
   /// A default time zone that is same across the process.
   static const tz::TimeZone& defaultTimezone();
 
-  bool operator==(const Timestamp& b) const = default;
-  auto operator<=>(const Timestamp& b) const = default;
+  VELOX_GPU_COMPATIBLE bool operator==(const Timestamp& b) const = default;
+  VELOX_GPU_COMPATIBLE auto operator<=>(const Timestamp& b) const = default;
 
   void operator++() {
     if (nanos_ < kMaxNanos) {
