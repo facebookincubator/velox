@@ -17,6 +17,7 @@
 
 #include <string>
 
+#include "velox/common/base/Macros.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -47,7 +48,8 @@ class TimestampWithTimeZoneRenderZone {
 
   /// Returns the session zone when enabled and the value's embedded zone
   /// otherwise.
-  const tz::TimeZone* get(int64_t timestampWithTimeZone) const {
+  VELOX_GPU_COMPATIBLE const tz::TimeZone* get(
+      int64_t timestampWithTimeZone) const {
     if (!useSessionTimeZone_) {
       return tz::locateZone(unpackZoneKeyId(timestampWithTimeZone));
     }
