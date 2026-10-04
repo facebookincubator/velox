@@ -81,8 +81,10 @@ struct FromUnixtimeFunction {
       out_type<TimestampWithTimezone>& result,
       const arg_type<double>& unixtime,
       const arg_type<Varchar>& timeZone) {
-    int16_t timeZoneId =
-        tzID_.value_or(tz::getTimeZoneID((std::string_view)timeZone));
+    // Resolved once in initialize() when the zone is a constant.
+    const int16_t timeZoneId = tzID_.has_value()
+        ? tzID_.value()
+        : tz::getTimeZoneID((std::string_view)timeZone);
     result = fromUnixtime(unixtime, timeZoneId);
   }
 
@@ -104,9 +106,10 @@ struct FromUnixtimeFunction {
       const arg_type<double>& unixtime,
       const arg_type<int64_t>& hours,
       const arg_type<int64_t>& minutes) {
-    int16_t timezoneId = tzID_.value_or(
-        tz::getTimeZoneID(
-            checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
+    const int16_t timezoneId = tzID_.has_value()
+        ? tzID_.value()
+        : tz::getTimeZoneID(
+              checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
