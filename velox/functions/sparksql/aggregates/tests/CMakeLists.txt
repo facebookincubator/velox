@@ -25,17 +25,23 @@ add_executable(
   CollectSetAggregateTest.cpp
   CovarianceAggregatesTest.cpp
   FirstAggregateTest.cpp
+  HistogramNumericAggregateTest.cpp
+  HistogramNumericTypesTest.cpp
   LastAggregateTest.cpp
   Main.cpp
   MinMaxAggregationTest.cpp
   MinMaxByAggregationTest.cpp
   ModeAggregateTest.cpp
   RegrReplacementAggregationTest.cpp
+  SparkNumericHistogramTest.cpp
   SumAggregationTest.cpp
   VarianceAggregationTest.cpp
 )
 
-velox_add_test_headers(velox_functions_spark_aggregates_test BitmapBuilder.h)
+velox_add_test_headers(
+  velox_functions_spark_aggregates_test
+  BitmapBuilder.h
+)
 
 add_test(velox_functions_spark_aggregates_test velox_functions_spark_aggregates_test)
 
