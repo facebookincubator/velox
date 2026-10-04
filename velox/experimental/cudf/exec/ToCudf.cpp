@@ -366,10 +366,14 @@ void registerCudf() {
   // WITH TIME ZONE needs the type known first. The device translation unit
   // that registers them cannot depend on the host type library.
   registerTimestampWithTimeZoneType();
+  // The GPU SFI registrations also say which calls depend on the session time
+  // zone, and the selection needs that whether or not the evaluator is
+  // enabled: with it off, such a call must stay on the CPU rather than go to
+  // an evaluator that reads TIMESTAMP as UTC. So the functions and the
+  // sensitivity are registered regardless; only the evaluator is optional.
+  gpu_sfi::registerPrestoGpuFunctions(prefix);
+  registerGpuSfiSessionTimeZoneSensitivity();
   if (CudfConfig::getInstance().gpuSfiExpressionEnabled) {
-    // The evaluator's canEvaluate() looks calls up in this registry, so the
-    // functions must be registered first.
-    gpu_sfi::registerPrestoGpuFunctions(prefix);
     registerGpuSfiEvaluator(CudfConfig::getInstance().gpuSfiExpressionPriority);
   }
 

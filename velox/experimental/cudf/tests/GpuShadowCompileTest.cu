@@ -28,8 +28,10 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/Arithmetic.h"
+#include "velox/functions/prestosql/detail/DateTimeCalendarFunctions.h"
 #include "velox/type/FloatingPointUtil.h"
-// Nothing above reaches the SimpleFunctionApi.h shadow, so include it here.
+// Included here so the SimpleFunctionApi.h shadow is reached whatever the
+// headers above include.
 #include "velox/type/SimpleFunctionApi.h"
 
 // Not covered: sparksql/Arithmetic.h needs the host-only ToHexUtil,
@@ -41,7 +43,6 @@ namespace {
 
 using namespace facebook::velox;
 using gpu::GpuExec;
-using gpu::GpuTimestamp;
 
 // A VELOX_GPU_COMPATIBLE call() from a Velox function header, instantiated
 // with TExec = GpuExec. truncate(x, n) also indexes DoubleUtil::powerOfTen()'s
@@ -74,8 +75,9 @@ __device__ void verifyChecks(int64_t value) {
   VELOX_USER_FAIL("Unsupported value: {}", value);
 }
 
-// Resolves the Date and Timestamp tags through GpuExec, and compares the
-// GpuTimestamp proxy that Timestamp maps to on the device.
+// Resolves the Date and Timestamp tags through GpuExec: a DATE arrives as its
+// day count and a TIMESTAMP as Velox's own Timestamp, whose constructors and
+// comparisons run on the device.
 template <typename TExec>
 struct LaterThanFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -84,13 +86,23 @@ struct LaterThanFunction {
       out_type<bool>& result,
       const arg_type<Timestamp>& timestamp,
       const arg_type<Date>& date) {
-    result = timestamp > GpuTimestamp(int64_t{date} * 86'400, 0);
+    result = timestamp > Timestamp::fromDate(date);
   }
 };
 
-__device__ bool verifyProxyTypes(int64_t seconds, int32_t date) {
+__device__ bool verifyTypeTags(int64_t seconds, int32_t date) {
   bool result{};
-  LaterThanFunction<GpuExec>{}.call(result, GpuTimestamp(seconds, 0), date);
+  LaterThanFunction<GpuExec>{}.call(result, Timestamp(seconds, 0), date);
+  return result;
+}
+
+// Instantiates one of Velox's calendar functions for the device, over the
+// real Timestamp and the shadowed time zone: a core change that no longer
+// parses behind the shadow, or that reaches a host-only call, fails here
+// before any registration does.
+__device__ int64_t verifyCalendar(const Timestamp& timestamp) {
+  int64_t result{};
+  functions::YearFunction<GpuExec>{}.call(result, timestamp);
   return result;
 }
 
@@ -102,6 +114,7 @@ __global__ void probeKernel(double* sink, const uint64_t* bits) {
   const auto value = static_cast<int64_t>(bits[0]);
   verifyChecks(value);
   *sink = verifyVeloxCall(sink[0], static_cast<int32_t>(value)) +
-      (verifyProxyTypes(value, static_cast<int32_t>(bits[1])) ? 1.0 : 0.0) +
+      (verifyTypeTags(value, static_cast<int32_t>(bits[1])) ? 1.0 : 0.0) +
+      static_cast<double>(verifyCalendar(Timestamp(value, 0))) +
       static_cast<double>(bits::countBits(bits, 0, 64));
 }

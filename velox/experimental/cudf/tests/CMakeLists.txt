@@ -272,6 +272,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_gpu_sfi_timestamp_test
+  SOURCES Main.cpp GpuSfiTimestampTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_string_function_test
   SOURCES Main.cpp StringFunctionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
@@ -335,8 +341,8 @@ velox_add_cudf_test(
 
 add_subdirectory(iceberg)
 
-# Host-only checks of the GpuExec type resolver, the GPU proxy types, the
-# custom-type view and the BitUtil shadow's helpers.
+# Host-only checks of the GpuExec type resolver, the custom-type view and the
+# BitUtil shadow's helpers.
 add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp GpuShadowBitUtilTest.cpp)
 add_test(
   NAME velox_cudf_gpu_types_test
@@ -415,6 +421,8 @@ target_compile_options(
 )
 target_link_libraries(
   velox_cudf_gpu_function_semantics_test
+  velox_cudf_gpu_sfi_host
+  velox_type_tz
   cudf::cudf
   fmt::fmt
   GTest::gmock

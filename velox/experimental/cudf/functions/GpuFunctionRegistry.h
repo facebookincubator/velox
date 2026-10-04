@@ -51,7 +51,28 @@ struct GpuArgView {
   cudf::size_type offset;
   /// When true every row reads element 0.
   bool isConstant;
+  /// Ticks per second of a timestamp argument, which cuDF stores as one
+  /// integer in the column's unit; zero otherwise.
+  int64_t ticksPerSecond;
 };
+
+/// Ticks per second of a cuDF timestamp column, or zero for any other type.
+/// Both sides of the shadow boundary convert between cuDF's one integer per
+/// row and Velox's seconds and nanoseconds with it.
+inline int64_t ticksPerSecond(cudf::data_type type) {
+  switch (type.id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1'000;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 1'000'000;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 1'000'000'000;
+    default:
+      return 0;
+  }
+}
 
 /// An initialized function instance, as opaque bytes: only the
 /// shadow-compiled side can name its type. Holds what initialize() derived from
@@ -78,8 +99,9 @@ using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     rmm::device_async_resource_ref mr);
 
 /// A constant argument's value for initialize(), as the bytes of its physical
-/// representation in host memory: the native value of a fixed-width type and
-/// the characters of a string. `data` is null for an argument that is not a
+/// representation in host memory: the native value of a fixed-width type, a
+/// timestamp as its seconds then its nanoseconds, each an int64, and the
+/// characters of a string. `data` is null for an argument that is not a
 /// constant or is a null literal, which initialize() then sees as a null
 /// pointer, as Velox passes it.
 struct GpuConstantArgument {
@@ -140,11 +162,16 @@ struct GpuFunctionInstanceSpec {
 /// with the same name and signature is replaced when `overwrite` is true and
 /// otherwise kept, returning false. Entries differing in signature coexist as
 /// overloads. GpuFunctionLookup.h reads the result.
+///
+/// `dependsOnSessionTimeZone` marks a function whose result for a TIMESTAMP
+/// argument depends on the session time zone, which initialize() reads; the
+/// evaluator keeps such a call away from evaluators that read TIMESTAMP as UTC.
 bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
     GpuFunctionInstanceSpec instanceSpec,
+    bool dependsOnSessionTimeZone,
     bool overwrite = true);
 
 /// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu

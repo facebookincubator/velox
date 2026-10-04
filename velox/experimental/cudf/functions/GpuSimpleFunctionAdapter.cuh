@@ -25,8 +25,11 @@
 #include "velox/experimental/cudf/functions/GpuVariadicView.h"
 
 #include "velox/core/Metaprogramming.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/TypeKind.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
@@ -71,6 +74,19 @@ struct isVariadicArg : std::false_type {};
 
 template <typename T>
 struct isVariadicArg<Variadic<T>> : std::true_type {};
+
+/// Whether a function declared over T may resolve a zone through the device
+/// time zone database. A TIMESTAMP WITH TIME ZONE value carries its zone as an
+/// id, which the shadow tz::locateZone() looks up per row; every other type
+/// reaches a zone only through the pointer initialize() resolved on the host.
+template <typename T>
+struct readsTimeZoneDatabase : std::is_same<T, TimestampWithTimezone> {};
+
+template <typename T>
+struct readsTimeZoneDatabase<Constant<T>> : readsTimeZoneDatabase<T> {};
+
+template <typename T>
+struct readsTimeZoneDatabase<Variadic<T>> : readsTimeZoneDatabase<T> {};
 
 /// How one declared type appears in a signature, like Velox's TypeAnalysis. A
 /// parameterised type such as ShortDecimal<P, S> spells out its parameters and
@@ -177,6 +193,13 @@ class ConstantArgument {
     }
     if constexpr (isGpuVariadicView<TIn>::value) {
       // A pack has no single value.
+    } else if constexpr (std::is_same_v<TIn, Timestamp>) {
+      // Seconds then nanoseconds, as GpuConstantArgument lays them out.
+      int64_t parts[2];
+      if (constant.size == sizeof(parts)) {
+        std::memcpy(parts, constant.data, sizeof(parts));
+        value_.emplace(parts[0], static_cast<uint64_t>(parts[1]));
+      }
     } else if constexpr (std::is_same_v<TIn, StringView>) {
       value_.emplace(static_cast<const char*>(constant.data), constant.size);
     } else if constexpr (gpu::isGpuCustomTypeView<TIn>::value) {
@@ -314,6 +337,14 @@ struct GpuUDFHolder {
 
   static constexpr bool hasInitialize = hasTemplateInitialize<Fn>::value;
 
+  /// True when the result for a TIMESTAMP argument depends on the session time
+  /// zone: the struct runs initialize(), where Velox hands it the QueryConfig,
+  /// over a TIMESTAMP argument. InitSessionTimezone's descendants are the
+  /// common case; DateTruncFunction reads the zone into a member of its own,
+  /// which a test on the base class alone would miss.
+  static constexpr bool dependsOnSessionTimeZone =
+      hasInitialize && (std::is_same_v<exec_arg_type<TArgs>, Timestamp> || ...);
+
   // TODO(gpu-sfi-initialize): Detect the initialize() overload that takes a
   // memory::MemoryPool* after config, trying the pool-free one first as
   // UDFHolder does. A function using it today runs on a default-constructed
@@ -425,6 +456,8 @@ __device__ inline decltype(auto) slotArg(
     cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else if constexpr (std::is_same_v<TIn, Timestamp>) {
+    return argTimestamp(arguments[i], row);
   } else if constexpr (std::is_same_v<TIn, StringView>) {
     // A string slot is a Constant<> that initialize() has already read, and
     // GpuArgView cannot describe a strings column, so nothing is read here.
@@ -446,8 +479,11 @@ __device__ inline auto slotNullableArg(
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
-  // A null pointer stands for a null input here, and an empty string view or
+  // A null pointer stands for a null input here, and a converted timestamp or
   // a wrapped custom-type value has no storage in the column to point at.
+  static_assert(
+      !std::is_same_v<TIn, Timestamp>,
+      "Timestamp arguments to callNullable() are not supported yet");
   static_assert(
       !std::is_same_v<TIn, StringView>,
       "String arguments to callNullable() are not supported yet");
@@ -472,12 +508,20 @@ __device__ inline GpuErrorKind raisedError() {
   return static_cast<GpuErrorKind>(gpuErrorBytes[threadIdx.x]);
 }
 
+/// The element type of the output column for a function result type: cuDF
+/// holds a timestamp as one integer in the column's unit.
+template <typename TOut>
+using stored_t =
+    std::conditional_t<std::is_same_v<TOut, Timestamp>, int64_t, TOut>;
+
 /// Evaluates one row. `valid` is null only when no argument can be null and the
-/// function cannot decline a row.
+/// function cannot decline a row. `outputTicksPerSecond` is read only for a
+/// timestamp result.
 template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
 __device__ void evaluateRow(
     typename Holder::udf_struct_t fn,
-    TOut* out,
+    stored_t<TOut>* out,
+    int64_t outputTicksPerSecond,
     bool* valid,
     uint8_t* declinedRows,
     const GpuArgView* arguments,
@@ -503,6 +547,20 @@ __device__ void evaluateRow(
         fn, result, slotNullableArg<TIn>(arguments, numArgs, I, row)...);
   }
 
+  stored_t<TOut> stored{};
+  if (ok) {
+    if constexpr (std::is_same_v<TOut, Timestamp>) {
+      // An instant the column's unit cannot hold is declined, so the CPU
+      // answers for the row as for any value a kernel cannot represent. A
+      // runtime error, so that no TRY turns a value the CPU has into a null.
+      if (!timestampTicks(result, outputTicksPerSecond, stored)) {
+        gpuRaise(GpuErrorKind::kRuntimeError);
+      }
+    } else {
+      stored = result;
+    }
+  }
+
   // A declined row's value came from data a check rejected, so it is not
   // written. Returning false means the function has no value for the row;
   // declining means the host still has to raise an error. Rows are declined
@@ -515,7 +573,7 @@ __device__ void evaluateRow(
     }
   }
   if (ok) {
-    out[row] = result;
+    out[row] = stored;
   }
   if (valid != nullptr) {
     valid[row] = ok;
@@ -525,7 +583,8 @@ __device__ void evaluateRow(
 template <typename Holder, typename TOut, typename... TIn>
 __global__ void simpleFunctionKernel(
     typename Holder::udf_struct_t fn,
-    TOut* out,
+    stored_t<TOut>* out,
+    int64_t outputTicksPerSecond,
     bool* valid,
     uint8_t* declinedRows,
     const GpuArgView* arguments,
@@ -542,6 +601,7 @@ __global__ void simpleFunctionKernel(
   evaluateRow<Holder, TOut, TIn...>(
       fn,
       out,
+      outputTicksPerSecond,
       valid,
       declinedRows,
       arguments,
@@ -599,6 +659,14 @@ struct GpuSimpleFunctionAdapter {
         stream,
         cudf::get_current_device_resource_ref());
 
+    // The device the stream belongs to has to hold this unit's view of the
+    // time zone database before a kernel resolves a zone from it.
+    if constexpr (
+        detail::readsTimeZoneDatabase<TReturn>::value ||
+        (detail::readsTimeZoneDatabase<TArgs>::value || ...)) {
+      tz::gpu_shadow_detail::uploadDeviceTimeZoneDatabase(stream.get());
+    }
+
     detail::simpleFunctionKernel<
         Holder,
         TOut,
@@ -611,7 +679,8 @@ struct GpuSimpleFunctionAdapter {
            detail::kBlockSize * sizeof(uint8_t),
            stream.get()>>>(
             fn,
-            out->mutable_view().template data<TOut>(),
+            out->mutable_view().template data<detail::stored_t<TOut>>(),
+            ticksPerSecond(outputType),
             needsValidity ? valid.data() : nullptr,
             declinedRows,
             deviceArguments.data(),
@@ -669,6 +738,7 @@ bool registerGpuFunction(
           Holder::hasInitialize ? &Holder::initializeInstance : nullptr,
           static_cast<int32_t>(sizeof(Fn)),
           static_cast<int32_t>(alignof(Fn))},
+      Holder::dependsOnSessionTimeZone,
       overwrite);
 }
 

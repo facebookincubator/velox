@@ -38,6 +38,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <algorithm>
 #include <atomic>
 #include <limits>
 
@@ -676,6 +677,34 @@ class CudfFilterProjectTest : public OperatorTestBase {
     assertQuery(planNode, duckDbSql);
   }
 
+  // Two TIMESTAMP WITH TIME ZONE columns: the same instants in two zones, in
+  // both orders since the zone keys sort one way, one row where the instants
+  // differ, and a null.
+  RowVectorPtr makeTimestampWithTimeZonePairs() {
+    const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
+    const auto utc = tz::getTimeZoneID("UTC");
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeNullableFlatVector<int64_t>(
+             {pack(0, losAngeles),
+              pack(1'000, losAngeles),
+              pack(-1'000, losAngeles),
+              pack(1'700'000'000'000, losAngeles),
+              pack(5'000, utc),
+              pack(1'000, losAngeles),
+              std::nullopt},
+             TIMESTAMP_WITH_TIME_ZONE()),
+         makeNullableFlatVector<int64_t>(
+             {pack(0, utc),
+              pack(1'000, utc),
+              pack(-1'000, utc),
+              pack(1'700'000'000'000, utc),
+              pack(5'000, losAngeles),
+              pack(2'000, utc),
+              pack(0, utc)},
+             TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,
@@ -1004,33 +1033,34 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
 
 // TIMESTAMP WITH TIME ZONE packs UTC millis over a zone key in one int64, and
 // two values naming the same instant in different zones compare equal. cuDF
-// sees the column as INT64, so an evaluator that compares or casts the number
-// answers for the packed bits; these expressions have to run on the CPU.
-TEST_F(CudfFilterProjectTest, timestampWithTimeZoneExpressionsRunOnCpu) {
-  const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
-  const auto utc = tz::getTimeZoneID("UTC");
-  // The same instants in two zones, in both orders since the zone keys sort
-  // one way, one row where the instants differ, and a null.
-  auto data = makeRowVector(
-      {"c0", "c1"},
-      {makeNullableFlatVector<int64_t>(
-           {pack(0, losAngeles),
-            pack(1'000, losAngeles),
-            pack(-1'000, losAngeles),
-            pack(1'700'000'000'000, losAngeles),
-            pack(5'000, utc),
-            pack(1'000, losAngeles),
-            std::nullopt},
-           TIMESTAMP_WITH_TIME_ZONE()),
-       makeNullableFlatVector<int64_t>(
-           {pack(0, utc),
-            pack(1'000, utc),
-            pack(-1'000, utc),
-            pack(1'700'000'000'000, utc),
-            pack(5'000, losAngeles),
-            pack(2'000, utc),
-            pack(0, utc)},
-           TIMESTAMP_WITH_TIME_ZONE())});
+// sees the column as INT64, so only GPU SFI, which unpacks the instant, may
+// compare it. The fixture forbids CPU fallback, so these run on the GPU or
+// fail.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneComparisonsRunOnGpu) {
+  auto data = makeTimestampWithTimeZonePairs();
+
+  for (const auto& projection :
+       {"c0 = c1",
+        "c0 <> c1",
+        "c0 < c1",
+        "c0 <= c1",
+        "c0 > c1",
+        "c0 >= c1",
+        "c0 between c1 and c1"}) {
+    SCOPED_TRACE(projection);
+    assertProjectMatchesVelox({data}, {projection});
+  }
+
+  for (const auto& filter : {"c0 = c1", "c0 between c1 and c1"}) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox({data}, filter, {"c0", "c1"});
+  }
+}
+
+// A cast of TIMESTAMP WITH TIME ZONE would read the packed bits as a number,
+// so casts stay on the CPU.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneCastsRunOnCpu) {
+  auto data = makeTimestampWithTimeZonePairs();
 
   // The operator declines these expressions at plan time, which is observable
   // only when the plan may continue on the CPU.
@@ -1044,22 +1074,9 @@ TEST_F(CudfFilterProjectTest, timestampWithTimeZoneExpressionsRunOnCpu) {
   };
 
   for (const auto& projection :
-       {"c0 = c1",
-        "c0 <> c1",
-        "c0 < c1",
-        "c0 <= c1",
-        "c0 > c1",
-        "c0 >= c1",
-        "c0 between c1 and c1",
-        "cast(c0 as varchar)",
-        "cast(c0 as timestamp)"}) {
+       {"cast(c0 as varchar)", "cast(c0 as timestamp)"}) {
     SCOPED_TRACE(projection);
     assertProjectMatchesVelox({data}, {projection});
-  }
-
-  for (const auto& filter : {"c0 = c1", "c0 between c1 and c1"}) {
-    SCOPED_TRACE(filter);
-    assertFilterMatchesVelox({data}, filter, {"c0", "c1"});
   }
 
   // Presto has no cast from TIMESTAMP WITH TIME ZONE to BIGINT, so the plan
@@ -1068,6 +1085,167 @@ TEST_F(CudfFilterProjectTest, timestampWithTimeZoneExpressionsRunOnCpu) {
       PlanBuilder().values({data}).project({"cast(c0 as bigint)"}).planNode();
   VELOX_ASSERT_THROW(
       runPlan(plan), "Cannot cast TIMESTAMP WITH TIME ZONE to BIGINT");
+}
+
+// A zone id the Velox database never assigned. Twelve bits can name one, and
+// nothing stops a packed value from carrying it.
+int16_t absentTimeZoneId() {
+  const auto ids = tz::getTimeZoneIDs();
+  for (int16_t id = 1; id < ids.back(); ++id) {
+    if (!std::binary_search(ids.begin(), ids.end(), id)) {
+      return id;
+    }
+  }
+  ADD_FAILURE() << "The Velox time zone database has no hole";
+  return -1;
+}
+
+// Every check a TIMESTAMP WITH TIME ZONE function can fail on the device
+// raises the CPU's error, as a declined row is re-evaluated through Velox.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneChecksRaiseTheCpuError) {
+  const auto hole = absentTimeZoneId();
+  const auto utc = tz::getTimeZoneID("UTC");
+
+  // The second row of each pair fails, next to a clean first row.
+  auto absentZone = makeRowVector({makeFlatVector<int64_t>(
+      {pack(0, utc), pack(1'000, hole)}, TIMESTAMP_WITH_TIME_ZONE())});
+  auto doubles = makeRowVector({makeFlatVector<double>({0.0, 1e300})});
+  auto offsets = makeRowVector({
+      makeFlatVector<double>({0.0, 1.0}),
+      makeFlatVector<int64_t>({5, 15}),
+      makeFlatVector<int64_t>({30, 0}),
+  });
+  auto overflowingOffsets = makeRowVector({
+      makeFlatVector<double>({0.0, 1.0}),
+      makeFlatVector<int64_t>({5, std::numeric_limits<int64_t>::max()}),
+      makeFlatVector<int64_t>({30, 0}),
+  });
+
+  struct Case {
+    const char* what;
+    RowVectorPtr data;
+    const char* projection;
+    const char* message;
+    bool userError;
+  };
+
+  const auto absentMessage =
+      fmt::format("Unable to resolve timeZoneID '{}'", hole);
+  const std::vector<Case> cases{
+      // tz::locateZone(id) raises a runtime error for a hole, which a TRY must
+      // not swallow.
+      {"renderZone", absentZone, "year(c0)", absentMessage.c_str(), false},
+      {"renderZoneSecond",
+       absentZone,
+       "second(c0)",
+       absentMessage.c_str(),
+       false},
+      {"embeddedZone",
+       absentZone,
+       "timezone_hour(c0)",
+       absentMessage.c_str(),
+       false},
+      {"embeddedZoneMinute",
+       absentZone,
+       "timezone_minute(c0)",
+       absentMessage.c_str(),
+       false},
+      // pack() rejects millis past the twelve-bit shift.
+      {"packOverflow",
+       doubles,
+       "from_unixtime(c0, 'UTC')",
+       "TimestampWithTimeZone overflow",
+       true},
+      // tz::getTimeZoneID(int32_t) rejects an offset beyond fourteen hours.
+      {"offsetRange",
+       offsets,
+       "from_unixtime(c0, c1, c2)",
+       "Invalid timezone offset minutes: 900",
+       true},
+      // The constant form fails the same way, checked once in initialize().
+      {"constantOffsetRange",
+       doubles,
+       "from_unixtime(c0, 15, 0)",
+       "Invalid timezone offset minutes: 900",
+       true},
+      {"offsetOverflow",
+       overflowingOffsets,
+       "from_unixtime(c0, c1, c2)",
+       "integer overflow: ",
+       true},
+      // tz::getTimeZoneID(name) rejects an unknown name.
+      {"unknownZone",
+       doubles,
+       "from_unixtime(c0, 'Mars/Olympus_Mons')",
+       "Unknown time zone: 'Mars/Olympus_Mons'",
+       true},
+      {"atTimezoneUnknownZone",
+       absentZone,
+       "at_timezone(c0, 'Mars/Olympus_Mons')",
+       "Unknown time zone: 'Mars/Olympus_Mons'",
+       true},
+      // getTimestampUnit() rejects the unit once, in initialize() on the
+      // host, where a failed check throws as it does on the CPU.
+      {"invalidTruncationUnit",
+       absentZone,
+       "date_trunc('millisecond', c0)",
+       "millisecond is not a valid TIMESTAMP field",
+       true},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.what);
+    auto plan = PlanBuilder()
+                    .values({testCase.data})
+                    .project({fmt::format("{} AS out", testCase.projection)})
+                    .planNode();
+    if (testCase.userError) {
+      VELOX_ASSERT_USER_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()), testCase.message);
+    } else {
+      VELOX_ASSERT_RUNTIME_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()), testCase.message);
+    }
+  }
+
+  // Rendered in the session zone, the embedded id is consulted only by the
+  // offset functions.
+  auto plan = PlanBuilder()
+                  .values({absentZone})
+                  .project({"year(c0) AS out", "timezone_hour(c0) AS tz"})
+                  .planNode();
+  VELOX_ASSERT_RUNTIME_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kLegacyTimestampWithTimezone, "false")
+          .copyResults(pool()),
+      absentMessage);
+  auto rendered = PlanBuilder()
+                      .values({absentZone})
+                      .project({"year(c0) AS out", "hour(c0) AS h"})
+                      .planNode();
+  AssertQueryBuilder(rendered)
+      .config(core::QueryConfig::kLegacyTimestampWithTimezone, "false")
+      .config(core::QueryConfig::kSessionTimezone, "Asia/Kathmandu")
+      .assertResults(makeRowVector(
+          {makeFlatVector<int64_t>({1970, 1970}),
+           makeFlatVector<int64_t>({5, 5})}));
+}
+
+// A TIMESTAMP result the output column's unit cannot hold is declined on the
+// device, so the CPU's value stands for the row: from_unixtime(1e18) clamps to
+// the last millisecond a Timestamp holds, far past the nanosecond column's
+// range. That value then meets the error every out-of-range Timestamp meets on
+// its way into a cuDF column, rather than being handed back as other bits.
+TEST_F(CudfFilterProjectTest, timestampResultBeyondTheColumnUnitIsTheCpus) {
+  auto data = makeRowVector({makeFlatVector<double>({0.0, 1e18, 1.5})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"from_unixtime(c0) AS out"})
+                  .planNode();
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Could not convert Timestamp(9223372036854775, 807000000) to "
+      "nanoseconds");
 }
 
 TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {

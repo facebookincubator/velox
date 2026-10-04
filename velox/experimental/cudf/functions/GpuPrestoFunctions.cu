@@ -19,21 +19,36 @@
 // Compiled with the gpu_shadows/ include path ahead of the Velox source root.
 
 #include "velox/experimental/cudf/functions/GpuDecimalRegistration.cuh"
+#include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
 #include "velox/experimental/cudf/functions/GpuRegistrationHelpers.cuh"
 
 // Bitwise.h calls bits::countBits without including BitUtil.h.
-#include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
-
 #include "velox/common/base/BitUtil.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
 #include "velox/functions/prestosql/Comparisons.h"
+// The calendar functions alone: DateTimeFunctions.h reaches the formatters,
+// parsers and vector machinery, which do not parse under nvcc.
+#include "velox/functions/prestosql/detail/DateTimeCalendarFunctions.h"
 #include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
 using namespace facebook::velox::functions;
+
+namespace {
+
+/// Registers a calendar field extractor over the three types the CPU registers
+/// it for, as DateTimeFunctionsRegistration.cpp does.
+template <template <class> typename Fn>
+void registerGpuCalendarField(const std::vector<std::string>& aliases) {
+  registerGpuFunction<Fn, int64_t, Timestamp>(aliases);
+  registerGpuFunction<Fn, int64_t, Date>(aliases);
+  registerGpuFunction<Fn, int64_t, TimestampWithTimezone>(aliases);
+}
+
+} // namespace
 
 void registerPrestoGpuFunctions(const std::string& prefix) {
   // --- Arithmetic ---------------------------------------------------------
@@ -114,6 +129,47 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuTernaryNumericWithTReturn<BetweenFunction, bool>(
       {prefix + "between"});
 
+  // --- Comparisons, TIMESTAMP WITH TIME ZONE -------------------------------
+  // Velox's own comparisons over the custom-type view, whose operators order
+  // the type by instant as TimestampWithTimeZoneType::compare() does. Names
+  // follow ComparisonFunctionsRegistration.cpp.
+  registerGpuFunction<
+      EqFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "eq"});
+  registerGpuFunction<
+      NeqFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "neq"});
+  registerGpuFunction<
+      LtFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "lt"});
+  registerGpuFunction<
+      GtFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "gt"});
+  registerGpuFunction<
+      LteFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "lte"});
+  registerGpuFunction<
+      GteFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "gte"});
+  registerGpuFunction<
+      BetweenFunction,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "between"});
+
   // --- Bitwise ------------------------------------------------------------
   registerGpuFunction<BitwiseAndFunction, int64_t, int64_t, int64_t>(
       {prefix + "bitwise_and"});
@@ -160,6 +216,73 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
       int64_t,
       int64_t>({prefix + "bitwise_shift_left"});
 
+  // --- Datetime -----------------------------------------------------------
+  // Velox's own calendar functions, over the device forms of Timestamp and
+  // the time zone database: the TIMESTAMP overloads apply the session time
+  // zone and the TIMESTAMP WITH TIME ZONE ones render each value in its own
+  // zone or the session zone, as legacy_timestamp_with_timezone selects, both
+  // read by the structs' initialize(). Names follow
+  // DateTimeFunctionsRegistration.cpp; the type has to be registered before
+  // these signatures are parsed, which registerCudf() ensures.
+  registerGpuCalendarField<YearFunction>({prefix + "year"});
+  registerGpuCalendarField<QuarterFunction>({prefix + "quarter"});
+  registerGpuCalendarField<MonthFunction>({prefix + "month"});
+  registerGpuCalendarField<DayFunction>(
+      {prefix + "day", prefix + "day_of_month"});
+  registerGpuCalendarField<DayOfWeekFunction>(
+      {prefix + "day_of_week", prefix + "dow"});
+  registerGpuCalendarField<DayOfYearFunction>(
+      {prefix + "day_of_year", prefix + "doy"});
+  registerGpuCalendarField<WeekFunction>(
+      {prefix + "week", prefix + "week_of_year"});
+  registerGpuCalendarField<YearOfWeekFunction>(
+      {prefix + "year_of_week", prefix + "yow"});
+  registerGpuCalendarField<HourFunction>({prefix + "hour"});
+  registerGpuCalendarField<MinuteFunction>({prefix + "minute"});
+  registerGpuCalendarField<SecondFunction>({prefix + "second"});
+  registerGpuCalendarField<MillisecondFunction>({prefix + "millisecond"});
+  registerGpuFunction<ToUnixtimeFunction, double, Timestamp>(
+      {prefix + "to_unixtime"});
+  registerGpuFunction<ToUnixtimeFunction, double, TimestampWithTimezone>(
+      {prefix + "to_unixtime"});
+  registerGpuFunction<TimeZoneHourFunction, int64_t, TimestampWithTimezone>(
+      {prefix + "timezone_hour"});
+  registerGpuFunction<TimeZoneMinuteFunction, int64_t, TimestampWithTimezone>(
+      {prefix + "timezone_minute"});
+  // A zone name or a unit binds only as a literal, which initialize() resolves
+  // on the host; a column there leaves the call to the CPU, since a kernel
+  // cannot read a strings column.
+  registerGpuFunction<FromUnixtimeFunction, Timestamp, double>(
+      {prefix + "from_unixtime"});
+  registerGpuFunction<
+      FromUnixtimeFunction,
+      TimestampWithTimezone,
+      double,
+      Constant<Varchar>>({prefix + "from_unixtime"});
+  registerGpuFunction<
+      FromUnixtimeFunction,
+      TimestampWithTimezone,
+      double,
+      int64_t,
+      int64_t>({prefix + "from_unixtime"});
+  registerGpuFunction<
+      AtTimezoneFunction,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      Constant<Varchar>>({prefix + "at_timezone"});
+  registerGpuFunction<
+      DateTruncFunction,
+      Timestamp,
+      Constant<Varchar>,
+      Timestamp>({prefix + "date_trunc"});
+  registerGpuFunction<DateTruncFunction, Date, Constant<Varchar>, Date>(
+      {prefix + "date_trunc"});
+  registerGpuFunction<
+      DateTruncFunction,
+      TimestampWithTimezone,
+      Constant<Varchar>,
+      TimestampWithTimezone>({prefix + "date_trunc"});
+
   // --- Logical -------------------------------------------------------------
   // See GpuLogicalFunctions.cuh. TODO: register is_null for every input type,
   // not only BOOLEAN.
@@ -197,7 +320,8 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuDecimalTruncateWithDigits<
       functions::detail::DecimalTruncateFunction>({prefix + "truncate"});
 
-  // eq and neq are absent because their call() bodies are host-only.
+  // eq and neq over numbers are absent because their call() bodies are
+  // host-only.
 }
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

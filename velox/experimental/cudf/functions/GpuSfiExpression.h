@@ -63,6 +63,11 @@ class GpuSfiExpression : public CudfExpression {
   /// evaluator.
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
+  /// True when the call's result depends on the session time zone, as the
+  /// function's registration declares it; such a call goes only to evaluators
+  /// that honor the zone. False for a call this evaluator cannot resolve.
+  static bool dependsOnSessionTimeZone(const core::TypedExprPtr& expr);
+
   static std::shared_ptr<CudfExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
@@ -91,5 +96,10 @@ class GpuSfiExpression : public CudfExpression {
 
 /// Registers the evaluator at `priority`, alongside AST and JIT.
 void registerGpuSfiEvaluator(int priority);
+
+/// Registers GpuSfiExpression::dependsOnSessionTimeZone() as a session time
+/// zone sensitivity predicate, so that the selection knows which calls read
+/// the zone whether or not the evaluator itself is registered.
+void registerGpuSfiSessionTimeZoneSensitivity();
 
 } // namespace facebook::velox::cudf_velox

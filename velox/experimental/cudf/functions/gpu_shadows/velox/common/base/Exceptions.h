@@ -18,10 +18,12 @@
 //
 // A kernel cannot throw, so a failed check records that its row was declined
 // and the body continues; see GpuErrorSink.cuh. The condition is evaluated on
-// every row. The message is dropped: the host re-evaluates a declined row
-// through Velox, which produces the real message and error code. What travels
-// with the row is its class, user or runtime, which decides whether a TRY may
-// swallow it.
+// every row. The message is not formatted there: the host re-evaluates a
+// declined row through Velox, which produces the real message and error code.
+// What travels with the row is its class, user or runtime, which decides
+// whether a TRY may swallow it. On the host side of the translation unit,
+// where initialize() runs real function bodies, a failed check throws the
+// Velox error with its message, as the real macro does.
 //
 // Every macro the real header defines is defined here, so that a body reaches
 // no wrongly defined one; scripts/checks/check-gpu-shadow-macros.py keeps the
@@ -33,24 +35,15 @@
 
 #include "velox/experimental/cudf/functions/GpuErrorSink.cuh"
 
-namespace facebook::velox::gpu_shadow_detail {
-
-// Uses the message arguments, which are not formatted on the device, so that a
-// local computed only for a check is not reported as unused (nvcc warning
-// #550-D for a FOLLY_ALWAYS_INLINE helper). Called only on the failure path,
-// since the condition already uses the operands.
-template <typename... Ts>
-__host__ __device__ constexpr void useArgs(const Ts&...) {}
-
-} // namespace facebook::velox::gpu_shadow_detail
-
-// A condition that must hold, in the two error classes.
-#define VELOX_GPU_SHADOW_CHECK_KIND(kind, cond, ...)              \
-  do {                                                            \
-    if (!(cond)) {                                                \
-      ::facebook::velox::gpu_shadow_detail::useArgs(__VA_ARGS__); \
-      ::facebook::velox::cudf_velox::gpu_sfi::gpuRaise(kind);     \
-    }                                                             \
+// A condition that must hold, in the two error classes. The message arguments
+// are passed on, so that a local computed only for a check is not reported as
+// unused (nvcc warning #550-D for a FOLLY_ALWAYS_INLINE helper).
+#define VELOX_GPU_SHADOW_CHECK_KIND(kind, cond, ...)    \
+  do {                                                  \
+    if (!(cond)) {                                      \
+      ::facebook::velox::cudf_velox::gpu_sfi::gpuRaise( \
+          kind __VA_OPT__(, ) __VA_ARGS__);             \
+    }                                                   \
   } while (0)
 
 #define VELOX_GPU_SHADOW_CHECK(cond, ...)                                  \
@@ -72,11 +65,9 @@ __host__ __device__ constexpr void useArgs(const Ts&...) {}
   VELOX_GPU_SHADOW_USER_CHECK((a)op(b) __VA_OPT__(, ) __VA_ARGS__)
 
 // An unconditional failure: VELOX_FAIL and the error-specific forms.
-#define VELOX_GPU_SHADOW_FAIL_KIND(kind, ...)                   \
-  do {                                                          \
-    ::facebook::velox::gpu_shadow_detail::useArgs(__VA_ARGS__); \
-    ::facebook::velox::cudf_velox::gpu_sfi::gpuRaise(kind);     \
-  } while (0)
+#define VELOX_GPU_SHADOW_FAIL_KIND(kind, ...)       \
+  ::facebook::velox::cudf_velox::gpu_sfi::gpuRaise( \
+      kind __VA_OPT__(, ) __VA_ARGS__)
 
 #define VELOX_GPU_SHADOW_FAIL(...)                                        \
   VELOX_GPU_SHADOW_FAIL_KIND(                                             \
@@ -289,11 +280,6 @@ __host__ __device__ constexpr void useArgs(const Ts&...) {}
 #endif
 
 #else // NDEBUG
-
-// Kept for bodies that reference their arguments through it; the debug macros
-// below do not use it, as in the real release forms.
-#define VELOX_GPU_SHADOW_NOOP_CHECK(...) \
-  ::facebook::velox::gpu_shadow_detail::useArgs(__VA_ARGS__)
 
 #ifndef VELOX_DCHECK
 #define VELOX_DCHECK(...)

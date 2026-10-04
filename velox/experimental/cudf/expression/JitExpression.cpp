@@ -97,6 +97,7 @@ void registerJitEvaluator(int priority) {
          const core::QueryConfig& config) {
         return std::make_shared<JitExpression>(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/false,
       /*overwrite=*/false);
 }
 
