@@ -432,3 +432,23 @@ add_subdirectory(utils)
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
   add_subdirectory(sparksql)
 endif()
+
+# Every Velox time zone looked up on the device and compared with tz::TimeZone
+# on the host. Compiled against the real time zone headers, not the shadow
+# ones, so the host half of the comparison is the real library; the device
+# half reads the POD table through GpuTimeZoneDatabase.h.
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_time_zone_database_test
+  SOURCES GpuTimeZoneDatabaseTest.cu
+  LIBS velox_cudf_gpu_sfi_host velox_type_tz cudf::cudf
+)
+set_target_properties(
+  velox_cudf_gpu_time_zone_database_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_compile_options(
+  velox_cudf_gpu_time_zone_database_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
