@@ -52,6 +52,11 @@ class Decoder {
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) = 0;
 
+  /// Returns the number of rows remaining in the encoded chunk at the
+  /// sequential cursor. Loads that chunk lazily when needed and returns zero
+  /// when the stream has no more chunks.
+  virtual uint32_t remainingRows() = 0;
+
   /// Reads absolute source rows densely into `output` without using or
   /// advancing the sequential decode cursor. Empty `rows` returns zero
   /// without touching `output`.
@@ -76,14 +81,6 @@ class Decoder {
   virtual void reset() = 0;
 
   virtual const Encoding* encoding() const = 0;
-
-  /// Decodes all rows remaining in the current backing encoding and advances
-  /// the sequential cursor. Implementations may reject this operation when
-  /// the row count cannot be determined before allocating the output.
-  virtual void read(
-      const std::function<void*(uint32_t rowCount)>& prepareOutput,
-      std::function<void*()> getOutputNulls,
-      std::vector<velox::BufferPtr>& stringBuffers) = 0;
 };
 
 } // namespace facebook::nimble

@@ -19,6 +19,7 @@ target_link_libraries(
   velox_connector
   velox_connector_registry
   velox_core
+  velox_expression
   velox_memory
   GTest::gmock
   GTest::gtest

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -59,49 +60,6 @@ HybridFlatMap makeHybridFlatMap(
   return hybridMap;
 }
 
-class DecoderWithoutRead final : public Decoder {
- public:
-  uint32_t next(
-      uint32_t,
-      void*,
-      std::function<void*()>,
-      std::vector<velox::BufferPtr>&,
-      const velox::bits::Bitmap*) override {
-    return 0;
-  }
-
-  uint32_t read(
-      std::span<const uint32_t>,
-      DataType,
-      void*,
-      std::function<void*()>,
-      std::vector<velox::BufferPtr>&) override {
-    return 0;
-  }
-
-  uint32_t read(
-      std::span<const RowRange>,
-      DataType,
-      void*,
-      std::function<void*()>,
-      std::vector<velox::BufferPtr>&) override {
-    return 0;
-  }
-
-  void skip(uint32_t) override {}
-  void reset() override {}
-  const Encoding* encoding() const override {
-    return nullptr;
-  }
-
-  void read(
-      const std::function<void*(uint32_t)>&,
-      std::function<void*()>,
-      std::vector<velox::BufferPtr>&) override {
-    NIMBLE_UNSUPPORTED("read-all is not supported by this decoder");
-  }
-};
-
 template <typename T>
 class TestDecoder final : public Decoder {
  public:
@@ -133,6 +91,10 @@ class TestDecoder final : public Decoder {
     return count;
   }
 
+  uint32_t remainingRows() override {
+    return static_cast<uint32_t>(values_.size() - index_);
+  }
+
   uint32_t read(
       std::span<const uint32_t>,
       DataType,
@@ -161,28 +123,6 @@ class TestDecoder final : public Decoder {
 
   const Encoding* encoding() const override {
     return nullptr;
-  }
-
-  void read(
-      const std::function<void*(uint32_t)>& prepareOutput,
-      std::function<void*()> getOutputNulls,
-      std::vector<velox::BufferPtr>& stringBuffers) override {
-    const auto rowCount = static_cast<uint32_t>(values_.size() - index_);
-    if (rowCount == 0) {
-      return;
-    }
-    auto* output = prepareOutput(rowCount);
-    NIMBLE_CHECK_NOT_NULL(output);
-    const auto nonNullCount = next(
-        rowCount,
-        output,
-        std::move(getOutputNulls),
-        stringBuffers,
-        /*scatterOutputBitmap=*/nullptr);
-    if (!nullable_) {
-      NIMBLE_CHECK_EQ(
-          nonNullCount, rowCount, "Test decoder values must be non-null.");
-    }
   }
 
  private:
@@ -222,6 +162,10 @@ class BoolDecoder final : public Decoder {
     return count;
   }
 
+  uint32_t remainingRows() override {
+    return static_cast<uint32_t>(values_.size() - index_);
+  }
+
   uint32_t read(
       std::span<const uint32_t>,
       DataType,
@@ -252,32 +196,98 @@ class BoolDecoder final : public Decoder {
     return nullptr;
   }
 
-  void read(
-      const std::function<void*(uint32_t)>& prepareOutput,
-      std::function<void*()> getOutputNulls,
-      std::vector<velox::BufferPtr>& stringBuffers) override {
-    const auto rowCount = static_cast<uint32_t>(values_.size() - index_);
-    if (rowCount == 0) {
-      return;
-    }
-    auto* output = prepareOutput(rowCount);
-    NIMBLE_CHECK_NOT_NULL(output);
-    const auto nonNullCount = next(
-        rowCount,
-        output,
-        std::move(getOutputNulls),
-        stringBuffers,
-        /*scatterOutputBitmap=*/nullptr);
-    if (!nullable_) {
-      NIMBLE_CHECK_EQ(
-          nonNullCount, rowCount, "Test decoder values must be non-null.");
-    }
-  }
-
  private:
   std::vector<uint8_t> values_;
   uint32_t index_{0};
   const bool nullable_;
+};
+
+// Exposes the wrapped decoder's rows as several encoded chunks.
+class SegmentedDecoder final : public Decoder {
+ public:
+  SegmentedDecoder(
+      std::unique_ptr<Decoder> decoder,
+      std::vector<uint32_t> chunkRowCounts)
+      : decoder_{std::move(decoder)},
+        chunkRowCounts_{std::move(chunkRowCounts)} {}
+
+  uint32_t next(
+      uint32_t count,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers,
+      const velox::bits::Bitmap* scatterOutputBitmap) override {
+    NIMBLE_CHECK_LE(count, remainingRows());
+    const auto nonNullCount = decoder_->next(
+        count,
+        output,
+        std::move(getOutputNulls),
+        stringBuffers,
+        scatterOutputBitmap);
+    currentChunkOffset_ += count;
+    if (currentChunkOffset_ == chunkRowCounts_[currentChunkIndex_]) {
+      ++currentChunkIndex_;
+      currentChunkOffset_ = 0;
+    }
+    return nonNullCount;
+  }
+
+  uint32_t remainingRows() override {
+    if (currentChunkIndex_ >= chunkRowCounts_.size()) {
+      return 0;
+    }
+    return chunkRowCounts_[currentChunkIndex_] - currentChunkOffset_;
+  }
+
+  uint32_t read(
+      std::span<const uint32_t>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  uint32_t read(
+      std::span<const RowRange>,
+      DataType,
+      void*,
+      std::function<void*()>,
+      std::vector<velox::BufferPtr>&) override {
+    NIMBLE_UNSUPPORTED("not implemented");
+  }
+
+  void skip(uint32_t count) override {
+    while (count > 0) {
+      const auto rowsToSkip = std::min(count, remainingRows());
+      NIMBLE_CHECK_GT(rowsToSkip, 0);
+      decoder_->skip(rowsToSkip);
+      currentChunkOffset_ += rowsToSkip;
+      count -= rowsToSkip;
+      if (currentChunkOffset_ == chunkRowCounts_[currentChunkIndex_]) {
+        ++currentChunkIndex_;
+        currentChunkOffset_ = 0;
+      }
+    }
+  }
+
+  void reset() override {
+    decoder_->reset();
+    currentChunkIndex_ = 0;
+    currentChunkOffset_ = 0;
+  }
+
+  const Encoding* encoding() const override {
+    return nullptr;
+  }
+
+ private:
+  // Supplies the decoded rows.
+  const std::unique_ptr<Decoder> decoder_;
+  // Row count of each encoded chunk, in order.
+  const std::vector<uint32_t> chunkRowCounts_;
+  size_t currentChunkIndex_{0};
+  uint32_t currentChunkOffset_{0};
 };
 
 class FieldReaderTest : public ::testing::Test {
@@ -355,22 +365,6 @@ class FieldReaderTest : public ::testing::Test {
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
 };
 
-TEST_F(FieldReaderTest, decoderReadAllCanBeUnsupported) {
-  DecoderWithoutRead decoder;
-  std::vector<velox::BufferPtr> stringBuffers;
-  bool preparedOutput{false};
-  NIMBLE_ASSERT_THROW(
-      decoder.read(
-          [&](uint32_t) -> void* {
-            preparedOutput = true;
-            return nullptr;
-          },
-          /*getOutputNulls=*/nullptr,
-          stringBuffers),
-      "read-all is not supported by this decoder");
-  EXPECT_FALSE(preparedOutput);
-}
-
 TEST_F(FieldReaderTest, roundTripsEveryHybridKeyType) {
   verifyHybridKeyType<int8_t>(velox::TINYINT(), {1, 9, 9, 1}, "1");
   verifyHybridKeyType<int16_t>(velox::SMALLINT(), {1, 9, 9, 1}, "1");
@@ -427,10 +421,72 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
   const auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& defaultGroup =
+      schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
+  ASSERT_TRUE(defaultGroup.groupKeys.empty());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  const auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+  ASSERT_NE(factory, nullptr);
+  EXPECT_THAT(
+      streamOffsets,
+      testing::Contains(defaultGroup.keyPresenceDescriptor.offset()));
+  EXPECT_THAT(
+      streamOffsets, testing::Contains(defaultGroup.inMapDescriptor.offset()));
+
   Deserializer deserializer{schema, pool_.get()};
   velox::VectorPtr output;
   deserializer.deserialize(serialized, output);
 
+  const auto* map =
+      output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+  ASSERT_NE(map, nullptr);
+  EXPECT_EQ(map->sizeAt(0), 0);
+  EXPECT_EQ(map->sizeAt(1), 0);
+}
+
+TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  const auto group = hybridMap->addGroup(
+      7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{false});
+  decoders[group.inMapDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{});
+  auto reader = factory->createReader(decoders);
+
+  folly::coro::blockingWait(reader->co_skip(1));
+  velox::VectorPtr output;
+  folly::coro::blockingWait(reader->co_next(2, output));
+
+  ASSERT_EQ(output->size(), 2);
   const auto* map =
       output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
   ASSERT_NE(map, nullptr);
@@ -445,7 +501,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
-  const auto defaultGroup = hybridMap->addGroup(
+  hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
       {},
       builder.createScalarTypeBuilder(ScalarKind::Int64));
@@ -465,66 +521,55 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
       [](uint32_t) { return true; },
       pool_.get());
 
-  const auto expectFailure = [&](std::optional<std::vector<int32_t>> keys,
-                                 std::optional<std::vector<uint8_t>> inMap,
-                                 std::string_view message,
-                                 bool isCorruptedFile = false) {
-    folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
-    if (keys.has_value()) {
-      decoders[group.keyDescriptor.offset()] =
-          std::make_unique<TestDecoder<int32_t>>(std::move(*keys));
-    }
-    if (inMap.has_value()) {
-      decoders[group.inMapDescriptor.offset()] =
-          std::make_unique<BoolDecoder>(std::move(*inMap));
-    }
-    auto reader = factory->createReader(decoders);
-    velox::VectorPtr output;
-    if (isCorruptedFile) {
-      NIMBLE_ASSERT_FILE_THROW(
-          folly::coro::blockingWait(reader->co_next(1, output)), message);
-    } else {
-      NIMBLE_ASSERT_THROW(
-          folly::coro::blockingWait(reader->co_next(1, output)), message);
-    }
-  };
+  const auto expectFailure =
+      [&](std::optional<std::vector<uint8_t>> keyPresence,
+          std::optional<std::vector<uint8_t>> inMap,
+          std::string_view message) {
+        folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+        if (keyPresence.has_value()) {
+          decoders[group.keyPresenceDescriptor.offset()] =
+              std::make_unique<BoolDecoder>(std::move(*keyPresence));
+        }
+        if (inMap.has_value()) {
+          decoders[group.inMapDescriptor.offset()] =
+              std::make_unique<BoolDecoder>(std::move(*inMap));
+        }
+        auto reader = factory->createReader(decoders);
+        velox::VectorPtr output;
+        NIMBLE_ASSERT_FILE_THROW(
+            folly::coro::blockingWait(reader->co_next(1, output)), message);
+      };
 
   expectFailure(
-      std::vector<int32_t>{1, 2}, std::vector<uint8_t>{true}, "not divisible");
-  expectFailure(
-      std::vector<int32_t>{1, 1},
       std::vector<uint8_t>{true, true},
-      "Duplicate key",
-      /*isCorruptedFile=*/true);
-  expectFailure(
-      std::vector<int32_t>{2},
       std::vector<uint8_t>{true},
-      "does not belong",
-      /*isCorruptedFile=*/true);
+      "exceeds schema key count");
   expectFailure(
-      std::vector<int32_t>{1},
       std::vector<uint8_t>{false},
-      "has no present rows",
-      /*isCorruptedFile=*/true);
+      std::vector<uint8_t>{true},
+      "in-map rows without present keys");
+  expectFailure(
+      std::vector<uint8_t>{true},
+      std::vector<uint8_t>{false},
+      "has no present rows");
   expectFailure(
       std::nullopt,
       std::vector<uint8_t>{true},
-      "key and in-map streams must be present together");
+      "key-presence and in-map streams must be present together");
   expectFailure(
-      std::vector<int32_t>{1},
-      std::nullopt,
-      "key and in-map streams must be present together");
-  expectFailure(
-      std::vector<int32_t>{},
       std::vector<uint8_t>{true},
-      "in-map rows without keys");
+      std::nullopt,
+      "key-presence and in-map streams must be present together");
+  expectFailure(
+      std::vector<uint8_t>{},
+      std::vector<uint8_t>{true},
+      "in-map rows without key presence");
 
   const auto expectNullableMetadataFailure = [&](bool nullableKey,
                                                  std::string_view message) {
     folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
-    decoders[group.keyDescriptor.offset()] =
-        std::make_unique<TestDecoder<int32_t>>(
-            std::vector<int32_t>{1}, nullableKey);
+    decoders[group.keyPresenceDescriptor.offset()] =
+        std::make_unique<BoolDecoder>(std::vector<uint8_t>{true}, nullableKey);
     decoders[group.inMapDescriptor.offset()] =
         std::make_unique<BoolDecoder>(std::vector<uint8_t>{true}, !nullableKey);
     auto reader = factory->createReader(decoders);
@@ -533,13 +578,46 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
         folly::coro::blockingWait(reader->co_next(1, output)), message);
   };
   expectNullableMetadataFailure(
-      /*nullableKey=*/true, "key stream must not contain nulls");
+      /*nullableKey=*/true, "key-presence stream must not contain nulls");
   expectNullableMetadataFailure(
       /*nullableKey=*/false, "in-map stream must not contain nulls");
 
+  const auto expectMultipleChunkFailure =
+      [&](std::vector<uint8_t> keyPresence,
+          std::vector<uint32_t> keyPresenceChunkRowCounts,
+          std::vector<uint8_t> inMap,
+          std::vector<uint32_t> inMapChunkRowCounts,
+          std::string_view message) {
+        folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+        decoders[group.keyPresenceDescriptor.offset()] =
+            std::make_unique<SegmentedDecoder>(
+                std::make_unique<BoolDecoder>(std::move(keyPresence)),
+                std::move(keyPresenceChunkRowCounts));
+        decoders[group.inMapDescriptor.offset()] =
+            std::make_unique<SegmentedDecoder>(
+                std::make_unique<BoolDecoder>(std::move(inMap)),
+                std::move(inMapChunkRowCounts));
+        auto reader = factory->createReader(decoders);
+        velox::VectorPtr output;
+        NIMBLE_ASSERT_FILE_THROW(
+            folly::coro::blockingWait(reader->co_next(1, output)), message);
+      };
+  expectMultipleChunkFailure(
+      /*keyPresence=*/{true, true},
+      /*keyPresenceChunkRowCounts=*/{1, 1},
+      /*inMap=*/{true, true},
+      /*inMapChunkRowCounts=*/{2},
+      "key-presence stream must have one encoded chunk per decode run");
+  expectMultipleChunkFailure(
+      /*keyPresence=*/{true},
+      /*keyPresenceChunkRowCounts=*/{1},
+      /*inMap=*/{true, true},
+      /*inMapChunkRowCounts=*/{1, 1},
+      "in-map stream must have one encoded chunk per decode run");
+
   folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> partialDecoders;
-  partialDecoders[group.keyDescriptor.offset()] =
-      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{1});
+  partialDecoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true});
   partialDecoders[group.inMapDescriptor.offset()] =
       std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
   partialDecoders[groupValueOffset] =
@@ -552,26 +630,6 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   ASSERT_NE(partialMap, nullptr);
   EXPECT_EQ(partialMap->sizeAt(0), 1);
   EXPECT_NO_THROW(partialReader->reset());
-
-  std::vector<uint32_t> allStreamOffsets;
-  auto allGroupsFactory = FieldReaderFactory::create(
-      {},
-      schema,
-      typeWithId,
-      allStreamOffsets,
-      [](uint32_t) { return true; },
-      pool_.get());
-  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> defaultDecoders;
-  defaultDecoders[defaultGroup.keyDescriptor.offset()] =
-      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{1});
-  defaultDecoders[defaultGroup.inMapDescriptor.offset()] =
-      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true});
-  auto defaultReader = allGroupsFactory->createReader(defaultDecoders);
-  velox::VectorPtr output;
-  NIMBLE_ASSERT_FILE_THROW(
-      folly::coro::blockingWait(defaultReader->co_next(1, output)),
-      "is configured in a non-Default group but appears in the Default "
-      "group's key stream");
 }
 
 TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
@@ -676,6 +734,8 @@ TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
   const auto defaultValueOffset = defaultValue->scalarDescriptor().offset();
   const auto defaultGroup = hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, {}, std::move(defaultValue));
+  hybridMap->appendDefaultGroupKey("9");
+  hybridMap->appendDefaultGroupKey("10");
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
@@ -693,14 +753,14 @@ TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
       pool_.get());
 
   folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
-  decoders[group.keyDescriptor.offset()] =
-      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{1, 2});
+  decoders[group.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
   decoders[group.inMapDescriptor.offset()] =
       std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
   decoders[groupValueOffset] =
       std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{10, 20});
-  decoders[defaultGroup.keyDescriptor.offset()] =
-      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{9, 10});
+  decoders[defaultGroup.keyPresenceDescriptor.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
   decoders[defaultGroup.inMapDescriptor.offset()] =
       std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true});
   decoders[defaultValueOffset] =

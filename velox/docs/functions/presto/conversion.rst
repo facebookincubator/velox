@@ -1038,19 +1038,20 @@ From TIMESTAMP WITH TIME ZONE
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The result depends on `adjust_timestamp_to_session_timezone` and
-`legacy_timestamp_with_timezone`.
+`use_session_timezone_for_timestamp_with_timezone`.
 
 When `adjust_timestamp_to_session_timezone` is true, the cast returns the UTC
-instant for either `legacy_timestamp_with_timezone` setting. For example,
+instant for either `use_session_timezone_for_timestamp_with_timezone` setting.
+For example,
 "1970-01-01 00:00:00.000 America/Los_Angeles" becomes
 "1970-01-01 08:00:00.000".
 
 When `adjust_timestamp_to_session_timezone` is false, the render time zone
-depends on `legacy_timestamp_with_timezone`:
+depends on `use_session_timezone_for_timestamp_with_timezone`:
 
-* ``true`` uses the time zone embedded in the value. The example above becomes
+* ``false`` uses the time zone embedded in the value. The example above becomes
   "1970-01-01 00:00:00.000".
-* ``false`` uses the session time zone. With session time zone
+* ``true`` uses the session time zone. With session time zone
   "America/New_York", the example above becomes "1970-01-01 03:00:00.000".
 
 Valid examples
@@ -1063,7 +1064,7 @@ Valid examples
   SELECT to_unixtime(cast(from_unixtime(0, '+06:00') as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
   SELECT to_unixtime(cast(from_unixtime(0, '-02:00') as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
 
-  -- `adjust_timestamp_to_session_timezone` is false and `legacy_timestamp_with_timezone` is true
+  -- `adjust_timestamp_to_session_timezone` is false and `use_session_timezone_for_timestamp_with_timezone` is false
   SELECT to_unixtime(cast(timestamp '1970-01-01 00:00:00 America/Los_Angeles' as timestamp)); -- 0.0 (1970-01-01 00:00:00.000)
   SELECT to_unixtime(cast(timestamp '2012-03-09 10:00:00 Asia/Chongqing' as timestamp)); -- 1.3312872E9 (2012-03-09 10:00:00.000)
   SELECT to_unixtime(cast(from_unixtime(0, '+06:00') as timestamp)); -- 21600.0 (1970-01-01 06:00:00.000)
@@ -1157,9 +1158,10 @@ From TIMESTAMP WITH TIME ZONE
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. The cast renders the
-value in the time zone selected by `legacy_timestamp_with_timezone`, then
-discards the `hh:mm:ss` part. The legacy setting uses the time zone embedded in
-the value. The non-legacy setting uses the session time zone.
+value in the time zone selected by
+`use_session_timezone_for_timestamp_with_timezone`, then discards the
+`hh:mm:ss` part. The false setting uses the time zone embedded in the value. The
+true setting uses the session time zone.
 
 Valid examples
 
@@ -1167,7 +1169,8 @@ Valid examples
 
   SELECT CAST(timestamp '2024-06-01 01:38:00 America/New_York' as DATE); -- 2024-06-01
 
-With `legacy_timestamp_with_timezone` set to false and session time zone
+With `use_session_timezone_for_timestamp_with_timezone` set to true and session
+time zone
 "America/Los_Angeles", the same value returns ``2024-05-31``.
 
 Cast to Decimal
