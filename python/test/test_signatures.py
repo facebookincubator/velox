@@ -84,3 +84,5 @@ class TestFunctionSignatures(unittest.TestCase):
         pv.register_spark_aggregate_signatures()
         spark_agg_signatures = pv.get_aggregate_function_signatures()
         self.assertTrue(len(spark_agg_signatures) > 0)
+        self.assertIn("histogram_numeric", spark_agg_signatures)
+        self.assertIn("histogram_numeric_legacy", spark_agg_signatures)
