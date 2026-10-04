@@ -235,9 +235,9 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
 }
 
 // TIMESTAMP WITH TIME ZONE and TIME WITH TIME ZONE reach cuDF as the int64 that
-// packs UTC millis over a zone key or offset. No evaluator binds the logical
-// type, and each of them would read the packed bits as a number, so they all
-// decline and the expression stays on the CPU.
+// packs UTC millis over a zone key or offset. The evaluators that would read
+// the packed bits as a number decline, and with no GPU SFI function over these
+// types yet, the expression stays on the CPU.
 TEST_F(
     CudfExpressionSelectionTest,
     customComparisonTypesAreClaimedByNoEvaluator) {
@@ -260,6 +260,7 @@ TEST_F(
     EXPECT_FALSE(ASTExpression::canEvaluate(expr));
     EXPECT_FALSE(JitExpression::canEvaluate(expr));
     EXPECT_FALSE(FunctionExpression::canEvaluate(expr));
+    EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
     EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
 

@@ -344,6 +344,10 @@ __device__ inline decltype(auto) slotArg(
     cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else if constexpr (gpu::isGpuCustomTypeView<TIn>::value) {
+    // Wrapped on the way out of the column, so the view need not share the
+    // element's layout.
+    return TIn{argValue<typename TIn::physical_type>(arguments[i], row)};
   } else {
     return argValue<TIn>(arguments[i], row);
   }
@@ -357,6 +361,11 @@ __device__ inline auto slotNullableArg(
     int32_t numArgs,
     std::size_t i,
     cudf::size_type row) {
+  // A null pointer stands for a null input here, and a wrapped custom-type
+  // value has no storage in the column to point at.
+  static_assert(
+      !gpu::isGpuCustomTypeView<TIn>::value,
+      "Custom type arguments to callNullable() are not supported yet");
   if constexpr (isGpuVariadicView<TIn>::value) {
     return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
   } else {
