@@ -66,8 +66,8 @@ constexpr bool devicePowersOfTenMatchHost() {
 }
 static_assert(devicePowersOfTenMatchHost());
 
-// The Exceptions.h shadow reduces the check macros to no-ops that still
-// evaluate their arguments.
+// The Exceptions.h shadow records a failed check in the launch's shared memory
+// and lets the body run on, so a check site compiles with nothing passed to it.
 __device__ void verifyChecks(int64_t value) {
   VELOX_USER_CHECK_GE(value, 0, "Value must not be negative: {}", value);
   VELOX_CHECK_LT(value, 100);

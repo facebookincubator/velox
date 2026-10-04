@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/CpuFilterFallback.h"
 #include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
@@ -193,6 +194,12 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   RowTypePtr buildType_;
   /** @brief Cached evaluator for post-join filter column */
   std::shared_ptr<CudfExpression> filterEvaluator_;
+  // The filter and the row type it reads, for the CPU re-run when a GPU SFI
+  // kernel declines a row: the optimized expression the evaluator compiled.
+  core::TypedExprPtr cpuFilterSource_;
+  RowTypePtr filterRowType_;
+  // Compiled on first decline; see reevaluateFilterOnCpu.
+  std::unique_ptr<velox::exec::ExprSet> cpuFilter_;
 
   bool rightPrecomputed_{false};
 

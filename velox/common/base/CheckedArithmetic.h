@@ -27,9 +27,7 @@
 // uses CCCL's __host__ __device__ cuda::*_overflow. That needs CCCL 3.4 or
 // newer, which not every CUDA toolkit bundles, so the swap is conditional:
 // without it, a device instantiation fails on nvcc diagnostic 20011 rather than
-// silently computing something else. The seam makes the checks evaluable on
-// device but not reportable, since GPU SFI turns VELOX_ARITHMETIC_ERROR into a
-// no-op; see TODO(gpu-sfi-checks).
+// silently computing something else.
 #if __has_include(<cuda/std/version>)
 #include <cuda/std/version> // CCCL_VERSION
 #endif

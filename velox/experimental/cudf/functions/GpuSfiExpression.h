@@ -62,13 +62,15 @@ class GpuSfiExpression : public CudfExpression {
   static std::shared_ptr<CudfExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false) override;
+      bool finalize = false,
+      gpu_sfi::GpuSfiErrors* errors = nullptr) override;
 
   void close() override;
 
