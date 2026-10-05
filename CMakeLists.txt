@@ -74,6 +74,7 @@ list(
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
 include(VeloxUtils)
+include(VeloxCompilerFlags)
 include(CMakeDependentOption)
 include(CheckIPOSupported)
 
@@ -346,16 +347,7 @@ if(
   endif()
 endif()
 
-if(${VELOX_FORCE_COLORED_OUTPUT})
-  if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-    add_compile_options(-fdiagnostics-color=always)
-  elseif(
-    "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-    OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang"
-  )
-    add_compile_options(-fcolor-diagnostics)
-  endif()
-endif()
+velox_configure_compiler_flags()
 
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
@@ -406,80 +398,6 @@ if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
   add_compile_definitions(VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND)
 endif()
 
-# MacOSX enables two-level namespace by default:
-# http://mirror.informatimago.com/next/developer.apple.com/releasenotes/DeveloperTools/TwoLevelNamespaces.html
-# Enables -flat_namespace so type_info can be deduplicated across .so boundaries
-if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-  add_link_options("-Wl,-flat_namespace")
-endif()
-
-if(UNIX AND NOT APPLE)
-  # linker flags, -export-dynamic for rtti
-  add_link_options("-Wl,-export-dynamic")
-endif()
-
-# Required so velox code can be used in a dynamic library
-set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
-
-# For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
-# (or later versions) to get support for the used features.
-if(
-  NOT
-    (
-      (
-        "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU"
-        AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER_EQUAL 11
-      )
-      OR
-        (
-          (
-            "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-            OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang"
-          )
-          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
-        )
-      OR
-        (
-          "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC"
-          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.30
-        )
-    )
-)
-  message(
-    FATAL_ERROR
-    "Unsupported compiler ${CMAKE_CXX_COMPILER_ID} with version ${CMAKE_CXX_COMPILER_VERSION} found."
-  )
-endif()
-
-if(MSVC)
-  add_compile_definitions(
-    USE_VELOX_COMMON_BASE
-    HAS_UNCAUGHT_EXCEPTIONS
-    GLOG_NO_ABBREVIATED_SEVERITIES
-    NOMINMAX
-  )
-else()
-  execute_process(
-    COMMAND
-      bash -c
-      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-    RESULT_VARIABLE COMMAND_STATUS
-  )
-
-  if(COMMAND_STATUS EQUAL "1")
-    message(FATAL_ERROR "Unable to determine compiler flags!")
-  endif()
-  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
-endif()
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND NOT MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
-endif()
-
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -491,53 +409,6 @@ endif()
 if("${MAX_LINK_JOBS}")
   set_property(GLOBAL APPEND PROPERTY JOB_POOLS "link_job_pool=${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
-endif()
-
-if(ENABLE_ALL_WARNINGS)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
-         -Wno-mismatched-tags \
-         -Wno-nullability-completeness"
-    )
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
-         -Wno-class-memaccess \
-         -Wno-comment \
-         -Wno-int-in-bool-context \
-         -Wno-redundant-move \
-         -Wno-array-bounds \
-         -Wno-maybe-uninitialized \
-         -Wno-unused-result \
-         -Wno-format-overflow \
-         -Wno-strict-aliasing"
-    )
-    # Avoid compiler bug for GCC 12.2.1
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
-    endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
-    endif()
-  endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_WARNINGS
-      "-Wno-unused \
-         -Wno-unused-parameter \
-         -Wno-sign-compare \
-         -Wno-ignored-qualifiers \
-         ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-    )
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
-  endif()
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -590,7 +461,9 @@ endif()
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
 # -latomic not found because it is added right after the compiler exe.
 # Only link libatomic if compiler-rt is not available (compiler-rt provides atomic implementation)
-velox_configure_clang_atomic_linker_flags()
+if(NOT MSVC)
+  velox_configure_clang_atomic_linker_flags()
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -614,10 +487,7 @@ set(VELOX_ICU_COMPONENTS data i18n io uc)
 if(NOT WIN32)
   list(APPEND VELOX_ICU_COMPONENTS tu)
 endif()
-velox_resolve_dependency(
-  ICU
-  COMPONENTS ${VELOX_ICU_COMPONENTS}
-)
+velox_resolve_dependency(ICU COMPONENTS ${VELOX_ICU_COMPONENTS})
 
 set(
   BOOST_COMPONENTS
@@ -649,6 +519,7 @@ endif()
 velox_set_source(gflags)
 
 if(WIN32)
+  # Let the installed Windows package select its available linkage type.
   velox_resolve_dependency(gflags)
 else()
   velox_resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
@@ -799,20 +670,8 @@ if(VELOX_ENABLE_GCS)
   add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
-# GCC needs to link a library to enable std::filesystem.
-# GCC needs to enable co-routines. We only support compiler that
-# support coroutines.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-  # Find Threads library
   find_package(Threads REQUIRED)
-  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
-  # Explicitly enable folly coroutines when compiler supports them.
-  # This is required for folly::coro::AsyncGenerator to work correctly.
-  add_compile_definitions(FOLLY_HAS_COROUTINES=1)
-elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "AppleClang")
-  # Handle Apple toolchain Clang change of name of variable.
-  # Remove when upgrading to the latest FBOS version where this has been addressed.
-  add_compile_options(-D_LIBCPP_HAS_NO_ASAN)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
@@ -858,7 +717,8 @@ find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
 if(WIN32 AND FLEX_FOUND AND (NOT FLEX_INCLUDE_DIRS OR FLEX_INCLUDE_DIR MATCHES "NOTFOUND"))
   get_filename_component(_flex_bin_dir "${FLEX_EXECUTABLE}" DIRECTORY)
-  set(_flex_include_candidates
+  set(
+    _flex_include_candidates
     "${_flex_bin_dir}"
     "${_flex_bin_dir}/.."
     "${_flex_bin_dir}/../include"
@@ -890,6 +750,8 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
+# Only Presto's word_stem function uses libstemmer. Avoid requiring its
+# make-based bundled build when Presto functions are disabled.
 if(VELOX_ENABLE_PRESTO_FUNCTIONS)
   velox_set_source(stemmer)
   velox_resolve_dependency(stemmer)
@@ -901,38 +763,6 @@ if(VELOX_BUILD_TESTING)
 endif()
 
 include_directories(.)
-
-# Adding this down here prevents warnings in dependencies from stopping the
-# build
-if("${TREAT_WARNINGS_AS_ERRORS}")
-  if(MSVC)
-    add_compile_options(/WX)
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-  endif()
-endif()
-
-# Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
-if(
-  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
-  AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-  AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
-)
-  set(
-    CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
-  )
-  # Skip alignment errors and member access check for now.
-  # https://github.com/facebookincubator/velox/issues/15811
-  # https://github.com/facebookincubator/velox/issues/15810
-  set(
-    CMAKE_EXE_LINKER_FLAGS
-    "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=vptr"
-  )
-endif()
-
-message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
-message("FINAL CMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
 
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
@@ -987,4 +817,5 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
+velox_configure_velox_flags()
 add_subdirectory(velox)

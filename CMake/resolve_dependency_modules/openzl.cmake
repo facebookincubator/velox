@@ -69,12 +69,11 @@ FetchContent_Declare(
 )
 
 # OpenZL's C++ bindings brace initialize several descriptor structs without
-# naming every member. TREAT_WARNINGS_AS_ERRORS puts -Werror into the global
-# CMAKE_CXX_FLAGS, which FetchContent subprojects inherit, so those become build
-# failures. Velox holds its own code to that standard, not its third party
-# dependencies. Relax just this warning while OpenZL is configured and restore
-# the flags afterwards, as duckdb and geos already do. Only the C++ bindings are
-# affected; -Werror is never added to CMAKE_C_FLAGS.
+# naming every member. FetchContent subprojects inherit a caller-provided
+# -Werror in CMAKE_CXX_FLAGS, so those become build failures. Velox holds its
+# own code to that standard, not its third party dependencies. Relax just this
+# warning while OpenZL is configured and restore the flags afterwards, as duckdb
+# and geos already do. Only the C++ bindings are affected.
 set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-field-initializers")
 
