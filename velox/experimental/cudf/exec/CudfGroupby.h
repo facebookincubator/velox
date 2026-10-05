@@ -160,13 +160,13 @@ class CudfGroupby : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::AggregationNode> const& aggregationNode);
 
-  void initialize() override;
+  void doInitialize() override;
 
   bool needsInput() const override {
     return !noMoreInput_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /* unused */) override {
     return exec::BlockingReason::kNotBlocked;
   }
 

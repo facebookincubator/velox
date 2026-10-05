@@ -44,7 +44,7 @@ class CudfFromVelox : public CudfOperatorBase {
     return !finished_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
@@ -79,7 +79,7 @@ class CudfToVelox : public CudfOperatorBase {
     return !finished_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 

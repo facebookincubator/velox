@@ -31,7 +31,9 @@ add_library(
   CudfLocalMerge.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp
+  CudfMemoryResource.cpp
   CudfNestedLoopJoin.cpp
+  CudfOperator.cpp
   CudfOrderBy.cpp
   CudfReduce.cpp
   CudfTopN.cpp
@@ -42,7 +44,6 @@ add_library(
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
   GpuCapabilities.cpp
-  CudfMemoryResource.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp

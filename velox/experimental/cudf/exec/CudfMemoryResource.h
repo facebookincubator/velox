@@ -33,6 +33,8 @@ class QueryCtx;
 
 namespace facebook::velox::cudf_velox {
 
+inline constexpr std::string_view kCudfMemoryResourceTag{"gpu"};
+
 inline constexpr std::string_view kCudfMemoryResourceRegistryKey{
     "cudfMemoryResource"};
 
@@ -152,6 +154,5 @@ class CudfMemoryResourceRegistry {
 
 std::shared_ptr<CudfMemoryResourceRegistry> cudfMemoryResourceRegistry(
     core::QueryCtx& queryCtx);
-
 
 } // namespace facebook::velox::cudf_velox
