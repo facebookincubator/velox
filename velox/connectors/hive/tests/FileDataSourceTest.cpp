@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/FileDataSource.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/Expr.h"
@@ -196,6 +197,61 @@ TEST_F(FileDataSourceTest, cancelArchivesActiveStatisticsOnce) {
   EXPECT_TRUE(reader->cancelled);
   source->cancel();
   EXPECT_EQ(source->getRuntimeStats().at("processedRows").sum, 11);
+}
+
+TEST_F(FileDataSourceTest, reusesReleasedNestedRows) {
+  auto rows = makeRowVector(
+      {"outer"},
+      {makeRowVector(
+          {"inner"},
+          {makeRowVector(
+              {"n"}, {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7})})})});
+  auto paths = makeFilePaths(1);
+  writeToFile(paths[0]->getPath(), rows);
+
+  for (bool retainOutput : {false, true}) {
+    SCOPED_TRACE(retainOutput);
+    auto source =
+        ConnectorRegistry::tryGet(exec::test::kHiveConnectorId)
+            ->createDataSource(
+                rows->rowType(),
+                makeTableHandle({}, nullptr, "reuse", rows->rowType()),
+                allRegularColumns(rows->rowType()),
+                ctx_.get());
+    source->addSplit(makeHiveConnectorSplit(paths[0]->getPath()));
+    std::weak_ptr<BaseVector> previousOuter;
+    std::weak_ptr<BaseVector> previousInner;
+    std::vector<RowVectorPtr> held;
+    ContinueFuture future;
+    for (vector_size_t offset = 0; offset < rows->size(); offset += 2) {
+      auto batch = source->next(2, future);
+      ASSERT_TRUE(batch.has_value());
+      ASSERT_NE(*batch, nullptr);
+      test::assertEqualVectors(rows->slice(offset, 2), *batch);
+      const auto& outer = BaseVector::loadedVectorShared((*batch)->childAt(0));
+      const auto& inner =
+          BaseVector::loadedVectorShared(outer->as<RowVector>()->childAt(0));
+      if (offset > 0 && !retainOutput) {
+        // Weak references observe actual DWIO reuse without retaining a batch.
+        EXPECT_FALSE(previousOuter.expired());
+        EXPECT_FALSE(previousInner.expired());
+        EXPECT_EQ(previousOuter.lock().get(), outer.get());
+        EXPECT_EQ(previousInner.lock().get(), inner.get());
+      }
+      previousOuter = outer;
+      previousInner = inner;
+      if (retainOutput) {
+        held.push_back(*batch);
+        for (vector_size_t i = 0; i < held.size(); ++i) {
+          test::assertEqualVectors(rows->slice(i * 2, 2), held[i]);
+        }
+      }
+    }
+    auto end = source->next(2, future);
+    ASSERT_TRUE(end.has_value());
+    EXPECT_EQ(*end, nullptr);
+    source->cancel();
+  }
 }
 
 } // namespace

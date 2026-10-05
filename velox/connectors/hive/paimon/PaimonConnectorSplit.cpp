@@ -273,6 +273,12 @@ void PaimonConnectorSplit::registerSerDe() {
 // --- Builder ---
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
+    PaimonDataFile file) {
+  dataFiles_.emplace_back(std::move(file));
+  return *this;
+}
+
+PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
     std::string filePath,
     uint64_t fileSize,
     int32_t level) {
@@ -280,8 +286,7 @@ PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
   meta.path = std::move(filePath);
   meta.size = fileSize;
   meta.level = level;
-  dataFiles_.emplace_back(std::move(meta));
-  return *this;
+  return addFile(std::move(meta));
 }
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::partitionKey(

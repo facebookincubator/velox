@@ -185,7 +185,6 @@ class FileDataSource : public DataSource {
   std::shared_ptr<const FileScanPlan> scanPlan_;
   FileTableHandlePtr tableHandle_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
-  VectorPtr output_;
   std::unique_ptr<FileScanReader> splitReader_;
 
   /// Output type from file reader. This is different from outputType_ in that

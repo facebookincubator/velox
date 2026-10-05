@@ -497,17 +497,17 @@ std::optional<RowVectorPtr> FileDataSource::next(
     return nullptr;
   }
   VELOX_CHECK_NOT_NULL(result.rows, "Data scan result must own a RowVector");
-  output_ = std::move(result.rows);
+  // Keep our reference local so the reader can reuse its vector once consumers
+  // release the previous batch.
+  auto rowVector = std::move(result.rows);
 
   VELOX_CHECK(
-      !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
-  auto rowsRemaining = output_->size();
+      !rowVector->mayHaveNulls(), "Top-level row vector cannot have nulls");
+  auto rowsRemaining = rowVector->size();
   if (rowsRemaining == 0) {
     // no rows passed the pushed down filters.
     return getEmptyOutput();
   }
-
-  auto rowVector = std::dynamic_pointer_cast<RowVector>(output_);
 
   // In case there is a remaining filter that excludes some but not all
   // rows, collect the indices of the passing rows. If there is no filter,
@@ -710,7 +710,6 @@ void FileDataSource::cancel() {
     }
     splitReader_->cancel();
   }
-  output_.reset();
   split_.reset();
   activeSplit_.reset();
 }

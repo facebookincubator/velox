@@ -15,6 +15,8 @@
  */
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 
+#include <unordered_set>
+
 #include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
 #include "velox/core/Expressions.h"
@@ -46,16 +48,29 @@ void validateField(
 
 void validateExpression(
     const PaimonSchema& schema,
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    const std::unordered_set<std::string>& lambdaParameters = {}) {
   if (!expr) {
+    return;
+  }
+  if (const auto* lambda =
+          dynamic_cast<const core::LambdaTypedExpr*>(expr.get())) {
+    // Preserve enclosing bindings while keeping this lambda's parameters
+    // scoped to its body. Only free input-column references bind to the table.
+    auto parameters = lambdaParameters;
+    const auto& names = lambda->signature()->names();
+    parameters.insert(names.begin(), names.end());
+    validateExpression(schema, lambda->body(), parameters);
     return;
   }
   if (const auto* field =
           dynamic_cast<const core::FieldAccessTypedExpr*>(expr.get())) {
-    validateField(schema, field->name(), field->type());
+    if (field->isInputColumn() && !lambdaParameters.count(field->name())) {
+      validateField(schema, field->name(), field->type());
+    }
   }
   for (const auto& input : expr->inputs()) {
-    validateExpression(schema, input);
+    validateExpression(schema, input, lambdaParameters);
   }
 }
 

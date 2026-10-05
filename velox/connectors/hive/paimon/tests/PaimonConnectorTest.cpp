@@ -723,7 +723,105 @@ TEST_F(PaimonConnectorTest, primaryKeyUnknownDeletionCountIsNotZero) {
       "require known zero deleteRowCount");
 }
 
+TEST_F(PaimonConnectorTest, rejectsUndeclaredLambdaCaptures) {
+  const auto type = ROW({"c0"}, {BIGINT()});
+  auto rows = makeRowVector(
+      {"c0", "_ROW_ID", "x"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({0, 0, 0}),
+       makeFlatVector<int64_t>({0, 0, 0})});
+  auto paths = makeFilePaths(1);
+  writeToFile(paths[0]->getPath(), {rows});
+  for (const auto& [filter, field] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"any_match(array_constructor(c0), x -> x > \"_ROW_ID\")",
+            "_ROW_ID"},
+           {"any_match(array_constructor(c0), x -> "
+            "any_match(array_constructor(x), y -> y > \"_ROW_ID\"))",
+            "_ROW_ID"},
+           {"any_match(array_constructor(c0), x -> x > 0) AND "
+            "any_match(array_constructor(c0), y -> y > x)",
+            "x"}}) {
+    SCOPED_TRACE(filter);
+    auto plan =
+        makePaimonScanPlan(type, type, {}, parseExpr(filter, rows->rowType()));
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(plan)
+            .split(makePaimonSplit({paths[0]->getPath()}))
+            .copyResults(pool()),
+        fmt::format("Unsupported Paimon field '{}'", field));
+  }
+}
+
+TEST_F(PaimonConnectorTest, lambdaParametersAndValidCaptures) {
+  auto rows = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeFlatVector<int64_t>({0, 5, 1, 6})});
+  auto paths = makeFilePaths(1);
+  writeToFile(paths[0]->getPath(), {rows});
+  const auto outputType = ROW({"c0"}, {BIGINT()});
+  auto expected = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})});
+  for (
+      const auto* filter :
+      {"any_match(array_constructor(c0), x -> x > c1)",
+       "any_match(array_constructor(cast(c0 as double)), "
+       "c0 -> c0 > cast(c1 as double))",
+       "any_match(array_constructor(c0), x -> "
+       "any_match(array_constructor(c1), y -> x > y))",
+       "any_match(array_constructor(cast(row_constructor(c0) as struct(v bigint))), "
+       "x -> x.v > c1)",
+       "any_match(array_constructor(c0), \"_ROW_ID\" -> \"_ROW_ID\" > c1)"}) {
+    SCOPED_TRACE(filter);
+    auto plan = makePaimonScanPlan(
+        outputType, rows->rowType(), {}, parseExpr(filter, rows->rowType()));
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit({paths[0]->getPath()}))
+        .assertResults({expected});
+  }
+}
+
+TEST_F(PaimonConnectorTest, rejectsLambdaCaptureTypeMismatch) {
+  const auto type = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto filter = parseExpr(
+      "any_match(array_constructor(c0), x -> cast(x as varchar) = c1)",
+      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+  auto plan = makePaimonScanPlan(ROW({"c0"}, {BIGINT()}), type, {}, filter);
+  VELOX_ASSERT_THROW(
+      directScan(plan), "Paimon field 'c1' type differs from target schema");
+}
+
 #ifdef VELOX_ENABLE_PARQUET
+TEST_F(PaimonConnectorTest, realAppendAndCowWithSplitBuilder) {
+  const auto manifest = fixture();
+  for (const auto* name : {"append", "cow"}) {
+    SCOPED_TRACE(name);
+    std::vector<std::shared_ptr<ConnectorSplit>> splits;
+    for (const auto& input : manifest[name]["splits"]) {
+      auto builder = PaimonConnectorSplitBuilder(
+          kPaimonConnectorId,
+          input["snapshotId"].asInt(),
+          PaimonTableType::kAppendOnly,
+          dwio::common::FileFormat::PARQUET);
+      builder
+          .partitionKey(
+              "p",
+              input["partition"].isNull()
+                  ? std::nullopt
+                  : std::make_optional(input["partition"].asString()))
+          .tableBucketNumber(folly::to<int32_t>(input["bucket"].asInt()));
+      for (const auto& file : input["files"]) {
+        builder.addFile(fixtureFile(file));
+      }
+      splits.push_back(
+          PaimonConnectorSplit::create(builder.build()->serialize()));
+    }
+    exec::test::AssertQueryBuilder(fixturePlan(fixtureType()))
+        .splits(splits)
+        .assertResults({fixtureRows(manifest[name]["rows"])});
+  }
+}
+
 TEST_F(PaimonConnectorTest, realAppendAndCowSnapshots) {
   const auto manifest = fixture();
   EXPECT_EQ(

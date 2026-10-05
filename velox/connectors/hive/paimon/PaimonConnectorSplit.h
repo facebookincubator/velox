@@ -188,6 +188,14 @@ class PaimonConnectorSplitBuilder {
         tableType_(tableType),
         fileFormat_(fileFormat) {}
 
+  /// Adds normalized file metadata, including the schema ID and physical row
+  /// count required for execution. Preserves per-file format and access
+  /// options.
+  PaimonConnectorSplitBuilder& addFile(PaimonDataFile file);
+
+  /// Legacy metadata-only convenience. This does not provide the schema ID or
+  /// row count required for execution; use the complete metadata overload above
+  /// for read splits.
   PaimonConnectorSplitBuilder&
   addFile(std::string filePath, uint64_t fileSize, int32_t level = 0);
 
