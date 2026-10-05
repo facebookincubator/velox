@@ -55,18 +55,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
-  registerUnaryNumeric<BRoundFunction>({prefix + "bround"});
-  registerFunction<BRoundFunction, int8_t, int8_t, int32_t>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int16_t, int16_t, int32_t>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int32_t, int32_t, int32_t>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int64_t, int64_t, int32_t>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, float, float, int32_t>({prefix + "bround"});
-  registerFunction<BRoundFunction, double, double, int32_t>(
-      {prefix + "bround"});
+  registerBRoundFunctions(prefix);
   registerFunction<ToHexBigintFunction, Varchar, int64_t>({prefix + "hex"});
   registerFunction<ToHexVarcharFunction, Varchar, Varchar>({prefix + "hex"});
   registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>(

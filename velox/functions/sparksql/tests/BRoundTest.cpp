@@ -17,16 +17,16 @@
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 #include <bit>
-#include <cfenv>
 #include <cmath>
 #include <limits>
-#include <utility>
-#include <vector>
+#include <string>
+#include <type_traits>
 
-#include <folly/ScopeGuard.h>
+#include <fmt/format.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/BRound.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -34,347 +34,241 @@ namespace {
 class BRoundTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
-  void test(T value, int32_t scale, T expected) {
-    const auto actual =
-        evaluateOnce<T, T, int32_t>("bround(c0, c1)", value, scale);
-    ASSERT_TRUE(actual.has_value());
-    if (std::isnan(expected)) {
-      EXPECT_TRUE(std::isnan(actual.value()));
-    } else {
-      EXPECT_EQ(actual.value(), expected)
-          << "value: " << value << ", scale: " << scale;
+  std::optional<T> bround(
+      std::optional<T> value,
+      std::optional<int32_t> scale) {
+    return evaluateOnce<T>(
+        fmt::format(
+            "bround(c0, cast({} as integer))",
+            scale ? std::to_string(*scale) : "null"),
+        value);
+  }
+
+  template <typename T>
+  std::optional<T> bround(std::optional<T> value) {
+    return evaluateOnce<T, T>("bround(c0)", value);
+  }
+
+  void setAnsiEnabled(bool enabled) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          enabled ? "true" : "false"}});
+  }
+
+  template <typename T>
+  void testIntegralEncodings() {
+    const auto input = makeNullableFlatVector<T>(
+        {14,  15,  16,  24,  25,  26,  34,  35,  36, -14,
+         -15, -16, -24, -25, -26, -34, -35, -36, 0,  std::nullopt});
+    const auto expected = makeNullableFlatVector<T>(
+        {10,  20,  20,  20,  20,  30,  30,  40,  40, -10,
+         -20, -20, -20, -20, -30, -30, -40, -40, 0,  std::nullopt});
+    const auto row = makeRowVector({input});
+    testEncodings(
+        makeTypedExpr("bround(c0, cast(-1 as integer))", row->rowType()),
+        {input},
+        expected);
+  }
+
+  template <typename T>
+  void testIntegralOverflow() {
+    const auto maximum = std::numeric_limits<T>::max();
+    const auto minimum = std::numeric_limits<T>::min();
+    const auto wrappedPositive = static_cast<T>(minimum + 2);
+    const auto wrappedNegative = static_cast<T>(maximum - 1);
+
+    setAnsiEnabled(false);
+    EXPECT_EQ(bround<T>(maximum, -1), wrappedPositive);
+    EXPECT_EQ(bround<T>(minimum, -1), wrappedNegative);
+
+    setAnsiEnabled(true);
+    VELOX_ASSERT_THROW(bround<T>(maximum, -1), "Arithmetic overflow");
+    VELOX_ASSERT_THROW(bround<T>(minimum, -1), "Arithmetic overflow");
+    EXPECT_EQ(bround<T>(T{25}, -1), T{20});
+    EXPECT_EQ(bround<T>(T{-35}, -1), T{-40});
+  }
+
+  template <typename T>
+  void testIntegralExtremeScaleUnderflow() {
+    constexpr int32_t kMaximumSupportedScale =
+        -detail::kMaxJavaBigIntegerPowerOfTenExponent;
+    constexpr int32_t kFirstUnderflowScale = kMaximumSupportedScale - 1;
+    constexpr auto kMinimumScale = std::numeric_limits<int32_t>::min();
+    for (const bool ansiEnabled : {false, true}) {
+      setAnsiEnabled(ansiEnabled);
+      EXPECT_EQ(bround<T>(T{1}, kMaximumSupportedScale), T{0});
+      EXPECT_EQ(bround<T>(T{0}, kFirstUnderflowScale), T{0});
+      VELOX_ASSERT_THROW(
+          bround<T>(T{1}, kFirstUnderflowScale),
+          "Underflow while rounding to scale -536870920");
+      EXPECT_EQ(bround<T>(T{0}, kMinimumScale), T{0});
+      VELOX_ASSERT_THROW(
+          bround<T>(T{1}, kMinimumScale),
+          "Underflow while rounding to scale -2147483648");
+      EXPECT_EQ(
+          evaluateOnce<T, T>(
+              "try(bround(c0, cast(-536870920 as integer)))", T{1}),
+          std::nullopt);
     }
-  }
-
-  template <typename T>
-  void testUnary(T value, T expected) {
-    const auto actual = evaluateOnce<T, T>("bround(c0)", value);
-    ASSERT_TRUE(actual.has_value());
-    EXPECT_EQ(actual.value(), expected) << "value: " << value;
-  }
-
-  template <typename T>
-  void testPositiveZero(T value, int32_t scale) {
-    const auto actual =
-        evaluateOnce<T, T, int32_t>("bround(c0, c1)", value, scale);
-    ASSERT_TRUE(actual.has_value());
-    EXPECT_EQ(actual.value(), static_cast<T>(0));
-    EXPECT_FALSE(std::signbit(actual.value()));
   }
 };
 
-TEST_F(BRoundTest, floatingPointMidpoints) {
-  for (const auto& [value, expected] : std::vector<std::pair<double, double>>{
-           {0.5, 0.0},
-           {1.5, 2.0},
-           {2.5, 2.0},
-           {3.5, 4.0},
-           {4.5, 4.0},
-           {-0.5, 0.0},
-           {-1.5, -2.0},
-           {-2.5, -2.0},
-           {-3.5, -4.0},
-       }) {
-    test(value, 0, expected);
-  }
+TEST_F(BRoundTest, floatingPointHalfEven) {
+  EXPECT_EQ(bround<double>(0.5, 0), 0.0);
+  EXPECT_EQ(bround<double>(1.5, 0), 2.0);
+  EXPECT_EQ(bround<double>(2.5, 0), 2.0);
+  EXPECT_EQ(bround<double>(3.5, 0), 4.0);
+  EXPECT_EQ(bround<double>(-2.5, 0), -2.0);
+  EXPECT_EQ(bround<double>(-3.5, 0), -4.0);
 
-  test(std::nextafter(0.5, 0.0), 0, 0.0);
-  test(std::nextafter(0.5, 1.0), 0, 1.0);
-  test(std::nextafter(-0.5, -1.0), 0, -1.0);
-  test(std::nextafter(-0.5, 0.0), 0, 0.0);
+  EXPECT_EQ(bround<double>(1.25, 1), 1.2);
+  EXPECT_EQ(bround<double>(1.75, 1), 1.8);
+  EXPECT_EQ(bround<double>(1.245, 2), 1.25);
+  // Spark converts through a decimal string and rounds 0.575 to 0.58. Velox
+  // intentionally rounds the binary value directly.
+  EXPECT_EQ(bround<double>(0.575, 2), 0.57);
+  EXPECT_EQ(bround<double>(-0.575, 2), -0.57);
+  EXPECT_EQ(bround<double>(150.0, -2), 200.0);
+  EXPECT_EQ(bround<double>(250.0, -2), 200.0);
+  EXPECT_EQ(bround<double>(350.0, -2), 400.0);
 
-  test(1.49, 0, 1.0);
-  test(1.51, 0, 2.0);
-  test(-1.49, 0, -1.0);
-  test(-1.51, 0, -2.0);
-  test(1.234, 2, 1.23);
-  test(1.235, 2, 1.24);
-  test(1.245, 2, 1.24);
-  test(-1.235, 2, -1.24);
-  test(0.575, 2, 0.58);
-  test(-0.575, 2, -0.58);
-  test(150.0, -2, 200.0);
-  test(250.0, -2, 200.0);
-  test(350.0, -2, 400.0);
-  test(-150.0, -2, -200.0);
-  test(-250.0, -2, -200.0);
-
-  for (const auto& [value, expected] : std::vector<std::pair<double, double>>{
-           {0.05, 0.0},
-           {0.15, 0.2},
-           {0.25, 0.2},
-           {0.35, 0.4},
-           {0.45, 0.4},
-           {0.55, 0.6},
-           {0.65, 0.6},
-           {0.75, 0.8},
-           {0.85, 0.8},
-           {0.95, 1.0},
-       }) {
-    test(value, 1, expected);
-    test(-value, 1, -expected);
-  }
+  EXPECT_EQ(bround<float>(1.25f, 1), 1.2f);
+  EXPECT_EQ(bround<float>(1.75f, 1), 1.8f);
+  EXPECT_EQ(bround<float>(15.0f, -1), 20.0f);
+  EXPECT_EQ(bround<float>(25.0f, -1), 20.0f);
 }
 
-TEST_F(BRoundTest, java17DecimalConversion) {
-  const double value = std::bit_cast<double>(uint64_t{0x43b657dddce43c03});
-  const double expected = std::bit_cast<double>(uint64_t{0x43b657dddce43c01});
-  test(value, -3, expected);
-
-  const double overflowingLongPath =
-      std::bit_cast<double>(uint64_t{0x4530000000000041});
-  const double overflowingLongPathExpected =
-      std::bit_cast<double>(uint64_t{0x4530000000000040});
-  test(overflowingLongPath, -10, overflowingLongPathExpected);
-  test(-overflowingLongPath, -10, -overflowingLongPathExpected);
-
-  const double overflowingMargin =
-      std::bit_cast<double>(uint64_t{0x4540000000000006});
-  const double overflowingMarginExpected =
-      std::bit_cast<double>(uint64_t{0x4540000000000005});
-  test(overflowingMargin, -10, overflowingMarginExpected);
-  test(-overflowingMargin, -10, -overflowingMarginExpected);
-
-  testPositiveZero(std::bit_cast<double>(uint64_t{0x3f677e2dadf20e5f}), 0);
-  testPositiveZero(std::bit_cast<float>(uint32_t{0x3b265345}), 0);
-
-  const float largeFloat = std::bit_cast<float>(uint32_t{0x6a256fa6});
-  const float largeFloatExpected = std::bit_cast<float>(uint32_t{0x6aa56fa6});
-  test(largeFloat, -26, largeFloatExpected);
-  test(-largeFloat, -26, -largeFloatExpected);
-
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<double, double, int32_t>(
-          "bround(c0, c1)", overflowingMargin, 536'870'911)),
-      "BigInteger would overflow supported range while rounding to scale "
-      "536870911");
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<float, float, int32_t>(
-          "bround(c0, c1)", largeFloat, 536'870'911)),
-      "BigInteger would overflow supported range while rounding to scale "
-      "536870911");
+TEST_F(BRoundTest, floatingPointNeighbors) {
+  EXPECT_EQ(bround<double>(std::nextafter(0.5, 0.0), 0), 0.0);
+  EXPECT_EQ(bround<double>(std::nextafter(0.5, 1.0), 0), 1.0);
+  EXPECT_EQ(bround<double>(std::nextafter(-0.5, -1.0), 0), -1.0);
+  EXPECT_EQ(bround<double>(std::nextafter(-0.5, 0.0), 0), 0.0);
 }
 
-TEST_F(BRoundTest, floatUsesExactBinaryValue) {
-  test(1.25f, 1, 1.2f);
-  test(1.35f, 1, 1.4f);
-  test(0.575f, 2, 0.57f);
-  test(-0.575f, 2, -0.57f);
-  test(15.0f, -1, 20.0f);
-  test(25.0f, -1, 20.0f);
-  test(35.0f, -1, 40.0f);
-}
-
-TEST_F(BRoundTest, specialValuesAndZero) {
-  test(
-      std::numeric_limits<double>::quiet_NaN(),
-      0,
-      std::numeric_limits<double>::quiet_NaN());
-  test(
-      std::numeric_limits<double>::infinity(),
-      2,
+TEST_F(BRoundTest, specialValuesAndScales) {
+  EXPECT_TRUE(
+      std::isnan(
+          bround<double>(std::numeric_limits<double>::quiet_NaN(), 2).value()));
+  EXPECT_EQ(
+      bround<double>(std::numeric_limits<double>::infinity(), 2),
       std::numeric_limits<double>::infinity());
-  test(
-      -std::numeric_limits<double>::infinity(),
-      -2,
+  EXPECT_EQ(
+      bround<double>(-std::numeric_limits<double>::infinity(), -2),
       -std::numeric_limits<double>::infinity());
-  test(
-      std::numeric_limits<float>::quiet_NaN(),
-      0,
-      std::numeric_limits<float>::quiet_NaN());
-  test(
-      std::numeric_limits<float>::infinity(),
-      2,
-      std::numeric_limits<float>::infinity());
 
-  testPositiveZero(-0.0, 5);
-  testPositiveZero(-0.4, 0);
-  testPositiveZero(-0.5, 0);
-  testPositiveZero(-1.0, -3);
-  testPositiveZero(-0.0f, 5);
-  testPositiveZero(-0.4f, 0);
-  testPositiveZero(-0.5f, 0);
+  EXPECT_EQ(
+      bround<double>(
+          std::numeric_limits<double>::max(),
+          std::numeric_limits<int32_t>::max()),
+      std::numeric_limits<double>::max());
+  EXPECT_EQ(
+      bround<double>(
+          std::numeric_limits<double>::max(),
+          std::numeric_limits<int32_t>::min()),
+      0.0);
+
+  for (const auto scale : {-10, 0, 10}) {
+    const auto rounded = bround<double>(-0.0, scale).value();
+    EXPECT_EQ(rounded, 0.0);
+    EXPECT_FALSE(std::signbit(rounded));
+  }
 }
 
-TEST_F(BRoundTest, subnormalResults) {
-  const auto doubleMin = std::numeric_limits<double>::denorm_min();
-  test(doubleMin, 324, doubleMin);
-  test(-doubleMin, 324, -doubleMin);
-  test(
-      std::bit_cast<double>(uint64_t{0x000fffffffffffff}),
-      309,
-      std::bit_cast<double>(uint64_t{0x000fd1d7d505cd02}));
-  test(
-      std::bit_cast<double>(uint64_t{0x0000000000000100}),
-      322,
-      std::bit_cast<double>(uint64_t{0x0000000000000107}));
-
-  const auto floatMin = std::numeric_limits<float>::denorm_min();
-  test(floatMin, 45, floatMin);
-  test(-floatMin, 45, -floatMin);
-  test(
-      std::bit_cast<float>(uint32_t{0x00400000}),
-      40,
-      std::bit_cast<float>(uint32_t{0x00403ecd}));
+TEST_F(BRoundTest, constantScaleRequired) {
+  const auto input = makeRowVector(
+      {makeFlatVector<double>({2.5, 3.5}), makeFlatVector<int32_t>({0, 1})});
+  VELOX_ASSERT_THROW(evaluate("bround(c0, c1)", input), "constant");
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<double>({2.0, 4.0}),
+      evaluate("bround(c0, cast(subtract(1, 1) as integer))", input));
 }
 
-TEST_F(BRoundTest, integralScales) {
-  test<int64_t>(15, -1, 20);
-  test<int64_t>(25, -1, 20);
-  test<int64_t>(35, -1, 40);
-  test<int64_t>(45, -1, 40);
-  test<int64_t>(-15, -1, -20);
-  test<int64_t>(-25, -1, -20);
+TEST_F(BRoundTest, integralTypesAndEncodings) {
+  setAnsiEnabled(false);
+  testIntegralEncodings<int8_t>();
+  testIntegralEncodings<int16_t>();
+  testIntegralEncodings<int32_t>();
+  testIntegralEncodings<int64_t>();
 
-  test<int32_t>(150, -2, 200);
-  test<int32_t>(250, -2, 200);
-  test<int32_t>(350, -2, 400);
-  test<int32_t>(-150, -2, -200);
-
-  test<int64_t>(42, 0, 42);
-  test<int64_t>(42, 5, 42);
-  test<int32_t>(-7, 3, -7);
-  test<int16_t>(100, 2, 100);
-  test<int8_t>(5, 1, 5);
+  EXPECT_EQ(bround<int64_t>(42, 0), 42);
+  EXPECT_EQ(bround<int64_t>(42, 5), 42);
 }
 
-TEST_F(BRoundTest, integralOverflowWrapping) {
-  test<int64_t>(
-      std::numeric_limits<int64_t>::max(), -1, -9223372036854775806LL);
-  test<int64_t>(std::numeric_limits<int64_t>::min(), -1, 9223372036854775806LL);
-  test<int64_t>(
-      std::numeric_limits<int64_t>::max(), -19, -8446744073709551616LL);
-  test<int64_t>(
-      std::numeric_limits<int64_t>::min(), -19, 8446744073709551616LL);
-  test<int64_t>(5'000'000'000'000'000'000LL, -19, 0);
-  test<int64_t>(5'000'000'000'000'000'001LL, -19, -8446744073709551616LL);
-  test<int64_t>(-5'000'000'000'000'000'000LL, -19, 0);
-  test<int64_t>(-5'000'000'000'000'000'001LL, -19, 8446744073709551616LL);
+TEST_F(BRoundTest, integralExtremeScaleUnderflow) {
+  testIntegralExtremeScaleUnderflow<int8_t>();
+  testIntegralExtremeScaleUnderflow<int16_t>();
+  testIntegralExtremeScaleUnderflow<int32_t>();
+  testIntegralExtremeScaleUnderflow<int64_t>();
+}
 
-  test<int32_t>(std::numeric_limits<int32_t>::max(), -1, -2147483646);
-  test<int32_t>(std::numeric_limits<int32_t>::min(), -1, 2147483646);
-  test<int16_t>(std::numeric_limits<int16_t>::max(), -1, -32766);
-  test<int16_t>(std::numeric_limits<int16_t>::min(), -1, 32766);
-  test<int8_t>(std::numeric_limits<int8_t>::max(), -1, -126);
-  test<int8_t>(std::numeric_limits<int8_t>::min(), -1, 126);
+TEST_F(BRoundTest, integralOverflowMode) {
+  testIntegralOverflow<int8_t>();
+  testIntegralOverflow<int16_t>();
+  testIntegralOverflow<int32_t>();
+  testIntegralOverflow<int64_t>();
+
+  setAnsiEnabled(false);
+  EXPECT_EQ(
+      bround<int64_t>(std::numeric_limits<int64_t>::max(), -19),
+      -8'446'744'073'709'551'616LL);
+  EXPECT_EQ(
+      bround<int64_t>(std::numeric_limits<int64_t>::min(), -19),
+      8'446'744'073'709'551'616LL);
+
+  setAnsiEnabled(true);
+  VELOX_ASSERT_THROW(
+      bround<int64_t>(std::numeric_limits<int64_t>::max(), -19),
+      "Arithmetic overflow");
+}
+
+TEST_F(BRoundTest, capturesAnsiModeAtInitialization) {
+  const auto input =
+      makeRowVector({makeFlatVector<int8_t>({127, 25, -35, -128})});
+  const auto rowType = input->rowType();
+
+  setAnsiEnabled(false);
+  auto legacy = compileExpression("bround(c0, cast(-1 as integer))", rowType);
+  setAnsiEnabled(true);
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<int8_t>({-126, 20, -40, 126}), evaluate(*legacy, input));
+
+  auto ansi =
+      compileExpression("try(bround(c0, cast(-1 as integer)))", rowType);
+  setAnsiEnabled(false);
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<int8_t>({std::nullopt, 20, -40, std::nullopt}),
+      evaluate(*ansi, input));
+}
+
+TEST_F(BRoundTest, partialSelectionAndTry) {
+  setAnsiEnabled(true);
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<int8_t>({25, 127, -35, -128, std::nullopt, 45})});
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<int8_t>(
+          {20, std::nullopt, -40, std::nullopt, std::nullopt, 40}),
+      evaluate("try(bround(c0, cast(-1 as integer)))", input));
+
+  SelectivityVector selected(input->size(), false);
+  selected.setValid(0, true);
+  selected.setValid(2, true);
+  selected.setValid(5, true);
+  selected.updateBounds();
+  const auto result = evaluate<SimpleVector<int8_t>>(
+      "bround(c0, cast(-1 as integer))", input, selected);
+  EXPECT_EQ(result->valueAt(0), 20);
+  EXPECT_EQ(result->valueAt(2), -40);
+  EXPECT_EQ(result->valueAt(5), 40);
 }
 
 TEST_F(BRoundTest, unaryAndNulls) {
-  testUnary(2.5, 2.0);
-  testUnary(3.5, 4.0);
-  testUnary(1.4, 1.0);
-  testUnary(2.5f, 2.0f);
-  testUnary(3.5f, 4.0f);
-  testUnary<int64_t>(42, 42);
+  EXPECT_EQ(bround<double>(2.5), 2.0);
+  EXPECT_EQ(bround<double>(3.5), 4.0);
+  EXPECT_EQ(bround<int64_t>(42), 42);
 
-  EXPECT_FALSE(
-      (evaluateOnce<double, double, int32_t>("bround(c0, c1)", std::nullopt, 0))
-          .has_value());
-  EXPECT_FALSE((evaluateOnce<double, double, int32_t>(
-                    "bround(c0, c1)", 2.5, std::nullopt))
-                   .has_value());
-  EXPECT_FALSE((evaluateOnce<int64_t, int64_t, int32_t>(
-                    "bround(c0, c1)", std::nullopt, -1))
-                   .has_value());
-  EXPECT_FALSE((evaluateOnce<float, float, int32_t>(
-                    "bround(c0, c1)", 2.5f, std::nullopt))
-                   .has_value());
-  EXPECT_FALSE((evaluateOnce<int64_t, int64_t, int32_t>(
-                    "bround(c0, c1)", int64_t{25}, std::nullopt))
-                   .has_value());
-}
-
-TEST_F(BRoundTest, largeScalesAndExtremes) {
-  for (const auto value : {1.0, -1.0, 0.5, 2.5}) {
-    test(value, 42, value);
-    test(value, -42, 0.0);
-  }
-
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<double, double, int32_t>(
-          "bround(c0, c1)", 1.0, std::numeric_limits<int32_t>::max())),
-      "BigInteger would overflow supported range while rounding to scale "
-      "2147483647");
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<float, float, int32_t>(
-          "bround(c0, c1)", 1.25f, std::numeric_limits<int32_t>::max())),
-      "BigInteger would overflow supported range while rounding to scale "
-      "2147483647");
-  EXPECT_FALSE(
-      (evaluateOnce<double, double, int32_t>(
-           "try(bround(c0, c1))", 1.0, std::numeric_limits<int32_t>::max()))
-          .has_value());
-  testPositiveZero(0.0, std::numeric_limits<int32_t>::max());
-  testPositiveZero(-0.0, std::numeric_limits<int32_t>::max());
-  test(std::ldexp(1.0, 53), 0, std::ldexp(1.0, 53));
-  test(std::ldexp(1.0f, 24), 0, std::ldexp(1.0f, 24));
-
-  test(
-      std::numeric_limits<double>::max(),
-      -308,
-      std::numeric_limits<double>::infinity());
-  test(
-      -std::numeric_limits<double>::max(),
-      -308,
-      -std::numeric_limits<double>::infinity());
-  testPositiveZero(std::numeric_limits<double>::denorm_min(), 323);
-}
-
-TEST_F(BRoundTest, scaleUnderflow) {
-  const auto exactDoubleLimit =
-      static_cast<int32_t>(2 - kMaxJavaBigIntegerPowerOfTenExponent);
-  test(1.25, exactDoubleLimit, 0.0);
-
-  const std::vector<int32_t> scales = {
-      std::numeric_limits<int32_t>::min(),
-      std::numeric_limits<int32_t>::min() + 1,
-      static_cast<int32_t>(2 - (kMaxJavaBigIntegerPowerOfTenExponent + 1)),
-      -1'000'000'000,
-  };
-  for (const auto scale : scales) {
-    test(0.0, scale, 0.0);
-    VELOX_ASSERT_THROW(
-        (evaluateOnce<double, double, int32_t>("bround(c0, c1)", 1.25, scale)),
-        "Underflow while rounding to scale " + std::to_string(scale));
-    EXPECT_FALSE((evaluateOnce<double, double, int32_t>(
-                      "try(bround(c0, c1))", 1.25, scale))
-                     .has_value());
-  }
-
-  const auto minScale = std::numeric_limits<int32_t>::min();
-  test<int64_t>(0, minScale, 0);
-  test<int32_t>(0, minScale, 0);
-  test<int16_t>(0, minScale, 0);
-  test<int8_t>(0, minScale, 0);
-  test<int64_t>(
-      1, -static_cast<int32_t>(kMaxJavaBigIntegerPowerOfTenExponent), 0);
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<int64_t, int64_t, int32_t>(
-          "bround(c0, c1)", int64_t{1}, minScale)),
-      "Underflow while rounding to scale -2147483648");
-  EXPECT_FALSE(
-      (evaluateOnce<int64_t, int64_t, int32_t>(
-           "try(bround(c0, c1))",
-           int64_t{1},
-           -static_cast<int32_t>(kMaxJavaBigIntegerPowerOfTenExponent + 1)))
-          .has_value());
-}
-
-TEST_F(BRoundTest, ignoresFloatingPointRoundingMode) {
-  const auto originalMode = std::fegetround();
-  auto restoreMode =
-      folly::makeGuard([originalMode]() { std::fesetround(originalMode); });
-  for (const auto mode :
-       {FE_TONEAREST, FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO}) {
-    ASSERT_EQ(std::fesetround(mode), 0);
-    test(1.25, 1, 1.2);
-    EXPECT_EQ(std::fegetround(), mode);
-    ASSERT_EQ(std::fesetround(mode), 0);
-    test(1.25f, 1, 1.2f);
-    EXPECT_EQ(std::fegetround(), mode);
-  }
-  ASSERT_EQ(std::fesetround(originalMode), 0);
-  restoreMode.dismiss();
+  EXPECT_EQ(bround<double>(std::nullopt, 0), std::nullopt);
+  EXPECT_EQ(bround<double>(2.5, std::nullopt), std::nullopt);
+  EXPECT_EQ(bround<int64_t>(std::nullopt, -1), std::nullopt);
 }
 
 } // namespace

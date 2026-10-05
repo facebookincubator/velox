@@ -76,16 +76,27 @@ Mathematical Functions
     Returns ``x`` rounded to ``d`` decimal places using HALF_EVEN rounding.
     Values exactly halfway between two results round to the nearest even value.
     Supported input types are integral and floating-point types. If ``d`` is
-    omitted, it defaults to zero. Decimal inputs use ``decimal_bround``.
+    omitted, it defaults to zero. If specified, ``d`` must be a constant
+    INTEGER expression. Decimal inputs use ``decimal_bround``.
 
-    Floating-point inputs use the decimal digits produced by OpenJDK 17
-    ``Double.toString``, matching Spark running on Java 17. Spark running on
-    Java 19 or later can produce different results for representation-sensitive
-    inputs. NaN and infinity are returned unchanged.
+    Integral overflow follows Spark's two's-complement wraparound when ANSI
+    mode is disabled and raises an error when ANSI mode is enabled. A nonzero
+    integral input raises an underflow error, independent of ANSI mode, when an
+    extreme negative scale exceeds Java's supported ``BigInteger`` power
+    range.
 
-    Integral overflow follows Spark's non-ANSI two's-complement wraparound.
-    Nonzero values raise an error when the requested scale would require a
-    Java ``BigInteger`` power outside its supported range.
+    Floating-point values are scaled by a power of ten, rounded using
+    ``std::nearbyint``, and scaled back. This uses Velox's default
+    round-to-nearest floating-point environment. Because it operates directly
+    on the binary floating-point value instead of converting through Java's
+    decimal string representation, some results can differ from Spark. NaN and
+    infinity are returned unchanged.
+
+    For example, ``bround(0.575, 2)`` returns ``0.57`` in Velox, while Spark's
+    decimal conversion returns ``0.58``. Integrations that require exact Spark
+    floating-point results should evaluate floating-point ``bround`` in Spark.
+    Integral and decimal inputs do not have this floating-point compatibility
+    exception.
 
     See `Spark's BRound expression
     <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
@@ -95,7 +106,7 @@ Mathematical Functions
         SELECT bround(2.5);     -- 2.0
         SELECT bround(3.5);     -- 4.0
         SELECT bround(2.55, 1); -- 2.6
-        SELECT bround(1.245, 2); -- 1.24
+        SELECT bround(1.245, 2); -- 1.25
 
 .. spark:function:: cbrt(x) -> double
 

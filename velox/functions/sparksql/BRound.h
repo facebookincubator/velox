@@ -17,60 +17,62 @@
 #pragma once
 
 #include <bit>
-#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 
-/// Matches Java BigInteger's maximum supported power-of-ten exponent.
-inline constexpr int64_t kMaxJavaBigIntegerPowerOfTenExponent = 536'870'919;
+/// Identifies the decimal HALF_EVEN special form.
+inline constexpr const char* kBRoundDecimal = "decimal_bround";
 
 namespace detail {
 
-inline constexpr size_t kMaxRoundingDigitCount = 18;
-inline constexpr uint64_t kTenToNineteen = 10'000'000'000'000'000'000ULL;
+inline constexpr int64_t kMaxJavaBigIntegerPowerOfTenExponent = 536'870'919;
+
+FOLLY_ALWAYS_INLINE Status broundUnderflowError(int32_t scale) {
+  return threadSkipErrorDetails()
+      ? Status::UserError()
+      : Status::UserError("Underflow while rounding to scale {}", scale);
+}
 
 Status broundFloatingPoint(float value, int32_t scale, float& result);
 
 Status broundFloatingPoint(double value, int32_t scale, double& result);
 
-FOLLY_ALWAYS_INLINE int64_t
-broundUnscaled(int64_t unscaled, size_t roundingDigitCount) {
-  VELOX_CHECK_LE(roundingDigitCount, kMaxRoundingDigitCount);
-  const int64_t divisor =
-      static_cast<int64_t>(DecimalUtil::kPowersOfTen[roundingDigitCount]);
-  const int64_t quotient = unscaled / divisor;
-  const int64_t remainder = unscaled % divisor;
+FOLLY_ALWAYS_INLINE int128_t divideHalfEven(int128_t value, int128_t divisor) {
+  const int128_t quotient = value / divisor;
+  const int128_t remainder = value % divisor;
   if (remainder == 0) {
     return quotient;
   }
 
-  const uint64_t absoluteRemainder = remainder < 0
-      ? uint64_t{0} - static_cast<uint64_t>(remainder)
-      : static_cast<uint64_t>(remainder);
-  const uint64_t half = static_cast<uint64_t>(divisor) / 2;
+  const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
+  const int128_t half = divisor / 2;
   if (absoluteRemainder > half ||
       (absoluteRemainder == half && quotient % 2 != 0)) {
-    return quotient + (unscaled < 0 ? -1 : 1);
+    return quotient + (value < 0 ? -1 : 1);
   }
   return quotient;
 }
 
 template <typename T>
-FOLLY_ALWAYS_INLINE T wrapToSigned(uint64_t value) {
+FOLLY_ALWAYS_INLINE T wrapToSigned(int128_t value) {
   static_assert(std::is_integral_v<T> && std::is_signed_v<T>);
   using UnsignedT = std::make_unsigned_t<T>;
   return std::bit_cast<T>(static_cast<UnsignedT>(value));
 }
 
 template <typename T>
-FOLLY_ALWAYS_INLINE Status broundIntegral(T value, int32_t scale, T& result) {
+FOLLY_ALWAYS_INLINE Status
+broundIntegral(T value, int32_t scale, bool ansiEnabled, T& result) {
   static_assert(
       std::is_integral_v<T> && std::is_signed_v<T> && !std::is_same_v<T, bool>);
 
@@ -81,40 +83,28 @@ FOLLY_ALWAYS_INLINE Status broundIntegral(T value, int32_t scale, T& result) {
 
   const int64_t roundingDigitCount = -static_cast<int64_t>(scale);
   if (roundingDigitCount > kMaxJavaBigIntegerPowerOfTenExponent) {
-    if (threadSkipErrorDetails()) {
-      return Status::UserError();
-    }
-    return Status::UserError("Underflow while rounding to scale {}", scale);
+    return broundUnderflowError(scale);
   }
-
-  if constexpr (sizeof(T) == sizeof(int64_t)) {
-    if (roundingDigitCount == 19) {
-      const uint64_t magnitude = value < 0
-          ? uint64_t{0} - static_cast<uint64_t>(value)
-          : static_cast<uint64_t>(value);
-      if (magnitude <= kTenToNineteen / 2) {
-        result = 0;
-      } else {
-        result = wrapToSigned<T>(
-            value < 0 ? uint64_t{0} - kTenToNineteen : kTenToNineteen);
-      }
-      return Status::OK();
-    }
-  }
-
-  if (roundingDigitCount > static_cast<int64_t>(kMaxRoundingDigitCount)) {
+  if (roundingDigitCount > std::numeric_limits<T>::digits10 + 1) {
     result = 0;
     return Status::OK();
   }
 
-  const auto digitCount = static_cast<size_t>(roundingDigitCount);
-  const int64_t divisor =
-      static_cast<int64_t>(DecimalUtil::kPowersOfTen[digitCount]);
-  const int64_t rounded =
-      broundUnscaled(static_cast<int64_t>(value), digitCount);
-  const uint64_t scaled =
-      static_cast<uint64_t>(rounded) * static_cast<uint64_t>(divisor);
-  result = wrapToSigned<T>(scaled);
+  const int128_t divisor = DecimalUtil::kPowersOfTen[roundingDigitCount];
+  const int128_t rounded =
+      divideHalfEven(static_cast<int128_t>(value), divisor) * divisor;
+  if (ansiEnabled &&
+      (rounded < std::numeric_limits<T>::min() ||
+       rounded > std::numeric_limits<T>::max())) {
+    return threadSkipErrorDetails()
+        ? Status::UserError()
+        : Status::UserError(
+              "Arithmetic overflow in bround({}, {})",
+              static_cast<int64_t>(value),
+              scale);
+  }
+
+  result = wrapToSigned<T>(rounded);
   return Status::OK();
 }
 
@@ -122,18 +112,45 @@ FOLLY_ALWAYS_INLINE Status broundIntegral(T value, int32_t scale, T& result) {
 
 template <typename TExec>
 struct BRoundFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*value*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*value*/,
+      const int32_t* /*scale*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  /// Rounds 'value' to zero decimal places using HALF_EVEN semantics.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T value) {
+    return call(result, value, 0);
+  }
 
   /// Rounds 'value' to 'scale' decimal places using HALF_EVEN semantics.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status
-  call(T& result, const T value, const int32_t scale = 0) {
+  call(T& result, const T value, const int32_t scale) {
     if constexpr (std::is_floating_point_v<T>) {
       return detail::broundFloatingPoint(value, scale, result);
     } else {
-      return detail::broundIntegral(value, scale, result);
+      return detail::broundIntegral(value, scale, ansiEnabled_, result);
     }
   }
+
+ private:
+  bool ansiEnabled_{false};
 };
+
+/// Registers primitive bround functions and the decimal_bround special form.
+void registerBRoundFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::functions::sparksql

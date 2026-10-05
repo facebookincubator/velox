@@ -275,17 +275,14 @@ Decimal Special Forms
 .. spark:function:: decimal_bround(decimal[, scale]) -> [decimal]
 
     Returns ``decimal`` rounded to a new scale using HALF_EVEN rounding mode.
-    A value exactly halfway between two results rounds to the result whose last
+    Values exactly halfway between two results round to the result whose last
     retained digit is even. ``scale`` defaults to 0 and must be a constant
     INTEGER.
 
-    Result precision and scale follow the same rules as ``decimal_round``.
-    Nonzero inputs raise an underflow error when the scale distance exceeds
-    Java's supported ``BigInteger`` power range. A rounded value that does not
-    fit the result precision raises an overflow error.
-
-    See `Spark's BRound expression
-    <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+    Result precision and scale follow Spark's decimal BROUND rules. Values that
+    do not fit the resolved result precision raise an overflow error. A nonzero
+    input raises an underflow error when an extreme negative scale exceeds
+    Java's supported ``BigInteger`` power range.
 
     ::
 
@@ -296,25 +293,18 @@ Decimal Special Forms
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
     Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
-    ``scale`` is the new scale to be rounded to. It is 0 by default and must
-    be a constant INTEGER; any INTEGER value is accepted.
-    A nonzero input raises an underflow error if the scale distance exceeds Java's supported ``BigInteger`` power range.
-    A rounded value that does not fit the result precision raises an overflow error.
+    ``scale`` is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
+    When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
-
-    See `Spark's Round expression
-    <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
 
     ::
 
         SELECT (round(cast (9.9 as decimal(2, 1)), 0)); -- decimal 10
         SELECT (round(cast (99 as decimal(2, 0)), -1)); -- decimal 100
 
-    When ``scale`` is negative, the result scale is 0. The result precision is
-    the smaller of 38 and the larger of ``p - s + 1`` and ``-scale + 1``.
-    For ``INT_MIN`` and ``INT_MIN + 1``, Spark integer overflow makes the
-    second term negative, so ``p - s + 1`` determines the result precision.
+    When ``scale`` is negative, we need to adjust ``-scale`` number of digits before the decimal point,
+    which means we need at least ``-scale + 1`` digits after rounding, and the result scale is 0.
 
     ::
 

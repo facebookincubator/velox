@@ -16,419 +16,28 @@
 
 #include "velox/functions/sparksql/BRound.h"
 
-#include <algorithm>
-#include <array>
 #include <bit>
-#include <charconv>
 #include <cmath>
 #include <limits>
+#include <utility>
 
-#include <boost/multiprecision/cpp_int.hpp>
-#include <fast_float/fast_float.h>
-
-#include "velox/common/base/Exceptions.h"
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FunctionCallToSpecialForm.h"
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
-
-using boost::multiprecision::cpp_int;
-
-constexpr uint64_t kDoubleExponentMask = 0x7FF0000000000000ULL;
-constexpr uint64_t kDoubleSignificandMask = 0x000FFFFFFFFFFFFFULL;
-constexpr uint64_t kDoubleSignMask = 0x8000000000000000ULL;
-constexpr uint32_t kDoubleSignificandWidth = 53;
-constexpr uint64_t kDoubleImplicitBit = 1ULL << 52;
-constexpr int32_t kDoubleMaxExponent = 1023;
-constexpr int32_t kMinSmallExponent = -21;
-constexpr int32_t kMaxSmallExponent = 62;
-// Match the plain-decimal formatting range used by JDK 8-18 FloatingDecimal.
-constexpr int32_t kMinPlainDecimalExponent = -3;
-constexpr int32_t kMaxPlainDecimalExponent = 8;
-constexpr double kLog10OfEDiv1P5 = 0.289529654;
-constexpr double kLog10Of1P5 = 0.176091259;
-constexpr double kLog10Of2 = 0.301029995663981;
-
-cpp_int powerOfFive(uint32_t exponent) {
-  cpp_int result = 1;
-  cpp_int base = 5;
-  while (exponent != 0) {
-    if ((exponent & 1) != 0) {
-      result *= base;
-    }
-    exponent >>= 1;
-    if (exponent != 0) {
-      base *= base;
-    }
-  }
-  return result;
-}
-
-int32_t estimateDecimalExponent(int32_t exponent, uint64_t significand) {
-  const uint64_t normalizedBits = static_cast<uint64_t>(kDoubleMaxExponent)
-          << 52 |
-      (significand & kDoubleSignificandMask);
-  const double normalizedSignificand = std::bit_cast<double>(normalizedBits);
-  const double approximation = (normalizedSignificand - 1.5) * kLog10OfEDiv1P5 +
-      kLog10Of1P5 + exponent * kLog10Of2;
-  const uint64_t approximationBits = std::bit_cast<uint64_t>(approximation);
-  const auto approximationExponent = static_cast<int32_t>(
-      static_cast<int64_t>((approximationBits & kDoubleExponentMask) >> 52) -
-      kDoubleMaxExponent);
-
-  if (approximationExponent >= 0 && approximationExponent < 52) {
-    const auto extractedExponent = static_cast<int32_t>(
-        ((approximationBits & kDoubleSignificandMask) | kDoubleImplicitBit) >>
-        (52 - approximationExponent));
-    return (approximationBits >> 63) != 0
-        ? ((approximationBits &
-            kDoubleSignificandMask >> approximationExponent) == 0
-               ? -extractedExponent
-               : -extractedExponent - 1)
-        : extractedExponent;
-  }
-
-  if (approximationExponent < 0) {
-    return (approximationBits & ~kDoubleSignMask) == 0 ? 0
-        : (approximationBits & kDoubleSignMask) != 0   ? -1
-                                                       : 0;
-  }
-
-  return static_cast<int32_t>(
-      static_cast<uint32_t>(static_cast<int64_t>(approximation)));
-}
-
-void convertJavaDigitsToDecimal(
-    bool negative,
-    const std::array<char, 20>& digits,
-    size_t digitCount,
-    int32_t decimalExponent,
-    int64_t& unscaled,
-    int32_t& scale) {
-  int64_t magnitude = 0;
-  for (size_t i = 0; i < digitCount; ++i) {
-    magnitude = magnitude * 10 + digits[i] - '0';
-  }
-
-  const bool scientific = decimalExponent <= kMinPlainDecimalExponent ||
-      decimalExponent >= kMaxPlainDecimalExponent;
-  if (scientific && digitCount == 1) {
-    magnitude *= 10;
-    digitCount = 2;
-  } else if (
-      !scientific && decimalExponent >= static_cast<int32_t>(digitCount)) {
-    const auto zeroCount =
-        decimalExponent - static_cast<int32_t>(digitCount) + 1;
-    magnitude *= static_cast<int64_t>(DecimalUtil::kPowersOfTen[zeroCount]);
-    scale = 1;
-    unscaled = negative ? -magnitude : magnitude;
-    return;
-  }
-
-  scale = static_cast<int32_t>(digitCount) - decimalExponent;
-  unscaled = negative ? -magnitude : magnitude;
-}
-
-uint32_t insignificantDecimalDigits(int32_t bitIndex) {
-  if (bitIndex <= 1 || bitIndex >= 64) {
-    return 0;
-  }
-  if (bitIndex == 63) {
-    return 19;
-  }
-
-  uint32_t count = 0;
-  for (uint64_t value = uint64_t{1} << bitIndex; value >= 10; value /= 10) {
-    ++count;
-  }
-  return count;
-}
-
-void decomposeSmallExponentNumber(
-    bool negative,
-    int32_t exponent,
-    uint64_t significand,
-    uint32_t significantBitCount,
-    int64_t& unscaled,
-    int32_t& scale) {
-  const int32_t adjustedExponent =
-      exponent - static_cast<int32_t>(significantBitCount) - 1;
-  const uint32_t insignificantDigits = exponent > significantBitCount
-      ? insignificantDecimalDigits(adjustedExponent)
-      : 0;
-
-  if (exponent >= static_cast<int32_t>(kDoubleSignificandWidth - 1)) {
-    significand <<= exponent - (kDoubleSignificandWidth - 1);
-  } else {
-    significand >>= kDoubleSignificandWidth - 1 - exponent;
-  }
-
-  int32_t decimalExponent = 0;
-  if (insignificantDigits != 0) {
-    const uint64_t powerOfTen =
-        static_cast<uint64_t>(DecimalUtil::kPowersOfTen[insignificantDigits]);
-    const uint64_t remainder = significand % powerOfTen;
-    significand /= powerOfTen;
-    decimalExponent += static_cast<int32_t>(insignificantDigits);
-    if (remainder >= powerOfTen / 2) {
-      ++significand;
-    }
-  }
-
-  while (significand % 10 == 0) {
-    ++decimalExponent;
-    significand /= 10;
-  }
-
-  std::array<char, 20> reversedDigits;
-  size_t digitCount = 0;
-  while (significand != 0) {
-    reversedDigits[digitCount++] = static_cast<char>('0' + significand % 10);
-    significand /= 10;
-  }
-  decimalExponent += static_cast<int32_t>(digitCount);
-
-  std::array<char, 20> digits;
-  for (size_t i = 0; i < digitCount; ++i) {
-    digits[i] = reversedDigits[digitCount - i - 1];
-  }
-  convertJavaDigitsToDecimal(
-      negative, digits, digitCount, decimalExponent, unscaled, scale);
-}
-
-/// Reproduces JDK 8-18 FloatingDecimal.BinaryToASCIIBuffer.dtoa so Spark's
-/// BigDecimal.valueOf rounding observes the same decimal digits. The int64
-/// branch mirrors Java's wrapping long path; cpp_int mirrors FDBigInteger.
-void decomposeFloatingPoint(double value, int64_t& unscaled, int32_t& scale) {
-  const uint64_t bits = std::bit_cast<uint64_t>(value);
-  const bool negative = (bits >> 63) != 0;
-  auto exponent = static_cast<int32_t>((bits & kDoubleExponentMask) >> 52);
-  uint64_t significand = bits & kDoubleSignificandMask;
-  uint32_t significantBitCount;
-
-  if (exponent == 0) {
-    const uint32_t leadingZeroCount = std::countl_zero(significand);
-    const uint32_t shift = leadingZeroCount - (64 - kDoubleSignificandWidth);
-    exponent = 1 - static_cast<int32_t>(shift) - kDoubleMaxExponent;
-    significand <<= shift;
-    significantBitCount = 64 - leadingZeroCount;
-  } else {
-    exponent -= kDoubleMaxExponent;
-    significand |= kDoubleImplicitBit;
-    significantBitCount = kDoubleSignificandWidth;
-  }
-
-  const uint32_t trailingZeroCount = std::countr_zero(significand);
-  const uint32_t fractionalBitCount =
-      kDoubleSignificandWidth - trailingZeroCount;
-  const uint32_t excessBitCount = static_cast<uint32_t>(
-      std::max(0, static_cast<int32_t>(fractionalBitCount) - exponent - 1));
-  if (exponent >= kMinSmallExponent && exponent <= kMaxSmallExponent &&
-      excessBitCount == 0 && fractionalBitCount < 64) {
-    decomposeSmallExponentNumber(
-        negative, exponent, significand, significantBitCount, unscaled, scale);
-    return;
-  }
-
-  int32_t decimalExponent = estimateDecimalExponent(exponent, significand);
-
-  const uint32_t valuePowerOfFive =
-      static_cast<uint32_t>(std::max(0, -decimalExponent));
-  int32_t valuePowerOfTwo =
-      static_cast<int32_t>(valuePowerOfFive + excessBitCount) + exponent;
-  const uint32_t scalePowerOfFive =
-      static_cast<uint32_t>(std::max(0, decimalExponent));
-  int32_t scalePowerOfTwo =
-      static_cast<int32_t>(scalePowerOfFive + excessBitCount);
-  const uint32_t marginPowerOfFive = valuePowerOfFive;
-  int32_t marginPowerOfTwo =
-      valuePowerOfTwo - static_cast<int32_t>(significantBitCount);
-
-  significand >>= trailingZeroCount;
-  valuePowerOfTwo -= static_cast<int32_t>(fractionalBitCount - 1);
-  const int32_t minPowerOfTwo = std::min(valuePowerOfTwo, scalePowerOfTwo);
-  valuePowerOfTwo -= minPowerOfTwo;
-  scalePowerOfTwo -= minPowerOfTwo;
-  marginPowerOfTwo -= minPowerOfTwo;
-
-  if (fractionalBitCount == 1) {
-    --marginPowerOfTwo;
-  }
-  if (marginPowerOfTwo < 0) {
-    valuePowerOfTwo -= marginPowerOfTwo;
-    scalePowerOfTwo -= marginPowerOfTwo;
-    marginPowerOfTwo = 0;
-  }
-
-  VELOX_DCHECK_GE(valuePowerOfTwo, 0);
-  VELOX_DCHECK_GE(scalePowerOfTwo, 0);
-  cpp_int decimalValue = powerOfFive(valuePowerOfFive) * significand;
-  decimalValue <<= valuePowerOfTwo;
-  cpp_int decimalScale = powerOfFive(scalePowerOfFive);
-  decimalScale <<= scalePowerOfTwo;
-  cpp_int margin = powerOfFive(marginPowerOfFive);
-  margin <<= marginPowerOfTwo;
-  margin *= 10;
-  const cpp_int decimalScaleTimesTen = decimalScale * 10;
-  const auto valueBitCount =
-      static_cast<uint32_t>(boost::multiprecision::msb(decimalValue) + 1);
-  const auto scaleTimesTenBitCount = static_cast<uint32_t>(
-      boost::multiprecision::msb(decimalScaleTimesTen) + 1);
-  const bool useInt64Path = valueBitCount < 64 && scaleTimesTenBitCount < 64;
-
-  std::array<char, 20> digits;
-  size_t digitCount = 0;
-  auto finishRounding = [&](bool low, bool high, int roundingThreshold) {
-    ++decimalExponent;
-    if (high &&
-        (!low || roundingThreshold > 0 ||
-         (roundingThreshold == 0 && ((digits[digitCount - 1] - '0') & 1)))) {
-      size_t index = digitCount;
-      while (index != 0 && digits[index - 1] == '9') {
-        digits[--index] = '0';
-      }
-      if (index == 0) {
-        ++decimalExponent;
-        digits[0] = '1';
-      } else {
-        ++digits[index - 1];
-      }
-    }
-    convertJavaDigitsToDecimal(
-        negative, digits, digitCount, decimalExponent, unscaled, scale);
-  };
-
-  if (useInt64Path) {
-    auto javaAdd = [](int64_t left, int64_t right) {
-      return std::bit_cast<int64_t>(
-          static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
-    };
-    auto javaSubtract = [](int64_t left, int64_t right) {
-      return std::bit_cast<int64_t>(
-          static_cast<uint64_t>(left) - static_cast<uint64_t>(right));
-    };
-    auto javaMultiply = [](int64_t left, int64_t right) {
-      return std::bit_cast<int64_t>(
-          static_cast<uint64_t>(left) * static_cast<uint64_t>(right));
-    };
-
-    int64_t longValue = decimalValue.convert_to<int64_t>();
-    const int64_t longScale = decimalScale.convert_to<int64_t>();
-    int64_t longMargin = margin.convert_to<int64_t>();
-    const int64_t longScaleTimesTen =
-        decimalScaleTimesTen.convert_to<int64_t>();
-    auto nextLongDigit = [&]() {
-      const auto digit = static_cast<uint32_t>(longValue / longScale);
-      longValue = javaMultiply(longValue % longScale, 10);
-      return digit;
-    };
-
-    const uint32_t firstDigit = nextLongDigit();
-    bool low = longValue < longMargin;
-    bool high = javaAdd(longValue, longMargin) > longScaleTimesTen;
-    if (firstDigit == 0 && !high) {
-      --decimalExponent;
-    } else {
-      digits[digitCount++] = static_cast<char>('0' + firstDigit);
-    }
-
-    if (decimalExponent < kMinPlainDecimalExponent ||
-        decimalExponent >= kMaxPlainDecimalExponent) {
-      low = false;
-      high = false;
-    }
-
-    while (!low && !high) {
-      VELOX_CHECK_LT(digitCount, digits.size());
-      digits[digitCount++] = static_cast<char>('0' + nextLongDigit());
-      longMargin = javaMultiply(longMargin, 10);
-      if (longMargin > 0) {
-        low = longValue < longMargin;
-        high = javaAdd(longValue, longMargin) > longScaleTimesTen;
-      } else {
-        low = true;
-        high = true;
-      }
-    }
-
-    const int64_t difference =
-        javaSubtract(javaMultiply(longValue, 2), longScaleTimesTen);
-    finishRounding(low, high, difference < 0 ? -1 : difference > 0 ? 1 : 0);
-    return;
-  }
-
-  auto nextDigit = [&]() {
-    const auto digit = (decimalValue / decimalScale).convert_to<uint32_t>();
-    decimalValue %= decimalScale;
-    decimalValue *= 10;
-    return digit;
-  };
-
-  const uint32_t firstDigit = nextDigit();
-  bool low = decimalValue < margin;
-  bool high = decimalValue + margin >= decimalScaleTimesTen;
-  if (firstDigit == 0 && !high) {
-    --decimalExponent;
-  } else {
-    digits[digitCount++] = static_cast<char>('0' + firstDigit);
-  }
-
-  if (decimalExponent < kMinPlainDecimalExponent ||
-      decimalExponent >= kMaxPlainDecimalExponent) {
-    low = false;
-    high = false;
-  }
-
-  while (!low && !high) {
-    VELOX_CHECK_LT(digitCount, digits.size());
-    digits[digitCount++] = static_cast<char>('0' + nextDigit());
-    margin *= 10;
-    low = decimalValue < margin;
-    high = decimalValue + margin >= decimalScaleTimesTen;
-  }
-
-  int roundingThreshold = 0;
-  if (high && low) {
-    roundingThreshold = decimalValue * 2 < decimalScaleTimesTen ? -1
-        : decimalValue * 2 > decimalScaleTimesTen               ? 1
-                                                                : 0;
-  }
-
-  finishRounding(low, high, roundingThreshold);
-}
-
-template <typename T>
-T composeFloatingPoint(int64_t unscaled, int32_t scale) {
-  if (unscaled == 0) {
-    return 0;
-  }
-
-  std::array<char, 64> buffer;
-  auto [position, integerError] =
-      std::to_chars(buffer.data(), buffer.data() + buffer.size(), unscaled);
-  VELOX_CHECK(integerError == std::errc(), "Failed to format decimal value");
-  *position++ = 'e';
-  const auto [end, exponentError] = std::to_chars(
-      position, buffer.data() + buffer.size(), -static_cast<int64_t>(scale));
-  VELOX_CHECK(
-      exponentError == std::errc(), "Failed to format decimal exponent");
-
-  T result;
-  const auto [parseEnd, parseError] = fast_float::from_chars(
-      buffer.data(), end, result, fast_float::chars_format::general);
-  if (parseError == std::errc::result_out_of_range) {
-    return std::copysign(
-        scale > 0 ? static_cast<T>(0) : std::numeric_limits<T>::infinity(),
-        static_cast<T>(unscaled));
-  }
-  VELOX_CHECK(parseError == std::errc(), "Failed to parse rounded value");
-  VELOX_CHECK_EQ(parseEnd, end);
-  return result;
-}
 
 template <typename T>
 Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
   static_assert(std::is_floating_point_v<T>);
 
+  // Spark rounds a decimal representation produced by the Java runtime.
+  // Velox intentionally rounds the binary value directly to avoid reproducing
+  // runtime-specific floating-to-decimal conversion algorithms.
   if (!std::isfinite(value)) {
     result = value;
     return Status::OK();
@@ -438,40 +47,217 @@ Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
     return Status::OK();
   }
 
-  int64_t unscaled;
-  int32_t sourceScale;
-  decomposeFloatingPoint(static_cast<double>(value), unscaled, sourceScale);
-  const int64_t scaleDistance =
-      std::abs(static_cast<int64_t>(sourceScale) - static_cast<int64_t>(scale));
-  if (scaleDistance > kMaxJavaBigIntegerPowerOfTenExponent) {
-    if (threadSkipErrorDetails()) {
-      return Status::UserError();
+  if (scale >= 0) {
+    const double factor = std::pow(10.0, static_cast<double>(scale));
+    if (!std::isfinite(factor)) {
+      result = value;
+      return Status::OK();
     }
-    return scale < sourceScale
-        ? Status::UserError("Underflow while rounding to scale {}", scale)
-        : Status::UserError(
-              "BigInteger would overflow supported range while rounding to "
-              "scale {}",
-              scale);
-  }
-  if (scale >= sourceScale) {
-    result = value;
-    return Status::OK();
+    const double scaled = static_cast<double>(value) * factor;
+    if (!std::isfinite(scaled)) {
+      result = value;
+      return Status::OK();
+    }
+    result = static_cast<T>(std::nearbyint(scaled) / factor);
+  } else {
+    const double factor =
+        std::pow(10.0, static_cast<double>(-static_cast<int64_t>(scale)));
+    if (!std::isfinite(factor)) {
+      result = 0;
+      return Status::OK();
+    }
+    result = static_cast<T>(
+        std::nearbyint(static_cast<double>(value) / factor) * factor);
   }
 
-  const int64_t roundingDigitCount =
-      static_cast<int64_t>(sourceScale) - static_cast<int64_t>(scale);
-  if (roundingDigitCount >
-      static_cast<int64_t>(detail::kMaxRoundingDigitCount)) {
+  if (result == 0) {
     result = 0;
-    return Status::OK();
   }
-
-  const int64_t rounded =
-      detail::broundUnscaled(unscaled, static_cast<size_t>(roundingDigitCount));
-  result = composeFloatingPoint<T>(rounded, scale);
   return Status::OK();
 }
+
+template <typename TInput, typename TResult>
+class DecimalBRoundFunction : public exec::VectorFunction {
+ public:
+  DecimalBRoundFunction(
+      uint8_t inputScale,
+      int32_t requestedScale,
+      uint8_t resultPrecision)
+      : roundingDigitCount_(
+            static_cast<int64_t>(inputScale) -
+            static_cast<int64_t>(requestedScale)),
+        requestedScale_(requestedScale),
+        scaleUnderflows_(
+            roundingDigitCount_ > detail::kMaxJavaBigIntegerPowerOfTenExponent),
+        roundsToZero_(roundingDigitCount_ > LongDecimalType::kMaxPrecision),
+        divisor_(
+            roundingDigitCount_ > 0 && !roundsToZero_
+                ? DecimalUtil::kPowersOfTen[roundingDigitCount_]
+                : 1),
+        multiplier_(
+            requestedScale < 0 && !roundsToZero_
+                ? DecimalUtil::kPowersOfTen[-static_cast<int64_t>(
+                      requestedScale)]
+                : 1),
+        limitBeforeMultiply_(
+            (DecimalUtil::kPowersOfTen[resultPrecision] - 1) / multiplier_) {}
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& resultType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+    auto* output = result->asUnchecked<FlatVector<TResult>>();
+    output->clearNulls(rows);
+    auto* values = output->mutableRawValues();
+    DecodedVector input(*args[0], rows);
+    rows.applyToSelected([&](auto row) {
+      const int128_t value = input.valueAt<TInput>(row);
+      if (scaleUnderflows_ && value != 0) {
+        output->setNull(row, true);
+        context.setStatus(row, detail::broundUnderflowError(requestedScale_));
+        return;
+      }
+
+      int128_t rounded{0};
+      if (!roundsToZero_) {
+        rounded = roundingDigitCount_ > 0
+            ? detail::divideHalfEven(value, divisor_)
+            : value;
+      }
+      if (rounded > limitBeforeMultiply_ || rounded < -limitBeforeMultiply_) {
+        output->setNull(row, true);
+        context.setStatus(
+            row,
+            threadSkipErrorDetails()
+                ? Status::UserError()
+                : Status::UserError("Decimal overflow in bround."));
+        return;
+      }
+      values[row] = static_cast<TResult>(rounded * multiplier_);
+    });
+  }
+
+ private:
+  const int64_t roundingDigitCount_;
+  const int32_t requestedScale_;
+  const bool scaleUnderflows_;
+  const bool roundsToZero_;
+  const int128_t divisor_;
+  const int128_t multiplier_;
+  const int128_t limitBeforeMultiply_;
+};
+
+TypePtr decimalResultType(const TypePtr& inputType, int32_t requestedScale) {
+  const auto [precision, scale] = getDecimalPrecisionScale(*inputType);
+  const int64_t integralDigits = static_cast<int64_t>(precision) - scale + 1;
+  if (requestedScale < 0) {
+    const int32_t requiredPrecision = std::bit_cast<int32_t>(
+        uint32_t{0} - static_cast<uint32_t>(requestedScale) + uint32_t{1});
+    return DECIMAL(
+        std::min<int64_t>(
+            std::max<int64_t>(integralDigits, requiredPrecision),
+            LongDecimalType::kMaxPrecision),
+        0);
+  }
+  const int32_t resultScale = std::min<int32_t>(scale, requestedScale);
+  return DECIMAL(
+      std::min<int64_t>(
+          integralDigits + resultScale, LongDecimalType::kMaxPrecision),
+      resultScale);
+}
+
+class DecimalBRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
+ public:
+  explicit DecimalBRoundCallToSpecialForm(std::string functionName)
+      : functionName_(std::move(functionName)) {}
+
+  TypePtr resolveType(const std::vector<TypePtr>& /*argTypes*/) override {
+    VELOX_USER_FAIL(
+        "{} requires an explicitly resolved result type.", functionName_);
+  }
+
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& args,
+      bool trackCpuUsage,
+      const core::QueryConfig& /*config*/) override {
+    VELOX_USER_CHECK(
+        args.size() == 1 || args.size() == 2,
+        "{} expects one or two arguments.",
+        functionName_);
+    VELOX_USER_CHECK(
+        args[0]->type()->isDecimal(),
+        "The first argument of {} must be decimal.",
+        functionName_);
+
+    int32_t scale{0};
+    std::shared_ptr<exec::ConstantExpr> scaleExpression;
+    bool nullScale{false};
+    if (args.size() == 2) {
+      VELOX_USER_CHECK(
+          args[1]->type()->isInteger(),
+          "The second argument of {} must be INTEGER.",
+          functionName_);
+      scaleExpression = std::dynamic_pointer_cast<exec::ConstantExpr>(args[1]);
+      VELOX_USER_CHECK_NOT_NULL(
+          scaleExpression,
+          "The second argument of {} must be a constant expression.",
+          functionName_);
+      const auto* constant =
+          scaleExpression->value()->asUnchecked<ConstantVector<int32_t>>();
+      nullScale = constant->isNullAt(0);
+      if (!nullScale) {
+        scale = constant->valueAt(0);
+      }
+    }
+
+    const auto expectedType = decimalResultType(args[0]->type(), scale);
+    VELOX_USER_CHECK(
+        type->equivalent(*expectedType),
+        "Invalid result type for {}: expected {}, got {}.",
+        functionName_,
+        expectedType->toString(),
+        type->toString());
+    if (nullScale) {
+      return std::make_shared<exec::ConstantExpr>(
+          BaseVector::createNullConstant(
+              type, 1, scaleExpression->value()->pool()));
+    }
+
+    const auto inputScale = getDecimalPrecisionScale(*args[0]->type()).second;
+    const auto resultPrecision = getDecimalPrecisionScale(*type).first;
+    std::shared_ptr<exec::VectorFunction> function;
+    if (args[0]->type()->isShortDecimal()) {
+      if (type->isShortDecimal()) {
+        function = std::make_shared<DecimalBRoundFunction<int64_t, int64_t>>(
+            inputScale, scale, resultPrecision);
+      } else {
+        function = std::make_shared<DecimalBRoundFunction<int64_t, int128_t>>(
+            inputScale, scale, resultPrecision);
+      }
+    } else if (type->isShortDecimal()) {
+      function = std::make_shared<DecimalBRoundFunction<int128_t, int64_t>>(
+          inputScale, scale, resultPrecision);
+    } else {
+      function = std::make_shared<DecimalBRoundFunction<int128_t, int128_t>>(
+          inputScale, scale, resultPrecision);
+    }
+
+    return std::make_shared<exec::Expr>(
+        type,
+        std::move(args),
+        std::move(function),
+        exec::VectorFunctionMetadata{},
+        functionName_,
+        trackCpuUsage);
+  }
+
+ private:
+  const std::string functionName_;
+};
 
 } // namespace
 
@@ -482,6 +268,27 @@ Status detail::broundFloatingPoint(float value, int32_t scale, float& result) {
 Status
 detail::broundFloatingPoint(double value, int32_t scale, double& result) {
   return broundFloatingPointImpl(value, scale, result);
+}
+
+void registerBRoundFunctions(const std::string& prefix) {
+  registerUnaryNumeric<BRoundFunction>({prefix + "bround"});
+  registerFunction<BRoundFunction, int8_t, int8_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, int16_t, int16_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, int32_t, int32_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, int64_t, int64_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, float, float, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, double, double, Constant<int32_t>>(
+      {prefix + "bround"});
+
+  const auto decimalName = prefix + kBRoundDecimal;
+  exec::registerFunctionCallToSpecialForm(
+      decimalName,
+      std::make_unique<DecimalBRoundCallToSpecialForm>(decimalName));
 }
 
 } // namespace facebook::velox::functions::sparksql
