@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <mutex>
 #include <string_view>
 
 #include "velox/exec/GroupingSet.h"
@@ -152,6 +153,11 @@ class HashAggregation : public Operator {
   const int32_t abandonPartialAggregationMinPct_;
 
   int64_t maxPartialAggregationMemoryUsage_;
+
+  // Guards 'groupingSet_' between close() and a peer driver that reads or
+  // takes it after all peers finish. Task termination closes waiting peers
+  // concurrently with that driver.
+  std::mutex mutex_;
   std::unique_ptr<GroupingSet> groupingSet_;
 
   // Cached from groupingSet_->hasCompactableAggregates() during initialize().

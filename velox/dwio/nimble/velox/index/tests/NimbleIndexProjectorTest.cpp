@@ -24,15 +24,23 @@
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
+#include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
+#include "velox/dwio/nimble/serializer/StreamDataParser.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
+#include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/BatchReader.h"
+#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
@@ -91,6 +99,19 @@ std::optional<std::string> readEmbeddedResumeKey(const folly::IOBuf& slice) {
 // — no over-fetch.
 folly::IOBuf coalesceChunkSlice(const folly::IOBuf& slice) {
   return slice.cloneCoalescedAsValue();
+}
+
+HybridFlatMap makeHybridFlatMapConfig(
+    const std::vector<std::vector<std::string>>& explicitGroups) {
+  HybridFlatMap hybridMap;
+  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
+    hybridMap.groups.push_back(
+        {.groupId = groupId, .groupKeys = explicitGroups[groupId]});
+  }
+  hybridMap.groups.push_back(
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+  return hybridMap;
 }
 
 } // namespace
@@ -393,7 +414,8 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
       bool setDataIoStats = true,
       bool setMetadataIoStats = true,
       bool setIndexIoStats = true,
-      bool cacheData = false) {
+      bool cacheData = false,
+      bool verifyStreamChecksums = false) {
     dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
     metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
     indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
@@ -409,6 +431,7 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
     }
     readerOptions.setFileFormat(FileFormat::NIMBLE);
     readerOptions.setLoadClusterIndex(true);
+    readerOptions.setVerifyStreamChecksums(verifyStreamChecksums);
     readerOptions.setCacheData(cacheData);
     if (cacheData) {
       readerOptions.setCache(velox::checkedNotNull(dataCache()));
@@ -2080,7 +2103,7 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
           std::string_view subfield,
           const folly::F14FastMap<std::string, std::set<std::string>>&
               flatMapColumns,
-          bool expectedRequiresNullBarrier) {
+          bool expectedRequiredBarrier) {
         writeData(
             {batch},
             {"key"},
@@ -2098,8 +2121,8 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
         ASSERT_EQ(result.responses[0].slices.size(), 1);
         EXPECT_EQ(
             readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                .requiresNullBarrier,
-            expectedRequiresNullBarrier);
+                .requiredBarrier,
+            expectedRequiredBarrier);
       };
 
   const auto nestedNoNulls = makeNestedBatch(false);
@@ -2131,6 +2154,155 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
       "features[\"a\"]",
       {{"features", {}}},
       true);
+}
+
+TEST_P(
+    NimbleIndexProjectorTest,
+    hybridFlatMapProjectionPreservesBatchBoundaries) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  constexpr vector_size_t kRowsPerBatch = 2;
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(INTEGER(), BIGINT())}});
+  const auto makeBatch = [&](int64_t keyBase,
+                             const std::vector<std::vector<Entry>>& maps) {
+    return vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerBatch, [keyBase](auto row) { return keyBase + row; }),
+         vectorMaker_->mapVector<int32_t, int64_t>(maps)});
+  };
+  const std::vector<RowVectorPtr> batches{
+      makeBatch(0, {{{1, 10}, {2, 20}}, {{1, 11}}}),
+      makeBatch(2, {{{1, 12}}, {{2, 23}}}),
+  };
+
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMapConfig({{"1", "2"}})}},
+      },
+      rowType,
+      leafPool_.get()};
+  index::test::TestClusterIndexMetadataWriter indexWriter{
+      *leafPool_,
+      {"key"},
+      {SortOrder{.ascending = true}},
+      /*enforceKeyOrder=*/true,
+      /*noDuplicateKey=*/true};
+  auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
+  auto* writeFilePtr = writeFile.get();
+  auto tabletWriter = TabletWriter::create(
+      writeFilePtr,
+      *leafPool_,
+      {
+          .metadataFlushThreshold = 1 << 20,
+          .streamDeduplicationEnabled = false,
+          .stripeGroupFlushCallback =
+              indexWriter.createStripeGroupFlushCallback(),
+          .closeCallback = indexWriter.createCloseCallback(),
+      });
+
+  for (size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+    const auto& batch = batches[batchIndex];
+    const std::string serialized{
+        serializer.serialize(batch, OrderedRanges::of(0, batch->size()))};
+    serde::StreamDataParser parser{leafPool_.get()};
+    ASSERT_EQ(parser.initialize(serialized), kRowsPerBatch);
+    ASSERT_TRUE(parser.requiredBarrier());
+
+    std::vector<std::unique_ptr<Buffer>> chunkBuffers;
+    std::vector<Stream> streams;
+    parser.iterateStreams([&](uint32_t streamOffset,
+                              std::string_view streamData) {
+      auto chunkBuffer = std::make_unique<Buffer>(*leafPool_);
+      ChunkedStreamWriter chunkWriter{*chunkBuffer};
+      auto content = chunkWriter.encode(streamData);
+      streams.push_back(
+          {.offset = streamOffset,
+           .chunks = {
+               {.rowCount = kRowsPerBatch, .content = std::move(content)}}});
+      chunkBuffers.push_back(std::move(chunkBuffer));
+    });
+
+    std::vector<index::test::KeyChunkSpec> keyChunks;
+    keyChunks.reserve(kRowsPerBatch);
+    for (vector_size_t row = 0; row < kRowsPerBatch; ++row) {
+      auto key = makePointLookup(
+          rowType,
+          {"key"},
+          static_cast<int64_t>(batchIndex * kRowsPerBatch + row));
+      ASSERT_TRUE(key.lowerKey.has_value());
+      keyChunks.push_back({.rowCount = 1, .key = *key.lowerKey});
+    }
+    indexWriter.addStripe(keyChunks);
+    tabletWriter->writeStripe(kRowsPerBatch, std::move(streams));
+  }
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  SchemaSerializer schemaSerializer;
+  tabletWriter->writeOptionalSection(
+      std::string{kSchemaSection}, schemaSerializer.serialize(*schema));
+  tabletWriter->writeOptionalSection(
+      std::string{kPropertiesSection},
+      FileProperties(
+          /*compactRowCountEncoding=*/true,
+          /*clusterIndexKeyColumnStorageOmitted=*/false,
+          /*clusterIndexKeyColumnsWithOmittedStorage=*/{})
+          .serialize());
+  tabletWriter->close();
+  writeFile->close();
+
+  TabletReaderCache::testingReset();
+  tabletReaderCache_.reset();
+  keyEncoder_.reset();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[1]");
+  auto projector = createProjector(subfields);
+  const auto& projectedMap =
+      projector->projectedNimbleType()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(
+      projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1", "2"}));
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 1, 3)};
+  NimbleIndexProjector::Options options;
+  options.maxOverfetchRowsRatio = 0;
+  auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 1);
+  ASSERT_EQ(result.responses[0].slices.size(), batches.size());
+  EXPECT_EQ(projector->stats().numSlicedStripes, 0);
+  std::vector<folly::IOBuf> owned;
+  std::vector<std::string_view> projectedBatches;
+  owned.reserve(result.responses[0].slices.size());
+  projectedBatches.reserve(result.responses[0].slices.size());
+  const std::array<RowRange, 2> expectedRanges{RowRange{1, 2}, RowRange{0, 1}};
+  for (size_t i = 0; i < result.responses[0].slices.size(); ++i) {
+    const auto& slice = result.responses[0].slices[i];
+    EXPECT_TRUE(readEmbeddedTabletChunkHeader(slice).requiredBarrier);
+    EXPECT_EQ(readEmbeddedRowRange(slice), expectedRanges[i]);
+    owned.push_back(coalesceChunkSlice(slice));
+    projectedBatches.emplace_back(
+        reinterpret_cast<const char*>(owned.back().data()),
+        owned.back().length());
+  }
+
+  Deserializer deserializer{
+      projector->projectedNimbleType(),
+      subfields,
+      leafPool_.get(),
+      DeserializerOptions{}};
+  VectorPtr output;
+  deserializer.deserialize(projectedBatches, output);
+  auto expected = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          std::vector<std::vector<Entry>>{{{1, 11}}, {{1, 12}}})});
+  expectVectorRows(output, expected);
 }
 
 TEST_P(
@@ -2181,11 +2353,11 @@ TEST_P(
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 3);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
   EXPECT_TRUE(readEmbeddedTabletChunkHeader(result.responses[0].slices[1])
-                  .requiresNullBarrier);
+                  .requiredBarrier);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[2])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
 
   std::vector<folly::IOBuf> owned;
   std::vector<std::string_view> batches;
@@ -2257,7 +2429,7 @@ TEST_P(
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
   EXPECT_FALSE(readEmbeddedTabletChunkHeader(result.responses[0].slices[0])
-                   .requiresNullBarrier);
+                   .requiredBarrier);
 
   auto output =
       deserializeProjectedSlice(*projector, result.responses[0].slices[0]);
@@ -2670,7 +2842,7 @@ TEST_P(NimbleIndexProjectorTest, projectedComplexNullFuzzer) {
       const auto& slice = result.responses[0].slices[batchIndex];
       EXPECT_EQ(readEmbeddedRowRange(slice), RowRange(0, kRowsPerBatch));
       EXPECT_EQ(
-          readEmbeddedTabletChunkHeader(slice).requiresNullBarrier,
+          readEmbeddedTabletChunkHeader(slice).requiredBarrier,
           batchIndex % 2 == 1);
     }
 
@@ -2781,7 +2953,7 @@ TEST_P(NimbleIndexProjectorTest, deserializerRangeFullStripe) {
 #undef RUN_DESERIALIZER_RANGE_TEST
 
 // Barrier + windowed kTablet + caller rowRange together. The projector marks a
-// slice `requiresNullBarrier` whenever a Row/FlatMap null stream is physically
+// slice `requiredBarrier` whenever a Row/FlatMap null stream is physically
 // present, so this combination is production-shaped rather than synthetic.
 TEST_P(NimbleIndexProjectorTest, deserializerRowRangeOnBarrierWindowedSlice) {
   auto nestedType = ROW({"b"}, {INTEGER()});
@@ -2824,7 +2996,7 @@ TEST_P(NimbleIndexProjectorTest, deserializerRowRangeOnBarrierWindowedSlice) {
   ASSERT_EQ(header.rowRange.startRow, kWindowStart);
   ASSERT_EQ(header.rowRange.endRow, kWindowEnd);
   // Without this the test would silently cover only the ordinary path.
-  ASSERT_TRUE(header.requiresNullBarrier);
+  ASSERT_TRUE(header.requiredBarrier);
 
   // Caller [0, 10) narrows the [30, 60) window to stripe rows [30, 40), which
   // spans the null at row 32. Compare against the unranged decode sliced the
@@ -3380,11 +3552,14 @@ TEST_P(NimbleIndexProjectorTest, statsToString) {
   stats.numReadRows = 1'000;
   stats.numProjectedRows = 800;
   stats.numOutputBytes = 8'192;
+  stats.numPlannedBytes = 16'384;
+  stats.numMaxBytesTruncations = 2;
   EXPECT_EQ(
       stats.toString(),
       "Stats(numReadStripes=3, numSlicedStripes=1, "
       "slicedStripePct=33.33%, numReadRows=1000, numProjectedRows=800, "
-      "numOutputBytes=8.00KB, "
+      "numOutputBytes=8.00KB, numPlannedBytes=16.00KB, "
+      "numMaxBytesTruncations=2, "
       "lookupTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "prepareTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "scanTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
@@ -4925,6 +5100,66 @@ TEST_P(NimbleIndexProjectorTest, maxBytesNoTruncation) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, plannedBytesAndMaxBytesTruncations) {
+  writeResumeKeyTestData();
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+
+  // Each stripe holds 100 keys, so [100 * i, 100 * (i + 1)) is stripe i.
+  const auto project = [&](int64_t lowerKey,
+                           int64_t upperKey,
+                           const NimbleIndexProjector::Options& options) {
+    auto projector = createProjector(subfields);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, lowerKey, upperKey)};
+    projector->projectStreams(request, options);
+    return projector->stats();
+  };
+
+  std::vector<uint64_t> stripeBytes;
+  uint64_t totalStripeBytes{0};
+  for (int64_t stripe = 0; stripe < 5; ++stripe) {
+    stripeBytes.push_back(
+        project(stripe * 100, (stripe + 1) * 100, {}).numPlannedBytes);
+    ASSERT_GT(stripeBytes.back(), 0);
+    totalStripeBytes += stripeBytes.back();
+  }
+
+  // Unlimited, a range over the five stripes plans all of them.
+  {
+    const auto stats = project(0, 500, {});
+    EXPECT_EQ(stats.numPlannedBytes, totalStripeBytes);
+    EXPECT_EQ(stats.numMaxBytesTruncations, 0);
+  }
+
+  // A limit that the first two stripes meet exactly stops the projection
+  // there, and the total is the value that was compared against it.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxBytes = stripeBytes[0] + stripeBytes[1];
+    const auto stats = project(0, 500, options);
+    EXPECT_EQ(stats.numPlannedBytes, options.maxBytes);
+    EXPECT_EQ(stats.numReadStripes, 2);
+    EXPECT_EQ(stats.numMaxBytesTruncations, 1);
+  }
+
+  // Meeting the limit on the range's last stripe cuts nothing short.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxBytes = stripeBytes[0] + stripeBytes[1];
+    EXPECT_EQ(project(0, 200, options).numMaxBytesTruncations, 0);
+  }
+
+  // A projection stopped by the row limit is not a byte truncation.
+  {
+    NimbleIndexProjector::Options options;
+    options.maxRows = 100;
+    EXPECT_EQ(project(0, 500, options).numMaxBytesTruncations, 0);
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, maxBytesPagination) {
   writeResumeKeyTestData();
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
@@ -5875,6 +6110,19 @@ class NimbleIndexProjectorChecksumTest
     return GetParam().reader;
   }
 
+  // Creates a projector whose reader options ask it to verify stream checksums.
+  std::unique_ptr<NimbleIndexProjector> createVerifyingProjector(
+      const std::vector<Subfield>& projectedSubfields) {
+    return createProjectorWithFileHandle(
+        projectedSubfields,
+        makeFileHandle(),
+        /*setDataIoStats=*/true,
+        /*setMetadataIoStats=*/true,
+        /*setIndexIoStats=*/true,
+        /*cacheData=*/false,
+        /*verifyStreamChecksums=*/true);
+  }
+
   ProjectionSummary project(
       NimbleIndexProjector& projector,
       const NimbleIndexProjector::Request& request,
@@ -5927,12 +6175,12 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumVerificationPasses) {
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   NimbleIndexProjector::Request request;
   request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {.verifyStreamChecksums = true});
+  auto result = project(*projector, request, {});
 
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
@@ -5958,40 +6206,69 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumDetectsCorruptedStream) {
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   NimbleIndexProjector::Request request;
   request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
   NIMBLE_ASSERT_THROW(
-      project(*projector, request, {.verifyStreamChecksums = true}),
-      "Stream checksum mismatch");
+      project(*projector, request, {}), "Stream checksum mismatch");
 }
 
-// Asking for verification against a file written without checksums must fail
-// when the projector is created, not part-way through a scan.
-// Opening a file that carries no checksums succeeds even when the reader asked
-// to verify: only a request that asks for verification fails, and it fails when
-// it is issued. Reads that do not ask for it keep working on the same
-// projector.
+// A reader that asks to verify still reads a file written without checksums:
+// the file is read unverified, so turning verification on ahead of the writers
+// does not fail reads of older files.
 TEST_P(
     NimbleIndexProjectorChecksumTest,
-    streamChecksumVerificationRequiresChecksums) {
+    streamChecksumVerificationSkipsFileWithoutChecksums) {
   auto batch = makeStreamChecksumBatch(*vectorMaker_, 100);
   writeData({batch}, {"key"});
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   NimbleIndexProjector::Request request;
   request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
 
-  NIMBLE_ASSERT_THROW(
-      project(*projector, request, {.verifyStreamChecksums = true}),
-      "Stream checksum verification requested, but the file carries no stream checksums.");
+  auto result = project(*projector, request, {});
+  ASSERT_EQ(result.responseHasData.size(), 1);
+  EXPECT_TRUE(result.responseHasData[0]);
+}
 
+// The file's checksum type is resolved only to verify. A type this binary
+// cannot build fails a projector that verifies, when it is created, and is
+// ignored by one that does not.
+TEST_P(
+    NimbleIndexProjectorChecksumTest,
+    streamChecksumTypeResolvedOnlyWhenVerifying) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 100);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+  // The checksum type byte follows the footer size and compression type in the
+  // postscript, and the reader copies it without validation.
+  sinkData_[sinkData_.size() - kPostscriptSize + kPostscriptChecksumedSize] =
+      static_cast<char>(200);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  NIMBLE_ASSERT_THROW(
+      createVerifyingProjector(subfields), "Unsupported checksum type");
+
+  auto projector = createProjector(subfields);
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
   auto result = project(*projector, request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
@@ -6040,14 +6317,14 @@ TEST_P(
 
     std::vector<Subfield> subfields;
     subfields.emplace_back("value");
-    auto projector = createProjector(subfields);
+    auto projector = createVerifyingProjector(subfields);
 
     // Span the whole key range so the projection crosses stripe groups.
     auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
     NimbleIndexProjector::Request request;
     request.keyBounds = {makePointLookup(rowType, {"key"}, 10)};
     request.keyBounds.push_back(makePointLookup(rowType, {"key"}, 39'990));
-    auto result = project(*projector, request, {.verifyStreamChecksums = true});
+    auto result = project(*projector, request, {});
 
     ASSERT_EQ(result.responseHasData.size(), 2);
     for (const auto hasData : result.responseHasData) {
@@ -6078,7 +6355,7 @@ TEST_P(
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
 
   // Vary the number of requests per call so the enqueue count differs between
@@ -6090,7 +6367,7 @@ TEST_P(
       request.keyBounds.push_back(
           makePointLookup(rowType, {"key"}, 10 * (i + 1)));
     }
-    auto result = project(*projector, request, {.verifyStreamChecksums = true});
+    auto result = project(*projector, request, {});
     ASSERT_EQ(result.responseHasData.size(), call + 1);
     for (const auto hasData : result.responseHasData) {
       EXPECT_TRUE(hasData);
@@ -6100,16 +6377,19 @@ TEST_P(
 
 // A projector must stay usable after a verification failure: each projection
 // clears its DataInput on the way out, so the next call starts from a clean
-// index.
+// index. Only stripe 0 is corrupted, so a later request that reads another
+// stripe must still succeed on the same projector.
 TEST_P(
     NimbleIndexProjectorChecksumTest,
     streamChecksumFailureLeavesProjectorUsable) {
-  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  // One stripe per 100-row batch.
+  auto batches = makeStreamChecksumBatches(
+      *vectorMaker_, /*numBatches=*/4, /*rowsPerBatch=*/100);
   writeData(
-      {batch},
+      batches,
       {"key"},
       /*flatMapColumns=*/{},
-      /*stripeSize=*/1 << 20,
+      /*stripeSize=*/1 << 10,
       /*enableStreamDeduplication=*/true,
       /*compactRowCountEncoding=*/false,
       /*chunkCompressionType=*/CompressionType::Uncompressed,
@@ -6119,20 +6399,20 @@ TEST_P(
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  NimbleIndexProjector::Request firstStripeRequest;
+  firstStripeRequest.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  NimbleIndexProjector::Request lastStripeRequest;
+  lastStripeRequest.keyBounds = {makePointLookup(rowType, {"key"}, 3'500)};
 
-  // Reading without verification succeeds before and after the failure.
-  EXPECT_TRUE(project(*projector, request, {}).responseHasData[0]);
+  EXPECT_TRUE(project(*projector, firstStripeRequest, {}).responseHasData[0]);
 
   corruptProjectedStreams();
   NIMBLE_ASSERT_THROW(
-      project(*projector, request, {.verifyStreamChecksums = true}),
-      "Stream checksum mismatch");
+      project(*projector, firstStripeRequest, {}), "Stream checksum mismatch");
 
-  auto result = project(*projector, request, {});
+  auto result = project(*projector, lastStripeRequest, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -6172,13 +6452,13 @@ TEST_P(
   std::vector<Subfield> subfields;
   subfields.emplace_back("valueA");
   subfields.emplace_back("valueB");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
 
   auto rowType =
       ROW({"key", "valueA", "valueB"}, {BIGINT(), INTEGER(), INTEGER()});
   NimbleIndexProjector::Request request;
   request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {.verifyStreamChecksums = true});
+  auto result = project(*projector, request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -6254,21 +6534,20 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumsWithFlatMapColumns) {
   subfields.emplace_back("features[\"a\"]");
   subfields.emplace_back("features[\"b\"]");
   subfields.emplace_back("features[\"c\"]");
-  auto projector = createProjector(subfields);
+  auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "features"}, {BIGINT(), MAP(VARCHAR(), BIGINT())});
   NimbleIndexProjector::Request request;
   request.keyBounds = {makePointLookup(rowType, {"key"}, 500)};
-  auto result = project(*projector, request, {.verifyStreamChecksums = true});
+  auto result = project(*projector, request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 
   // And a corrupted flat-map stream is still caught.
   corruptProjectedStreams();
-  auto corruptedProjector = createProjector(subfields);
+  auto corruptedProjector = createVerifyingProjector(subfields);
   NIMBLE_ASSERT_THROW(
-      project(*corruptedProjector, request, {.verifyStreamChecksums = true}),
-      "Stream checksum mismatch");
+      project(*corruptedProjector, request, {}), "Stream checksum mismatch");
 }
 
 // Checksums present but verification off: reads proceed and corruption goes

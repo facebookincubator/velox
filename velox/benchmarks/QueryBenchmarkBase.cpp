@@ -15,6 +15,7 @@
  */
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
+#include <folly/String.h>
 #include <iostream>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
@@ -116,7 +117,11 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
-DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
+DEFINE_string(
+    query_configs,
+    "",
+    "Semicolon-separated Velox query configs applied to every query, "
+    "e.g. 'key1=value1;key2=value2'.");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -168,7 +173,38 @@ void QueryBenchmarkBase::printResults(
   }
 }
 
+namespace {
+// Parses the semicolon-separated key=value entries of --query_configs into
+// 'queryConfigs'. Whitespace around each entry, key and value is trimmed.
+// Empty entries are skipped.
+void applyQueryConfigOverrides(
+    std::unordered_map<std::string, std::string>& queryConfigs) {
+  if (FLAGS_query_configs.empty()) {
+    return;
+  }
+  std::vector<std::string_view> entries;
+  folly::split(";", FLAGS_query_configs, entries);
+  for (const auto& rawEntry : entries) {
+    const std::string_view entry = folly::trimWhitespace(rawEntry);
+    if (entry.empty()) {
+      continue;
+    }
+    const auto equals = entry.find('=');
+    VELOX_USER_CHECK_NE(
+        equals,
+        std::string_view::npos,
+        "Invalid --query_configs entry, expected key=value: '{}'",
+        entry);
+    const std::string_view key = folly::trimWhitespace(entry.substr(0, equals));
+    const std::string_view value =
+        folly::trimWhitespace(entry.substr(equals + 1));
+    queryConfigs[std::string(key)] = std::string(value);
+  }
+}
+} // namespace
+
 void QueryBenchmarkBase::initialize() {
+  applyQueryConfigOverrides(config_);
   if (FLAGS_cache_gb) {
     memory::MemoryManager::Options options;
     int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
@@ -265,8 +301,9 @@ QueryBenchmarkBase::run(
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
       params.queryConfigs = queryConfigs;
-      params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
-          std::to_string(FLAGS_split_preload_per_driver);
+      for (const auto& [key, value] : config_) {
+        params.queryConfigs[key] = value;
+      }
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {

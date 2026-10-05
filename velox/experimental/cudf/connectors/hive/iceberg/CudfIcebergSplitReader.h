@@ -282,7 +282,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // has transformed it differently from the pushed filter.
   std::optional<TransformedFilter> transformedLogicalFilter_;
 
-  // Top-level column names and total row count from the file metadata
+  // Top-level column names and total row count from the file metadata.
   std::unordered_set<std::string> fileColumnNames_;
 
   // Tracks the absolute row range covered by the split.

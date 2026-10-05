@@ -2029,19 +2029,16 @@ class FlatMapFieldWriter : public FieldWriter {
 template <velox::TypeKind K>
 class HybridFlatMapFieldWriter : public FieldWriter {
   using KeyType = typename velox::TypeTraits<K>::NativeType;
-  using KeyStreamType = std::
-      conditional_t<K == velox::TypeKind::VARCHAR, std::string_view, KeyType>;
-
   struct Group {
     uint32_t groupId{};
     std::vector<std::string> groupKeys;
-    ContentStreamData<KeyStreamType>* keyStream{nullptr};
-    ContentStreamData<bool>* inMapStream{nullptr};
+    ContentStreamData<bool>& keyPresenceStream;
+    ContentStreamData<bool>& inMapStream;
     std::unique_ptr<FieldWriter> valueWriter;
 
     void reset() {
-      keyStream->reset();
-      inMapStream->reset();
+      keyPresenceStream.reset();
+      inMapStream.reset();
       valueWriter->reset();
     }
   };
@@ -2200,29 +2197,33 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     groupByKey_.reserve(configuredGroupKeyCount);
 
     // Each group owns a complete value subtree; the schema node carries its
-    // key and in-map descriptors.
+    // key-presence and in-map descriptors.
     const auto addGroup = [&](uint32_t groupId,
                               std::vector<std::string> groupKeys) -> Group& {
       auto valueWriter = FieldWriter::create(context_, valueType_);
       const auto descriptors = hybridTypeBuilder.addGroup(
           groupId, std::move(groupKeys), valueWriter->typeBuilder());
-      auto* keyStream = &context_.createContentStreamData<KeyStreamType>(
-          descriptors.keyDescriptor, nodeId_);
-      auto* inMapStream = &context_.createContentStreamData<bool>(
+      auto& keyPresenceStream = context_.createContentStreamData<bool>(
+          descriptors.keyPresenceDescriptor, nodeId_);
+      auto& inMapStream = context_.createContentStreamData<bool>(
           descriptors.inMapDescriptor, nodeId_);
+      // The reader consumes each group's key-presence and in-map metadata
+      // atomically.
+      keyPresenceStream.disableChunking();
+      inMapStream.disableChunking();
 
       return groups_.emplace_back(
           Group{
               .groupId = groupId,
               .groupKeys = {},
-              .keyStream = keyStream,
+              .keyPresenceStream = keyPresenceStream,
               .inMapStream = inMapStream,
               .valueWriter = std::move(valueWriter),
           });
     };
 
-    // Build the writer-lifetime lookup for configured keys. Unknown keys are
-    // routed to Default for the current batch without changing this index.
+    // Build the writer-lifetime lookup for configured keys. Default keys join
+    // this lookup when first observed and retain that schema ordinal.
     for (const auto& configuredGroup : hybridMap.groups) {
       const auto groupIndex = groups_.size();
       const bool isDefault =
@@ -2247,38 +2248,28 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         nodeId_);
   }
 
-  void writeKey(Group& group, std::string_view key) {
-    auto& keys = group.keyStream->mutableData();
-    if constexpr (K == velox::TypeKind::VARCHAR) {
-      keys.push_back(context_.stringBuffer().writeString(key));
-      group.keyStream->extraMemory() += key.size();
-    } else {
-      const auto parsed = folly::tryTo<KeyType>(key);
-      NIMBLE_CHECK(
-          parsed.hasValue(), "Invalid canonical Hybrid FlatMap key: {}.", key);
-      keys.push_back(parsed.value());
-    }
-  }
-
   KeyBatch& getOrCreateKeyBatch(
       const std::string& key,
       uint32_t nonNullCount,
-      folly::F14FastMap<std::string, KeyBatch>& batches,
-      std::vector<std::vector<std::string>>& batchGroupKeys) const {
+      folly::F14FastMap<std::string, KeyBatch>& batches) {
     auto [batch, inserted] = batches.try_emplace(key);
     if (!inserted) {
       return batch->second;
     }
-    const auto group = groupByKey_.find(key);
-    const bool isDefaultKey = group == groupByKey_.end();
-    const auto groupIndex = isDefaultKey ? *defaultGroupIndex_ : group->second;
+    auto group = groupByKey_.find(key);
+    if (group == groupByKey_.end()) {
+      NIMBLE_CHECK(
+          defaultGroupIndex_.has_value(),
+          "Hybrid FlatMap Default group is not initialized.");
+      const auto defaultGroupIndex = *defaultGroupIndex_;
+      auto& defaultGroup = groups_[defaultGroupIndex];
+      defaultGroup.groupKeys.push_back(key);
+      typeBuilder_->asHybridFlatMap().appendDefaultGroupKey(key);
+      group = groupByKey_.emplace(key, defaultGroupIndex).first;
+    }
+    const auto groupIndex = group->second;
     batch->second.groupIndex = groupIndex;
     batch->second.inMap.resize(nonNullCount, false);
-    // Default keys are absent from schema metadata. Record each distinct key
-    // once, in first-seen order, to align its key, in-map, and value streams.
-    if (isDefaultKey) {
-      batchGroupKeys[groupIndex].push_back(batch->first);
-    }
     return batch->second;
   }
 
@@ -2308,9 +2299,9 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         reordered, OrderedRanges::of(0, reordered->size()));
   }
 
-  // Builds per-key state for one MapVector batch, then emits configured keys in
-  // schema order and Default keys in first-seen order. Row ordinals exclude
-  // null maps; Default keys remain local to this batch.
+  // Builds per-key state for one MapVector batch, then emits each group's key
+  // presence bitmap in schema order. Row ordinals exclude null maps. Default
+  // keys remain in the schema catalog across resets in first-seen order.
   void ingestMap(const velox::VectorPtr& vector, const OrderedRanges& ranges) {
     NIMBLE_CHECK(!written_, "Hybrid FlatMap supports one write per reset.");
     written_ = true;
@@ -2357,7 +2348,6 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     const auto nonNullCount = static_cast<uint32_t>(nonNullRows.size());
     folly::F14FastMap<std::string, KeyBatch> batches;
     batches.reserve(groupByKey_.size());
-    std::vector<std::vector<std::string>> batchGroupKeys(groups_.size());
     uint64_t totalKeyCount{0};
     uint64_t totalKeyStringSize{0};
     auto processMap = [&](velox::vector_size_t row,
@@ -2372,8 +2362,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
           totalKeyStringSize += key.size();
         }
 
-        auto& batch =
-            getOrCreateKeyBatch(key, nonNullCount, batches, batchGroupKeys);
+        auto& batch = getOrCreateKeyBatch(key, nonNullCount, batches);
         NIMBLE_CHECK(
             !batch.inMap[rowOrdinal],
             "Duplicate key: {} at hybrid FlatMap with node id {}",
@@ -2407,19 +2396,24 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         "Hybrid FlatMap Default group is not initialized.");
     for (size_t groupIndex = 0; groupIndex < groups_.size(); ++groupIndex) {
       auto& group = groups_[groupIndex];
+      const bool hasPresentKey = std::any_of(
+          group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
+            return batches.contains(key);
+          });
+      if (!hasPresentKey) {
+        continue;
+      }
       std::vector<velox::vector_size_t> groupValueIndices;
-      const auto& groupKeys = group.groupId == HybridFlatMap::kDefaultGroupId
-          ? batchGroupKeys[groupIndex]
-          : group.groupKeys;
-      for (const auto& key : groupKeys) {
+      auto& keyPresence = group.keyPresenceStream.mutableData();
+      for (const auto& key : group.groupKeys) {
         const auto batchIt = batches.find(key);
+        keyPresence.push_back(batchIt != batches.end());
         if (batchIt == batches.end()) {
           continue;
         }
-        writeKey(group, key);
         const auto& batch = batchIt->second;
         NIMBLE_DCHECK_EQ(batch.groupIndex, groupIndex);
-        auto& inMap = group.inMapStream->mutableData();
+        auto& inMap = group.inMapStream.mutableData();
         for (const auto present : batch.inMap) {
           inMap.push_back(present);
         }
