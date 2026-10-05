@@ -336,27 +336,45 @@ derived from the ratio of baseline to observed RTT). Tunables:
 (<code class="docutils literal notranslate"><span class="pre">velox/exec/rpc/RPCRateLimiter.h</span></code>), one instance per admission key,
 obtained from the process-scoped <code class="docutils literal notranslate"><span class="pre">RPCRateLimiterRegistry</span></code> and keyed by
 <code class="docutils literal notranslate"><span class="pre">admissionKey()</span></code>:
-an AIMD limit shared across every driver hitting that backend —
-multiplicative decrease on overload, additive increase on success. Distinct
-admission keys adapt independently; functions returning the same key,
-including <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>, share one controller. The worker properties are
+an adaptive limit shared across every driver hitting that backend —
+multiplicative decrease on overload, doubling recovery below one, and
+additive increase at or above one. Distinct admission keys adapt
+independently; functions returning the same key, including <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>, share
+one controller. The worker properties are
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.adaptive_enabled</span></code>, <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code>,
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.decrease_factor</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> (see <a class="reference internal" href="../configs.html"><span class="doc">Configuration properties</span></a>).</p>
-<p>Despite the name it bounds <em>concurrency</em>, not a rate: capacity is a semaphore
-over in-flight units. The class, configuration, and runtime-stat names retain
-the historical “rate limiter” terminology.</p>
+<p>At limits of at least one, capacity bounds concurrent in-flight units. Below
+one, the limiter admits one unit at a time and spaces admission starts using
+the smoothed successful RPC duration. The class and configuration names
+retain the historical “rate limiter” terminology.</p>
 </li>
 </ul>
 <p>Each admission key is configured by the first query that reaches it. Adaptive
-control defaults to enabled with a ceiling of 200, floor of 50, and decrease
-factor of 0.5. A positive <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> overrides the function’s
-<code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code>; <code class="docutils literal notranslate"><span class="pre">0</span></code> defers to the function. When both values are
-zero, the built-in ceiling is 20.</p>
-<p><code class="docutils literal notranslate"><span class="pre">evaluateCongestion()</span></code> returns one of five verdicts. <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> is the
-only verdict that directly applies multiplicative decrease to both controllers;
-a <code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> latency sample may independently reduce the per-driver gradient
-window.</p>
+control defaults to enabled with a legacy ceiling of 200, an integral session
+floor of 50, and a decrease factor of 0.5. Setting
+<code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code> to <code class="docutils literal notranslate"><span class="pre">0</span></code> delegates the floor to
+<code class="docutils literal notranslate"><span class="pre">configuredAdaptiveFloor()</span></code>. The legacy <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> keeps
+its original behavior during mixed-version rollout. A non-negative
+<code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.hard_limit</span></code> supersedes it: zero adds no session ceiling and
+a positive value is combined with <code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code> using the smaller
+positive value. Minus one, the default, retains legacy behavior. Functions that
+share an admission key must declare the same stable floor and ceiling. Later
+queries cannot reconfigure an initialized key until the worker restarts.</p>
+<p>With <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.hard_limit=0</span></code> and no function ceiling,
+<code class="docutils literal notranslate"><span class="pre">rpcRateLimiterHardLimit</span></code> is 1,000,000 while the current and lifetime
+low-water windows start at 200. A low-water value of 200 therefore does not
+prove overload. With a decrease factor of 0.5, overloads from successive
+admission epochs move the window from 200 to 100 to 50; completions admitted in
+the same epoch coalesce after the first decrease. If the function floor permits
+fractional pacing, successive overload epochs can move the window from 1 to 0.5
+to 0.25. Healthy completions never shrink the window: they recover 0.25 to 0.5
+to 1 before additive growth resumes, clamped at the hard limit.</p>
+<p><code class="docutils literal notranslate"><span class="pre">evaluateCongestion()</span></code> returns one of five verdicts. Canonical typed overload
+backs off shared admission at completion time before its lease is released; the
+driver later consumes the recorded marker to back off its local window without
+applying the shared decrease twice. A <code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> latency sample may
+independently reduce the per-driver gradient window.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 27.5%" />
@@ -402,10 +420,14 @@ still recovers shared admission capacity.</p>
 <li><p><strong>Admits</strong> it only when <em>both</em> the per-driver window and the per-backend
 limiter have headroom; otherwise it waits.</p></li>
 <li><p><strong>Dispatches</strong> it under a per-unit timeout.</p></li>
-<li><p><strong>On completion</strong>, obtains the function’s verdict. <code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> feeds the
-round-trip time to the per-driver window and recovers shared admission;
-<code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code> only recovers shared admission; <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> shrinks
-both controllers; the other verdicts leave them unchanged.</p></li>
+<li><p><strong>On completion</strong>, classifies canonical typed overload, applies at most one
+shared decrease for the admission epoch, and releases the shared lease.</p></li>
+<li><p><strong>On driver consumption</strong>, obtains the function’s aggregate verdict.
+<code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> feeds round-trip time to the per-driver window and recovers
+shared admission; <code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code> only recovers shared admission; a
+recorded canonical overload shrinks the driver window without repeating the
+shared decrease; a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict shrinks both
+controllers; the other verdicts leave both controllers unchanged.</p></li>
 </ol>
 </section>
 <section id="retries-and-error-handling">
@@ -414,9 +436,10 @@ both controllers; the other verdicts leave them unchanged.</p></li>
 bounded retry backoff. The <code class="docutils literal notranslate"><span class="pre">RPCOperator</span></code> independently enforces a per-unit
 timeout and runs the flow control above. Terminal rate-limit and timeout
 failures may become <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code>; other backend and transport failures
-normally become <code class="docutils literal notranslate"><span class="pre">kNonOverloadError</span></code>. Framework failures are handled below.
-Only an overload verdict causes admission backoff. This keeps request-level
-reliability separate from cluster-level flow control.</p>
+normally become <code class="docutils literal notranslate"><span class="pre">kNonOverloadError</span></code>. Framework failures are handled below. A
+canonical typed overload or a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict causes
+admission backoff. This keeps request-level reliability separate from
+cluster-level flow control.</p>
 <p>Classified row failures reach <code class="docutils literal notranslate"><span class="pre">buildOutput()</span></code>, where the function applies its
 configured policy by emitting null or error output, or by failing the query.</p>
 <p>A framework failure is different: a wrong response count, a duplicate or
