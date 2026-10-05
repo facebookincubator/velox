@@ -344,14 +344,10 @@ struct CountMinSketchAccumulator {
 };
 
 template <typename T>
-T readConstantArgument(
-    const VectorPtr& argument,
-    const SelectivityVector& rows,
-    std::string_view name) {
-  VELOX_USER_CHECK(
-      rows.hasSelections(),
-      "{} argument requires at least one input row",
-      name);
+T readConstantArgument(const VectorPtr& argument, std::string_view name) {
+  VELOX_USER_CHECK_GT(
+      argument->size(), 0, "{} argument requires at least one input row", name);
+  SelectivityVector rows(argument->size());
   DecodedVector decoded(*argument, rows);
   const auto firstRow = rows.begin();
   VELOX_USER_CHECK(
@@ -393,8 +389,7 @@ class CountMinSketchAggregate : public exec::Aggregate {
         constantInputs[2] == nullptr || constantInputs[3] == nullptr) {
       return;
     }
-    SelectivityVector rows(1);
-    computeDimensions(constantInputs, rows);
+    computeDimensions(constantInputs);
   }
 
   void addRawInput(
@@ -511,8 +506,8 @@ class CountMinSketchAggregate : public exec::Aggregate {
     decodedValue_.decode(*args[0], rows);
     inputKind_ = args[0]->type()->kind();
 
-    if (rows.hasSelections()) {
-      computeDimensions(args, rows);
+    if (args[1]->size() > 0) {
+      computeDimensions(args);
     }
   }
 
@@ -520,23 +515,20 @@ class CountMinSketchAggregate : public exec::Aggregate {
   // arguments (positions 1, 2 and 3). Derives the sketch dimensions on the
   // first input and verifies that subsequent input batches use the same
   // parameters.
-  void computeDimensions(
-      const std::vector<VectorPtr>& args,
-      const SelectivityVector& rows) {
-    const auto eps = readConstantArgument<double>(args[1], rows, "eps");
+  void computeDimensions(const std::vector<VectorPtr>& args) {
+    const auto eps = readConstantArgument<double>(args[1], "eps");
     VELOX_USER_CHECK_GT(eps, 0.0, "eps must be positive");
 
-    const auto confidence =
-        readConstantArgument<double>(args[2], rows, "confidence");
+    const auto confidence = readConstantArgument<double>(args[2], "confidence");
     VELOX_USER_CHECK_GT(confidence, 0.0, "confidence must be positive");
     VELOX_USER_CHECK_LT(confidence, 1.0, "confidence must be less than 1.0");
 
     int32_t seed{0};
     if (args[3]->type()->kind() == TypeKind::INTEGER) {
-      seed = readConstantArgument<int32_t>(args[3], rows, "seed");
+      seed = readConstantArgument<int32_t>(args[3], "seed");
     } else {
-      seed = static_cast<int32_t>(
-          readConstantArgument<int64_t>(args[3], rows, "seed"));
+      seed =
+          static_cast<int32_t>(readConstantArgument<int64_t>(args[3], "seed"));
     }
 
     if (epsilon_.has_value()) {
