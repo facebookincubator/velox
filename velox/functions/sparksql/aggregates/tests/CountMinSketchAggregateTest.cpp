@@ -441,7 +441,7 @@ TEST_F(CountMinSketchAggregateTest, emptyInputCompanionFunctions) {
   auto finalPlan = exec::test::PlanBuilder(pool())
                        .values({partial})
                        .singleAggregation(
-                           {}, {"count_min_sketch_merge_extract_varbinary(c0)"})
+                           {}, {"count_min_sketch_merge_extract_varbinary(a0)"})
                        .planNode();
   auto finalResult =
       exec::test::AssertQueryBuilder(finalPlan).copyResults(pool());
