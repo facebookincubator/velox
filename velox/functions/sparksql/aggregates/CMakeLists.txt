@@ -58,6 +58,7 @@ velox_link_libraries(
   velox_expression_functions
   velox_aggregates
   velox_functions_lib
+  velox_functions_spark_impl
   velox_vector
 )
 
