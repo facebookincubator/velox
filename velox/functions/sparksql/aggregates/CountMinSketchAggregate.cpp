@@ -18,6 +18,8 @@
 
 #include <bit>
 #include <cmath>
+#include <optional>
+#include <string_view>
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
@@ -341,6 +343,31 @@ struct CountMinSketchAccumulator {
   std::vector<int64_t, StlAllocator<int64_t>> table_;
 };
 
+template <typename T>
+T readConstantArgument(
+    const VectorPtr& argument,
+    const SelectivityVector& rows,
+    std::string_view name) {
+  VELOX_USER_CHECK(
+      rows.hasSelections(),
+      "{} argument requires at least one input row",
+      name);
+  DecodedVector decoded(*argument, rows);
+  const auto firstRow = rows.begin();
+  VELOX_USER_CHECK(
+      !decoded.isNullAt(firstRow), "{} argument must not be null", name);
+  const auto value = decoded.valueAt<T>(firstRow);
+  rows.applyToSelected([&](vector_size_t row) {
+    VELOX_USER_CHECK(
+        !decoded.isNullAt(row), "{} argument must not be null", name);
+    VELOX_USER_CHECK(
+        decoded.valueAt<T>(row) == value,
+        "{} argument must be constant for all input rows",
+        name);
+  });
+  return value;
+}
+
 class CountMinSketchAggregate : public exec::Aggregate {
  public:
   explicit CountMinSketchAggregate(const TypePtr& resultType)
@@ -484,47 +511,52 @@ class CountMinSketchAggregate : public exec::Aggregate {
     decodedValue_.decode(*args[0], rows);
     inputKind_ = args[0]->type()->kind();
 
-    if (depth_ == 0) {
+    if (rows.hasSelections()) {
       computeDimensions(args, rows);
     }
   }
 
-  // Extracts the constant eps, confidence and seed arguments (positions 1, 2
-  // and 3) and derives the sketch dimensions, matching Spark's
-  // CountMinSketchImpl. Populates depth_, width_ and hashA_.
+  // Extracts and validates the query-wide constant eps, confidence and seed
+  // arguments (positions 1, 2 and 3). Derives the sketch dimensions on the
+  // first input and verifies that subsequent input batches use the same
+  // parameters.
   void computeDimensions(
       const std::vector<VectorPtr>& args,
       const SelectivityVector& rows) {
-    DecodedVector decodedEps(*args[1], rows);
-    VELOX_USER_CHECK(
-        decodedEps.isConstantMapping(),
-        "eps argument must be constant for all input rows");
-    VELOX_USER_CHECK(!decodedEps.isNullAt(0), "eps argument must not be null");
-    double eps = decodedEps.valueAt<double>(0);
+    const auto eps = readConstantArgument<double>(args[1], rows, "eps");
     VELOX_USER_CHECK_GT(eps, 0.0, "eps must be positive");
 
-    DecodedVector decodedConfidence(*args[2], rows);
-    VELOX_USER_CHECK(
-        decodedConfidence.isConstantMapping(),
-        "confidence argument must be constant for all input rows");
-    VELOX_USER_CHECK(
-        !decodedConfidence.isNullAt(0), "confidence argument must not be null");
-    double confidence = decodedConfidence.valueAt<double>(0);
+    const auto confidence =
+        readConstantArgument<double>(args[2], rows, "confidence");
     VELOX_USER_CHECK_GT(confidence, 0.0, "confidence must be positive");
     VELOX_USER_CHECK_LT(confidence, 1.0, "confidence must be less than 1.0");
 
-    DecodedVector decodedSeed(*args[3], rows);
-    VELOX_USER_CHECK(
-        decodedSeed.isConstantMapping(),
-        "seed argument must be constant for all input rows");
-    VELOX_USER_CHECK(
-        !decodedSeed.isNullAt(0), "seed argument must not be null");
-    int32_t seed;
+    int32_t seed{0};
     if (args[3]->type()->kind() == TypeKind::INTEGER) {
-      seed = decodedSeed.valueAt<int32_t>(0);
+      seed = readConstantArgument<int32_t>(args[3], rows, "seed");
     } else {
-      seed = static_cast<int32_t>(decodedSeed.valueAt<int64_t>(0));
+      seed = static_cast<int32_t>(
+          readConstantArgument<int64_t>(args[3], rows, "seed"));
     }
+
+    if (epsilon_.has_value()) {
+      VELOX_USER_CHECK_EQ(
+          eps,
+          epsilon_.value(),
+          "eps argument must be constant for all input rows");
+      VELOX_USER_CHECK_EQ(
+          confidence,
+          confidence_.value(),
+          "confidence argument must be constant for all input rows");
+      VELOX_USER_CHECK_EQ(
+          seed,
+          seed_.value(),
+          "seed argument must be constant for all input rows");
+      return;
+    }
+    epsilon_ = eps;
+    confidence_ = confidence;
+    seed_ = seed;
 
     // Compute depth and width matching Spark's CountMinSketchImpl.
     // Validate the width before narrowing to int32 to avoid undefined behavior
@@ -628,6 +660,9 @@ class CountMinSketchAggregate : public exec::Aggregate {
   DecodedVector decodedValue_;
   DecodedVector decodedIntermediate_;
   TypeKind inputKind_{TypeKind::INVALID};
+  std::optional<double> epsilon_;
+  std::optional<double> confidence_;
+  std::optional<int32_t> seed_;
   int32_t depth_{0};
   int32_t width_{0};
   std::vector<int64_t> hashA_;
