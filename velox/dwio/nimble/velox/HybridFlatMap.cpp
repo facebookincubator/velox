@@ -101,9 +101,11 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
   NIMBLE_CHECK_NOT_NULL(groupIds, "Hybrid FlatMap group IDs are missing.");
   NIMBLE_CHECK_NOT_NULL(
       groupKeyCounts, "Hybrid FlatMap group key counts are missing.");
-  NIMBLE_CHECK_NOT_NULL(groupKeys, "Hybrid FlatMap group keys are missing.");
   const auto numGroupIds = groupIds->size();
-  const auto numKeys = groupKeys->size();
+  // FlatBuffers writers may omit an empty vector. An omitted group_keys holds
+  // zero keys, so the key count checks below accept it only when no group has
+  // keys, as in Default-only metadata.
+  const auto numKeys = groupKeys == nullptr ? 0 : groupKeys->size();
   NIMBLE_CHECK_EQ(
       numGroupIds,
       groupKeyCounts->size(),

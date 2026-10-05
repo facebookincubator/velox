@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <string>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
@@ -30,6 +32,8 @@
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::nimble {
 namespace {
@@ -78,6 +82,80 @@ class DeserializerTest : public ::testing::Test {
     rootPool_ =
         velox::memory::memoryManager()->addRootPool("deserializer_test");
     pool_ = rootPool_->addLeafChild("leaf");
+  }
+
+  // Maps one selected key subfield to the JSON maps it decodes to.
+  struct KeySelection {
+    std::string subfield;
+    std::vector<std::string> expectedMaps;
+  };
+
+  // Serializes `inputMaps` as a `features` column whose Hybrid FlatMap has
+  // only the Default group, then checks a full decode and one decode per entry
+  // of `selections` against the expected maps.
+  template <typename TKey>
+  void verifyDefaultOnlyRoundTrip(
+      const std::vector<std::string>& inputMaps,
+      const std::vector<std::string>& expectedGroupKeys,
+      const std::vector<KeySelection>& selections) {
+    velox::test::VectorMaker vectorMaker{pool_.get()};
+    const auto makeInput = [&](const std::vector<std::string>& maps) {
+      return vectorMaker.rowVector(
+          {"features"}, {vectorMaker.mapVectorFromJson<TKey, double>(maps)});
+    };
+    const auto input = makeInput(inputMaps);
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kSerialization,
+            .hybridFlatMapColumns = {{"features", makeHybridFlatMap({})}},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+
+    // A batch of only empty and null maps observes no Default keys.
+    const auto emptyInput = makeInput({"{}", "null"});
+    const std::string emptySerialized{serializer.serialize(
+        emptyInput, OrderedRanges::of(0, emptyInput->size()))};
+    for (const auto* slice : {&serialized, &emptySerialized}) {
+      const auto* pos = slice->data();
+      const auto header =
+          serde::readSerializationHeader(pos, slice->data() + slice->size());
+      EXPECT_TRUE(header.flags.requiredBarrier);
+    }
+
+    const auto schema =
+        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    SchemaSerializer schemaSerializer;
+    const auto deserializerSchema =
+        SchemaDeserializer::deserialize(schemaSerializer.serialize(*schema));
+    for (const auto* roundTripSchema :
+         {schema.get(), deserializerSchema.get()}) {
+      const auto& hybridMap =
+          roundTripSchema->asRow().childAt(0)->asHybridFlatMap();
+      ASSERT_EQ(hybridMap.groupCount(), 1);
+      EXPECT_EQ(hybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+      EXPECT_EQ(hybridMap.groupAt(0).groupKeys, expectedGroupKeys);
+    }
+
+    Deserializer deserializer{deserializerSchema, pool_.get()};
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+    velox::test::assertEqualVectors(input, output);
+    deserializer.deserialize(emptySerialized, output);
+    velox::test::assertEqualVectors(emptyInput, output);
+
+    for (const auto& selection : selections) {
+      SCOPED_TRACE(selection.subfield);
+      std::vector<Deserializer::Subfield> subfields;
+      subfields.emplace_back(selection.subfield);
+      Deserializer selectedDeserializer{
+          deserializerSchema, subfields, pool_.get(), DeserializerOptions{}};
+      selectedDeserializer.deserialize(serialized, output);
+      velox::test::assertEqualVectors(
+          makeInput(selection.expectedMaps), output);
+    }
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
@@ -218,7 +296,9 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   EXPECT_EQ(hybridMap.groupAt(1).groupId, 1);
   EXPECT_EQ(hybridMap.groupAt(1).groupKeys, (std::vector<std::string>{"3"}));
   EXPECT_EQ(hybridMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(hybridMap.groupAt(2).groupKeys.empty());
+  EXPECT_EQ(
+      hybridMap.groupAt(2).groupKeys,
+      (std::vector<std::string>{"99", "100", "101"}));
 
   SchemaSerializer schemaSerializer;
   const auto deserializerSchema =
@@ -295,8 +375,8 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       std::vector<std::string_view>{
           serialized, newDefaultSerialized, secondSerialized},
       output);
-  // The first and third batches repeat keys, but each decode barrier must load
-  // an independent key catalog.
+  // Every batch decodes against the final accumulated schema. Earlier
+  // key-presence bitmaps omit later trailing Default keys.
   ASSERT_EQ(
       output->size(),
       input->size() + newDefaultInput->size() + secondInput->size());
@@ -320,6 +400,29 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   ASSERT_EQ(output->size(), 2);
   EXPECT_TRUE(input->equalValueAt(output.get(), 1, 0));
   EXPECT_TRUE(input->equalValueAt(output.get(), 2, 1));
+}
+
+TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
+  // The rows cover a non-empty map, a null map, an empty map and a null value,
+  // and one key repeats across rows.
+  verifyDefaultOnlyRoundTrip<int64_t>(
+      {"{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"},
+      {"9", "1", "2"},
+      {
+          {.subfield = "features[1]",
+           .expectedMaps = {"{1: 10}", "null", "{}", "{1: 11}"}},
+          {.subfield = "features[99]",
+           .expectedMaps = {"{}", "null", "{}", "{}"}},
+      });
+  verifyDefaultOnlyRoundTrip<std::string>(
+      {R"({"a": 10, "i": 90})", "null", "{}", R"({"b": null, "a": 11})"},
+      {"i", "a", "b"},
+      {
+          {.subfield = R"(features["a"])",
+           .expectedMaps = {R"({"a": 10})", "null", "{}", R"({"a": 11})"}},
+          {.subfield = R"(features["missing"])",
+           .expectedMaps = {"{}", "null", "{}", "{}"}},
+      });
 }
 
 } // namespace

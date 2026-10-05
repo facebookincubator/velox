@@ -52,19 +52,14 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
     QueryCtxHolder holder;
     holder.sessionProperties =
         std::make_shared<config::ConfigBase>(std::move(sessionProps));
-    holder.ctx = std::make_unique<ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        holder.sessionProperties.get(),
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.FileConnectorUtilTest",
-        "task.FileConnectorUtilTest",
-        "planNodeId.FileConnectorUtilTest",
-        0,
-        "");
+    holder.ctx = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool_.get())
+                     .connectorPool(pool_.get())
+                     .sessionProperties(holder.sessionProperties.get())
+                     .queryId("query.FileConnectorUtilTest")
+                     .taskId("task.FileConnectorUtilTest")
+                     .planNodeId("planNodeId.FileConnectorUtilTest")
+                     .build();
     return holder;
   }
 
@@ -382,8 +377,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
     auto holder = makeConnectorQueryCtx(
         {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
          {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
-         {hive::FileConfig::kNimbleIntegerDictionaryAwareFilteringSession,
-          "true"}});
+         {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
@@ -398,7 +392,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_TRUE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 
   // Keys absent => flags fall back to their default (false).
@@ -418,7 +412,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_FALSE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 }
 
