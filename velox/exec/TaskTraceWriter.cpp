@@ -34,8 +34,14 @@ namespace {
 // Returns the value to record for a config entry, replacing credentials with a
 // placeholder. The trace file is written once and kept, so a secret copied
 // here outlives the query that supplied it.
-std::string redactIfCredential(std::string_view key, std::string_view value) {
-  if (isCredentialConfigKey(key)) {
+// 'recorded' is whether CredentialKeys lists 'key' for this destination.
+// isCredentialConfigKey() is a floor for the names it knows, since a QueryCtx
+// can be built with no provenance at all.
+std::string redactIfCredential(
+    bool recorded,
+    std::string_view key,
+    std::string_view value) {
+  if (recorded || isCredentialConfigKey(key)) {
     return std::string(kRedactedConfigValue);
   }
   return std::string(value);
@@ -166,21 +172,30 @@ void TaskTraceMetadataWriter::write(
 
   auto traceNode = trace::getTraceNode(planNode, traceNodeId_);
 
+  const auto& credentialKeys = queryCtx.credentialKeys();
+
   folly::dynamic queryConfigObj = folly::dynamic::object;
   const auto configValues = queryCtx.queryConfig().rawConfigsCopy();
   for (const auto& [key, value] : configValues) {
-    queryConfigObj[key] = redactIfCredential(key, value);
+    queryConfigObj[key] = redactIfCredential(
+        credentialKeys.isQueryConfigCredential(key), key, value);
   }
 
+  // A credential's name is not enough: whether a write stored it here depends
+  // on which write reached this connector and what it did on conflict, so the
+  // record is consulted per connector rather than as one set of names.
   folly::dynamic connectorPropertiesObj = folly::dynamic::object;
   for (const auto& [connectorId, configs] :
        queryCtx.connectorSessionProperties()) {
-    const auto credentialKeys = delegatedCredentialKeys(queryCtx, connectorId);
+    const auto forwardedKeys = delegatedCredentialKeys(queryCtx, connectorId);
     folly::dynamic obj = folly::dynamic::object;
     for (const auto& [key, value] : configs->rawConfigsCopy()) {
-      obj[key] = credentialKeys.contains(key)
+      obj[key] = forwardedKeys.contains(key)
           ? std::string(kRedactedConfigValue)
-          : redactIfCredential(key, value);
+          : redactIfCredential(
+                credentialKeys.isConnectorCredential(connectorId, key),
+                key,
+                value);
     }
     connectorPropertiesObj[connectorId] = obj;
   }

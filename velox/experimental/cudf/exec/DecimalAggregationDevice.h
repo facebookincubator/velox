@@ -21,6 +21,7 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <cuda/buffer>
 #include <cuda/stream>
 
 #include <cstddef>
@@ -120,7 +121,8 @@ void averageRoundDecimalSum(
  * @param mr memory resource for the returned mask.
  * @return {null mask buffer, null count}.
  */
-std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
+std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     cuda::stream_ref stream,

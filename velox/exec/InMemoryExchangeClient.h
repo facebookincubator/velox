@@ -30,6 +30,8 @@
 
 namespace facebook::velox::exec {
 
+struct ExchangeTransportEntry;
+
 /// Handle for a set of producers reached through ExchangeSource, buffering
 /// their pages in an in-memory ExchangeQueue. This may be shared by multiple
 /// Exchange operators, one per consumer thread.
@@ -69,6 +71,11 @@ class InMemoryExchangeClient
       bool lazyFetching = false);
 
   ~InMemoryExchangeClient() override;
+
+  /// Builds the built-in transport entry. Exchange consumes its Task-level
+  /// client. MergeExchange creates per-source clients and does not use this
+  /// client for data.
+  static std::shared_ptr<ExchangeTransportEntry> makeDefaultTransportEntry();
 
   /// Memory pool the received pages are allocated from.
   memory::MemoryPool* pool() const {

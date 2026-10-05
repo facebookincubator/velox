@@ -175,6 +175,14 @@ uint32_t ChunkedStreamDecoder::next(
   return nonNullCount;
 }
 
+uint32_t ChunkedStreamDecoder::remainingRows() {
+  if (remaining_ == 0 && !stream_->hasNext()) {
+    return 0;
+  }
+  ensureLoaded();
+  return remaining_;
+}
+
 uint32_t ChunkedStreamDecoder::read(
     std::span<const uint32_t> /*rows*/,
     DataType /*dataType*/,

@@ -61,23 +61,28 @@ OperatorCtx::createConnectorQueryCtx(
     memory::MemoryPool* connectorPool,
     const common::SpillConfig* spillConfig) const {
   const auto& task = driverCtx_->task;
-  auto connectorQueryCtx = std::make_shared<connector::ConnectorQueryCtx>(
-      pool_,
-      connectorPool,
-      task->queryCtx()->connectorSessionProperties(connectorId),
-      spillConfig,
-      driverCtx_->prefixSortConfig(),
-      std::make_unique<SimpleExpressionEvaluator>(
-          execCtx()->queryCtx(), execCtx()->pool()),
-      task->queryCtx()->cache(),
-      task->queryCtx()->queryId(),
-      taskId(),
-      planNodeId,
-      driverCtx_->driverId,
-      driverCtx_->queryConfig().sessionTimezone(),
-      driverCtx_->queryConfig().adjustTimestampToTimezone(),
-      task->getCancellationToken(),
-      task->queryCtx()->fsTokenProvider());
+  std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx =
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(pool_)
+          .connectorPool(connectorPool)
+          .sessionProperties(
+              task->queryCtx()->connectorSessionProperties(connectorId))
+          .spillConfig(spillConfig)
+          .prefixSortConfig(driverCtx_->prefixSortConfig())
+          .expressionEvaluator(
+              std::make_unique<SimpleExpressionEvaluator>(
+                  execCtx()->queryCtx(), execCtx()->pool()))
+          .asyncDataCache(task->queryCtx()->cache())
+          .queryId(task->queryCtx()->queryId())
+          .taskId(taskId())
+          .planNodeId(planNodeId)
+          .driverId(driverCtx_->driverId)
+          .sessionTimezone(driverCtx_->queryConfig().sessionTimezone())
+          .adjustTimestampToTimezone(
+              driverCtx_->queryConfig().adjustTimestampToTimezone())
+          .cancellationToken(task->getCancellationToken())
+          .tokenProvider(task->queryCtx()->fsTokenProvider())
+          .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
   connectorQueryCtx->setRowSizeTrackingMode(

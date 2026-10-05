@@ -60,6 +60,12 @@ class TableWriterTestBase : public HiveConnectorTestBase {
 
   static std::string testModeString(TestMode mode);
 
+  /// Builds a statistics specification containing a single min aggregate.
+  static core::ColumnStatsSpec generateColumnStatsSpec(
+      const std::string& name,
+      const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+      AggregationNode::Step step);
+
   // NOTE: google parameterized test framework can't handle complex test
   // parameters properly. So we encode the different test parameters into one
   // integer value.
@@ -114,11 +120,6 @@ class TableWriterTestBase : public HiveConnectorTestBase {
   static RowTypePtr getNonPartitionsColumns(
       const std::vector<std::string>& partitionedKeys,
       const RowTypePtr& rowType);
-
-  static core::ColumnStatsSpec generateColumnStatsSpec(
-      const std::string& name,
-      const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
-      AggregationNode::Step step);
 
   std::shared_ptr<Task> assertQueryWithWriterConfigs(
       const core::PlanNodePtr& plan,

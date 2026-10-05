@@ -17,6 +17,7 @@ add_test(nimble_index_projector_test nimble_index_projector_test)
 target_link_libraries(
   nimble_index_projector_test
   nimble_index_projector
+  nimble_index_test_utils
   nimble_tablet_reader_cache
   nimble_deserializer
   nimble_serialization_header

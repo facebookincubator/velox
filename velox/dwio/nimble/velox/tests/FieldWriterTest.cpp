@@ -128,20 +128,20 @@ TEST_F(FieldWriterTest, writesHybridGroupKeysInMapsAndValues) {
   EXPECT_EQ(hybridMap.groupAt(1).groupId, 1);
   EXPECT_EQ(hybridMap.groupAt(1).groupKeys, (std::vector<std::string>{"3"}));
   EXPECT_EQ(hybridMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
-  // Default's observed keys ride in its data stream, not in the schema.
-  EXPECT_TRUE(hybridMap.groupAt(2).groupKeys.empty());
+  EXPECT_EQ(hybridMap.groupAt(2).groupKeys, (std::vector<std::string>{"9"}));
 
   const auto& explicitGroup = hybridMap.groupAt(0);
-  const auto* explicitKeys =
-      findStream(context, explicitGroup.keyDescriptor.offset());
+  const auto* explicitKeyPresence =
+      findStream(context, explicitGroup.keyPresenceDescriptor.offset());
   const auto* explicitInMap =
       findStream(context, explicitGroup.inMapDescriptor.offset());
   const auto* explicitValues = findStream(
       context, explicitGroup.valueType->asScalar().scalarDescriptor().offset());
-  ASSERT_NE(explicitKeys, nullptr);
+  ASSERT_NE(explicitKeyPresence, nullptr);
   ASSERT_NE(explicitInMap, nullptr);
   ASSERT_NE(explicitValues, nullptr);
-  EXPECT_EQ(readStream<int32_t>(*explicitKeys), (std::vector<int32_t>{1, 2}));
+  EXPECT_EQ(
+      readStream<uint8_t>(*explicitKeyPresence), (std::vector<uint8_t>{1, 1}));
   EXPECT_EQ(
       readStream<uint8_t>(*explicitInMap),
       (std::vector<uint8_t>{1, 0, 1, 0, 1, 1}));
@@ -151,16 +151,17 @@ TEST_F(FieldWriterTest, writesHybridGroupKeysInMapsAndValues) {
 
   const auto& defaultGroup = hybridMap.groupAt(2);
   EXPECT_EQ(defaultGroup.groupId, HybridFlatMap::kDefaultGroupId);
-  const auto* defaultKeys =
-      findStream(context, defaultGroup.keyDescriptor.offset());
+  const auto* defaultKeyPresence =
+      findStream(context, defaultGroup.keyPresenceDescriptor.offset());
   const auto* defaultInMap =
       findStream(context, defaultGroup.inMapDescriptor.offset());
   const auto* defaultValues = findStream(
       context, defaultGroup.valueType->asScalar().scalarDescriptor().offset());
-  ASSERT_NE(defaultKeys, nullptr);
+  ASSERT_NE(defaultKeyPresence, nullptr);
   ASSERT_NE(defaultInMap, nullptr);
   ASSERT_NE(defaultValues, nullptr);
-  EXPECT_EQ(readStream<int32_t>(*defaultKeys), (std::vector<int32_t>{9}));
+  EXPECT_EQ(
+      readStream<uint8_t>(*defaultKeyPresence), (std::vector<uint8_t>{1}));
   EXPECT_EQ(
       readStream<uint8_t>(*defaultInMap), (std::vector<uint8_t>{1, 0, 0}));
   EXPECT_EQ(readStream<int64_t>(*defaultValues), (std::vector<int64_t>{90}));
@@ -185,24 +186,59 @@ TEST_F(FieldWriterTest, omitsAbsentHybridKeysAndEmptyGroups) {
   ASSERT_EQ(writtenMap.groupCount(), 2);
 
   const auto& explicitGroup = writtenMap.groupAt(0);
-  const auto* explicitKeys =
-      findStream(context, explicitGroup.keyDescriptor.offset());
-  ASSERT_NE(explicitKeys, nullptr);
-  EXPECT_EQ(readStream<int32_t>(*explicitKeys), (std::vector<int32_t>{1}));
+  const auto* explicitKeyPresence =
+      findStream(context, explicitGroup.keyPresenceDescriptor.offset());
+  ASSERT_NE(explicitKeyPresence, nullptr);
+  EXPECT_EQ(
+      readStream<uint8_t>(*explicitKeyPresence), (std::vector<uint8_t>{1, 0}));
 
   const auto& defaultGroup = writtenMap.groupAt(1);
-  const auto* defaultKeys =
-      findStream(context, defaultGroup.keyDescriptor.offset());
+  EXPECT_TRUE(defaultGroup.groupKeys.empty());
+  const auto* defaultKeyPresence =
+      findStream(context, defaultGroup.keyPresenceDescriptor.offset());
   const auto* defaultInMap =
       findStream(context, defaultGroup.inMapDescriptor.offset());
   const auto* defaultValues = findStream(
       context, defaultGroup.valueType->asScalar().scalarDescriptor().offset());
-  ASSERT_NE(defaultKeys, nullptr);
+  ASSERT_NE(defaultKeyPresence, nullptr);
   ASSERT_NE(defaultInMap, nullptr);
   ASSERT_NE(defaultValues, nullptr);
-  EXPECT_EQ(defaultKeys->rowCount(), 0);
+  EXPECT_EQ(defaultKeyPresence->rowCount(), 0);
   EXPECT_EQ(defaultInMap->rowCount(), 0);
   EXPECT_EQ(defaultValues->rowCount(), 0);
+}
+
+TEST_F(FieldWriterTest, disablesChunkingOnlyForHybridGroupMetadata) {
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  FieldWriterContext context{*pool_};
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap({{"1", "2"}}));
+  auto writer = FieldWriter::create(context, typeWithId);
+
+  const auto schema =
+      SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
+  const auto& hybridMap = schema->asHybridFlatMap();
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    SCOPED_TRACE(fmt::format("group={}", i));
+    const auto& group = hybridMap.groupAt(i);
+    const auto* keyPresence =
+        findStream(context, group.keyPresenceDescriptor.offset());
+    const auto* inMap = findStream(context, group.inMapDescriptor.offset());
+    const auto* values = findStream(
+        context, group.valueType->asScalar().scalarDescriptor().offset());
+    ASSERT_NE(keyPresence, nullptr);
+    ASSERT_NE(inMap, nullptr);
+    ASSERT_NE(values, nullptr);
+    EXPECT_TRUE(keyPresence->noChunking());
+    EXPECT_TRUE(inMap->noChunking());
+    EXPECT_FALSE(values->noChunking());
+  }
+
+  const auto* nulls = findStream(context, hybridMap.nullsDescriptor().offset());
+  ASSERT_NE(nulls, nullptr);
+  EXPECT_FALSE(nulls->noChunking());
 }
 
 TEST_F(FieldWriterTest, writesStringKeysInGroupOrder) {
@@ -229,21 +265,22 @@ TEST_F(FieldWriterTest, writesStringKeysInGroupOrder) {
   EXPECT_EQ(
       hybridMap.groupAt(0).groupKeys, (std::vector<std::string>{"a", "b"}));
 
-  const auto* configuredKeys =
-      findStream(context, hybridMap.groupAt(0).keyDescriptor.offset());
-  const auto* defaultKeys =
-      findStream(context, hybridMap.defaultGroup().keyDescriptor.offset());
-  ASSERT_NE(configuredKeys, nullptr);
-  ASSERT_NE(defaultKeys, nullptr);
   EXPECT_EQ(
-      readStream<std::string_view>(*configuredKeys),
-      (std::vector<std::string_view>{"a", "b"}));
+      hybridMap.defaultGroup().groupKeys, (std::vector<std::string>{"x"}));
+  const auto* configuredKeyPresence =
+      findStream(context, hybridMap.groupAt(0).keyPresenceDescriptor.offset());
+  const auto* defaultKeyPresence = findStream(
+      context, hybridMap.defaultGroup().keyPresenceDescriptor.offset());
+  ASSERT_NE(configuredKeyPresence, nullptr);
+  ASSERT_NE(defaultKeyPresence, nullptr);
   EXPECT_EQ(
-      readStream<std::string_view>(*defaultKeys),
-      (std::vector<std::string_view>{"x"}));
+      readStream<uint8_t>(*configuredKeyPresence),
+      (std::vector<uint8_t>{1, 1}));
+  EXPECT_EQ(
+      readStream<uint8_t>(*defaultKeyPresence), (std::vector<uint8_t>{1}));
 }
 
-TEST_F(FieldWriterTest, defaultKeysAreBatchLocalAndDoNotChangeSchema) {
+TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
   using Entry = std::pair<int32_t, std::optional<int64_t>>;
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(
@@ -252,27 +289,30 @@ TEST_F(FieldWriterTest, defaultKeysAreBatchLocalAndDoNotChangeSchema) {
   context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
   auto writer = FieldWriter::create(context, typeWithId);
 
-  const auto writeAndReadDefaultKeys =
+  const auto writeAndReadDefaultKeyPresence =
       [&](const std::vector<std::vector<Entry>>& maps) {
         const auto input = vectorMaker_->mapVector<int32_t, int64_t>(maps);
         writer->write(input, OrderedRanges::of(0, input->size()));
         const auto schema =
             SchemaReader::getSchema(context.schemaBuilder().schemaNodes());
         const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
-        EXPECT_TRUE(defaultGroup.groupKeys.empty());
-        const auto* keys =
-            findStream(context, defaultGroup.keyDescriptor.offset());
-        NIMBLE_CHECK_NOT_NULL(keys);
-        return readStream<int32_t>(*keys);
+        const auto* keyPresence =
+            findStream(context, defaultGroup.keyPresenceDescriptor.offset());
+        NIMBLE_CHECK_NOT_NULL(keyPresence);
+        return std::pair{
+            defaultGroup.groupKeys, readStream<uint8_t>(*keyPresence)};
       };
 
   EXPECT_EQ(
-      writeAndReadDefaultKeys({{{1, 10}, {9, 90}, {8, 80}}}),
-      (std::vector<int32_t>{9, 8}));
+      writeAndReadDefaultKeyPresence({{{1, 10}, {9, 90}, {8, 80}}}),
+      (std::pair{
+          std::vector<std::string>{"9", "8"}, std::vector<uint8_t>{1, 1}}));
   writer->reset();
   EXPECT_EQ(
-      writeAndReadDefaultKeys({{{1, 11}, {10, 100}, {9, 99}}}),
-      (std::vector<int32_t>{10, 9}));
+      writeAndReadDefaultKeyPresence({{{1, 11}, {10, 100}, {9, 99}}}),
+      (std::pair{
+          std::vector<std::string>{"9", "8", "10"},
+          std::vector<uint8_t>{1, 0, 1}}));
 }
 
 TEST_F(FieldWriterTest, rejectsEmptyConfiguredKey) {
@@ -346,11 +386,9 @@ TEST_F(FieldWriterTest, rejectsDuplicateDefaultGroupsAfterWrite) {
               },
       });
 
-  const auto writer = FieldWriter::create(context, typeWithId);
-  ASSERT_NE(writer, nullptr);
   NIMBLE_ASSERT_THROW(
-      context.schemaBuilder().schemaNodes(),
-      "Duplicate Hybrid FlatMap group ID: 4294967295");
+      FieldWriter::create(context, typeWithId),
+      "Hybrid FlatMap has multiple Default groups");
 }
 
 TEST_F(FieldWriterTest, rejectsConfiguredKeysInDefaultGroup) {
@@ -375,6 +413,84 @@ TEST_F(FieldWriterTest, rejectsConfiguredKeysInDefaultGroup) {
       });
 
   EXPECT_THROW(FieldWriter::create(context, typeWithId), NimbleInternalError);
+}
+
+TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {
+  constexpr velox::vector_size_t kRows{2};
+  constexpr velox::vector_size_t kEntries{4};
+  const std::string groupedKey{"grouped_feature_name_longer_than_inline"};
+  const std::string defaultKey{"default_feature_name_longer_than_inline"};
+  const std::string replacementDefaultKey{
+      "replacement_default_feature_name_longer_than_inline"};
+  const auto mapType = velox::MAP(velox::VARCHAR(), velox::DOUBLE());
+  auto keys =
+      velox::BaseVector::create(velox::VARCHAR(), kEntries, pool_.get());
+  auto values =
+      velox::BaseVector::create(velox::DOUBLE(), kEntries, pool_.get());
+  const std::array<std::string_view, kEntries> keyData{
+      groupedKey, defaultKey, defaultKey, groupedKey};
+  const std::array<double, kEntries> valueData{1.0, 9.0, 99.0, 10.0};
+  for (velox::vector_size_t i = 0; i < kEntries; ++i) {
+    keys->asFlatVector<velox::StringView>()->set(
+        i, velox::StringView{keyData[i]});
+    values->asFlatVector<double>()->set(i, valueData[i]);
+  }
+
+  auto map = std::make_shared<velox::MapVector>(
+      pool_.get(),
+      mapType,
+      nullptr,
+      kRows,
+      velox::allocateOffsets(kRows, pool_.get()),
+      velox::allocateSizes(kRows, pool_.get()),
+      keys,
+      values);
+  const std::array<velox::vector_size_t, kRows> mapOffsets{0, 2};
+  const std::array<velox::vector_size_t, kRows> mapSizes{2, 2};
+  std::copy(
+      mapOffsets.begin(),
+      mapOffsets.end(),
+      map->mutableOffsets(kRows)->asMutable<velox::vector_size_t>());
+  std::copy(
+      mapSizes.begin(),
+      mapSizes.end(),
+      map->mutableSizes(kRows)->asMutable<velox::vector_size_t>());
+
+  const auto type = velox::ROW({{"features", mapType}});
+  const auto input = std::make_shared<velox::RowVector>(
+      pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{map});
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap({{groupedKey}})}},
+      },
+      type,
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  keys->asFlatVector<velox::StringView>()->set(
+      1, velox::StringView{replacementDefaultKey});
+  keys->asFlatVector<velox::StringView>()->set(
+      2, velox::StringView{replacementDefaultKey});
+  const std::string replacementSerialized{
+      serializer.serialize(input, OrderedRanges::of(0, kRows))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  velox::VectorPtr output;
+  {
+    Deserializer deserializer{schema, pool_.get()};
+    deserializer.deserialize(serialized, output);
+    deserializer.deserialize(replacementSerialized, output);
+  }
+
+  ASSERT_EQ(output->size(), input->size());
+  for (velox::vector_size_t row = 0; row < kRows; ++row) {
+    EXPECT_TRUE(input->equalValueAt(output.get(), row, row))
+        << "row " << row << " expected " << input->toString(row) << " actual "
+        << output->toString(row);
+  }
 }
 
 TEST_F(FieldWriterTest, initializesEverySupportedHybridValueType) {

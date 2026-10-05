@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-/// Unit tests for isTimeout() — the helper that recognizes timeout failures so
-/// the transports can tag them RPCErrorKind::kTimeout (a hard-overload signal
-/// for the congestion policy) instead of the generic kBackendError.
+// Unit tests for RPC error classification and typed response payloads.
 
 #include "velox/exec/rpc/RpcErrorClassification.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
@@ -28,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <folly/ExceptionWrapper.h>
@@ -108,6 +107,27 @@ TEST(RpcErrorClassificationTest, classifiedTimeoutSurvivesAPlainRuntimeError) {
 TEST(RpcErrorClassificationTest, unclassifiedInternalStillResolves) {
   auto ew = folly::make_exception_wrapper<std::bad_alloc>();
   EXPECT_EQ(errorKindFor(ew), velox::rpc::RPCErrorKind::kInternalError);
+}
+
+TEST(RpcErrorClassificationTest, everyErrorKindHasOneCategory) {
+  using velox::rpc::RPCErrorCategory;
+  using velox::rpc::RPCErrorKind;
+
+  const std::vector<std::pair<RPCErrorKind, RPCErrorCategory>> cases{
+      {RPCErrorKind::kNone, RPCErrorCategory::kNone},
+      {RPCErrorKind::kNullInput, RPCErrorCategory::kNullInput},
+      {RPCErrorKind::kRateLimited, RPCErrorCategory::kOverload},
+      {RPCErrorKind::kTimeout, RPCErrorCategory::kOverload},
+      {RPCErrorKind::kBackendError, RPCErrorCategory::kNonOverloadBackend},
+      {RPCErrorKind::kEmptyResponse, RPCErrorCategory::kNonOverloadBackend},
+      {RPCErrorKind::kInvalidRequest, RPCErrorCategory::kInvalidRequest},
+      {RPCErrorKind::kUnset, RPCErrorCategory::kFramework},
+      {RPCErrorKind::kInternalError, RPCErrorCategory::kFramework},
+  };
+
+  for (const auto& [kind, expectedCategory] : cases) {
+    EXPECT_EQ(velox::rpc::errorCategory(kind), expectedCategory);
+  }
 }
 
 // ── Inline payload storage ──────────────────────────────────────────────────

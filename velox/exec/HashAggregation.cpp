@@ -527,6 +527,10 @@ bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
   for (const auto& peer : peerOperators) {
     auto* aggregation = peer->as<HashAggregation>();
     VELOX_CHECK_NOT_NULL(aggregation);
+    std::lock_guard<std::mutex> l(aggregation->mutex_);
+    VELOX_CHECK_NOT_NULL(
+        aggregation->groupingSet_,
+        "Internal state for a peer is empty. It might have already been closed.");
     totalInputRows += aggregation->groupingSet_->numInputRows();
   }
   return totalInputRows == 0;
@@ -559,22 +563,31 @@ void HashAggregation::combineGlobalPartialAggregation() {
     }
   };
 
-  std::vector<HashAggregation*> peerAggregations;
-  peerAggregations.reserve(peerOperators.size());
-  std::vector<GroupingSet*> peerGroupingSets;
+  TestValue::adjust(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      this);
+
+  // Destroyed before SCOPE_EXIT releases the peers, whose pools hold their
+  // memory.
+  std::vector<std::unique_ptr<GroupingSet>> peerGroupingSets;
   peerGroupingSets.reserve(peerOperators.size());
+  std::vector<GroupingSet*> others;
+  others.reserve(peerOperators.size());
   for (const auto& peer : peerOperators) {
     auto* aggregation = peer->as<HashAggregation>();
     VELOX_CHECK_NOT_NULL(aggregation);
-    peerAggregations.push_back(aggregation);
-    peerGroupingSets.push_back(aggregation->groupingSet_.get());
-  }
-
-  groupingSet_->mergeGlobalAggregations(peerGroupingSets);
-  for (auto* aggregation : peerAggregations) {
-    aggregation->groupingSet_->resetGlobalAggregation();
+    {
+      std::lock_guard<std::mutex> l(aggregation->mutex_);
+      VELOX_CHECK_NOT_NULL(
+          aggregation->groupingSet_,
+          "Internal state for a peer is empty. It might have already been closed.");
+      peerGroupingSets.push_back(std::move(aggregation->groupingSet_));
+    }
+    others.push_back(peerGroupingSets.back().get());
     aggregation->finished_ = true;
   }
+
+  groupingSet_->mergeGlobalAggregations(others);
 }
 
 void HashAggregation::noMoreInput() {
@@ -673,9 +686,14 @@ void HashAggregation::reclaim(
 }
 
 void HashAggregation::close() {
-  if (groupingSet_) {
+  std::unique_ptr<GroupingSet> groupingSet;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    groupingSet = std::move(groupingSet_);
+  }
+  if (groupingSet) {
     const auto numToIntermediateFastPathCalls =
-        groupingSet_->numToIntermediateFastPathCalls();
+        groupingSet->numToIntermediateFastPathCalls();
     if (numToIntermediateFastPathCalls > 0) {
       addRuntimeStat(
           std::string(kToIntermediateFastPathCalls),
@@ -685,7 +703,6 @@ void HashAggregation::close() {
   Operator::close();
 
   output_ = nullptr;
-  groupingSet_.reset();
 }
 
 void HashAggregation::updateEstimatedOutputRowSize() {

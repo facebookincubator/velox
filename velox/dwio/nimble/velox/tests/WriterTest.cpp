@@ -802,8 +802,7 @@ TEST_F(WriterTest, fsstSubfieldRejectsCustomClusterIndexConfig) {
   expectWriterCreationThrows(
       velox::ROW("target", velox::VARCHAR()),
       std::move(options),
-      "FSST subfields cannot be combined with custom cluster index "
-      "configuration 'custom_cluster_index': key columns are unavailable");
+      "Cluster index configuration 'custom_cluster_index' does not expose key columns");
 }
 
 TEST_F(WriterTest, fsstSubfieldRejectsSharedDictionaryCollision) {

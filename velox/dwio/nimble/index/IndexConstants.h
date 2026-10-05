@@ -30,6 +30,9 @@ constexpr uint32_t kKeyStreamId = UINT32_MAX;
 namespace facebook::nimble::index {
 
 inline constexpr std::string_view kClusterIndexName{"nimble.cluster.v1"};
+/// Registered name of the hierarchical cluster-index implementation.
+inline constexpr std::string_view kHierarchicalClusterIndexName{
+    "nimble.cluster.hierarchical.v1"};
 inline constexpr std::string_view kDenseHashIndexName{"nimble.dense.hash.v1"};
 inline constexpr std::string_view kDenseSortedIndexName{
     "nimble.dense.sorted.v1"};
