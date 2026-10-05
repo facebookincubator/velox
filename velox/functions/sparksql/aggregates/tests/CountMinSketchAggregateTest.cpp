@@ -83,18 +83,46 @@ class CountMinSketchAggregateTest
   // the single-column input and returns the raw sketch bytes. Used to assert
   // byte-for-byte parity of the narrower value types against bigint.
   std::string serializeSketch(const VectorPtr& column) {
+    return serializeSketch(column, "count_min_sketch(c0, 0.5, 0.5, 1)");
+  }
+
+  // Serializes a sketch using the specified aggregate expression.
+  std::string serializeSketch(
+      const VectorPtr& column,
+      const std::string& expression) {
     auto vectors = {makeRowVector({column})};
-    auto planNode =
-        exec::test::PlanBuilder(pool())
-            .values(vectors)
-            .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
-            .planNode();
+    auto planNode = exec::test::PlanBuilder(pool())
+                        .values(vectors)
+                        .singleAggregation({}, {expression})
+                        .planNode();
     auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
     EXPECT_EQ(result->size(), 1);
     auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
     EXPECT_FALSE(resultFlat->isNullAt(0));
     auto sv = resultFlat->valueAt(0);
     return std::string(sv.data(), sv.size());
+  }
+
+  // Verifies that merging the supplied serialized sketches fails.
+  void assertMergeFails(
+      const std::vector<std::string>& sketches,
+      const std::string& expectedError) {
+    std::vector<StringView> views;
+    views.reserve(sketches.size());
+    for (const auto& sketch : sketches) {
+      views.emplace_back(sketch);
+    }
+
+    auto input = makeFlatVector<StringView>(views, VARBINARY());
+    auto planNode =
+        exec::test::PlanBuilder(pool())
+            .values({makeRowVector({input})})
+            .singleAggregation(
+                {}, {"count_min_sketch_merge_extract_varbinary(c0)"})
+            .planNode();
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(planNode).copyResults(pool()),
+        expectedError);
   }
 
   // Returns the uppercase hex encoding of a serialized sketch, matching the
@@ -507,22 +535,27 @@ TEST_F(CountMinSketchAggregateTest, differentParameters) {
   EXPECT_EQ(totalCount, 5);
 }
 
-TEST_F(CountMinSketchAggregateTest, bigintSeedInput) {
-  // Integer literals are parsed as bigint by default; verify bigint seed works.
+TEST_F(CountMinSketchAggregateTest, seedInputTypes) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
 
   auto planNode =
       exec::test::PlanBuilder(pool())
           .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
+          .singleAggregation(
+              {},
+              {
+                  "count_min_sketch(c0, 0.5, 0.5, cast(1 as integer))",
+                  "count_min_sketch(c0, 0.5, 0.5, cast(1 as bigint))",
+              })
           .planNode();
   auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
 
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-  auto [depth, width, totalCount] = parseSketch(sv);
-  EXPECT_EQ(totalCount, 3);
+  ASSERT_EQ(result->size(), 1);
+  auto integerSeed = result->childAt(0)->asFlatVector<StringView>();
+  auto bigintSeed = result->childAt(1)->asFlatVector<StringView>();
+  ASSERT_FALSE(integerSeed->isNullAt(0));
+  ASSERT_FALSE(bigintSeed->isNullAt(0));
+  EXPECT_EQ(toHex(integerSeed->valueAt(0)), toHex(bigintSeed->valueAt(0)));
 }
 
 TEST_F(CountMinSketchAggregateTest, partialToFinal) {
@@ -577,6 +610,40 @@ TEST_F(CountMinSketchAggregateTest, mergeCounterOverflowWraps) {
 
   const char* firstTableCount = serialized.data() + kFirstTableCountOffset;
   EXPECT_EQ(readBE64(firstTableCount), std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(CountMinSketchAggregateTest, malformedMergeInputRejected) {
+  auto values = makeFlatVector<int64_t>({1, 2, 3});
+  auto sketch = serializeSketch(values);
+
+  auto truncatedHeader = sketch.substr(0, 19);
+  assertMergeFails(
+      {truncatedHeader}, "CountMinSketch serialized data too small");
+
+  auto truncatedTable = sketch.substr(0, sketch.size() - 1);
+  assertMergeFails(
+      {truncatedTable}, "CountMinSketch serialized data truncated");
+}
+
+TEST_F(CountMinSketchAggregateTest, incompatibleMergeInputRejected) {
+  auto values = makeFlatVector<int64_t>({1, 2, 3});
+  auto sketch = serializeSketch(values);
+  auto differentDepth =
+      serializeSketch(values, "count_min_sketch(c0, 0.5, 0.75, 1)");
+  auto differentWidth =
+      serializeSketch(values, "count_min_sketch(c0, 0.25, 0.5, 1)");
+  auto differentHashSeed =
+      serializeSketch(values, "count_min_sketch(c0, 0.5, 0.5, 2)");
+
+  assertMergeFails(
+      {sketch, differentDepth},
+      "Cannot merge CountMinSketch of different depth");
+  assertMergeFails(
+      {sketch, differentWidth},
+      "Cannot merge CountMinSketch of different width");
+  assertMergeFails(
+      {sketch, differentHashSeed},
+      "Cannot merge CountMinSketch with different hash seeds");
 }
 
 TEST_F(CountMinSketchAggregateTest, nullParametersRejected) {
