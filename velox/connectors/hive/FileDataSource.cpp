@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/FileDataSource.h"
 
 #include <fmt/ranges.h>
+#include <folly/ScopeGuard.h>
 #include <string>
 #include <unordered_map>
 
@@ -26,6 +27,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileSplitReaderAdapter.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -33,6 +35,17 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::connector::hive {
 
 namespace {
+
+void mergeReaderStats(
+    std::unordered_map<std::string, RuntimeMetric>& target,
+    const std::unordered_map<std::string, RuntimeMetric>& source) {
+  for (const auto& [name, metric] : source) {
+    auto [it, inserted] = target.emplace(name, metric);
+    if (!inserted) {
+      it->second.merge(metric);
+    }
+  }
+}
 
 void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
@@ -407,79 +420,94 @@ std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
       /*subfieldFiltersForValidation=*/&filters_);
 }
 
+std::unique_ptr<FileScanReader> FileDataSource::createScanReader() {
+  split_ = checkedPointerCast<FileConnectorSplit>(activeSplit_);
+  auto reader = std::make_unique<FileSplitReaderAdapter>(
+      createSplitReader(), split_, pool_);
+  reader->prepare(
+      randomSkip_,
+      remainingFilterColumns_,
+      metadataFilter_,
+      readerProducedType_);
+  readerOutputType_ = reader->readerOutputType();
+  return reader;
+}
+
+FileDataSource::~FileDataSource() {
+  // Do not collect statistics from a destructor. Cancellation also releases
+  // pending work for callers that do not explicitly call DataSource::cancel().
+  if (scanReader_) {
+    scanReader_->cancel();
+  }
+}
+
 void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK_NULL(
-      split_,
+      activeSplit_,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = checkedPointerCast<FileConnectorSplit>(split);
-
-  VLOG(1) << "Adding split " << split_->toString();
-
-  if (splitReader_) {
-    splitReader_.reset();
+  VELOX_CHECK_NOT_NULL(split);
+  activeSplit_ = std::move(split);
+  try {
+    VLOG(1) << "Adding split " << activeSplit_->toString();
+    scanReader_ = createScanReader();
+    VELOX_CHECK_NOT_NULL(scanReader_);
+  } catch (...) {
+    resetSplit();
+    throw;
   }
-
-  splitReader_ = createSplitReader();
-
-  // Split reader subclasses may need to use the reader options in prepareSplit
-  // so we initialize it beforehand.
-  splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
-
-  auto splitReaderOutputType = splitReader_->readerOutputType();
-  if (readerProducedType_ != nullptr &&
-      splitReaderOutputType->size() > readerProducedType_->size()) {
-    // The split reader appended columns, e.g. an unselected Iceberg
-    // equality-delete or lineage column. next() allocates the output from
-    // 'readerProducedType_', so it has to grow by the same columns.
-    auto names = readerProducedType_->names();
-    auto types = readerProducedType_->children();
-    for (auto i = readerProducedType_->size();
-         i < splitReaderOutputType->size();
-         ++i) {
-      names.push_back(splitReaderOutputType->nameOf(i));
-      types.push_back(splitReaderOutputType->childAt(i));
-    }
-    readerProducedType_ = ROW(std::move(names), std::move(types));
-  }
-  readerOutputType_ = std::move(splitReaderOutputType);
 }
 
 std::optional<RowVectorPtr> FileDataSource::next(
     uint64_t size,
-    velox::ContinueFuture& /*future*/) {
-  VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
-  VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
+    ContinueFuture& future) {
+  try {
+    return nextImpl(size, future);
+  } catch (...) {
+    // Preserve the original read/validation error even if taking the final
+    // statistics snapshot fails. resetSplit releases resources in either case.
+    try {
+      resetSplit();
+    } catch (...) {
+    }
+    throw;
+  }
+}
+
+std::optional<RowVectorPtr> FileDataSource::nextImpl(
+    uint64_t size,
+    ContinueFuture& future) {
+  VELOX_CHECK_NOT_NULL(
+      activeSplit_, "No split to process. Call addSplit first.");
+  VELOX_CHECK_NOT_NULL(scanReader_, "No scan reader present");
+  VELOX_CHECK_GT(size, 0);
 
   TestValue::adjust(
       "facebook::velox::connector::hive::FileDataSource::next", this);
 
-  if (splitReader_->emptySplit()) {
-    resetSplit();
-    return nullptr;
+  // A previous ready future must not hide a reader that fails to supply one.
+  future = ContinueFuture::makeEmpty();
+  const auto result = scanReader_->next(size, output_, future);
+  VELOX_CHECK_LE(
+      result.physicalRowsScanned,
+      std::numeric_limits<uint64_t>::max() - completedRows_,
+      "Physical row count overflow");
+  completedRows_ += result.physicalRowsScanned;
+  switch (result.state) {
+    case ScanReadResult::State::kBlocked:
+      VELOX_CHECK(future.valid(), "Blocked scan reader must provide a future");
+      return std::nullopt;
+    case ScanReadResult::State::kEnd:
+      VELOX_CHECK(!future.valid(), "Finished scan reader returned a future");
+      resetSplit();
+      return nullptr;
+    case ScanReadResult::State::kData:
+      VELOX_CHECK(!future.valid(), "Scan reader returned data and a future");
+      break;
+    default:
+      VELOX_FAIL("Invalid scan reader state");
   }
-
-  // Subclass reader may add extra columns to reader output (e.g. for bucket
-  // conversion or delta update).
-  auto& outputRowType =
-      readerProducedType_ ? readerProducedType_ : readerOutputType_;
-  auto needsExtraColumn = [&] {
-    return output_->asUnchecked<RowVector>()->childrenSize() <
-        outputRowType->size();
-  };
-  if (!output_ || needsExtraColumn()) {
-    output_ = BaseVector::create(outputRowType, 0, pool_);
-  }
-
-  const auto rowsScanned = splitReader_->next(size, output_);
-  completedRows_ += rowsScanned;
-  if (rowsScanned == 0) {
-    splitReader_->updateRuntimeStats(runtimeStats_);
-    resetSplit();
-    return nullptr;
-  }
-
+  VELOX_CHECK_NOT_NULL(output_, "Scan reader returned data without a vector");
+  VELOX_CHECK_NOT_NULL(output_->as<RowVector>(), "Expected a row vector");
   VELOX_CHECK(
       !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
   auto rowsRemaining = output_->size();
@@ -499,7 +527,7 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   if (remainingFilterExprSet_) {
     rowsRemaining = evaluateRemainingFilter(rowVector);
-    VELOX_CHECK_LE(rowsRemaining, rowsScanned);
+    VELOX_CHECK_LE(rowsRemaining, rowVector->size());
     if (rowsRemaining == 0) {
       // No rows passed the remaining filter.
       return getEmptyOutput();
@@ -512,7 +540,8 @@ std::optional<RowVectorPtr> FileDataSource::next(
   }
 
   if (outputType_->size() == 0) {
-    return exec::wrap(rowsRemaining, remainingIndices, rowVector);
+    return std::make_shared<RowVector>(
+        pool_, outputType_, nullptr, rowsRemaining, std::vector<VectorPtr>{});
   }
 
   std::vector<VectorPtr> outputColumns;
@@ -541,8 +570,8 @@ void FileDataSource::addDynamicFilter(
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
   fieldSpec.setFilter(filter);
   scanSpec_->resetCachedValues(true);
-  if (splitReader_) {
-    splitReader_->resetFilterCaches();
+  if (scanReader_) {
+    scanReader_->resetFilterCaches();
   }
 }
 
@@ -567,11 +596,12 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
     fileEvent.tableName = tableHandle_->name();
     fileEvent.dbName = tableHandle_->dbName();
   }
-  if (split_) {
-    fileEvent.filePath = split_->filePath;
-    fileEvent.fileFormat = split_->fileFormat;
-    if (!split_->partitionKeys.empty()) {
-      fileEvent.partitionKeys = &split_->partitionKeys;
+  if (const auto* file =
+          scanReader_ ? scanReader_->currentFileSplit() : nullptr) {
+    fileEvent.filePath = file->filePath;
+    fileEvent.fileFormat = file->fileFormat;
+    if (!file->partitionKeys.empty()) {
+      fileEvent.partitionKeys = &file->partitionKeys;
     }
   }
   scanBatchCallback_(fileEvent);
@@ -579,7 +609,10 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
 
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
-  auto res = runtimeStats_.toRuntimeMetricMap();
+  auto res = readerStats_;
+  if (scanReader_) {
+    mergeReaderStats(res, scanReader_->getRuntimeStats());
+  }
   io::addIoStatsToRuntimeStats(*dataIoStats_, "", res);
   io::addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
@@ -613,18 +646,33 @@ void FileDataSource::setFromDataSource(
   auto source = dynamic_cast<FileDataSource*>(sourceUnique.get());
   VELOX_CHECK_NOT_NULL(source, "Bad DataSource type");
 
+  VELOX_CHECK_NULL(activeSplit_, "Cannot replace an active split");
+  VELOX_CHECK_NOT_NULL(source->scanReader_);
+  VELOX_CHECK_LE(
+      source->completedRows_,
+      std::numeric_limits<uint64_t>::max() - completedRows_,
+      "Physical row count overflow");
+  // Check support before moving any state out of the source.
+  source->scanReader_->setConnectorQueryCtx(connectorQueryCtx_);
+  activeSplit_ = std::move(source->activeSplit_);
   split_ = std::move(source->split_);
-  runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
-  runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
-  runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
+  mergeReaderStats(readerStats_, source->readerStats_);
+  completedRows_ += source->completedRows_;
+  lastEventStorageReadBytes_ += source->lastEventStorageReadBytes_;
+  totalRemainingFilterTime_.fetch_add(
+      source->totalRemainingFilterTime_.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  totalRemainingFilterCpuTime_.fetch_add(
+      source->totalRemainingFilterCpuTime_.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  output_ = std::move(source->output_);
   readerOutputType_ = std::move(source->readerOutputType_);
   readerProducedType_ = std::move(source->readerProducedType_);
   extractionColumns_ = std::move(source->extractionColumns_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   metadataFilter_ = std::move(source->metadataFilter_);
-  splitReader_ = std::move(source->splitReader_);
-  splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+  scanReader_ = std::move(source->scanReader_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->dataIoStats_->merge(*dataIoStats_);
@@ -636,10 +684,10 @@ void FileDataSource::setFromDataSource(
 }
 
 int64_t FileDataSource::estimatedRowSize() {
-  if (splitReader_ == nullptr) {
+  if (scanReader_ == nullptr) {
     return kUnknownRowSize;
   }
-  auto rowSize = splitReader_->estimatedRowSize();
+  auto rowSize = scanReader_->estimatedRowSize();
   TestValue::adjust(
       "facebook::velox::connector::hive::FileDataSource::estimatedRowSize",
       &rowSize);
@@ -671,9 +719,23 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 }
 
 void FileDataSource::resetSplit() {
-  split_.reset();
-  splitReader_->resetSplit();
-  // Keep readers around to hold adaptation.
+  SCOPE_EXIT {
+    if (scanReader_) {
+      scanReader_->cancel();
+      scanReader_.reset();
+    }
+    output_.reset();
+    split_.reset();
+    activeSplit_.reset();
+  };
+  if (scanReader_) {
+    mergeReaderStats(readerStats_, scanReader_->getRuntimeStats());
+  }
+}
+
+void FileDataSource::cancel() {
+  resetSplit();
+  filterResult_.reset();
 }
 
 } // namespace facebook::velox::connector::hive

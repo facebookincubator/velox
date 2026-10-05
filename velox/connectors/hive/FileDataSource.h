@@ -25,6 +25,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileScanReader.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -41,13 +42,13 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
   std::string_view tableName;
   /// Database / namespace name from the connector table handle.
   std::string_view dbName;
-  /// File path of the current split.
+  /// Physical file path for this batch, empty if there is no single source.
   std::string_view filePath;
-  /// Non-owning pointer to the current split's partition keys.
+  /// Non-owning pointer to the current physical file's partition keys.
   /// Null when partition keys are not available.
   const std::unordered_map<std::string, std::optional<std::string>>*
       partitionKeys{nullptr};
-  /// File format of the current split.
+  /// File format for this batch, UNKNOWN if there is no single source.
   dwio::common::FileFormat fileFormat{dwio::common::FileFormat::UNKNOWN};
   /// Bytes fetched from storage producing this batch, including any read
   /// amplification from coalescing adjacent regions.
@@ -57,7 +58,7 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 class FileConfig;
 
 /// Base class for file-based data sources that read from columnar file formats
-/// (ORC, Parquet, etc.) using FileSplitReader. Provides the common scan
+/// (ORC, Parquet, etc.) through FileScanReader. Provides the common scan
 /// pipeline: column resolution, filter extraction, scan spec construction,
 /// split reading, remaining filter evaluation, and runtime stats collection.
 ///
@@ -90,7 +91,11 @@ class FileDataSource : public DataSource {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<FileConfig>& fileConfig);
 
+  ~FileDataSource() override;
+
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  void cancel() override;
 
   std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
       override;
@@ -112,7 +117,7 @@ class FileDataSource : public DataSource {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   bool allPrefetchIssued() const override {
-    return splitReader_ && splitReader_->allPrefetchIssued();
+    return scanReader_ && scanReader_->allPrefetchIssued();
   }
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
@@ -128,6 +133,10 @@ class FileDataSource : public DataSource {
   }
 
  protected:
+  /// Creates and prepares a reader for activeSplit_. The default adapter uses
+  /// the existing single-file createSplitReader() specialization.
+  virtual std::unique_ptr<FileScanReader> createScanReader();
+
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
 
   FileHandleFactory* const fileHandleFactory_;
@@ -136,11 +145,14 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
+  std::shared_ptr<ConnectorSplit> activeSplit_;
+  // Single-file context for existing createSplitReader() specializations.
+  // Logical readers do not need to populate this member.
   std::shared_ptr<FileConnectorSplit> split_;
   FileTableHandlePtr tableHandle_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
-  std::unique_ptr<FileSplitReader> splitReader_;
+  std::unique_ptr<FileScanReader> scanReader_;
 
   /// Output type from file reader. This is different from outputType_ in that
   /// it contains column names before assignment, and columns that are only used
@@ -193,7 +205,8 @@ class FileDataSource : public DataSource {
   // post-read using the extraction chains.
   folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
 
-  dwio::common::RuntimeStats runtimeStats_;
+  // Completed logical readers only. Active statistics are added as a snapshot.
+  std::unordered_map<std::string, RuntimeMetric> readerStats_;
 
  private:
   // Configure extraction columns on the ScanSpec and build
@@ -211,8 +224,10 @@ class FileDataSource : public DataSource {
   /// filterEvalCtx_.selectedIndices and selectedBits are not updated.
   vector_size_t evaluateRemainingFilter(RowVectorPtr& rowVector);
 
-  /// Clears split_ after split has been fully processed. Keeps readers around
-  /// to hold adaptation.
+  std::optional<RowVectorPtr> nextImpl(uint64_t size, ContinueFuture& future);
+
+  /// Archives statistics once and releases the active reader and split.
+  /// ScanSpec retains adaptation across splits.
   void resetSplit();
 
   const RowVectorPtr& getEmptyOutput() {

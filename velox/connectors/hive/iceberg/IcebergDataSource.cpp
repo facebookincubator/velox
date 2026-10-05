@@ -149,7 +149,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
     // only by the remainingFilter — which FileDataSource::constructor appended
     // to readerOutputType_ but omitted from outputType_ — are present in the
     // RowVector that evaluateRemainingFilter receives. FileDataSource::addSplit
-    // overwrites readerOutputType_ with splitReader_->readerOutputType() after
+    // gets readerOutputType_ through the default reader adapter after
     // createSplitReader() returns; passing the pre-overwrite value here ensures
     // the shape matches what the compiled ExprSet expects.
     return std::make_unique<IcebergChangelogSplitReader>(
