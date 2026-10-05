@@ -2871,27 +2871,10 @@ TEST_F(WriterTest, encodingLayout) {
         // Verify FlatMap Kay "1" stream
         auto capture = nimble::EncodingLayoutCapture::capture(
             chunkedStream.nextChunk(), nimble::Encoding::Options{});
-        EXPECT_EQ(nimble::EncodingType::MainlyConstant, capture.encodingType());
-        EXPECT_EQ(
-            nimble::EncodingType::Trivial,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::IsCommon)
-                ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::Uncompressed,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::IsCommon)
-                ->compressionType());
-        EXPECT_EQ(
-            nimble::EncodingType::FixedBitWidth,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
-                ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::Uncompressed,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
-                ->compressionType());
+        // Key "1" holds a single non-null value, so replaying the requested
+        // MainlyConstant layout finds no uncommon values and encode() falls
+        // back to ConstantEncoding, which has no child streams to verify.
+        EXPECT_EQ(nimble::EncodingType::Constant, capture.encodingType());
       }
 
       {
