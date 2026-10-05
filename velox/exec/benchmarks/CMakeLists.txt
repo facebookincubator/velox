@@ -86,6 +86,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_group_probe_benchmark GroupProbeBenchmark.cpp)
+
+target_link_libraries(velox_group_probe_benchmark velox_exec Folly::follybenchmark)
+
 add_executable(velox_hash_join_list_result_benchmark HashJoinListResultBenchmark.cpp)
 
 target_link_libraries(

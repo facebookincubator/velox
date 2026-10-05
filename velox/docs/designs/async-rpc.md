@@ -13,8 +13,8 @@ That forces three decisions, and most of what follows is mechanism for them:
 - **What a row that never came back evaluates to.** Failing a million-row query
   because eleven rows timed out is usually the wrong answer.
 
-This document describes the shape the pieces form, not how to write a
-function.
+This document describes the shape the pieces form;
+`develop/async-rpc-functions.rst` is the how-to for writing a function.
 
 ## Layering
 

@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -27,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
@@ -72,6 +74,8 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -312,12 +316,14 @@ std::string_view asView(const flatbuffers::FlatBufferBuilder& builder) {
 }
 
 const index::ClusterIndexConfig& clusterIndexConfig(
-    const WriterOptions& options) {
+    const index::IndexConfig& config) {
+  const auto* clusterConfig =
+      dynamic_cast<const index::ClusterIndexConfig*>(&config);
   NIMBLE_USER_CHECK_NOT_NULL(
-      options.clusterIndexConfig,
-      "Cluster index key column storage can only be omitted when cluster index is enabled");
-  return index::checkedIndexConfig<index::ClusterIndexConfig>(
-      *options.clusterIndexConfig);
+      clusterConfig,
+      "Cluster index configuration '{}' does not expose key columns.",
+      config.name);
+  return *clusterConfig;
 }
 
 bool omitClusterIndexKeyColumnStorage(const WriterOptions& options) {
@@ -341,10 +347,11 @@ std::vector<velox::column_index_t> storedInputColumnIndices(
   std::vector<velox::column_index_t> indices;
   indices.reserve(rowType->size());
 
-  const auto& indexOptions = clusterIndexConfig(options);
+  const auto& clusterConfig = clusterIndexConfig(
+      *velox::checkedNotNull(options.clusterIndexConfig.get()));
   std::unordered_set<std::string> keyColumns;
-  keyColumns.reserve(indexOptions.columns.size());
-  for (const auto& column : indexOptions.columns) {
+  keyColumns.reserve(clusterConfig.columns.size());
+  for (const auto& column : clusterConfig.columns) {
     NIMBLE_USER_CHECK(
         rowType->containsChild(column),
         "Cluster index key column '{}' not found in input schema: {}",
@@ -514,7 +521,7 @@ detail::WriterContext::Options prepareWriterContextOptions(
         ? TypeWithId::create(storedType)
         : std::move(inputSchema);
 
-    const std::vector<std::string>* clusterIndexKeyColumns{nullptr};
+    const index::ClusterIndexConfig* clusterConfig{nullptr};
     if (options.clusterIndexConfig != nullptr) {
       const auto& config = *options.clusterIndexConfig;
       NIMBLE_USER_CHECK_EQ(
@@ -522,25 +529,18 @@ detail::WriterContext::Options prepareWriterContextOptions(
           index::IndexFamily::Cluster,
           "Cluster index configuration must use the cluster family: {}",
           config.name);
-      const auto* builtInConfig =
-          dynamic_cast<const index::ClusterIndexConfig*>(&config);
-      NIMBLE_USER_CHECK_NOT_NULL(
-          builtInConfig,
-          "FSST subfields cannot be combined with custom cluster index "
-          "configuration '{}': key columns are unavailable.",
-          config.name);
-      clusterIndexKeyColumns = &builtInConfig->columns;
+      clusterConfig = &clusterIndexConfig(config);
     }
 
     fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
     for (const auto& fieldPath : options.fsstEncodingSubfields) {
       const auto subfield = parseValueStreamSubfield(fieldPath);
-      if (clusterIndexKeyColumns != nullptr) {
+      if (clusterConfig != nullptr) {
         NIMBLE_USER_CHECK(
             std::find(
-                clusterIndexKeyColumns->begin(),
-                clusterIndexKeyColumns->end(),
-                subfield.baseName()) == clusterIndexKeyColumns->end(),
+                clusterConfig->columns.begin(),
+                clusterConfig->columns.end(),
+                subfield.baseName()) == clusterConfig->columns.end(),
             "FSST subfield '{}' cannot target cluster index key column '{}'.",
             fieldPath,
             subfield.baseName());
@@ -1491,6 +1491,10 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   return *descriptor.context<WriterStreamContext>();
 }
 
+bool noChunking(const StreamData& streamData) {
+  return streamData.noChunking();
+}
+
 void initializeEncodingLayouts(
     const TypeBuilder& typeBuilder,
     const EncodingLayoutTree& encodingLayoutTree);
@@ -2030,6 +2034,7 @@ Writer::Writer(
            .enableChunkStats = context_->options().enableChunkStats,
            .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
+           .maxChunkStringStatSize = context_->options().maxChunkStringStatSize,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
            .stripeGroupEncodingLayoutReadFactors =
@@ -2408,9 +2413,10 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   bool clusterIndexKeyColumnStorageOmitted{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage;
   if (omitClusterIndexKeyColumnStorage(context_->options())) {
-    const auto& indexOptions = clusterIndexConfig(context_->options());
     clusterIndexKeyColumnStorageOmitted = true;
-    clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
+    const auto& config = *context_->options().clusterIndexConfig;
+    clusterIndexKeyColumnsWithOmittedStorage =
+        clusterIndexConfig(config).columns;
   }
 
   // Read back from the tablet writer rather than from options, so the recorded
@@ -2799,6 +2805,11 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
+  // A reclaim-triggered flush must remain on the reclaiming thread. Dispatching
+  // executor tasks could enter memory arbitration recursively.
+  if (velox::memory::underMemoryArbitration()) {
+    return 1;
+  }
   const auto minStreamsPerEncodingTask =
       std::max(1u, options.minStreamsPerEncodingTask);
   const auto maxByStreams =
@@ -2932,41 +2943,56 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add(
-            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
-              velox::common::testutil::TestValue::adjust(
-                  "facebook::nimble::Writer::parallelEncodeTask",
-                  const_cast<uint32_t*>(&taskId));
-              const auto startCpuNanos = velox::process::threadCpuNanos();
-              while (true) {
-                const auto fetchIndex =
-                    nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (fetchIndex >= streamCount) {
-                  break;
-                }
-                const auto streamIndex = orderedIndices[fetchIndex];
-                auto& [nodeId, streamData] = streams[streamIndex];
-                uint64_t streamSize{0};
-                processStream(
-                    *streamData,
-                    encodingScratchBufferPool,
-                    encodingBufferPool,
-                    streamSize,
-                    chunkSize);
-                auto* statsCollector = context_->getStatsCollector(nodeId);
-                if (statsCollector) {
-                  statsCollector->addPhysicalSize(streamSize);
-                }
-              }
-              encodingCpuNanos.fetch_add(
-                  velox::process::threadCpuNanos() - startCpuNanos,
-                  std::memory_order_relaxed);
-            });
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool]() {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto fetchIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (fetchIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = orderedIndices[fetchIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            uint64_t streamSize{0};
+            processStream(
+                *streamData,
+                encodingScratchBufferPool,
+                encodingBufferPool,
+                streamSize,
+                chunkSize);
+            auto* statsCollector = context_->getStatsCollector(nodeId);
+            if (statsCollector) {
+              statsCollector->addPhysicalSize(streamSize);
+            }
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
       barrier.waitAll();
     } else {
@@ -3155,20 +3181,31 @@ bool Writer::encodeStreamChunk(
     uint64_t minChunkSize,
     uint64_t maxChunkSize,
     bool ensureFullChunks,
+    bool lastChunk,
     Stream& encodedStream,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool,
     uint64_t& streamBytes,
     std::atomic_uint64_t& chunkBytes,
     std::atomic_uint64_t& logicalBytes) {
+  const bool chunkingDisabled = noChunking(streamData);
+  if (chunkingDisabled && !lastChunk) {
+    return false;
+  }
+
   bool writtenChunk{false};
   logicalBytes += streamData.memoryUsed();
   auto& streamChunks = encodedStream.chunks;
+  // Protected streams reach this path only at stripe close. Raising the cap
+  // to the complete buffered size makes the chunker emit at most one chunk.
+  const auto streamMaxChunkSize = chunkingDisabled
+      ? std::max(maxChunkSize, streamData.memoryUsed())
+      : maxChunkSize;
   auto chunker = getStreamChunker(
       streamData,
       StreamChunkerOptions{
           .minChunkSize = minChunkSize,
-          .maxChunkSize = maxChunkSize,
+          .maxChunkSize = streamMaxChunkSize,
           .ensureFullChunks = ensureFullChunks,
           .isFirstChunk = streamChunks.empty()});
   uint64_t encodedChunkBytes{0};
@@ -3182,9 +3219,87 @@ bool Writer::encodeStreamChunk(
   chunkBytes += encodedChunkBytes;
   // Compact erases processed stream data to reclaim memory.
   chunker->compact();
+  if (chunkingDisabled) {
+    NIMBLE_CHECK_LE(
+        streamChunks.size(),
+        1,
+        "A stream with chunking disabled produced multiple chunks.");
+  }
   logicalBytes -= streamData.memoryUsed();
   return writtenChunk;
 }
+
+namespace {
+
+template <typename T>
+void populateTypedChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    uint32_t maxStringStatSize) {
+  const std::span<const T> values{
+      reinterpret_cast<const T*>(chunkView.data().data()),
+      chunkView.data().size() / sizeof(T)};
+  if (values.empty()) {
+    return;
+  }
+  if constexpr (std::is_floating_point_v<T>) {
+    if (std::any_of(values.begin(), values.end(), [](T value) {
+          return std::isnan(value);
+        })) {
+      return;
+    }
+  }
+  const auto [min, max] = std::minmax_element(values.begin(), values.end());
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      return;
+    }
+    chunk.minValue = std::string{*min};
+    chunk.maxValue = std::string{*max};
+  } else {
+    chunk.minValue = *min;
+    chunk.maxValue = *max;
+  }
+}
+
+void populateChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    const WriterOptions& options) {
+  if (!options.enableChunkStats ||
+      options.chunkStatsVersion != ChunkStatsVersion::kV2) {
+    return;
+  }
+#define POPULATE_CHUNK_BOUNDS(scalarKind, Type)            \
+  case ScalarKind::scalarKind:                             \
+    populateTypedChunkBounds<Type>(                        \
+        chunkView, chunk, options.maxChunkStringStatSize); \
+    return
+
+  switch (chunkView.descriptor().scalarKind()) {
+    POPULATE_CHUNK_BOUNDS(Bool, bool);
+    POPULATE_CHUNK_BOUNDS(Int8, int8_t);
+    POPULATE_CHUNK_BOUNDS(UInt8, uint8_t);
+    POPULATE_CHUNK_BOUNDS(Int16, int16_t);
+    POPULATE_CHUNK_BOUNDS(UInt16, uint16_t);
+    POPULATE_CHUNK_BOUNDS(Int32, int32_t);
+    POPULATE_CHUNK_BOUNDS(UInt32, uint32_t);
+    POPULATE_CHUNK_BOUNDS(Int64, int64_t);
+    POPULATE_CHUNK_BOUNDS(UInt64, uint64_t);
+    POPULATE_CHUNK_BOUNDS(Float, float);
+    POPULATE_CHUNK_BOUNDS(Double, double);
+    case ScalarKind::String:
+    case ScalarKind::Binary:
+      populateTypedChunkBounds<std::string_view>(
+          chunkView, chunk, options.maxChunkStringStatSize);
+      return;
+    case ScalarKind::Undefined:
+      return;
+  }
+#undef POPULATE_CHUNK_BOUNDS
+}
+
+} // namespace
 
 uint32_t Writer::encodeChunk(
     const StreamData& chunkView,
@@ -3205,6 +3320,7 @@ uint32_t Writer::encodeChunk(
   chunk.rowCount = chunkView.rowCount();
   // Per-chunk null count, precomputed by the chunker.
   chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
+  populateChunkBounds(chunkView, chunk, context_->options());
   ChunkedStreamWriter chunkWriter{
       *encodingBuffer_, context_->options().chunkCompression};
   for (auto& buffer : chunkWriter.encode(encoded)) {
@@ -3247,15 +3363,31 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool] {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
           const auto startCpuNanos = velox::process::threadCpuNanos();
           while (true) {
             const auto inputIndex =
@@ -3272,6 +3404,7 @@ bool Writer::writeChunks(
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
+                    lastChunk,
                     encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
@@ -3305,6 +3438,7 @@ bool Writer::writeChunks(
                 minChunkSize,
                 maxChunkSize,
                 ensureFullChunks,
+                lastChunk,
                 encodedStreams_[offset],
                 encodingScratchBufferPool,
                 encodingBufferPool,
@@ -3347,6 +3481,7 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
+    bool stopWhenPressureRelieved,
     FlushPolicy* flushPolicy) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
@@ -3354,10 +3489,10 @@ bool Writer::flushChunks(
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
     if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+        (stopWhenPressureRelieved && !shouldChunk(flushPolicy))) {
       return false;
     }
   }
@@ -3448,45 +3583,75 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
+  const auto& options = context_->options();
+  if (options.enableChunking) {
     const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
-    const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    // O(numStreams) plus an allocation, so it is called only from a branch
+    // that will act on the result.
+    const auto oversizedStreams = [&] {
+      const auto streamCount = streams.size();
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      std::vector<uint32_t> indices;
+      indices.reserve(streamCount);
+      for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (!noChunking(*streams[streamIndex].second) &&
+            streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          indices.push_back(streamIndex);
+        }
       }
+      return indices;
+    };
+
+    if (options.eagerChunking) {
+      // An oversized stream is capped on its own account, without waiting for
+      // the writer's total to come under pressure. See
+      // WriterOptions::eagerChunking. Stopping once pressure cleared would
+      // leave the streams after that point above the cap, so this walks all
+      // of them.
+      flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/false,
+          flushPolicy.get());
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
-      // Relieve memory pressure by chunking small streams.
-      // Sort streams for chunking based on raw memory usage.
-      // TODO(T240072104): Improve performance by bucketing the streams
-      // by size (by most significant bit) instead of sorting them.
-      // Only sort streams above minChunkSize.
-      streamIndices.resize(streams.size());
-      std::iota(streamIndices.begin(), streamIndices.end(), 0);
-      std::sort(
-          streamIndices.begin(),
-          streamIndices.end(),
-          [&](const uint32_t& a, const uint32_t& b) {
-            return streams[a].second->memoryUsed() >
-                streams[b].second->memoryUsed();
-          });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+    if (shouldChunk(flushPolicy.get())) {
+      // Soft chunking, bounded by maxChunkSize.
+      const bool continueChunking = flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/true,
+          flushPolicy.get());
+      // Hard chunking reaches below maxChunkSize: the escalation for when
+      // capping each stream was not enough.
+      if (continueChunking) {
+        // Sort streams for chunking based on raw memory usage.
+        // TODO(T240072104): Improve performance by bucketing the streams
+        // by size (by most significant bit) instead of sorting them.
+        // Only sort streams above minChunkSize.
+        std::vector<uint32_t> streamIndices;
+        streamIndices.reserve(streams.size());
+        for (uint32_t streamIndex = 0; streamIndex < streams.size();
+             ++streamIndex) {
+          if (!noChunking(*streams[streamIndex].second)) {
+            streamIndices.push_back(streamIndex);
+          }
+        }
+        std::sort(
+            streamIndices.begin(),
+            streamIndices.end(),
+            [&](const uint32_t& a, const uint32_t& b) {
+              return streams[a].second->memoryUsed() >
+                  streams[b].second->memoryUsed();
+            });
+        flushChunks(
+            streamIndices,
+            /*ensureFullChunks=*/false,
+            /*stopWhenPressureRelieved=*/true,
+            flushPolicy.get());
+      }
     }
   }
 

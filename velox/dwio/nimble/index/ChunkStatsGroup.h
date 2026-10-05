@@ -18,8 +18,10 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "velox/dwio/nimble/index/IndexTypes.h"
+#include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 
 namespace facebook::velox::memory {
@@ -49,7 +51,8 @@ class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
   virtual ~ChunkStatsGroup();
 
   /// Creates a StreamIndex for the specified stripe and stream ID.
-  /// Returns nullptr if the stream is not indexed (has ≤1 chunk).
+  /// Returns nullptr when the stream has no chunk metadata. Implementations may
+  /// return an index for a single chunk when statistics support pruning.
   /// @param streamSize Total byte size of the stream in this stripe.
   virtual std::shared_ptr<StreamIndex> createStreamIndex(
       uint32_t stripe,
@@ -100,6 +103,28 @@ class StreamIndex {
 
   /// Returns the total number of rows in this stream.
   virtual uint32_t rowCount() const = 0;
+
+  /// Returns the absolute chunk index range [start, end) for this stream.
+  virtual std::pair<uint32_t, uint32_t> chunkRange() const;
+
+  /// Returns the exclusive end row for the chunk at the given absolute
+  /// position.
+  virtual uint32_t chunkEndRow(uint32_t chunkIndex) const;
+
+  /// Returns the per-chunk min and max values at the absolute position, or
+  /// std::nullopt when bounds are absent.
+  virtual std::optional<std::pair<ChunkStatValue, ChunkStatValue>> chunkBounds(
+      uint32_t chunkIndex) const;
+
+  /// Returns the per-chunk min value at the absolute position reported by
+  /// ChunkLocation::chunkIndex, or std::nullopt when bounds are absent.
+  virtual std::optional<ChunkStatValue> chunkMinValue(
+      uint32_t chunkIndex) const;
+
+  /// Returns the per-chunk max value at the absolute position reported by
+  /// ChunkLocation::chunkIndex, or std::nullopt when bounds are absent.
+  virtual std::optional<ChunkStatValue> chunkMaxValue(
+      uint32_t chunkIndex) const;
 
   /// Returns the stream ID this index is for.
   uint32_t streamId() const {

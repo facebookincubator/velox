@@ -96,41 +96,13 @@ class FlatMapVector : public BaseVector {
       std::vector<VectorPtr> mapValues,
       std::vector<BufferPtr> inMaps,
       std::optional<vector_size_t> nullCount = std::nullopt,
-      bool sortedKeys = false)
-      : BaseVector(
-            pool,
-            type,
-            VectorEncoding::Simple::FLAT_MAP,
-            std::move(nulls),
-            length,
-            std::nullopt,
-            nullCount),
-        mapValues_(std::move(mapValues)),
-        inMaps_(std::move(inMaps)),
-        sortedKeys_(sortedKeys) {
-    VELOX_CHECK(type->isMap(), "FlatMapVector requires a MAP type.");
-    distinctKeys_ = BaseVector::getOrCreateEmpty(
-        std::move(distinctKeys), type->childAt(0), pool);
-    setDistinctKeysImpl(distinctKeys_);
-
-    VELOX_CHECK_EQ(
-        numDistinctKeys(),
-        mapValues_.size(),
-        "Wrong number of map value vectors.");
-    VELOX_CHECK_LE(
-        inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
-  }
+      bool sortedKeys = false);
 
   ~FlatMapVector() override = default;
 
   /// Overwrites the existing distinct keys vector, resizing map values and
   /// clearing in-map buffers.
-  void setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys = false) {
-    setDistinctKeysImpl(std::move(distinctKeys));
-    mapValues_.resize(numDistinctKeys());
-    inMaps_.clear();
-    sortedKeys_ = sortedKeys;
-  }
+  void setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys = false);
 
   TypePtr keyType() const {
     return type()->asMap().keyType();
@@ -354,18 +326,7 @@ class FlatMapVector : public BaseVector {
   /// `sourceDistinctKeys`.
   void appendDistinctKey(
       const VectorPtr& sourceDistinctKeys,
-      column_index_t sourceChannel) {
-    column_index_t targetChannel = distinctKeys_->size();
-
-    distinctKeys_->resize(targetChannel + 1);
-    distinctKeys_->copy(
-        sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
-    mapValues_.resize(distinctKeys_->size());
-
-    keyToChannel_.insert(
-        {distinctKeys_->hashValueAt(targetChannel), targetChannel});
-    sortedKeys_ = false;
-  }
+      column_index_t sourceChannel);
 
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in
@@ -380,20 +341,7 @@ class FlatMapVector : public BaseVector {
       const folly::Range<const BaseVector::CopyRange*>& ranges);
 
  private:
-  void setDistinctKeysImpl(VectorPtr distinctKeys) {
-    VELOX_CHECK(distinctKeys != nullptr);
-    VELOX_CHECK(
-        *distinctKeys->type() == *keyType(),
-        "Unexpected key type: {}",
-        distinctKeys->type()->toString());
-
-    distinctKeys_ = std::move(distinctKeys);
-    keyToChannel_.clear();
-
-    for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
-      keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
-    }
-  }
+  void setDistinctKeysImpl(VectorPtr distinctKeys);
 
   /// Compares a map in this Vector with a map in a MapVector.
   std::optional<int32_t> compareToMap(

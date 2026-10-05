@@ -63,6 +63,7 @@ WindowNode                  Window
 RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
 MixedUnionNode              MixedUnion
+RPCNode                     RPC
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -1162,6 +1163,54 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+.. _RPCNode:
+
+RPCNode
+~~~~~~~
+
+The RPC operation calls an external service asynchronously and appends the
+response as a new column. ``kPerRow`` dispatches each row independently;
+``kBatch`` accumulates rows and passes each flushed group to the function, which
+may issue one native or asynchronous batch request or fan out into per-row
+requests. It is used for remote inference such as LLM completion and text
+embeddings. The corresponding operator class is ``RPCOperator``
+(``velox/exec/rpc/``); the business logic is provided by an
+:ref:`AsyncRPCFunction <AsyncRPCFunction>` (see
+:doc:`/develop/async-rpc-functions`).
+
+An upstream ``ProjectNode`` computes argument expressions into columns before
+the RPC node reads them by name.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - call
+     - The registered function call. Its name identifies the
+       ``AsyncRPCFunction``, its type is the RPC result type, and its inputs are
+       field accesses or constants in argument order.
+   * - outputColumn
+     - Name of the result column appended to the output.
+   * - outputType
+     - Full output row type: the passed-through source columns plus the result
+       column (stated explicitly to allow column pruning).
+   * - streamingMode
+     - ``kPerRow`` (one RPC per row, dispatched concurrently) or ``kBatch``
+       (rows accumulated and flushed as groups). This is the concrete mode
+       selected during planning; the function decides how to serve it on its
+       own backend.
+   * - dispatchBatchSize
+     - In ``kBatch`` mode, sets the flush granularity. ``0`` waits until input
+       closes, then flushes everything pending; ``maxRowsPerFlush()`` may split
+       that backlog into smaller requests. Not used in ``kPerRow`` mode.
+
+.. note::
+   ``streamingMode`` is what the query asked for, not what the function will do
+   about it — see :ref:`Execution mode and dispatch path <RPCDispatchPath>`.
 
 GPU Operators (cuDF)
 --------------------

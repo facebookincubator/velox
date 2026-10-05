@@ -15,6 +15,7 @@
  */
 #include "velox/exec/HashAggregation.h"
 
+#include <algorithm>
 #include <optional>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
@@ -87,6 +88,13 @@ void HashAggregation::initialize() {
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
   std::vector<AggregateInfo> aggregateInfos = toAggregateInfo(
       *aggregationNode_, *operatorCtx_, numHashers, expressionEvaluator);
+
+  canCombineGlobalPartialAggregation_ = isGlobal_ &&
+      aggregationNode_->step() == core::AggregationNode::Step::kPartial &&
+      !aggregateInfos.empty() && !hasGlobalGroupingSets_ &&
+      std::all_of(aggregateInfos.begin(),
+                  aggregateInfos.end(),
+                  [](const auto& info) { return info.function->isReducing(); });
 
   // Check that aggregate result type match the output type.
   for (auto i = 0; i < aggregateInfos.size(); i++) {
@@ -492,7 +500,7 @@ bool HashAggregation::shouldEmitDefaultGlobalGroupingSetRows() {
     return false;
   }
   // Single driver has no peers; emit based on its own input.
-  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) <= 1) {
+  if (operatorCtx_->numPeers() == 0) {
     return groupingSet_->numInputRows() == 0;
   }
   return electDefaultGlobalGroupingSetDriver();
@@ -500,15 +508,14 @@ bool HashAggregation::shouldEmitDefaultGlobalGroupingSetRows() {
 
 bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  std::vector<std::shared_ptr<Operator>> peerOperators;
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     return false;
   }
 
   SCOPE_EXIT {
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -517,10 +524,13 @@ bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
   // allPeersFinished returned true, so every peer has finished noMoreInput()
   // and its input count is final.
   uint64_t totalInputRows = groupingSet_->numInputRows();
-  for (auto& peer : peers) {
-    auto* aggregation =
-        dynamic_cast<HashAggregation*>(peer->findOperator(planNodeId()));
+  for (const auto& peer : peerOperators) {
+    auto* aggregation = peer->as<HashAggregation>();
     VELOX_CHECK_NOT_NULL(aggregation);
+    std::lock_guard<std::mutex> l(aggregation->mutex_);
+    VELOX_CHECK_NOT_NULL(
+        aggregation->groupingSet_,
+        "Internal state for a peer is empty. It might have already been closed.");
     totalInputRows += aggregation->groupingSet_->numInputRows();
   }
   return totalInputRows == 0;
@@ -534,14 +544,63 @@ RowVectorPtr HashAggregation::getDefaultGlobalGroupingSetOutput() {
   return output_;
 }
 
+void HashAggregation::combineGlobalPartialAggregation() {
+  if (!canCombineGlobalPartialAggregation_ || operatorCtx_->numPeers() == 0) {
+    return;
+  }
+
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+    VELOX_CHECK(future_.valid());
+    return;
+  }
+
+  SCOPE_EXIT {
+    peerOperators.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  TestValue::adjust(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      this);
+
+  // Destroyed before SCOPE_EXIT releases the peers, whose pools hold their
+  // memory.
+  std::vector<std::unique_ptr<GroupingSet>> peerGroupingSets;
+  peerGroupingSets.reserve(peerOperators.size());
+  std::vector<GroupingSet*> others;
+  others.reserve(peerOperators.size());
+  for (const auto& peer : peerOperators) {
+    auto* aggregation = peer->as<HashAggregation>();
+    VELOX_CHECK_NOT_NULL(aggregation);
+    {
+      std::lock_guard<std::mutex> l(aggregation->mutex_);
+      VELOX_CHECK_NOT_NULL(
+          aggregation->groupingSet_,
+          "Internal state for a peer is empty. It might have already been closed.");
+      peerGroupingSets.push_back(std::move(aggregation->groupingSet_));
+    }
+    others.push_back(peerGroupingSets.back().get());
+    aggregation->finished_ = true;
+  }
+
+  groupingSet_->mergeGlobalAggregations(others);
+}
+
 void HashAggregation::noMoreInput() {
   updateEstimatedOutputRowSize();
   groupingSet_->noMoreInput();
   Operator::noMoreInput();
 
-  // May park this driver on 'future_' for the peer election, surfaced by
-  // isBlocked() as kWaitForAggregationPeers.
-  emitDefaultGlobalGroupingSetRows_ = shouldEmitDefaultGlobalGroupingSetRows();
+  if (hasGlobalGroupingSets_) {
+    emitDefaultGlobalGroupingSetRows_ =
+        shouldEmitDefaultGlobalGroupingSetRows();
+  } else {
+    combineGlobalPartialAggregation();
+  }
 
   // Release the extra reserved memory right after processing all the inputs.
   pool()->release();
@@ -627,9 +686,14 @@ void HashAggregation::reclaim(
 }
 
 void HashAggregation::close() {
-  if (groupingSet_) {
+  std::unique_ptr<GroupingSet> groupingSet;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    groupingSet = std::move(groupingSet_);
+  }
+  if (groupingSet) {
     const auto numToIntermediateFastPathCalls =
-        groupingSet_->numToIntermediateFastPathCalls();
+        groupingSet->numToIntermediateFastPathCalls();
     if (numToIntermediateFastPathCalls > 0) {
       addRuntimeStat(
           std::string(kToIntermediateFastPathCalls),
@@ -639,7 +703,6 @@ void HashAggregation::close() {
   Operator::close();
 
   output_ = nullptr;
-  groupingSet_.reset();
 }
 
 void HashAggregation::updateEstimatedOutputRowSize() {

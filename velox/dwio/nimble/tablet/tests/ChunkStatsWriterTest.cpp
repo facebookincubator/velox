@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <limits>
 #include <span>
 
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -124,6 +125,155 @@ class ChunkStatsWriterTest : public ::testing::Test {
     return encoded;
   }
 
+  template <typename T>
+  static std::vector<uint8_t> encodeConstant(T value, uint32_t rowCount) {
+    std::vector<uint8_t> encoded(EncodingPrefix::kFixedPrefixSize + sizeof(T));
+    auto* position = reinterpret_cast<char*>(encoded.data());
+    EncodingPrefix::serialize(
+        EncodingType::Constant,
+        TypeTraits<T>::dataType,
+        rowCount,
+        /*useVarint=*/false,
+        position);
+    std::memcpy(position, &value, sizeof(T));
+    return encoded;
+  }
+
+  static std::vector<uint8_t> encodeConstantString(
+      std::string_view value,
+      uint32_t rowCount) {
+    std::vector<uint8_t> encoded(
+        EncodingPrefix::kFixedPrefixSize + sizeof(uint32_t) + value.size());
+    auto* position = reinterpret_cast<char*>(encoded.data());
+    EncodingPrefix::serialize(
+        EncodingType::Constant,
+        DataType::String,
+        rowCount,
+        /*useVarint=*/false,
+        position);
+    encoding::writeString(value, position);
+    return encoded;
+  }
+
+  static std::string createV2ConstantBoundsData(uint32_t chunkCount) {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto createEncodedStream = [&](const std::vector<uint8_t>& encoded) {
+      return serialization::CreateEncodedStream(
+          builder, builder.CreateVector(encoded));
+    };
+    const auto rows =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/1, chunkCount));
+    const auto offsets =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const auto nullCounts =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const auto mins =
+        createEncodedStream(encodeConstant<int64_t>(/*value=*/1, chunkCount));
+    const auto maxs =
+        createEncodedStream(encodeConstant<int64_t>(/*value=*/2, chunkCount));
+    const std::vector<uint32_t> chunkCounts{chunkCount};
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        minStreams{mins};
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        maxStreams{maxs};
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            builder.CreateVector(chunkCounts),
+            rows,
+            offsets,
+            nullCounts,
+            builder.CreateVector(minStreams),
+            builder.CreateVector(maxStreams)));
+    return {
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+  }
+
+  static std::string createV2ConstantStringBoundsData(
+      std::string_view min,
+      std::string_view max,
+      uint32_t chunkCount) {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto createEncodedStream = [&](const std::vector<uint8_t>& encoded) {
+      return serialization::CreateEncodedStream(
+          builder, builder.CreateVector(encoded));
+    };
+    std::vector<uint32_t> rowEnds(chunkCount);
+    for (uint32_t i = 0; i < chunkCount; ++i) {
+      rowEnds[i] = i + 1;
+    }
+    const auto rows = createEncodedStream(encodeTrivial(rowEnds));
+    const auto offsets =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const auto nullCounts =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const auto mins =
+        createEncodedStream(encodeConstantString(min, chunkCount));
+    const auto maxs =
+        createEncodedStream(encodeConstantString(max, chunkCount));
+    const auto presence =
+        createEncodedStream(encodeConstant<bool>(true, chunkCount));
+    const std::vector<uint32_t> chunkCounts{chunkCount};
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        minStreams{mins};
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        maxStreams{maxs};
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            builder.CreateVector(chunkCounts),
+            rows,
+            offsets,
+            nullCounts,
+            builder.CreateVector(minStreams),
+            builder.CreateVector(maxStreams),
+            presence));
+    return {
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+  }
+
+  static std::string createV2BoundsData(
+      std::span<const uint8_t> min,
+      std::span<const uint8_t> max,
+      std::span<const uint8_t> presence,
+      uint32_t chunkCount = 1) {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto createEncodedStream = [&](std::span<const uint8_t> encoded) {
+      return encoded.empty()
+          ? serialization::CreateEncodedStream(builder)
+          : serialization::CreateEncodedStream(
+                builder, builder.CreateVector(encoded.data(), encoded.size()));
+    };
+    const auto rows =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/1, chunkCount));
+    const auto offsets =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const auto nullCounts =
+        createEncodedStream(encodeConstant<uint32_t>(/*value=*/0, chunkCount));
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        minStreams{createEncodedStream(min)};
+    const std::vector<flatbuffers::Offset<serialization::EncodedStream>>
+        maxStreams{createEncodedStream(max)};
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            builder.CreateVector(std::vector<uint32_t>{chunkCount}),
+            rows,
+            offsets,
+            nullCounts,
+            builder.CreateVector(minStreams),
+            builder.CreateVector(maxStreams),
+            createEncodedStream(presence)));
+    return {
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+  }
+
   static std::string createV2GroupDataFromEncoded(
       std::span<const uint32_t> chunkCounts,
       std::span<const uint8_t> chunkRows,
@@ -184,7 +334,12 @@ class ChunkStatsWriterTest : public ::testing::Test {
   ChunkStatsWriter& createWriter(
       ChunkStatsVersion version,
       float minAvgChunksPerStream = 2) {
-    writer_ = ChunkStatsWriter::create(version, *pool_, minAvgChunksPerStream);
+    writer_ = ChunkStatsWriter::create(
+        *pool_,
+        {
+            .version = version,
+            .minAvgChunksPerStream = minAvgChunksPerStream,
+        });
     return *writer_;
   }
 
@@ -254,15 +409,32 @@ TEST_P(ChunkStatsReaderVersionTest, readerContract) {
   EXPECT_EQ(finalLocation.chunkSize, firstLocation.chunkSize);
   EXPECT_EQ(finalLocation.rowOffset, firstLocation.rowOffset);
   NIMBLE_ASSERT_THROW(firstStream->lookupChunk(30), "beyond the last chunk");
+  if (GetParam() == ChunkStatsVersion::kV2) {
+    EXPECT_EQ(firstStream->chunkRange(), std::make_pair(0U, 2U));
+    EXPECT_EQ(firstStream->chunkEndRow(0), 10);
+    EXPECT_EQ(firstStream->chunkEndRow(1), 30);
+  } else {
+    NIMBLE_ASSERT_THROW(
+        firstStream->chunkRange(), "Chunk iteration is not supported");
+  }
 
-  EXPECT_EQ(
-      chunkStats->createStreamIndex(
-          /*stripe=*/5, /*streamId=*/1, /*streamSize=*/5),
-      nullptr);
-  EXPECT_EQ(
-      chunkStats->createStreamIndex(
-          /*stripe=*/6, /*streamId=*/0, /*streamSize=*/7),
-      nullptr);
+  auto firstStripeSecondStream = chunkStats->createStreamIndex(
+      /*stripe=*/5, /*streamId=*/1, /*streamSize=*/5);
+  auto secondStripeFirstStream = chunkStats->createStreamIndex(
+      /*stripe=*/6, /*streamId=*/0, /*streamSize=*/7);
+  if (GetParam() == ChunkStatsVersion::kV1) {
+    EXPECT_EQ(firstStripeSecondStream, nullptr);
+    EXPECT_EQ(secondStripeFirstStream, nullptr);
+  } else {
+    ASSERT_NE(firstStripeSecondStream, nullptr);
+    EXPECT_EQ(firstStripeSecondStream->chunkRange(), std::make_pair(3U, 4U));
+    EXPECT_EQ(firstStripeSecondStream->chunkEndRow(3), 30);
+    EXPECT_EQ(firstStripeSecondStream->chunkNullCount(3), 3);
+    ASSERT_NE(secondStripeFirstStream, nullptr);
+    EXPECT_EQ(secondStripeFirstStream->chunkRange(), std::make_pair(2U, 3U));
+    EXPECT_EQ(secondStripeFirstStream->chunkEndRow(2), 40);
+    EXPECT_EQ(secondStripeFirstStream->chunkNullCount(2), 4);
+  }
   EXPECT_EQ(
       chunkStats->createStreamIndex(
           /*stripe=*/5, /*streamId=*/2, /*streamSize=*/0),
@@ -294,6 +466,12 @@ TEST_P(ChunkStatsReaderVersionTest, readerContract) {
   EXPECT_EQ(secondStream->chunkNullCount(secondLocation.chunkIndex), 1);
   EXPECT_EQ(secondStream->rowCount(), 40);
   NIMBLE_ASSERT_THROW(secondStream->lookupChunk(40), "beyond the last chunk");
+  if (GetParam() == ChunkStatsVersion::kV2) {
+    EXPECT_EQ(secondStream->chunkRange(), std::make_pair(4U, 7U));
+    EXPECT_EQ(secondStream->chunkEndRow(4), 10);
+    EXPECT_EQ(secondStream->chunkEndRow(5), 25);
+    EXPECT_EQ(secondStream->chunkEndRow(6), 40);
+  }
 }
 
 TEST_P(ChunkStatsReaderVersionTest, multipleGroupsRoundTrip) {
@@ -591,6 +769,587 @@ TEST_F(ChunkStatsWriterTest, v2MultipleStreamsAndStripes) {
   }
 }
 
+TEST_F(ChunkStatsWriterTest, v2EncodesDoubleBoundsAsDouble) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  chunks[0].minValue = 1.5;
+  chunks[0].maxValue = 2.5;
+  chunks[1].minValue = -3.25;
+  chunks[1].maxValue = 4.75;
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+  const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+      fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(group->chunk_min_values(), nullptr);
+  ASSERT_NE(group->chunk_max_values(), nullptr);
+  const auto* encodedMins = group->chunk_min_values()->Get(0)->data();
+  const auto* encodedMaxs = group->chunk_max_values()->Get(0)->data();
+  ASSERT_NE(encodedMins, nullptr);
+  ASSERT_NE(encodedMaxs, nullptr);
+  EXPECT_EQ(
+      EncodingPrefix::dataType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedMins->data()),
+              encodedMins->size()}),
+      DataType::Double);
+  EXPECT_EQ(
+      EncodingPrefix::dataType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedMaxs->data()),
+              encodedMaxs->size()}),
+      DataType::Double);
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+  ASSERT_NE(stream, nullptr);
+  EXPECT_EQ(std::get<double>(*stream->chunkMinValue(0)), 1.5);
+  EXPECT_EQ(std::get<double>(*stream->chunkMaxValue(0)), 2.5);
+  EXPECT_EQ(std::get<double>(*stream->chunkMinValue(1)), -3.25);
+  EXPECT_EQ(std::get<double>(*stream->chunkMaxValue(1)), 4.75);
+}
+
+TEST_F(ChunkStatsWriterTest, v2EncodesFloatBoundsAsFloat) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  chunks[0].minValue = 1.5F;
+  chunks[0].maxValue = 2.5F;
+  chunks[1].minValue = -3.25F;
+  chunks[1].maxValue = 4.75F;
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+  const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+      fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(group->chunk_min_values(), nullptr);
+  ASSERT_NE(group->chunk_max_values(), nullptr);
+  const auto* encodedMins = group->chunk_min_values()->Get(0)->data();
+  const auto* encodedMaxs = group->chunk_max_values()->Get(0)->data();
+  ASSERT_NE(encodedMins, nullptr);
+  ASSERT_NE(encodedMaxs, nullptr);
+  EXPECT_EQ(
+      EncodingPrefix::dataType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedMins->data()),
+              encodedMins->size()}),
+      DataType::Float);
+  EXPECT_EQ(
+      EncodingPrefix::dataType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedMaxs->data()),
+              encodedMaxs->size()}),
+      DataType::Float);
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+  ASSERT_NE(stream, nullptr);
+  EXPECT_EQ(std::get<float>(*stream->chunkMinValue(0)), 1.5F);
+  EXPECT_EQ(std::get<float>(*stream->chunkMaxValue(0)), 2.5F);
+  EXPECT_EQ(std::get<float>(*stream->chunkMinValue(1)), -3.25F);
+  EXPECT_EQ(std::get<float>(*stream->chunkMaxValue(1)), 4.75F);
+}
+
+TEST_F(ChunkStatsWriterTest, v2PreservesPhysicalBoundTypes) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  const std::vector<ChunkStatValue> mins{
+      int8_t{-1},
+      uint8_t{1},
+      int16_t{-2},
+      uint16_t{2},
+      int32_t{-3},
+      uint32_t{3},
+      int64_t{-4},
+      uint64_t{4},
+      false,
+  };
+  const std::vector<ChunkStatValue> maxs{
+      int8_t{1},
+      uint8_t{2},
+      int16_t{2},
+      uint16_t{3},
+      int32_t{3},
+      uint32_t{4},
+      int64_t{4},
+      uint64_t{5},
+      true,
+  };
+  const std::vector<DataType> expectedTypes{
+      DataType::Int8,
+      DataType::Uint8,
+      DataType::Int16,
+      DataType::Uint16,
+      DataType::Int32,
+      DataType::Uint32,
+      DataType::Int64,
+      DataType::Uint64,
+      DataType::Bool,
+  };
+
+  writer.newStripe(mins.size());
+  for (uint32_t streamId = 0; streamId < mins.size(); ++streamId) {
+    auto chunks = createChunks(buffer, {{1, 1}});
+    chunks.front().minValue = mins[streamId];
+    chunks.front().maxValue = maxs[streamId];
+    writer.addStream(streamId, chunks);
+  }
+  writer.writeGroup(mins.size(), 1, createMetadataSectionCallback(fileIndex));
+
+  const auto* serializedGroup =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+          fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(serializedGroup->chunk_min_values(), nullptr);
+  for (uint32_t streamId = 0; streamId < expectedTypes.size(); ++streamId) {
+    const auto* data =
+        serializedGroup->chunk_min_values()->Get(streamId)->data();
+    ASSERT_NE(data, nullptr);
+    EXPECT_EQ(
+        EncodingPrefix::dataType(
+            std::string_view{
+                reinterpret_cast<const char*>(data->data()), data->size()}),
+        expectedTypes[streamId]);
+  }
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  for (uint32_t streamId = 0; streamId < expectedTypes.size(); ++streamId) {
+    auto stream = chunkStats->createStreamIndex(0, streamId, 1);
+    ASSERT_NE(stream, nullptr);
+    EXPECT_EQ(stream->chunkMinValue(streamId), mins[streamId]);
+    EXPECT_EQ(stream->chunkMaxValue(streamId), maxs[streamId]);
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RoundTripsTypedAndMissingBounds) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(3);
+  auto integralChunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  integralChunks[0].minValue = int64_t{-7};
+  integralChunks[0].maxValue = int64_t{11};
+  integralChunks[1].minValue = std::numeric_limits<int64_t>::min();
+  integralChunks[1].maxValue = std::numeric_limits<int64_t>::max();
+  writer.addStream(0, integralChunks);
+
+  auto stringChunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  stringChunks[0].minValue = std::string{};
+  stringChunks[0].maxValue = std::string{"beta"};
+  stringChunks[1].minValue = std::string{"a\0b", 3};
+  stringChunks[1].maxValue = std::string{"z"};
+  writer.addStream(1, stringChunks);
+
+  auto partialChunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  partialChunks[0].minValue = -1.5;
+  partialChunks[0].maxValue = 3.25;
+  writer.addStream(2, partialChunks);
+
+  writer.writeGroup(3, 1, createMetadataSectionCallback(fileIndex));
+  const auto* serializedGroup =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+          fileIndex.groupMetadataSections.front().data());
+  const auto* encodedPresence = serializedGroup->chunk_min_max_present();
+  ASSERT_NE(encodedPresence, nullptr);
+  ASSERT_NE(encodedPresence->data(), nullptr);
+  const std::string_view presenceData{
+      reinterpret_cast<const char*>(encodedPresence->data()->data()),
+      encodedPresence->data()->size()};
+  EXPECT_EQ(EncodingPrefix::dataType(presenceData), DataType::Bool);
+  EXPECT_EQ(EncodingPrefix::readRowCount(presenceData, /*useVarint=*/false), 6);
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+
+  auto integral = chunkStats->createStreamIndex(0, 0, 10);
+  ASSERT_NE(integral, nullptr);
+  EXPECT_EQ(std::get<int64_t>(*integral->chunkMinValue(0)), -7);
+  EXPECT_EQ(std::get<int64_t>(*integral->chunkMaxValue(0)), 11);
+  EXPECT_EQ(
+      std::get<int64_t>(*integral->chunkMinValue(1)),
+      std::numeric_limits<int64_t>::min());
+  EXPECT_EQ(
+      std::get<int64_t>(*integral->chunkMaxValue(1)),
+      std::numeric_limits<int64_t>::max());
+
+  auto strings = chunkStats->createStreamIndex(0, 1, 10);
+  ASSERT_NE(strings, nullptr);
+  EXPECT_EQ(std::get<std::string>(*strings->chunkMinValue(2)), "");
+  EXPECT_EQ(std::get<std::string>(*strings->chunkMaxValue(2)), "beta");
+  EXPECT_EQ(
+      std::get<std::string>(*strings->chunkMinValue(3)),
+      std::string("a\0b", 3));
+  EXPECT_EQ(std::get<std::string>(*strings->chunkMaxValue(3)), "z");
+
+  auto partial = chunkStats->createStreamIndex(0, 2, 10);
+  ASSERT_NE(partial, nullptr);
+  EXPECT_EQ(std::get<double>(*partial->chunkMinValue(4)), -1.5);
+  EXPECT_EQ(std::get<double>(*partial->chunkMaxValue(4)), 3.25);
+  EXPECT_FALSE(partial->chunkMinValue(5).has_value());
+  EXPECT_FALSE(partial->chunkMaxValue(5).has_value());
+}
+
+TEST_F(ChunkStatsWriterTest, v2StreamIndexExtendedApis) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{5, 2}}));
+
+  writer.newStripe(1);
+  auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  chunks[0].minValue = int64_t{-7};
+  chunks[0].maxValue = int64_t{11};
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 2, createMetadataSectionCallback(fileIndex));
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/5,
+      /*stripeCount=*/2,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(
+      /*stripe=*/6, /*streamId=*/0, /*streamSize=*/10);
+  ASSERT_NE(stream, nullptr);
+
+  EXPECT_EQ(stream->chunkRange(), std::make_pair(1U, 3U));
+  EXPECT_EQ(stream->chunkEndRow(1), 10);
+  EXPECT_EQ(stream->chunkEndRow(2), 30);
+
+  const auto bounds = stream->chunkBounds(1);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_EQ(bounds->first, ChunkStatValue{int64_t{-7}});
+  EXPECT_EQ(bounds->second, ChunkStatValue{int64_t{11}});
+  EXPECT_EQ(stream->chunkBounds(2), std::nullopt);
+
+  NIMBLE_ASSERT_THROW(
+      stream->chunkEndRow(0), "Chunk index is before this stream's range");
+  NIMBLE_ASSERT_THROW(
+      stream->chunkEndRow(3), "Chunk index is beyond this stream's range");
+  NIMBLE_ASSERT_THROW(
+      stream->chunkBounds(0), "Chunk index is before this stream's range");
+  NIMBLE_ASSERT_THROW(
+      stream->chunkBounds(3), "Chunk index is beyond this stream's range");
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkRows) {
+  {
+    const std::array<uint32_t, 1> chunkCounts{
+        std::numeric_limits<uint32_t>::max()};
+    const auto rows = encodeConstant<uint32_t>(
+        /*value=*/1, std::numeric_limits<uint32_t>::max());
+    const auto offsets = encodeConstant<uint32_t>(
+        /*value=*/0, std::numeric_limits<uint32_t>::max());
+    const auto nullCounts = encodeConstant<uint32_t>(
+        /*value=*/0, std::numeric_limits<uint32_t>::max());
+    const auto groupData =
+        createV2GroupDataFromEncoded(chunkCounts, rows, offsets, nullCounts);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2,
+        /*firstStripe=*/0,
+        /*stripeCount=*/1,
+        copyMetadata(groupData),
+        *pool_);
+
+    NIMBLE_ASSERT_THROW(
+        chunkStats->createStreamIndex(0, 0, 1),
+        "Chunk count exceeds stream row count");
+  }
+
+  {
+    const std::array<uint32_t, 1> chunkCounts{2};
+    const std::array<uint32_t, 2> rows{2, 2};
+    const std::array<uint32_t, 2> offsets{0, 1};
+    const std::array<uint32_t, 2> nullCounts{0, 0};
+    const auto groupData =
+        createV2GroupData(chunkCounts, rows, offsets, nullCounts);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2,
+        /*firstStripe=*/0,
+        /*stripeCount=*/1,
+        copyMetadata(groupData),
+        *pool_);
+    auto stream = chunkStats->createStreamIndex(0, 0, 2);
+    ASSERT_NE(stream, nullptr);
+
+    NIMBLE_ASSERT_THROW(
+        stream->chunkEndRow(1), "Chunk rows must be strictly increasing");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2UsesRleForChunkBoundPresence) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  constexpr size_t kRunLength{1'000};
+  writer.newStripe(1);
+  auto chunks = createChunks(
+      buffer,
+      std::vector<ChunkSpec>(2 * kRunLength, {.rowCount = 1, .size = 1}));
+  for (size_t i = 0; i < kRunLength; ++i) {
+    chunks[i].minValue = int64_t{1};
+    chunks[i].maxValue = int64_t{2};
+  }
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+      fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(group->chunk_min_max_present(), nullptr);
+  ASSERT_NE(group->chunk_min_max_present()->data(), nullptr);
+  const auto* encoded = group->chunk_min_max_present()->data();
+  const std::string_view presenceData{
+      reinterpret_cast<const char*>(encoded->data()), encoded->size()};
+  EXPECT_EQ(EncodingPrefix::dataType(presenceData), DataType::Bool);
+  EXPECT_EQ(EncodingPrefix::encodingType(presenceData), EncodingType::RLE);
+}
+
+TEST_F(ChunkStatsWriterTest, v2RoundTripsConstantStringBounds) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+  for (auto& chunk : chunks) {
+    chunk.minValue = std::string{"same"};
+    chunk.maxValue = std::string{"same"};
+  }
+  writer.addStream(0, chunks);
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(0, 0, 10);
+  ASSERT_NE(stream, nullptr);
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMinValue(0)), "same");
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMaxValue(1)), "same");
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsOversizedStringBounds) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+
+  writer.newStripe(1);
+  auto chunks = createChunks(buffer, {{10, 4}});
+  chunks[0].minValue = std::string(
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize + 1, 'a');
+  chunks[0].maxValue = std::string{"z"};
+  NIMBLE_ASSERT_THROW(
+      writer.addStream(0, chunks),
+      "Chunk minimum exceeds the maximum string statistic size");
+}
+
+TEST_F(ChunkStatsWriterTest, v2PreservesBoundsAcrossStripes) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  auto firstStripe = createChunks(buffer, {{10, 4}});
+  firstStripe[0].minValue = int64_t{2};
+  firstStripe[0].maxValue = int64_t{8};
+  writer.addStream(0, firstStripe);
+
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{10, 4}}));
+  writer.writeGroup(1, 2, createMetadataSectionCallback(fileIndex));
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/5,
+      /*stripeCount=*/2,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  auto first = chunkStats->createStreamIndex(5, 0, 4);
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(std::get<int64_t>(*first->chunkMinValue(0)), 2);
+  EXPECT_EQ(std::get<int64_t>(*first->chunkMaxValue(0)), 8);
+  auto second = chunkStats->createStreamIndex(6, 0, 4);
+  ASSERT_NE(second, nullptr);
+  const auto [startChunk, endChunk] = second->chunkRange();
+  ASSERT_EQ(endChunk - startChunk, 1);
+  EXPECT_EQ(second->chunkMinValue(startChunk), std::nullopt);
+  EXPECT_EQ(second->chunkMaxValue(startChunk), std::nullopt);
+}
+
+TEST_F(ChunkStatsWriterTest, v2PreservesPackedLayoutWithAbsentStreams) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  const auto addBoundedStream = [&](uint32_t streamId,
+                                    std::vector<Chunk> chunks,
+                                    const ChunkStatValue& min,
+                                    const ChunkStatValue& max) {
+    for (auto& chunk : chunks) {
+      chunk.minValue = min;
+      chunk.maxValue = max;
+    }
+    writer.addStream(streamId, chunks);
+  };
+
+  writer.newStripe(1);
+  addBoundedStream(
+      0, createChunks(buffer, {{10, 4}, {20, 6}}), int8_t{-1}, int8_t{1});
+
+  writer.newStripe(3);
+  addBoundedStream(0, createChunks(buffer, {{30, 7}}), int8_t{-2}, int8_t{2});
+  auto stream2Chunks = createChunks(buffer, {{60, 8}, {40, 9}});
+  stream2Chunks[0].minValue = uint16_t{10};
+  stream2Chunks[0].maxValue = uint16_t{20};
+  writer.addStream(2, stream2Chunks);
+
+  writer.newStripe(2);
+  addBoundedStream(
+      0, createChunks(buffer, {{40, 10}, {50, 11}}), int8_t{-3}, int8_t{3});
+  addBoundedStream(1, createChunks(buffer, {{50, 12}}), false, true);
+
+  writer.writeGroup(3, 3, createMetadataSectionCallback(fileIndex));
+  const auto* serializedGroup =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+          fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(serializedGroup->stream_chunk_counts(), nullptr);
+  const std::vector<uint32_t> chunkCounts{
+      serializedGroup->stream_chunk_counts()->begin(),
+      serializedGroup->stream_chunk_counts()->end()};
+  EXPECT_THAT(chunkCounts, testing::ElementsAre(2, 3, 5, 0, 0, 1, 0, 2, 2));
+  EXPECT_THAT(
+      decode(*serializedGroup->stream_chunk_rows()),
+      testing::ElementsAre(10, 30, 30, 40, 90, 50, 60, 100));
+  EXPECT_THAT(
+      decode(*serializedGroup->stream_chunk_offsets()),
+      testing::ElementsAre(0, 4, 0, 0, 10, 0, 0, 8));
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/3,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  EXPECT_EQ(chunkStats->createStreamIndex(0, 1, 0), nullptr);
+  EXPECT_EQ(chunkStats->createStreamIndex(1, 1, 0), nullptr);
+  auto stream1Stripe2 = chunkStats->createStreamIndex(2, 1, 12);
+  ASSERT_NE(stream1Stripe2, nullptr);
+  EXPECT_EQ(stream1Stripe2->lookupChunk(0).chunkIndex, 5);
+  EXPECT_EQ(stream1Stripe2->chunkMinValue(5), ChunkStatValue{false});
+  EXPECT_EQ(stream1Stripe2->chunkMaxValue(5), ChunkStatValue{true});
+
+  EXPECT_EQ(chunkStats->createStreamIndex(0, 2, 0), nullptr);
+  auto stream2Stripe1 = chunkStats->createStreamIndex(1, 2, 17);
+  ASSERT_NE(stream2Stripe1, nullptr);
+  EXPECT_EQ(stream2Stripe1->lookupChunk(0).chunkIndex, 6);
+  EXPECT_EQ(stream2Stripe1->lookupChunk(60).chunkIndex, 7);
+  EXPECT_EQ(stream2Stripe1->chunkMinValue(6), ChunkStatValue{uint16_t{10}});
+  EXPECT_EQ(stream2Stripe1->chunkMaxValue(6), ChunkStatValue{uint16_t{20}});
+  EXPECT_FALSE(stream2Stripe1->chunkMinValue(7).has_value());
+  EXPECT_FALSE(stream2Stripe1->chunkMaxValue(7).has_value());
+  EXPECT_EQ(chunkStats->createStreamIndex(2, 2, 0), nullptr);
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidBounds) {
+  Buffer buffer{*pool_};
+
+  {
+    auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+    writer.newStripe(1);
+    auto chunks = createChunks(buffer, {{10, 4}});
+    chunks[0].minValue = int64_t{1};
+    chunks[0].maxValue = 2.0;
+    NIMBLE_ASSERT_THROW(
+        writer.addStream(0, chunks),
+        "Chunk minimum and maximum must have the same type");
+  }
+
+  {
+    auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+    writer.newStripe(1);
+    auto chunks = createChunks(buffer, {{10, 4}});
+    chunks[0].minValue = int64_t{2};
+    chunks[0].maxValue = int64_t{1};
+    NIMBLE_ASSERT_THROW(
+        writer.addStream(0, chunks), "Chunk minimum must not exceed maximum");
+  }
+
+  {
+    auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+    writer.newStripe(1);
+    auto chunks = createChunks(buffer, {{10, 4}});
+    chunks[0].minValue = std::numeric_limits<double>::quiet_NaN();
+    chunks[0].maxValue = 1.0;
+    NIMBLE_ASSERT_THROW(
+        writer.addStream(0, chunks), "Chunk bounds must not be NaN");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsCompactUnboundedBounds) {
+  const auto groupData = createV2ConstantBoundsData(/*chunkCount=*/10'000);
+  NIMBLE_ASSERT_THROW(
+      index::ChunkStatsGroup::create(
+          ChunkStatsVersion::kV2,
+          /*firstStripe=*/0,
+          /*stripeCount=*/1,
+          copyMetadata(groupData),
+          *pool_),
+      "V2 chunk bounds metadata is incomplete or has an invalid stream count");
+}
+
+TEST_F(ChunkStatsWriterTest, v2ReadsOversizedStringBounds) {
+  const std::string min(
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize + 1, 'a');
+  const auto groupData =
+      createV2ConstantStringBoundsData(min, "z", /*chunkCount=*/2);
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(groupData),
+      *pool_);
+  auto stream = chunkStats->createStreamIndex(0, 0, 0);
+  ASSERT_NE(stream, nullptr);
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMinValue(0)), min);
+  EXPECT_EQ(std::get<std::string>(*stream->chunkMaxValue(0)), "z");
+}
+
 TEST_F(ChunkStatsWriterTest, v2EmptyStream) {
   auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
   TestChunkFileIndex fileIndex;
@@ -845,6 +1604,61 @@ TEST_F(ChunkStatsWriterTest, v2RejectsInvalidEncodedStreamPrefix) {
     invalidDataType[EncodingPrefix::kDataTypeOffset] =
         static_cast<uint8_t>(DataType::Int32);
     expectInvalidRows(invalidDataType, "invalid data type");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkBoundsMetadata) {
+  const auto presence = encodeConstant<bool>(true, /*rowCount=*/1);
+
+  {
+    const std::array<uint8_t, 1> invalidMin{0};
+    const auto max = encodeConstant<int8_t>(1, /*rowCount=*/1);
+    const auto groupData = createV2BoundsData(invalidMin, max, presence);
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "Encoded chunk min values array is too small");
+  }
+
+  {
+    const auto groupData = createV2BoundsData({}, {}, presence);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+    auto stream = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1);
+    ASSERT_NE(stream, nullptr);
+    NIMBLE_ASSERT_THROW(
+        stream->chunkBounds(/*chunkIndex=*/0),
+        "marked present but stream 0 has no bounds data");
+  }
+
+  {
+    const auto min = encodeConstant<int8_t>(2, /*rowCount=*/1);
+    const auto max = encodeConstant<int8_t>(1, /*rowCount=*/1);
+    const auto groupData = createV2BoundsData(min, max, presence);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+    auto stream = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1);
+    ASSERT_NE(stream, nullptr);
+    NIMBLE_ASSERT_THROW(
+        stream->chunkMinValue(/*chunkIndex=*/0),
+        "chunk minimum must not exceed maximum");
+  }
+
+  {
+    const auto min = encodeConstant<float>(
+        std::numeric_limits<float>::quiet_NaN(), /*rowCount=*/1);
+    const auto max = encodeConstant<float>(1, /*rowCount=*/1);
+    const auto groupData = createV2BoundsData(min, max, presence);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+    auto stream = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1);
+    ASSERT_NE(stream, nullptr);
+    NIMBLE_ASSERT_THROW(
+        stream->chunkMaxValue(/*chunkIndex=*/0),
+        "chunk bounds must not be NaN");
   }
 }
 
@@ -1244,9 +2058,13 @@ TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeRoundtrip) {
       MetadataBuffer::decompress(
           std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
 
-  auto chunkStats = index::ChunkStats::create(std::move(rootSection));
+  auto chunkStats =
+      index::ChunkStats::create(GetParam(), std::move(rootSection));
   ASSERT_NE(chunkStats, nullptr);
   ASSERT_EQ(chunkStats->numGroups(), 2);
+  EXPECT_EQ(
+      chunkStats->supportsChunkStatsPruning(),
+      GetParam() == ChunkStatsVersion::kV2);
 
   for (uint32_t i = 0; i < 2; ++i) {
     const auto& section = chunkStats->groupMetadata(i);
@@ -1292,7 +2110,8 @@ TEST_F(ChunkStatsWriterTest, missingUncompressedSizeBackwardCompat) {
       MetadataBuffer::decompress(
           std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
 
-  auto chunkStats = index::ChunkStats::create(std::move(rootSection));
+  auto chunkStats =
+      index::ChunkStats::create(ChunkStatsVersion::kV1, std::move(rootSection));
   ASSERT_NE(chunkStats, nullptr);
   ASSERT_EQ(chunkStats->numGroups(), 2);
 
@@ -1346,9 +2165,13 @@ TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeForUncompressedSections) {
       MetadataBuffer::decompress(
           std::move(rootBuffer), CompressionType::Uncompressed, pool_.get()))};
 
-  auto chunkStats = index::ChunkStats::create(std::move(rootSection));
+  auto chunkStats =
+      index::ChunkStats::create(GetParam(), std::move(rootSection));
   ASSERT_NE(chunkStats, nullptr);
   ASSERT_EQ(chunkStats->numGroups(), 1);
+  EXPECT_EQ(
+      chunkStats->supportsChunkStatsPruning(),
+      GetParam() == ChunkStatsVersion::kV2);
 
   const auto& section = chunkStats->groupMetadata(0);
   EXPECT_EQ(section.compressionType(), CompressionType::Uncompressed);

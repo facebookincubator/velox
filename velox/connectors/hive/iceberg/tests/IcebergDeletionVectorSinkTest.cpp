@@ -168,20 +168,15 @@ class IcebergDeletionVectorSinkTest : public ::testing::Test {
             std::unordered_map<std::string, std::string>()));
 
     queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
-    connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
-        pool_.get(),
-        connectorPool_.get(),
-        sessionProperties_.get(),
-        /*spillConfig=*/nullptr,
-        common::PrefixSortConfig(),
-        /*expressionEvaluator=*/nullptr,
-        /*cache=*/nullptr,
-        /*queryId=*/"query.IcebergDeletionVectorSinkTest",
-        /*taskId=*/"task.IcebergDeletionVectorSinkTest",
-        /*planNodeId=*/"planNodeId.IcebergDeletionVectorSinkTest",
-        /*driverId=*/0,
-        /*sessionTimezone=*/"",
-        /*adjustTimestampToTimezone=*/false);
+    connectorQueryCtx_ =
+        connector::ConnectorQueryCtx::Builder()
+            .operatorPool(pool_.get())
+            .connectorPool(connectorPool_.get())
+            .sessionProperties(sessionProperties_.get())
+            .queryId("query.IcebergDeletionVectorSinkTest")
+            .taskId("task.IcebergDeletionVectorSinkTest")
+            .planNodeId("planNodeId.IcebergDeletionVectorSinkTest")
+            .build();
   }
 
   RowVectorPtr makePositionDeleteRows(

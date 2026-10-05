@@ -35,6 +35,8 @@ class HybridFlatMap {
   /// Describes one group in logical schema order.
   struct Group {
     uint32_t groupId{0};
+    /// Keys in key-presence bitmap order. Configured groups are sorted;
+    /// Default preserves first-seen order.
     std::vector<std::string> groupKeys;
 
     bool operator==(const Group&) const = default;
@@ -43,6 +45,14 @@ class HybridFlatMap {
   /// Reserved identifier for the Default group.
   static constexpr uint32_t kDefaultGroupId =
       std::numeric_limits<uint32_t>::max();
+
+  /// Returns whether `groupId` identifies the reserved Default group.
+  static constexpr bool isDefaultGroup(uint32_t groupId) {
+    return groupId == kDefaultGroupId;
+  }
+
+  /// Returns the logical group with `groupId`. Fails when it is absent.
+  const Group& groupById(uint32_t groupId) const;
 
   /// Reserved schema attribute containing serialized group metadata.
   static constexpr std::string_view kAttributeName{"hybridFlatMap"};
@@ -62,7 +72,8 @@ class HybridFlatMap {
   /// preceding groups.
   std::string serialize() const;
 
-  /// Deserializes and validates groups produced by `serialize()`.
+  /// Deserializes and validates groups produced by `serialize()`. Also accepts
+  /// an omitted `group_keys` vector when no group has keys.
   static HybridFlatMap deserialize(std::string_view serialized);
 
   /// Deserializes the reserved metadata attribute, leaving `attributes`
@@ -75,55 +86,70 @@ class HybridFlatMap {
   static HybridFlatMap extractAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes);
 
-  /// Appends the reserved metadata attribute to `attributes`, which must not
-  /// already contain it. The attribute is owned by the schema, so a caller
-  /// supplying its own copy is setting reserved state it does not control.
+  /// Appends the reserved metadata attribute when absent, or replaces its
+  /// stale value in place.
   void setAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes) const;
+};
 
-  /// Validates full-plan group IDs and keys. Accessors decouple validation
-  /// from writer- and reader-side group representations.
-  template <typename GroupIdAt, typename GroupKeysAt>
-  static void
-  validate(size_t groupCount, GroupIdAt groupIdAt, GroupKeysAt groupKeysAt) {
-    NIMBLE_CHECK_GT(
-        groupCount, 1, "Hybrid FlatMap requires at least two groups.");
-    folly::F14FastSet<uint32_t> groupIds;
-    folly::F14FastSet<std::string> keys;
-    bool hasDefaultGroup{false};
-    for (size_t i = 0; i < groupCount; ++i) {
-      const auto groupId = groupIdAt(i);
-      const auto& groupKeys = groupKeysAt(i);
-      const bool uniqueGroupId = groupIds.insert(groupId).second;
+namespace detail {
+
+template <typename GroupIdAt, typename GroupKeysAt>
+void validateHybridFlatMapGroups(
+    size_t groupCount,
+    bool hasDefault,
+    GroupIdAt groupIdAt,
+    GroupKeysAt groupKeysAt) {
+  NIMBLE_CHECK_GE(
+      groupCount, size_t{1}, "Hybrid FlatMap requires at least 1 group(s).");
+  // Default alone is valid because it holds every key. A projection may keep a
+  // single configured group, so only a complete schema requires its single
+  // group to be Default.
+  if (hasDefault && groupCount == 1) {
+    NIMBLE_CHECK(
+        HybridFlatMap::isDefaultGroup(groupIdAt(0)),
+        "Hybrid FlatMap single group must be Default: {}.",
+        groupIdAt(0));
+  }
+  folly::F14FastSet<uint32_t> groupIds;
+  folly::F14FastSet<std::string> keys;
+  bool foundDefault{false};
+  for (size_t i = 0; i < groupCount; ++i) {
+    const auto groupId = groupIdAt(i);
+    const auto& groupKeys = groupKeysAt(i);
+    NIMBLE_CHECK(
+        groupIds.insert(groupId).second,
+        "Duplicate Hybrid FlatMap group ID: {}.",
+        groupId);
+    if (i > 0) {
+      NIMBLE_CHECK_LT(
+          groupIdAt(i - 1),
+          groupId,
+          "Hybrid FlatMap group IDs must be in ascending order.");
+    }
+    if (HybridFlatMap::isDefaultGroup(groupId)) {
+      foundDefault = true;
+    } else {
       NIMBLE_CHECK(
-          uniqueGroupId, "Duplicate Hybrid FlatMap group ID: {}.", groupId);
-      if (groupId == kDefaultGroupId) {
-        hasDefaultGroup = true;
-        NIMBLE_CHECK(
-            groupKeys.empty(),
-            "Hybrid FlatMap Default group cannot contain group keys.");
-      } else {
-        NIMBLE_CHECK(
-            !groupKeys.empty(),
-            "Hybrid FlatMap group must contain at least one key: {}.",
-            groupId);
-      }
+          !groupKeys.empty(),
+          "Hybrid FlatMap group must contain at least one key: {}.",
+          groupId);
       NIMBLE_CHECK(
           std::is_sorted(groupKeys.begin(), groupKeys.end()),
           "Hybrid FlatMap group keys must be sorted: {}.",
           groupId);
-      for (const auto& key : groupKeys) {
-        NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-        const bool uniqueKey = keys.insert(key).second;
-        NIMBLE_CHECK(uniqueKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-      }
     }
-    NIMBLE_CHECK(
-        hasDefaultGroup, "Hybrid FlatMap must have exactly one Default group.");
+    for (const auto& key : groupKeys) {
+      NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
+      NIMBLE_CHECK(
+          keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
+    }
   }
-};
-
-namespace detail {
+  if (hasDefault) {
+    NIMBLE_CHECK(
+        foundDefault, "Hybrid FlatMap must have exactly one Default group.");
+  }
+}
 
 // Normalizes child accessors across the two schema-tree representations:
 // TypeBuilder exposes children by reference (`const TypeBuilder&`) while Type

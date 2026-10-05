@@ -52,19 +52,14 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
     QueryCtxHolder holder;
     holder.sessionProperties =
         std::make_shared<config::ConfigBase>(std::move(sessionProps));
-    holder.ctx = std::make_unique<ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        holder.sessionProperties.get(),
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.FileConnectorUtilTest",
-        "task.FileConnectorUtilTest",
-        "planNodeId.FileConnectorUtilTest",
-        0,
-        "");
+    holder.ctx = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool_.get())
+                     .connectorPool(pool_.get())
+                     .sessionProperties(holder.sessionProperties.get())
+                     .queryId("query.FileConnectorUtilTest")
+                     .taskId("task.FileConnectorUtilTest")
+                     .planNodeId("planNodeId.FileConnectorUtilTest")
+                     .build();
     return holder;
   }
 
@@ -382,8 +377,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
     auto holder = makeConnectorQueryCtx(
         {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
          {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
-         {hive::FileConfig::kNimbleIntegerDictionaryAwareFilteringSession,
-          "true"}});
+         {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
@@ -398,7 +392,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_TRUE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 
   // Keys absent => flags fall back to their default (false).
@@ -418,7 +412,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
 
     EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
-    EXPECT_FALSE(rowReaderOptions.nimbleIntegerDictionaryAwareFiltering());
+    EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 }
 
@@ -478,8 +472,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
 
 TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -498,8 +491,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -536,8 +528,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -576,8 +567,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
 // The reader built from the scan spec has no 'typeWithId()' subtree for it, so
 // reading its statistics dereferences null.
 TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
 
   // Tests 'filter' on a scan that returns 'constant' for 'c0'.
@@ -623,8 +613,7 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
 // downstream re-checks them: testFilterOnConstant() accepts any non-null
 // constant.
 TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -670,8 +659,7 @@ TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
 
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -708,8 +696,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
 
 TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -765,8 +752,7 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
 
 TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 

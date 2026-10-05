@@ -271,6 +271,10 @@ bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintMultiRange);
 }
 
+bool isNegatedBigintRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kNegatedBigintRange);
+}
+
 bool isBytesValues(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBytesValues);
 }
@@ -467,6 +471,22 @@ std::shared_ptr<ExprToSubfieldFilterParser>
     ExprToSubfieldFilterParser::parser_ =
         std::make_shared<PrestoExprToSubfieldFilterParser>();
 
+std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+ExprToSubfieldFilterParser::leafToSubfieldFilter(
+    const core::ITypedExpr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated) {
+  common::Subfield subfield;
+  if (expr.type()->isBoolean() && toSubfield(&expr, subfield)) {
+    return std::make_pair(std::move(subfield), boolEqual(!negated));
+  }
+
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(&expr)) {
+    return leafCallToSubfieldFilter(*call, evaluator, negated);
+  }
+  return std::nullopt;
+}
+
 // static
 bool ExprToSubfieldFilterParser::toSubfield(
     const core::ITypedExpr* field,
@@ -543,12 +563,10 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
     }
     VELOX_CHECK(isBigintRange(lessThanFilter));
     VELOX_CHECK(isBigintRange(greaterThanFilter));
-
-    std::vector<std::unique_ptr<common::BigintRange>> filters;
-    filters.emplace_back(asBigintRange(lessThanFilter));
-    filters.emplace_back(asBigintRange(greaterThanFilter));
-    return std::make_unique<common::BigintMultiRange>(
-        std::move(filters), false);
+    const auto excluded =
+        lessThanFilter->as<common::BigintRange>()->upper() + 1;
+    return std::make_unique<common::NegatedBigintRange>(
+        excluded, excluded, false);
   }
 
   if (typeKind == TypeKind::HUGEINT) {
@@ -984,7 +1002,7 @@ std::unique_ptr<common::Filter> mergeOverlappingDisjuncts(
   }
 
   if (newRanges.size() == 1) {
-    return std::move(newRanges.front());
+    return newRanges.front()->clone(nullAllowed);
   }
 
   return toMultiRange(newRanges, nullAllowed);
@@ -1011,7 +1029,8 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
   }
 
   if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
-        return isBigintRange(filter) || isBigintMultiRange(filter);
+        return isBigintRange(filter) || isBigintMultiRange(filter) ||
+            isNegatedBigintRange(filter);
       })) {
     return nullptr;
   }
@@ -1022,12 +1041,35 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
   for (auto& filter : disjuncts) {
     if (isBigintRange(filter)) {
       ranges.emplace_back(asBigintRange(filter));
-    } else {
+    } else if (isBigintMultiRange(filter)) {
       for (const auto& range :
            filter->as<common::BigintMultiRange>()->ranges()) {
         ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
       }
+    } else {
+      const auto* negatedRange = filter->as<common::NegatedBigintRange>();
+      if (negatedRange->lower() > std::numeric_limits<int64_t>::min()) {
+        ranges.emplace_back(
+            std::make_unique<common::BigintRange>(
+                std::numeric_limits<int64_t>::min(),
+                negatedRange->lower() - 1,
+                false));
+      }
+      if (negatedRange->upper() < std::numeric_limits<int64_t>::max()) {
+        ranges.emplace_back(
+            std::make_unique<common::BigintRange>(
+                negatedRange->upper() + 1,
+                std::numeric_limits<int64_t>::max(),
+                false));
+      }
     }
+  }
+
+  if (ranges.empty()) {
+    if (nullAllowed) {
+      return isNull();
+    }
+    return std::make_unique<common::AlwaysFalse>();
   }
 
   std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
@@ -1151,6 +1193,55 @@ std::unique_ptr<common::Filter> tryMergeBytesValues(
 std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
     std::vector<std::unique_ptr<common::Filter>> disjuncts) {
   VELOX_CHECK_GE(disjuncts.size(), 2);
+
+  if (std::any_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kAlwaysTrue);
+      })) {
+    return alwaysTrue();
+  }
+
+  disjuncts.erase(
+      std::remove_if(
+          disjuncts.begin(),
+          disjuncts.end(),
+          [](const auto& filter) {
+            return filter->is(common::FilterKind::kAlwaysFalse);
+          }),
+      disjuncts.end());
+  if (disjuncts.empty()) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  if (disjuncts.size() == 1) {
+    return std::move(disjuncts.front());
+  }
+
+  const auto firstNotNull =
+      std::find_if(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kIsNotNull);
+      });
+  if (firstNotNull != disjuncts.end()) {
+    if (std::any_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+          return filter->testNull();
+        })) {
+      return alwaysTrue();
+    }
+    return isNotNull();
+  }
+
+  const auto firstNull = std::remove_if(
+      disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kIsNull);
+      });
+  if (firstNull != disjuncts.end()) {
+    disjuncts.erase(firstNull, disjuncts.end());
+    if (disjuncts.empty()) {
+      return isNull();
+    }
+    if (disjuncts.size() == 1) {
+      return disjuncts.front()->clone(true);
+    }
+    disjuncts.front() = disjuncts.front()->clone(true);
+  }
 
   if (auto merged = tryMergeBigintRanges(disjuncts)) {
     return merged;

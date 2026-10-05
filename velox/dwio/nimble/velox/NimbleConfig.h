@@ -88,6 +88,8 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint64_t> CHUNKING_WRITER_MIN_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_MAX_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE;
+  static Entry<bool> CHUNKING_WRITER_EAGER_CHUNKING;
+
   /// VARCHAR subfield paths whose value streams prefer FSST, falling back to
   /// Trivial when FSST misses its compression target. FSST and its fallback use
   /// the normal encoding compression policy. Paths use Velox subfield syntax:
@@ -266,6 +268,9 @@ class Config : public velox::config::ConfigBase {
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
+
+  /// Maps to WriterOptions::enableStreamChecksums.
+  static Entry<bool> ENABLE_STREAM_CHECKSUMS;
 
   static constexpr const char* kNimbleWriteTargetRawStripeSize =
       "nimble_write_target_raw_stripe_size";

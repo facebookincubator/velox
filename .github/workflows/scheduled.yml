@@ -28,6 +28,8 @@ on:
       - .github/workflows/scheduled.yml
       - pyproject.toml
 
+  # The Presto source of truth fuzzers skip this event. The Regression Fuzzer
+  # is replacing them and already runs here.
   push:
     branches:
       - main
@@ -788,6 +790,7 @@ jobs:
 
   presto-sot-fuzzer-run:
     name: Expression Fuzzer with Presto SOT
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1156,6 +1159,7 @@ jobs:
 
   presto-java-join-fuzzer-run:
     name: Join Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1271,6 +1275,7 @@ jobs:
 
   presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1340,6 +1345,7 @@ jobs:
 
   presto-java-topn-row-number-fuzzer-run:
     name: TopNRowNumber Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1537,6 +1543,7 @@ jobs:
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1608,11 +1615,11 @@ jobs:
 
   presto-java-only-bias-function-expression-fuzzer-run:
     name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
+    if: ${{ github.event_name != 'push' && needs.compile.outputs.presto_bias == 'true' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1707,11 +1714,11 @@ jobs:
 
   presto-bias-java-aggregation-fuzzer-run:
     name: Biased Aggregation Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' && needs.compile.outputs.presto_aggregate_bias == 'true' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1822,6 +1829,7 @@ jobs:
 
   presto-java-window-fuzzer-run:
     name: Window Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1894,6 +1902,7 @@ jobs:
 
   presto-java-writer-fuzzer-run:
     name: Writer Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java

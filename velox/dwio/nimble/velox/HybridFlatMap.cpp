@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
 
 #include <algorithm>
+#include <iterator>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaGenerated.h"
@@ -42,6 +43,18 @@ bool HybridFlatMap::supportedKeyKind(ScalarKind kind) {
       return false;
   }
   NIMBLE_UNREACHABLE("Unknown scalar kind: {}.", kind);
+}
+
+const HybridFlatMap::Group& HybridFlatMap::groupById(uint32_t groupId) const {
+  const auto iterator =
+      std::find_if(groups.begin(), groups.end(), [groupId](const auto& group) {
+        return group.groupId == groupId;
+      });
+  NIMBLE_CHECK(
+      iterator != groups.end(),
+      "Hybrid FlatMap group ID is missing: {}.",
+      groupId);
+  return *iterator;
 }
 
 std::string HybridFlatMap::serialize() const {
@@ -88,18 +101,15 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
   NIMBLE_CHECK_NOT_NULL(groupIds, "Hybrid FlatMap group IDs are missing.");
   NIMBLE_CHECK_NOT_NULL(
       groupKeyCounts, "Hybrid FlatMap group key counts are missing.");
-  NIMBLE_CHECK_NOT_NULL(groupKeys, "Hybrid FlatMap group keys are missing.");
   const auto numGroupIds = groupIds->size();
-  const auto numKeys = groupKeys->size();
+  // FlatBuffers writers may omit an empty vector. An omitted group_keys holds
+  // zero keys, so the key count checks below accept it only when no group has
+  // keys, as in Default-only metadata.
+  const auto numKeys = groupKeys == nullptr ? 0 : groupKeys->size();
   NIMBLE_CHECK_EQ(
       numGroupIds,
       groupKeyCounts->size(),
       "Hybrid FlatMap group IDs and key counts must have the same size");
-  NIMBLE_CHECK_LE(
-      static_cast<uint64_t>(numGroupIds),
-      static_cast<uint64_t>(numKeys) + 1,
-      "Hybrid FlatMap group count must not exceed group key count plus one");
-
   HybridFlatMap hybridMap;
   hybridMap.groups.reserve(numGroupIds);
   flatbuffers::uoffset_t groupKeyIndex{0};
@@ -129,25 +139,28 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       groupKeyIndex,
       numKeys,
       "Hybrid FlatMap group key counts must match group keys size");
-  validate(
-      hybridMap.groups.size(),
-      [&hybridMap](size_t index) { return hybridMap.groups[index].groupId; },
-      [&hybridMap](size_t index) -> const auto& {
-        return hybridMap.groups[index].groupKeys;
-      });
   return hybridMap;
 }
 
 void HybridFlatMap::setAttribute(
     std::vector<std::pair<std::string, std::string>>& attributes) const {
+  const auto isHybridFlatMapAttribute = [](const auto& attribute) {
+    return attribute.first == kAttributeName;
+  };
+  const auto existing = std::find_if(
+      attributes.begin(), attributes.end(), isHybridFlatMapAttribute);
   auto serialized = serialize();
-  const bool alreadySet = std::any_of(
-      attributes.begin(), attributes.end(), [](const auto& attribute) {
-        return attribute.first == kAttributeName;
-      });
-  NIMBLE_CHECK(
-      !alreadySet, "Hybrid FlatMap metadata attribute already exists.");
-  attributes.emplace_back(kAttributeName, std::move(serialized));
+  if (existing == attributes.end()) {
+    attributes.emplace_back(kAttributeName, std::move(serialized));
+  } else {
+    existing->second = std::move(serialized);
+  }
+
+  NIMBLE_CHECK_EQ(
+      std::count_if(
+          attributes.begin(), attributes.end(), isHybridFlatMapAttribute),
+      1,
+      "Hybrid FlatMap metadata attribute must be unique.");
 }
 
 HybridFlatMap HybridFlatMap::getAttribute(

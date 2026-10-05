@@ -52,6 +52,11 @@ class Decoder {
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) = 0;
 
+  /// Returns the number of rows remaining in the encoded chunk at the
+  /// sequential cursor. Loads that chunk lazily when needed and returns zero
+  /// when the stream has no more chunks.
+  virtual uint32_t remainingRows() = 0;
+
   /// Reads absolute source rows densely into `output` without using or
   /// advancing the sequential decode cursor. Empty `rows` returns zero
   /// without touching `output`.
