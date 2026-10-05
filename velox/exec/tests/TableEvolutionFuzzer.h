@@ -367,6 +367,17 @@ class TableEvolutionFuzzer {
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
 
+  /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
+  /// order. If any cursor fails, waits for the others to finish, then rethrows
+  /// the error of the first failed cursor in 'cursors'. With OOM injection
+  /// enabled, an injected OOM ends a cursor early with the rows read so far.
+  /// When this returns, 'executor' holds no reference to any cursor, so the
+  /// caller holds the last reference to every task and can destroy the tasks
+  /// before the memory pools their plans reference.
+  static std::vector<std::vector<RowVectorPtr>> runTaskCursors(
+      const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+      folly::Executor& executor);
+
   void run();
 
   /// Runs the same query shapes as run(), but against 'inputFile'.

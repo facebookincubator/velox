@@ -740,58 +740,6 @@ void generateAggregatesForColumns(
   }
 }
 
-std::vector<std::vector<RowVectorPtr>> runTaskCursors(
-    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
-    folly::Executor& executor) {
-  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
-  for (int i = 0; i < cursors.size(); ++i) {
-    auto [promise, future] =
-        folly::makePromiseContract<std::vector<RowVectorPtr>>();
-    futures.push_back(std::move(future));
-    auto cursorPtr = cursors[i];
-    auto task = cursorPtr->task();
-    executor.add([cursorPtr, task, promise = std::move(promise)]() mutable {
-      std::vector<RowVectorPtr> results;
-      try {
-        while (cursorPtr->moveNext()) {
-          auto& result = cursorPtr->current();
-          result->loadedVector();
-          results.push_back(std::move(result));
-        }
-        promise.setValue(std::move(results));
-      } catch (VeloxRuntimeError& e) {
-        if (FLAGS_enable_oom_injection_write_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
-          promise.setValue(std::move(results));
-        } else if (
-            FLAGS_enable_oom_injection_read_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
-          promise.setValue(std::move(results));
-        } else {
-          LOG(ERROR) << e.what();
-          promise.setException(e);
-        }
-      } catch (const std::exception& e) {
-        LOG(ERROR) << e.what();
-        promise.setException(e);
-      }
-    });
-  }
-  std::vector<std::vector<RowVectorPtr>> results;
-  results.reserve(futures.size());
-  for (auto& future : futures) {
-    results.push_back(std::move(future).get());
-  }
-  return results;
-}
 // `tableBucketCount' is the bucket count of current table setup when reading.
 // `partitionBucketCount' is the bucket count when the partition was written.
 // `tableBucketCount' must be a multiple of `partitionBucketCount'.
@@ -962,6 +910,68 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
 
 // Generate random aggregation configuration for pushdown testing.
 } // namespace
+
+std::vector<std::vector<RowVectorPtr>> TableEvolutionFuzzer::runTaskCursors(
+    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+    folly::Executor& executor) {
+  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
+  for (int i = 0; i < cursors.size(); ++i) {
+    auto [taskPromise, future] =
+        folly::makePromiseContract<std::vector<RowVectorPtr>>();
+    futures.push_back(std::move(future));
+    auto cursorPtr = cursors[i];
+    auto task = cursorPtr->task();
+    executor.add([cursorPtr, task, promise = std::move(taskPromise)]() mutable {
+      std::vector<RowVectorPtr> results;
+      folly::exception_wrapper error;
+      try {
+        while (cursorPtr->moveNext()) {
+          auto& result = cursorPtr->current();
+          result->loadedVector();
+          results.push_back(std::move(result));
+        }
+      } catch (VeloxRuntimeError& e) {
+        if (FLAGS_enable_oom_injection_write_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
+        } else if (
+            FLAGS_enable_oom_injection_read_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
+        } else {
+          LOG(ERROR) << e.what();
+          error = folly::exception_wrapper{std::current_exception()};
+        }
+      } catch (const std::exception& e) {
+        LOG(ERROR) << e.what();
+        error = folly::exception_wrapper{std::current_exception()};
+      }
+      // The caller wakes up when the promise is fulfilled and may then free
+      // the pools this task's plan references, so the task must not be
+      // destroyed here.
+      cursorPtr.reset();
+      task.reset();
+      if (error) {
+        promise.setException(std::move(error));
+      } else {
+        promise.setValue(std::move(results));
+      }
+    });
+  }
+  auto outcomes = folly::collectAll(std::move(futures)).get();
+  std::vector<std::vector<RowVectorPtr>> results;
+  results.reserve(outcomes.size());
+  for (auto& outcome : outcomes) {
+    results.push_back(std::move(outcome).value());
+  }
+  return results;
+}
 
 std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
   std::string quoted;
