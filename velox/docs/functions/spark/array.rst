@@ -314,7 +314,8 @@ Array Functions
     reflects Spark's ``spark.sql.legacy.sizeOfNull`` configuration combined with ANSI
     mode (``spark.sql.legacy.sizeOfNull`` AND NOT ``spark.sql.ansi.enabled``): it is
     true only when Spark ANSI mode is disabled and ``spark.sql.legacy.sizeOfNull`` is
-    true, so under Spark ANSI mode null input always returns null. ::
+    true, so under Spark ANSI mode null input always returns null. The cardinality is
+    read directly without evaluating or materializing array elements. ::
 
         SELECT size(array(1, 2, 3), true); -- 3
         SELECT size(NULL, true); -- -1 (Spark ANSI mode disabled)
