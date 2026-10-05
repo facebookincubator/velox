@@ -151,7 +151,7 @@ within a split prefer the smaller dictionary.
 ### Size estimation from samples
 
 ALP and ALP_RD share a child-cost model in `NestedAlpSizeEstimation`. The model
-distinguishes `sampleValues` from `numTotalRows`. The former contains the
+distinguishes `sampleValues` from `numRows`. The former contains the
 observed values; its size is the sample row count. The
 latter is the total row count of the stream being estimated. For example,
 1,024 sampled values can represent a stream containing 1,000,000 values. The
@@ -172,7 +172,7 @@ For codecs using the generic extrapolation path, the estimate is:
 ```text
 numSampleRows = sampleValues.size()
 estimatedSize = fullPrefixSize
-    + (sampleSizeBytes - samplePrefixSize) * numTotalRows / numSampleRows
+    + (sampleSizeBytes - samplePrefixSize) * numRows / numSampleRows
 ```
 
 Here `sampleSizeBytes` is the sample's estimated encoded size in bytes. The
@@ -189,9 +189,9 @@ its sample with its own exponent and factor, then estimates its three children
 using this same policy-aware model. Selected FixedBitWidth child sizes include
 the padding required by the serialized representation.
 
-ALP's encoded integer stream represents `numTotalRows` values. Its exception
+ALP's encoded integer stream represents `numRows` values. Its exception
 positions and original exception values each represent
-`ceil(sampleExceptions * numTotalRows / numSampleRows)` values. ALP adds its
+`ceil(sampleExceptions * numRows / numSampleRows)` values. ALP adds its
 prefix, control word, exception count and child-length varints once. This
 aligns its size estimates with the configured child candidates, read factors
 and replayed layouts. Its size estimator varies the offset within each sampling
@@ -200,8 +200,8 @@ training algorithm is unchanged.
 An estimate without a supplied policy uses the default child candidates.
 
 ALP_RD estimates its four children separately. Codes and right parts each
-represent `numTotalRows` values. The two exception streams each represent
-`ceil(sampleExceptions * numTotalRows / numSampleRows)` values; their samples
+represent `numRows` values. The two exception streams each represent
+`ceil(sampleExceptions * numRows / numSampleRows)` values; their samples
 contain only the observed exceptions. When no exceptions are sampled, the
 estimate omits these two streams. The ALP_RD prefix, dictionary, exception count
 and child-length varints are added once to the selected child estimates.

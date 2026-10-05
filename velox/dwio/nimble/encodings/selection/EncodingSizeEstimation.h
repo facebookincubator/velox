@@ -79,23 +79,9 @@ struct EncodingSizeEstimation {
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy = nullptr) {
     if constexpr (isFloatingPointType<T>()) {
-      if (policy != nullptr) {
-        if (encodingType == EncodingType::ALP) {
-          return ALPEncoding<T>::estimateSize(values, options, policy);
-        }
-        if (encodingType == EncodingType::ALPRD) {
-          return ALPRDEncodingBase::estimateSize(
-              values, values.size(), options, policy);
-        }
-        if (policy->hasFloatingPointEncodingCandidates()) {
-          if (auto size = NestedAlpSizeEstimation::estimateContainerSize<T>(
-                  encodingType, values, statistics, options, *policy)) {
-            return size;
-          }
-        }
-      }
-    }
-    if constexpr (isNumericType<physicalType>()) {
+      return estimateFloatingPointSize(
+          encodingType, values, statistics, options, policy);
+    } else if constexpr (isNumericType<physicalType>()) {
       return estimateNumericSize(encodingType, values, statistics, options);
     } else if constexpr (isBoolType<physicalType>()) {
       return estimateBoolSize(encodingType, values, statistics, options);
@@ -108,6 +94,34 @@ struct EncodingSizeEstimation {
   }
 
  private:
+  /// Uses configured child policies for floating-point encodings and falls
+  /// back to numeric estimation for the remaining candidates.
+  static std::optional<uint64_t> estimateFloatingPointSize(
+      EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      EncodingSelectionPolicyBase* policy) {
+    static_assert(isFloatingPointType<T>());
+    if (policy != nullptr) {
+      if (encodingType == EncodingType::ALP) {
+        return ALPEncoding<T>::estimateSize(values, options, policy);
+      }
+      if (encodingType == EncodingType::ALPRD) {
+        return ALPRDEncodingBase::estimateSize(
+            values, values.size(), options, policy);
+      }
+      if (policy->hasFloatingPointEncodingCandidates()) {
+        if (auto size =
+                NestedAlpSizeEstimation::estimateFloatingPointContainerSize<T>(
+                    encodingType, values, statistics, options, *policy)) {
+          return size;
+        }
+      }
+    }
+    return estimateNumericSize(encodingType, values, statistics, options);
+  }
+
   static std::optional<uint64_t> estimateNumericSize(
       const EncodingType encodingType,
       const uint64_t entryCount,

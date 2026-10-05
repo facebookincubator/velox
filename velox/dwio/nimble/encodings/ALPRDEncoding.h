@@ -116,14 +116,14 @@ class ALPRDEncodingBase {
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 
-  /// Estimates a payload of numTotalRows values from sampleValues, which may
+  /// Estimates a payload of numRows values from sampleValues, which may
   /// contain the full input or a representative sample.
   /// Uses the same bounded training as encode(), including child policies,
   /// prefix sizes, byte rounding, padding and exception metadata.
   template <typename PhysicalType>
   static std::optional<uint64_t> estimateSize(
       std::span<const PhysicalType> sampleValues,
-      uint32_t numTotalRows,
+      uint32_t numRows,
       const Encoding::Options& options,
       EncodingSelectionPolicyBase* policy);
 
@@ -261,7 +261,7 @@ class ALPRDEncoding final
       const Encoding::Options& options) {
     NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
     return ALPRDEncodingBase::estimateSize(
-        values, values.size(), options, nullptr);
+        values, values.size(), options, /*policy=*/nullptr);
   }
 
   static std::string_view encode(

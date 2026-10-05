@@ -36,40 +36,6 @@ uint32_t NestedAlpSizeEstimation::sampledRowIndex(
 
 namespace {
 
-// Estimates ALP and ALPRD children at the size of their target streams.
-// Sampling state and policy adaptation stay local to these encoding models.
-template <typename T>
-class SampledCost {
- public:
-  using PhysicalType = typename TypeTraits<T>::physicalType;
-
-  // Statistics describe the observed sample; numTotalRows is the target size.
-  SampledCost(
-      EncodingSelectionPolicyBase& policy,
-      std::span<const PhysicalType> sampleValues,
-      uint32_t numTotalRows,
-      const Encoding::Options& options);
-
-  // Scores manual candidates at full size or honors a policy-selected layout.
-  uint64_t selectedSize();
-
- private:
-  // A supplied policy also estimates explicitly bound container children.
-  std::optional<uint64_t> estimateSize(
-      EncodingType encodingType,
-      EncodingSelectionPolicyBase* policy);
-
-  // Borrows the child policy that carries candidate and layout restrictions.
-  EncodingSelectionPolicy<T>& policy_;
-  // Observed values and the full stream length they represent.
-  const std::span<const PhysicalType> sampleValues_;
-  const uint32_t numTotalRows_;
-  // Builds statistics once for all candidate estimates.
-  const Statistics<PhysicalType> statistics_;
-  // Prefix and bit-packing options must match the subsequent writer.
-  const Encoding::Options& options_;
-};
-
 // Samples the derived sequence without allocating a full run-value or uncommon
 // value stream. The caller already knows its length from the cached statistics.
 template <typename T, typename Predicate>
@@ -77,7 +43,7 @@ std::span<const T> sampleFilteredValues(
     std::span<const T> values,
     uint32_t numValues,
     Predicate include,
-    std::array<T, ALPRDEncodingBase::kSampleSize>& storage) {
+    std::array<T, NestedAlpSizeEstimation::kSampleSize>& storage) {
   const auto sampleSize = std::min<uint32_t>(numValues, storage.size());
   if (sampleSize == 0) {
     return {};
@@ -104,6 +70,7 @@ std::span<const T> sampleFilteredValues(
 
 // Estimates a floating-point container using its actual value-child policy.
 // Returns nullopt for encodings other than Dictionary, RLE and MainlyConstant.
+// values may be a sample; numRows is the target full-stream size.
 template <typename T>
 std::optional<uint64_t> estimateNestedFloatingPointSize(
     EncodingType encodingType,
@@ -119,15 +86,16 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
       encodingType != EncodingType::MainlyConstant) {
     return std::nullopt;
   }
+  // Project an observed child count to numRows, rounding up to a whole row.
   const auto scaleCount = [&](uint64_t count) -> uint32_t {
     return (count * numRows + values.size() - 1) / values.size();
   };
   const auto prefixSize =
       EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
-  std::array<PhysicalType, ALPRDEncodingBase::kSampleSize> storage;
+  std::array<PhysicalType, NestedAlpSizeEstimation::kSampleSize> storage;
   std::span<const PhysicalType> sample;
   uint32_t numChildRows{0};
-  NestedEncodingIdentifier identifier;
+  NestedEncodingIdentifier nestedIdentifier;
   uint64_t otherSize{0};
   switch (encodingType) {
     case EncodingType::Dictionary: {
@@ -143,7 +111,7 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
       }
       sample = {storage.data(), sampled};
       numChildRows = scaleCount(counts.size());
-      identifier = EncodingIdentifiers::Dictionary::Alphabet;
+      nestedIdentifier = EncodingIdentifiers::Dictionary::Alphabet;
       otherSize = prefixSize + sizeof(uint32_t) +
           FixedBitWidthEncoding<uint32_t>::estimateSize(
                       numRows, 0, numChildRows - 1, options);
@@ -164,7 +132,7 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
           },
           storage);
       numChildRows = scaleCount(numRuns);
-      identifier = EncodingIdentifiers::RunLength::RunValues;
+      nestedIdentifier = EncodingIdentifiers::RunLength::RunValues;
       otherSize = prefixSize + sizeof(uint32_t) +
           FixedBitWidthEncoding<uint32_t>::estimateSize(
                       numChildRows,
@@ -184,31 +152,66 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
             storage);
       }
       numChildRows = scaleCount(numUncommon);
-      identifier = EncodingIdentifiers::MainlyConstant::OtherValues;
+      nestedIdentifier = EncodingIdentifiers::MainlyConstant::OtherValues;
       otherSize = prefixSize + 2 * sizeof(uint32_t) + sizeof(PhysicalType) +
           SparseBoolEncoding::estimateSize(numRows, numChildRows, options);
       break;
     }
     default:
-      NIMBLE_UNREACHABLE("Unexpected floating-point container.");
+      NIMBLE_UNREACHABLE(
+          "Unexpected floating-point container: {}.", encodingType);
   }
-  auto childPolicy = policy.create<T>(encodingType, identifier);
+  auto childPolicy = policy.create<T>(encodingType, nestedIdentifier);
   return otherSize +
-      SampledCost<T>{*childPolicy, sample, numChildRows, options}
-          .selectedSize();
+      NestedAlpSizeEstimation::estimateChildSize<T>(
+             sample, numChildRows, options, *childPolicy);
 }
+
+// Estimates ALP and ALPRD children at the size of their target streams.
+// Sampling state and policy adaptation stay local to these encoding models.
+template <typename T>
+class SampledCost {
+ public:
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+
+  // Statistics describe the observed sample; numRows is the target size.
+  SampledCost(
+      EncodingSelectionPolicyBase& policy,
+      std::span<const PhysicalType> sampleValues,
+      uint32_t numRows,
+      const Encoding::Options& options);
+
+  // Scores manual candidates at full size or honors a policy-selected layout.
+  uint64_t selectedSize();
+
+ private:
+  // A supplied policy also estimates explicitly bound container children.
+  std::optional<uint64_t> estimateSize(
+      EncodingType encodingType,
+      EncodingSelectionPolicyBase* policy);
+
+  // Observed values and the full stream length they represent.
+  const std::span<const PhysicalType> sampleValues_;
+  const uint32_t numRows_;
+  // Builds statistics once for all candidate estimates.
+  const Statistics<PhysicalType> statistics_;
+  // Prefix and bit-packing options must match the subsequent writer.
+  const Encoding::Options& options_;
+  // Borrows the child policy that carries candidate and layout restrictions.
+  EncodingSelectionPolicy<T>& policy_;
+};
 
 template <typename T>
 SampledCost<T>::SampledCost(
     EncodingSelectionPolicyBase& policy,
     std::span<const PhysicalType> sampleValues,
-    uint32_t numTotalRows,
+    uint32_t numRows,
     const Encoding::Options& options)
-    : policy_{static_cast<EncodingSelectionPolicy<T>&>(policy)},
-      sampleValues_{sampleValues},
-      numTotalRows_{numTotalRows},
+    : sampleValues_{sampleValues},
+      numRows_{numRows},
       statistics_{Statistics<PhysicalType>::create(sampleValues)},
-      options_{options} {}
+      options_{options},
+      policy_{static_cast<EncodingSelectionPolicy<T>&>(policy)} {}
 
 template <typename T>
 uint64_t SampledCost<T>::selectedSize() {
@@ -219,7 +222,7 @@ uint64_t SampledCost<T>::selectedSize() {
     // Compare every candidate after projecting its cost to the target stream.
     // Sampled candidates retain the existing container heuristics to bound
     // recursive training, even when the sample contains every input row.
-    NIMBLE_CHECK_LE(sampleValues_.size(), numTotalRows_);
+    NIMBLE_CHECK_LE(sampleValues_.size(), numRows_);
     if (!sampleValues_.empty()) {
       float minCost = std::numeric_limits<float>::max();
       for (const auto& [encodingType, readFactor] :
@@ -246,7 +249,7 @@ uint64_t SampledCost<T>::selectedSize() {
     selectedEncoding = result.encodingType;
     // A policy's estimate describes its input, so reuse it only when the
     // sample covers the full stream. The selected layout remains binding.
-    if (numTotalRows_ == sampleValues_.size()) {
+    if (numRows_ == sampleValues_.size()) {
       size = result.estimatedSize;
     }
   }
@@ -254,11 +257,11 @@ uint64_t SampledCost<T>::selectedSize() {
     size = estimateSize(selectedEncoding, &policy_);
   }
   const auto prefixSize =
-      EncodingPrefix::serializedSize(numTotalRows_, options_.useVarintRowCount);
+      EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
   if (!size) {
     // Custom policies can select codecs without estimators. Keep their layout
     // binding and use an uncompressed size as the training approximation.
-    return prefixSize + 1 + uint64_t{numTotalRows_} * sizeof(PhysicalType);
+    return prefixSize + 1 + uint64_t{numRows_} * sizeof(PhysicalType);
   }
   if (selectedEncoding == EncodingType::Trivial ||
       selectedEncoding == EncodingType::FixedBitWidth ||
@@ -278,20 +281,20 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
   if constexpr (isFloatingPointType<T>()) {
     if (encodingType == EncodingType::ALPRD) {
       return ALPRDEncodingBase::estimateSize(
-          sampleValues_, numTotalRows_, options_, policy);
+          sampleValues_, numRows_, options_, policy);
     }
     if (encodingType == EncodingType::ALP) {
       if (sampleValues_.empty()) {
         return std::nullopt;
       }
       return ALPEncoding<T>::estimateSizeFromSample(
-          numTotalRows_, sampleValues_, options_, policy);
+          numRows_, sampleValues_, options_, policy);
     }
     if (policy != nullptr) {
       if (auto size = estimateNestedFloatingPointSize<T>(
               encodingType,
               sampleValues_,
-              numTotalRows_,
+              numRows_,
               statistics_,
               *policy,
               options_)) {
@@ -299,15 +302,15 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
       }
     }
   }
-  if (numTotalRows_ == sampleValues_.size()) {
+  if (numRows_ == sampleValues_.size()) {
     return detail::EncodingSizeEstimation<T>::estimateSize(
         encodingType, sampleValues_, statistics_, options_);
   }
   NIMBLE_CHECK(
       !sampleValues_.empty(), "Size estimation requires a non-empty sample.");
-  NIMBLE_CHECK_LE(sampleValues_.size(), numTotalRows_);
+  NIMBLE_CHECK_LE(sampleValues_.size(), numRows_);
   const auto prefixSize =
-      EncodingPrefix::serializedSize(numTotalRows_, options_.useVarintRowCount);
+      EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
   const auto samplePrefixSize = EncodingPrefix::serializedSize(
       sampleValues_.size(), options_.useVarintRowCount);
   if (encodingType == EncodingType::Constant) {
@@ -321,7 +324,7 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
         encodingType == EncodingType::FixedBitWidth ||
         encodingType == EncodingType::SimdForBitpack) {
       return detail::EncodingSizeEstimation<T>::estimateSize(
-          encodingType, numTotalRows_, statistics_, options_);
+          encodingType, numRows_, statistics_, options_);
     }
   }
   auto size = detail::EncodingSizeEstimation<T>::estimateSize(
@@ -333,7 +336,7 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
   //
   //   estimatedSize = fullPrefixSize
   //       + (sampleSizeBytes - samplePrefixSize)
-  //           * numTotalRows / numSampleRows
+  //           * numRows / numSampleRows
   //
   // Here numSampleRows is sampleValues.size(). Count the outer prefix once;
   // its varint length can depend on the row count.
@@ -352,7 +355,7 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
       : samplePrefixSize;
   return estimatedPrefixSize +
       (*size - std::min<uint64_t>(*size, estimatedSamplePrefixSize)) *
-      numTotalRows_ / sampleValues_.size();
+      numRows_ / sampleValues_.size();
 }
 
 } // namespace
@@ -360,15 +363,15 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
 template <typename T>
 uint64_t NestedAlpSizeEstimation::estimateChildSize(
     std::span<const typename TypeTraits<T>::physicalType> sampleValues,
-    uint32_t numTotalRows,
+    uint32_t numRows,
     const Encoding::Options& options,
     EncodingSelectionPolicyBase& policy) {
-  return SampledCost<T>{policy, sampleValues, numTotalRows, options}
-      .selectedSize();
+  return SampledCost<T>{policy, sampleValues, numRows, options}.selectedSize();
 }
 
 template <typename T>
-std::optional<uint64_t> NestedAlpSizeEstimation::estimateContainerSize(
+std::optional<uint64_t>
+NestedAlpSizeEstimation::estimateFloatingPointContainerSize(
     EncodingType encodingType,
     std::span<const typename TypeTraits<T>::physicalType> values,
     const Statistics<typename TypeTraits<T>::physicalType>& statistics,
@@ -406,14 +409,14 @@ template uint64_t NestedAlpSizeEstimation::estimateChildSize<double>(
     EncodingSelectionPolicyBase&);
 
 template std::optional<uint64_t>
-NestedAlpSizeEstimation::estimateContainerSize<float>(
+NestedAlpSizeEstimation::estimateFloatingPointContainerSize<float>(
     EncodingType,
     std::span<const uint32_t>,
     const Statistics<uint32_t>&,
     const Encoding::Options&,
     EncodingSelectionPolicyBase&);
 template std::optional<uint64_t>
-NestedAlpSizeEstimation::estimateContainerSize<double>(
+NestedAlpSizeEstimation::estimateFloatingPointContainerSize<double>(
     EncodingType,
     std::span<const uint64_t>,
     const Statistics<uint64_t>&,

@@ -29,6 +29,9 @@ namespace facebook::nimble::detail {
 /// selected layouts. Parameter training remains specific to each encoding.
 class NestedAlpSizeEstimation {
  public:
+  /// Maximum number of values sampled from a floating-point container child.
+  static constexpr uint32_t kSampleSize = 1'024;
+
   /// Picks a deterministic offset within an evenly sized sampling interval.
   static uint32_t
   sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
@@ -36,11 +39,12 @@ class NestedAlpSizeEstimation {
   /// Returns the selected child's estimated bytes, including its prefix and
   /// padding. Read factors influence selection but are not part of this size.
   /// The policy supplies child choices; its selection methods may update
-  /// internal state.
+  /// internal state. numRows is the target full-stream size, while sampleValues
+  /// contains the observed sample.
   template <typename T>
   static uint64_t estimateChildSize(
       std::span<const typename TypeTraits<T>::physicalType> sampleValues,
-      uint32_t numTotalRows,
+      uint32_t numRows,
       const Encoding::Options& options,
       EncodingSelectionPolicyBase& policy);
 
@@ -48,7 +52,7 @@ class NestedAlpSizeEstimation {
   /// using its value-child policy. Samples the derived child from the complete
   /// input; returns nullopt for other encoding types.
   template <typename T>
-  static std::optional<uint64_t> estimateContainerSize(
+  static std::optional<uint64_t> estimateFloatingPointContainerSize(
       EncodingType encodingType,
       std::span<const typename TypeTraits<T>::physicalType> values,
       const Statistics<typename TypeTraits<T>::physicalType>& statistics,
