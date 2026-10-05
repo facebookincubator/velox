@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/Executor.h>
 #include <folly/init/Init.h>
@@ -817,6 +818,58 @@ TEST_F(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
   EXPECT_GT(base, Fuzzer::kMinAdaptiveVectorSize);
   EXPECT_LT(doubled, Fuzzer::kMaxAdaptiveVectorSize);
   EXPECT_EQ(doubled, 2 * base);
+}
+
+// DWRF reads a timestamp in the second before the Unix epoch that has a
+// fractional part back one second later. Timestamps outside that second, or on
+// its boundary, round-trip and must be left alone.
+TEST_F(TableEvolutionFuzzerTest, roundDownUnrepresentableTimestamps) {
+  velox::test::VectorMaker vectorMaker(pool_.get());
+  const Timestamp secondBeforeEpoch{-1, 0};
+
+  auto data = vectorMaker.rowVector({
+      vectorMaker.flatVectorNullable<Timestamp>({
+          Timestamp(-1, 801'000'000),
+          Timestamp(0, 801'000'000),
+          Timestamp(-2, 500'000'000),
+          std::nullopt,
+      }),
+      vectorMaker.arrayVector<Timestamp>({
+          {Timestamp(-1, 1'000'000)},
+          {secondBeforeEpoch},
+          {},
+          {},
+      }),
+      vectorMaker.mapVector<int64_t, Timestamp>({
+          {{1, Timestamp(-1, 999'000'000)}},
+          {},
+          {},
+          {},
+      }),
+  });
+  auto expected = vectorMaker.rowVector({
+      vectorMaker.flatVectorNullable<Timestamp>({
+          secondBeforeEpoch,
+          Timestamp(0, 801'000'000),
+          Timestamp(-2, 500'000'000),
+          std::nullopt,
+      }),
+      vectorMaker.arrayVector<Timestamp>({
+          {secondBeforeEpoch},
+          {secondBeforeEpoch},
+          {},
+          {},
+      }),
+      vectorMaker.mapVector<int64_t, Timestamp>({
+          {{1, secondBeforeEpoch}},
+          {},
+          {},
+          {},
+      }),
+  });
+
+  TableEvolutionFuzzer::roundDownUnrepresentableTimestamps(data);
+  velox::test::assertEqualVectors(expected, data);
 }
 
 TEST_F(TableEvolutionFuzzerTest, extraReadSessionPropertiesApplied) {

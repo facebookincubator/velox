@@ -358,6 +358,7 @@ void prepareDataBatch(
   for (auto& child : data->children()) {
     BaseVector::flattenVector(child);
   }
+  TableEvolutionFuzzer::roundDownUnrepresentableTimestamps(data);
   if (dataBatchMutator) {
     dataBatchMutator(data, seed, rowOffset);
   }
@@ -649,6 +650,34 @@ int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
       rows,
       static_cast<double>(FLAGS_min_adaptive_vector_size),
       static_cast<double>(FLAGS_max_adaptive_vector_size)));
+}
+
+void TableEvolutionFuzzer::roundDownUnrepresentableTimestamps(
+    const VectorPtr& vector) {
+  const auto kind = vector->typeKind();
+  if (kind == TypeKind::TIMESTAMP) {
+    auto* timestamps = vector->asChecked<FlatVector<Timestamp>>();
+    for (vector_size_t row = 0; row < timestamps->size(); ++row) {
+      if (timestamps->isNullAt(row)) {
+        continue;
+      }
+      const auto timestamp = timestamps->valueAt(row);
+      if (timestamp.getSeconds() == -1 && timestamp.getNanos() != 0) {
+        timestamps->set(row, Timestamp(-1, 0));
+      }
+    }
+  } else if (kind == TypeKind::ARRAY) {
+    roundDownUnrepresentableTimestamps(
+        vector->asChecked<ArrayVector>()->elements());
+  } else if (kind == TypeKind::MAP) {
+    const auto* map = vector->asChecked<MapVector>();
+    roundDownUnrepresentableTimestamps(map->mapKeys());
+    roundDownUnrepresentableTimestamps(map->mapValues());
+  } else if (kind == TypeKind::ROW) {
+    for (const auto& child : vector->asChecked<RowVector>()->children()) {
+      roundDownUnrepresentableTimestamps(child);
+    }
+  }
 }
 
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)

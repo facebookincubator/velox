@@ -312,6 +312,14 @@ class TableEvolutionFuzzer {
       double bytesPerRow,
       int64_t targetBatchBytes = kTargetBatchBytes);
 
+  /// Rounds every timestamp in 'vector' that falls inside the second before
+  /// the Unix epoch and has a fractional part down to that whole second.
+  /// Descends into the elements, keys, values and children of complex vectors,
+  /// which must all be flat. DWRF reads such a timestamp back one second later,
+  /// to match the Java ORC writer, and the generated rows are the oracle for
+  /// every file format.
+  static void roundDownUnrepresentableTimestamps(const VectorPtr& vector);
+
   explicit TableEvolutionFuzzer(const Config& config);
 
   static const std::string& connectorId();
