@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/FileScanPlan.h"
 
 #include <fmt/ranges.h>
+#include <algorithm>
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
@@ -361,7 +362,18 @@ FileScanState FileScanPlan::newFileScanState(
       state.scanSpec, readerOutputType, context->memoryPool());
   // MetadataFilter installs leaves on this exact ScanSpec. Build it after
   // extraction setup and every time the physical column demands change.
-  if (remainingFilter_) {
+  // Predicates on extraction results cannot use the original column's
+  // statistics: e.g. extracting r.x changes the meaning of "r IS NULL".
+  // Until predicates can be mapped to equivalent physical subfields, disable
+  // metadata filtering for the whole expression if it references extraction.
+  // Dropping just an affected disjunct would make OR pruning unsafe.
+  const bool filterUsesExtraction = std::any_of(
+      extractionColumns_.begin(),
+      extractionColumns_.end(),
+      [this](const auto& entry) {
+        return remainingFilterColumns_.contains(entry.second->name());
+      });
+  if (remainingFilter_ && !filterUsesExtraction) {
     state.metadataFilter = std::make_shared<common::MetadataFilter>(
         *state.scanSpec, *remainingFilter_, context->expressionEvaluator());
   }

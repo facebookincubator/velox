@@ -820,6 +820,113 @@ TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
   ASSERT_FALSE(plan->readerOutputType()->containsChild("extra"));
 }
 
+TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
+  constexpr vector_size_t kNumRows = 20'000;
+  // The physical ROW is non-null, but its extracted child is always null.
+  const auto nulls = makeConstant<int64_t>(std::nullopt, kNumRows);
+  const auto values = makeConstant<int64_t>(7, kNumRows);
+  const auto negative = makeConstant<int64_t>(-1, kNumRows);
+  const auto physicalRow = makeRowVector({"x", "y"}, {nulls, values});
+  const auto input =
+      makeRowVector({"r", "c", "d"}, {physicalRow, negative, negative});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    auto file = writeScanFile(input, format);
+    const std::vector<NamedExtraction> extractions{
+        {"r", {ExtractionPathElement::structField("x")}, BIGINT()}};
+    const auto expected =
+        makeRowVector({"r", "c", "d"}, {nulls, negative, negative});
+    const auto outputType = asRowType(expected->type());
+    const ColumnHandleMap assignments{
+        {"r",
+         std::make_shared<HiveColumnHandle>(
+             "r",
+             HiveColumnHandle::ColumnType::kRegular,
+             BIGINT(),
+             physicalRow->type(),
+             std::vector<common::Subfield>{},
+             extractions)},
+        {"c", regularColumn("c", BIGINT())},
+        {"d", regularColumn("d", BIGINT())}};
+    const std::vector<std::pair<std::string, vector_size_t>> cases{
+        {"r IS NULL OR c > 0", kNumRows},
+        {"NOT (r IS NOT NULL AND c <= 0)", kNumRows},
+        {"r IS NOT NULL OR c > 0", 0},
+        {"(r IS NULL OR c > 0) AND c < 0", kNumRows},
+        {"c > 0 OR d > 0", 0}};
+    for (const auto& [filter, expectedRows] : cases) {
+      SCOPED_TRACE(filter);
+      for (bool extractFilter : {false, true}) {
+        SCOPED_TRACE(extractFilter);
+        const auto plan = std::make_shared<const FileScanPlan>(
+            outputType,
+            makeTableHandle(
+                {},
+                parseExpr(filter, outputType),
+                "test",
+                asRowType(input->type())),
+            assignments,
+            context_.get(),
+            hiveConfig_,
+            FileScanOptions{extractFilter});
+        FileDataSource source(
+            plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+        source.addSplit(HiveConnectorSplitBuilder(file->getPath())
+                            .connectorId(kHiveConnectorId)
+                            .fileFormat(format)
+                            .build());
+        vector_size_t numRows = 0;
+        while (auto batch = next(source, 1'024)) {
+          numRows += batch->size();
+          test::assertEqualVectors(expected->slice(0, batch->size()), batch);
+        }
+        EXPECT_EQ(numRows, expectedRows);
+        // Extraction in the projection must not disable safe statistics
+        // pruning for expressions that reference only ordinary columns.
+        if (format == dwio::common::FileFormat::DWRF &&
+            filter == "c > 0 OR d > 0") {
+          const auto stats = source.getRuntimeStats();
+          ASSERT_TRUE(stats.contains("skippedStrides"));
+          EXPECT_GT(stats.at("skippedStrides").sum, 0);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(FileDataSourceTest, metadataWithMultipleExtractions) {
+  const auto rowType = ROW({{"x", BIGINT()}, {"y", BIGINT()}});
+  const auto type = ROW({{"r", rowType}, {"c", BIGINT()}});
+  // Swapping fields preserves the ROW type, but changes predicate semantics.
+  // Multiple extractions use a transform with ExtractionType::kNone.
+  const ColumnHandleMap assignments{
+      {"r",
+       std::make_shared<HiveColumnHandle>(
+           "r",
+           HiveColumnHandle::ColumnType::kRegular,
+           rowType,
+           rowType,
+           std::vector<common::Subfield>{},
+           std::vector<NamedExtraction>{
+               {"x", {ExtractionPathElement::structField("y")}, BIGINT()},
+               {"y", {ExtractionPathElement::structField("x")}, BIGINT()}})},
+      {"c", regularColumn("c", BIGINT())}};
+  const FileScanPlan plan(
+      type,
+      makeTableHandle(
+          {}, parseExpr("r.y IS NULL OR c > 0", type), "test", type),
+      assignments,
+      context_.get(),
+      hiveConfig_);
+  const auto state = plan.newFileScanState(context_.get());
+  ASSERT_FALSE(state.metadataFilter);
+  const auto* r = state.scanSpec->childByName("r");
+  ASSERT_TRUE(r->hasTransform());
+  ASSERT_EQ(r->extractionType(), common::ScanSpec::ExtractionType::kNone);
+  ASSERT_EQ(r->childByName("y")->numMetadataFilters(), 0);
+  ASSERT_EQ(state.scanSpec->childByName("c")->numMetadataFilters(), 0);
+}
+
 TEST_F(FileDataSourceTest, sharedScanPlanConcurrentPhysicalReaders) {
   const auto type = ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}, {"p", BIGINT()}});
   ColumnHandleMap assignments{
