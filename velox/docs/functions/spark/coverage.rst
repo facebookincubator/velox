@@ -16,7 +16,6 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(2) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(2) td:nth-child(9) {background-color: #6BA81E;}
     table.coverage tr:nth-child(3) td:nth-child(1) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(3) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(3) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(5) td:nth-child(1) {background-color: #6BA81E;}
@@ -228,7 +227,7 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     =====================================================================================================================================================================================================================  ==  =========================================  ==  =========================================
     :spark:func:`abs`                          count_if                                   inline                                     nvl                                        :spark:func:`sqrt`                             any                                            cume_dist
     :spark:func:`acos`                         count_min_sketch                           inline_outer                               nvl2                                       stack                                          approx_count_distinct                          :spark:func:`dense_rank`
-    :spark:func:`acosh`                        covar_pop                                  input_file_block_length                    :spark:func:`octet_length`                 std                                            :spark:func:`approx_percentile`                first_value
+    :spark:func:`acosh`                        covar_pop                                  input_file_block_length                    octet_length                               std                                            :spark:func:`approx_percentile`                first_value
     :spark:func:`add_months`                   covar_samp                                 input_file_block_start                     or                                         stddev                                         array_agg                                      lag
     :spark:func:`aggregate`                    :spark:func:`crc32`                        input_file_name                            :spark:func:`overlay`                      stddev_pop                                     :spark:func:`avg`                              last_value
     and                                        cume_dist                                  :spark:func:`instr`                        parse_url                                  stddev_samp                                    bit_and                                        lead
