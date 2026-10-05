@@ -42,6 +42,10 @@ class AggregateCompanionFunctionBase : public Aggregate {
   void setConstantInputs(
       const std::vector<VectorPtr>& constantInputs) override final;
 
+  bool requiresRawInputMetadata() const override final;
+
+  void setRawInputMetadata(const std::vector<VectorPtr>& args) override final;
+
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
