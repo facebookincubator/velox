@@ -39,6 +39,14 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
         {{SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId),
           std::to_string(partitionId)}});
   }
+
+  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
+  void setThrowExceptionOnDuplicateMapKeys(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         value ? "true" : "false"},
+    });
+  }
 };
 
 } // namespace facebook::velox::functions::sparksql::test

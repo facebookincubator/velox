@@ -21,6 +21,7 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -196,12 +197,12 @@ class MapFunction : public exec::VectorFunction {
 };
 
 // Decoded inputs and output buffers threaded through the per-row build loop of
-// map_from_arrays.
+// map_from_arrays and transform_keys.
 struct MapFromArraysBuffers {
   const DecodedVector* decodedKeys;
   const DecodedVector* decodedValues;
-  const ArrayVector* keysArray;
-  const ArrayVector* valuesArray;
+  const ArrayVectorBase* keysArray;
+  const ArrayVectorBase* valuesArray;
   const DecodedVector* decodedKeyElements;
   bool throwExceptionOnDuplicateMapKeys;
   vector_size_t* rawOffsets;
@@ -380,7 +381,7 @@ vector_size_t buildMapEntriesForConstantKeys(
 void checkNullAndDuplicateKeys(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
-    const ArrayVector& keysArray,
+    const ArrayVectorBase& keysArray,
     const DecodedVector& decodedKeyElements) {
   // Only runs under EXCEPTION, so a repeat always throws.
   KeyDeduplicator keyDeduplicator{
@@ -560,6 +561,149 @@ std::shared_ptr<exec::VectorFunction> makeMapFromArrays(
   return std::make_shared<MapFromArraysFunction>(
       config.throwExceptionOnDuplicateMapKeys());
 }
+
+// Implements Spark's transform_keys(map(K1,V), function(K1,V,K2)) ->
+// map(K2,V). Pairs each key the lambda returns with the original value, in
+// entry order. A repeated key raises DUPLICATED_MAP_KEY, or under LAST_WIN
+// overwrites the value of its first occurrence in place, so the key keeps that
+// first position.
+class TransformKeysFunction : public exec::VectorFunction {
+ public:
+  explicit TransformKeysFunction(bool throwExceptionOnDuplicateMapKeys)
+      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys} {}
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 2);
+
+    exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
+    auto flatMap = flattenMap(rows, args[0], *mapDecoder.get());
+
+    const auto numKeys = flatMap->mapKeys()->size();
+    const std::vector<VectorPtr> lambdaArgs = {
+        flatMap->mapKeys(), flatMap->mapValues()};
+    SelectivityVector validRowsInReusedResult =
+        toElementRows<MapVector>(numKeys, rows, flatMap.get());
+
+    VectorPtr transformedKeys;
+    applyLambdaToElements<MapVector>(
+        args[1],
+        rows,
+        numKeys,
+        flatMap,
+        lambdaArgs,
+        validRowsInReusedResult,
+        context,
+        transformedKeys);
+
+    // A null map has no keys to check and stays null in the result.
+    exec::LocalSelectivityVector remainingRows(context, rows);
+    context.deselectErrors(*remainingRows);
+    if (flatMap->mayHaveNulls()) {
+      remainingRows->deselectNulls(
+          flatMap->rawNulls(), rows.begin(), rows.end());
+    }
+    exec::LocalDecodedVector decodedKeys(
+        context,
+        *transformedKeys,
+        toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get()));
+
+    // Under EXCEPTION no row can shrink, so the result keeps the offsets and
+    // sizes of the input map.
+    if (throwExceptionOnDuplicateMapKeys_) {
+      checkNullAndDuplicateKeys(
+          *remainingRows, context, *flatMap, *decodedKeys);
+      context.deselectErrors(*remainingRows);
+
+      auto mapVector = std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          addNullsForUnselectedRows(flatMap, *remainingRows),
+          rows.end(),
+          flatMap->offsets(),
+          flatMap->sizes(),
+          transformedKeys,
+          flatMap->mapValues());
+      context.moveOrCopyResult(mapVector, rows, result);
+      return;
+    }
+
+    // Deduplication can only shrink a row, so the number of keys is an upper
+    // bound on the number of entries in the result.
+    vector_size_t maxNumEntries{0};
+    remainingRows->applyToSelected(
+        [&](vector_size_t row) { maxNumEntries += flatMap->sizeAt(row); });
+
+    auto* pool = context.pool();
+    BufferPtr offsets = allocateOffsets(rows.end(), pool);
+    BufferPtr sizes = allocateSizes(rows.end(), pool);
+    BufferPtr keysIndices = allocateIndices(maxNumEntries, pool);
+    BufferPtr valuesIndices = allocateIndices(maxNumEntries, pool);
+
+    // The offsets and sizes of the map locate both the transformed keys and the
+    // values.
+    exec::LocalDecodedVector decodedFlatMap(context, *flatMap, *remainingRows);
+    const MapFromArraysBuffers buffers{
+        .decodedKeys = decodedFlatMap.get(),
+        .decodedValues = decodedFlatMap.get(),
+        .keysArray = flatMap.get(),
+        .valuesArray = flatMap.get(),
+        .decodedKeyElements = decodedKeys.get(),
+        .throwExceptionOnDuplicateMapKeys = false,
+        .rawOffsets = offsets->asMutable<vector_size_t>(),
+        .rawSizes = sizes->asMutable<vector_size_t>(),
+        .rawKeysIndices = keysIndices->asMutable<vector_size_t>(),
+        .rawValuesIndices = valuesIndices->asMutable<vector_size_t>(),
+    };
+    const auto numEntries = buildMapEntries(*remainingRows, context, buffers);
+    context.deselectErrors(*remainingRows);
+
+    auto mapVector = std::make_shared<MapVector>(
+        pool,
+        outputType,
+        addNullsForUnselectedRows(flatMap, *remainingRows),
+        rows.end(),
+        std::move(offsets),
+        std::move(sizes),
+        BaseVector::wrapInDictionary(
+            nullptr, std::move(keysIndices), numEntries, transformedKeys),
+        BaseVector::wrapInDictionary(
+            nullptr,
+            std::move(valuesIndices),
+            numEntries,
+            flatMap->mapValues()));
+    context.moveOrCopyResult(mapVector, rows, result);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // map(K1,V), function(K1,V,K2) -> map(K2,V)
+    return {
+        exec::FunctionSignatureBuilder()
+            .typeVariable("K1")
+            .typeVariable("K2")
+            .typeVariable("V")
+            .returnType("map(K2,V)")
+            .argumentType("map(K1,V)")
+            .argumentType("function(K1,V,K2)")
+            .build(),
+    };
+  }
+
+ private:
+  const bool throwExceptionOnDuplicateMapKeys_;
+};
+
+std::shared_ptr<exec::VectorFunction> makeTransformKeys(
+    const std::string& /*name*/,
+    const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
+    const core::QueryConfig& config) {
+  return std::make_shared<TransformKeysFunction>(
+      config.throwExceptionOnDuplicateMapKeys());
+}
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
@@ -574,4 +718,13 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_map_from_arrays,
     MapFromArraysFunction::signatures(),
     makeMapFromArrays);
+
+// Default null behavior does not apply: the lambda may capture other columns,
+// and a null capture does not make the result null. A null map still yields a
+// null map.
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
+    udf_transform_keys,
+    TransformKeysFunction::signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+    makeTransformKeys);
 } // namespace facebook::velox::functions::sparksql

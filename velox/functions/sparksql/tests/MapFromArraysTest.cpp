@@ -42,14 +42,6 @@ class MapFromArraysTest : public SparkFunctionBaseTest {
         evaluate("map_from_arrays(c0, c1)", makeRowVector({keys, values})),
         errorMessage);
   }
-
-  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
-  void setThrowExceptionOnDuplicateMapKeys(bool value) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
-         value ? "true" : "false"},
-    });
-  }
 };
 
 TEST_F(MapFromArraysTest, basic) {
