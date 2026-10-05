@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -40,7 +41,7 @@ inline int64_t readBE64(const char*& buf) {
       (static_cast<uint64_t>(static_cast<uint8_t>(buf[6])) << 8) |
       static_cast<uint64_t>(static_cast<uint8_t>(buf[7]));
   buf += 8;
-  return static_cast<int64_t>(v);
+  return std::bit_cast<int64_t>(v);
 }
 
 inline int32_t readBE32(const char*& buf) {
@@ -50,6 +51,13 @@ inline int32_t readBE32(const char*& buf) {
       static_cast<uint32_t>(static_cast<uint8_t>(buf[3]));
   buf += 4;
   return static_cast<int32_t>(v);
+}
+
+void writeBE64(std::string& data, size_t offset, int64_t value) {
+  uint64_t v = static_cast<uint64_t>(value);
+  for (int32_t i = 0; i < 8; ++i) {
+    data[offset + i] = static_cast<char>((v >> (56 - i * 8)) & uint64_t{0xFF});
+  }
 }
 
 class CountMinSketchAggregateTest
@@ -532,6 +540,43 @@ TEST_F(CountMinSketchAggregateTest, partialToFinal) {
 
   testAggregations(
       vectors, {}, {"count_min_sketch(c0, 0.5, 0.5, 1)"}, {expected});
+}
+
+TEST_F(CountMinSketchAggregateTest, mergeCounterOverflowWraps) {
+  // Spark uses Java long arithmetic for counters, which wraps at 64 bits.
+  auto emptySketch = serializeSketch(makeFlatVector<int64_t>({}));
+  auto maxSketch = emptySketch;
+  auto oneSketch = emptySketch;
+
+  // Version(4), totalCount(8), depth(4), width(4), hashA(8), table.
+  constexpr size_t kTotalCountOffset = 4;
+  constexpr size_t kFirstTableCountOffset = 28;
+  writeBE64(maxSketch, kTotalCountOffset, std::numeric_limits<int64_t>::max());
+  writeBE64(
+      maxSketch, kFirstTableCountOffset, std::numeric_limits<int64_t>::max());
+  writeBE64(oneSketch, kTotalCountOffset, 1);
+  writeBE64(oneSketch, kFirstTableCountOffset, 1);
+
+  auto input = makeFlatVector<StringView>(
+      {StringView(maxSketch), StringView(oneSketch)}, VARBINARY());
+  auto planNode = exec::test::PlanBuilder(pool())
+                      .values({makeRowVector({input})})
+                      .singleAggregation(
+                          {}, {"count_min_sketch_merge_extract_varbinary(c0)"})
+                      .planNode();
+  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(resultFlat->isNullAt(0));
+  auto serialized = resultFlat->valueAt(0);
+  auto [depth, width, totalCount] = parseSketch(serialized);
+  EXPECT_EQ(depth, 1);
+  EXPECT_EQ(width, 4);
+  EXPECT_EQ(totalCount, std::numeric_limits<int64_t>::min());
+
+  const char* firstTableCount = serialized.data() + kFirstTableCountOffset;
+  EXPECT_EQ(readBE64(firstTableCount), std::numeric_limits<int64_t>::min());
 }
 
 TEST_F(CountMinSketchAggregateTest, nullParametersRejected) {

@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/aggregates/CountMinSketchAggregate.h"
 
+#include <bit>
 #include <cmath>
 
 #include "velox/exec/Aggregate.h"
@@ -106,7 +107,12 @@ inline int64_t readBigEndianLong(const char*& buf) {
       (static_cast<uint64_t>(static_cast<uint8_t>(buf[6])) << 8) |
       static_cast<uint64_t>(static_cast<uint8_t>(buf[7]));
   buf += 8;
-  return static_cast<int64_t>(v);
+  return std::bit_cast<int64_t>(v);
+}
+
+inline int64_t wrappingAdd(int64_t left, int64_t right) {
+  return std::bit_cast<int64_t>(
+      static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
 }
 
 static constexpr int64_t kPrimeModulus = (1LL << 31) - 1;
@@ -197,9 +203,10 @@ struct CountMinSketchAccumulator {
   void addLong(int64_t item) {
     for (int32_t i = 0; i < depth_; ++i) {
       int32_t col = hashLong(item, i);
-      table_[static_cast<size_t>(i) * width_ + col] += 1;
+      auto& count = table_[static_cast<size_t>(i) * width_ + col];
+      count = wrappingAdd(count, 1);
     }
-    totalCount_ += 1;
+    totalCount_ = wrappingAdd(totalCount_, 1);
   }
 
   void addBinary(const char* data, int32_t length) {
@@ -207,16 +214,18 @@ struct CountMinSketchAccumulator {
       int32_t buckets[64];
       getHashBuckets(data, length, buckets);
       for (int32_t i = 0; i < depth_; ++i) {
-        table_[static_cast<size_t>(i) * width_ + buckets[i]] += 1;
+        auto& count = table_[static_cast<size_t>(i) * width_ + buckets[i]];
+        count = wrappingAdd(count, 1);
       }
     } else {
       std::vector<int32_t> buckets(depth_);
       getHashBuckets(data, length, buckets.data());
       for (int32_t i = 0; i < depth_; ++i) {
-        table_[static_cast<size_t>(i) * width_ + buckets[i]] += 1;
+        auto& count = table_[static_cast<size_t>(i) * width_ + buckets[i]];
+        count = wrappingAdd(count, 1);
       }
     }
-    totalCount_ += 1;
+    totalCount_ = wrappingAdd(totalCount_, 1);
   }
 
   int64_t serializedSize() const {
@@ -318,10 +327,11 @@ struct CountMinSketchAccumulator {
     // Merge table counts.
     for (int32_t i = 0; i < depth_; ++i) {
       for (int32_t j = 0; j < width_; ++j) {
-        table_[static_cast<size_t>(i) * width_ + j] += readBigEndianLong(buf);
+        auto& count = table_[static_cast<size_t>(i) * width_ + j];
+        count = wrappingAdd(count, readBigEndianLong(buf));
       }
     }
-    totalCount_ += otherTotalCount;
+    totalCount_ = wrappingAdd(totalCount_, otherTotalCount);
   }
 
   int32_t depth_{0};
