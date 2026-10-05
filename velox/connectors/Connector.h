@@ -685,7 +685,8 @@ class ConnectorQueryCtx {
       const std::string& sessionTimezone,
       bool adjustTimestampToTimezone = false,
       folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
+      std::unordered_map<std::string, memory::MemoryPool*> customPools = {});
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -810,7 +811,7 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
-  std::unordered_map<std::string, memory::MemoryPool*> customPools_;
+  const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
