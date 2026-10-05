@@ -678,8 +678,12 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
     return {};
   }
 
+  // Construct row group passes using all (or selected) columns for pass memory
+  // estimation.
   return splitReader_->construct_row_group_passes(
-      rowGroupIndices, passReadLimit_);
+      cudf::io::parquet::experimental::read_columns_mode::ALL_COLUMNS,
+      rowGroupIndices,
+      passReadLimit_);
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {
