@@ -180,6 +180,29 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.directBufferedInputSharedAllocation(session.get()));
 }
 
+TEST(FileConfigTest, nimbleFooterSpeculativeIoSize) {
+  FileConfig config(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {FileConfig::kNimbleFooterSpeculativeIoSize, "4MB"}}),
+      "hive.");
+  const auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+  EXPECT_EQ(
+      config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+
+  const auto unitsSession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {FileConfig::kNimbleFooterSpeculativeIoSizeSession, "2MB"}});
+  EXPECT_EQ(
+      config.nimbleFooterSpeculativeIoSize(unitsSession.get()), 2UL << 20);
+
+  const auto legacySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {FileConfig::kNimbleFooterSpeculativeIoSizeSession, "1024"}});
+  EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(legacySession.get()), 1024);
+}
+
 TEST(FileConfigTest, nimbleDictionaryAwareReadsSessionOverridesCatalog) {
   const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
     FileConfig config(

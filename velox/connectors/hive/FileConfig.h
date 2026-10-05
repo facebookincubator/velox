@@ -76,15 +76,21 @@ class FileConfig {
       256UL << 10,
       "Speculative tail-read size in bytes for ORC files.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_HIVE_CONFIG_PROPERTY(
       kNimbleFooterSpeculativeIoSizeSession,
-      kNimbleFooterSpeculativeIoSize,
-      nimbleFooterSpeculativeIoSize,
       "nimble_footer_speculative_io_size",
-      "nimble.footer-speculative-io-size",
-      uint64_t,
-      8UL << 20,
-      "Speculative tail-read size in bytes for Nimble files.")
+      std::string,
+      "8MB",
+      "Speculative tail-read size for Nimble files.")
+
+  /// Catalog config key for the Nimble footer speculative I/O size.
+  static constexpr const char* kNimbleFooterSpeculativeIoSize =
+      "nimble.footer-speculative-io-size";
+
+  /// Returns the speculative Nimble footer read size in bytes. Accepts both
+  /// legacy unqualified byte counts and data-size strings such as "8MB".
+  uint64_t nimbleFooterSpeculativeIoSize(
+      const config::ConfigBase* session) const;
 
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleStringDecoderZeroCopySession,
