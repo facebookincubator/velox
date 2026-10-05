@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
@@ -95,27 +96,56 @@ bool CompileState::compile(bool allowCpuFallback) {
     const OperatorAdapter* adapter = nullptr;
   };
 
-  auto getOperatorProperties =
-      [&registry, this, ctx](const exec::Operator* op) {
-        OperatorProperties props;
-        auto adapter = registry.findAdapter(op);
-        props.adapter = adapter;
-        if (adapter) {
-          auto planNode = resolveOperatorPlanNode(op);
-          if (planNode) {
-            static_cast<OperatorAdapter::Properties&>(props) =
-                adapter->properties(op, planNode, ctx);
+  auto getOperatorProperties = [&registry, this, ctx](
+                                   const exec::Operator* op) {
+    OperatorProperties props;
+    auto adapter = registry.findAdapter(op);
+    props.adapter = adapter;
+    if (adapter) {
+      auto planNode = resolveOperatorPlanNode(op);
+      if (planNode) {
+        static_cast<OperatorAdapter::Properties&>(props) =
+            adapter->properties(op, planNode, ctx);
+      }
+    }
+    if (isAnyOf<CudfOperator>(op)) {
+      // CudfOperator is always fully GPU compatible
+      // (runs on GPU, accepts GPU input, produces GPU output).
+      props.canRunOnGPU = true;
+      props.acceptsGpuInput = true;
+      props.producesGpuOutput = true;
+    }
+    // Adapters gate on operation/expression support but not on column
+    // types, and passthrough adapters (OrderBy, TopN, Limit, AssignUniqueId,
+    // local merge/exchange, ...) do not check types at all. A GPU operator
+    // exchanges whole RowVectors across
+    // the CudfFromVelox/CudfToVelox boundary, converting every column -
+    // including passthrough columns it never inspects. Keep the operator on
+    // CPU when any input or output column type is not cuDF-convertible
+    // (e.g. MAP), rather than aborting at runtime in cudf::from_arrow.
+    if (props.canRunOnGPU or props.acceptsGpuInput or props.producesGpuOutput) {
+      if (auto planNode = resolveOperatorPlanNode(op)) {
+        auto allConvertible = [](const RowTypePtr& rowType) {
+          for (const auto& child : rowType->children()) {
+            if (not isCudfSupportedType(child)) {
+              return false;
+            }
           }
+          return true;
+        };
+        bool convertible = allConvertible(planNode->outputType());
+        for (const auto& source : planNode->sources()) {
+          convertible = convertible and allConvertible(source->outputType());
         }
-        if (isAnyOf<CudfOperator>(op)) {
-          // CudfOperator is always fully GPU compatible
-          // (runs on GPU, accepts GPU input, produces GPU output).
-          props.canRunOnGPU = true;
-          props.acceptsGpuInput = true;
-          props.producesGpuOutput = true;
+        if (not convertible) {
+          props.canRunOnGPU = false;
+          props.acceptsGpuInput = false;
+          props.producesGpuOutput = false;
         }
-        return props;
-      };
+      }
+    }
+    return props;
+  };
 
   // caching operator properties
   std::vector<OperatorProperties> opProps(operators.size());

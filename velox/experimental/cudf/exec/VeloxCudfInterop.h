@@ -30,6 +30,13 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 bool canMakeCudfDefaultScalar(const TypePtr& type);
 
+/// Returns true if 'type' maps to a cuDF type, i.e. veloxToCudfDataType would
+/// succeed for it and, recursively, for every nested child. Returns false for
+/// types cuDF/Arrow interop cannot represent (MAP, non-decimal HUGEINT,
+/// intervals, UNKNOWN, ...). Unlike veloxToCudfDataType it never throws, so it
+/// can be used to gate GPU offload placement.
+bool isCudfSupportedType(const TypePtr& type);
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(

@@ -135,6 +135,36 @@ bool canMakeCudfDefaultScalar(const TypePtr& type) {
   }
 }
 
+bool isCudfSupportedType(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    case TypeKind::ARRAY:
+      return isCudfSupportedType(type->childAt(0));
+    case TypeKind::ROW: {
+      for (const auto& child : asRowType(type)->children()) {
+        if (!isCudfSupportedType(child)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(
