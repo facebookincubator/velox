@@ -314,9 +314,7 @@ TEST_F(CountMinSketchAggregateTest, varbinaryInput) {
 
 TEST_F(CountMinSketchAggregateTest, varbinaryMatchesVarchar) {
   // The varbinary branch shares the addBinary / murmurHash3 path with varchar,
-  // so hashing the same raw bytes (including a 0x00 and a high byte >= 0x80)
-  // must yield a byte-identical sketch. This locks the binary path to the
-  // Spark-verified varchar golden above.
+  // so hashing the same raw bytes must yield a byte-identical sketch.
   std::vector<std::string> raw = {
       std::string("\x00\x01\x80\xFF", 4), std::string("hi", 2)};
   auto varbinary = makeFlatVector<StringView>(
@@ -325,6 +323,30 @@ TEST_F(CountMinSketchAggregateTest, varbinaryMatchesVarchar) {
       makeFlatVector<StringView>({StringView(raw[0]), StringView(raw[1])});
 
   EXPECT_EQ(serializeSketch(varbinary), serializeSketch(varchar));
+}
+
+TEST_F(CountMinSketchAggregateTest, varbinarySignedHighByteTailGolden) {
+  // Byte-for-byte parity against a Spark 4.1.1 CountMinSketch generated with:
+  //   CountMinSketch.create(0.5, 0.5, 1)
+  //   addBinary([0x80])
+  //   addBinary([0x01, 0x80])
+  //   addBinary([0x01, 0x02, 0xFF])
+  // The one-, two-, and three-byte Murmur3 tails all contain a signed high
+  // byte, locking Spark's signed-byte promotion behavior.
+  std::vector<std::string> raw = {
+      std::string("\x80", 1),
+      std::string("\x01\x80", 2),
+      std::string("\x01\x02\xFF", 3)};
+  auto varbinary = makeFlatVector<StringView>(
+      {StringView(raw[0]), StringView(raw[1]), StringView(raw[2])},
+      VARBINARY());
+
+  std::string expectedHex =
+      "000000010000000000000003000000010000000400000000"
+      "5D8D6AB900000000000000000000000000000000000000000000000200000000"
+      "00000001";
+  auto serialized = serializeSketch(varbinary);
+  EXPECT_EQ(toHex(StringView(serialized)), expectedHex);
 }
 
 TEST_F(CountMinSketchAggregateTest, nullInputsSkipped) {
@@ -386,6 +408,44 @@ TEST_F(CountMinSketchAggregateTest, emptyInputPartialToFinal) {
 
   testAggregations(
       vectors, {}, {"count_min_sketch(c0, 0.5, 0.5, 1)"}, {expected});
+}
+
+TEST_F(CountMinSketchAggregateTest, emptyInputCompanionFunctions) {
+  auto vectors = {makeRowVector({makeFlatVector<int64_t>({})})};
+
+  auto partialPlan =
+      exec::test::PlanBuilder(pool())
+          .values(vectors)
+          .singleAggregation({}, {"count_min_sketch_partial(c0, 0.5, 0.5, 1)"})
+          .planNode();
+  auto partial =
+      exec::test::AssertQueryBuilder(partialPlan).copyResults(pool());
+
+  ASSERT_EQ(partial->size(), 1);
+  auto partialFlat = partial->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(partialFlat->isNullAt(0));
+  auto [partialDepth, partialWidth, partialTotalCount] =
+      parseSketch(partialFlat->valueAt(0));
+  EXPECT_EQ(partialDepth, 1);
+  EXPECT_EQ(partialWidth, 4);
+  EXPECT_EQ(partialTotalCount, 0);
+
+  auto finalPlan = exec::test::PlanBuilder(pool())
+                       .values({partial})
+                       .singleAggregation(
+                           {}, {"count_min_sketch_merge_extract_varbinary(c0)"})
+                       .planNode();
+  auto finalResult =
+      exec::test::AssertQueryBuilder(finalPlan).copyResults(pool());
+
+  ASSERT_EQ(finalResult->size(), 1);
+  auto finalFlat = finalResult->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(finalFlat->isNullAt(0));
+  auto [finalDepth, finalWidth, finalTotalCount] =
+      parseSketch(finalFlat->valueAt(0));
+  EXPECT_EQ(finalDepth, 1);
+  EXPECT_EQ(finalWidth, 4);
+  EXPECT_EQ(finalTotalCount, 0);
 }
 
 TEST_F(CountMinSketchAggregateTest, groupBy) {
