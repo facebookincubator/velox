@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/aggregates/MaxSizeForStatsAggregate.h"
+#include "velox/common/memory/RawVector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
@@ -38,7 +39,7 @@ class MaxSizeForStatsAggregate
  private:
   std::vector<vector_size_t> elementSizes_;
   std::vector<vector_size_t*> elementSizePtrs_;
-  std::vector<vector_size_t> elementIndices_;
+  raw_vector<vector_size_t> elementIndices_;
   Scratch scratch_;
   DecodedVector decoded_;
 

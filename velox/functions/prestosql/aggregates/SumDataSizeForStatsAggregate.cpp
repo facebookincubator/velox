@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
+#include "velox/common/memory/RawVector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
@@ -180,7 +181,7 @@ class SumDataSizeForStatsAggregate
   // Reusable buffers to calculate the data size of input rows.
   std::vector<vector_size_t> rowSizes_;
   std::vector<vector_size_t*> rowSizePtrs_;
-  std::vector<vector_size_t> rowIndices_;
+  raw_vector<vector_size_t> rowIndices_;
   Scratch scratch_;
 };
 
