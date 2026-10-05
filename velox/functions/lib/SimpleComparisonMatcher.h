@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include "velox/core/Expressions.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -83,8 +85,9 @@ class AnySingleInputMatcher : public Matcher {
  public:
   AnySingleInputMatcher(
       core::TypedExprPtr* expr,
-      core::FieldAccessTypedExprPtr* input)
-      : expr_{expr}, input_{input} {}
+      core::FieldAccessTypedExprPtr* input,
+      std::unordered_set<std::string> lambdaInputs)
+      : expr_{expr}, input_{input}, lambdaInputs_{std::move(lambdaInputs)} {}
 
   bool match(const core::TypedExprPtr& expr) override;
 
@@ -95,10 +98,10 @@ class AnySingleInputMatcher : public Matcher {
 
   core::TypedExprPtr* const expr_;
   core::FieldAccessTypedExprPtr* const input_;
+  const std::unordered_set<std::string> lambdaInputs_;
 };
 
-/// Matches constant expression that represents values 1, 0, or -1 of type
-/// BIGINT.
+/// Matches a non-null INTEGER or BIGINT constant expression.
 class ComparisonConstantMatcher : public Matcher {
  public:
   explicit ComparisonConstantMatcher(int64_t* value) : value_{value} {}
@@ -123,8 +126,9 @@ class SimpleComparisonChecker {
 
   std::shared_ptr<Matcher> anySingleInput(
       core::TypedExprPtr* expr,
-      core::FieldAccessTypedExprPtr* input) {
-    return std::make_shared<AnySingleInputMatcher>(expr, input);
+      core::FieldAccessTypedExprPtr* input,
+      const std::unordered_set<std::string>& lambdaInputs) {
+    return std::make_shared<AnySingleInputMatcher>(expr, input, lambdaInputs);
   }
 
   std::shared_ptr<Matcher> comparisonConstant(int64_t* value) {

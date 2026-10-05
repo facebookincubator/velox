@@ -27,7 +27,7 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
   }
 
   VELOX_CHECK_EQ(inputArgs.size(), 1);
-  return makeArraySort(name, inputArgs, config, true, false, true);
+  return makeArraySort(name, inputArgs, config, true, false, false, true);
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
@@ -39,7 +39,7 @@ std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
   }
 
   VELOX_CHECK_EQ(inputArgs.size(), 1);
-  return makeArraySort(name, inputArgs, config, false, false, true);
+  return makeArraySort(name, inputArgs, config, false, false, false, true);
 }
 
 } // namespace facebook::velox::functions

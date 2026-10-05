@@ -274,8 +274,8 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
           {
               {
                   variant::row({1, 1}),
-                  variant::row({2, 2}),
                   variant::row({2, variant::null(TypeKind::INTEGER)}),
+                  variant::row({2, 2}),
               },
           }),
   });
