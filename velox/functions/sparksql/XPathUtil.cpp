@@ -495,25 +495,27 @@ class XmlXPathEvaluator {
         nullptr,
         "UTF-8",
         options));
+    const xmlError* parseError = xmlCtxtGetLastError(parser.get());
+    const int parseErrorCode =
+        parseError == nullptr ? XML_ERR_OK : parseError->code;
     // Before libxml2 2.13, an allocation failure, including a text node over
     // the size limit, stops the parser without clearing wellFormed, so a
     // truncated document can be returned.
     const bool outOfMemory = parser->errNo == XML_ERR_NO_MEMORY;
     if (doc_ == nullptr || outOfMemory) {
-      int code = XML_ERR_NO_MEMORY;
-      if (!outOfMemory) {
-        const xmlError* error = xmlCtxtGetLastError(parser.get());
-        code = error == nullptr ? XML_ERR_OK : error->code;
-      }
-      status_ = invalidXmlStatus(code);
+      status_ =
+          invalidXmlStatus(outOfMemory ? XML_ERR_NO_MEMORY : parseErrorCode);
       return;
     }
 
     // Any retained general entity reference returns NULL, including one left
     // when an external subset is not loaded. That document has no internal
-    // subset. Still compile the path so invalid XPath syntax remains a user
-    // error.
-    blockedEntities_ = hasEntityReferences(xmlDocGetRootElement(doc_.get()));
+    // subset. Some libxml2 versions replace an undeclared attribute reference
+    // with an empty value while reporting it in the parser diagnostic instead
+    // of retaining an entity-reference node.
+    blockedEntities_ = parseErrorCode == XML_ERR_UNDECLARED_ENTITY ||
+        parseErrorCode == XML_WAR_UNDECLARED_ENTITY ||
+        hasEntityReferences(xmlDocGetRootElement(doc_.get()));
 
     ctx_.reset(xmlXPathNewContext(doc_.get()));
     VELOX_CHECK_NOT_NULL(ctx_, "Failed to create XPath context");

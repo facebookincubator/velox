@@ -426,8 +426,8 @@ TEST_F(XPathFunctionsTest, doctypeHandling) {
             "<foo>ok</foo>",
             "foo"),
         "ok");
-    // An undeclared reference is retained when the external subset is not
-    // loaded, even though the document has no internal subset.
+    // An undeclared reference is either retained or reported by the parser
+    // when the external subset is not loaded.
     EXPECT_EQ(
         xpathString(
             "<!DOCTYPE foo SYSTEM \"file:///xpath-absent\">"
