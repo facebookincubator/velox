@@ -20,7 +20,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <double-conversion.h>
+#include <double-conversion/double-conversion.h>
 #include <folly/String.h>
 
 #include "velox/expression/DecodedArgs.h"

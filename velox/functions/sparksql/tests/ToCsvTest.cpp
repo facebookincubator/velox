@@ -25,6 +25,8 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
+using facebook::velox::test::assertEqualVectors;
+
 class ToCsvTest : public SparkFunctionBaseTest {
  protected:
   std::optional<std::string> toCsv(
