@@ -241,7 +241,8 @@ class StreamingAggregationTest
                           {"array_agg(distinct c1)",
                            "array_agg(c1 order by c2)",
                            "count(distinct c1)",
-                           "array_agg(c2)"},
+                           "array_agg(c2)",
+                           "count(distinct 1)"},
                           {},
                           core::AggregationNode::Step::kSingle,
                           false)
@@ -250,7 +251,8 @@ class StreamingAggregationTest
       config(AssertQueryBuilder(plan, duckDbQueryRunner_), outputBatchSize)
           .assertResults(
               "SELECT c0, array_agg(distinct c1), array_agg(c1 order by c2), "
-              "count(distinct c1), array_agg(c2) FROM tmp GROUP BY c0");
+              "count(distinct c1), array_agg(c2), count(distinct 1) "
+              "FROM tmp GROUP BY c0");
     }
 
     {

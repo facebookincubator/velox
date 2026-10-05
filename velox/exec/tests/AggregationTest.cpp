@@ -4006,6 +4006,18 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
   assertQuery(
       plan, "SELECT c0, sum(DISTINCT 1), count(c1) FROM tmp GROUP BY c0");
 
+  // All-constant distinct inputs together with an accumulator that uses
+  // external memory.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "cast(c0 as varchar) as name"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)", "arbitrary(name)"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3), arbitrary(CAST(c0 AS VARCHAR)) FROM tmp GROUP BY c0");
+
   // Global aggregation with constant distinct input.
   plan = PlanBuilder()
              .values({data})
