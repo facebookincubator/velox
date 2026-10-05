@@ -17,6 +17,7 @@
 #include "velox/functions/sparksql/EncodeFunction.h"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstring>
 #include <memory>
@@ -541,6 +542,40 @@ bool isJavaShiftJis(const StringView& charset) {
   return false;
 }
 
+bool isJis0208(const StringView& charset) {
+  static constexpr std::string_view kNames[] = {
+      "X-JIS0208",
+      "JIS0208",
+      "JIS_C6226-1983",
+      "JIS_X0208-1983",
+      "CSISO87JISX0208",
+      "ISO-IR-87",
+      "X0208",
+  };
+  for (const auto& name : kNames) {
+    if (equalsIgnoreCase(charset, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isJis0212(const StringView& charset) {
+  static constexpr std::string_view kNames[] = {
+      "JIS_X0212-1990",
+      "JIS0212",
+      "CSISO159JISX02121990",
+      "ISO-IR-159",
+      "X0212",
+  };
+  for (const auto& name : kNames) {
+    if (equalsIgnoreCase(charset, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string_view javaSubstitutionBytes(
     const StringView& requestedName,
     const char* canonicalName) {
@@ -601,6 +636,175 @@ std::vector<UChar> toUtf16(const StringView& input) {
     }
   }
   return utf16;
+}
+
+enum class JisDoubleBytePlane {
+  k0208,
+  k0212,
+};
+
+struct JisMapping {
+  char32_t codePoint;
+  uint16_t bytes;
+};
+
+// ICU's versioned ISO-2022-JP mappings are nearly identical to OpenJDK's
+// generated JIS_X_0208 and JIS_X_0212 charsets. These corrections preserve
+// OpenJDK's exact mapping membership.
+constexpr std::array<JisMapping, 7> kJis0208MappingsMissingFromIcu{{
+    {0x00A2, 0x2171},
+    {0x00A3, 0x2172},
+    {0x00AC, 0x224C},
+    {0x2014, 0x213D},
+    {0x2016, 0x2142},
+    {0x2212, 0x215D},
+    {0x301C, 0x2141},
+}};
+
+constexpr std::array<char32_t, 82> kJis0208MappingsMissingFromOpenJdk{{
+    0x2015, 0x2116, 0x2121, 0x2160, 0x2161, 0x2162, 0x2163, 0x2164, 0x2165,
+    0x2166, 0x2167, 0x2168, 0x2169, 0x2211, 0x221F, 0x2225, 0x222E, 0x22BF,
+    0x2460, 0x2461, 0x2462, 0x2463, 0x2464, 0x2465, 0x2466, 0x2467, 0x2468,
+    0x2469, 0x246A, 0x246B, 0x246C, 0x246D, 0x246E, 0x246F, 0x2470, 0x2471,
+    0x2472, 0x2473, 0x301D, 0x301F, 0x3231, 0x3232, 0x3239, 0x32A4, 0x32A5,
+    0x32A6, 0x32A7, 0x32A8, 0x3303, 0x330D, 0x3314, 0x3318, 0x3322, 0x3323,
+    0x3326, 0x3327, 0x332B, 0x3336, 0x333B, 0x3349, 0x334A, 0x334D, 0x3351,
+    0x3357, 0x337B, 0x337C, 0x337D, 0x337E, 0x338E, 0x338F, 0x339C, 0x339D,
+    0x339E, 0x33A1, 0x33C4, 0x33CD, 0xF86F, 0xFF0D, 0xFF5E, 0xFFE0, 0xFFE1,
+    0xFFE2,
+}};
+
+constexpr std::array<JisMapping, 2> kJis0212MappingsMissingFromIcu{{
+    {0x2116, 0x2271},
+    {0xFF5E, 0x2237},
+}};
+
+template <size_t N>
+uint16_t findJisMapping(
+    const std::array<JisMapping, N>& mappings,
+    char32_t codePoint) {
+  const auto it = std::lower_bound(
+      mappings.begin(),
+      mappings.end(),
+      codePoint,
+      [](const JisMapping& mapping, char32_t value) {
+        return mapping.codePoint < value;
+      });
+  return it != mappings.end() && it->codePoint == codePoint ? it->bytes : 0;
+}
+
+void appendJisBytes(std::string& output, uint16_t bytes) {
+  output.push_back(static_cast<char>(bytes >> 8));
+  output.push_back(static_cast<char>(bytes & 0xFF));
+}
+
+Status encodeJisDoubleByte(
+    exec::StringWriter& result,
+    const StringView& input,
+    const StringView& charset,
+    JisDoubleBytePlane plane,
+    bool replaceUnmappable) {
+  if (input.empty()) {
+    result.resize(0);
+    return Status::OK();
+  }
+
+  UErrorCode error{U_ZERO_ERROR};
+  const char* converterName = plane == JisDoubleBytePlane::k0208
+      ? "ISO_2022,locale=ja,version=0"
+      : "ISO_2022,locale=ja,version=1";
+  std::unique_ptr<UConverter, decltype(&ucnv_close)> converter{
+      ucnv_open(converterName, &error), &ucnv_close};
+  if (U_FAILURE(error)) {
+    return Status::UserError(
+        "encode: unsupported charset '{}'",
+        std::string(charset.data(), charset.size()));
+  }
+  ucnv_setFromUCallBack(
+      converter.get(),
+      UCNV_FROM_U_CALLBACK_STOP,
+      nullptr,
+      nullptr,
+      nullptr,
+      &error);
+  if (U_FAILURE(error)) {
+    return Status::UserError(
+        "encode: unsupported charset '{}'",
+        std::string(charset.data(), charset.size()));
+  }
+
+  std::string output;
+  output.reserve(input.size());
+  size_t inputPosition{0};
+  while (inputPosition < input.size()) {
+    char32_t codePoint;
+    inputPosition +=
+        decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
+
+    const auto mapping = plane == JisDoubleBytePlane::k0208
+        ? findJisMapping(kJis0208MappingsMissingFromIcu, codePoint)
+        : findJisMapping(kJis0212MappingsMissingFromIcu, codePoint);
+    if (mapping != 0) {
+      appendJisBytes(output, mapping);
+      continue;
+    }
+
+    const bool rejectedJis0208Mapping = plane == JisDoubleBytePlane::k0208 &&
+        std::binary_search(kJis0208MappingsMissingFromOpenJdk.begin(),
+                           kJis0208MappingsMissingFromOpenJdk.end(),
+                           codePoint);
+
+    UChar utf16[2];
+    int32_t numUtf16Units;
+    if (codePoint <= 0xFFFF) {
+      utf16[0] = static_cast<UChar>(codePoint);
+      numUtf16Units = 1;
+    } else {
+      const auto adjusted = codePoint - 0x10000;
+      utf16[0] = static_cast<UChar>(0xD800 + (adjusted >> 10));
+      utf16[1] = static_cast<UChar>(0xDC00 + (adjusted & 0x3FF));
+      numUtf16Units = 2;
+    }
+
+    char iso2022Bytes[16]{};
+    error = U_ZERO_ERROR;
+    ucnv_resetFromUnicode(converter.get());
+    const auto numIso2022Bytes = ucnv_fromUChars(
+        converter.get(),
+        iso2022Bytes,
+        sizeof(iso2022Bytes),
+        utf16,
+        numUtf16Units,
+        &error);
+    const bool isJis0208Sequence = plane == JisDoubleBytePlane::k0208 &&
+        numIso2022Bytes == 8 &&
+        std::memcmp(iso2022Bytes, "\x1B\x24\x42", 3) == 0 &&
+        std::memcmp(iso2022Bytes + 5, "\x1B\x28\x42", 3) == 0;
+    const bool isJis0212Sequence = plane == JisDoubleBytePlane::k0212 &&
+        numIso2022Bytes == 9 &&
+        std::memcmp(iso2022Bytes, "\x1B\x24\x28\x44", 4) == 0 &&
+        std::memcmp(iso2022Bytes + 6, "\x1B\x28\x42", 3) == 0;
+    const bool isExpectedPlane = !rejectedJis0208Mapping && U_SUCCESS(error) &&
+        (isJis0208Sequence || isJis0212Sequence);
+    if (!isExpectedPlane) {
+      if (!replaceUnmappable) {
+        return unmappableCharacter(charset);
+      }
+      if (plane == JisDoubleBytePlane::k0208) {
+        output.append("\x21\x29", 2);
+      } else {
+        output.append("\x22\x44", 2);
+      }
+      continue;
+    }
+
+    const auto dataOffset = plane == JisDoubleBytePlane::k0208 ? 3 : 4;
+    output.append(iso2022Bytes + dataOffset, 2);
+  }
+
+  result.resize(output.size());
+  std::memcpy(result.data(), output.data(), output.size());
+  return Status::OK();
 }
 
 Status encodeLegacy(
@@ -916,6 +1120,12 @@ CharsetType resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
       equalsIgnoreCase(charset, "UTF_32")) {
     return CharsetType::kUtf32;
   }
+  if (isJis0208(charset)) {
+    return CharsetType::kJis0208;
+  }
+  if (isJis0212(charset)) {
+    return CharsetType::kJis0212;
+  }
 
   UErrorCode error{U_ZERO_ERROR};
   const std::string charsetName{charset.data(), charset.size()};
@@ -967,6 +1177,20 @@ Status encode(
       return encodeUtf32(result, input, true);
     case CharsetType::kUtf32LE:
       return encodeUtf32(result, input, false);
+    case CharsetType::kJis0208:
+      return encodeJisDoubleByte(
+          result,
+          input,
+          charset,
+          JisDoubleBytePlane::k0208,
+          legacyCodingErrorAction);
+    case CharsetType::kJis0212:
+      return encodeJisDoubleByte(
+          result,
+          input,
+          charset,
+          JisDoubleBytePlane::k0212,
+          legacyCodingErrorAction);
     case CharsetType::kLegacy:
       return encodeLegacy(result, input, charset, legacyCodingErrorAction);
     case CharsetType::kUnsupported:

@@ -39,6 +39,8 @@ enum class CharsetType : uint8_t {
   kUtf32,
   kUtf32BE,
   kUtf32LE,
+  kJis0208,
+  kJis0212,
   kLegacy,
   kUnsupported,
 };

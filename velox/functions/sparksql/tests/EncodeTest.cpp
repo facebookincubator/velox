@@ -290,6 +290,59 @@ TEST_F(EncodeTest, cesu8Accepted) {
       ElementsAre(0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80));
 }
 
+TEST_F(EncodeTest, legacyJisDoubleByteCharsets) {
+  for (const auto* name : {"x-JIS0208", "JIS0208"}) {
+    SCOPED_TRACE(name);
+    VELOX_ASSERT_USER_THROW(
+        encode("\xE3\x81\x82", name), "encode: unsupported charset");
+  }
+  for (const auto* name : {"JIS_X0212-1990", "JIS0212"}) {
+    SCOPED_TRACE(name);
+    VELOX_ASSERT_USER_THROW(
+        encode("\xCB\x98", name), "encode: unsupported charset");
+  }
+
+  enableLegacyJavaCharsets();
+  for (const auto* name :
+       {"x-JIS0208",
+        "JIS0208",
+        "JIS_C6226-1983",
+        "JIS_X0208-1983",
+        "csISO87JISX0208",
+        "iso-ir-87",
+        "x0208"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(encodeBytes("\xE3\x81\x82", name), ElementsAre(0x24, 0x22));
+    EXPECT_THAT(encodeBytes("\xC2\xA2", name), ElementsAre(0x21, 0x71));
+    VELOX_ASSERT_USER_THROW(
+        encode("A", name),
+        "encode: input contains a character that cannot be encoded");
+    VELOX_ASSERT_USER_THROW(
+        encode("\xCB\x98", name),
+        "encode: input contains a character that cannot be encoded");
+    VELOX_ASSERT_USER_THROW(
+        encode("\xE2\x80\x95", name),
+        "encode: input contains a character that cannot be encoded");
+  }
+  for (const auto* name :
+       {"JIS_X0212-1990",
+        "JIS0212",
+        "csISO159JISX02121990",
+        "iso-ir-159",
+        "jis_x0212-1990",
+        "x0212"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(encodeBytes("\xCB\x98", name), ElementsAre(0x22, 0x2F));
+    EXPECT_THAT(encodeBytes("\xE2\x84\x96", name), ElementsAre(0x22, 0x71));
+    VELOX_ASSERT_USER_THROW(
+        encode("A", name),
+        "encode: input contains a character that cannot be encoded");
+    VELOX_ASSERT_USER_THROW(
+        encode("\xE3\x81\x82", name),
+        "encode: input contains a character that cannot be encoded");
+  }
+}
+
 TEST_F(EncodeTest, embeddedNulCharsetRejected) {
   // A NUL in the charset name must not be truncated and silently resolved to a
   // different charset; Java rejects such names.
@@ -339,6 +392,28 @@ TEST_F(EncodeTest, legacyCharsetSpecificReplacement) {
     SCOPED_TRACE(name);
     EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0xFE, 0xFE));
   }
+  for (const auto* name : {"x-JIS0208", "JIS0208"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(
+        encodeBytes(
+            "\xE3\x81\x82"
+            "\xF0\x9F\x98\x80"
+            "\xE3\x81\x84",
+            name),
+        ElementsAre(0x24, 0x22, 0x21, 0x29, 0x24, 0x24));
+  }
+  for (const auto* name : {"JIS_X0212-1990", "JIS0212"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(
+        encodeBytes(
+            "\xCB\x98"
+            "\xF0\x9F\x98\x80",
+            name),
+        ElementsAre(0x22, 0x2F, 0x22, 0x44));
+  }
+  EXPECT_THAT(encodeBytes("\xCB\x98", "x-JIS0208"), ElementsAre(0x21, 0x29));
+  EXPECT_THAT(
+      encodeBytes("\xE3\x81\x82", "JIS_X0212-1990"), ElementsAre(0x22, 0x44));
   EXPECT_THAT(
       encodeBytes("\xF0\x9F\x98\x80", "ISO-2022-JP"),
       ElementsAre(0x1B, 0x24, 0x42, 0x21, 0x29, 0x1B, 0x28, 0x42));
