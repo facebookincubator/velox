@@ -27,13 +27,14 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
   }
 
   VELOX_CHECK_EQ(inputArgs.size(), 1);
-  // Nulls are considered largest.
+  // Top-level nulls are largest, but nested nulls are smallest.
   return facebook::velox::functions::makeArraySort(
       name,
       inputArgs,
       config,
       true /*ascending*/,
       false /*nullsFirst*/,
+      true /*nestedNullsFirst*/,
       false /*throwOnNestedNull*/);
 }
 
@@ -97,7 +98,7 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
     }
     ascending = boolVector->as<ConstantVector<bool>>()->valueAt(0);
   }
-  // Nulls are considered smallest.
+  // Nulls are smallest when ascending and largest when descending.
   bool nullsFirst = ascending;
   return facebook::velox::functions::makeArraySort(
       name,
@@ -105,6 +106,7 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
       config,
       ascending /*ascending*/,
       nullsFirst /*nullsFirst*/,
+      nullsFirst /*nestedNullsFirst*/,
       false /*throwOnNestedNull*/);
 }
 

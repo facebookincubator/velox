@@ -24,6 +24,7 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 namespace facebook::velox::expression {
 namespace {
@@ -238,6 +239,28 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
   testExpression(
       "array_sort(c0, (x, y) -> if(length(x) < length(y), abs(-1)::integer, if(length(x) > length(y), (-4 / 3)::integer, (0 / 3)::integer)))",
       "array_sort_desc(c0, x -> length(x))",
+      type);
+
+  type = ROW({"c0"}, {ARRAY(BIGINT())});
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x < y, -10, if(x > y, 10, 0)))",
+      "array_sort(c0)",
+      type);
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x > y, -10, if(x < y, 10, 0)))",
+      "array_sort_desc(c0, x -> x)",
+      type);
+
+  type = ROW({"c0"}, {ARRAY(DOUBLE())});
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x < y, -10, if(x > y, 10, 0)))",
+      "array_sort(c0, x -> x)",
+      type);
+
+  type = ROW({"c0"}, {ARRAY(test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x < y, -10, if(x > y, 10, 0)))",
+      "array_sort(c0, x -> x)",
       type);
 
   testExpression(

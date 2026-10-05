@@ -26,6 +26,8 @@ namespace facebook::velox::functions {
 /// descending order.
 /// @param nullsFirst If true, nulls are placed first; otherwise, nulls are
 /// placed last.
+/// @param nestedNullsFirst If true, nulls nested inside complex values are
+/// ordered first; otherwise, they are ordered last.
 /// @param throwOnNestedNull If true, throw an exception if a nested null is
 /// encountered.
 std::shared_ptr<exec::VectorFunction> makeArraySort(
@@ -34,6 +36,7 @@ std::shared_ptr<exec::VectorFunction> makeArraySort(
     const core::QueryConfig& config,
     bool ascending,
     bool nullsFirst,
+    bool nestedNullsFirst,
     bool throwOnNestedNull);
 
 /// Creates array_sort with a lambda function.

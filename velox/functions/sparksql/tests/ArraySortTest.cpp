@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cmath>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -103,15 +104,57 @@ TEST_F(ArraySortTest, string) {
   testArraySort(input, expected);
 }
 
+TEST_F(ArraySortTest, binary) {
+  auto input = makeNullableArrayVector<std::string>(
+      {{std::string("\xff", 1),
+        std::string("\x00", 1),
+        std::string("\x80", 1),
+        std::nullopt}},
+      ARRAY(VARBINARY()));
+  auto expected = makeNullableArrayVector<std::string>(
+      {{std::string("\x00", 1),
+        std::string("\x80", 1),
+        std::string("\xff", 1),
+        std::nullopt}},
+      ARRAY(VARBINARY()));
+  testArraySort(input, expected);
+}
+
+TEST_F(ArraySortTest, unknown) {
+  auto input = makeNullableArrayVector<UnknownValue>({
+      {std::nullopt, std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt},
+  });
+  testArraySort(input, input);
+}
+
 TEST_F(ArraySortTest, timestamp) {
   auto input = makeNullableArrayVector(timestampInput());
   auto expected = makeNullableArrayVector(timestampAscNullLargest());
   testArraySort(input, expected);
 }
 
+TEST_F(ArraySortTest, timestampUtc) {
+  auto input = makeNullableArrayVector<Timestamp>(
+      {{Timestamp(20, 0), Timestamp(-10, 0), Timestamp(0, 0), std::nullopt}},
+      ARRAY(TIMESTAMP_UTC()));
+  auto expected = makeNullableArrayVector<Timestamp>(
+      {{Timestamp(-10, 0), Timestamp(0, 0), Timestamp(20, 0), std::nullopt}},
+      ARRAY(TIMESTAMP_UTC()));
+  testArraySort(input, expected);
+}
+
 TEST_F(ArraySortTest, date) {
   auto input = makeNullableArrayVector(dateInput(), ARRAY(DATE()));
   auto expected = makeNullableArrayVector(dateAscNullLargest(), ARRAY(DATE()));
+  testArraySort(input, expected);
+}
+
+TEST_F(ArraySortTest, yearMonthInterval) {
+  auto input = makeNullableArrayVector<int32_t>(
+      {{24, -6, 18, std::nullopt}}, ARRAY(INTERVAL_YEAR_MONTH()));
+  auto expected = makeNullableArrayVector<int32_t>(
+      {{-6, 18, 24, std::nullopt}}, ARRAY(INTERVAL_YEAR_MONTH()));
   testArraySort(input, expected);
 }
 
@@ -123,7 +166,8 @@ TEST_F(ArraySortTest, bool) {
 
 TEST_F(ArraySortTest, array) {
   auto input = makeNullableNestedArrayVector(arrayInput());
-  auto expected = makeNullableNestedArrayVector(arrayAscNullLargest());
+  auto expected =
+      makeNullableNestedArrayVector(arrayAscTopNullLargestNestedNullSmallest());
   testArraySort(input, expected);
 }
 
@@ -140,7 +184,8 @@ TEST_F(ArraySortTest, failOnMapTypeSort) {
 TEST_F(ArraySortTest, row) {
   auto rowType = ROW({INTEGER(), VARCHAR()});
   auto input = makeArrayOfRowVector(rowType, rowInput());
-  auto expected = makeArrayOfRowVector(rowType, rowAscNullLargest());
+  auto expected =
+      makeArrayOfRowVector(rowType, rowAscTopNullLargestNestedNullSmallest());
   testArraySort(input, expected);
 }
 
@@ -197,6 +242,18 @@ TEST_F(ArraySortTest, lambda) {
       true,
       data,
       sortedAsc);
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), -10, if(greaterthan(length(x), length(y)), 10, 0))",
+      true,
+      data,
+      sortedAsc);
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), "
+      "-2147483647 - 1, "
+      "if(greaterthan(length(x), length(y)), 2147483647, 0))",
+      true,
+      data,
+      sortedAsc);
 
   // Different ways to sort by length descending.
   testArraySort("x -> length(x)", false, data, sortedDesc);
@@ -211,15 +268,143 @@ TEST_F(ArraySortTest, lambda) {
       true,
       data,
       sortedDesc);
+
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), 10, if(greaterthan(length(x), length(y)), -10, 0))",
+      true,
+      data,
+      sortedDesc);
+
+  auto tiedData =
+      makeNullableArrayVector<std::string>({{"bb", "aa", "c", "dd"}});
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), -10, if(greaterthan(length(x), length(y)), 10, 0))",
+      true,
+      tiedData,
+      makeNullableArrayVector<std::string>({{"c", "bb", "aa", "dd"}}));
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), 10, if(greaterthan(length(x), length(y)), -10, 0))",
+      true,
+      tiedData,
+      makeNullableArrayVector<std::string>({{"bb", "aa", "dd", "c"}}));
+
+  auto capturedData = makeRowVector({
+      makeNullableArrayVector<int32_t>({{3, 1, 2}, {6, 4, 5}}),
+      makeFlatVector<int32_t>({10, -10}),
+  });
+  auto capturedResult = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(greatest(x, c1), greatest(y, c1)), -1, "
+      "if(greaterthan(greatest(x, c1), greatest(y, c1)), 1, 0)))",
+      capturedData);
+  assertEqualVectors(
+      makeNullableArrayVector<int32_t>({{3, 1, 2}, {4, 5, 6}}), capturedResult);
+
+  auto nestedNullData =
+      makeNullableArrayVector<int32_t>({{1, std::nullopt, 2}});
+  testArraySort(
+      "(x, y) -> if(lessthan(array(x), array(y)), -1, "
+      "if(greaterthan(array(x), array(y)), 1, 0))",
+      true,
+      nestedNullData,
+      makeNullableArrayVector<int32_t>({{std::nullopt, 1, 2}}));
+  testArraySort(
+      "(x, y) -> if(lessthan(array(x), array(y)), 1, "
+      "if(greaterthan(array(x), array(y)), -1, 0))",
+      true,
+      nestedNullData,
+      makeNullableArrayVector<int32_t>({{2, 1, std::nullopt}}));
 }
 
-TEST_F(ArraySortTest, unsupporteLambda) {
+TEST_F(ArraySortTest, identityComparatorPreservesSignedZeroOrder) {
+  auto input = makeArrayVector<double>({{-0.0, 0.0, 0.0, -0.0}, {0.0, -0.0}});
+  auto result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(x, y), -10, if(greaterthan(x, y), 10, 0)))",
+      makeRowVector({input}));
+
+  auto* arrays = result->as<ArrayVector>();
+  auto* elements = arrays->elements()->as<SimpleVector<double>>();
+  ASSERT_NE(elements, nullptr);
+
+  std::vector<bool> expectedSigns{true, false, false, true, false, true};
+  for (vector_size_t index = 0; index < expectedSigns.size(); ++index) {
+    EXPECT_EQ(std::signbit(elements->valueAt(index)), expectedSigns[index]);
+  }
+}
+
+TEST_F(ArraySortTest, comparatorEncodings) {
+  auto input =
+      makeNullableArrayVector<int32_t>({{3, 1, 2}, {1, std::nullopt, 2}});
+  const std::string comparator =
+      "(x, y) -> if(lessthan(array(x), array(y)), -10, "
+      "if(greaterthan(array(x), array(y)), 10, 0))";
+
+  auto dictionaryInput =
+      BaseVector::wrapInDictionary(makeIndices({1, 0, 1}), input);
+  auto result = evaluate(
+      fmt::format("array_sort(c0, {})", comparator),
+      makeRowVector({dictionaryInput}));
+  assertEqualVectors(
+      makeNullableArrayVector<int32_t>(
+          {{std::nullopt, 1, 2}, {1, 2, 3}, {std::nullopt, 1, 2}}),
+      result);
+
+  auto constantInput = BaseVector::wrapInConstant(3, 0, input);
+  result = evaluate(
+      fmt::format("array_sort(c0, {})", comparator),
+      makeRowVector({constantInput}));
+  assertEqualVectors(
+      makeNullableArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}),
+      result);
+}
+
+TEST_F(ArraySortTest, unsupportedLambda) {
   auto data = makeRowVector({
       makeNullableArrayVector(intInput<int32_t>()),
   });
 
   VELOX_ASSERT_THROW(
       evaluate("array_sort(c0, (a, b) -> 0)", data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(lessthan(a, b), -10, if(greaterthan(a, b), 10, 5)))",
+          data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(lessthan(a, b), -10, if(greaterthan(a, b), -20, 0)))",
+          data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(equalto(a, b), 5, if(lessthan(a, b), -10, 37)))",
+          data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(lessthan(a, b), -10, if(equalto(a, b), 5, 37)))",
+          data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(lessthan(a, a), -10, if(greaterthan(a, a), 37, 0)))",
+          data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  auto dataWithCapture = makeRowVector(
+      {data->childAt(0),
+       makeFlatVector<int32_t>(data->size(), [](auto) { return 5; })});
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(lessthan(a, c1), -10, if(greaterthan(a, c1), 37, 0)))",
+          dataWithCapture),
       "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
 }
 } // namespace
