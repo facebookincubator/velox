@@ -60,9 +60,8 @@ IcebergDataSource::IcebergDataSource(
   // into a loud error.
   IcebergConnector::validateChangelogSubfieldFilters(filters_);
 
-  // For changelog queries, build the ChangelogScanContext once so it is
-  // reused across all splits.  This lets stats-based filter reordering and
-  // column adaptation accumulate rather than being discarded after each split.
+  // Changelog columns use a separate base-table schema. The physical scan
+  // spec is rebuilt for each split while the column demands are retained.
   const auto& dataColumns = tableHandle_->dataColumns();
   VELOX_CHECK_NOT_NULL(
       dataColumns,
@@ -145,6 +144,22 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
 
   if (changelogScanContext_.has_value()) {
+    auto& context = *changelogScanContext_;
+    auto dataScanSpec = makeScanSpec(
+        context.dataReaderOutputType,
+        /*outputSubfields=*/{},
+        common::SubfieldFilters{},
+        /*indexColumns=*/{},
+        tableHandle_->dataColumns(),
+        partitionKeys_,
+        infoColumns_,
+        specialColumns_,
+        fileConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx_->sessionProperties()),
+        pool_);
+    dataScanSpec->moveAdaptationFrom(*context.dataScanSpec);
+    context.dataScanSpec = std::move(dataScanSpec);
+
     // Pass readerOutputType_ (not outputType()) so that columns referenced
     // only by the remainingFilter — which FileDataSource::constructor appended
     // to readerOutputType_ but omitted from outputType_ — are present in the
@@ -155,7 +170,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
-        &partitionKeys_,
+        &scanPlan_->partitionKeys(),
         connectorQueryCtx_,
         fileConfig_,
         *changelogScanContext_,
@@ -166,7 +181,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
         ioExecutor_,
         readerOutputType_,
         *columnHandles_,
-        &filters_,
+        &fileScanState_->filters,
         &changelogDynamicFilters_);
   }
 
@@ -174,7 +189,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   return std::make_unique<IcebergSplitReader>(
       icebergSplit,
       tableHandle_,
-      &partitionKeys_,
+      &scanPlan_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

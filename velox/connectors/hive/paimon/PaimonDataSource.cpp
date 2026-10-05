@@ -71,7 +71,7 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
       split_,
       paimonSplit_,
       tableHandle_,
-      &partitionKeys_,
+      &scanPlan_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

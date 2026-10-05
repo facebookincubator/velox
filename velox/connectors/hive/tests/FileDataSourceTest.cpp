@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/FileDataSource.h"
+
+#include <future>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -147,6 +149,24 @@ class TestDataSource : public FileDataSource {
   }
 };
 
+class InspectableFileDataSource : public FileDataSource {
+ public:
+  using FileDataSource::FileDataSource;
+
+  const auto& scanState() const {
+    return fileScanState_;
+  }
+
+  void addPhysicalColumn(const std::string& name, const TypePtr& type) {
+    auto names = readerOutputType_->names();
+    auto types = readerOutputType_->children();
+    names.push_back(name);
+    types.push_back(type);
+    readerOutputType_ = ROW(std::move(names), std::move(types));
+    resetScanSpec();
+  }
+};
+
 class TestConnector : public HiveConnector {
  public:
   TestConnector(
@@ -196,18 +216,50 @@ class FileDataSourceTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  std::unique_ptr<ConnectorQueryCtx> makeContext() {
+  std::unique_ptr<ConnectorQueryCtx> makeContext(
+      memory::MemoryPool* pool = nullptr) {
+    pool = pool ? pool : pool_.get();
     return ConnectorQueryCtx::Builder()
-        .operatorPool(pool_.get())
-        .connectorPool(pool_.get())
+        .operatorPool(pool)
+        .connectorPool(pool)
         .sessionProperties(config_.get())
         .expressionEvaluator(
             std::make_unique<exec::SimpleExpressionEvaluator>(
-                queryCtx_.get(), pool_.get()))
+                queryCtx_.get(), pool))
         .queryId("FileDataSourceTest")
         .taskId("FileDataSourceTest")
         .planNodeId("scan")
         .build();
+  }
+
+  std::shared_ptr<TempFilePath> writeScanFile(
+      const RowVectorPtr& input,
+      dwio::common::FileFormat format) {
+    auto file = TempFilePath::create();
+    if (format == dwio::common::FileFormat::DWRF) {
+      writeToFile(file->getPath(), input);
+    }
+#ifdef VELOX_ENABLE_NIMBLE
+    else {
+      nimble::Writer writer(
+          input->type(),
+          std::make_unique<LocalWriteFile>(file->getPath(), false, false),
+          *pool_,
+          nimble::WriterOptions{});
+      writer.write(input);
+      writer.close();
+    }
+#endif
+    return file;
+  }
+
+  static std::vector<dwio::common::FileFormat> fileFormats() {
+    std::vector<dwio::common::FileFormat> formats{
+        dwio::common::FileFormat::DWRF};
+#ifdef VELOX_ENABLE_NIMBLE
+    formats.push_back(dwio::common::FileFormat::NIMBLE);
+#endif
+    return formats;
   }
 
   std::unique_ptr<TestDataSource> makeSource(
@@ -666,6 +718,240 @@ TEST_F(FileDataSourceTest, tableScanBlockedProgressAndCachedOutput) {
             .operatorStats.at(0)
             .rawInputPositions,
         5);
+  }
+}
+
+TEST_F(FileDataSourceTest, scanPlanPreservesLogicalInputsAndPolicy) {
+  const auto dataType = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
+  const auto outputType = ROW({{"alias", BIGINT()}});
+  ColumnHandleMap assignments{{"alias", regularColumn("c0", BIGINT())}};
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("c0"),
+      std::make_unique<common::BigintRange>(0, 9, false));
+  auto expression = parseExpr("c0 >= 3 AND c1 % 2 = 1", dataType);
+  auto table =
+      makeTableHandle(std::move(filters), expression, "test", dataType);
+  for (bool extract : {true, false}) {
+    SCOPED_TRACE(extract);
+    auto plan = std::make_shared<const FileScanPlan>(
+        outputType,
+        table,
+        assignments,
+        context_.get(),
+        hiveConfig_,
+        FileScanOptions{extract});
+    EXPECT_EQ(plan->originalRemainingFilter(), expression);
+    EXPECT_EQ(plan->assignments().at("alias"), assignments.at("alias"));
+    EXPECT_TRUE(plan->outputType()->equivalent(*outputType));
+    EXPECT_TRUE(plan->readerOutputType()->equivalent(*dataType));
+    EXPECT_TRUE(
+        plan->originalFilters().at(common::Subfield("c0"))->testInt64(0));
+    EXPECT_EQ(
+        plan->filters().at(common::Subfield("c0"))->testInt64(0), !extract);
+    EXPECT_TRUE(plan->remainingFilterColumns().contains("c1"));
+    if (!extract) {
+      EXPECT_EQ(plan->remainingFilter(), expression);
+    }
+    // The caller receives a separate predicate map, not mutable plan storage.
+    auto copied = plan->filters();
+    copied.clear();
+    ASSERT_EQ(plan->filters().size(), 1);
+
+    auto file = writeScanFile(
+        makeRowVector(
+            {makeFlatVector<int64_t>({0, 3, 4, 7, 10}),
+             makeFlatVector<int64_t>({1, 1, 2, 3, 1})}),
+        dwio::common::FileFormat::DWRF);
+    FileDataSource source(
+        plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+    source.addSplit(makeHiveConnectorSplit(file->getPath()));
+    expectValues(next(source), {3, 7});
+    ASSERT_EQ(next(source), nullptr);
+  }
+}
+
+TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
+  const auto type = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
+  ColumnHandleMap assignments{
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c1", regularColumn("c1", BIGINT())}};
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("c0"),
+      std::make_unique<common::BigintRange>(0, 100, false));
+  auto table = makeTableHandle(
+      std::move(filters), parseExpr("c0 > 10 OR c1 > 20", type), "test", type);
+  auto plan = std::make_shared<const FileScanPlan>(
+      type, table, assignments, context_.get(), hiveConfig_);
+  auto first = plan->newFileScanState(context_.get());
+  auto second = plan->newFileScanState(context_.get());
+  ASSERT_NE(first.scanSpec, second.scanSpec);
+  ASSERT_NE(first.metadataFilter, second.metadataFilter);
+  ASSERT_TRUE(first.metadataFilter);
+  auto* firstField = first.scanSpec->childByName("c0");
+  auto* secondField = second.scanSpec->childByName("c0");
+  ASSERT_GT(firstField->numMetadataFilters(), 0);
+  ASSERT_GT(secondField->numMetadataFilters(), 0);
+  ASSERT_NE(
+      firstField->metadataFilterNodeAt(0),
+      secondField->metadataFilterNodeAt(0));
+  ASSERT_NE(firstField->filter(), secondField->filter());
+  firstField->setConstantValue<int64_t>(99, BIGINT(), pool_.get());
+  firstField->setFilter(std::make_shared<common::BigintRange>(90, 100, false));
+  ASSERT_FALSE(secondField->isConstant());
+  ASSERT_TRUE(secondField->filter()->testInt64(1));
+  auto third = plan->newFileScanState(context_.get());
+  ASSERT_FALSE(third.scanSpec->childByName("c0")->isConstant());
+  ASSERT_TRUE(third.scanSpec->childByName("c0")->filter()->testInt64(1));
+
+  InspectableFileDataSource source(
+      plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+  const auto before = source.scanState();
+  source.addPhysicalColumn("extra", BIGINT());
+  const auto& after = source.scanState();
+  ASSERT_NE(before->scanSpec, after->scanSpec);
+  ASSERT_NE(before->metadataFilter, after->metadataFilter);
+  ASSERT_TRUE(after->scanSpec->childByName("extra"));
+  ASSERT_GT(after->scanSpec->childByName("c0")->numMetadataFilters(), 0);
+  ASSERT_NE(
+      before->scanSpec->childByName("c0")->metadataFilterNodeAt(0),
+      after->scanSpec->childByName("c0")->metadataFilterNodeAt(0));
+  ASSERT_FALSE(plan->readerOutputType()->containsChild("extra"));
+}
+
+TEST_F(FileDataSourceTest, sharedScanPlanConcurrentPhysicalReaders) {
+  const auto type = ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}, {"p", BIGINT()}});
+  ColumnHandleMap assignments{
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c1", regularColumn("c1", VARCHAR())},
+      {"p", partitionKey("p", BIGINT())}};
+  auto plan = std::make_shared<const FileScanPlan>(
+      type,
+      makeTableHandle({}, parseExpr("c0 % 2 = 1", type), "test", type),
+      assignments,
+      context_.get(),
+      hiveConfig_);
+  auto firstPool = rootPool_->addLeafChild("first-reader");
+  auto secondPool = rootPool_->addLeafChild("second-reader");
+  auto firstContext = makeContext(firstPool.get());
+  auto secondContext = makeContext(secondPool.get());
+  const auto c0 = makeFlatVector<int64_t>(100, [](auto i) { return i; });
+  const auto strings = makeFlatVector<std::string>(
+      100, [](auto i) { return fmt::format("retained string value {}", i); });
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    auto firstFile = writeScanFile(makeRowVector({c0}), format);
+    auto secondFile = writeScanFile(makeRowVector({c0, strings}), format);
+    auto read = [&](const auto& file,
+                    const ConnectorQueryCtx* context,
+                    int partition) {
+      FileDataSource source(plan, &fileFactory_, nullptr, context, hiveConfig_);
+      auto split = HiveConnectorSplitBuilder(file->getPath())
+                       .connectorId(kHiveConnectorId)
+                       .fileFormat(format)
+                       .partitionKey("p", std::to_string(partition))
+                       .build();
+      source.addSplit(split);
+      std::vector<RowVectorPtr> batches;
+      while (auto batch = next(source, 7)) {
+        batch->loadedVector();
+        batches.push_back(std::move(batch));
+      }
+      return batches;
+    };
+    auto first = std::async(std::launch::async, [&] {
+      return read(firstFile, firstContext.get(), 1);
+    });
+    auto second = std::async(std::launch::async, [&] {
+      return read(secondFile, secondContext.get(), 2);
+    });
+    auto firstBatches = first.get();
+    auto secondBatches = second.get();
+    for (int reader = 0; reader < 2; ++reader) {
+      int count = 0;
+      for (const auto& batch : reader == 0 ? firstBatches : secondBatches) {
+        DecodedVector decodedNumbers(*batch->childAt(0));
+        DecodedVector decodedStrings(*batch->childAt(1));
+        DecodedVector decodedPartition(*batch->childAt(2));
+        for (int row = 0; row < batch->size(); ++row) {
+          const auto value = 2 * count + 1;
+          EXPECT_EQ(decodedNumbers.valueAt<int64_t>(row), value);
+          if (reader == 0) {
+            EXPECT_TRUE(batch->childAt(1)->isNullAt(row));
+          } else {
+            EXPECT_EQ(
+                decodedStrings.valueAt<StringView>(row).str(),
+                fmt::format("retained string value {}", value));
+          }
+          EXPECT_EQ(decodedPartition.valueAt<int64_t>(row), reader + 1);
+          ++count;
+        }
+      }
+      EXPECT_EQ(count, 50);
+    }
+    ASSERT_FALSE(plan->newFileScanState(context_.get())
+                     .scanSpec->childByName("c1")
+                     ->isConstant());
+  }
+}
+
+TEST_F(FileDataSourceTest, newFileStatePreservesDynamicFiltersAndOwnership) {
+  const auto type = ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}, {"p", BIGINT()}});
+  ColumnHandleMap assignments{
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c1", regularColumn("c1", VARCHAR())},
+      {"p", partitionKey("p", BIGINT())}};
+  auto plan = std::make_shared<const FileScanPlan>(
+      type,
+      makeTableHandle({}, nullptr, "test", type),
+      assignments,
+      context_.get(),
+      hiveConfig_);
+  const auto numbers = makeFlatVector<int64_t>({1, 2, 3});
+  const auto strings = makeFlatVector<std::string>(
+      {"out of line first value",
+       "out of line second value",
+       "out of line third value"});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    auto missing = writeScanFile(makeRowVector({numbers}), format);
+    auto present = writeScanFile(makeRowVector({numbers, strings}), format);
+    InspectableFileDataSource source(
+        plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+    source.addDynamicFilter(
+        2, std::make_shared<common::BigintRange>(1, 1, false));
+    auto add = [&](const auto& file, const std::string& partition) {
+      auto split = HiveConnectorSplitBuilder(file->getPath())
+                       .connectorId(kHiveConnectorId)
+                       .fileFormat(format)
+                       .partitionKey("p", partition)
+                       .build();
+      source.addSplit(split);
+    };
+    add(missing, "1");
+    auto first = next(source);
+    first->loadedVector();
+    ASSERT_EQ(first->size(), 3);
+    ASSERT_TRUE(first->childAt(1)->isNullAt(0));
+    const auto firstState = source.scanState();
+    ASSERT_EQ(next(source), nullptr);
+    source.addDynamicFilter(
+        0, std::make_shared<common::BigintRange>(2, 3, false));
+    add(present, "2");
+    while (auto batch = next(source)) {
+      ASSERT_EQ(batch->size(), 0);
+    }
+    add(present, "1");
+    ASSERT_NE(source.scanState(), firstState);
+    auto last = next(source);
+    last->loadedVector();
+    ASSERT_EQ(last->size(), 2);
+    ASSERT_EQ(next(source), nullptr);
+    source.cancel();
+    test::assertEqualVectors(numbers, first->childAt(0));
+    test::assertEqualVectors(strings->slice(1, 2), last->childAt(1));
+    ASSERT_EQ(plan->filters().size(), 0);
   }
 }
 

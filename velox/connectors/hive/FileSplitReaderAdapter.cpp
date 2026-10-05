@@ -21,8 +21,14 @@ namespace facebook::velox::connector::hive {
 FileSplitReaderAdapter::FileSplitReaderAdapter(
     std::unique_ptr<FileSplitReader> reader,
     std::shared_ptr<const FileConnectorSplit> split,
-    memory::MemoryPool* pool)
-    : reader_(std::move(reader)), split_(std::move(split)), pool_(pool) {
+    memory::MemoryPool* pool,
+    std::shared_ptr<const FileScanPlan> plan,
+    std::shared_ptr<FileScanState> state)
+    : plan_(std::move(plan)),
+      state_(std::move(state)),
+      reader_(std::move(reader)),
+      split_(std::move(split)),
+      pool_(pool) {
   VELOX_CHECK_NOT_NULL(reader_);
 }
 
@@ -106,6 +112,8 @@ const FileConnectorSplit* FileSplitReaderAdapter::currentFileSplit() const {
 void FileSplitReaderAdapter::cancel() noexcept {
   ended_ = true;
   reader_.reset();
+  state_.reset();
+  plan_.reset();
   split_.reset();
 }
 

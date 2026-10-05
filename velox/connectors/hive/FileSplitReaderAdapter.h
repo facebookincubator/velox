@@ -22,6 +22,9 @@
 
 namespace facebook::velox::connector::hive {
 
+class FileScanPlan;
+struct FileScanState;
+
 /// Adapts the existing synchronous file reader and its connector-specific
 /// specializations to the logical scan interface.
 class FileSplitReaderAdapter final : public FileScanReader {
@@ -29,7 +32,9 @@ class FileSplitReaderAdapter final : public FileScanReader {
   FileSplitReaderAdapter(
       std::unique_ptr<FileSplitReader> reader,
       std::shared_ptr<const FileConnectorSplit> split,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      std::shared_ptr<const FileScanPlan> plan = nullptr,
+      std::shared_ptr<FileScanState> state = nullptr);
 
   void prepare(
       std::shared_ptr<random::RandomSkipTracker> randomSkip,
@@ -57,6 +62,10 @@ class FileSplitReaderAdapter final : public FileScanReader {
   // Keep preparation stats at a stable address across data source takeover.
   // Some existing reader specializations retain a reference to them.
   dwio::common::RuntimeStats preparationStats_;
+  // Own the immutable inputs and physical filter storage referenced by the
+  // reader, including after a preloaded data source has been destroyed.
+  std::shared_ptr<const FileScanPlan> plan_;
+  std::shared_ptr<FileScanState> state_;
   std::unique_ptr<FileSplitReader> reader_;
   std::shared_ptr<const FileConnectorSplit> split_;
   memory::MemoryPool* const pool_;
