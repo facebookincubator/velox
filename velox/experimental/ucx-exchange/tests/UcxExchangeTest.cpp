@@ -1654,7 +1654,7 @@ namespace {
 // Row type for the real-Task cases below. Two fixed-width columns keep the
 // host/device round trip cheap while still exercising a multi-column table.
 const RowTypePtr& taskShuffleRowType() {
-  static const RowTypePtr rowType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  static const RowTypePtr rowType = ROW({{"c0", INTEGER()}, {"c1", BIGINT()}});
   return rowType;
 }
 
@@ -1894,6 +1894,51 @@ int64_t firstUnorderedIndex(const std::vector<int32_t>& sortKeys) {
           sortKeys.begin(), sortKeys.end(), [](int32_t left, int32_t right) {
             return left >= right;
           }));
+}
+
+// Builds 'numProducers' producers whose c0 ranges interleave -- producer i
+// emits i, i + numProducers, ... -- so that no producer's output is globally
+// ordered on its own. The batches stay on the host: CompileState puts a
+// CudfFromVelox between Values and UcxPartitionedOutput, see
+// taskShuffleOverUcx.
+std::vector<TaskShuffleProducer> makeInterleavedProducers(
+    memory::MemoryPool* pool,
+    const std::string& taskIdPrefix,
+    int numProducers,
+    vector_size_t numRowsPerProducer) {
+  std::vector<TaskShuffleProducer> producers;
+  producers.reserve(numProducers);
+  for (int i = 0; i < numProducers; ++i) {
+    producers.emplace_back(
+        taskIdPrefix + std::to_string(i),
+        std::vector<RowVectorPtr>{makeTaskShuffleBatch(
+            pool,
+            /*firstValue=*/i,
+            /*stride=*/numProducers,
+            numRowsPerProducer)});
+  }
+  return producers;
+}
+
+// The batches of every producer in 'producers', in producer order.
+std::vector<RowVectorPtr> allBatchesOf(
+    const std::vector<TaskShuffleProducer>& producers) {
+  std::vector<RowVectorPtr> batches;
+  for (const auto& producer : producers) {
+    batches.insert(
+        batches.end(), producer.second.begin(), producer.second.end());
+  }
+  return batches;
+}
+
+// Fails the current test unless the c0 column of 'batches' strictly ascends,
+// reporting the first violation.
+void expectGloballyOrdered(const std::vector<RowVectorPtr>& batches) {
+  const auto sortKeys = sortKeysOf(batches);
+  const auto firstUnordered = firstUnorderedIndex(sortKeys);
+  EXPECT_EQ(firstUnordered, static_cast<int64_t>(sortKeys.size()))
+      << "Merge over UCX produced unordered output at index: "
+      << firstUnordered;
 }
 
 // Starts one 'Values -> PartitionedOutput' producer Task per entry in
@@ -2145,21 +2190,12 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
   // row counts stay small.
   constexpr vector_size_t kNumRowsPerProducer = 512;
   constexpr int kNumProducers = 2;
-  std::vector<RowVectorPtr> expected;
-  std::vector<TaskShuffleProducer> producers;
-  for (int i = 0; i < kNumProducers; ++i) {
-    auto batch = makeTaskShuffleBatch(
-        pool_.get(),
-        /*firstValue=*/i,
-        /*stride=*/kNumProducers,
-        kNumRowsPerProducer);
-    expected.push_back(batch);
-    // Host batches: CompileState puts a CudfFromVelox between Values and
-    // UcxPartitionedOutput, see taskShuffleOverUcx.
-    producers.emplace_back(
-        taskPrefix + "mergeProducer" + std::to_string(i),
-        std::vector<RowVectorPtr>{batch});
-  }
+  const auto producers = makeInterleavedProducers(
+      pool_.get(),
+      taskPrefix + "mergeProducer",
+      kNumProducers,
+      kNumRowsPerProducer);
+  const auto expected = allBatchesOf(producers);
 
   core::PlanNodeId mergeNodeId;
   auto consumerPlan = exec::test::PlanBuilder()
@@ -2200,11 +2236,7 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
       operatorIdsOf(consumerStats.pipelineStats[0]),
       testing::ElementsAre(0, 1, 2, 3));
 
-  const auto sortKeys = sortKeysOf(actual);
-  const auto firstUnordered = firstUnorderedIndex(sortKeys);
-  EXPECT_EQ(firstUnordered, static_cast<int64_t>(sortKeys.size()))
-      << "MergeExchange over UCX produced unordered output at index: "
-      << firstUnordered;
+  expectGloballyOrdered(actual);
 }
 
 // The same merge expansion as above, but in the driver shape where the operator
@@ -2242,19 +2274,12 @@ TEST_F(
   // Interleaved key ranges again, so the output cannot be ordered by accident.
   constexpr vector_size_t kNumRowsPerProducer = 512;
   constexpr int kNumProducers = 2;
-  std::vector<RowVectorPtr> expected;
-  std::vector<TaskShuffleProducer> producers;
-  for (int i = 0; i < kNumProducers; ++i) {
-    auto batch = makeTaskShuffleBatch(
-        pool_.get(),
-        /*firstValue=*/i,
-        /*stride=*/kNumProducers,
-        kNumRowsPerProducer);
-    expected.push_back(batch);
-    producers.emplace_back(
-        taskPrefix + "gpuMergeProducer" + std::to_string(i),
-        std::vector<RowVectorPtr>{batch});
-  }
+  const auto producers = makeInterleavedProducers(
+      pool_.get(),
+      taskPrefix + "gpuMergeProducer",
+      kNumProducers,
+      kNumRowsPerProducer);
+  const auto expected = allBatchesOf(producers);
   auto producerTasks = startTaskShuffleProducers(ucx, producers);
 
   // The Task under test: a kUcx merge exchange straight into a kUcx partitioned
@@ -2345,11 +2370,7 @@ TEST_F(
   // with a pipeline that merely has the right shape.
   ASSERT_EQ(totalRows(actual), kNumProducers * kNumRowsPerProducer);
   EXPECT_TRUE(exec::test::assertEqualResults(expected, actual));
-  const auto sortKeys = sortKeysOf(actual);
-  const auto firstUnordered = firstUnorderedIndex(sortKeys);
-  EXPECT_EQ(firstUnordered, static_cast<int64_t>(sortKeys.size()))
-      << "All-GPU merge over UCX produced unordered output at index: "
-      << firstUnordered;
+  expectGloballyOrdered(actual);
 }
 
 std::shared_ptr<UcxOutputQueueManager>

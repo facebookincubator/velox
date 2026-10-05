@@ -37,7 +37,6 @@
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -48,8 +47,6 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/core/QueryConfig.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -1266,7 +1263,7 @@ class UcxExchangeAdapter : public OperatorAdapter {
   UcxExchangeAdapter() : OperatorAdapter("UcxExchange") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const ucx_exchange::UcxExchange*>(op) != nullptr;
+    return op->is<ucx_exchange::UcxExchange>();
   }
 
   bool canRunOnGPU(
@@ -1319,8 +1316,7 @@ class UcxPartitionedOutputAdapter : public OperatorAdapter {
   UcxPartitionedOutputAdapter() : OperatorAdapter("UcxPartitionedOutput") {}
 
   bool canHandle(const exec::Operator* op) const override {
-    return dynamic_cast<const ucx_exchange::UcxPartitionedOutput*>(op) !=
-        nullptr;
+    return op->is<ucx_exchange::UcxPartitionedOutput>();
   }
 
   bool canRunOnGPU(

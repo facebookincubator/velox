@@ -40,11 +40,11 @@ namespace {
 
 using core::TransportKind;
 
-/// Verifies that the cuDF registration path advertises the UCX transport in
-/// ExchangeTransportRegistry and OutputTransportRegistry, that the registered
-/// entries build the UCX operators paired with their own client and manager,
-/// and that those operators are left in place by the cuDF driver adapter
-/// machinery.
+// Verifies that the cuDF registration path advertises the UCX transport in
+// ExchangeTransportRegistry and OutputTransportRegistry, that the registered
+// entries build the UCX operators paired with their own client and manager,
+// and that those operators are left in place by the cuDF driver adapter
+// machinery.
 class UcxTransportRegistrationTest : public OperatorTestBase {
  protected:
   void SetUp() override {
@@ -88,9 +88,9 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
         .values({vectors})
         .partitionedOutput(
             {"c0"},
-            4,
+            /*numPartitions=*/4,
             /*outputLayout=*/{},
-            /*serdeKind=*/"Presto",
+            VectorSerde::kindName(VectorSerde::Kind::kPresto),
             std::string{transport})
         .planFragment();
   }
@@ -98,11 +98,11 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
       core::PlanFragment fragment,
-      std::unordered_map<std::string, std::string> queryConfig = {}) {
+      std::unordered_map<std::string, std::string> queryConfig) {
     return Task::create(
         taskId,
         std::move(fragment),
-        0,
+        /*destination=*/0,
         core::QueryCtx::create(
             nullptr, core::QueryConfig{std::move(queryConfig)}),
         Task::ExecutionMode::kParallel);
@@ -111,10 +111,27 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
   // Returns a DriverCtx for driver 0 of 'task'.
   std::shared_ptr<DriverCtx> makeDriverCtx(std::shared_ptr<Task> task) {
     return std::make_shared<DriverCtx>(
-        std::move(task), 0, 0, kUngroupedGroupId, 0);
+        std::move(task),
+        /*driverId=*/0,
+        /*pipelineId=*/0,
+        kUngroupedGroupId,
+        /*partitionId=*/0);
   }
 
-  RowTypePtr rowType_{ROW({"c0", "c1"}, {BIGINT(), VARCHAR()})};
+  // Returns the client context Task passes to an exchange entry for 'task'.
+  ExchangeClientContext makeClientContext(const std::shared_ptr<Task>& task) {
+    return ExchangeClientContext{
+        .taskId = task->taskId(),
+        .destination = task->destination(),
+        .numberOfConsumers = 1,
+        .maxExchangeBufferSize = 1 << 20,
+        .minExchangeOutputBatchBytes = 0,
+        .pool = pool(),
+        .executor = executor_.get(),
+        .queryConfig = task->queryCtx()->queryConfig()};
+  }
+
+  RowTypePtr rowType_{ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}})};
 
  private:
   bool savedExchange_{false};
@@ -172,23 +189,15 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
   auto exchangeNode =
       std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
   ASSERT_NE(exchangeNode, nullptr);
-  auto task = makeTask("test-ucx-exchange-task", std::move(plan));
+  auto task =
+      makeTask("test-ucx-exchange-task", std::move(plan), /*queryConfig=*/{});
   auto driverCtx = makeDriverCtx(task);
 
   auto entry = ExchangeTransportRegistry::tryGet(
       *task->queryCtx(), exchangeNode->transportKind());
   ASSERT_NE(entry, nullptr);
 
-  auto client = entry->makeClient(
-      ExchangeClientContext{
-          .taskId = task->taskId(),
-          .destination = task->destination(),
-          .numberOfConsumers = 1,
-          .maxExchangeBufferSize = 1 << 20,
-          .minExchangeOutputBatchBytes = 0,
-          .pool = pool(),
-          .executor = executor_.get(),
-          .queryConfig = task->queryCtx()->queryConfig()});
+  auto client = entry->makeClient(makeClientContext(task));
   ASSERT_NE(
       std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
       nullptr);
@@ -224,7 +233,10 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxPartitionedOutput) {
       std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
           plan.planNode);
   ASSERT_NE(outputNode, nullptr);
-  auto task = makeTask("test-ucx-partitioned-output-task", std::move(plan));
+  auto task = makeTask(
+      "test-ucx-partitioned-output-task",
+      std::move(plan),
+      /*queryConfig=*/{});
   auto driverCtx = makeDriverCtx(task);
 
   auto entry = OutputTransportRegistry::tryGet(
@@ -270,16 +282,7 @@ TEST_F(UcxTransportRegistrationTest, ucxEntriesRequireCudfEnabledForQuery) {
   ASSERT_NE(entry, nullptr);
 
   VELOX_ASSERT_USER_THROW(
-      entry->makeClient(
-          ExchangeClientContext{
-              .taskId = task->taskId(),
-              .destination = task->destination(),
-              .numberOfConsumers = 1,
-              .maxExchangeBufferSize = 1 << 20,
-              .minExchangeOutputBatchBytes = 0,
-              .pool = pool(),
-              .executor = executor_.get(),
-              .queryConfig = task->queryCtx()->queryConfig()}),
+      entry->makeClient(makeClientContext(task)),
       "The UCX exchange transport requires cuDF for this query");
 
   auto outputPlan = makePartitionedOutputPlan(TransportKind::kUcx);
@@ -310,7 +313,8 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
   auto exchangeNode =
       std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
   ASSERT_NE(exchangeNode, nullptr);
-  auto task = makeTask("test-foreign-client-task", std::move(plan));
+  auto task =
+      makeTask("test-foreign-client-task", std::move(plan), /*queryConfig=*/{});
   auto driverCtx = makeDriverCtx(task);
 
   auto ucxEntry =
@@ -322,16 +326,7 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
 
   // A client from another transport must not be accepted: the entry pairs the
   // operator with the client its own factory produces.
-  auto foreignClient = inMemoryEntry->makeClient(
-      ExchangeClientContext{
-          .taskId = task->taskId(),
-          .destination = task->destination(),
-          .numberOfConsumers = 1,
-          .maxExchangeBufferSize = 1 << 20,
-          .minExchangeOutputBatchBytes = 0,
-          .pool = pool(),
-          .executor = executor_.get(),
-          .queryConfig = task->queryCtx()->queryConfig()});
+  auto foreignClient = inMemoryEntry->makeClient(makeClientContext(task));
   ASSERT_NE(foreignClient, nullptr);
   VELOX_ASSERT_THROW(
       ucxEntry->makeExchangeOperator(
