@@ -88,6 +88,13 @@ class BitwiseTest : public SparkFunctionBaseTest {
       std::optional<T2> b) {
     return evaluateOnce<T1>("shiftright(c0, c1)", a, b);
   }
+
+  template <typename T>
+  std::optional<T> shiftRightUnsigned(
+      std::optional<T> value,
+      std::optional<int32_t> shift) {
+    return evaluateOnce<T>("shiftrightunsigned(c0, c1)", value, shift);
+  }
 };
 
 TEST_F(BitwiseTest, bitwiseAnd) {
@@ -313,6 +320,47 @@ TEST_F(BitwiseTest, shiftRight) {
   EXPECT_EQ((shiftRight_twoTypes<int64_t, int32_t>(kMax64, 1)), kMax64 >> 1);
   EXPECT_EQ(
       (shiftRight_twoTypes<int64_t, int32_t>(kMin64, 1)), -4611686018427387904);
+}
+
+TEST_F(BitwiseTest, shiftRightUnsigned) {
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(8, 1), 4);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(16, 2), 4);
+
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(42, 0), 42);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, 0), -1);
+
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, 1), kMax32);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-3, 1), 2'147'483'646);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(kMin32, 31), 1);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(kMin32, 1), 1'073'741'824);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(kMax32, 1), kMax32 >> 1);
+
+  // Spark uses the low five bits of the shift amount for INTEGER.
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, 32), -1);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, 33), kMax32);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, -1), 1);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(-1, kMin32), -1);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(kMin32, kMax32), 1);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(kMax32, kMax32), 0);
+
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, 1), kMax64);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(kMin64, 63), 1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(kMin64, 1), 4'611'686'018'427'387'904);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(kMax64, 1), kMax64 >> 1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(42, 0), 42);
+
+  // Spark uses the low six bits of the shift amount for BIGINT.
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, 64), -1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, 65), kMax64);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, -1), 1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, kMin32), -1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(kMin64, kMax32), 1);
+
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(std::nullopt, 1), std::nullopt);
+  EXPECT_EQ(shiftRightUnsigned<int32_t>(1, std::nullopt), std::nullopt);
+  EXPECT_EQ(
+      shiftRightUnsigned<int32_t>(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(std::nullopt, 1), std::nullopt);
 }
 
 } // namespace
