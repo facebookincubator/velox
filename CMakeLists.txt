@@ -74,7 +74,6 @@ list(
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
 include(VeloxUtils)
-include(VeloxCompilerFlags)
 include(CMakeDependentOption)
 include(CheckIPOSupported)
 
@@ -347,7 +346,91 @@ if(
   endif()
 endif()
 
-velox_configure_compiler_flags()
+# Select compiler-specific flags here. Apply each group at the appropriate stage
+# below to control which dependencies inherit it.
+# MSVC covers compatible drivers such as clang-cl; WIN32 tests the target OS.
+set(VELOX_COLOR_COMPILE_OPTIONS "")
+set(VELOX_WARNING_CXX_FLAGS "")
+set(VELOX_WERROR_COMPILE_OPTIONS "")
+set(VELOX_WERROR_CXX_FLAGS "")
+set(VELOX_FOLLY_COMPILE_OPTIONS "")
+set(VELOX_FOLLY_COMPILE_DEFINITIONS "")
+set(VELOX_SANITIZER_CXX_FLAGS "")
+set(VELOX_SANITIZER_LINKER_FLAGS "")
+if(MSVC)
+  set(VELOX_WERROR_COMPILE_OPTIONS /WX)
+else()
+  set(VELOX_WERROR_CXX_FLAGS " -Werror")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(VELOX_COLOR_COMPILE_OPTIONS -fcolor-diagnostics)
+    set(
+      KNOWN_COMPILER_SPECIFIC_WARNINGS
+      "-Wno-range-loop-analysis \
+         -Wno-mismatched-tags \
+         -Wno-nullability-completeness"
+    )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+      # Handle Apple toolchain Clang change of name of variable.
+      # Remove when upgrading to the latest FBOS version where this has been addressed.
+      set(VELOX_FOLLY_COMPILE_OPTIONS -D_LIBCPP_HAS_NO_ASAN)
+    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20)
+      # Enable the ASAN and UBSAN sanitizers for Clang 20 and above.
+      set(
+        VELOX_SANITIZER_CXX_FLAGS
+        " -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+      )
+      # Skip alignment errors and member access check for now.
+      # https://github.com/facebookincubator/velox/issues/15811
+      # https://github.com/facebookincubator/velox/issues/15810
+      set(
+        VELOX_SANITIZER_LINKER_FLAGS
+        " -fsanitize=address -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=vptr"
+      )
+    endif()
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(VELOX_COLOR_COMPILE_OPTIONS -fdiagnostics-color=always)
+    set(VELOX_FOLLY_COMPILE_OPTIONS $<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+    # Explicitly enable folly coroutines when compiler supports them.
+    # This is required for folly::coro::AsyncGenerator to work correctly.
+    set(VELOX_FOLLY_COMPILE_DEFINITIONS FOLLY_HAS_COROUTINES=1)
+    set(
+      KNOWN_COMPILER_SPECIFIC_WARNINGS
+      "-Wno-implicit-fallthrough \
+         -Wno-class-memaccess \
+         -Wno-comment \
+         -Wno-int-in-bool-context \
+         -Wno-redundant-move \
+         -Wno-array-bounds \
+         -Wno-maybe-uninitialized \
+         -Wno-unused-result \
+         -Wno-format-overflow \
+         -Wno-strict-aliasing"
+    )
+    # Avoid compiler bug for GCC 12.2.1
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+    endif()
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
+    endif()
+  endif()
+  set(
+    KNOWN_WARNINGS
+    "-Wno-unused \
+         -Wno-unused-parameter \
+         -Wno-sign-compare \
+         -Wno-ignored-qualifiers \
+         ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
+  )
+  set(VELOX_WARNING_CXX_FLAGS " -Wall -Wextra ${KNOWN_WARNINGS}")
+endif()
+
+if(${VELOX_FORCE_COLORED_OUTPUT})
+  add_compile_options(${VELOX_COLOR_COMPILE_OPTIONS})
+endif()
 
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
@@ -398,6 +481,78 @@ if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
   add_compile_definitions(VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND)
 endif()
 
+# MacOSX enables two-level namespace by default:
+# http://mirror.informatimago.com/next/developer.apple.com/releasenotes/DeveloperTools/TwoLevelNamespaces.html
+# Enables -flat_namespace so type_info can be deduplicated across .so boundaries
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  add_link_options("-Wl,-flat_namespace")
+endif()
+
+if(UNIX AND NOT APPLE)
+  # linker flags, -export-dynamic for rtti
+  add_link_options("-Wl,-export-dynamic")
+endif()
+
+# Required so velox code can be used in a dynamic library
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+
+# For C++20 support we need GNU GCC11 (or later versions), Clang/AppleClang 15
+# (or later versions), or MSVC 19.30 (Visual Studio 2022) or later.
+if(
+  NOT
+    (
+      (
+        "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU"
+        AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER_EQUAL 11
+      )
+      OR
+        (
+          (
+            "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
+            OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang"
+          )
+          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
+        )
+      OR
+        (
+          "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC"
+          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.30
+        )
+    )
+)
+  message(
+    FATAL_ERROR
+    "Unsupported compiler ${CMAKE_CXX_COMPILER_ID} with version ${CMAKE_CXX_COMPILER_VERSION} found."
+  )
+endif()
+
+if(WIN32)
+  add_compile_definitions(GLOG_NO_ABBREVIATED_SEVERITIES NOMINMAX)
+endif()
+if(MSVC)
+  add_compile_definitions(USE_VELOX_COMMON_BASE HAS_UNCAUGHT_EXCEPTIONS)
+else()
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS
+  )
+
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
+endif()
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND NOT MSVC)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
+endif()
+
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -409,6 +564,10 @@ endif()
 if("${MAX_LINK_JOBS}")
   set_property(GLOBAL APPEND PROPERTY JOB_POOLS "link_job_pool=${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
+endif()
+
+if(ENABLE_ALL_WARNINGS)
+  string(APPEND CMAKE_CXX_FLAGS "${VELOX_WARNING_CXX_FLAGS}")
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -671,8 +830,11 @@ if(VELOX_ENABLE_GCS)
 endif()
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+  # Find Threads library
   find_package(Threads REQUIRED)
 endif()
+add_compile_options(${VELOX_FOLLY_COMPILE_OPTIONS})
+add_compile_definitions(${VELOX_FOLLY_COMPILE_DEFINITIONS})
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
   message(
@@ -764,6 +926,21 @@ endif()
 
 include_directories(.)
 
+# Delay warnings-as-errors and sanitizers until the dependencies above are
+# configured. Dependencies resolved below still inherit these flags.
+if("${TREAT_WARNINGS_AS_ERRORS}")
+  add_compile_options(${VELOX_WERROR_COMPILE_OPTIONS})
+  string(APPEND CMAKE_CXX_FLAGS "${VELOX_WERROR_CXX_FLAGS}")
+endif()
+
+if(VELOX_ENABLE_ASAN_UBSAN_SANITIZERS)
+  string(APPEND CMAKE_CXX_FLAGS "${VELOX_SANITIZER_CXX_FLAGS}")
+  string(APPEND CMAKE_EXE_LINKER_FLAGS "${VELOX_SANITIZER_LINKER_FLAGS}")
+endif()
+
+message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
+message("FINAL CMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
+
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
   velox_resolve_dependency(Arrow)
@@ -817,5 +994,4 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
-velox_configure_velox_flags()
 add_subdirectory(velox)
