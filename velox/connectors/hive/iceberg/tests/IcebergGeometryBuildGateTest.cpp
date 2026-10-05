@@ -15,7 +15,7 @@
  */
 
 // Runtime behavior of an Iceberg geometry read as a function of the build flag.
-// Unlike IcebergGeometryReadTest this file is compiled in *both*
+// Unlike IcebergGeospatialReadTest this file is compiled in *both*
 // configurations, because the point is to pin what a VELOX_ENABLE_GEO=OFF
 // binary does when it meets a geometry column: it must fail with an explicit
 // message naming the flag, and it must never hand raw WKB back inside a

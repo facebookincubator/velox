@@ -35,7 +35,7 @@
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -368,20 +368,22 @@ IcebergDataSink::IcebergDataSink(
               : nullptr),
       partitionRowType_(std::move(partitionRowType)),
       icebergInsertTableHandle_(insertTableHandle) {
-  // Reading an Iceberg geometry column re-encodes the file's ISO WKB into
-  // Velox's internal GEOMETRY encoding (see IcebergGeometryConverter). The
-  // write side does not perform the inverse conversion yet, and GEOMETRY is
-  // VARBINARY-backed, so a GEOMETRY vector written here would land on disk as
+  // Reading an Iceberg geometry or geography column re-encodes the file's ISO
+  // WKB into Velox's internal geometry encoding (see
+  // IcebergGeospatialConverter). The write side does not perform the inverse
+  // conversion yet, and both GEOMETRY and SPHERICALGEOGRAPHY are
+  // VARBINARY-backed, so such a vector written here would land on disk as
   // Velox's internal bytes rather than the ISO WKB the Iceberg spec requires.
   // That file would be unreadable by this reader and by every other Iceberg
   // engine. Reject the write instead of silently producing a non-conforming
   // file; this mirrors the read-side guards that reject non-Parquet formats and
   // non-XY geometries.
   VELOX_USER_CHECK(
-      !containsGeometry(inputType_),
-      "Writing an Iceberg geometry column is not supported: the Iceberg writer "
-      "does not convert Velox's internal geometry encoding to ISO WKB. Geometry "
-      "support in the Iceberg connector is currently read-only.");
+      !containsGeospatial(inputType_),
+      "Writing an Iceberg geometry or geography column is not supported: the "
+      "Iceberg writer does not convert Velox's internal geometry encoding to "
+      "ISO WKB. Geospatial support in the Iceberg connector is currently "
+      "read-only.");
 
   commitPartitionValue_.resize(maxOpenWriters_);
 

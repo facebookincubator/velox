@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 #include <fmt/format.h>
 
 #define USE_UNSTABLE_GEOS_CPP_API 1
+#include <geos/geom/CoordinateFilter.h>
 #include <geos/io/WKBReader.h>
 
 #include "velox/common/geospatial/GeometrySerde.h"
@@ -30,6 +32,23 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
+
+// Names the geospatial type a column is read as, for error messages.
+struct GeospatialKind {
+  // Iceberg type name, e.g. "geometry".
+  std::string_view columnKind;
+  // Velox type name, e.g. "GEOMETRY".
+  std::string_view typeName;
+  // Whether coordinates must be WGS84 longitude/latitude.
+  bool sphericalCoordinates;
+};
+
+constexpr GeospatialKind kGeometryKind{"geometry", "GEOMETRY", false};
+constexpr GeospatialKind kGeographyKind{
+    "geography",
+    "SPHERICALGEOGRAPHY",
+    true,
+};
 
 // EWKB (PostGIS) flags in the 32-bit WKB geometry type word. Iceberg mandates
 // ISO WKB, which never sets them, so their presence means the payload does not
@@ -104,8 +123,11 @@ constexpr uint32_t kMaxParseDepth = 100;
 // than an out-of-bounds read.
 class WkbHeaderValidator {
  public:
-  WkbHeaderValidator(StringView wkb, const std::string& columnPath)
-      : wkb_{wkb}, columnPath_{columnPath} {}
+  WkbHeaderValidator(
+      StringView wkb,
+      const GeospatialKind& kind,
+      const std::string& columnPath)
+      : wkb_{wkb}, kind_{kind}, columnPath_{columnPath} {}
 
   void validate() {
     validateGeometry(/*depth=*/1);
@@ -113,7 +135,8 @@ class WkbHeaderValidator {
     VELOX_USER_CHECK_EQ(
         position_,
         size(),
-        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': {} trailing byte(s) after the geometry",
+        "Invalid well-known binary (WKB) in Iceberg {} column '{}': {} trailing byte(s) after the geometry",
+        kind_.columnKind,
         columnPath_,
         size() - position_);
   }
@@ -133,7 +156,8 @@ class WkbHeaderValidator {
     VELOX_USER_CHECK_LE(
         depth,
         kMaxParseDepth,
-        "Iceberg geometry column '{}' is nested more than {} levels deep; deeper nesting is rejected because it can exhaust the stack while parsing",
+        "Iceberg {} column '{}' is nested more than {} levels deep; deeper nesting is rejected because it can exhaust the stack while parsing",
+        kind_.columnKind,
         columnPath_,
         kMaxParseDepth);
 
@@ -143,21 +167,25 @@ class WkbHeaderValidator {
     VELOX_USER_CHECK_EQ(
         typeCode & (kEwkbFlagZ | kEwkbFlagM | kEwkbFlagSrid),
         0,
-        "Iceberg geometry column '{}' is encoded as extended WKB (EWKB); the Iceberg specification requires ISO WKB",
+        "Iceberg {} column '{}' is encoded as extended WKB (EWKB); the Iceberg specification requires ISO WKB",
+        kind_.columnKind,
         columnPath_);
 
     const uint32_t dimensions = typeCode / 1000;
     VELOX_USER_CHECK_EQ(
         dimensions,
         0,
-        "Iceberg geometry column '{}' contains {} coordinates; Velox GEOMETRY supports only two-dimensional (XY) geometries",
+        "Iceberg {} column '{}' contains {} coordinates; Velox {} supports only two-dimensional (XY) geometries",
+        kind_.columnKind,
         columnPath_,
-        dimensionName(dimensions));
+        dimensionName(dimensions),
+        kind_.typeName);
 
     const uint32_t geometryCode = typeCode % 1000;
     VELOX_USER_CHECK(
         geometryCode >= 1 && geometryCode <= kMaxSupportedWkbGeometryCode,
-        "Iceberg geometry column '{}' contains an unsupported WKB geometry type code {}",
+        "Iceberg {} column '{}' contains an unsupported WKB geometry type code {}",
+        kind_.columnKind,
         columnPath_,
         geometryCode);
 
@@ -205,7 +233,8 @@ class WkbHeaderValidator {
       return false;
     }
     VELOX_USER_FAIL(
-        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': unknown byte order marker {}",
+        "Invalid well-known binary (WKB) in Iceberg {} column '{}': unknown byte order marker {}",
+        kind_.columnKind,
         columnPath_,
         static_cast<int32_t>(marker));
   }
@@ -239,7 +268,8 @@ class WkbHeaderValidator {
     VELOX_USER_CHECK_LE(
         numBytes,
         size() - position_,
-        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': truncated payload, need {} more byte(s) at offset {} of {}",
+        "Invalid well-known binary (WKB) in Iceberg {} column '{}': truncated payload, need {} more byte(s) at offset {} of {}",
+        kind_.columnKind,
         columnPath_,
         numBytes,
         position_,
@@ -253,6 +283,7 @@ class WkbHeaderValidator {
   // reported as a stack-use-after-scope for short payloads such as the EMPTY
   // forms. A member copy owns its inline bytes for the validator's lifetime.
   const StringView wkb_;
+  const GeospatialKind& kind_;
   const std::string& columnPath_;
   uint64_t position_{0};
 };
@@ -260,35 +291,85 @@ class WkbHeaderValidator {
 // Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
 // represent faithfully, rather than silently dropping dimensions. Every nested
 // header is checked, not just the outermost one; see WkbHeaderValidator.
-void validateIsoWkb(StringView wkb, const std::string& columnPath) {
+void validateIsoWkb(
+    StringView wkb,
+    const GeospatialKind& kind,
+    const std::string& columnPath) {
   VELOX_USER_CHECK_GE(
       wkb.size(),
       kWkbHeaderLength,
-      "Invalid well-known binary (WKB) in Iceberg geometry column '{}': expected at least {} bytes, found {}",
+      "Invalid well-known binary (WKB) in Iceberg {} column '{}': expected at least {} bytes, found {}",
+      kind.columnKind,
       columnPath,
       kWkbHeaderLength,
       wkb.size());
 
-  WkbHeaderValidator{wkb, columnPath}.validate();
+  WkbHeaderValidator{wkb, kind, columnPath}.validate();
 }
 
+// Rejects a coordinate that is not a valid WGS84 longitude/latitude, with the
+// messages of Presto's to_spherical_geography. Every coordinate is visited
+// rather than the envelope, because a GEOS envelope ignores NaN ordinates. An
+// empty point, which WKB encodes as NaN ordinates, has no coordinates to visit.
+class SphericalCoordinateValidator : public geos::geom::CoordinateFilter {
+ public:
+  explicit SphericalCoordinateValidator(const std::string& columnPath)
+      : columnPath_{columnPath} {}
+
+  void filter_ro(const geos::geom::Coordinate* coordinate) override {
+    VELOX_USER_CHECK(
+        isInRange(
+            coordinate->x,
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude),
+        "Invalid value in Iceberg geography column '{}': Longitude must be between -180 and 180; found {}",
+        columnPath_,
+        coordinate->x);
+    VELOX_USER_CHECK(
+        isInRange(
+            coordinate->y,
+            common::geospatial::kMinLatitude,
+            common::geospatial::kMaxLatitude),
+        "Invalid value in Iceberg geography column '{}': Latitude must be between -90 and 90; found {}",
+        columnPath_,
+        coordinate->y);
+  }
+
+ private:
+  // False for NaN, and for infinities since the bounds are finite.
+  static bool isInRange(double value, double min, double max) {
+    return value >= min && value <= max;
+  }
+
+  const std::string& columnPath_;
+};
+
 // Parses one WKB value and appends Velox's internal geometry encoding to
-// 'out'.
+// 'out'. A geography value is validated before it is encoded.
 void wkbToVeloxGeometry(
     StringView wkb,
     geos::io::WKBReader& wkbReader,
     std::string& out,
+    const GeospatialKind& kind,
     const std::string& columnPath) {
-  validateIsoWkb(wkb, columnPath);
+  validateIsoWkb(wkb, kind, columnPath);
   std::unique_ptr<geos::geom::Geometry> geometry;
   try {
     geometry = wkbReader.read(
         reinterpret_cast<const unsigned char*>(wkb.data()), wkb.size());
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(
-        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': {}",
+        "Invalid well-known binary (WKB) in Iceberg {} column '{}': {}",
+        kind.columnKind,
         columnPath,
         e.what());
+  }
+  // Z and M are already rejected by validateIsoWkb(), so only the ranges of
+  // Presto's to_spherical_geography remain to be checked. Its geometry kind
+  // check needs no counterpart: every kind WKB can encode passes it.
+  if (kind.sphericalCoordinates) {
+    SphericalCoordinateValidator validator{columnPath};
+    geometry->apply_ro(&validator);
   }
   // Standard WKB carries no SRID and Velox's GEOMETRY has no SRID concept:
   // never invent one. GeometrySerializer must not run inside a GEOS_TRY: it
@@ -297,23 +378,28 @@ void wkbToVeloxGeometry(
 }
 
 // Converts the live positions of a flat scalar vector of WKB payloads into a
-// new flat GEOMETRY vector. Positions outside 'rows', and null positions, are
-// left null; their bytes are never read.
-VectorPtr convertGeometryLeaf(
+// new flat vector of 'targetType', GEOMETRY() or SPHERICAL_GEOGRAPHY().
+// Positions outside 'rows', and null positions, are left null; their bytes are
+// never read.
+VectorPtr convertGeospatialLeaf(
     const VectorPtr& input,
+    const TypePtr& targetType,
     const SelectivityVector& rows,
     memory::MemoryPool* pool,
     const std::string& columnPath) {
+  const auto& kind =
+      isSphericalGeographyType(targetType) ? kGeographyKind : kGeometryKind;
   const auto size = input->size();
   auto* flatInput = input->asFlatVector<StringView>();
   VELOX_CHECK_NOT_NULL(
       flatInput,
-      "Expected a flat scalar vector for Iceberg geometry column '{}', got {}",
+      "Expected a flat scalar vector for Iceberg {} column '{}', got {}",
+      kind.columnKind,
       columnPath,
       input->encoding());
 
   auto result =
-      BaseVector::create<FlatVector<StringView>>(GEOMETRY(), size, pool);
+      BaseVector::create<FlatVector<StringView>>(targetType, size, pool);
   // Start from all-null so unselected positions carry no bytes at all.
   for (vector_size_t i = 0; i < size; ++i) {
     result->setNull(i, true);
@@ -327,7 +413,7 @@ VectorPtr convertGeometryLeaf(
     }
     serialized.clear();
     wkbToVeloxGeometry(
-        flatInput->valueAt(i), wkbReader, serialized, columnPath);
+        flatInput->valueAt(i), wkbReader, serialized, kind, columnPath);
     // set() copies non-inline values into the result's own string buffers, so
     // the result never aliases the reader's (recycled) page buffers.
     result->set(i, StringView(serialized));
@@ -382,14 +468,14 @@ SelectivityVector selectReferencedDictionaryEntries(
 
 } // namespace
 
-VectorPtr convertIcebergGeometry(
+VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     const SelectivityVector& rows,
     memory::MemoryPool* pool,
     const std::string& columnPath) {
   VELOX_CHECK_NOT_NULL(input);
-  VELOX_CHECK(containsGeometry(targetType));
+  VELOX_CHECK(containsGeospatial(targetType));
 
   const auto& loaded = BaseVector::loadedVectorShared(input);
 
@@ -417,8 +503,8 @@ VectorPtr convertIcebergGeometry(
       auto base = BaseVector::create(loaded->type(), 1, pool);
       base->copy(loaded.get(), 0, 0, 1);
       SelectivityVector singleRow(1);
-      auto converted =
-          convertIcebergGeometry(base, targetType, singleRow, pool, columnPath);
+      auto converted = convertIcebergGeospatial(
+          base, targetType, singleRow, pool, columnPath);
       // The re-encoded value outlives this call either way: for a scalar
       // geometry ConstantVector copies the string into its own buffer and drops
       // the base, and for a complex type it retains the one-row base vector.
@@ -433,8 +519,8 @@ VectorPtr convertIcebergGeometry(
       const auto& base = loaded->valueVector();
       auto baseRows =
           selectReferencedDictionaryEntries(*loaded, rows, base->size());
-      auto convertedValues =
-          convertIcebergGeometry(base, targetType, baseRows, pool, columnPath);
+      auto convertedValues = convertIcebergGeospatial(
+          base, targetType, baseRows, pool, columnPath);
       return BaseVector::wrapInDictionary(
           loaded->nulls(),
           loaded->wrapInfo(),
@@ -446,8 +532,8 @@ VectorPtr convertIcebergGeometry(
       break;
   }
 
-  if (isGeometryType(targetType)) {
-    return convertGeometryLeaf(loaded, rows, pool, columnPath);
+  if (isGeospatialType(targetType)) {
+    return convertGeospatialLeaf(loaded, targetType, rows, pool, columnPath);
   }
 
   switch (targetType->kind()) {
@@ -460,10 +546,10 @@ VectorPtr convertIcebergGeometry(
       const auto& rowType = targetType->asRow();
       std::vector<VectorPtr> children = row->children();
       for (auto i = 0; i < rowType.size(); ++i) {
-        if (containsGeometry(rowType.childAt(i))) {
+        if (containsGeospatial(rowType.childAt(i))) {
           // A row's children are positionally aligned with the row itself, so
           // the live rows carry over unchanged.
-          children[i] = convertIcebergGeometry(
+          children[i] = convertIcebergGeospatial(
               children[i],
               rowType.childAt(i),
               rows,
@@ -484,7 +570,7 @@ VectorPtr convertIcebergGeometry(
       const auto& inputElements = array->elements();
       auto elementRows =
           selectReferencedElements(*array, rows, inputElements->size());
-      auto elements = convertIcebergGeometry(
+      auto elements = convertIcebergGeospatial(
           inputElements,
           targetType->childAt(0),
           elementRows,
@@ -510,16 +596,16 @@ VectorPtr convertIcebergGeometry(
       auto values = map->mapValues();
       const auto entryRows =
           selectReferencedElements(*map, rows, values->size());
-      if (containsGeometry(targetType->childAt(0))) {
-        keys = convertIcebergGeometry(
+      if (containsGeospatial(targetType->childAt(0))) {
+        keys = convertIcebergGeospatial(
             keys,
             targetType->childAt(0),
             entryRows,
             pool,
             fmt::format("{}[key]", columnPath));
       }
-      if (containsGeometry(targetType->childAt(1))) {
-        values = convertIcebergGeometry(
+      if (containsGeospatial(targetType->childAt(1))) {
+        values = convertIcebergGeospatial(
             values,
             targetType->childAt(1),
             entryRows,
@@ -545,13 +631,13 @@ VectorPtr convertIcebergGeometry(
   }
 }
 
-VectorPtr convertIcebergGeometry(
+VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     memory::MemoryPool* pool,
     const std::string& columnPath) {
   SelectivityVector allRows(input->size());
-  return convertIcebergGeometry(input, targetType, allRows, pool, columnPath);
+  return convertIcebergGeospatial(input, targetType, allRows, pool, columnPath);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
