@@ -17,76 +17,15 @@
 #include "velox/functions/sparksql/aggregates/CountMinSketchAggregate.h"
 
 #include <cmath>
-#include <cstring>
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/sparksql/Murmur3Hash.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
-
-static_assert(
-    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
-    "CountMinSketch Murmur3 hash assumes little-endian byte order");
-
-// Spark-compatible Murmur3 x86 32-bit hash used for binary/string hashing
-// in CountMinSketch. This matches Spark's Murmur3_x86_32.hashUnsafeBytes.
-class SparkMurmur3 {
- public:
-  static int32_t hashBytes(const char* data, int32_t length, int32_t seed) {
-    uint32_t h1 = static_cast<uint32_t>(seed);
-    const char* i = data;
-    const char* const end = data + length;
-    // Use pointer difference (not `i <= end - 4`) so no out-of-bounds pointer
-    // is formed for buffers shorter than 4 bytes.
-    for (; end - i >= 4; i += 4) {
-      uint32_t k;
-      std::memcpy(&k, i, sizeof(k));
-      h1 = mixH1(h1, mixK1(k));
-    }
-    for (; i != end; ++i) {
-      // Sign-extend byte to int32 to match Java's byte→int promotion
-      // used in Spark's Murmur3_x86_32.hashBytesByInt.
-      h1 = mixH1(
-          h1,
-          mixK1(
-              static_cast<uint32_t>(static_cast<int32_t>(
-                  static_cast<int8_t>(static_cast<uint8_t>(*i))))));
-    }
-    return static_cast<int32_t>(fmix(h1, static_cast<uint32_t>(length)));
-  }
-
- private:
-  static uint32_t mixK1(uint32_t k1) {
-    k1 *= 0xcc9e2d51;
-    k1 = rotateLeft(k1, 15);
-    k1 *= 0x1b873593;
-    return k1;
-  }
-
-  static uint32_t mixH1(uint32_t h1, uint32_t k1) {
-    h1 ^= k1;
-    h1 = rotateLeft(h1, 13);
-    h1 = h1 * 5 + 0xe6546b64;
-    return h1;
-  }
-
-  static uint32_t fmix(uint32_t h1, uint32_t length) {
-    h1 ^= length;
-    h1 ^= h1 >> 16;
-    h1 *= 0x85ebca6b;
-    h1 ^= h1 >> 13;
-    h1 *= 0xc2b2ae35;
-    h1 ^= h1 >> 16;
-    return h1;
-  }
-
-  static uint32_t rotateLeft(uint32_t value, int32_t bits) {
-    return (value << bits) | (value >> (32 - bits));
-  }
-};
 
 // Java-compatible linear congruential PRNG matching java.util.Random.
 // Used to generate hashA seeds identically to Spark's CountMinSketchImpl.
@@ -172,6 +111,32 @@ inline int64_t readBigEndianLong(const char*& buf) {
 
 static constexpr int64_t kPrimeModulus = (1LL << 31) - 1;
 
+int64_t serializedSketchSize(int32_t depth, int32_t width) {
+  // Version(4) + TotalCount(8) + Depth(4) + Width(4) +
+  // HashA(depth*8) + Table(depth*width*8)
+  return 20 + static_cast<int64_t>(depth) * 8 +
+      static_cast<int64_t>(depth) * width * 8;
+}
+
+// Serializes an all-zero sketch without modifying accumulator state.
+void serializeEmptySketch(
+    char* output,
+    int32_t depth,
+    int32_t width,
+    const std::vector<int64_t>& hashA) {
+  char* buffer = output;
+  writeBigEndianInt(buffer, 1);
+  writeBigEndianLong(buffer, 0);
+  writeBigEndianInt(buffer, depth);
+  writeBigEndianInt(buffer, width);
+  for (const auto hash : hashA) {
+    writeBigEndianLong(buffer, hash);
+  }
+  for (int64_t i = 0; i < static_cast<int64_t>(depth) * width; ++i) {
+    writeBigEndianLong(buffer, 0);
+  }
+}
+
 // Accumulator storing the CountMinSketch state.
 // The binary format matches Spark's CountMinSketchImpl (V1, big-endian).
 struct CountMinSketchAccumulator {
@@ -215,8 +180,12 @@ struct CountMinSketchAccumulator {
   // Uses unsigned arithmetic to avoid signed overflow UB.
   void getHashBuckets(const char* data, int32_t length, int32_t* buckets)
       const {
-    int32_t hash1 = SparkMurmur3::hashBytes(data, length, 0);
-    int32_t hash2 = SparkMurmur3::hashBytes(data, length, hash1);
+    int32_t hash1 = static_cast<int32_t>(
+        ::facebook::velox::functions::sparksql::SparkMurmur3Hash::hashBytes(
+            data, length, 0));
+    int32_t hash2 = static_cast<int32_t>(
+        ::facebook::velox::functions::sparksql::SparkMurmur3Hash::hashBytes(
+            data, length, static_cast<uint32_t>(hash1)));
     for (int32_t i = 0; i < depth_; ++i) {
       auto combined = static_cast<int32_t>(
           static_cast<uint32_t>(hash1) +
@@ -251,10 +220,7 @@ struct CountMinSketchAccumulator {
   }
 
   int64_t serializedSize() const {
-    // Version(4) + TotalCount(8) + Depth(4) + Width(4) +
-    // HashA(depth*8) + Table(depth*width*8)
-    return 20 + static_cast<int64_t>(depth_) * 8 +
-        static_cast<int64_t>(depth_) * width_ * 8;
+    return serializedSketchSize(depth_, width_);
   }
 
   void serialize(char* output) const {
@@ -475,54 +441,12 @@ class CountMinSketchAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    VELOX_CHECK(result);
-    auto flatResult = (*result)->asUnchecked<FlatVector<StringView>>();
-    flatResult->resize(numGroups);
-
-    // Groups that received no rows are still uninitialized. When the sketch
-    // dimensions are known (single/partial aggregation, where the constant
-    // eps/confidence/seed arguments were captured via setConstantInputs),
-    // materialize a valid empty sketch so the output matches Spark's
-    // non-nullable count_min_sketch. This covers the fully-empty global
-    // aggregation case.
-    if (depth_ != 0) {
-      for (vector_size_t i = 0; i < numGroups; ++i) {
-        auto* accumulator = value<CountMinSketchAccumulator>(groups[i]);
-        if (!accumulator->initialized()) {
-          auto tracker = trackRowSize(groups[i]);
-          accumulator->init(depth_, width_, hashA_);
-          clearNull(groups[i]);
-        }
-      }
-    }
-
-    int64_t totalSize = 0;
-    for (vector_size_t i = 0; i < numGroups; ++i) {
-      auto* accumulator = value<CountMinSketchAccumulator>(groups[i]);
-      if (accumulator->initialized()) {
-        totalSize += accumulator->serializedSize();
-      }
-    }
-
-    char* rawBuffer = flatResult->getRawStringBufferWithSpace(totalSize);
-    for (vector_size_t i = 0; i < numGroups; ++i) {
-      auto* accumulator = value<CountMinSketchAccumulator>(groups[i]);
-      if (UNLIKELY(!accumulator->initialized())) {
-        // Dimensions are unknown (e.g. final aggregation over no intermediate
-        // states); there is nothing to serialize.
-        flatResult->setNull(i, true);
-        continue;
-      }
-      auto size = accumulator->serializedSize();
-      accumulator->serialize(rawBuffer);
-      flatResult->setNoCopy(i, StringView(rawBuffer, size));
-      rawBuffer += size;
-    }
+    extractSketches(groups, numGroups, result);
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    extractValues(groups, numGroups, result);
+    extractSketches(groups, numGroups, result);
   }
 
  protected:
@@ -607,6 +531,12 @@ class CountMinSketchAggregate : public exec::Aggregate {
     // Use log1p(-c) to match Spark's exact formula and rounding.
     depth_ = static_cast<int32_t>(
         std::ceil(-std::log1p(-confidence) / std::log(2.0)));
+    const auto outputSize = serializedSketchSize(depth_, width_);
+    VELOX_USER_CHECK_LE(
+        outputSize,
+        std::numeric_limits<int32_t>::max(),
+        "count_min_sketch serialized size out of range: {} bytes",
+        outputSize);
 
     // Initialize hashA using Java-compatible Random.
     JavaRandom rng(seed);
@@ -643,6 +573,45 @@ class CountMinSketchAggregate : public exec::Aggregate {
         VELOX_UNREACHABLE(
             "Unsupported type for count_min_sketch: {}",
             TypeKindName::toName(inputKind_));
+    }
+  }
+
+  // Serializes initialized accumulators or aggregate-level empty sketches
+  // without modifying group state.
+  void extractSketches(char** groups, int32_t numGroups, VectorPtr* result)
+      const {
+    VELOX_CHECK(result);
+    auto flatResult = (*result)->asUnchecked<FlatVector<StringView>>();
+    flatResult->resize(numGroups);
+
+    int64_t totalSize = 0;
+    for (vector_size_t i = 0; i < numGroups; ++i) {
+      const auto* accumulator = value<CountMinSketchAccumulator>(groups[i]);
+      if (accumulator->initialized()) {
+        totalSize += accumulator->serializedSize();
+      } else if (depth_ != 0) {
+        totalSize += serializedSketchSize(depth_, width_);
+      }
+    }
+
+    char* rawBuffer = flatResult->getRawStringBufferWithSpace(totalSize);
+    for (vector_size_t i = 0; i < numGroups; ++i) {
+      const auto* accumulator = value<CountMinSketchAccumulator>(groups[i]);
+      int64_t size;
+      if (accumulator->initialized()) {
+        size = accumulator->serializedSize();
+        accumulator->serialize(rawBuffer);
+      } else if (depth_ != 0) {
+        size = serializedSketchSize(depth_, width_);
+        serializeEmptySketch(rawBuffer, depth_, width_, hashA_);
+      } else {
+        // Final aggregation over no intermediate states has no dimensions.
+        flatResult->setNull(i, true);
+        continue;
+      }
+      flatResult->setNoCopy(
+          i, StringView(rawBuffer, static_cast<int32_t>(size)));
+      rawBuffer += size;
     }
   }
 

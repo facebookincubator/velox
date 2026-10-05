@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <string>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -401,7 +402,9 @@ TEST_F(CountMinSketchAggregateTest, groupBy) {
   auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
+  auto keyFlat = result->childAt(0)->asFlatVector<int32_t>();
   auto resultFlat = result->childAt(1)->asFlatVector<StringView>();
+  std::map<int32_t, int64_t> counts;
 
   for (vector_size_t i = 0; i < 2; ++i) {
     ASSERT_FALSE(resultFlat->isNullAt(i));
@@ -409,10 +412,9 @@ TEST_F(CountMinSketchAggregateTest, groupBy) {
     auto [depth, width, totalCount] = parseSketch(sv);
     EXPECT_EQ(depth, 1);
     EXPECT_EQ(width, 4);
-    // Group 1 has 2 values, group 2 has 3 values.
-    // But we don't know the order, so just check both are valid.
-    EXPECT_TRUE(totalCount == 2 || totalCount == 3);
+    ASSERT_TRUE(counts.emplace(keyFlat->valueAt(i), totalCount).second);
   }
+  EXPECT_EQ(counts, (std::map<int32_t, int64_t>{{1, 2}, {2, 3}}));
 }
 
 TEST_F(CountMinSketchAggregateTest, differentParameters) {
@@ -511,6 +513,14 @@ TEST_F(CountMinSketchAggregateTest, invalidParametersRejected) {
       {},
       {"count_min_sketch(c0, 1.0e-300, 0.5, 1)"},
       "count_min_sketch width out of range");
+
+  // eps that produces a valid width but an output larger than StringView can
+  // represent.
+  testFailingAggregations(
+      data,
+      {},
+      {"count_min_sketch(c0, 7.450580596923828e-9, 0.5, 1)"},
+      "count_min_sketch serialized size out of range");
 
   // Confidence outside (0, 1).
   testFailingAggregations(
