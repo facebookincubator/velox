@@ -5969,6 +5969,47 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
   cache->shutdown();
 }
 
+TEST_P(TabletTest, footerOnlyPopulatesMetadataCache) {
+  if (!expectHasCache()) {
+    GTEST_SKIP() << "Requires CachedMetadataInput";
+  }
+
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::Buffer buffer(*pool_);
+  auto tabletWriter = nimble::TabletWriter::create(&writeFile, *pool_, {});
+  auto* pos = buffer.reserve(50);
+  std::memset(pos, 'a', 50);
+  tabletWriter->writeStripe(
+      100,
+      {{.offset = 0,
+        .chunks = {
+            {.rowCount = 100, .content = {std::string_view(pos, 50)}}}}});
+  tabletWriter->close();
+  writeFile.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::TabletReader::Options options;
+  options.footerOnly = true;
+  options.maxFooterIoBytes = 0;
+
+  auto coldTablet = createTabletReader(readFile, options);
+  EXPECT_EQ(coldTablet->tabletRowCount(), 100);
+  EXPECT_FALSE(coldTablet->stats().footerCacheHit);
+  EXPECT_GT(metadataIoStats_->rawBytesRead(), 0);
+
+  dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+  metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+  indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+  readerOptions_.reset();
+
+  auto warmTablet = createTabletReader(readFile, options);
+  EXPECT_EQ(warmTablet->tabletRowCount(), 100);
+  EXPECT_TRUE(warmTablet->stats().footerCacheHit);
+  EXPECT_GT(metadataIoStats_->ramHit().count(), 0);
+  EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
+}
+
 TEST_P(TabletTest, metadataInputReads) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
@@ -7294,9 +7335,8 @@ TEST_P(TabletCacheTest, cacheMetadataWithOptionalSections) {
 
   // Warm reader: optional sections should be served from cache.
   // With maxFooterIoBytes=0 (adaptive mode), cacheMetadata() has no speculative
-  // buffer, so only footer+PS is proactively cached. Stripes and stripe group
-  // metadata may require file IO on the warm path, but optional sections
-  // (loaded through CachedMetadataInput by the cold reader) should be in cache.
+  // buffer, so it doesn't proactively cache metadata. Optional sections loaded
+  // through CachedMetadataInput by the cold reader should still be in cache.
   {
     auto warmReader = createTabletReader(readFile, options);
     EXPECT_EQ(warmReader->stripeCount(), 1);

@@ -146,6 +146,11 @@ class TabletReader {
     /// kInitialFooterSize).
     uint64_t maxFooterIoBytes{8 * 1024 * 1024};
 
+    /// If true, initializes only the postscript and exact footer. This exposes
+    /// the tablet row count without speculative over-read or loading stripes
+    /// and optional metadata.
+    bool footerOnly{false};
+
     /// Optional sections to eagerly load during initialization.
     std::vector<std::string> preloadOptionalSections;
 
@@ -235,6 +240,10 @@ class TabletReader {
   /// Configures TabletReader::Options from Velox ReaderOptions.
   static Options configureOptions(
       const velox::dwio::common::ReaderOptions& options);
+
+  /// Completes metadata initialization after a footer-only open without
+  /// reading the footer again. This is a no-op for a fully initialized reader.
+  void loadRemainingMetadata(const Options& options);
 
   /// Returns a collection of stream loaders for the given stripe. The stream
   /// loaders are returned in the same order as the input stream identifiers
@@ -492,6 +501,10 @@ class TabletReader {
   // Tries to load footer+PS from cache at synthetic key fileSize_.
   bool loadFooterFromCache();
 
+  // Caches the decompressed footer and postscript at the synthetic key
+  // fileSize_ for subsequent opens.
+  void cacheFooter();
+
   // Caches metadata sections from the speculative read buffer into
   // CachedMetadataInput for subsequent opens.
   void cacheMetadata(std::string_view footerBuf, uint64_t footerOffset);
@@ -667,6 +680,9 @@ class TabletReader {
   Postscript ps_;
   std::unique_ptr<MetadataBuffer> footer_;
   std::unique_ptr<MetadataBuffer> stripes_;
+
+  // True after stripe and optional metadata initialization is complete.
+  bool metadataInitialized_{false};
 
   mutable MetadataCache<uint32_t, StripeGroup> stripeGroupCache_;
 
