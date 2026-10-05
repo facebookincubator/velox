@@ -538,16 +538,19 @@ TEST_F(CountMinSketchAggregateTest, differentParameters) {
 TEST_F(CountMinSketchAggregateTest, seedInputTypes) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation(
-              {},
-              {
-                  "count_min_sketch(c0, 0.5, 0.5, cast(1 as integer))",
-                  "count_min_sketch(c0, 0.5, 0.5, cast(1 as bigint))",
-              })
-          .planNode();
+  auto planNode = exec::test::PlanBuilder(pool())
+                      .values(vectors)
+                      .project(
+                          {"c0",
+                           "cast(1 as integer) as integer_seed",
+                           "cast(1 as bigint) as bigint_seed"})
+                      .singleAggregation(
+                          {},
+                          {
+                              "count_min_sketch(c0, 0.5, 0.5, integer_seed)",
+                              "count_min_sketch(c0, 0.5, 0.5, bigint_seed)",
+                          })
+                      .planNode();
   auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
 
   ASSERT_EQ(result->size(), 1);
@@ -556,6 +559,52 @@ TEST_F(CountMinSketchAggregateTest, seedInputTypes) {
   ASSERT_FALSE(integerSeed->isNullAt(0));
   ASSERT_FALSE(bigintSeed->isNullAt(0));
   EXPECT_EQ(toHex(integerSeed->valueAt(0)), toHex(bigintSeed->valueAt(0)));
+}
+
+TEST_F(CountMinSketchAggregateTest, flatConstantParameters) {
+  auto values = makeFlatVector<int64_t>({1, 2, 1});
+  auto vectors = {makeRowVector(
+      {values,
+       makeFlatVector<double>({0.5, 0.5, 0.5}),
+       makeFlatVector<double>({0.5, 0.5, 0.5}),
+       makeFlatVector<int32_t>({1, 1, 1})})};
+
+  auto planNode =
+      exec::test::PlanBuilder(pool())
+          .values(vectors)
+          .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
+          .planNode();
+  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
+  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
+  auto resultValue = resultFlat->valueAt(0);
+
+  EXPECT_EQ(
+      std::string(resultValue.data(), resultValue.size()),
+      serializeSketch(values));
+}
+
+TEST_F(CountMinSketchAggregateTest, changedParametersAcrossBatchesRejected) {
+  auto vectors = {
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2}),
+           makeFlatVector<double>({0.5, 0.5}),
+           makeFlatVector<double>({0.5, 0.5}),
+           makeFlatVector<int32_t>({1, 1})}),
+      makeRowVector(
+          {makeFlatVector<int64_t>({3, 4}),
+           makeFlatVector<double>({0.25, 0.25}),
+           makeFlatVector<double>({0.5, 0.5}),
+           makeFlatVector<int32_t>({1, 1})}),
+  };
+
+  auto planNode =
+      exec::test::PlanBuilder(pool())
+          .values(vectors)
+          .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
+          .planNode();
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(planNode).copyResults(pool()),
+      "eps argument must be constant for all input rows");
 }
 
 TEST_F(CountMinSketchAggregateTest, partialToFinal) {
