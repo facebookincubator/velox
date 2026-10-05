@@ -62,6 +62,18 @@ CudfHiveDataSource::CudfHiveDataSource(
       outputType_(outputType),
       pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
+  if (auto* gpuPool =
+          connectorQueryCtx_->customMemoryPool(kCudfMemoryResourceTag)) {
+    VELOX_CHECK(
+        mr_.has_value() && output_mr_.has_value(),
+        "cuDF memory resources must be initialized before table scan");
+    gpuPoolOwner_ = gpuPool->shared_from_this();
+    gpuTempResource_.emplace(*mr_, gpuPoolOwner_);
+    gpuOutputResource_ = *mr_ == *output_mr_
+        ? *gpuTempResource_
+        : CudfMemoryResource{*output_mr_, gpuPoolOwner_};
+  }
+  auto memoryResources = scopedMemoryResources();
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
@@ -211,10 +223,15 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  auto memoryResources = scopedMemoryResources();
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
+  if (gpuTempResource_) {
+    cudfSplitReader_->setMemoryResources(
+        *gpuTempResource_, *gpuOutputResource_);
+  }
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
   // Check if preloaded splits should start pre-fetching the first pass of
@@ -272,8 +289,8 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
   VELOX_CHECK_NOT_NULL(cudfSplitReader_);
 
-  // 'source' owns the query context the reader was prepared with and is
-  // freed right after this call.
+  // Rebind the borrowed context. The reader retains the owning resources
+  // and pool identity it was prepared with after 'source' is destroyed.
   cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
 
   // Start column chunk fetch if it is not already started
@@ -290,6 +307,7 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /* future */) {
+  auto memoryResources = scopedMemoryResources();
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
   auto chunkOpt = cudfSplitReader_->next(size);
@@ -351,6 +369,17 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   return output;
 }
 
+std::optional<ScopedCudfMemoryResources>
+CudfHiveDataSource::scopedMemoryResources() {
+  if (gpuTempResource_) {
+    return std::optional<ScopedCudfMemoryResources>{
+        std::in_place,
+        rmm::device_async_resource_ref{*gpuTempResource_},
+        rmm::device_async_resource_ref{*gpuOutputResource_}};
+  }
+  return std::nullopt;
+}
+
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
@@ -371,6 +400,22 @@ CudfHiveDataSource::getRuntimeStats() {
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });
+  if (gpuPoolOwner_) {
+    result.emplace(
+        "cudfOperatorGpuPeakBytes",
+        RuntimeMetric(
+            static_cast<int64_t>(gpuPoolOwner_->peakBytes()),
+            RuntimeCounter::Unit::kBytes));
+    auto* queryPool = gpuPoolOwner_.get();
+    while (queryPool->parent() != nullptr) {
+      queryPool = queryPool->parent();
+    }
+    result.emplace(
+        "cudfQueryGpuPeakBytes",
+        RuntimeMetric(
+            static_cast<int64_t>(queryPool->peakBytes()),
+            RuntimeCounter::Unit::kBytes));
+  }
   const auto& ioStats = ioStats_->stats();
   for (const auto& [key, value] : ioStats) {
     // Keep the ReadFile-layer value under the established key.

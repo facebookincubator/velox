@@ -17,11 +17,15 @@
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox::exec::test;
@@ -80,6 +84,73 @@ TEST_P(CudfEqualityDeleteFileReaderTest, basicSingleColumnDelete) {
       });
 
   assertEqualResults({expected}, {result});
+}
+
+// Exercise both the direct Parquet reader and the CPU-to-GPU delete-key path.
+TEST_P(CudfEqualityDeleteFileReaderTest, accountsScanAndDeleteBuffers) {
+  auto rowType = ROW({"id"}, {BIGINT()});
+  auto dataFile = TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3, 4})}));
+  auto deleteFile = TempFilePath::create();
+  writeDeleteFile(
+      GetParam(),
+      deleteFile->getPath(),
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({2})})});
+  IcebergDeleteFile deletes(
+      FileContent::kEqualityDeletes,
+      deleteFile->getPath(),
+      toDwioFormat(GetParam()),
+      1,
+      getFileSize(deleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  memory::MemoryAllocator::Options options;
+  options.capacity = 1L << 30;
+  auto backend = std::make_shared<memory::CustomMemoryResource>(
+      "gpu",
+      std::make_shared<memory::MallocAllocator>(options),
+      memory::MemoryArbitrator::create({}),
+      [] { return memory::MemoryReclaimer::create(); });
+  // Production retains this backend for the process lifetime. In the test it
+  // must outlive asynchronous task cleanup, including assertion failures.
+  SCOPE_EXIT {
+    waitForAllTasksToBeDeleted();
+  };
+  auto root =
+      memory::memoryManager()->addCustomRootPool("iceberg-accounting", backend);
+  auto query = core::QueryCtx::Builder()
+                   .executor(driverExecutor_.get())
+                   .customPool("gpu", root)
+                   .build();
+  auto registry = memory::CustomMemoryResourceRegistry::createRegistry(nullptr);
+  registry->insert("gpu", backend);
+  query->setRegistry(memory::kCustomMemoryResourceRegistryKey, registry);
+
+  auto plan = makeTableScanPlan(rowType);
+  std::shared_ptr<::facebook::velox::exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .queryCtx(query)
+                    .splits(makeIcebergSplits(dataFile->getPath(), {deletes}))
+                    .copyResults(pool(), task);
+  assertEqualResults(
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3, 4})})}, {result});
+  auto* nodePool = task->customNodePool("gpu", plan->id());
+  ASSERT_NE(nodePool, nullptr);
+  bool foundScan = false;
+  nodePool->visitChildren([&](memory::MemoryPool* child) {
+    if (child->isLeaf() &&
+        child->name().find(".TableScan.") != std::string::npos) {
+      foundScan = true;
+      EXPECT_GT(child->peakBytes(), 0);
+    }
+    return true;
+  });
+  EXPECT_TRUE(foundScan);
+  task.reset();
+  waitForAllTasksToBeDeleted();
+  EXPECT_EQ(root->usedBytes(), 0);
 }
 
 /// Verifies multi-column equality deletes (both columns must match).
