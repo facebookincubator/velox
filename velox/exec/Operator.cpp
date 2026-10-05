@@ -130,7 +130,7 @@ void Operator::maybeSetTracer() {
   const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
 
   if (traceCtx && traceCtx->shouldTrace(*this)) {
-    if (dynamic_cast<SourceOperator*>(this) != nullptr) {
+    if (is<SourceOperator>()) {
       splitTracer_ = traceCtx->createSplitTracer(*this);
     } else {
       inputTracer_ = traceCtx->createInputTracer(*this);
@@ -259,6 +259,31 @@ std::optional<uint32_t> Operator::maxDrivers(
 
 const std::string& OperatorCtx::taskId() const {
   return driverCtx_->task->taskId();
+}
+
+int32_t OperatorCtx::numPeers() const {
+  const auto numDrivers = driverCtx_->task->numDrivers(driverCtx_->driver);
+  VELOX_DCHECK_GT(numDrivers, 0);
+  return numDrivers - 1;
+}
+
+bool OperatorCtx::allPeersFinished(
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Operator>>& peerOperators) const {
+  std::vector<std::shared_ptr<Driver>> peerDrivers;
+  if (!driverCtx_->task->allPeersFinished(
+          planNodeId_, driverCtx_->driver, future, promises, peerDrivers)) {
+    return false;
+  }
+
+  peerOperators.reserve(peerDrivers.size());
+  for (const auto& peerDriver : peerDrivers) {
+    auto* peerOperator = peerDriver->findOperator(operatorId_);
+    VELOX_CHECK_EQ(peerOperator->operatorType(), operatorType_);
+    peerOperators.emplace_back(peerDriver, peerOperator);
+  }
+  return true;
 }
 
 static bool isSequence(

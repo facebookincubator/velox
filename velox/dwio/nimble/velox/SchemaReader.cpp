@@ -378,7 +378,7 @@ const HybridFlatMapType::Group& HybridFlatMapType::groupAt(size_t index) const {
 const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
   const auto iterator =
       std::find_if(groups_.begin(), groups_.end(), [](const auto& group) {
-        return group.groupId == HybridFlatMap::kDefaultGroupId;
+        return HybridFlatMap::isDefaultGroup(group.groupId);
       });
   NIMBLE_CHECK(
       iterator != groups_.end(), "Hybrid FlatMap Default group is missing.");
@@ -387,11 +387,13 @@ const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
 
 std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
   for (size_t i = 0; i < groups_.size(); ++i) {
-    if (groups_[i].groupId == HybridFlatMap::kDefaultGroupId) {
-      continue;
-    }
-    if (std::binary_search(
-            groups_[i].groupKeys.begin(), groups_[i].groupKeys.end(), key)) {
+    const auto& group = groups_[i];
+    const bool found = HybridFlatMap::isDefaultGroup(group.groupId)
+        ? std::find(group.groupKeys.begin(), group.groupKeys.end(), key) !=
+            group.groupKeys.end()
+        : std::binary_search(
+              group.groupKeys.begin(), group.groupKeys.end(), key);
+    if (found) {
       return i;
     }
   }
@@ -580,11 +582,11 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
       for (const auto& groupMetadata : metadata.groups) {
         NIMBLE_CHECK_LT(
             index + 2, nodes.size(), "Incomplete Hybrid FlatMap group.");
-        const auto& keysNode = nodes[index++];
+        const auto& keyPresenceNode = nodes[index++];
         NIMBLE_CHECK(
-            keysNode.kind() == Kind::Scalar &&
-                keysNode.scalarKind() == node.scalarKind(),
-            "Hybrid FlatMap keys stream must match its key type.");
+            keyPresenceNode.kind() == Kind::Scalar &&
+                keyPresenceNode.scalarKind() == ScalarKind::Bool,
+            "Hybrid FlatMap key-presence stream must be boolean.");
         const auto& inMapNode = nodes[index++];
         NIMBLE_CHECK(
             inMapNode.kind() == Kind::Scalar &&
@@ -598,8 +600,9 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
             HybridFlatMapType::Group{
                 .groupId = groupMetadata.groupId,
                 .groupKeys = groupMetadata.groupKeys,
-                .keyDescriptor =
-                    StreamDescriptor{keysNode.offset(), keysNode.scalarKind()},
+                .keyPresenceDescriptor =
+                    StreamDescriptor{
+                        keyPresenceNode.offset(), keyPresenceNode.scalarKind()},
                 .inMapDescriptor =
                     StreamDescriptor{
                         inMapNode.offset(), inMapNode.scalarKind()},

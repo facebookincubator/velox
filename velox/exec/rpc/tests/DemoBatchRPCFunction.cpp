@@ -202,8 +202,8 @@ AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
     if (!response.hasError()) {
       continue;
     }
-    if (response.errorKind() == velox::rpc::RPCErrorKind::kRateLimited ||
-        response.errorKind() == velox::rpc::RPCErrorKind::kTimeout) {
+    if (velox::rpc::errorCategory(response.errorKind()) ==
+        velox::rpc::RPCErrorCategory::kOverload) {
       return CongestionSignal::kOverloaded;
     }
     hasNonOverloadError = true;

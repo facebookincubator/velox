@@ -33,6 +33,20 @@ TEST_F(AssertQueryBuilderTest, basic) {
 
   AssertQueryBuilder(PlanBuilder().values({data}).planNode())
       .assertResults(data);
+
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({makeRowVector(
+              {makeFlatVector<int32_t>({1}),
+               makeFlatVector<std::string>({"a"})})})
+          .planNode())
+      .assertResults({Variant(1), Variant("a")});
+
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({makeRowVector({makeFlatVector<int32_t>({1}, DATE())})})
+          .planNode())
+      .assertSingleResult<int32_t>(1);
 }
 
 TEST_F(AssertQueryBuilderTest, serialExecution) {
@@ -172,10 +186,10 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
                       .singleAggregation({}, {"count(1)"})
                       .planNode();
 
-  AssertQueryBuilder(joinPlan, duckDbQueryRunner_)
+  AssertQueryBuilder(joinPlan)
       .split(probeScanId, makeHiveConnectorSplit(file->getPath()))
       .split(buildScanId, makeHiveConnectorSplit(buildFile->getPath()))
-      .assertResults("SELECT 2");
+      .assertSingleResult<int64_t>(2);
 }
 
 TEST_F(AssertQueryBuilderTest, encodedResults) {

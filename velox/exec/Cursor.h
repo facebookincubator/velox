@@ -84,6 +84,10 @@ struct CursorParameters {
   /// core::PlanFragment::taskUniqueId.
   std::optional<int32_t> taskUniqueId{};
 
+  /// Hooks for a plan containing a FixedPointNode, passed to Task::create. The
+  /// task copies them, so they need to outlive only the cursor's construction.
+  const FixedPointOptions* fixedPointOptions{nullptr};
+
   /// Callback invoked with the Task after it is created but before it is
   /// started, allowing tests to tweak runtime task state.
   std::function<void(Task&)> beforeTaskStart{};

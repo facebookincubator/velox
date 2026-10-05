@@ -22,9 +22,12 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector {
 namespace {
@@ -73,21 +76,71 @@ TEST(ConnectorTest, registryOperations) {
   EXPECT_EQ(ConnectorRegistry::findAll<TestConnector>().size(), 0);
 }
 
-TEST(ConnectorTest, connectorQueryCtxBuilder) {
+TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
   config::ConfigBase sessionProperties({});
+  ConnectorQueryCtx context(
+      nullptr,
+      nullptr,
+      &sessionProperties,
+      nullptr,
+      {},
+      nullptr,
+      nullptr,
+      "query",
+      "task",
+      "scan",
+      3,
+      "UTC");
+
+  EXPECT_EQ(context.sessionProperties(), &sessionProperties);
+  EXPECT_EQ(context.scanId(), "task.scan");
+  EXPECT_EQ(context.driverId(), 3);
+  EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
+}
+
+TEST(ConnectorTest, builderPreservesConfiguredFields) {
+  memory::MemoryManager manager;
+  auto connectorPool = manager.addRootPool("builder-connector");
+  auto operatorPool = connectorPool->addLeafChild("builder-operator");
+  auto queryCtx = core::QueryCtx::Builder().pool(connectorPool).build();
+  config::ConfigBase sessionProperties({});
+  common::SpillConfig spillConfig{};
+  const common::PrefixSortConfig prefixSortConfig{64, 16, 8};
+  auto evaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+      queryCtx.get(), operatorPool.get());
+  auto* evaluatorPtr = evaluator.get();
+  cache::AsyncDataCache cache{manager.allocator()};
+  folly::CancellationSource cancellationSource;
+  auto tokenProvider =
+      std::make_shared<filesystems::PlainUserNameTokenProvider>("test-user");
+
   auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                               .operatorPool(operatorPool.get())
+                               .connectorPool(connectorPool.get())
                                .sessionProperties(&sessionProperties)
+                               .spillConfig(&spillConfig)
+                               .prefixSortConfig(prefixSortConfig)
+                               .expressionEvaluator(std::move(evaluator))
+                               .asyncDataCache(&cache)
                                .queryId("query")
                                .taskId("task")
                                .planNodeId("plan")
                                .driverId(7)
                                .sessionTimezone("America/Los_Angeles")
                                .adjustTimestampToTimezone(true)
+                               .cancellationToken(cancellationSource.getToken())
+                               .tokenProvider(tokenProvider)
                                .build();
 
-  EXPECT_EQ(connectorQueryCtx->memoryPool(), nullptr);
-  EXPECT_EQ(connectorQueryCtx->connectorMemoryPool(), nullptr);
+  EXPECT_EQ(connectorQueryCtx->memoryPool(), operatorPool.get());
+  EXPECT_EQ(connectorQueryCtx->connectorMemoryPool(), connectorPool.get());
   EXPECT_EQ(connectorQueryCtx->sessionProperties(), &sessionProperties);
+  EXPECT_EQ(connectorQueryCtx->spillConfig(), &spillConfig);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().maxNormalizedKeyBytes, 64);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().minNumRows, 16);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().maxStringPrefixLength, 8);
+  EXPECT_EQ(connectorQueryCtx->expressionEvaluator(), evaluatorPtr);
+  EXPECT_EQ(connectorQueryCtx->cache(), &cache);
   EXPECT_EQ(connectorQueryCtx->queryId(), "query");
   EXPECT_EQ(connectorQueryCtx->taskId(), "task");
   EXPECT_EQ(connectorQueryCtx->planNodeId(), "plan");
@@ -95,6 +148,21 @@ TEST(ConnectorTest, connectorQueryCtxBuilder) {
   EXPECT_EQ(connectorQueryCtx->driverId(), 7);
   EXPECT_EQ(connectorQueryCtx->sessionTimezone(), "America/Los_Angeles");
   EXPECT_TRUE(connectorQueryCtx->adjustTimestampToTimezone());
+  EXPECT_EQ(connectorQueryCtx->fsTokenProvider(), tokenProvider);
+  EXPECT_FALSE(
+      connectorQueryCtx->cancellationToken().isCancellationRequested());
+  cancellationSource.requestCancellation();
+  EXPECT_TRUE(connectorQueryCtx->cancellationToken().isCancellationRequested());
+}
+
+TEST(ConnectorTest, builderRejectsSecondBuild) {
+  config::ConfigBase sessionProperties({});
+  ConnectorQueryCtx::Builder builder;
+  builder.sessionProperties(&sessionProperties);
+
+  auto context = builder.build();
+  EXPECT_NE(context, nullptr);
+  EXPECT_THROW(builder.build(), VeloxRuntimeError);
 }
 
 class ConnectorRegistryTest : public testing::Test {

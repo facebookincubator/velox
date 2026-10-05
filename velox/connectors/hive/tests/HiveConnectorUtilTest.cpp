@@ -458,6 +458,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 1111);
   }
 
+#ifdef VELOX_ENABLE_PARQUET
   // Test Parquet format.
   {
     dwio::common::ReaderOptions readerOptions(pool_.get());
@@ -477,6 +478,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 7777);
     EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 6666);
   }
+#endif
 
   // Test Nimble format.
   {

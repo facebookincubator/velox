@@ -99,6 +99,16 @@ CudfFromVelox::CudfFromVelox(
 }
 
 void CudfFromVelox::doAddInput(RowVectorPtr input) {
+  // compile() places CudfFromVelox only after operators classified as
+  // producing CPU output, so device-resident input means the upstream operator
+  // is misclassified.
+  VELOX_CHECK_NULL(
+      dynamic_cast<const CudfVector*>(input.get()),
+      "CudfFromVelox received a device-resident CudfVector. The upstream "
+      "operator produces GPU output but is classified as a CPU operator. "
+      "Make it emit host vectors, or fix its operator adapter so that no "
+      "CudfFromVelox is placed after it.");
+
   if (input->size() > 0) {
     // Materialize lazy vectors
     for (auto& child : input->children()) {

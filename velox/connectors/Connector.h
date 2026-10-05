@@ -533,6 +533,29 @@ class IndexSource {
 /// responsibility of the caller.
 class ConnectorQueryCtx {
  public:
+  /// Builder pattern for constructing ConnectorQueryCtx instances.
+  ///
+  /// Provides a fluent interface for setting context parameters by name. Prefer
+  /// this over the positional constructor, especially when configuring only a
+  /// subset of the optional parameters. Session properties are required.
+  /// The scan ID is derived from the task and plan node IDs.
+  /// Raw pointers are borrowed and must outlive the context; the expression
+  /// evaluator is owned by the context and the token provider is shared.
+  ///
+  /// Example:
+  /// @code
+  ///   auto ctx = ConnectorQueryCtx::Builder()
+  ///                  .operatorPool(operatorPool)
+  ///                  .connectorPool(connectorPool)
+  ///                  .sessionProperties(sessionProperties)
+  ///                  .queryId("query-123")
+  ///                  .taskId("task-123")
+  ///                  .planNodeId("scan-1")
+  ///                  .build();
+  /// @endcode
+  ///
+  /// Each builder can be used for one context: build() consumes its owned
+  /// settings.
   class Builder {
    public:
     Builder& operatorPool(memory::MemoryPool* operatorPool) {
@@ -619,7 +642,9 @@ class ConnectorQueryCtx {
     }
 
     /// Constructs a ConnectorQueryCtx with the configured parameters.
-    /// The builder object cannot be re-used after build() is called.
+    ///
+    /// Consumes owned settings; do not call build() more than once.
+    /// @return Unique pointer to the newly created ConnectorQueryCtx.
     std::unique_ptr<ConnectorQueryCtx> build();
 
    private:
@@ -639,7 +664,28 @@ class ConnectorQueryCtx {
     folly::CancellationToken cancellationToken_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::unordered_map<std::string, memory::MemoryPool*> customPools_;
+    bool built_{false};
   };
+
+  /// Deprecated: Prefer Builder for new call sites. Kept public for source
+  /// compatibility with connectors outside Velox. Raw pointer inputs are
+  /// borrowed; expressionEvaluator is owned and tokenProvider is shared.
+  ConnectorQueryCtx(
+      memory::MemoryPool* operatorPool,
+      memory::MemoryPool* connectorPool,
+      const config::ConfigBase* sessionProperties,
+      const common::SpillConfig* spillConfig,
+      common::PrefixSortConfig prefixSortConfig,
+      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
+      cache::AsyncDataCache* cache,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId,
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone = false,
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -748,6 +794,8 @@ class ConnectorQueryCtx {
   }
 
  private:
+  /// Used by Builder without adding another parameter to the public
+  /// constructor.
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
@@ -761,10 +809,10 @@ class ConnectorQueryCtx {
       const std::string& planNodeId,
       int driverId,
       const std::string& sessionTimezone,
-      bool adjustTimestampToTimezone = false,
-      folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
-      std::unordered_map<std::string, memory::MemoryPool*> customPools = {});
+      bool adjustTimestampToTimezone,
+      folly::CancellationToken cancellationToken,
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider,
+      std::unordered_map<std::string, memory::MemoryPool*> customPools);
 
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;

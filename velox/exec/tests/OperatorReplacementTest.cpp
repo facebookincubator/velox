@@ -93,27 +93,25 @@ class CustomJoinBuild : public Operator {
   void noMoreInput() override {
     Operator::noMoreInput();
     std::vector<ContinuePromise> promises;
-    std::vector<std::shared_ptr<Driver>> peers;
+    std::vector<std::shared_ptr<Operator>> peerOperators;
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
     // state. allPeersFinished is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->task()->allPeersFinished(
-            planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
       return;
     }
 
-    for (auto& peer : peers) {
-      auto op = peer->findOperator(planNodeId());
-      auto* build = dynamic_cast<CustomJoinBuild*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* build = peer->as<CustomJoinBuild>();
       VELOX_CHECK(build);
       numRows_ += build->numRows_;
     }
 
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue from the barrier and finish.
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -297,8 +295,7 @@ bool CustomDriverAdapter(
 
     facebook::velox::exec::Operator* oper = operators[operatorIndex];
     VELOX_CHECK(oper);
-    if (auto joinBuildOp =
-            dynamic_cast<facebook::velox::exec::HashBuild*>(oper)) {
+    if (auto* joinBuildOp = oper->as<facebook::velox::exec::HashBuild>()) {
       auto planid = joinBuildOp->planNodeId();
       auto id = joinBuildOp->operatorId();
       replace_op.push_back(std::make_unique<CustomJoinBuild>(id, ctx, planid));
@@ -306,8 +303,7 @@ bool CustomDriverAdapter(
       auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
     } else if (
-        auto joinProbeOp =
-            dynamic_cast<facebook::velox::exec::HashProbe*>(oper)) {
+        auto* joinProbeOp = oper->as<facebook::velox::exec::HashProbe>()) {
       auto planid = joinProbeOp->planNodeId();
       auto id = joinProbeOp->operatorId();
       replace_op.push_back(std::make_unique<CustomJoinProbe>(id, ctx, planid));

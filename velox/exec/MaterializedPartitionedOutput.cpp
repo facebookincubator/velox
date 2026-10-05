@@ -432,11 +432,11 @@ void MaterializedPartitionedOutput::finish() {
   flushBatch();
 
   std::vector<ContinuePromise> peerPromises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
   ContinueFuture peerFuture;
   auto* driverContext = operatorCtx()->driverCtx();
-  const auto isLast = driverContext->task->allPeersFinished(
-      planNodeId(), driverContext->driver, &peerFuture, peerPromises, peers);
+  const auto isLast =
+      operatorCtx()->allPeersFinished(&peerFuture, peerPromises, peerOperators);
   if (isLast) {
     // allPeersFinished returns true only for the last driver. That driver owns
     // the shared buffer's terminal snapshot and publishes it exactly once.

@@ -276,6 +276,31 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
   std::vector<std::string> symbolRichValues_;
 };
 
+TEST_F(EncodingDispatchConsistencyTest, cappingJsonSelectsFsst) {
+  std::vector<std::string> values;
+  values.reserve(kNumRows);
+  for (velox::vector_size_t row = 0; row < kNumRows; ++row) {
+    values.push_back(makeCappingJsonValue(0xc0ffeeULL + row, row));
+  }
+  const auto batch = vectorMaker_->rowVector(
+      {"c0"},
+      {vectorMaker_->flatVector<velox::StringView>(kNumRows, [&](auto row) {
+        return velox::StringView(values.at(row));
+      })});
+
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.randomizeWriterConfig = false;
+  NimbleWriterFuzzer fuzzer(options, *rootPool_);
+
+  EXPECT_EQ(
+      fuzzer.runFixed({batch}, EncodingType::Fsst), WriteOutcome::kApplied);
+  const auto entry =
+      fuzzer.pairCoverage().find({DataType::String, EncodingType::Fsst});
+  ASSERT_NE(entry, fuzzer.pairCoverage().end());
+  EXPECT_GT(entry->second.numChunksApplied, 0u);
+}
+
 TEST_F(
     EncodingDispatchConsistencyTest,
     withholdsIntegralOnlyEncodingsFromNullableFloat) {

@@ -79,22 +79,20 @@ void CudfJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
+  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
     return;
   }
 
   SCOPE_EXIT {
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
   };
 
-  for (auto& peer : peers) {
-    auto* build =
-        dynamic_cast<CudfJoinBuild*>(peer->findOperator(planNodeId()));
+  for (const auto& peer : peerOperators) {
+    auto* build = peer->as<CudfJoinBuild>();
     VELOX_CHECK_NOT_NULL(build);
     VELOX_CHECK(
         typeid(*build) == typeid(*this),

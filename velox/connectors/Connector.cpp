@@ -28,6 +28,8 @@
 namespace facebook::velox::connector {
 
 std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
+  VELOX_CHECK(!built_, "ConnectorQueryCtx::Builder can only build once");
+  built_ = true;
   return std::unique_ptr<ConnectorQueryCtx>(new ConnectorQueryCtx(
       operatorPool_,
       connectorPool_,
@@ -46,6 +48,40 @@ std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
       std::move(tokenProvider_),
       std::move(customPools_)));
 }
+
+ConnectorQueryCtx::ConnectorQueryCtx(
+    memory::MemoryPool* operatorPool,
+    memory::MemoryPool* connectorPool,
+    const config::ConfigBase* sessionProperties,
+    const common::SpillConfig* spillConfig,
+    common::PrefixSortConfig prefixSortConfig,
+    std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
+    cache::AsyncDataCache* cache,
+    const std::string& queryId,
+    const std::string& taskId,
+    const std::string& planNodeId,
+    int driverId,
+    const std::string& sessionTimezone,
+    bool adjustTimestampToTimezone,
+    folly::CancellationToken cancellationToken,
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider)
+    : ConnectorQueryCtx(
+          operatorPool,
+          connectorPool,
+          sessionProperties,
+          spillConfig,
+          std::move(prefixSortConfig),
+          std::move(expressionEvaluator),
+          cache,
+          queryId,
+          taskId,
+          planNodeId,
+          driverId,
+          sessionTimezone,
+          adjustTimestampToTimezone,
+          std::move(cancellationToken),
+          std::move(tokenProvider),
+          {}) {}
 
 ConnectorQueryCtx::ConnectorQueryCtx(
     memory::MemoryPool* operatorPool,
