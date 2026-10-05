@@ -2407,7 +2407,8 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       auto& keyPresence = group.keyPresenceStream.mutableData();
       for (const auto& key : group.groupKeys) {
         const auto batchIt = batches.find(key);
-        keyPresence.push_back(batchIt != batches.end());
+        const bool keyPresent = batchIt != batches.end();
+        keyPresence.push_back(keyPresent);
         if (batchIt == batches.end()) {
           continue;
         }
