@@ -782,8 +782,11 @@ void Task::initCustomTaskPools() {
         resource, "No CustomMemoryResource registered for tag: {}", tag);
     customChildPools_.push_back(root->addAggregateChild(
         fmt::format("task.{}.{}", taskId_.c_str(), tag),
-        resource->newTaskReclaimer(
-            shared_from_this(), memoryArbitrationPriority_)));
+        resource->newReclaimer(
+            memory::TaskReclaimerContext{
+                shared_from_this(),
+                memoryArbitrationPriority_,
+                resource->tag()})));
     customTaskPools_[tag] = customChildPools_.back().get();
   }
 }

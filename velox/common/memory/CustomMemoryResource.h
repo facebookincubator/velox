@@ -21,6 +21,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <variant>
 
 namespace facebook::velox::core {
 class QueryCtx;
@@ -37,50 +39,48 @@ class MemoryArbitrator;
 class MemoryPool;
 class MemoryReclaimer;
 
+/// Pool creation currently happens before the pool exists, so 'pool' can be
+/// nullptr.
+struct PoolReclaimerContext {
+  MemoryPool* pool;
+};
+
+struct QueryReclaimerContext {
+  core::QueryCtx* queryCtx;
+  MemoryPool* pool;
+};
+
+struct TaskReclaimerContext {
+  std::shared_ptr<exec::Task> task;
+  int64_t priority;
+  /// Borrowed for the duration of the factory call.
+  std::string_view resourceTag;
+};
+
+using ReclaimerContext = std::
+    variant<PoolReclaimerContext, QueryReclaimerContext, TaskReclaimerContext>;
+
 /// Describes an externally-provided memory resource (e.g. a GPU or tiered
 /// memory backend) registered with the memory subsystem and referenced by
 /// 'tag' when building custom memory pool hierarchies. Roots need not belong to
-/// queries. Both constructors enforce
+/// queries. Construction enforces
 /// non-empty tag and non-null allocator, arbitrator, and reclaimerFactory;
 /// once constructed, the resource is immutable.
 class CustomMemoryResource {
  public:
-  using ReclaimerFactory = std::function<std::unique_ptr<MemoryReclaimer>()>;
-  using QueryReclaimerFactory = std::function<
-      std::unique_ptr<MemoryReclaimer>(core::QueryCtx*, MemoryPool*)>;
-  using TaskReclaimerFactory = std::function<std::unique_ptr<MemoryReclaimer>(
-      const std::shared_ptr<exec::Task>&,
-      int64_t /*priority*/,
-      const std::string& /*resourceTag*/)>;
+  using ReclaimerFactory =
+      std::function<std::unique_ptr<MemoryReclaimer>(const ReclaimerContext&)>;
 
-  /// Optional execution-context-aware factories. Query factories are invoked
-  /// explicitly through newQueryReclaimer(); their presence does not change
-  /// resource-based root creation. Task creation uses the task factory when
-  /// supplied, otherwise the legacy factory. A supplied factory's result is
-  /// authoritative: nullptr means no reclaimer, never select a fallback.
-  /// Factories on resources shared across queries must support concurrent calls
-  /// and should not capture a particular query/task. Each invocation receives
-  /// the current execution context.
-  struct ExecutionReclaimerFactories {
-    QueryReclaimerFactory query{};
-    TaskReclaimerFactory task{};
-  };
-
+  /// The factory receives the current pool, query, or task context. A nullptr
+  /// result means no reclaimer; there is no implicit fallback. Factories on
+  /// resources shared across queries must support concurrent calls and should
+  /// not capture a particular query or task.
   CustomMemoryResource(
       std::string tag,
       std::shared_ptr<MemoryAllocator> allocator,
       std::shared_ptr<MemoryArbitrator> arbitrator,
       ReclaimerFactory reclaimerFactory,
       int64_t maxCapacity = std::numeric_limits<int64_t>::max());
-
-  /// Opt-in execution factories; the original constructor is unchanged.
-  CustomMemoryResource(
-      std::string tag,
-      std::shared_ptr<MemoryAllocator> allocator,
-      std::shared_ptr<MemoryArbitrator> arbitrator,
-      ReclaimerFactory reclaimerFactory,
-      int64_t maxCapacity,
-      ExecutionReclaimerFactories executionReclaimerFactories);
 
   /// Unique identifier for this resource.
   const std::string& tag() const {
@@ -104,27 +104,13 @@ class CustomMemoryResource {
     return arbitrator_.get();
   }
 
-  /// Returns a fresh reclaimer for a new pool by invoking the factory
-  /// supplied at construction. Used for legacy roots/tasks and node pools.
-  /// A nullptr result means that the pool has no reclaimer.
-  std::unique_ptr<MemoryReclaimer> newReclaimer() const;
-
-  bool hasQueryReclaimerFactory() const {
-    return static_cast<bool>(executionReclaimerFactories_.query);
-  }
-
-  /// Calls the explicit query factory; requires hasQueryReclaimerFactory().
-  /// Inputs are borrowed during creation. Install the returned reclaimer on
-  /// the root during query setup, before creating Tasks or allocating memory.
-  std::unique_ptr<MemoryReclaimer> newQueryReclaimer(
-      core::QueryCtx* queryCtx,
-      MemoryPool* pool) const;
-
-  /// Uses the explicit task factory when supplied, otherwise the legacy
-  /// factory. Does not reinterpret a nullptr result from either factory.
-  std::unique_ptr<MemoryReclaimer> newTaskReclaimer(
-      const std::shared_ptr<exec::Task>& task,
-      int64_t priority) const;
+  /// Returns a fresh reclaimer by invoking the factory with 'context'.
+  /// Resource roots and node pools use the default pool context. Query setup
+  /// explicitly supplies a query context and installs the result before
+  /// creating Tasks or allocating memory. Task creation supplies a task
+  /// context. A nullptr result means that the pool has no reclaimer.
+  std::unique_ptr<MemoryReclaimer> newReclaimer(
+      const ReclaimerContext& context = PoolReclaimerContext{nullptr}) const;
 
  private:
   const std::string tag_;
@@ -132,7 +118,6 @@ class CustomMemoryResource {
   const std::shared_ptr<MemoryAllocator> allocator_;
   const std::shared_ptr<MemoryArbitrator> arbitrator_;
   const ReclaimerFactory reclaimerFactory_;
-  const ExecutionReclaimerFactories executionReclaimerFactories_;
 };
 
 } // namespace facebook::velox::memory

@@ -226,7 +226,7 @@ class MemoryManager {
 
   /// Creates a root memory pool backed by 'resource'. The pool's maximum
   /// capacity comes from 'resource->maxCapacity'; its reclaimer comes from
-  /// 'resource->newReclaimer()', independently of any query/task factories.
+  /// 'resource->newReclaimer()' using the default pool context.
   /// Its allocator and arbitrator are borrowed from 'resource->allocator' and
   /// 'resource->arbitrator'. The
   /// caller (typically via CustomMemoryResourceRegistry) is responsible

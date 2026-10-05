@@ -875,28 +875,31 @@ Custom Memory Resources
 *CustomMemoryResource* lets an extension expose memory tiers other than
 host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
 NUMA-bound pools) side-by-side with the default CPU tier. A resource
-bundles a tag, an allocator, an arbitrator, and a context-free reclaimer factory.
-An additional constructor accepts optional query/task factories, described below.
-Both constructors require a non-empty tag and non-null allocator, arbitrator,
-and context-free reclaimer factory. The resource is immutable once constructed.
-The original interface remains available:
+bundles a tag, an allocator, an arbitrator, and a reclaimer factory that
+receives a pool, query, or task context. Construction requires a non-empty tag
+and non-null allocator, arbitrator, and factory. The resource is immutable once
+constructed:
 
 .. code-block:: c++
 
   class CustomMemoryResource {
    public:
+    using ReclaimerFactory = std::function<
+        std::unique_ptr<MemoryReclaimer>(const ReclaimerContext&)>;
+
     CustomMemoryResource(
         std::string tag,
         std::shared_ptr<MemoryAllocator> allocator,
         std::shared_ptr<MemoryArbitrator> arbitrator,
-        std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory,
+        ReclaimerFactory reclaimerFactory,
         int64_t maxCapacity = std::numeric_limits<int64_t>::max());
 
     const std::string& tag() const;
     int64_t maxCapacity() const;
     MemoryAllocator* allocator() const;
     MemoryArbitrator* arbitrator() const;
-    std::unique_ptr<MemoryReclaimer> newReclaimer() const;
+    std::unique_ptr<MemoryReclaimer> newReclaimer(
+        const ReclaimerContext& context = PoolReclaimerContext{nullptr}) const;
   };
 
 Custom roots use the supplied allocator and arbitrator rather than implicitly
@@ -920,7 +923,9 @@ global scope at process startup, after *initializeMemoryManager*:
       "device",
       std::make_shared<MyTieredAllocator>(...),
       memory::MemoryArbitrator::create(...),
-      []() { return std::make_unique<MyReclaimer>(); },
+      [](const memory::ReclaimerContext&) {
+        return std::make_unique<MyReclaimer>();
+      },
       deviceCapacity);
   memory::CustomMemoryResourceRegistry::global().insert(
       resource->tag(), resource);
@@ -965,18 +970,24 @@ parallel ``task → node → operator`` aggregate/leaf subtree beneath it that
 mirrors the default hierarchy. Aggregate children under a custom root are
 created at the same moment as their default counterparts.
 
-Existing CXL and other resources using the original constructor continue to
-use their original factory for root, task and node pools without code changes.
-A factory result of ``nullptr`` means no reclaimer; it never selects a fallback.
+Context-independent resources such as CXL can ignore the context and create the
+same reclaimer for root, task and node pools. A factory result of ``nullptr``
+means no reclaimer; it never selects a fallback.
 
 Query- and Task-Aware Reclaimers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Extensions can opt into distinct query/task factories with the additional
-constructor overload. The following is an alternative to the legacy resource
-definition above: register the selected definition once, not both under the same
-tag. Factories may select the public built-in query/task reclaimers or create
-extension-specific implementations:
+*ReclaimerContext* is a ``std::variant`` of *PoolReclaimerContext*,
+*QueryReclaimerContext*, and *TaskReclaimerContext*. Pool creation uses a null
+pool pointer because the pool does not exist yet. Query context carries the
+query and existing root; task context carries the task, priority, and resource
+tag. Context pointers and the resource tag are borrowed during the factory call.
+
+Extensions can select reclaimers based on the context variant. The following is
+an alternative to the context-independent resource definition above: register
+the selected definition once, not both under the same tag. Factories may select
+the public built-in query/task reclaimers or create extension-specific
+implementations:
 
 .. code-block:: c++
 
@@ -984,11 +995,28 @@ extension-specific implementations:
       "device",
       allocator,
       arbitrator,
-      []() { return exec::MemoryReclaimer::create(); }, // Node traversal.
-      deviceCapacity,
-      memory::CustomMemoryResource::ExecutionReclaimerFactories{
-          .query = core::QueryCtx::MemoryReclaimer::create,
-          .task = exec::Task::MemoryReclaimer::create});
+      [](const memory::ReclaimerContext& context)
+          -> std::unique_ptr<memory::MemoryReclaimer> {
+        return std::visit(
+            [](const auto& ctx)
+                -> std::unique_ptr<memory::MemoryReclaimer> {
+              using Context = std::decay_t<decltype(ctx)>;
+              if constexpr (std::is_same_v<Context,
+                                           memory::QueryReclaimerContext>) {
+                return core::QueryCtx::MemoryReclaimer::create(
+                    ctx.queryCtx, ctx.pool);
+              } else if constexpr (std::is_same_v<
+                                       Context,
+                                       memory::TaskReclaimerContext>) {
+                return exec::Task::MemoryReclaimer::create(
+                    ctx.task, ctx.priority, std::string(ctx.resourceTag));
+              } else {
+                return exec::MemoryReclaimer::create(); // Node traversal.
+              }
+            },
+            context);
+      },
+      deviceCapacity);
   memory::CustomMemoryResourceRegistry::global().insert(
       resource->tag(), resource);
 
@@ -1015,19 +1043,18 @@ resource registered above:
       resource->allocator(),
       resource->arbitrator(),
       resource->maxCapacity()); // No reclaimer installed by default.
-  if (resource->hasQueryReclaimerFactory()) {
-    auto reclaimer = resource->newQueryReclaimer(queryCtx.get(), root.get());
-    if (reclaimer != nullptr) {
-      root->setReclaimer(std::move(reclaimer));
-    }
+  auto reclaimer = resource->newReclaimer(
+      memory::QueryReclaimerContext{queryCtx.get(), root.get()});
+  if (reclaimer != nullptr) {
+    root->setReclaimer(std::move(reclaimer));
   }
   queryCtx->addCustomPool(resource->tag(), std::move(root));
 
-Neither *MemoryManager* nor *QueryCtx* invokes the query factory. Calling
-*newQueryReclaimer* requires a configured query factory; it does not fall back
-to the context-free factory. If none is configured, the component-based example
-leaves the root without a reclaimer. Use the resource-based overload when the
-context-free factory should select the root reclaimer instead.
+Neither *MemoryManager* nor *QueryCtx* invokes the factory with query context.
+The extension supplies that context explicitly when installing a query
+reclaimer. A null result leaves the root without a reclaimer; it does not fall
+back to a pool context. Use the resource-based overload when a pool context
+should select the root reclaimer instead.
 
 *setReclaimer* installs a reclaimer only once; it cannot replace one already on
 the pool. Do not create a root through the resource-based overload and then
@@ -1035,12 +1062,11 @@ attempt to replace its reclaimer. Complete setup before creating Tasks or
 allocating custom memory. Registering only after successful factory invocation
 leaves the pool unregistered with *QueryCtx* if that invocation throws.
 
-The explicit task factory receives the task, reclamation priority and resource
-tag. The built-in Task reclaimer uses that tag to traverse only the selected
-custom hierarchy with task pause/resume coordination. When the task factory is
-absent, Task uses the context-free factory. When present, its result is used
-exactly, including ``nullptr``. Node and join-node pools continue to use the
-context-free factory. As with ordinary pools, a child can have a reclaimer only
+The task context contains the task, reclamation priority and resource tag.
+The built-in Task reclaimer uses that tag to traverse only the selected custom
+hierarchy with task pause/resume coordination. Task creation uses the factory's
+result exactly, including ``nullptr``. Node and join-node pools pass a pool
+context. As with ordinary pools, a child can have a reclaimer only
 when its parent has one: a null query/task reclaimer must be paired with suitable
 descendant factories, not non-null child reclaimers.
 

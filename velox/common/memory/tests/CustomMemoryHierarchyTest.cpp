@@ -86,18 +86,24 @@ class CustomMemoryHierarchyTest : public testing::Test {
       bool useExecutionFactories = false) {
     MemoryAllocator::Options options;
     options.capacity = capacity;
-    CustomMemoryResource::ExecutionReclaimerFactories factories;
-    if (useExecutionFactories) {
-      factories.query = core::QueryCtx::MemoryReclaimer::create;
-      factories.task = exec::Task::MemoryReclaimer::create;
-    }
     return std::make_shared<CustomMemoryResource>(
         tag,
         std::make_shared<MallocAllocator>(options),
         MemoryArbitrator::create({}),
-        []() { return exec::MemoryReclaimer::create(); },
-        capacity,
-        std::move(factories));
+        [useExecutionFactories](const ReclaimerContext& context) {
+          if (useExecutionFactories) {
+            if (auto* query = std::get_if<QueryReclaimerContext>(&context)) {
+              return core::QueryCtx::MemoryReclaimer::create(
+                  query->queryCtx, query->pool);
+            }
+            if (auto* task = std::get_if<TaskReclaimerContext>(&context)) {
+              return exec::Task::MemoryReclaimer::create(
+                  task->task, task->priority, std::string(task->resourceTag));
+            }
+          }
+          return exec::MemoryReclaimer::create();
+        },
+        capacity);
   }
 
   // Models extension-owned setup; QueryCtx registration itself is passive.
@@ -105,8 +111,9 @@ class CustomMemoryHierarchyTest : public testing::Test {
       core::QueryCtx& query,
       const CustomMemoryResource& resource,
       std::shared_ptr<MemoryPool> root) {
-    if (resource.hasQueryReclaimerFactory() && root->reclaimer() == nullptr) {
-      auto reclaimer = resource.newQueryReclaimer(&query, root.get());
+    if (root->reclaimer() == nullptr) {
+      auto reclaimer =
+          resource.newReclaimer(QueryReclaimerContext{&query, root.get()});
       if (reclaimer != nullptr) {
         root->setReclaimer(std::move(reclaimer));
       }
@@ -188,18 +195,16 @@ class CustomMemoryHierarchyTest : public testing::Test {
   std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
 
-TEST_F(
-    CustomMemoryHierarchyTest,
-    legacyCxlCodeUsesOriginalFactoryAtEveryLevel) {
+TEST_F(CustomMemoryHierarchyTest, contextFreeCxlFactoryAtEveryLevel) {
   MemoryAllocator::Options options;
   options.capacity = 1L << 30;
   int calls{0};
-  // Deliberately use only the original constructor, builder and factory API.
+  // A context-independent factory can serve every level.
   auto resource = std::make_shared<CustomMemoryResource>(
       "cxl",
       std::make_shared<MallocAllocator>(options),
       MemoryArbitrator::create({}),
-      [&]() {
+      [&](const ReclaimerContext&) {
         ++calls;
         return MemoryReclaimer::create(17);
       },
@@ -239,33 +244,29 @@ TEST_F(
   options.capacity = 1L << 30;
   int queryCalls{0};
   int taskCalls{0};
-  int legacyCalls{0};
+  int poolCalls{0};
   exec::Task* observedTask{nullptr};
   auto resource = std::make_shared<CustomMemoryResource>(
       "device",
       std::make_shared<MallocAllocator>(options),
       MemoryArbitrator::create({}),
-      [&]() {
-        ++legacyCalls;
+      [&](const ReclaimerContext& context) -> std::unique_ptr<MemoryReclaimer> {
+        if (auto* query = std::get_if<QueryReclaimerContext>(&context)) {
+          ++queryCalls;
+          return core::QueryCtx::MemoryReclaimer::create(
+              query->queryCtx, query->pool);
+        }
+        if (auto* task = std::get_if<TaskReclaimerContext>(&context)) {
+          ++taskCalls;
+          observedTask = task->task.get();
+          EXPECT_EQ(task->resourceTag, "device");
+          EXPECT_EQ(task->priority, 0);
+          return std::make_unique<TestTaskReclaimer>(29);
+        }
+        ++poolCalls;
         return MemoryReclaimer::create(3);
       },
-      options.capacity,
-      CustomMemoryResource::ExecutionReclaimerFactories{
-          .query =
-              [&](core::QueryCtx* query, MemoryPool* root) {
-                ++queryCalls;
-                return core::QueryCtx::MemoryReclaimer::create(query, root);
-              },
-          .task =
-              [&](const std::shared_ptr<exec::Task>& task,
-                  int64_t priority,
-                  const std::string& tag) {
-                ++taskCalls;
-                observedTask = task.get();
-                EXPECT_EQ(tag, "device");
-                EXPECT_EQ(priority, 0);
-                return std::make_unique<TestTaskReclaimer>(29);
-              }});
+      options.capacity);
   auto query = core::QueryCtx::Builder().queryId("mixed-factories").build();
   auto root = memoryManager()->addCustomRootPool(
       "mixed.device",
@@ -280,7 +281,7 @@ TEST_F(
   auto task = makeTask("mixed-task", query);
   EXPECT_EQ(queryCalls, 1);
   EXPECT_EQ(taskCalls, 1);
-  EXPECT_EQ(legacyCalls, 1); // Values node.0.
+  EXPECT_EQ(poolCalls, 1); // Values node.0.
   EXPECT_EQ(observedTask, task.get());
   auto* taskPool = findChild(root.get(), "task.mixed-task.device");
   ASSERT_NE(taskPool, nullptr);
@@ -288,31 +289,31 @@ TEST_F(
   EXPECT_EQ(taskPool->reclaimer()->priority(), 29);
   auto* node = task->getOrAddCustomNodePool("device", "n0");
   EXPECT_EQ(node->reclaimer()->priority(), 3);
-  EXPECT_EQ(legacyCalls, 2);
+  EXPECT_EQ(poolCalls, 2);
 }
 
 TEST_F(CustomMemoryHierarchyTest, nullTaskFactoryResultDoesNotFallBack) {
   MemoryAllocator::Options options;
   options.capacity = 1L << 30;
-  int legacyCalls{0};
+  int poolCalls{0};
   int taskCalls{0};
   auto resource = std::make_shared<CustomMemoryResource>(
       "device",
       std::make_shared<MallocAllocator>(options),
       MemoryArbitrator::create({}),
-      [&]() {
-        ++legacyCalls;
-        return std::unique_ptr<MemoryReclaimer>{};
+      [&](const ReclaimerContext& context) -> std::unique_ptr<MemoryReclaimer> {
+        if (auto* query = std::get_if<QueryReclaimerContext>(&context)) {
+          return core::QueryCtx::MemoryReclaimer::create(
+              query->queryCtx, query->pool);
+        }
+        if (std::holds_alternative<TaskReclaimerContext>(context)) {
+          ++taskCalls;
+          return nullptr;
+        }
+        ++poolCalls;
+        return nullptr;
       },
-      options.capacity,
-      CustomMemoryResource::ExecutionReclaimerFactories{
-          .query = core::QueryCtx::MemoryReclaimer::create,
-          .task = [&](const std::shared_ptr<exec::Task>&,
-                      int64_t,
-                      const std::string&) {
-            ++taskCalls;
-            return std::unique_ptr<MemoryReclaimer>{};
-          }});
+      options.capacity);
   auto query = core::QueryCtx::Builder().queryId("null-task").build();
   auto root = memoryManager()->addCustomRootPool(
       "null.device",
@@ -328,7 +329,7 @@ TEST_F(CustomMemoryHierarchyTest, nullTaskFactoryResultDoesNotFallBack) {
   auto* taskPool = findChild(root.get(), "task.null-task.device");
   ASSERT_NE(taskPool, nullptr);
   EXPECT_EQ(taskPool->reclaimer(), nullptr);
-  EXPECT_EQ(legacyCalls, 1);
+  EXPECT_EQ(poolCalls, 1);
   EXPECT_EQ(taskCalls, 1);
 }
 

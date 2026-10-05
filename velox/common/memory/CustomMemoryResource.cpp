@@ -29,27 +29,11 @@ CustomMemoryResource::CustomMemoryResource(
     std::shared_ptr<MemoryArbitrator> arbitrator,
     ReclaimerFactory reclaimerFactory,
     int64_t maxCapacity)
-    : CustomMemoryResource(
-          std::move(tag),
-          std::move(allocator),
-          std::move(arbitrator),
-          std::move(reclaimerFactory),
-          maxCapacity,
-          ExecutionReclaimerFactories{}) {}
-
-CustomMemoryResource::CustomMemoryResource(
-    std::string tag,
-    std::shared_ptr<MemoryAllocator> allocator,
-    std::shared_ptr<MemoryArbitrator> arbitrator,
-    ReclaimerFactory reclaimerFactory,
-    int64_t maxCapacity,
-    ExecutionReclaimerFactories executionReclaimerFactories)
     : tag_(std::move(tag)),
       maxCapacity_(maxCapacity),
       allocator_(std::move(allocator)),
       arbitrator_(std::move(arbitrator)),
-      reclaimerFactory_(std::move(reclaimerFactory)),
-      executionReclaimerFactories_(std::move(executionReclaimerFactories)) {
+      reclaimerFactory_(std::move(reclaimerFactory)) {
   VELOX_USER_CHECK(!tag_.empty(), "CustomMemoryResource tag is empty");
   VELOX_USER_CHECK_NOT_NULL(
       allocator_, "CustomMemoryResource allocator is null for tag: {}", tag_);
@@ -61,30 +45,15 @@ CustomMemoryResource::CustomMemoryResource(
       tag_);
 }
 
-std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newReclaimer() const {
-  return reclaimerFactory_();
-}
-
-std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newQueryReclaimer(
-    core::QueryCtx* queryCtx,
-    MemoryPool* pool) const {
-  VELOX_CHECK_NOT_NULL(queryCtx);
-  VELOX_CHECK_NOT_NULL(pool);
-  VELOX_CHECK(
-      hasQueryReclaimerFactory(),
-      "No query reclaimer factory configured for resource: {}",
-      tag_);
-  return executionReclaimerFactories_.query(queryCtx, pool);
-}
-
-std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newTaskReclaimer(
-    const std::shared_ptr<exec::Task>& task,
-    int64_t priority) const {
-  VELOX_CHECK_NOT_NULL(task);
-  if (executionReclaimerFactories_.task) {
-    return executionReclaimerFactories_.task(task, priority, tag_);
+std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newReclaimer(
+    const ReclaimerContext& context) const {
+  if (const auto* query = std::get_if<QueryReclaimerContext>(&context)) {
+    VELOX_CHECK_NOT_NULL(query->queryCtx);
+    VELOX_CHECK_NOT_NULL(query->pool);
+  } else if (const auto* task = std::get_if<TaskReclaimerContext>(&context)) {
+    VELOX_CHECK_NOT_NULL(task->task);
   }
-  return newReclaimer();
+  return reclaimerFactory_(context);
 }
 
 } // namespace facebook::velox::memory

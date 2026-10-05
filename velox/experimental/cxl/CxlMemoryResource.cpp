@@ -36,9 +36,10 @@ std::shared_ptr<memory::CustomMemoryResource> CxlMemoryResource::create(
   std::shared_ptr<memory::MemoryArbitrator> arbitrator =
       memory::MemoryArbitrator::create(
           {.kind = "SHARED", .capacity = maxCapacity});
-  memory::CustomMemoryResource::ReclaimerFactory reclaimerFactory = [] {
-    return memory::MemoryReclaimer::create();
-  };
+  memory::CustomMemoryResource::ReclaimerFactory reclaimerFactory =
+      [](const memory::ReclaimerContext&) {
+        return memory::MemoryReclaimer::create();
+      };
 
   return std::make_shared<memory::CustomMemoryResource>(
       std::string{kTag},
