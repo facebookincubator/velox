@@ -86,7 +86,7 @@ TEST_F(StringTest, octetLength) {
     return evaluateOnce<int32_t>("octet_length(c0)", inputType, input);
   };
 
-  for (const auto& inputType : {VARCHAR(), VARBINARY()}) {
+  for (const auto& inputType : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
     SCOPED_TRACE(inputType->toString());
     EXPECT_EQ(octetLength("", inputType), 0);
     EXPECT_EQ(octetLength(std::string("\0", 1), inputType), 1);
