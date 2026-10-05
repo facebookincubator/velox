@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include <fmt/ranges.h>
 #include <folly/Singleton.h>
 #include <folly/lang/Bits.h>
 
@@ -239,6 +240,22 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<std::string>& values) {
     return {makeRowVector(
         names, {data->childAt(0), makeFlatVector<std::string>(values)})};
+  }
+
+  // Creates a data source for 'plan', a scan of the Iceberg connector.
+  std::unique_ptr<DataSource> makeDataSource(const core::PlanNodePtr& plan) {
+    auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(plan);
+    VELOX_CHECK_NOT_NULL(scanNode);
+    auto connector = ConnectorRegistry::tryGet(test::kIcebergConnectorId);
+    VELOX_CHECK_NOT_NULL(
+        connector,
+        "Connector is not registered: {}",
+        test::kIcebergConnectorId);
+    return connector->createDataSource(
+        scanNode->outputType(),
+        scanNode->tableHandle(),
+        scanNode->assignments(),
+        connectorQueryCtx_.get());
   }
 
   // Writes a positional delete file for 'positions' of 'dataFilePath'. The temp
@@ -509,26 +526,37 @@ class IcebergReadTest : public test::IcebergTestBase {
   static inline const std::string kTargetTablePartitionData =
       R"({"partitionValues":["2024-01-01"]})";
 
-  // Reads 'values' with '$target_table_row_id' projected and 'filter' on
-  // 'filterField' of the composite (empty: the composite itself), and asserts
+  // Reads 'values' minus 'deletePositions' with '$target_table_row_id'
+  // projected and 'filter' on the subfield 'filterPath', and asserts
   // 'expectedValues' with 'expectedPositions'.
   void assertTargetTableRowId(
       const std::vector<int64_t>& values,
-      const std::vector<int64_t>& expectedValues,
-      const std::vector<int64_t>& expectedPositions,
+      const std::vector<int64_t>& deletePositions,
+      const std::vector<std::string>& filterPath,
       const common::FilterPtr& filter,
-      const std::string& filterField) {
+      const std::vector<int64_t>& expectedValues,
+      const std::vector<int64_t>& expectedPositions) {
     SCOPED_TRACE(
         fmt::format(
-            "filter: {} on {}",
+            "filter: {} on {}, deletes: {}",
             filter == nullptr ? "none" : filter->toString(),
-            filterField.empty() ? "the composite" : filterField));
+            fmt::join(filterPath, "."),
+            fmt::join(deletePositions, ", ")));
     VELOX_CHECK_EQ(expectedValues.size(), expectedPositions.size());
 
     auto dataFilePath = TempFilePath::create();
     writeToFile(
         dataFilePath->getPath(),
         {makeRowVector({"c0"}, {makeFlatVector<int64_t>(values)})});
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    std::shared_ptr<TempFilePath> deleteFilePath;
+    if (!deletePositions.empty()) {
+      auto [path, deleteFile] =
+          makePositionalDeleteFile(dataFilePath->getPath(), deletePositions);
+      deleteFilePath = std::move(path);
+      deleteFiles.push_back(std::move(deleteFile));
+    }
 
     const auto rowIdType = ROW(
         {{"file_path", VARCHAR()},
@@ -546,12 +574,8 @@ class IcebergReadTest : public test::IcebergTestBase {
     if (filter != nullptr) {
       // The subfield parser rejects the leading '$'.
       std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
-      path.push_back(
-          std::make_unique<common::Subfield::NestedField>(
-              IcebergMetadataColumn::kTargetTableRowIdColumnName));
-      if (!filterField.empty()) {
-        path.push_back(
-            std::make_unique<common::Subfield::NestedField>(filterField));
+      for (const auto& field : filterPath) {
+        path.push_back(std::make_unique<common::Subfield::NestedField>(field));
       }
       common::SubfieldFilters filters;
       filters.emplace(common::Subfield(std::move(path)), filter);
@@ -587,7 +611,8 @@ class IcebergReadTest : public test::IcebergTestBase {
             {{IcebergMetadataColumn::kSpecIdInfoColumn,
               std::to_string(kTargetTableSpecId)},
              {IcebergMetadataColumn::kPartitionDataInfoColumn,
-              kTargetTablePartitionData}})})
+              kTargetTablePartitionData}},
+            deleteFiles)})
         .assertResults({expected});
   }
 };
@@ -2139,20 +2164,13 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterMidSplit) {
       {makeRowVector({makeFlatVector<int64_t>(
           kMultiBatchNumRows, [](vector_size_t row) { return row; })})});
 
-  const auto outputType = ROW({"c0", "_row_id"}, BIGINT());
-  auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+  auto dataSource = makeDataSource(
       exec::test::PlanBuilder()
           .startTableScan(test::kIcebergConnectorId)
-          .outputType(outputType)
+          .outputType(ROW({"c0", "_row_id"}, BIGINT()))
           .dataColumns(ROW("c0", BIGINT()))
           .endTableScan()
           .planNode());
-  auto dataSource = ConnectorRegistry::tryGet(test::kIcebergConnectorId)
-                        ->createDataSource(
-                            outputType,
-                            scanNode->tableHandle(),
-                            scanNode->assignments(),
-                            connectorQueryCtx_.get());
   dataSource->addSplit(makeIcebergSplitWithInfoColumns(
       dataFilePath->getPath(),
       {{IcebergMetadataColumn::kFirstRowIdInfoColumn,
@@ -2247,24 +2265,90 @@ TEST_F(IcebergReadTest, rowLineageFilterOverBatches) {
 // Synthesis of the $target_table_row_id composite from the split's info
 // columns and the file row positions.
 TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
+  const std::string composite{
+      IcebergMetadataColumn::kTargetTableRowIdColumnName};
+
   // The reader sees a null placeholder; filtering there would prune the split.
   for (const auto& filter : std::vector<common::FilterPtr>{
            nullptr, std::make_shared<common::IsNotNull>()}) {
     assertTargetTableRowId(
         /*values=*/{10, 20, 30},
-        /*expectedValues=*/{10, 20, 30},
-        /*expectedPositions=*/{0, 1, 2},
+        /*deletePositions=*/{},
+        /*filterPath=*/{composite},
         filter,
-        /*filterField=*/"");
+        /*expectedValues=*/{10, 20, 30},
+        /*expectedPositions=*/{0, 1, 2});
   }
 
   // A range on 'row_position' selects from the positions next() fills in.
   assertTargetTableRowId(
       /*values=*/{10, 20, 30, 40, 50},
-      /*expectedValues=*/{20, 30, 40},
-      /*expectedPositions=*/{1, 2, 3},
+      /*deletePositions=*/{},
+      /*filterPath=*/{composite, "row_position"},
       std::make_shared<common::BigintRange>(1, 3, false),
-      /*filterField=*/"row_position");
+      /*expectedValues=*/{20, 30, 40},
+      /*expectedPositions=*/{1, 2, 3});
+
+  // The reader drops rows, so the batch is smaller than the rows read.
+  assertTargetTableRowId(
+      /*values=*/{10, 20, 30, 40, 50},
+      /*deletePositions=*/{},
+      /*filterPath=*/{"c0"},
+      std::make_shared<common::BigintRange>(30, 50, false),
+      /*expectedValues=*/{30, 40, 50},
+      /*expectedPositions=*/{2, 3, 4});
+  assertTargetTableRowId(
+      /*values=*/{10, 20, 30, 40, 50},
+      /*deletePositions=*/{0, 3},
+      /*filterPath=*/{},
+      /*filter=*/nullptr,
+      /*expectedValues=*/{20, 30, 50},
+      /*expectedPositions=*/{1, 2, 4});
+}
+
+// The composite is as long as the batch, not as the rows the reader read.
+TEST_F(IcebergReadTest, targetTableRowIdWithDroppedRows) {
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})})});
+  auto [deleteFilePath, deleteFile] =
+      makePositionalDeleteFile(dataFilePath->getPath(), {3});
+
+  const auto rowIdType = ROW(
+      {{"file_path", VARCHAR()},
+       {"row_position", BIGINT()},
+       {"spec_id", INTEGER()},
+       {"partition_data", VARCHAR()}});
+  auto dataSource = makeDataSource(
+      exec::test::PlanBuilder()
+          .startTableScan(test::kIcebergConnectorId)
+          .outputType(ROW(
+              {{"c0", BIGINT()},
+               {IcebergMetadataColumn::kTargetTableRowIdColumnName,
+                rowIdType}}))
+          .dataColumns(ROW("c0", BIGINT()))
+          .subfieldFilter("c0 >= 20")
+          .endTableScan()
+          .planNode());
+  dataSource->addSplit(makeIcebergSplitWithInfoColumns(
+      dataFilePath->getPath(), {}, {deleteFile}));
+
+  ContinueFuture future;
+  auto batch = dataSource->next(100, future);
+  ASSERT_TRUE(batch.has_value());
+  ASSERT_NE(batch.value(), nullptr);
+  const auto& output = batch.value();
+  ASSERT_EQ(output->size(), 3);
+
+  const auto composite = output->childAt(1)->loadedVector()->as<RowVector>();
+  ASSERT_NE(composite, nullptr);
+  EXPECT_EQ(composite->size(), output->size());
+  for (const auto& child : composite->children()) {
+    EXPECT_EQ(child->size(), output->size());
+  }
+  velox::test::assertEqualVectors(
+      makeFlatVector<int64_t>({1, 2, 4}), composite->childAt(1));
 }
 
 // Info columns arrive as strings on the split and are parsed at read time.

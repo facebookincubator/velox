@@ -1082,7 +1082,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           "$target_table_row_id must be a 4-field ROW; got {}",
           rowIdType->toString());
       const auto& rowIdRowType = rowIdType->asRow();
-      const auto numRows = static_cast<vector_size_t>(rowsScanned);
+      // 'rowsScanned' counts the rows the reader dropped too.
+      const auto numRows = rowOutput->size();
 
       auto filePathConst = BaseVector::createConstant(
           rowIdRowType.childAt(0),
