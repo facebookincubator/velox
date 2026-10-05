@@ -222,7 +222,7 @@ class FileDataSource : public DataSource {
   folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
 
   // Completed logical readers only. Active statistics are added as a snapshot.
-  std::unordered_map<std::string, RuntimeMetric> readerStats_;
+  dwio::common::RuntimeStats readerStats_;
 
  private:
   void applyDynamicFilters();

@@ -290,6 +290,37 @@ void RuntimeStats::mergeFrom(const SplitStats& split) {
   }
 }
 
+void RuntimeStats::mergeFrom(const RuntimeStats& other) {
+  skippedSplits += other.skippedSplits;
+  processedSplits += other.processedSplits;
+  skippedSplitBytes += other.skippedSplitBytes;
+  skippedStrides += other.skippedStrides;
+  processedStrides += other.processedStrides;
+  chunkSkippedRows += other.chunkSkippedRows;
+  processedRows += other.processedRows;
+  footerBufferOverread += other.footerBufferOverread;
+  footerBufferUnderread += other.footerBufferUnderread;
+  footerCacheHit += other.footerCacheHit;
+  numStripes += other.numStripes;
+  unitLoaderStats.merge(other.unitLoaderStats);
+  for (const auto& [format, metrics] : other.formatSpecificStats) {
+    auto& target = formatSpecificStats[format];
+    for (const auto& [name, metric] : metrics) {
+      auto [it, inserted] = target.emplace(name, metric);
+      if (!inserted) {
+        VELOX_CHECK_EQ(it->second.unit, metric.unit);
+        it->second.merge(metric);
+      }
+    }
+  }
+  for (const auto& [nodeId, statsByFormat] : other.columnStats) {
+    for (const auto& [format, stats] : statsByFormat) {
+      auto it = columnStats[nodeId].try_emplace(format, stats.typeKind).first;
+      it->second.mergeFrom(stats);
+    }
+  }
+}
+
 void SplitStats::registerColumnStats(
     const TypeWithId& node,
     bool collectDecodingStats) {

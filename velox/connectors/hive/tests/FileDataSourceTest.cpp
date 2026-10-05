@@ -55,6 +55,7 @@ struct ReaderState {
   int destroyed{0};
   int filterResets{0};
   bool failStats{false};
+  dwio::common::RuntimeStats stats;
   ContinuePromise promise{ContinuePromise::makeEmpty()};
   const ConnectorQueryCtx* context{nullptr};
 };
@@ -104,10 +105,11 @@ class ScriptedReader final : public FileScanReader {
     return {step.state, step.scanned};
   }
 
-  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats()
-      const override {
+  dwio::common::RuntimeStats getRuntimeStats() const override {
     VELOX_CHECK(!state_->failStats, "Injected statistics failure");
-    return {{"testScanned", RuntimeMetric(saturateCast(state_->scanned))}};
+    auto stats = state_->stats;
+    stats.processedRows += saturateCast(state_->scanned);
+    return stats;
   }
   void resetFilterCaches() override {
     ++state_->filterResets;
@@ -446,7 +448,7 @@ TEST_F(FileDataSourceTest, failureAfterOutputKeepsProgress) {
   auto output = next(*source);
   VELOX_ASSERT_THROW(next(*source), "Injected reader failure");
   ASSERT_EQ(source->getCompletedRows(), 3);
-  ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 3);
+  ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 3);
   ASSERT_EQ(state->destroyed, 1);
   expectValues(output, {1, 2, 3});
 }
@@ -490,12 +492,12 @@ TEST_F(FileDataSourceTest, statisticsSnapshotsAndCleanup) {
   ASSERT_TRUE(source->allPrefetchIssued());
   next(*source);
   for (int i = 0; i < 2; ++i) {
-    ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 3);
+    ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 3);
   }
   ASSERT_EQ(next(*source), nullptr);
-  ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 3);
+  ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 3);
   source->cancel();
-  ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 3);
+  ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 3);
   source->state =
       script({{State::kData, 2, {4}}, {State::kBlocked, 0, {}, true}});
   source->addSplit(logicalSplit());
@@ -504,11 +506,11 @@ TEST_F(FileDataSourceTest, statisticsSnapshotsAndCleanup) {
   ASSERT_FALSE(source->next(10, future).has_value());
   source->cancel();
   ASSERT_TRUE(future.isReady());
-  ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 5);
+  ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 5);
   ASSERT_EQ(source->getCompletedRows(), 5);
   ASSERT_EQ(source->state->cancels, 1);
   source->cancel();
-  ASSERT_EQ(source->getRuntimeStats().at("testScanned").sum, 5);
+  ASSERT_EQ(source->getRuntimeStats().at("processedRows").sum, 5);
 }
 
 TEST_F(FileDataSourceTest, destructionAndSplitContract) {
@@ -525,6 +527,144 @@ TEST_F(FileDataSourceTest, destructionAndSplitContract) {
   ASSERT_EQ(state->destroyed, 1);
 }
 
+TEST_F(FileDataSourceTest, countersAndDistributionsAcrossTakeover) {
+  const auto format = dwio::common::FileFormat::DWRF;
+  const auto makeState = [&](int64_t value) {
+    auto state = script({{State::kData, 1, {value}}, {State::kEnd}});
+    auto& stats = state->stats;
+    stats.footerBufferOverread = value;
+    stats.unitLoaderStats.addCounter(
+        "testLoadNanos", RuntimeCounter(value, RuntimeCounter::Unit::kNanos));
+    // These are distributions of individual observations, not scalar totals.
+    auto& metric = stats.formatSpecificStats[format]["testDistribution"];
+    metric.addValue(value);
+    metric.addValue(value + 1);
+    auto& column = stats.columnStats[0]
+                       .try_emplace(format, TypeKind::BIGINT)
+                       .first->second;
+    column.columnMetrics["testColumnDistribution"].addValue(value);
+    column.decodingStats.emplace().decodeCPUTimeNanos.increment(value);
+    return state;
+  };
+  auto target = makeSource(makeState(2));
+  target->addSplit(logicalSplit());
+  next(*target);
+  ASSERT_EQ(next(*target), nullptr);
+
+  auto source = makeSource(makeState(3));
+  source->addSplit(logicalSplit());
+  next(*source);
+  ASSERT_EQ(next(*source), nullptr);
+  source->state = makeState(5);
+  source->addSplit(logicalSplit());
+  next(*source);
+  target->setFromDataSource(std::move(source));
+
+  const auto stats = target->getRuntimeStats();
+  expectStatsEqual(stats, target->getRuntimeStats());
+  const auto expectMetric = [&](const std::string& name,
+                                int64_t sum,
+                                int64_t count,
+                                int64_t min,
+                                int64_t max,
+                                RuntimeCounter::Unit unit =
+                                    RuntimeCounter::Unit::kNone) {
+    SCOPED_TRACE(name);
+    const auto& metric = stats.at(name);
+    EXPECT_EQ(metric.sum, sum);
+    EXPECT_EQ(metric.count, count);
+    EXPECT_EQ(metric.min, min);
+    EXPECT_EQ(metric.max, max);
+    EXPECT_EQ(metric.unit, unit);
+  };
+  expectMetric("processedRows", 3, 1, 3, 3);
+  expectMetric(
+      "footerBufferOverread", 10, 1, 10, 10, RuntimeCounter::Unit::kBytes);
+  expectMetric("testLoadNanos", 10, 1, 10, 10, RuntimeCounter::Unit::kNanos);
+  expectMetric("dwrf.testDistribution", 23, 6, 2, 6);
+  expectMetric("dwrf.testColumnDistribution", 10, 3, 2, 5);
+  expectMetric("dwrf.column_0.BIGINT.testColumnDistribution", 10, 3, 2, 5);
+  expectMetric(
+      "dwrf.decodeCPUTimeNanos", 10, 3, 2, 5, RuntimeCounter::Unit::kNanos);
+  ASSERT_EQ(next(*target), nullptr);
+  expectStatsEqual(stats, target->getRuntimeStats());
+  target->cancel();
+  expectStatsEqual(stats, target->getRuntimeStats());
+}
+
+TEST_F(FileDataSourceTest, fileAdapterAggregatesCountersAcrossSplits) {
+  auto makeFileSource = [&] {
+    return std::make_unique<HiveDataSource>(
+        type_,
+        makeTableHandle({}, nullptr, "test", type_),
+        assignments_,
+        &fileFactory_,
+        nullptr,
+        context_.get(),
+        hiveConfig_);
+  };
+  const std::vector<std::string> counters{
+      "processedSplits",
+      "processedStrides",
+      "numStripes",
+      "footerBufferOverread"};
+  std::unordered_map<std::string, int64_t> expectedTotals;
+  auto source = makeFileSource();
+  for (int i = 1; i <= 3; ++i) {
+    SCOPED_TRACE(i);
+    auto input = makeRowVector(
+        {makeFlatVector<int64_t>(100 * i, [](auto row) { return row; })});
+    auto file = writeScanFile(input, dwio::common::FileFormat::DWRF);
+    auto split = makeHiveConnectorSplit(file->getPath());
+    // Compare accumulated totals with independent single-split reads.
+    auto single = makeFileSource();
+    single->addSplit(split);
+    while (auto batch = next(*single)) {
+      batch->loadedVector();
+    }
+    const auto singleStats = single->getRuntimeStats();
+    for (const auto& name : counters) {
+      expectedTotals[name] += singleStats.at(name).sum;
+    }
+
+    int rows = 0;
+    if (i == 3) {
+      auto preloaded = makeFileSource();
+      preloaded->addSplit(split);
+      auto batch = next(*preloaded);
+      batch->loadedVector();
+      rows += batch->size();
+      source->setFromDataSource(std::move(preloaded));
+    } else {
+      source->addSplit(split);
+    }
+    while (auto batch = next(*source)) {
+      batch->loadedVector();
+      rows += batch->size();
+      const auto snapshot = source->getRuntimeStats();
+      expectStatsEqual(snapshot, source->getRuntimeStats());
+      for (const auto& name : counters) {
+        const auto& metric = snapshot.at(name);
+        EXPECT_EQ(metric.count, 1);
+        EXPECT_EQ(metric.min, metric.sum);
+        EXPECT_EQ(metric.max, metric.sum);
+      }
+    }
+    ASSERT_EQ(rows, input->size());
+    const auto stats = source->getRuntimeStats();
+    for (const auto& name : counters) {
+      SCOPED_TRACE(name);
+      const auto& metric = stats.at(name);
+      EXPECT_EQ(metric.sum, expectedTotals.at(name));
+      EXPECT_EQ(metric.count, 1);
+      EXPECT_EQ(metric.min, metric.sum);
+      EXPECT_EQ(metric.max, metric.sum);
+    }
+    source->cancel();
+    expectStatsEqual(stats, source->getRuntimeStats());
+  }
+}
+
 TEST_F(FileDataSourceTest, takeoverPreservesActiveStatsAndContext) {
   auto state = script({{State::kData, 4, {4}}, {State::kEnd}});
   auto target = makeSource(state);
@@ -535,9 +675,9 @@ TEST_F(FileDataSourceTest, takeoverPreservesActiveStatsAndContext) {
   ASSERT_EQ(state->context, context_.get());
   ASSERT_EQ(state->destroyed, 0);
   ASSERT_EQ(target->getCompletedRows(), 4);
-  ASSERT_EQ(target->getRuntimeStats().at("testScanned").sum, 4);
+  ASSERT_EQ(target->getRuntimeStats().at("processedRows").sum, 4);
   ASSERT_EQ(next(*target), nullptr);
-  ASSERT_EQ(target->getRuntimeStats().at("testScanned").sum, 4);
+  ASSERT_EQ(target->getRuntimeStats().at("processedRows").sum, 4);
   ASSERT_EQ(state->destroyed, 1);
 }
 
@@ -709,7 +849,7 @@ TEST_F(FileDataSourceTest, tableScanBlockedProgressAndCachedOutput) {
         task->taskStats()
             .pipelineStats.at(0)
             .operatorStats.at(0)
-            .runtimeStats.at("testScanned")
+            .runtimeStats.at("processedRows")
             .sum,
         5);
     ASSERT_EQ(

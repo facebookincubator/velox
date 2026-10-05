@@ -33,17 +33,6 @@ namespace facebook::velox::connector::hive {
 
 namespace {
 
-void mergeReaderStats(
-    std::unordered_map<std::string, RuntimeMetric>& target,
-    const std::unordered_map<std::string, RuntimeMetric>& source) {
-  for (const auto& [name, metric] : source) {
-    auto [it, inserted] = target.emplace(name, metric);
-    if (!inserted) {
-      it->second.merge(metric);
-    }
-  }
-}
-
 void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::unordered_map<std::string, RuntimeMetric>& res) {
@@ -366,10 +355,11 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
 
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
-  auto res = readerStats_;
+  auto stats = readerStats_;
   if (scanReader_) {
-    mergeReaderStats(res, scanReader_->getRuntimeStats());
+    stats.mergeFrom(scanReader_->getRuntimeStats());
   }
+  auto res = stats.toRuntimeMetricMap();
   io::addIoStatsToRuntimeStats(*dataIoStats_, "", res);
   io::addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
@@ -413,7 +403,7 @@ void FileDataSource::setFromDataSource(
   source->scanReader_->setConnectorQueryCtx(connectorQueryCtx_);
   activeSplit_ = std::move(source->activeSplit_);
   split_ = std::move(source->split_);
-  mergeReaderStats(readerStats_, source->readerStats_);
+  readerStats_.mergeFrom(source->readerStats_);
   completedRows_ += source->completedRows_;
   lastEventStorageReadBytes_ += source->lastEventStorageReadBytes_;
   totalRemainingFilterTime_.fetch_add(
@@ -495,7 +485,7 @@ void FileDataSource::resetSplit() {
     activeSplit_.reset();
   };
   if (scanReader_) {
-    mergeReaderStats(readerStats_, scanReader_->getRuntimeStats());
+    readerStats_.mergeFrom(scanReader_->getRuntimeStats());
   }
 }
 

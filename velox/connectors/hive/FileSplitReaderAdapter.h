@@ -45,8 +45,7 @@ class FileSplitReaderAdapter final : public FileScanReader {
   ScanReadResult
   next(uint64_t maxRows, VectorPtr& output, ContinueFuture& future) override;
 
-  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats()
-      const override;
+  dwio::common::RuntimeStats getRuntimeStats() const override;
   void resetFilterCaches() override;
   int64_t estimatedRowSize() const override;
   bool allPrefetchIssued() const override;

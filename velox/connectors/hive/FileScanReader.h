@@ -18,6 +18,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -56,8 +57,9 @@ class FileScanReader {
   /// physical readers. Repeated calls must not change or consume the stats.
   /// Take the final snapshot before cancel(), which may release the counters.
   /// Shared IO counters are accounted for separately by FileDataSource.
-  virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats()
-      const = 0;
+  /// Preserve raw counters until FileDataSource exports the totals across
+  /// logical splits. Format-specific and column metrics retain their samples.
+  virtual dwio::common::RuntimeStats getRuntimeStats() const = 0;
 
   virtual void resetFilterCaches() = 0;
   virtual int64_t estimatedRowSize() const = 0;

@@ -76,13 +76,12 @@ ScanReadResult FileSplitReaderAdapter::next(
       scanned};
 }
 
-std::unordered_map<std::string, RuntimeMetric>
-FileSplitReaderAdapter::getRuntimeStats() const {
+dwio::common::RuntimeStats FileSplitReaderAdapter::getRuntimeStats() const {
   auto stats = preparationStats_;
   if (reader_) {
     reader_->updateRuntimeStats(stats);
   }
-  return stats.toRuntimeMetricMap();
+  return stats;
 }
 
 void FileSplitReaderAdapter::resetFilterCaches() {
