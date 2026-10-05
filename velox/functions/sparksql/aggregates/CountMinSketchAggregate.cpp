@@ -366,8 +366,11 @@ T readConstantArgument(const VectorPtr& argument, std::string_view name) {
 
 class CountMinSketchAggregate : public exec::Aggregate {
  public:
-  explicit CountMinSketchAggregate(const TypePtr& resultType)
-      : Aggregate(resultType) {}
+  CountMinSketchAggregate(
+      const TypePtr& resultType,
+      bool requiresRawInputMetadata)
+      : Aggregate(resultType),
+        requiresRawInputMetadata_{requiresRawInputMetadata} {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(CountMinSketchAccumulator);
@@ -375,6 +378,15 @@ class CountMinSketchAggregate : public exec::Aggregate {
 
   bool isFixedSize() const override {
     return false;
+  }
+
+  bool requiresRawInputMetadata() const override {
+    return requiresRawInputMetadata_;
+  }
+
+  void setRawInputMetadata(const std::vector<VectorPtr>& args) override {
+    VELOX_CHECK_GE(args.size(), 4);
+    computeDimensions(args);
   }
 
   // Captures the constant eps, confidence and seed arguments before any data is
@@ -655,6 +667,7 @@ class CountMinSketchAggregate : public exec::Aggregate {
   std::optional<double> epsilon_;
   std::optional<double> confidence_;
   std::optional<int32_t> seed_;
+  const bool requiresRawInputMetadata_;
   int32_t depth_{0};
   int32_t width_{0};
   std::vector<int64_t> hashA_;
@@ -706,17 +719,27 @@ exec::AggregateRegistrationResult registerCountMinSketchAggregate(
             .build());
   }
 
+  exec::AggregateFunctionMetadata metadata;
+  metadata.orderSensitive = false;
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step /* step */,
-          const std::vector<TypePtr>& /* argTypes */,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& /* argTypes */,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        return std::make_unique<CountMinSketchAggregate>(resultType);
+        // Normal raw aggregation uses kPartial or kSingle. Generated merge and
+        // extract companions use kIntermediate or kFinal and don't have the
+        // raw eps, confidence and seed arguments.
+        const bool requiresRawInputMetadata =
+            step == core::AggregationNode::Step::kPartial ||
+            step == core::AggregationNode::Step::kSingle;
+        return std::make_unique<CountMinSketchAggregate>(
+            resultType, requiresRawInputMetadata);
       },
+      metadata,
       withCompanionFunctions,
       overwrite);
 }

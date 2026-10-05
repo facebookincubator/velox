@@ -619,13 +619,87 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
     });
   };
   const std::vector<RowVectorPtr> vectors = {
-      makeInput(0, true),
       makeInput(1, false),
+      makeInput(0, true),
   };
   const std::vector<std::string> groupingKeys = {"c4"};
   const std::vector<std::string> aggregates = {
       "count_min_sketch(c0, c1, c2, c3)"};
   const std::vector<std::string> masks = {"c5"};
+
+  auto globalMaskedPartialPlan = exec::test::PlanBuilder(pool())
+                                     .values({vectors[0]})
+                                     .partialAggregation({}, aggregates, masks)
+                                     .planNode();
+  auto globalMaskedPartial =
+      exec::test::AssertQueryBuilder(globalMaskedPartialPlan)
+          .copyResults(pool());
+  ASSERT_EQ(globalMaskedPartial->size(), 1);
+  auto globalMaskedSketch =
+      globalMaskedPartial->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(globalMaskedSketch->isNullAt(0));
+  auto [globalMaskedDepth, globalMaskedWidth, globalMaskedCount] =
+      parseSketch(globalMaskedSketch->valueAt(0));
+  EXPECT_EQ(globalMaskedDepth, 1);
+  EXPECT_EQ(globalMaskedWidth, 4);
+  EXPECT_EQ(globalMaskedCount, 0);
+
+  auto maskedPartialPlan =
+      exec::test::PlanBuilder(pool())
+          .values({vectors[0]})
+          .partialAggregation(groupingKeys, aggregates, masks)
+          .planNode();
+  auto maskedPartial =
+      exec::test::AssertQueryBuilder(maskedPartialPlan).copyResults(pool());
+  ASSERT_EQ(maskedPartial->size(), 1);
+  auto maskedSketch = maskedPartial->childAt(1)->asFlatVector<StringView>();
+  ASSERT_FALSE(maskedSketch->isNullAt(0));
+  auto [maskedDepth, maskedWidth, maskedCount] =
+      parseSketch(maskedSketch->valueAt(0));
+  EXPECT_EQ(maskedDepth, 1);
+  EXPECT_EQ(maskedWidth, 4);
+  EXPECT_EQ(maskedCount, 0);
+
+  auto streamingMaskedPartialPlan =
+      exec::test::PlanBuilder(pool())
+          .values({vectors[0]})
+          .streamingAggregation(
+              groupingKeys,
+              aggregates,
+              masks,
+              core::AggregationNode::Step::kPartial,
+              false)
+          .planNode();
+  auto streamingMaskedPartial =
+      exec::test::AssertQueryBuilder(streamingMaskedPartialPlan)
+          .copyResults(pool());
+  ASSERT_EQ(streamingMaskedPartial->size(), 1);
+  auto streamingMaskedSketch =
+      streamingMaskedPartial->childAt(1)->asFlatVector<StringView>();
+  ASSERT_FALSE(streamingMaskedSketch->isNullAt(0));
+  auto [streamingDepth, streamingWidth, streamingCount] =
+      parseSketch(streamingMaskedSketch->valueAt(0));
+  EXPECT_EQ(streamingDepth, 1);
+  EXPECT_EQ(streamingWidth, 4);
+  EXPECT_EQ(streamingCount, 0);
+
+  auto maskedCompanionPlan =
+      exec::test::PlanBuilder(pool())
+          .values({vectors[0]})
+          .singleAggregation(
+              groupingKeys, {"count_min_sketch_partial(c0, c1, c2, c3)"}, masks)
+          .planNode();
+  auto maskedCompanion =
+      exec::test::AssertQueryBuilder(maskedCompanionPlan).copyResults(pool());
+  ASSERT_EQ(maskedCompanion->size(), 1);
+  auto maskedCompanionSketch =
+      maskedCompanion->childAt(1)->asFlatVector<StringView>();
+  ASSERT_FALSE(maskedCompanionSketch->isNullAt(0));
+  auto [companionDepth, companionWidth, companionCount] =
+      parseSketch(maskedCompanionSketch->valueAt(0));
+  EXPECT_EQ(companionDepth, 1);
+  EXPECT_EQ(companionWidth, 4);
+  EXPECT_EQ(companionCount, 0);
 
   auto expectedPlan = exec::test::PlanBuilder(pool())
                           .values(vectors)

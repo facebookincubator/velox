@@ -305,7 +305,24 @@ void StreamingAggregation::evaluateAggregates() {
     }
 
     const auto& rows = getSelectivityVector(i);
+    const auto& function = aggregate.function;
+    const auto makeArgs = [&]() {
+      std::vector<VectorPtr> args;
+      for (auto j = 0; j < aggregate.inputs.size(); ++j) {
+        if (aggregate.inputs[j] == kConstantChannel) {
+          args.push_back(
+              BaseVector::wrapInConstant(
+                  input_->size(), 0, aggregate.constantInputs[j]));
+        } else {
+          args.push_back(input_->childAt(aggregate.inputs[j]));
+        }
+      }
+      return args;
+    };
     if (!rows.hasSelections()) {
+      if (isRawInput(step_) && function->requiresRawInputMetadata()) {
+        function->setRawInputMetadata(makeArgs());
+      }
       continue;
     }
 
@@ -314,19 +331,7 @@ void StreamingAggregation::evaluateAggregates() {
       continue;
     }
 
-    const auto& function = aggregate.function;
-    const auto& inputs = aggregate.inputs;
-    const auto& constantInputs = aggregate.constantInputs;
-
-    std::vector<VectorPtr> args;
-    for (auto j = 0; j < inputs.size(); ++j) {
-      if (inputs[j] == kConstantChannel) {
-        args.push_back(
-            BaseVector::wrapInConstant(input_->size(), 0, constantInputs[j]));
-      } else {
-        args.push_back(input_->childAt(inputs[j]));
-      }
-    }
+    auto args = makeArgs();
 
     if (isRawInput(step_)) {
       if (function->supportsAddRawClusteredInput()) {
