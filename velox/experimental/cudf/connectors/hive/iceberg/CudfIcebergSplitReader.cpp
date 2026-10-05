@@ -29,6 +29,7 @@
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/Type.h"
 
 #include <cudf/column/column_factories.hpp>
@@ -835,7 +836,11 @@ void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
         childIdx,
         meta.schema.size(),
         "Parquet schema child index out of range");
-    fileColumnNames_.insert(meta.schema[childIdx].name);
+    const auto& name = meta.schema[childIdx].name;
+    fileColumnNames_.insert(
+        caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name);
   }
 }
 

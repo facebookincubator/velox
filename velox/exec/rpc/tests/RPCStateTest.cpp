@@ -127,6 +127,84 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
 }
 
+TEST_F(RPCStateTest, claimReportsIdleWithoutCreatingAWaiter) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+
+  EXPECT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kIdle);
+  EXPECT_FALSE(waitFuture.valid());
+  EXPECT_FALSE(claimedRow.has_value());
+}
+
+TEST_F(RPCStateTest, completedRowReleasesAdmissionBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.row.admission");
+  limiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  auto admissionLease = limiter->makeLease(std::move(tokens.front()));
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state_->addPendingRow(
+      state_,
+      42,
+      RPCState::RowLocation{0, 0},
+      std::move(future),
+      std::move(admissionLease));
+  promise.setValue(RPCResponse{});
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_FALSE(claimedRow->sharedOverloadHandled);
+  EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, completedOverloadBacksOffBeforeReleasingAdmission) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.row.overload");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state_->addPendingRow(
+      state_,
+      42,
+      RPCState::RowLocation{0, 0},
+      std::move(future),
+      limiter->makeLease(std::move(tokens.front())));
+  promise.setValue(
+      RPCResponse::failed(
+          42, velox::rpc::RPCErrorKind::kRateLimited, "overloaded"));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_TRUE(claimedRow->sharedOverloadHandled);
+  EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
+}
+
 TEST_F(RPCStateTest, completedRowMemoryIsAccountedUntilReleased) {
   auto root = memory::memoryManager()->addRootPool("rpcResponseAccounting");
   auto pool = root->addLeafChild("leaf");
@@ -196,6 +274,73 @@ TEST_F(RPCStateTest, completedBatchMemoryIsAccountedUntilReleased) {
   EXPECT_EQ(pool->stats().numExternalFrees, baseline.numExternalFrees + 1);
 }
 
+TEST_F(RPCStateTest, completedBatchReleasesAdmissionBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.batch.admission");
+  limiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto reserved = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(reserved.size(), 1);
+  auto admissionLease = limiter->makeLease(std::move(reserved));
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state_->addPendingBatch(
+      state_,
+      std::move(future),
+      {},
+      /*admissionUnits=*/1,
+      std::move(admissionLease));
+  promise.setValue(std::vector<RPCResponse>(1));
+
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state_->tryPollReady();
+    return readyBatch.has_value();
+  });
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_FALSE(readyBatch->sharedOverloadHandled);
+  EXPECT_TRUE(readyBatch->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, completedBatchOverloadBacksOffBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.batch.overload");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto reserved = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(reserved.size(), 1);
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state_->addPendingBatch(
+      state_,
+      std::move(future),
+      {},
+      /*admissionUnits=*/1,
+      limiter->makeLease(std::move(reserved)));
+  std::vector<RPCResponse> responses;
+  responses.push_back(
+      RPCResponse::failed(
+          42, velox::rpc::RPCErrorKind::kRateLimited, "overloaded"));
+  promise.setValue(std::move(responses));
+
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state_->tryPollReady();
+    return readyBatch.has_value();
+  });
+  ASSERT_TRUE(readyBatch.has_value());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  EXPECT_TRUE(readyBatch->sharedOverloadHandled);
+  EXPECT_TRUE(readyBatch->admissionEpoch.has_value());
+}
+
 TEST_F(RPCStateTest, closeReleasesQueuedPayloadAndIgnoresLateCompletion) {
   auto root = memory::memoryManager()->addRootPool("rpcCloseAccounting");
   auto pool = root->addLeafChild("leaf");
@@ -227,6 +372,54 @@ TEST_F(RPCStateTest, closeReleasesQueuedPayloadAndIgnoresLateCompletion) {
   latePromise.setValue(std::move(lateResponse));
   waitFor([&]() { return lateState->numInFlight() == 0; });
   EXPECT_EQ(pool->usedBytes(), baseline);
+}
+
+TEST_F(RPCStateTest, closeReleasesPerRowAndBatchAdmission) {
+  auto rowLimiter = std::make_shared<RPCRateLimiter>("test.close.row");
+  rowLimiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto rowTokens = rowLimiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rowTokens.size(), 1);
+  auto rowLease = rowLimiter->makeLease(std::move(rowTokens.front()));
+
+  auto rowState = std::make_shared<RPCState>(testPool());
+  rowState->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto [rowPromise, rowFuture] = folly::makePromiseContract<RPCResponse>();
+  rowState->addPendingRow(
+      rowState,
+      1,
+      RPCState::RowLocation{0, 0},
+      std::move(rowFuture),
+      std::move(rowLease));
+  ASSERT_EQ(rowLimiter->stats().pending, 1);
+
+  rowState->close();
+  EXPECT_EQ(rowLimiter->stats().pending, 0);
+  rowPromise.setValue(RPCResponse{});
+  waitFor([&]() { return rowState->numInFlight() == 0; });
+  EXPECT_EQ(rowLimiter->stats().pending, 0);
+
+  auto batchLimiter = std::make_shared<RPCRateLimiter>("test.close.batch");
+  batchLimiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto batchTokens = batchLimiter->tryAcquireUpTo(1);
+  ASSERT_EQ(batchTokens.size(), 1);
+  auto admissionLease = batchLimiter->makeLease(std::move(batchTokens));
+
+  auto batchState = std::make_shared<RPCState>(testPool());
+  batchState->setStreamingMode(RPCStreamingMode::kBatch);
+  auto [batchPromise, batchFuture] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  batchState->addPendingBatch(
+      batchState,
+      std::move(batchFuture),
+      {},
+      /*admissionUnits=*/1,
+      std::move(admissionLease));
+  ASSERT_EQ(batchLimiter->stats().pending, 1);
+
+  batchState->close();
+  EXPECT_EQ(batchLimiter->stats().pending, 0);
+  batchPromise.setValue(std::vector<RPCResponse>(1));
+  EXPECT_EQ(batchLimiter->stats().pending, 0);
 }
 
 TEST_F(RPCStateTest, closeReleasesReadyBatchAndIgnoresLateBatch) {

@@ -247,10 +247,11 @@ class HybridFlatMapType : public Type {
   struct Group {
     /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
     uint32_t groupId;
-    /// Feature keys assigned to this group. Empty only for Default.
+    /// Feature keys in key-presence bitmap order. Default keys are accumulated
+    /// in first-seen order and may be empty before any are observed.
     std::vector<std::string> groupKeys;
-    /// Actual keys represented by the following in-map segments.
-    StreamDescriptor keyDescriptor;
+    /// One bit per schema key; trailing omitted bits are absent.
+    StreamDescriptor keyPresenceDescriptor;
     /// Key-major row-presence stream.
     StreamDescriptor inMapDescriptor;
     /// Complete value subtree owned by this physical group.
@@ -266,7 +267,7 @@ class HybridFlatMapType : public Type {
   /// Returns the map-level null stream descriptor.
   const StreamDescriptor& nullsDescriptor() const;
 
-  /// Returns the scalar type used by map keys and group keys streams.
+  /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
   /// Returns the number of physical groups present in this schema. Complete
@@ -281,9 +282,8 @@ class HybridFlatMapType : public Type {
   /// Default because it was not selected.
   const Group& defaultGroup() const;
 
-  /// Returns the schema-order index of the configured group containing `key`.
-  /// Returns `std::nullopt` when no configured group contains it, including
-  /// both keys routed to Default and keys unknown to the schema.
+  /// Returns the schema-order index of the group containing `key`, including
+  /// Default. Returns `std::nullopt` when the schema has not observed it.
   std::optional<size_t> findGroup(std::string_view key) const;
 
   /// Returns the common logical value type from the first group.
@@ -540,7 +540,7 @@ bool visitPresenceStreamOffsets(
       }
       for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
         const auto& group = hybridFlatMap.groupAt(i);
-        if (visitStream(group.keyDescriptor.offset()) ||
+        if (visitStream(group.keyPresenceDescriptor.offset()) ||
             visitStream(group.inMapDescriptor.offset()) ||
             visitPresenceStreamOffsets(
                 *group.valueType, level + 1, visitType, visitStream)) {

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <ostream>
@@ -30,6 +31,11 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/Merge.h"
 
 namespace facebook::velox::exec {
 
@@ -76,6 +82,55 @@ InMemoryExchangeClient::InMemoryExchangeClient(
   VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
   VELOX_CHECK_GE(
       destination, 0, "Exchange client destination must not be negative");
+}
+
+// static
+std::shared_ptr<ExchangeTransportEntry>
+InMemoryExchangeClient::makeDefaultTransportEntry() {
+  return ExchangeTransportEntry::make<InMemoryExchangeClient>(
+      [](const ExchangeClientContext& context) {
+        // Validate the Task-supplied limit before narrowing it.
+        const auto& queryConfig = context.queryConfig;
+        VELOX_USER_CHECK_LE(
+            context.maxExchangeBufferSize,
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+            "Exchange buffer size must fit in int64_t: {}",
+            core::QueryConfig::kMaxExchangeBufferSize);
+        return std::make_shared<InMemoryExchangeClient>(
+            context.taskId,
+            context.destination,
+            static_cast<int64_t>(context.maxExchangeBufferSize),
+            context.numberOfConsumers,
+            context.minExchangeOutputBatchBytes,
+            context.pool,
+            context.executor,
+            queryConfig.requestDataSizesMaxWaitSec(),
+            queryConfig.singleSourceExchangeOptimizationEnabled(),
+            queryConfig.exchangeLazyFetchingEnabled());
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        return std::make_unique<Exchange>(operatorId, ctx, node, client);
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& /*client*/)
+          -> std::unique_ptr<Operator> {
+        // MergeExchange keeps one client per source to preserve each
+        // source's order, so it does not take the Task-level client.
+        const auto mergeExchangeNode =
+            std::dynamic_pointer_cast<const core::MergeExchangeNode>(node);
+        VELOX_CHECK_NOT_NULL(
+            mergeExchangeNode,
+            "MergeExchange requires a MergeExchangeNode, plan node: {}",
+            node->id());
+        return std::make_unique<MergeExchange>(
+            operatorId, ctx, mergeExchangeNode);
+      });
 }
 
 void InMemoryExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {

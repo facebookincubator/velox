@@ -35,6 +35,8 @@ class HybridFlatMap {
   /// Describes one group in logical schema order.
   struct Group {
     uint32_t groupId{0};
+    /// Keys in key-presence bitmap order. Configured groups are sorted;
+    /// Default preserves first-seen order.
     std::vector<std::string> groupKeys;
 
     bool operator==(const Group&) const = default;
@@ -70,7 +72,8 @@ class HybridFlatMap {
   /// preceding groups.
   std::string serialize() const;
 
-  /// Deserializes and validates groups produced by `serialize()`.
+  /// Deserializes and validates groups produced by `serialize()`. Also accepts
+  /// an omitted `group_keys` vector when no group has keys.
   static HybridFlatMap deserialize(std::string_view serialized);
 
   /// Deserializes the reserved metadata attribute, leaving `attributes`
@@ -97,12 +100,17 @@ void validateHybridFlatMapGroups(
     bool hasDefault,
     GroupIdAt groupIdAt,
     GroupKeysAt groupKeysAt) {
-  const auto minGroupCount = 1 + static_cast<size_t>(hasDefault);
   NIMBLE_CHECK_GE(
-      groupCount,
-      minGroupCount,
-      "Hybrid FlatMap requires at least {} group(s).",
-      minGroupCount);
+      groupCount, size_t{1}, "Hybrid FlatMap requires at least 1 group(s).");
+  // Default alone is valid because it holds every key. A projection may keep a
+  // single configured group, so only a complete schema requires its single
+  // group to be Default.
+  if (hasDefault && groupCount == 1) {
+    NIMBLE_CHECK(
+        HybridFlatMap::isDefaultGroup(groupIdAt(0)),
+        "Hybrid FlatMap single group must be Default: {}.",
+        groupIdAt(0));
+  }
   folly::F14FastSet<uint32_t> groupIds;
   folly::F14FastSet<std::string> keys;
   bool foundDefault{false};
@@ -121,19 +129,16 @@ void validateHybridFlatMapGroups(
     }
     if (HybridFlatMap::isDefaultGroup(groupId)) {
       foundDefault = true;
-      NIMBLE_CHECK(
-          groupKeys.empty(),
-          "Hybrid FlatMap Default group cannot contain group keys.");
     } else {
       NIMBLE_CHECK(
           !groupKeys.empty(),
           "Hybrid FlatMap group must contain at least one key: {}.",
           groupId);
+      NIMBLE_CHECK(
+          std::is_sorted(groupKeys.begin(), groupKeys.end()),
+          "Hybrid FlatMap group keys must be sorted: {}.",
+          groupId);
     }
-    NIMBLE_CHECK(
-        std::is_sorted(groupKeys.begin(), groupKeys.end()),
-        "Hybrid FlatMap group keys must be sorted: {}.",
-        groupId);
     for (const auto& key : groupKeys) {
       NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
       NIMBLE_CHECK(

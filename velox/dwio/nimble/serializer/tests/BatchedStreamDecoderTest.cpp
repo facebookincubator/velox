@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 
+#include "folly/Conv.h"
 #include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -274,6 +275,8 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
       HybridFlatMap::kDefaultGroupId,
       {},
       schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  hybridMap->appendDefaultGroupKey("new:X");
+  hybridMap->appendDefaultGroupKey("new:Y");
 
   SchemaSerializer schemaSerializer;
   const auto schema = SchemaDeserializer::deserialize(
@@ -328,46 +331,58 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
     return decoded;
   };
 
-  const std::vector<std::string> expectedKeys{"A", "B"};
-  const auto encodedKeys = encodeStrings(expectedKeys);
-  const auto decodedKeys =
-      decodeStrings(group.keyDescriptor, encodedKeys, expectedKeys.size());
-  EXPECT_EQ(decodedKeys, expectedKeys);
+  const auto encodeBools = [&](std::span<const bool> values) {
+    const std::string_view raw{
+        reinterpret_cast<const char*>(values.data()),
+        values.size() * sizeof(bool)};
+    Buffer buffer{*pool_};
+    return std::string{serde::detail::encodeScalar<std::string>(
+        options,
+        ScalarKind::Bool,
+        raw,
+        *pool_,
+        buffer,
+        /*encodingLayout=*/nullptr,
+        options.encodingOptions)};
+  };
+  const auto decodeBools = [&](const StreamDescriptor& descriptor,
+                               std::string_view encoded,
+                               size_t count) {
+    ScalarType type{descriptor};
+    BatchedStreamDecoder decoder{
+        type, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+    decoder.addBatch(
+        /*startRow=*/0,
+        encoded,
+        /*legacyHeaderless=*/false,
+        options.encodingOptions.useVarintRowCount);
+    const auto numValues = folly::to<uint32_t>(count);
+    std::vector<uint8_t> decoded(count);
+    std::vector<facebook::velox::BufferPtr> stringBuffers;
+    EXPECT_EQ(
+        decoder.next(
+            numValues,
+            decoded.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        numValues);
+    return std::vector<bool>(decoded.begin(), decoded.end());
+  };
+
+  const std::array<bool, 2> expectedKeyPresence{true, true};
+  const auto decodedKeyPresence = decodeBools(
+      group.keyPresenceDescriptor,
+      encodeBools(expectedKeyPresence),
+      expectedKeyPresence.size());
+  EXPECT_EQ(
+      decodedKeyPresence,
+      std::vector<bool>(
+          expectedKeyPresence.begin(), expectedKeyPresence.end()));
 
   const std::array<bool, 6> expectedInMap{
       true, false, false, true, false, true};
-  const std::string_view rawInMap{
-      reinterpret_cast<const char*>(expectedInMap.data()),
-      expectedInMap.size() * sizeof(bool)};
-  Buffer inMapBuffer{*pool_};
-  const std::string encodedInMap{serde::detail::encodeScalar<std::string>(
-      options,
-      ScalarKind::Bool,
-      rawInMap,
-      *pool_,
-      inMapBuffer,
-      /*encodingLayout=*/nullptr,
-      options.encodingOptions)};
-  ScalarType inMapType{group.inMapDescriptor};
-  BatchedStreamDecoder inMapDecoder{
-      inMapType, /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
-  inMapDecoder.addBatch(
-      /*startRow=*/0,
-      encodedInMap,
-      /*legacyHeaderless=*/false,
-      options.encodingOptions.useVarintRowCount);
-  std::vector<uint8_t> decodedInMap(expectedInMap.size());
-  std::vector<facebook::velox::BufferPtr> stringBuffers;
-  EXPECT_EQ(
-      inMapDecoder.next(
-          decodedInMap.size(),
-          decodedInMap.data(),
-          /*getOutputNulls=*/nullptr,
-          stringBuffers),
-      expectedInMap.size());
-  EXPECT_EQ(
-      std::vector<bool>(decodedInMap.begin(), decodedInMap.end()),
-      std::vector<bool>(expectedInMap.begin(), expectedInMap.end()));
+  const auto decodedInMap = decodeBools(
+      group.inMapDescriptor, encodeBools(expectedInMap), expectedInMap.size());
 
   const std::vector<std::string> expectedValues{"x", "u", "v"};
   const auto encodedValues = encodeStrings(expectedValues);
@@ -379,11 +394,14 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
 
   std::vector<std::vector<std::pair<std::string, std::string>>> rows(3);
   size_t valueIndex{0};
-  for (size_t keyIndex = 0; keyIndex < decodedKeys.size(); ++keyIndex) {
+  for (size_t keyIndex = 0; keyIndex < group.groupKeys.size(); ++keyIndex) {
+    if (!decodedKeyPresence[keyIndex]) {
+      continue;
+    }
     for (size_t row = 0; row < rows.size(); ++row) {
       if (decodedInMap[keyIndex * rows.size() + row]) {
         rows[row].emplace_back(
-            decodedKeys[keyIndex], decodedValues[valueIndex]);
+            group.groupKeys[keyIndex], decodedValues[valueIndex]);
         ++valueIndex;
       }
     }
@@ -397,14 +415,17 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
   EXPECT_EQ(rows, expectedRows);
 
   const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
-  const std::vector<std::string> expectedDefaultKeys{"new:X", "new:Y"};
-  const auto encodedDefaultKeys = encodeStrings(expectedDefaultKeys);
   EXPECT_EQ(
-      decodeStrings(
-          defaultGroup.keyDescriptor,
-          encodedDefaultKeys,
-          expectedDefaultKeys.size()),
-      expectedDefaultKeys);
+      defaultGroup.groupKeys, (std::vector<std::string>{"new:X", "new:Y"}));
+  const std::array<bool, 2> expectedDefaultKeyPresence{true, false};
+  EXPECT_EQ(
+      decodeBools(
+          defaultGroup.keyPresenceDescriptor,
+          encodeBools(expectedDefaultKeyPresence),
+          expectedDefaultKeyPresence.size()),
+      std::vector<bool>(
+          expectedDefaultKeyPresence.begin(),
+          expectedDefaultKeyPresence.end()));
 }
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
