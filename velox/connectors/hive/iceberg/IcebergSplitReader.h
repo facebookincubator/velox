@@ -245,9 +245,8 @@ class IcebergSplitReader : public FileSplitReader {
   // without a geometry column. The Iceberg connector is the sole owner of the
   // WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
   std::vector<column_index_t> geometryOutputChannels_;
-  // Whether an implicit row-number column is needed for _row_id computation
-  // (set when filters, random-skip, or positional deletes make output
-  // positions non-contiguous).
+  // Whether the reader appends a row-number column, the source of the file
+  // positions for _row_id and $target_table_row_id.
   bool useRowNumberColumn_{false};
 
   // Filled-in columns of the current split, with or without a filter yet: a

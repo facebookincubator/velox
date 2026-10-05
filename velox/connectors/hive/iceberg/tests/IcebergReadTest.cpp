@@ -23,6 +23,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -2127,6 +2128,73 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
       {102, 200});
   const auto planStats = exec::toPlanStats(task->taskStats());
   EXPECT_EQ(planStats.at(scanId).customStats.at("preloadedSplits").sum, 2);
+}
+
+// A dynamic filter on a data column arriving mid-split makes the reader drop
+// rows; '_row_id' still follows the file positions.
+TEST_F(IcebergReadTest, rowLineageDynamicFilterMidSplit) {
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>(
+          kMultiBatchNumRows, [](vector_size_t row) { return row; })})});
+
+  const auto outputType = ROW({"c0", "_row_id"}, BIGINT());
+  auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+      exec::test::PlanBuilder()
+          .startTableScan(test::kIcebergConnectorId)
+          .outputType(outputType)
+          .dataColumns(ROW("c0", BIGINT()))
+          .endTableScan()
+          .planNode());
+  auto dataSource = ConnectorRegistry::tryGet(test::kIcebergConnectorId)
+                        ->createDataSource(
+                            outputType,
+                            scanNode->tableHandle(),
+                            scanNode->assignments(),
+                            connectorQueryCtx_.get());
+  dataSource->addSplit(makeIcebergSplitWithInfoColumns(
+      dataFilePath->getPath(),
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn,
+        std::to_string(kMultiBatchFirstRowId)},
+       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn,
+        std::to_string(kMultiBatchSequenceNumber)}}));
+
+  std::vector<RowVectorPtr> results;
+  ContinueFuture future;
+  auto readBatch = [&]() {
+    auto batch = dataSource->next(kMultiBatchRowsPerBatch, future);
+    VELOX_CHECK(batch.has_value());
+    if (batch.value() == nullptr) {
+      return false;
+    }
+    // The next read invalidates the lazy columns.
+    batch.value()->loadedVector();
+    results.push_back(batch.value());
+    return true;
+  };
+  ASSERT_TRUE(readBatch());
+  dataSource->addDynamicFilter(
+      0, std::make_shared<common::BigintRange>(150, 199, false));
+  while (readBatch()) {
+  }
+
+  auto expectedRowIds = [this](vector_size_t firstRow, vector_size_t numRows) {
+    return makeRowVector(
+        {"c0", "_row_id"},
+        {
+            makeFlatVector<int64_t>(
+                numRows, [&](vector_size_t row) { return firstRow + row; }),
+            makeFlatVector<int64_t>(
+                numRows,
+                [&](vector_size_t row) {
+                  return kMultiBatchFirstRowId + firstRow + row;
+                }),
+        });
+  };
+  exec::test::assertEqualResults(
+      {expectedRowIds(0, kMultiBatchRowsPerBatch), expectedRowIds(150, 50)},
+      results);
 }
 
 // Splits of a data source share the scan spec; the filter is enforced on each.

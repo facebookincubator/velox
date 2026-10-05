@@ -472,8 +472,7 @@ void IcebergSplitReader::prepareSplit(
   // $target_table_row_id and cache the constant fields (spec_id,
   // partition_data) so next() can build the composite RowVector cheaply.
   // file_path comes from the split's filePath directly; row_position is
-  // computed per row in next() using either the injected row-number column
-  // (filter / skip / positional-delete paths) or the contiguous formula.
+  // computed per row in next() from the injected row-number column.
   targetTableRowIdOutputIndex_ = std::nullopt;
   targetTableSpecId_ = std::nullopt;
   targetTablePartitionData_ = std::nullopt;
@@ -537,30 +536,13 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  // Inject a row-number column when filters, random-skip, or row-skipping
-  // deletes make the output-to-file-position mapping non-contiguous.
-  // Check split metadata rather than positionalDeleteFileReaders_ because
-  // the row reader must be configured before delete files are opened. Both
-  // _row_id and $target_table_row_id need accurate file-absolute positions,
-  // so request injection when either is projected. Deletion vectors skip rows
-  // exactly like V2 positional deletes and must be counted here too.
-  const bool hasRowSkippingDeletes = std::any_of(
-      icebergSplit_->deleteFiles.begin(),
-      icebergSplit_->deleteFiles.end(),
-      [](const IcebergDeleteFile& deleteFile) {
-        return (deleteFile.content == FileContent::kPositionalDeletes ||
-                deleteFile.content == FileContent::kDeletionVector) &&
-            deleteFile.recordCount > 0;
-      });
-  // TODO: Inject the row-number column when _row_id or $target_table_row_id
-  // is projected and the scan can receive dynamic filters. A dynamic filter on
-  // another column that arrives after this decision makes the reader drop rows
-  // while next() still uses the contiguous formula, so the row positions are
-  // wrong.
-  useRowNumberColumn_ = (rowIdOutputIndex_.has_value() ||
-                         targetTableRowIdOutputIndex_.has_value()) &&
-      (scanSpec_->hasFilter() || baseReaderOpts_.randomSkip() != nullptr ||
-       hasRowSkippingDeletes);
+  // _row_id and $target_table_row_id need file-absolute positions, which the
+  // output index does not give once the reader drops rows. Filters, random
+  // skip and deletes drop them, and so does a dynamic filter that arrives
+  // after the row reader is created, so the row-number column is injected
+  // whenever either column is projected.
+  useRowNumberColumn_ =
+      rowIdOutputIndex_.has_value() || targetTableRowIdOutputIndex_.has_value();
   if (useRowNumberColumn_) {
     dwio::common::RowNumberColumnInfo rowNumInfo;
     rowNumInfo.insertPosition = readerOutputType_->size();
@@ -1064,24 +1046,16 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           seqNumChild, pool, [seqNum](vector_size_t) { return seqNum; });
     }
 
-    // Resolve file-absolute row positions once and reuse for both
-    // _row_id and $target_table_row_id. When useRowNumberColumn_ is true,
-    // the reader appended a row-number column at index
-    // readerOutputType_->size(). Otherwise the output is contiguous and we
-    // derive positions from the split offset plus per-row index.
-    const bool needRowPositions = rowIdOutputIndex_.has_value() ||
-        targetTableRowIdOutputIndex_.has_value();
+    // File-absolute row positions for both _row_id and $target_table_row_id,
+    // from the row-number column the reader appends at index
+    // readerOutputType_->size().
     std::optional<DecodedVector> decodedRowNumsHolder;
-    if (needRowPositions && useRowNumberColumn_) {
+    if (useRowNumberColumn_) {
       decodedRowNumsHolder.emplace(
           *rowOutput->childAt(readerOutputType_->size()));
     }
     auto rowPositionAt = [&](vector_size_t i) -> int64_t {
-      if (useRowNumberColumn_) {
-        return decodedRowNumsHolder->valueAt<int64_t>(i);
-      }
-      return static_cast<int64_t>(splitOffset_ + baseReadOffset_) +
-          static_cast<int64_t>(i);
+      return decodedRowNumsHolder->valueAt<int64_t>(i);
     };
 
     if (rowIdOutputIndex_.has_value() && firstRowId_.has_value()) {
