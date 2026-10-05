@@ -607,6 +607,50 @@ TEST_F(CountMinSketchAggregateTest, changedParametersAcrossBatchesRejected) {
       "eps argument must be constant for all input rows");
 }
 
+TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
+  const auto makeInput = [&](int32_t group, bool mask) {
+    return makeRowVector({
+        makeFlatVector<int64_t>({group}),
+        makeFlatVector<double>({0.5}),
+        makeFlatVector<double>({0.5}),
+        makeFlatVector<int32_t>({1}),
+        makeFlatVector<int32_t>({group}),
+        makeFlatVector<bool>({mask}),
+    });
+  };
+  const std::vector<RowVectorPtr> vectors = {
+      makeInput(0, true),
+      makeInput(1, false),
+  };
+  const std::vector<std::string> groupingKeys = {"c4"};
+  const std::vector<std::string> aggregates = {
+      "count_min_sketch(c0, c1, c2, c3)"};
+  const std::vector<std::string> masks = {"c5"};
+
+  auto expectedPlan = exec::test::PlanBuilder(pool())
+                          .values(vectors)
+                          .singleAggregation(groupingKeys, aggregates, masks)
+                          .planNode();
+  auto expected =
+      exec::test::AssertQueryBuilder(expectedPlan).copyResults(pool());
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  std::vector<core::PlanNodePtr> sources;
+  for (const auto& vector : vectors) {
+    sources.push_back(
+        exec::test::PlanBuilder(planNodeIdGenerator)
+            .values({vector})
+            .partialAggregation(groupingKeys, aggregates, masks)
+            .planNode());
+  }
+  auto partialPlan = exec::test::PlanBuilder(planNodeIdGenerator)
+                         .localPartition(groupingKeys, sources)
+                         .finalAggregation()
+                         .planNode();
+
+  assertQuery(partialPlan, expected);
+}
+
 TEST_F(CountMinSketchAggregateTest, partialToFinal) {
   // Verify partial->final aggregation produces correct results using
   // testAggregations which tests multiple plans.
