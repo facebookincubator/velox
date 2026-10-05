@@ -22,9 +22,9 @@ FileSplitReaderAdapter::FileSplitReaderAdapter(
     std::unique_ptr<FileSplitReader> reader,
     std::shared_ptr<const FileConnectorSplit> split,
     memory::MemoryPool* pool,
-    std::shared_ptr<const FileScanPlan> plan,
+    std::shared_ptr<const FileScanSpec> fileScanSpec,
     std::shared_ptr<FileScanState> state)
-    : plan_(std::move(plan)),
+    : fileScanSpec_(std::move(fileScanSpec)),
       state_(std::move(state)),
       reader_(std::move(reader)),
       split_(std::move(split)),
@@ -113,7 +113,7 @@ void FileSplitReaderAdapter::cancel() noexcept {
   ended_ = true;
   reader_.reset();
   state_.reset();
-  plan_.reset();
+  fileScanSpec_.reset();
   split_.reset();
 }
 

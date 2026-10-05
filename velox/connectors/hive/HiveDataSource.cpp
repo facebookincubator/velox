@@ -127,7 +127,7 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
   return std::make_unique<HiveSplitReader>(
       hiveSplit,
       tableHandle_,
-      &scanPlan_->partitionKeys(),
+      &fileScanSpec_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
@@ -137,7 +137,7 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
-      &scanPlan_->infoColumns(),
+      &fileScanSpec_->infoColumns(),
       std::move(bucketChannels),
       /*subfieldFiltersForValidation=*/&fileScanState_->filters);
 }

@@ -170,7 +170,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
-        &scanPlan_->partitionKeys(),
+        &fileScanSpec_->partitionKeys(),
         connectorQueryCtx_,
         fileConfig_,
         *changelogScanContext_,
@@ -189,7 +189,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   return std::make_unique<IcebergSplitReader>(
       icebergSplit,
       tableHandle_,
-      &scanPlan_->partitionKeys(),
+      &fileScanSpec_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

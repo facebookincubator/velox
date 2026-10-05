@@ -721,7 +721,7 @@ TEST_F(FileDataSourceTest, tableScanBlockedProgressAndCachedOutput) {
   }
 }
 
-TEST_F(FileDataSourceTest, scanPlanPreservesLogicalInputsAndPolicy) {
+TEST_F(FileDataSourceTest, fileScanSpecPreservesLogicalInputsAndPolicy) {
   const auto dataType = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
   const auto outputType = ROW({{"alias", BIGINT()}});
   ColumnHandleMap assignments{{"alias", regularColumn("c0", BIGINT())}};
@@ -734,29 +734,32 @@ TEST_F(FileDataSourceTest, scanPlanPreservesLogicalInputsAndPolicy) {
       makeTableHandle(std::move(filters), expression, "test", dataType);
   for (bool extract : {true, false}) {
     SCOPED_TRACE(extract);
-    auto plan = std::make_shared<const FileScanPlan>(
+    auto fileScanSpec = std::make_shared<const FileScanSpec>(
         outputType,
         table,
         assignments,
         context_.get(),
         hiveConfig_,
         FileScanOptions{extract});
-    EXPECT_EQ(plan->originalRemainingFilter(), expression);
-    EXPECT_EQ(plan->assignments().at("alias"), assignments.at("alias"));
-    EXPECT_TRUE(plan->outputType()->equivalent(*outputType));
-    EXPECT_TRUE(plan->readerOutputType()->equivalent(*dataType));
-    EXPECT_TRUE(
-        plan->originalFilters().at(common::Subfield("c0"))->testInt64(0));
+    EXPECT_EQ(fileScanSpec->originalRemainingFilter(), expression);
+    EXPECT_EQ(fileScanSpec->assignments().at("alias"), assignments.at("alias"));
+    EXPECT_TRUE(fileScanSpec->outputType()->equivalent(*outputType));
+    EXPECT_TRUE(fileScanSpec->readerOutputType()->equivalent(*dataType));
+    EXPECT_TRUE(fileScanSpec->originalFilters()
+                    .at(common::Subfield("c0"))
+                    ->testInt64(0));
     EXPECT_EQ(
-        plan->filters().at(common::Subfield("c0"))->testInt64(0), !extract);
-    EXPECT_TRUE(plan->remainingFilterColumns().contains("c1"));
+        fileScanSpec->filters().at(common::Subfield("c0"))->testInt64(0),
+        !extract);
+    EXPECT_TRUE(fileScanSpec->remainingFilterColumns().contains("c1"));
     if (!extract) {
-      EXPECT_EQ(plan->remainingFilter(), expression);
+      EXPECT_EQ(fileScanSpec->remainingFilter(), expression);
     }
-    // The caller receives a separate predicate map, not mutable plan storage.
-    auto copied = plan->filters();
+    // The caller receives a separate predicate map, not mutable specification
+    // storage.
+    auto copied = fileScanSpec->filters();
     copied.clear();
-    ASSERT_EQ(plan->filters().size(), 1);
+    ASSERT_EQ(fileScanSpec->filters().size(), 1);
 
     auto file = writeScanFile(
         makeRowVector(
@@ -764,14 +767,14 @@ TEST_F(FileDataSourceTest, scanPlanPreservesLogicalInputsAndPolicy) {
              makeFlatVector<int64_t>({1, 1, 2, 3, 1})}),
         dwio::common::FileFormat::DWRF);
     FileDataSource source(
-        plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+        fileScanSpec, &fileFactory_, nullptr, context_.get(), hiveConfig_);
     source.addSplit(makeHiveConnectorSplit(file->getPath()));
     expectValues(next(source), {3, 7});
     ASSERT_EQ(next(source), nullptr);
   }
 }
 
-TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
+TEST_F(FileDataSourceTest, fileScanSpecCreatesIndependentMetadataAndFilters) {
   const auto type = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
   ColumnHandleMap assignments{
       {"c0", regularColumn("c0", BIGINT())},
@@ -782,10 +785,10 @@ TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
       std::make_unique<common::BigintRange>(0, 100, false));
   auto table = makeTableHandle(
       std::move(filters), parseExpr("c0 > 10 OR c1 > 20", type), "test", type);
-  auto plan = std::make_shared<const FileScanPlan>(
+  auto fileScanSpec = std::make_shared<const FileScanSpec>(
       type, table, assignments, context_.get(), hiveConfig_);
-  auto first = plan->newFileScanState(context_.get());
-  auto second = plan->newFileScanState(context_.get());
+  auto first = fileScanSpec->newFileScanState(context_.get());
+  auto second = fileScanSpec->newFileScanState(context_.get());
   ASSERT_NE(first.scanSpec, second.scanSpec);
   ASSERT_NE(first.metadataFilter, second.metadataFilter);
   ASSERT_TRUE(first.metadataFilter);
@@ -801,12 +804,12 @@ TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
   firstField->setFilter(std::make_shared<common::BigintRange>(90, 100, false));
   ASSERT_FALSE(secondField->isConstant());
   ASSERT_TRUE(secondField->filter()->testInt64(1));
-  auto third = plan->newFileScanState(context_.get());
+  auto third = fileScanSpec->newFileScanState(context_.get());
   ASSERT_FALSE(third.scanSpec->childByName("c0")->isConstant());
   ASSERT_TRUE(third.scanSpec->childByName("c0")->filter()->testInt64(1));
 
   InspectableFileDataSource source(
-      plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+      fileScanSpec, &fileFactory_, nullptr, context_.get(), hiveConfig_);
   const auto before = source.scanState();
   source.addPhysicalColumn("extra", BIGINT());
   const auto& after = source.scanState();
@@ -817,7 +820,7 @@ TEST_F(FileDataSourceTest, scanPlanCreatesIndependentMetadataAndFilters) {
   ASSERT_NE(
       before->scanSpec->childByName("c0")->metadataFilterNodeAt(0),
       after->scanSpec->childByName("c0")->metadataFilterNodeAt(0));
-  ASSERT_FALSE(plan->readerOutputType()->containsChild("extra"));
+  ASSERT_FALSE(fileScanSpec->readerOutputType()->containsChild("extra"));
 }
 
 TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
@@ -858,7 +861,7 @@ TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
       SCOPED_TRACE(filter);
       for (bool extractFilter : {false, true}) {
         SCOPED_TRACE(extractFilter);
-        const auto plan = std::make_shared<const FileScanPlan>(
+        const auto fileScanSpec = std::make_shared<const FileScanSpec>(
             outputType,
             makeTableHandle(
                 {},
@@ -870,7 +873,7 @@ TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
             hiveConfig_,
             FileScanOptions{extractFilter});
         FileDataSource source(
-            plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+            fileScanSpec, &fileFactory_, nullptr, context_.get(), hiveConfig_);
         source.addSplit(HiveConnectorSplitBuilder(file->getPath())
                             .connectorId(kHiveConnectorId)
                             .fileFormat(format)
@@ -911,14 +914,14 @@ TEST_F(FileDataSourceTest, metadataWithMultipleExtractions) {
                {"x", {ExtractionPathElement::structField("y")}, BIGINT()},
                {"y", {ExtractionPathElement::structField("x")}, BIGINT()}})},
       {"c", regularColumn("c", BIGINT())}};
-  const FileScanPlan plan(
+  const FileScanSpec fileScanSpec(
       type,
       makeTableHandle(
           {}, parseExpr("r.y IS NULL OR c > 0", type), "test", type),
       assignments,
       context_.get(),
       hiveConfig_);
-  const auto state = plan.newFileScanState(context_.get());
+  const auto state = fileScanSpec.newFileScanState(context_.get());
   ASSERT_FALSE(state.metadataFilter);
   const auto* r = state.scanSpec->childByName("r");
   ASSERT_TRUE(r->hasTransform());
@@ -927,13 +930,13 @@ TEST_F(FileDataSourceTest, metadataWithMultipleExtractions) {
   ASSERT_EQ(state.scanSpec->childByName("c")->numMetadataFilters(), 0);
 }
 
-TEST_F(FileDataSourceTest, sharedScanPlanConcurrentPhysicalReaders) {
+TEST_F(FileDataSourceTest, sharedFileScanSpecConcurrentPhysicalReaders) {
   const auto type = ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}, {"p", BIGINT()}});
   ColumnHandleMap assignments{
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", VARCHAR())},
       {"p", partitionKey("p", BIGINT())}};
-  auto plan = std::make_shared<const FileScanPlan>(
+  auto fileScanSpec = std::make_shared<const FileScanSpec>(
       type,
       makeTableHandle({}, parseExpr("c0 % 2 = 1", type), "test", type),
       assignments,
@@ -950,23 +953,23 @@ TEST_F(FileDataSourceTest, sharedScanPlanConcurrentPhysicalReaders) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     auto firstFile = writeScanFile(makeRowVector({c0}), format);
     auto secondFile = writeScanFile(makeRowVector({c0, strings}), format);
-    auto read = [&](const auto& file,
-                    const ConnectorQueryCtx* context,
-                    int partition) {
-      FileDataSource source(plan, &fileFactory_, nullptr, context, hiveConfig_);
-      auto split = HiveConnectorSplitBuilder(file->getPath())
-                       .connectorId(kHiveConnectorId)
-                       .fileFormat(format)
-                       .partitionKey("p", std::to_string(partition))
-                       .build();
-      source.addSplit(split);
-      std::vector<RowVectorPtr> batches;
-      while (auto batch = next(source, 7)) {
-        batch->loadedVector();
-        batches.push_back(std::move(batch));
-      }
-      return batches;
-    };
+    auto read =
+        [&](const auto& file, const ConnectorQueryCtx* context, int partition) {
+          FileDataSource source(
+              fileScanSpec, &fileFactory_, nullptr, context, hiveConfig_);
+          auto split = HiveConnectorSplitBuilder(file->getPath())
+                           .connectorId(kHiveConnectorId)
+                           .fileFormat(format)
+                           .partitionKey("p", std::to_string(partition))
+                           .build();
+          source.addSplit(split);
+          std::vector<RowVectorPtr> batches;
+          while (auto batch = next(source, 7)) {
+            batch->loadedVector();
+            batches.push_back(std::move(batch));
+          }
+          return batches;
+        };
     auto first = std::async(std::launch::async, [&] {
       return read(firstFile, firstContext.get(), 1);
     });
@@ -997,7 +1000,7 @@ TEST_F(FileDataSourceTest, sharedScanPlanConcurrentPhysicalReaders) {
       }
       EXPECT_EQ(count, 50);
     }
-    ASSERT_FALSE(plan->newFileScanState(context_.get())
+    ASSERT_FALSE(fileScanSpec->newFileScanState(context_.get())
                      .scanSpec->childByName("c1")
                      ->isConstant());
   }
@@ -1009,7 +1012,7 @@ TEST_F(FileDataSourceTest, newFileStatePreservesDynamicFiltersAndOwnership) {
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", VARCHAR())},
       {"p", partitionKey("p", BIGINT())}};
-  auto plan = std::make_shared<const FileScanPlan>(
+  auto fileScanSpec = std::make_shared<const FileScanSpec>(
       type,
       makeTableHandle({}, nullptr, "test", type),
       assignments,
@@ -1025,7 +1028,7 @@ TEST_F(FileDataSourceTest, newFileStatePreservesDynamicFiltersAndOwnership) {
     auto missing = writeScanFile(makeRowVector({numbers}), format);
     auto present = writeScanFile(makeRowVector({numbers, strings}), format);
     InspectableFileDataSource source(
-        plan, &fileFactory_, nullptr, context_.get(), hiveConfig_);
+        fileScanSpec, &fileFactory_, nullptr, context_.get(), hiveConfig_);
     source.addDynamicFilter(
         2, std::make_shared<common::BigintRange>(1, 1, false));
     auto add = [&](const auto& file, const std::string& partition) {
@@ -1058,7 +1061,7 @@ TEST_F(FileDataSourceTest, newFileStatePreservesDynamicFiltersAndOwnership) {
     source.cancel();
     test::assertEqualVectors(numbers, first->childAt(0));
     test::assertEqualVectors(strings->slice(1, 2), last->childAt(1));
-    ASSERT_EQ(plan->filters().size(), 0);
+    ASSERT_EQ(fileScanSpec->filters().size(), 0);
   }
 }
 

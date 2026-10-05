@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileScanPlan.h"
+#include "velox/connectors/hive/FileScanSpec.h"
 
 #include <fmt/ranges.h>
 #include <algorithm>
@@ -35,7 +35,7 @@ common::SubfieldFilters cloneFilters(const common::SubfieldFilters& filters) {
 }
 } // namespace
 
-void FileScanPlan::processColumnHandle(const FileColumnHandlePtr& handle) {
+void FileScanSpec::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
     case FileColumnHandle::ColumnType::kRegular:
       break;
@@ -54,7 +54,7 @@ void FileScanPlan::processColumnHandle(const FileColumnHandlePtr& handle) {
   }
 }
 
-FileScanPlan::FileScanPlan(
+FileScanSpec::FileScanSpec(
     const RowTypePtr& outputType,
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
@@ -217,7 +217,7 @@ FileScanPlan::FileScanPlan(
             std::move(readColumnTypes));
   }
 }
-RowTypePtr FileScanPlan::configureExtractionColumns(
+RowTypePtr FileScanSpec::configureExtractionColumns(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
     memory::MemoryPool* pool) const {
@@ -327,20 +327,20 @@ RowTypePtr FileScanPlan::configureExtractionColumns(
   return nullptr;
 }
 
-common::SubfieldFilters FileScanPlan::originalFilters() const {
+common::SubfieldFilters FileScanSpec::originalFilters() const {
   return cloneFilters(originalFilters_);
 }
 
-common::SubfieldFilters FileScanPlan::filters() const {
+common::SubfieldFilters FileScanSpec::filters() const {
   return cloneFilters(filters_);
 }
 
-FileScanState FileScanPlan::newFileScanState(
+FileScanState FileScanSpec::newFileScanState(
     const ConnectorQueryCtx* context) const {
   return newFileScanState(readerOutputType_, subfields_, filters_, context);
 }
 
-FileScanState FileScanPlan::newFileScanState(
+FileScanState FileScanSpec::newFileScanState(
     const RowTypePtr& readerOutputType,
     const Subfields& subfields,
     const common::SubfieldFilters& filters,

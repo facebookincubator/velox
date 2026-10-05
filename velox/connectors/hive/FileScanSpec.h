@@ -30,7 +30,7 @@ struct FileScanOptions {
 };
 
 /// Mutable state for exactly one physical reader. Never share this state
-/// between concurrently active readers, even when they share a FileScanPlan.
+/// between concurrently active readers, even when they share a FileScanSpec.
 struct FileScanState {
   common::SubfieldFilters filters;
   std::shared_ptr<common::ScanSpec> scanSpec;
@@ -38,16 +38,40 @@ struct FileScanState {
   RowTypePtr readerProducedType;
 };
 
-/// Immutable column and predicate preparation shared by physical readers.
-/// Owns the handles and subfields referenced by the derived column demands.
-/// It owns no vectors, compiled ExprSets, query context or mutable ScanSpec.
-class FileScanPlan {
+/// Immutable connector-level description of the columns and predicates for a
+/// logical scan. Multiple data sources or physical readers with the same scan
+/// requirements can share a std::shared_ptr<const FileScanSpec>.
+///
+/// Resolves output assignments to physical column names and types, including
+/// partition and synthesized columns, required subfields, extraction chains,
+/// and post-read column processing. Preserves the original predicates and
+/// derives the physical filters, remaining expression, and column demands
+/// according to FileScanOptions. Columns needed only by the remaining
+/// expression are included in the reader's input requirements.
+///
+/// The DWIO common::ScanSpec is a mutable tree describing how one physical
+/// reader accesses columns. newFileScanState() creates a fresh tree, cloned
+/// filters, extraction configuration, and an optional MetadataFilter for each
+/// reader. The overload accepting physical column demands supports additions
+/// such as Hive bucket conversion columns. File-specific constants, filter
+/// adaptation, and other reader mutations remain local to that FileScanState.
+///
+/// Owns the handles, typed expressions, and subfields backing its derived
+/// column demands. Readers borrowing these inputs must retain this object's
+/// lifetime. The query context and expression evaluator are used during
+/// preparation; this object retains no query context, compiled ExprSet, vector,
+/// reader, or mutable common::ScanSpec. Each reader obtains its execution state
+/// using its own context and memory pool.
+///
+/// File enumeration, split scheduling, and format-specific I/O are handled by
+/// the connector and reader layers that consume this specification.
+class FileScanSpec {
  public:
   using Subfields =
       folly::F14FastMap<std::string, std::vector<const common::Subfield*>>;
   using ColumnHandles = std::unordered_map<std::string, FileColumnHandlePtr>;
 
-  FileScanPlan(
+  FileScanSpec(
       const RowTypePtr& outputType,
       const FileTableHandlePtr& tableHandle,
       const ColumnHandleMap& assignments,
@@ -55,17 +79,17 @@ class FileScanPlan {
       const std::shared_ptr<FileConfig>& config,
       FileScanOptions options = {});
 
-  ~FileScanPlan() = default;
+  ~FileScanSpec() = default;
 
-  FileScanPlan(const FileScanPlan&) = delete;
-  FileScanPlan& operator=(const FileScanPlan&) = delete;
-  FileScanPlan(FileScanPlan&&) = delete;
-  FileScanPlan& operator=(FileScanPlan&&) = delete;
+  FileScanSpec(const FileScanSpec&) = delete;
+  FileScanSpec& operator=(const FileScanSpec&) = delete;
+  FileScanSpec(FileScanSpec&&) = delete;
+  FileScanSpec& operator=(FileScanSpec&&) = delete;
 
   FileScanState newFileScanState(const ConnectorQueryCtx* context) const;
 
   /// Build a state with connector-specific physical column demands, e.g.
-  /// Hive bucket conversion columns. Does not modify the logical plan.
+  /// Hive bucket conversion columns. Does not modify this specification.
   FileScanState newFileScanState(
       const RowTypePtr& readerOutputType,
       const Subfields& subfields,

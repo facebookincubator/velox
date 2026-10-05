@@ -25,8 +25,8 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/FileScanPlan.h"
 #include "velox/connectors/hive/FileScanReader.h"
+#include "velox/connectors/hive/FileScanSpec.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -94,7 +94,7 @@ class FileDataSource : public DataSource {
       FileScanOptions options = {});
 
   FileDataSource(
-      std::shared_ptr<const FileScanPlan> scanPlan,
+      std::shared_ptr<const FileScanSpec> fileScanSpec,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -158,7 +158,7 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
-  const std::shared_ptr<const FileScanPlan> scanPlan_;
+  const std::shared_ptr<const FileScanSpec> fileScanSpec_;
   std::shared_ptr<FileScanState> fileScanState_;
 
   std::shared_ptr<ConnectorSplit> activeSplit_;
