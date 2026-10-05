@@ -794,26 +794,6 @@ class ConnectorQueryCtx {
   }
 
  private:
-  /// Used by Builder without adding another parameter to the public
-  /// constructor.
-  ConnectorQueryCtx(
-      memory::MemoryPool* operatorPool,
-      memory::MemoryPool* connectorPool,
-      const config::ConfigBase* sessionProperties,
-      const common::SpillConfig* spillConfig,
-      common::PrefixSortConfig prefixSortConfig,
-      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
-      cache::AsyncDataCache* cache,
-      const std::string& queryId,
-      const std::string& taskId,
-      const std::string& planNodeId,
-      int driverId,
-      const std::string& sessionTimezone,
-      bool adjustTimestampToTimezone,
-      folly::CancellationToken cancellationToken,
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider,
-      std::unordered_map<std::string, memory::MemoryPool*> customPools);
-
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
   const config::ConfigBase* const sessionProperties_;
@@ -830,7 +810,7 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
-  const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
+  std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
