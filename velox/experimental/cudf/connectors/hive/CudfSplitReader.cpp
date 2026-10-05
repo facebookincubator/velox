@@ -649,7 +649,7 @@ void CudfSplitReader::setupPageIndexes() {
   splitReader_->setup_page_indexes(pageIndexData);
 }
 
-CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
+CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
   // Filter row groups using row group byte ranges
@@ -683,7 +683,8 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
   return splitReader_->construct_row_group_passes(
       cudf::io::parquet::experimental::read_columns_mode::ALL_COLUMNS,
       rowGroupIndices,
-      passReadLimit_);
+      passReadLimit_,
+      readerOptions_);
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {
