@@ -125,14 +125,18 @@ void ALPRDEncodingBase::loadExceptions(
 
 namespace {
 
-// Keeps parameter training and automatic selection on the same sampled model.
-struct TrainedSplit {
+// Keeps parameter selection and automatic selection on the same sampled model.
+struct SplitSelection {
   ALPRDEncodingBase::Parameters parameters;
+  // Estimates serialized bytes for all target rows, including the prefix,
+  // split metadata and child payloads. Read factors affect child selection,
+  // not this byte count. The maximum value means no split has been selected.
   uint64_t size{std::numeric_limits<uint64_t>::max()};
 };
 
-// Uses cheap scalar costs to bound how many times training invokes potentially
-// expensive nested policies. The final score always uses the supplied policy.
+// Uses cheap scalar costs to bound how often split selection invokes
+// potentially expensive nested policies. The final score uses the supplied
+// policy.
 struct SplitCandidate {
   ALPRDEncodingBase::Parameters parameters;
   std::array<uint64_t, 4> childSizes;
@@ -175,19 +179,19 @@ uint64_t splitSize(
   return size;
 }
 
-// Owns the bounded sample and scratch storage for one ALPRD training run.
+// Owns the bounded sample and scratch storage for one ALPRD split selection.
 template <typename PhysicalType>
-class SplitTraining {
+class SplitSelector {
  public:
   // Samples the input while retaining positions in the target full stream.
-  SplitTraining(
+  SplitSelector(
       std::span<const PhysicalType> values,
       uint32_t numRows,
       const Encoding::Options& options,
-      const ALPRDEncodingBase::ChildPolicies& childPolicies);
+      const ALPRDEncodingBase::NestedEncodingPolicies& nestedEncodingPolicies);
 
   // Shortlists splits with scalar costs, then scores their selected children.
-  TrainedSplit train();
+  SplitSelection select();
 
  private:
   using Base = ALPRDEncodingBase;
@@ -196,9 +200,9 @@ class SplitTraining {
   const uint32_t numRows_;
   // Samples remain bounded even when the input span contains all values.
   const uint32_t numSamples_;
-  // Borrows the caller's options and child policies for this training run.
+  // Borrows the caller's options and child policies for this split selection.
   const Encoding::Options& options_;
-  const Base::ChildPolicies& childPolicies_;
+  const Base::NestedEncodingPolicies& nestedEncodingPolicies_;
   // Original sampled bits and their mapped positions in the target payload.
   std::array<PhysicalType, Base::kSampleSize> sample_{};
   std::array<uint32_t, Base::kSampleSize> samplePositions_{};
@@ -214,16 +218,17 @@ class SplitTraining {
 };
 
 template <typename PhysicalType>
-SplitTraining<PhysicalType>::SplitTraining(
+SplitSelector<PhysicalType>::SplitSelector(
     std::span<const PhysicalType> values,
     uint32_t numRows,
     const Encoding::Options& options,
-    const ALPRDEncodingBase::ChildPolicies& childPolicies)
+    const ALPRDEncodingBase::NestedEncodingPolicies& nestedEncodingPolicies)
     : numRows_{numRows},
       numSamples_{std::min<uint32_t>(values.size(), Base::kSampleSize)},
       options_{options},
-      childPolicies_{childPolicies} {
-  NIMBLE_CHECK(!values.empty(), "ALPRD training requires non-empty input.");
+      nestedEncodingPolicies_{nestedEncodingPolicies} {
+  NIMBLE_CHECK(
+      !values.empty(), "ALPRD split selection requires non-empty input.");
   NIMBLE_CHECK_LE(values.size(), numRows_);
   for (uint32_t i = 0; i < numSamples_; ++i) {
     const auto index = detail::NestedAlpSizeEstimation::sampledRowIndex(
@@ -234,7 +239,7 @@ SplitTraining<PhysicalType>::SplitTraining(
 }
 
 template <typename PhysicalType>
-TrainedSplit SplitTraining<PhysicalType>::train() {
+SplitSelection SplitSelector<PhysicalType>::select() {
   std::vector<SplitCandidate> candidates;
   candidates.reserve(Base::kMaxHighBitWidth * Base::kMaxDictionarySize);
   for (uint8_t highBitWidth = 1; highBitWidth <= Base::kMaxHighBitWidth;
@@ -345,7 +350,7 @@ TrainedSplit SplitTraining<PhysicalType>::train() {
             ? lhs.parameters.rightBitWidth < rhs.parameters.rightBitWidth
             : lhs.parameters.dictionarySize < rhs.parameters.dictionarySize;
       });
-  TrainedSplit best;
+  SplitSelection best;
   for (uint32_t candidateIndex = 0; candidateIndex < numCandidates;
        ++candidateIndex) {
     const auto& candidate = candidates[candidateIndex];
@@ -373,26 +378,26 @@ TrainedSplit SplitTraining<PhysicalType>::train() {
             {codes_.data(), numSamples_},
             numRows_,
             options_,
-            *childPolicies_.codes),
+            *nestedEncodingPolicies_.codes),
         detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
             {rightParts_.data(), numSamples_},
             numRows_,
             options_,
-            *childPolicies_.rightParts),
+            *nestedEncodingPolicies_.rightParts),
         numExceptions == 0
             ? 0
             : detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
                   {exceptionPositions_.data(), sampleExceptions},
                   numExceptions,
                   options_,
-                  *childPolicies_.exceptionPositions),
+                  *nestedEncodingPolicies_.exceptionPositions),
         numExceptions == 0
             ? 0
             : detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
                   {exceptionHighParts_.data(), sampleExceptions},
                   numExceptions,
                   options_,
-                  *childPolicies_.exceptionHighParts),
+                  *nestedEncodingPolicies_.exceptionHighParts),
     };
     const auto size = splitSize(
         parameters.dictionarySize,
@@ -410,12 +415,13 @@ TrainedSplit SplitTraining<PhysicalType>::train() {
 }
 
 template <typename PhysicalType>
-TrainedSplit trainSplit(
+SplitSelection selectSplit(
     std::span<const PhysicalType> values,
     uint32_t numRows,
     const Encoding::Options& options,
     EncodingSelectionPolicyBase* policy) {
-  NIMBLE_CHECK(!values.empty(), "ALPRD training requires non-empty input.");
+  NIMBLE_CHECK(
+      !values.empty(), "ALPRD split selection requires non-empty input.");
   NIMBLE_CHECK_LE(values.size(), numRows);
   std::unique_ptr<EncodingSelectionPolicyBase> defaultPolicy;
   if (policy == nullptr) {
@@ -426,11 +432,11 @@ TrainedSplit trainSplit(
             .createPolicy(TypeTraits<PhysicalType>::dataType);
     policy = defaultPolicy.get();
   }
-  return SplitTraining<PhysicalType>{
+  return SplitSelector<PhysicalType>{
       values,
       numRows,
       options,
-      ALPRDEncodingBase::ChildPolicies{
+      ALPRDEncodingBase::NestedEncodingPolicies{
           .codes = policy->create<uint16_t>(
               EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
           .rightParts = policy->create<PhysicalType>(
@@ -442,7 +448,7 @@ TrainedSplit trainSplit(
               EncodingType::ALPRD,
               EncodingIdentifiers::ALPRD::ExceptionHighParts),
       }}
-      .train();
+      .select();
 }
 
 } // namespace
@@ -451,11 +457,14 @@ template <typename PhysicalType>
 ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     std::span<const PhysicalType> values,
     const Encoding::Options& options,
-    const ChildPolicies& childPolicies) {
+    const NestedEncodingPolicies& nestedEncodingPolicies) {
   NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-  return SplitTraining<PhysicalType>{
-      values, static_cast<uint32_t>(values.size()), options, childPolicies}
-      .train()
+  return SplitSelector<PhysicalType>{
+      values,
+      static_cast<uint32_t>(values.size()),
+      options,
+      nestedEncodingPolicies}
+      .select()
       .parameters;
 }
 
@@ -465,7 +474,7 @@ ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     const Encoding::Options& options,
     EncodingSelectionPolicyBase* policy) {
   NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-  return trainSplit(values, values.size(), options, policy).parameters;
+  return selectSplit(values, values.size(), options, policy).parameters;
 }
 
 template <typename PhysicalType>
@@ -477,19 +486,19 @@ std::optional<uint64_t> ALPRDEncodingBase::estimateSize(
   if (sampleValues.empty()) {
     return std::nullopt;
   }
-  return trainSplit(sampleValues, numRows, options, policy).size;
+  return selectSplit(sampleValues, numRows, options, policy).size;
 }
 
 template ALPRDEncodingBase::Parameters
 ALPRDEncodingBase::selectParameters<uint32_t>(
     std::span<const uint32_t>,
     const Encoding::Options&,
-    const ALPRDEncodingBase::ChildPolicies&);
+    const ALPRDEncodingBase::NestedEncodingPolicies&);
 template ALPRDEncodingBase::Parameters
 ALPRDEncodingBase::selectParameters<uint64_t>(
     std::span<const uint64_t>,
     const Encoding::Options&,
-    const ALPRDEncodingBase::ChildPolicies&);
+    const ALPRDEncodingBase::NestedEncodingPolicies&);
 template ALPRDEncodingBase::Parameters
 ALPRDEncodingBase::selectParameters<uint32_t>(
     std::span<const uint32_t>,

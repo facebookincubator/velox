@@ -247,6 +247,85 @@ TYPED_TEST(ALPRDSelectionTest, respectsNestedCandidates) {
   }
 }
 
+TYPED_TEST(ALPRDSelectionTest, nestedSelectionUsesOnlyConfiguredCandidates) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  std::array<PhysicalType, 128> values{};
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = std::bit_cast<PhysicalType>(static_cast<T>(i + 1) / 4);
+  }
+  const auto statistics = Statistics<PhysicalType>::create(values);
+  const std::array<std::pair<EncodingType, NestedEncodingIdentifier>, 3>
+      valueChildren{
+          std::pair{
+              EncodingType::Dictionary,
+              EncodingIdentifiers::Dictionary::Alphabet,
+          },
+          std::pair{
+              EncodingType::RLE,
+              EncodingIdentifiers::RunLength::RunValues,
+          },
+          std::pair{
+              EncodingType::MainlyConstant,
+              EncodingIdentifiers::MainlyConstant::OtherValues,
+          },
+      };
+  for (auto allowNestedAlpSelection : {false, true}) {
+    SCOPED_TRACE(allowNestedAlpSelection);
+    this->options_.allowNestedAlpSelection = allowNestedAlpSelection;
+    for (const auto& [parent, nestedIdentifier] : valueChildren) {
+      SCOPED_TRACE(toString(parent));
+      for (const auto& nestedCandidates :
+           {ReadFactors{},
+            ReadFactors{{EncodingType::ALP, 1}},
+            ReadFactors{{EncodingType::ALPRD, 1}},
+            ReadFactors{{EncodingType::ALP, 1}, {EncodingType::ALPRD, 1}}}) {
+        auto parentPolicy = this->policy({{parent, 1}}, nestedCandidates);
+        auto nestedPolicy =
+            parentPolicy->template create<T>(parent, nestedIdentifier);
+        auto& typedPolicy =
+            static_cast<ManualEncodingSelectionPolicy<T>&>(*nestedPolicy);
+        const auto selected =
+            typedPolicy.select(values, statistics, this->options_);
+        if (nestedCandidates.empty()) {
+          // The legacy option must not turn an empty candidate list into ALP.
+          EXPECT_EQ(selected.encodingType, EncodingType::Trivial);
+        } else {
+          EXPECT_THAT(
+              nestedCandidates,
+              ::testing::Contains(
+                  ::testing::Pair(selected.encodingType, ::testing::_)));
+        }
+      }
+    }
+  }
+}
+
+TYPED_TEST(ALPRDSelectionTest, validatesChildPolicyLogicalType) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  const auto values = this->makeValues(16, 2);
+  auto logicalPolicy = this->policy({{EncodingType::Trivial, 1}}, std::nullopt);
+  ManualEncodingSelectionPolicy<PhysicalType> physicalPolicy{
+      {{EncodingType::Trivial, 1}}, std::nullopt, std::nullopt};
+
+  // Sharing the same physical representation does not make floating-point
+  // and integer policies interchangeable. Both remain valid for their own T.
+  EXPECT_EQ(
+      detail::NestedAlpSizeEstimation::estimateChildSize<T>(
+          values, values.size(), this->options_, *logicalPolicy),
+      detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+          values, values.size(), this->options_, physicalPolicy));
+  EXPECT_THROW(
+      detail::NestedAlpSizeEstimation::estimateChildSize<T>(
+          values, values.size(), this->options_, physicalPolicy),
+      velox::VeloxRuntimeError);
+  EXPECT_THROW(
+      detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+          values, values.size(), this->options_, *logicalPolicy),
+      velox::VeloxRuntimeError);
+}
+
 TYPED_TEST(ALPRDSelectionTest, estimatesLargeInputFromBoundedSample) {
   using PhysicalType = typename TestFixture::PhysicalType;
   const auto values = this->makeValues(65'536, 2);

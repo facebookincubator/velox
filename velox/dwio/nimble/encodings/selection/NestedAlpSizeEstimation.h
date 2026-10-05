@@ -48,11 +48,11 @@ class NestedAlpSizeEstimation {
       const Encoding::Options& options,
       EncodingSelectionPolicyBase& policy);
 
-  /// Estimates a floating-point Dictionary, RLE or MainlyConstant candidate
-  /// using its value-child policy. Samples the derived child from the complete
-  /// input; returns nullopt for other encoding types.
+  /// Estimates the total size of a floating-point Dictionary, RLE or
+  /// MainlyConstant encoding using its value-child policy. Samples the derived
+  /// child from the complete input; returns nullopt for other encoding types.
   template <typename T>
-  static std::optional<uint64_t> estimateFloatingPointContainerSize(
+  static std::optional<uint64_t> estimateSize(
       EncodingType encodingType,
       std::span<const typename TypeTraits<T>::physicalType> values,
       const Statistics<typename TypeTraits<T>::physicalType>& statistics,

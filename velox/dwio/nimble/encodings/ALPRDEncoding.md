@@ -39,6 +39,12 @@ select ALP or ALP_RD through their inherited or explicitly overridden candidates
 Parent estimation includes that floating-point child choice. Ancestor encoding
 filters apply as usual.
 
+ALP and ALP_RD both require explicit candidate configuration. The legacy
+`allowNestedAlpSelection` option does not add ALP to nested candidates. Callers
+that relied on this option must add ALP to their nested candidate configuration.
+The option retains its existing floating-point normalization and policy-free
+estimation behavior.
+
 The policy hook `hasFloatingPointEncodingCandidates()` reports whether
 configured candidates or replayed layouts include ALP or ALP_RD. This includes
 nested candidate overrides and replay fallback policies. Callers use logical

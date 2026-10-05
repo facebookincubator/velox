@@ -71,7 +71,8 @@ struct EncodingSizeEstimation {
   /// ALP, ALPRD and floating-point containers depend on candidates, read
   /// factors, nested overrides and replayed layouts supplied by the policy.
   /// These are not captured by values, statistics or options, so the policy is
-  /// needed to estimate the child choices available to the writer.
+  /// needed to estimate the child choices available to the writer. Child sizes
+  /// are estimated without serializing the sampled data.
   static std::optional<uint64_t> estimateSize(
       const EncodingType encodingType,
       std::span<const physicalType> values,
@@ -94,8 +95,8 @@ struct EncodingSizeEstimation {
   }
 
  private:
-  /// Uses configured child policies for floating-point encodings and falls
-  /// back to numeric estimation for the remaining candidates.
+  // Uses configured child policies for floating-point encodings and falls
+  // back to numeric estimation for the remaining candidates.
   static std::optional<uint64_t> estimateFloatingPointSize(
       EncodingType encodingType,
       std::span<const physicalType> values,
@@ -112,9 +113,8 @@ struct EncodingSizeEstimation {
             values, values.size(), options, policy);
       }
       if (policy->hasFloatingPointEncodingCandidates()) {
-        if (auto size =
-                NestedAlpSizeEstimation::estimateFloatingPointContainerSize<T>(
-                    encodingType, values, statistics, options, *policy)) {
+        if (auto size = NestedAlpSizeEstimation::estimateSize<T>(
+                encodingType, values, statistics, options, *policy)) {
           return size;
         }
       }

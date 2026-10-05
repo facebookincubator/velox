@@ -17,6 +17,7 @@
 
 #include <folly/hash/Hash.h>
 
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
@@ -211,7 +212,8 @@ SampledCost<T>::SampledCost(
       numRows_{numRows},
       statistics_{Statistics<PhysicalType>::create(sampleValues)},
       options_{options},
-      policy_{static_cast<EncodingSelectionPolicy<T>&>(policy)} {}
+      policy_{*velox::checkedPointerCast<EncodingSelectionPolicy<T>>(&policy)} {
+}
 
 template <typename T>
 uint64_t SampledCost<T>::selectedSize() {
@@ -226,7 +228,7 @@ uint64_t SampledCost<T>::selectedSize() {
     if (!sampleValues_.empty()) {
       float minCost = std::numeric_limits<float>::max();
       for (const auto& [encodingType, readFactor] :
-           manual->candidateEncodingReadFactors(options_)) {
+           manual->candidateEncodingReadFactors()) {
         const auto estimatedSize = estimateSize(
             encodingType,
             (encodingType == EncodingType::ALP ||
@@ -370,8 +372,7 @@ uint64_t NestedAlpSizeEstimation::estimateChildSize(
 }
 
 template <typename T>
-std::optional<uint64_t>
-NestedAlpSizeEstimation::estimateFloatingPointContainerSize(
+std::optional<uint64_t> NestedAlpSizeEstimation::estimateSize(
     EncodingType encodingType,
     std::span<const typename TypeTraits<T>::physicalType> values,
     const Statistics<typename TypeTraits<T>::physicalType>& statistics,
@@ -408,15 +409,13 @@ template uint64_t NestedAlpSizeEstimation::estimateChildSize<double>(
     const Encoding::Options&,
     EncodingSelectionPolicyBase&);
 
-template std::optional<uint64_t>
-NestedAlpSizeEstimation::estimateFloatingPointContainerSize<float>(
+template std::optional<uint64_t> NestedAlpSizeEstimation::estimateSize<float>(
     EncodingType,
     std::span<const uint32_t>,
     const Statistics<uint32_t>&,
     const Encoding::Options&,
     EncodingSelectionPolicyBase&);
-template std::optional<uint64_t>
-NestedAlpSizeEstimation::estimateFloatingPointContainerSize<double>(
+template std::optional<uint64_t> NestedAlpSizeEstimation::estimateSize<double>(
     EncodingType,
     std::span<const uint64_t>,
     const Statistics<uint64_t>&,

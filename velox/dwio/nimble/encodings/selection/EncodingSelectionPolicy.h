@@ -132,8 +132,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
-    const auto candidateEncodingReadFactors =
-        this->candidateEncodingReadFactors(options);
+    const auto& candidateEncodingReadFactors =
+        this->candidateEncodingReadFactors();
 
     // Fast path: when there are no candidate encodings, fall back to Trivial.
     if (candidateEncodingReadFactors.empty()) {
@@ -230,14 +230,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
              *nestedEncodingReadFactorsOverride_));
   }
 
+  /// Returns the configured candidates for this selection node.
   const std::vector<std::pair<EncodingType, float>>&
   candidateEncodingReadFactors() const {
     return candidateEncodingReadFactors_;
   }
-
-  /// Returns effective candidates, including option-enabled nested ALP.
-  std::vector<std::pair<EncodingType, float>> candidateEncodingReadFactors(
-      const Encoding::Options& options) const;
 
  protected:
   std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
@@ -279,7 +276,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
  private:
-  /// Checks whether the candidates contain ALP or ALPRD.
+  // Checks whether the candidates contain ALP or ALPRD.
   static bool hasFloatingPointEncodingCandidate(
       const std::vector<std::pair<EncodingType, float>>& candidates);
 
@@ -575,7 +572,7 @@ class ReplayedEncodingSelectionPolicy
   }
 
  private:
-  /// Checks whether a layout tree contains ALP or ALPRD.
+  // Checks whether a layout tree contains ALP or ALPRD.
   static bool layoutHasFloatingPointEncoding(const EncodingLayout& layout);
 
   const std::optional<CompressionOptions> compressionOptions_;

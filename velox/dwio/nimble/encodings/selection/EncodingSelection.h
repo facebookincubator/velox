@@ -239,6 +239,7 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
 
 namespace detail {
 /// Returns whether an encoding can retain a logical floating-point type.
+/// Applies to value-stream encodings; Nullable wrappers use selectNullable().
 /// Container encodings also require the policy to request logical selection.
 bool useLogicalTypeForEncoding(
     DataType logicalDataType,

@@ -86,11 +86,11 @@ class ALPRDEncodingBase {
       std::string_view data,
       const Encoding::Options& options);
 
-  /// Maximum number of input values inspected by split training.
+  /// Maximum number of input values inspected by split encoding selection.
   static constexpr uint32_t kSampleSize = 1'024;
 
-  /// Owns the child selection policies used for split training.
-  struct ChildPolicies {
+  /// Owns the child encoding policies used for split selection.
+  struct NestedEncodingPolicies {
     /// Selects the uint16 dictionary-code encoding.
     std::unique_ptr<EncodingSelectionPolicyBase> codes;
     /// Selects the uint32/uint64 low-part encoding.
@@ -101,14 +101,14 @@ class ALPRDEncodingBase {
     std::unique_ptr<EncodingSelectionPolicyBase> exceptionHighParts;
   };
 
-  /// Trains the split using the supplied child selection policies.
+  /// Selects the split using the supplied child encoding policies.
   template <typename PhysicalType>
   static Parameters selectParameters(
       std::span<const PhysicalType> values,
       const Encoding::Options& options,
-      const ChildPolicies& childPolicies);
+      const NestedEncodingPolicies& nestedEncodingPolicies);
 
-  /// Trains the split and dictionary using estimated serialized child sizes.
+  /// Selects the split and dictionary using estimated serialized child sizes.
   /// A null policy uses the existing default child candidates.
   template <typename PhysicalType>
   static Parameters selectParameters(
@@ -118,8 +118,9 @@ class ALPRDEncodingBase {
 
   /// Estimates a payload of numRows values from sampleValues, which may
   /// contain the full input or a representative sample.
-  /// Uses the same bounded training as encode(), including child policies,
-  /// prefix sizes, byte rounding, padding and exception metadata.
+  /// Uses the same bounded split selection as encode(), including child
+  /// policies, prefix sizes, byte rounding, padding and exception metadata.
+  /// Estimates child sizes without serializing the sample.
   template <typename PhysicalType>
   static std::optional<uint64_t> estimateSize(
       std::span<const PhysicalType> sampleValues,
@@ -276,7 +277,7 @@ class ALPRDEncoding final
     const auto parameters = selectParameters(
         values,
         options,
-        ChildPolicies{
+        NestedEncodingPolicies{
             .codes = selection.template createNestedPolicy<uint16_t>(
                 EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
             .rightParts = selection.template createNestedPolicy<physicalType>(

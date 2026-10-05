@@ -1365,12 +1365,10 @@ TYPED_TEST(ALPEncodingTest, manualSelectionUsesAlpEstimate) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 256; ++i) {
@@ -1382,7 +1380,10 @@ TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
           {nimble::EncodingType::Dictionary, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),
@@ -1440,12 +1441,10 @@ TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, rleRunValuesUseConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 128; ++i) {
@@ -1460,7 +1459,10 @@ TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
           {nimble::EncodingType::RLE, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),
@@ -1516,12 +1518,10 @@ TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
   }
 }
 
-TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseNestedAlpWhenEnabled) {
+TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseConfiguredNestedAlp) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
-      .useVarintRowCount = false,
-      .fixedBitWidthUseExactBits = true,
-      .allowNestedAlpSelection = true};
+      .useVarintRowCount = false, .fixedBitWidthUseExactBits = true};
 
   nimble::Vector<D> values{this->pool_.get()};
   for (auto i = 0; i < 256; ++i) {
@@ -1536,7 +1536,10 @@ TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseNestedAlpWhenEnabled) {
           {nimble::EncodingType::MainlyConstant, 1.0},
       },
       std::nullopt,
-      std::nullopt);
+      std::nullopt,
+      std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::ALP, 1.0},
+      });
 
   const auto serialized = nimble::EncodingFactory::encode<D>(
       std::move(policy),

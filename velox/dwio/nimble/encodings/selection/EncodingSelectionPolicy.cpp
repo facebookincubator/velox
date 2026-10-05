@@ -18,28 +18,6 @@
 namespace facebook::nimble {
 
 template <typename T>
-std::vector<std::pair<EncodingType, float>>
-ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors(
-    const Encoding::Options& options) const {
-  auto candidates = candidateEncodingReadFactors_;
-  // TODO: Remove this opt-in once ALP is production-ready for default
-  // selection.
-  if constexpr (isFloatingPointType<T>()) {
-    if (options.allowNestedAlpSelection &&
-        (identifier_ == EncodingIdentifiers::Dictionary::Alphabet ||
-         identifier_ == EncodingIdentifiers::MainlyConstant::OtherValues ||
-         identifier_ == EncodingIdentifiers::RunLength::RunValues) &&
-        std::none_of(
-            candidates.begin(), candidates.end(), [](const auto& entry) {
-              return entry.first == EncodingType::ALP;
-            })) {
-      candidates.emplace_back(EncodingType::ALP, 1.0);
-    }
-  }
-  return candidates;
-}
-
-template <typename T>
 /* static */ bool
 ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate(
     const std::vector<std::pair<EncodingType, float>>& candidates) {
@@ -67,9 +45,6 @@ ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(
 }
 
 #define INSTANTIATE_POLICY_METHODS(T)                                  \
-  template std::vector<std::pair<EncodingType, float>>                 \
-  ManualEncodingSelectionPolicy<T>::candidateEncodingReadFactors(      \
-      const Encoding::Options&) const;                                 \
   template bool                                                        \
   ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate( \
       const std::vector<std::pair<EncodingType, float>>&);             \
@@ -253,6 +228,12 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
 bool detail::useLogicalTypeForEncoding(
     DataType logicalDataType,
     EncodingType encodingType) {
+  // Nullable wrappers are selected through selectNullable(). This helper only
+  // considers encodings selected for non-null value streams.
+  NIMBLE_CHECK_NE(
+      encodingType,
+      EncodingType::Nullable,
+      "Nullable wrappers are handled by selectNullable().");
   if (logicalDataType != DataType::Float &&
       logicalDataType != DataType::Double) {
     return false;
