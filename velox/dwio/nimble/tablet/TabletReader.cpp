@@ -313,15 +313,28 @@ void TabletReader::init(const Options& options) {
   uint64_t footerOffset{0};
   velox::BufferPtr footerBuf;
 
-  loadFooter(options.maxFooterIoBytes, footerBuf, footerIoSize, footerOffset);
+  // A footer-only reader exists specifically to avoid speculative tail
+  // over-read. Enforce exact footer I/O here so future callers cannot
+  // accidentally weaken that contract through maxFooterIoBytes.
+  loadFooter(
+      options.footerOnly ? 0 : options.maxFooterIoBytes,
+      footerBuf,
+      footerIoSize,
+      footerOffset);
   NIMBLE_CHECK_NOT_NULL(footer_);
+
+  // Parsing the optional-section directory does not read any section data.
+  initOptionalSections();
+
+  if (options.footerOnly) {
+    tabletRowCount_ = footerRoot(*footer_)->row_count();
+    cacheFooter();
+    return;
+  }
 
   const auto footerView = footerBuf != nullptr
       ? std::string_view{footerBuf->as<char>(), footerBuf->size()}
       : std::string_view{};
-
-  // Parse optional sections metadata from footer before enqueueing.
-  initOptionalSections();
 
   // Collect stripes + optional sections. Try extracting from footerBuf
   // first (speculative mode), batch-load the rest via coalesced IO.
@@ -341,6 +354,30 @@ void TabletReader::init(const Options& options) {
   initVectorIndexes();
 
   cacheMetadata(footerView, footerOffset);
+  metadataInitialized_ = true;
+}
+
+void TabletReader::loadRemainingMetadata(const Options& options) {
+  if (metadataInitialized_) {
+    return;
+  }
+
+  NIMBLE_CHECK_NOT_NULL(footer_);
+
+  std::vector<LoadSection> sections;
+  collectStripesSection(sections);
+  collectOptionalSections(options, sections);
+  loadSections(sections);
+
+  initStripes();
+  initProperties();
+  initSharedDictionaries(options);
+  initIndexDescriptors();
+  initClusterIndex();
+  initChunkStats();
+  initDenseIndexes();
+  initVectorIndexes();
+  metadataInitialized_ = true;
 }
 
 void TabletReader::loadFooter(
@@ -449,24 +486,11 @@ bool TabletReader::initFromCache(const Options& options) {
     return false;
   }
   initOptionalSections();
-
-  // Collect stripes + optional sections together for coalesced IO.
-  // Empty files (0 rows) have no stripes section but still need optional
-  // sections loaded (e.g., schema describes column types even with no rows).
-  std::vector<LoadSection> sections;
-  collectStripesSection(sections);
-  collectOptionalSections(options, sections);
-
-  loadSections(sections);
-
-  initStripes();
-  initProperties();
-  initSharedDictionaries(options);
-  initIndexDescriptors();
-  initClusterIndex();
-  initChunkStats();
-  initDenseIndexes();
-  initVectorIndexes();
+  if (options.footerOnly) {
+    tabletRowCount_ = footerRoot(*footer_)->row_count();
+    return true;
+  }
+  loadRemainingMetadata(options);
   return true;
 }
 
@@ -479,6 +503,8 @@ void TabletReader::cacheMetadata(
   if (footerBuf.empty()) {
     return;
   }
+
+  cacheFooter();
 
   auto cacheSection = [&](const MetadataSection& section) {
     if (section.offset() < footerOffset) {
@@ -498,15 +524,6 @@ void TabletReader::cacheMetadata(
       metadataInput_->cacheMetadata(section.offset(), {&view, 1});
     }
   };
-
-  // Cache decompressed footer + PS at synthetic offset fileSize_.
-  // Store uncompressed so loadFooterFromCache can slice without decompressing.
-  {
-    const auto footerContent = footer_->content();
-    const auto psData = ps_.serialize();
-    std::array<std::string_view, 2> ranges{footerContent, psData};
-    metadataInput_->cacheMetadata(fileSize_, ranges);
-  }
 
   const auto* footer = footerRoot(*footer_);
 
@@ -551,6 +568,19 @@ void TabletReader::cacheMetadata(
       cacheSection(firstSection);
     }
   }
+}
+
+void TabletReader::cacheFooter() {
+  if (!metadataInput_->cached()) {
+    return;
+  }
+
+  // Store the footer uncompressed so loadFooterFromCache can slice it without
+  // decompressing it again.
+  const auto footerContent = footer_->content();
+  const auto psData = ps_.serialize();
+  std::array<std::string_view, 2> ranges{footerContent, psData};
+  metadataInput_->cacheMetadata(fileSize_, ranges);
 }
 
 void TabletReader::loadStripes(
@@ -673,8 +703,11 @@ void TabletReader::initStripes(
     std::string_view footerBuf,
     uint64_t footerOffset) {
   const auto* footer = footerRoot(*footer_);
-  NIMBLE_CHECK_EQ(tabletRowCount_, 0);
-  tabletRowCount_ = footer->row_count();
+  const auto footerRowCount = footer->row_count();
+  NIMBLE_CHECK(
+      tabletRowCount_ == 0 || tabletRowCount_ == footerRowCount,
+      "Tablet row count changed while completing metadata initialization");
+  tabletRowCount_ = footerRowCount;
   if (stripes_ == nullptr) {
     NIMBLE_CHECK_EQ(tabletRowCount_, 0);
     return;
