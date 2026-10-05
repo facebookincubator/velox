@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <array>
+
 #include <gmock/gmock.h>
+#include <unicode/ucnv.h>
 #include <string_view>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -384,14 +387,55 @@ TEST_F(EncodeTest, legacyCharsetCodingErrorAction) {
 
 TEST_F(EncodeTest, legacyCharsetSpecificReplacement) {
   enableLegacyCharsetsAndCodingErrorAction();
-  for (const auto* name : {"x-IBM300", "cp300", "ibm300", "ibm-300", "300"}) {
-    SCOPED_TRACE(name);
-    EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0x42, 0x6F));
+
+  const auto isAnyIcuConverterAvailable = [](const auto& names) {
+    for (const auto* name : names) {
+      UErrorCode error{U_ZERO_ERROR};
+      auto* converter = ucnv_open(name, &error);
+      if (converter != nullptr) {
+        ucnv_close(converter);
+      }
+      if (U_SUCCESS(error)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // System ICU distributions may omit optional legacy converter data. When a
+  // converter family is available, verify all of its Java aliases.
+  constexpr std::array<const char*, 5> kIbm300Names{
+      "x-IBM300", "cp300", "ibm300", "ibm-300", "300"};
+  if (isAnyIcuConverterAvailable(kIbm300Names)) {
+    for (const auto* name : kIbm300Names) {
+      SCOPED_TRACE(name);
+      EXPECT_THAT(
+          encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0x42, 0x6F));
+    }
+  } else {
+    for (const auto* name : kIbm300Names) {
+      SCOPED_TRACE(name);
+      VELOX_ASSERT_USER_THROW(
+          encode("\xF0\x9F\x98\x80", name), "encode: unsupported charset");
+    }
   }
-  for (const auto* name : {"x-IBM834", "cp834", "ibm834", "ibm-834", "834"}) {
-    SCOPED_TRACE(name);
-    EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0xFE, 0xFE));
+
+  constexpr std::array<const char*, 5> kIbm834Names{
+      "x-IBM834", "cp834", "ibm834", "ibm-834", "834"};
+  if (isAnyIcuConverterAvailable(kIbm834Names)) {
+    for (const auto* name : kIbm834Names) {
+      SCOPED_TRACE(name);
+      EXPECT_THAT(
+          encodeBytes("\xF0\x9F\x98\x80", name), ElementsAre(0xFE, 0xFE));
+    }
+  } else {
+    for (const auto* name : kIbm834Names) {
+      SCOPED_TRACE(name);
+      VELOX_ASSERT_USER_THROW(
+          encode("\xF0\x9F\x98\x80", name), "encode: unsupported charset");
+    }
   }
+
   for (const auto* name : {"x-JIS0208", "JIS0208"}) {
     SCOPED_TRACE(name);
     EXPECT_THAT(
