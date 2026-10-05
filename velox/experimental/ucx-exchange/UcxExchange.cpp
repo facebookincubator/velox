@@ -46,7 +46,11 @@ UcxExchange::UcxExchange(
           driverCtx->queryConfig().preferredOutputBatchBytes()},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
-      driverId_{driverCtx->driverId} {
+      driverId_{driverCtx->driverId},
+      planNodeBoundary_{
+          std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode)
+              ? core::PlanNode::Boundary::kInput
+              : core::PlanNode::Boundary::kBoth} {
   VELOX_CHECK_NOT_NULL(
       ucxExchangeClient,
       "UCX exchange client is null, plan node: {}",

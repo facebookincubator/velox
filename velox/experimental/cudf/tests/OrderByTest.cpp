@@ -239,6 +239,29 @@ TEST_F(OrderByTest, singleKey) {
   runTest(plan, orderById, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
 }
 
+// A CudfOrderBy built for a MergeExchangeNode reports only its node's output,
+// because the exchange sharing that node reports the input. One built for an
+// OrderByNode is the node's only operator and keeps counting both.
+TEST_F(OrderByTest, orderByNodeReportsBothPlanNodeBoundaries) {
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      100, [](vector_size_t row) { return 100 - row; })});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder().values({data}).orderBy({"c0"}, false).planNode();
+
+  auto task = assertQueryOrdered(plan, "SELECT * FROM tmp ORDER BY c0", {0});
+
+  int numCudfOrderBy = 0;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& stats : pipeline.operatorStats) {
+      if (stats.operatorType == "CudfOrderBy") {
+        ++numCudfOrderBy;
+        EXPECT_EQ(stats.planNodeBoundary, core::PlanNode::Boundary::kBoth);
+      }
+    }
+  }
+  EXPECT_EQ(numCudfOrderBy, 1);
+}
+
 TEST_F(OrderByTest, multipleKeys) {
   vector_size_t batchSize = 1000;
   std::vector<RowVectorPtr> vectors;

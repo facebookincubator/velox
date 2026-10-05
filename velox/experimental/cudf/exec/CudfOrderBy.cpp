@@ -59,6 +59,7 @@ CudfOrderBy::CudfOrderBy(
           mergeExchangeNode) {
   initializeSortKeys(
       mergeExchangeNode->sortingKeys(), mergeExchangeNode->sortingOrders());
+  planNodeBoundary_ = core::PlanNode::Boundary::kOutput;
 }
 
 void CudfOrderBy::initializeSortKeys(

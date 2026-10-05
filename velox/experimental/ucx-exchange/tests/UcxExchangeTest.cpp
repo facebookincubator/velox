@@ -45,6 +45,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -1870,6 +1871,18 @@ std::vector<int32_t> operatorIdsOf(const exec::PipelineStats& pipeline) {
   return ids;
 }
 
+// The plan-node boundary each operator of 'pipeline' reported, in pipeline
+// order.
+std::vector<core::PlanNode::Boundary> planNodeBoundariesOf(
+    const exec::PipelineStats& pipeline) {
+  std::vector<core::PlanNode::Boundary> boundaries;
+  boundaries.reserve(pipeline.operatorStats.size());
+  for (const auto& stats : pipeline.operatorStats) {
+    boundaries.push_back(stats.planNodeBoundary);
+  }
+  return boundaries;
+}
+
 // The c0 column of 'batches' flattened into one sequence, so that a single
 // assertion can report the first ordering violation rather than one per row.
 std::vector<int32_t> sortKeysOf(const std::vector<RowVectorPtr>& batches) {
@@ -2236,6 +2249,14 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
       operatorIdsOf(consumerStats.pipelineStats[0]),
       testing::ElementsAre(0, 1, 2, 3));
 
+  // UcxExchange and CudfOrderBy share the merge node's id, so the exchange
+  // reports only the node's input and the sort only its output
+  // (Operator::planNodeBoundary()).
+  const auto boundaries = planNodeBoundariesOf(consumerStats.pipelineStats[0]);
+  ASSERT_GE(boundaries.size(), 2);
+  EXPECT_EQ(boundaries[0], core::PlanNode::Boundary::kInput);
+  EXPECT_EQ(boundaries[1], core::PlanNode::Boundary::kOutput);
+
   expectGloballyOrdered(actual);
 }
 
@@ -2354,6 +2375,14 @@ TEST_F(
   EXPECT_THAT(
       operatorIdsOf(sorterStats.pipelineStats[0]),
       testing::ElementsAre(0, 1, 2));
+
+  // Nothing but the merge expansion shares the merge node's id here, so its
+  // totals are UcxExchange's input and CudfOrderBy's output, each counted once.
+  const auto planStats = exec::toPlanStats(sorterStats);
+  const auto& mergeStats = planStats.at(mergeNodeId);
+  const uint64_t numMergedRows = kNumProducers * kNumRowsPerProducer;
+  EXPECT_EQ(mergeStats.inputRows, numMergedRows);
+  EXPECT_EQ(mergeStats.outputRows, numMergedRows);
 
   // The consequence of a repeated id, asserted directly: stats.resize() default
   // constructs OperatorStats(0, 0, "", ""), and every slot has to be claimed by
