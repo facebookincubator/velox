@@ -2253,6 +2253,13 @@ void Writer::writeColumnStats() {
         context_->columnStats().front()->getLogicalSize());
   }
 
+  flatbuffers::FlatBufferBuilder builder;
+  builder.Finish(serialization::CreateStats(builder, context_->fileRawSize()));
+  tabletWriter_->writeOptionalSection(
+      std::string(kStatsSection),
+      {reinterpret_cast<const char*>(builder.GetBufferPointer()),
+       builder.GetSize()});
+
   if (context_->options().enableVectorizedStats) {
     VectorizedFileStats fileStats{
         context_->columnStats(), encodingMemoryPool_.get()};
@@ -2267,14 +2274,6 @@ void Writer::writeColumnStats() {
           std::string(kStripeStatsSection),
           stripeStats.serialize(stripeStatsBuffer));
     }
-  } else {
-    flatbuffers::FlatBufferBuilder builder;
-    builder.Finish(
-        serialization::CreateStats(builder, context_->fileRawSize()));
-    tabletWriter_->writeOptionalSection(
-        std::string(kStatsSection),
-        {reinterpret_cast<const char*>(builder.GetBufferPointer()),
-         builder.GetSize()});
   }
 }
 
