@@ -155,6 +155,8 @@ void registerStringFunctions(const std::string& prefix) {
       Varchar>({prefix + "str_to_map"});
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
+  registerFunction<sparksql::RightFunction, Varchar, Varchar, int32_t>(
+      {prefix + "right"});
   registerFunction<sparksql::BitLengthFunction, int32_t, Varchar>(
       {prefix + "bit_length"});
   registerFunction<sparksql::BitLengthFunction, int32_t, Varbinary>(
