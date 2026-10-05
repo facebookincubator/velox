@@ -41,6 +41,7 @@ velox_add_library(
   BloomFilterAggAggregate.h
   CentralMomentsAggregate.h
   CollectListAggregate.h
+  CountMinSketchAggregate.h
   CovarianceAggregate.h
   DecimalAverageAggregate.h
   DecimalSumAggregate.h
@@ -56,6 +57,7 @@ velox_link_libraries(
   velox_exec
   velox_expression_functions
   velox_aggregates
+  velox_functions_lib
   velox_vector
 )
 
