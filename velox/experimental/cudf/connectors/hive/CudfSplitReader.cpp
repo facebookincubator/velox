@@ -527,13 +527,18 @@ void CudfSplitReader::setupReaderOptions() {
       dataSource_,
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
 
+  const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
+
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder()
-          .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
-          .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
+          .use_pandas_metadata(
+              cudfHiveConfig_->isUsePandasMetadataSession(sessionProperties))
+          .use_arrow_schema(
+              cudfHiveConfig_->isUseArrowSchemaSession(sessionProperties))
           .allow_mismatched_pq_schemas(
-              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
+              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
+                  sessionProperties))
           .timestamp_type(cudfHiveConfig_->timestampType())
           // cuDF currently only folds ASCII letters, unlike the CPU reader's
           // UTF-8 folding, so non-ASCII names (rare case) that differ in case
