@@ -585,5 +585,72 @@ TEST_F(CudfMemoryResourceTest, ScopedSelectionIsThreadLocal) {
   EXPECT_TRUE(childSawOwnResources);
 }
 
+TEST_F(CudfMemoryResourceTest, GlobalCountersIncludeScopedAllocations) {
+  auto previousTemp = mr_;
+  auto previousOutput = output_mr_;
+  auto previousStats = statsMr_;
+  auto previousOutputStats = outputStatsMr_;
+  SCOPE_EXIT {
+    mr_ = std::move(previousTemp);
+    output_mr_ = std::move(previousOutput);
+    statsMr_ = std::move(previousStats);
+    outputStatsMr_ = std::move(previousOutputStats);
+  };
+
+  for (const bool distinctOutput : {false, true}) {
+    SCOPED_TRACE(distinctOutput);
+    auto tempState = std::make_shared<HostBackedResourceState>();
+    auto outputState = std::make_shared<HostBackedResourceState>();
+    statsMr_.emplace(makeTestUpstream(tempState));
+    mr_ = *statsMr_;
+    outputStatsMr_.reset();
+    if (distinctOutput) {
+      outputStatsMr_.emplace(makeTestUpstream(outputState));
+      output_mr_ = *outputStatsMr_;
+    } else {
+      output_mr_ = mr_;
+    }
+    auto previousCurrent = cudf::set_current_device_resource(
+        createThreadLocalTemporaryMemoryResource(*mr_));
+    SCOPE_EXIT {
+      cudf::set_current_device_resource(std::move(previousCurrent));
+    };
+
+    auto root = memory::memoryManager()->addRootPool();
+    auto tempPool = root->addLeafChild("globalCountersTemp");
+    auto outputPool = root->addLeafChild("globalCountersOutput");
+    CudfMemoryResource temp{*mr_, tempPool};
+    CudfMemoryResource output{*output_mr_, outputPool};
+    auto current = cudf::get_current_device_resource_ref();
+    constexpr auto kAlignment = alignof(std::max_align_t);
+
+    EXPECT_EQ(cudfAllocatedBytes(), 0);
+    auto* unscoped = current.allocate_sync(128, kAlignment);
+    EXPECT_EQ(cudfAllocatedBytes(), 128);
+    EXPECT_EQ(root->usedBytes(), 0);
+
+    void* temporary;
+    void* result;
+    {
+      ScopedCudfMemoryResources scope{temp, output};
+      temporary = current.allocate_sync(256, kAlignment);
+      result = get_output_mr().allocate_sync(512, kAlignment);
+      EXPECT_EQ(tempPool->usedBytes(), 256);
+      EXPECT_EQ(outputPool->usedBytes(), 512);
+      EXPECT_EQ(cudfAllocatedBytes(), 128 + 256 + 512);
+      EXPECT_EQ(tempState->liveBytes, distinctOutput ? 384 : 896);
+      EXPECT_EQ(outputState->liveBytes, distinctOutput ? 512 : 0);
+    }
+
+    current.deallocate_sync(temporary, 256, kAlignment);
+    EXPECT_EQ(tempPool->usedBytes(), 0);
+    EXPECT_EQ(cudfAllocatedBytes(), 128 + 512);
+    output.deallocate_sync(result, 512, kAlignment);
+    current.deallocate_sync(unscoped, 128, kAlignment);
+    EXPECT_EQ(root->usedBytes(), 0);
+    EXPECT_EQ(cudfAllocatedBytes(), 0);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
