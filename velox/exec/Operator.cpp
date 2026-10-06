@@ -82,6 +82,7 @@ OperatorCtx::createConnectorQueryCtx(
               driverCtx_->queryConfig().adjustTimestampToTimezone())
           .cancellationToken(task->getCancellationToken())
           .tokenProvider(task->queryCtx()->fsTokenProvider())
+          .customPools(customPools_)
           .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());

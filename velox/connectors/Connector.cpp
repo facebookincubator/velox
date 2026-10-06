@@ -45,7 +45,8 @@ std::unique_ptr<ConnectorQueryCtx> ConnectorQueryCtx::Builder::build() {
       sessionTimezone_,
       adjustTimestampToTimezone_,
       std::move(cancellationToken_),
-      std::move(tokenProvider_)));
+      std::move(tokenProvider_),
+      std::move(customPools_)));
 }
 
 ConnectorQueryCtx::ConnectorQueryCtx(
@@ -63,7 +64,8 @@ ConnectorQueryCtx::ConnectorQueryCtx(
     const std::string& sessionTimezone,
     bool adjustTimestampToTimezone,
     folly::CancellationToken cancellationToken,
-    std::shared_ptr<filesystems::TokenProvider> tokenProvider)
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider,
+    std::unordered_map<std::string, memory::MemoryPool*> customPools)
     : operatorPool_(operatorPool),
       connectorPool_(connectorPool),
       sessionProperties_(sessionProperties),
@@ -79,7 +81,8 @@ ConnectorQueryCtx::ConnectorQueryCtx(
       sessionTimezone_(sessionTimezone),
       adjustTimestampToTimezone_(adjustTimestampToTimezone),
       cancellationToken_(std::move(cancellationToken)),
-      fsTokenProvider_(std::move(tokenProvider)) {
+      fsTokenProvider_(std::move(tokenProvider)),
+      customPools_(std::move(customPools)) {
   VELOX_CHECK_NOT_NULL(sessionProperties);
 }
 

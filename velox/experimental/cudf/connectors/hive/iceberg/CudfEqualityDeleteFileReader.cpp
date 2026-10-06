@@ -51,8 +51,12 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
     const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
     ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
-    const std::string& connectorId)
-    : equalityColumnNames_(equalityColumnNames) {
+    const std::string& connectorId,
+    std::optional<rmm::device_async_resource_ref> tempMemoryResource,
+    std::optional<rmm::device_async_resource_ref> outputMemoryResource)
+    : equalityColumnNames_(equalityColumnNames),
+      tempMemoryResource_(tempMemoryResource),
+      outputMemoryResource_(outputMemoryResource) {
   VELOX_CHECK(
       deleteFile.content == velox_iceberg::FileContent::kEqualityDeletes,
       "Expected equality delete file but got content type: {}",
@@ -188,7 +192,7 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
           .column_names(equalityColumnNames_)
           .build();
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto mr = get_output_mr();
+  auto mr = outputMemoryResource();
   deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
       cudf::io::read_parquet(options, stream, mr).tbl,
       equalityColumnTypes,
@@ -209,8 +213,8 @@ void CudfEqualityDeleteFileReader::buildHashJoin(cuda::stream_ref stream) {
   // Convert host rows to a GPU table if we came through the non-Parquet path.
   if (!deleteKeyTable_) {
     VELOX_CHECK_NOT_NULL(deleteRows_);
-    deleteKeyTable_ =
-        with_arrow::toCudfTable(deleteRows_, pool_, stream, get_temp_mr());
+    deleteKeyTable_ = with_arrow::toCudfTable(
+        deleteRows_, pool_, stream, tempMemoryResource());
     VELOX_CHECK_NOT_NULL(deleteKeyTable_);
     deleteRows_.reset();
   }
@@ -222,7 +226,7 @@ void CudfEqualityDeleteFileReader::buildHashJoin(cuda::stream_ref stream) {
       cudf::null_equality::EQUAL,
       0.5,
       stream,
-      get_temp_mr());
+      tempMemoryResource());
 }
 
 void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
@@ -272,11 +276,13 @@ void CudfEqualityDeleteFileReader::applyDeletes(
   // side to know which data rows to delete.
   const auto probeTable = table.select(equalityColumnIndices_);
   const auto probeIndices =
-      deleteHashJoin_->inner_join(probeTable, stream, get_temp_mr()).first;
+      deleteHashJoin_->inner_join(probeTable, stream, tempMemoryResource())
+          .first;
 
   // Clear `deleteMask` at probe positions if any
   if (not probeIndices->is_empty()) {
-    scatterDeletesToMask(deleteMask, *probeIndices, stream, get_temp_mr());
+    scatterDeletesToMask(
+        deleteMask, *probeIndices, stream, tempMemoryResource());
   }
 }
 

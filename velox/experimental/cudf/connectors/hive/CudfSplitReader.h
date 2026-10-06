@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
@@ -34,6 +35,8 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
+
+#include <cuda/memory_resource>
 
 #include <functional>
 #include <span>
@@ -78,6 +81,11 @@ class CudfSplitReader : public NvtxHelper {
   using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
       const cudf::io::parquet::FileMetaData&)>;
 
+  /// Install owning resource handles before preparing the split. These remain
+  /// valid when a preloaded reader is adopted and its original source dies.
+  void setMemoryResources(
+      cuda::mr::any_resource<cuda::mr::device_accessible> temp,
+      cuda::mr::any_resource<cuda::mr::device_accessible> output);
   /// Sets a builder for a split-specific pushdown filter. The builder is
   /// invoked after the Parquet footer is read and before reader options are
   /// configured. The returned expression must remain alive while the split is
@@ -121,6 +129,18 @@ class CudfSplitReader : public NvtxHelper {
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 
+  rmm::device_async_resource_ref tempMemoryResource() const {
+    return tempMemoryResource_
+        ? rmm::device_async_resource_ref{*tempMemoryResource_}
+        : get_temp_mr();
+  }
+
+  rmm::device_async_resource_ref outputMemoryResource() const {
+    return outputMemoryResource_
+        ? rmm::device_async_resource_ref{*outputMemoryResource_}
+        : get_output_mr();
+  }
+
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
@@ -163,6 +183,15 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<IoStats> ioStats_;
 
   cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
+
+  // Mutable only to expose the allocator's non-const interface from logically
+  // const reader operations. Handles are fixed while the split is prepared.
+  // Declared before cuDF readers/buffers so their borrowed refs remain valid
+  // through destruction (including derived Iceberg delete readers).
+  mutable std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
+      tempMemoryResource_;
+  mutable std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
+      outputMemoryResource_;
 
   // Parquet metadata(s) for the current split(s).
   std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;

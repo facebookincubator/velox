@@ -239,7 +239,7 @@ CudfIcebergSplitReader::determineCudfMemoryResource() const {
   // Use temporary mr when there are filters beyond table read.
   const auto needsTempMr = deferredFilter() or deletionVectorFile_ or
       positionalDeleteFiles_.size() or equalityDeleteFiles_.size();
-  return needsTempMr ? get_temp_mr() : get_output_mr();
+  return needsTempMr ? tempMemoryResource() : outputMemoryResource();
 }
 
 bool CudfIcebergSplitReader::needPrependedRowIndex() const {
@@ -346,13 +346,13 @@ std::unique_ptr<cudf::column> CudfIcebergSplitReader::makeRowIndex(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream_,
-      get_temp_mr());
+      tempMemoryResource());
   fillSequence<uint64_t>(
       rowIndex->mutable_view(),
       baseReadOffset_,
       numRows,
       stream_,
-      get_temp_mr());
+      tempMemoryResource());
   return rowIndex;
 }
 
@@ -446,10 +446,10 @@ CudfIcebergSplitReader::readNextChunk() {
   if (isApplyingDeletes) {
     // Allocate deletion mask column if needed (nothing is deleted)
     if (not deleteMask_ or std::cmp_less(deleteMask_->size(), numRows)) {
-      auto false_scalar =
-          cudf::numeric_scalar<bool>(false, true, stream_, get_temp_mr());
+      auto false_scalar = cudf::numeric_scalar<bool>(
+          false, true, stream_, tempMemoryResource());
       deleteMask_ = cudf::make_column_from_scalar(
-          false_scalar, numRows, stream_, get_temp_mr());
+          false_scalar, numRows, stream_, tempMemoryResource());
     } else {
       // Clear the bitmap
       CUDF_CUDA_TRY(cudaMemsetAsync(
@@ -493,7 +493,8 @@ CudfIcebergSplitReader::readNextChunk() {
 
     // Apply the delete mask if there are remaining physical columns.
     if (cudfTable->num_columns() > 0) {
-      const auto deleteMr = deferredFilter() ? get_temp_mr() : get_output_mr();
+      const auto deleteMr =
+          deferredFilter() ? tempMemoryResource() : outputMemoryResource();
       cudfTable = cudf::apply_deletion_mask(
           cudfTable->view(), deleteMaskView_, stream_, deleteMr);
     }
@@ -504,7 +505,7 @@ CudfIcebergSplitReader::readNextChunk() {
   if (cudfTable->num_columns() == 0) {
     if (isApplyingDeletes) {
       const auto deletedRows = static_cast<std::size_t>(
-          countDeletedRows(deleteMaskView_, stream_, get_temp_mr()));
+          countDeletedRows(deleteMaskView_, stream_, tempMemoryResource()));
       VELOX_CHECK_LE(
           deletedRows,
           static_cast<std::size_t>(numRows),
@@ -519,16 +520,17 @@ CudfIcebergSplitReader::readNextChunk() {
 
   // Build output table by injecting missing columns at appropriate indices
   auto* deferred = deferredFilter();
-  const auto injectMr = deferred ? get_temp_mr() : get_output_mr();
+  const auto injectMr =
+      deferred ? tempMemoryResource() : outputMemoryResource();
   cudfTable =
       buildOutputTable(std::move(cudfTable), injectMr, rowCountOverride);
 
   // Apply the deferred subfield filter.
   if (deferred) {
     auto filterMask = cudf::compute_column(
-        cudfTable->view(), *deferred, stream_, get_temp_mr());
+        cudfTable->view(), *deferred, stream_, tempMemoryResource());
     cudfTable = cudf::apply_retention_mask(
-        cudfTable->view(), filterMask->view(), stream_, get_output_mr());
+        cudfTable->view(), filterMask->view(), stream_, outputMemoryResource());
   }
 
   // Update the base read offset
@@ -673,7 +675,9 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
             ioStatistics_,
             ioStats_,
             runtimeStats,
-            icebergSplit_->connectorId));
+            icebergSplit_->connectorId,
+            tempMemoryResource(),
+            outputMemoryResource()));
   }
 
   if (deletionVectorFile_ != nullptr) {
@@ -709,7 +713,7 @@ CudfIcebergSplitReader::equalityDeleteKeys(
 
 void CudfIcebergSplitReader::applyDeletionVector(cudf::column_view rowIndex) {
   deletionVectorReader_->applyDeletes(
-      deleteMaskView_, rowIndex, stream_, get_temp_mr());
+      deleteMaskView_, rowIndex, stream_, tempMemoryResource());
 }
 
 void CudfIcebergSplitReader::readPositionalDeleteBitmap(
@@ -732,7 +736,7 @@ void CudfIcebergSplitReader::readPositionalDeleteBitmap(
   std::memset(deleteBitmap_->asMutable<uint8_t>(), 0, numBitmaskBytes);
   if (not deviceBitmap_ or deviceBitmap_->size() < numBitmaskBytes) {
     deviceBitmap_ = std::make_shared<rmm::device_buffer>(
-        numBitmaskBytes, stream_, get_temp_mr());
+        numBitmaskBytes, stream_, tempMemoryResource());
   }
 
   VELOX_CHECK_NOT_NULL(deleteBitmap_->as<uint8_t>());
@@ -775,7 +779,7 @@ void CudfIcebergSplitReader::applyPositionalDeletes(
       rowIndex,
       deleteMaskView_,
       stream_,
-      get_temp_mr());
+      tempMemoryResource());
 }
 
 void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
