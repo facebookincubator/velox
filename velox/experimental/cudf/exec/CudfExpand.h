@@ -60,6 +60,10 @@ class CudfExpand : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  // Taken from the plan node because the input vector's type may describe
+  // this operator's output instead of its input.
+  const size_t numInputColumns_;
+
   // Input channel for each output column, one list per projection.
   // kConstantChannel marks columns taken from 'constantProjections_'.
   std::vector<std::vector<column_index_t>> fieldProjections_;

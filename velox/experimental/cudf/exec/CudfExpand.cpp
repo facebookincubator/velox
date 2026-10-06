@@ -38,7 +38,8 @@ CudfExpand::CudfExpand(
           expandNode->id(),
           "CudfExpand",
           nvtx3::rgb{255, 165, 0}, // Orange
-          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kClose) {
+          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kClose),
+      numInputColumns_(expandNode->inputType()->size()) {
   const auto& inputType = expandNode->inputType();
   const auto numProjections = expandNode->projections().size();
   const auto numColumns = expandNode->names().size();
@@ -160,7 +161,7 @@ RowVectorPtr CudfExpand::doGetOutput() {
     // be moved into the output instead of copied. A column projected more
     // than once is copied for all but its last use.
     auto inputColumns = cudfInput->release()->release();
-    VELOX_CHECK_EQ(inputColumns.size(), input_->type()->size());
+    VELOX_CHECK_EQ(inputColumns.size(), numInputColumns_);
 
     std::vector<int32_t> remainingUses(inputColumns.size(), 0);
     for (const auto channel : fieldProjection) {

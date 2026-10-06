@@ -83,7 +83,10 @@ TEST_F(CudfExpandTest, simpleConstant) {
 // Complex-type constants cannot be built as cuDF scalars, so Expand must stay
 // on the CPU.
 TEST_F(CudfExpandTest, complexConstantFallsBackToCpu) {
+  // The fallback setting is read when cuDF is registered.
+  cudf_velox::unregisterCudf();
   cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
 
   auto data = makeRowVectorData(3);
   auto children = data->children();
