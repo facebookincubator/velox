@@ -58,14 +58,26 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 
 class FileConfig;
 
-/// Base class for file-based data sources that read from columnar file formats
-/// (ORC, Parquet, etc.) through FileScanReader. Provides the common scan
-/// pipeline: column resolution, filter extraction, scan spec construction,
-/// split reading, remaining filter evaluation, and runtime stats collection.
+/// Common connector scan pipeline that exposes FileScanReader through the
+/// DataSource interface consumed by TableScan. Owns the active logical split,
+/// reader, and reusable output slot, and translates data, blocked, and end
+/// results while tracking physical progress independently of output rows.
 ///
-/// Connector-specific data sources (Hive, Paimon, etc.) extend this class to
-/// add format-specific behavior like bucket conversion, multi-file splits, or
-/// merge-on-read.
+/// Holds an immutable FileScanSpec for column and predicate requirements.
+/// Prepares independent FileScanState instances for physical readers and
+/// compiles the remaining expression using this data source's context and
+/// memory pool. Evaluates that expression and applies output post-processing
+/// after the logical reader produces a batch.
+///
+/// The default createScanReader() wraps existing FileSplitReader
+/// specializations in FileSplitReaderAdapter. Connector-specific subclasses
+/// can instead supply a logical reader that owns multiple physical inputs.
+/// Physical preparation state is shared with the adapter to preserve borrowed
+/// inputs during serial takeover of a preloaded data source.
+///
+/// Archives completed readers' raw statistics once and adds the active reader
+/// only to exported snapshots. EOF, cancellation, and read failures release
+/// the reader and split; cleanup still runs if statistics collection fails.
 class FileDataSource : public DataSource {
  public:
   /// Runtime stat keys for file-based data sources. Data IO stats use the
@@ -91,7 +103,7 @@ class FileDataSource : public DataSource {
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<FileConfig>& fileConfig,
-      FileScanOptions options = {});
+      FileScanSpec::Options options = {});
 
   FileDataSource(
       std::shared_ptr<const FileScanSpec> fileScanSpec,

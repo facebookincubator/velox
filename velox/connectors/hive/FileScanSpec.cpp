@@ -21,6 +21,7 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -59,8 +60,22 @@ FileScanSpec::FileScanSpec(
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
     const ConnectorQueryCtx* context,
+    const std::shared_ptr<FileConfig>& config)
+    : FileScanSpec(
+          outputType,
+          tableHandle,
+          assignments,
+          context,
+          config,
+          Options{}) {}
+
+FileScanSpec::FileScanSpec(
+    const RowTypePtr& outputType,
+    const FileTableHandlePtr& tableHandle,
+    const ColumnHandleMap& assignments,
+    const ConnectorQueryCtx* context,
     const std::shared_ptr<FileConfig>& config,
-    FileScanOptions options)
+    Options options)
     : outputType_(outputType),
       tableHandle_(tableHandle),
       assignments_(assignments),

@@ -25,8 +25,21 @@ namespace facebook::velox::connector::hive {
 class FileScanSpec;
 struct FileScanState;
 
-/// Adapts the existing synchronous file reader and its connector-specific
-/// specializations to the logical scan interface.
+/// Bridges an existing synchronous FileSplitReader and its connector-specific
+/// specializations to FileScanReader. Owns the legacy reader object and maps
+/// its scanned-row count and EOF convention to data and end results. This
+/// adapter performs synchronous reads and does not produce blocked results.
+///
+/// Retains the immutable FileScanSpec and the physical FileScanState borrowed
+/// by the reader. A data source and its adapter may jointly own that state for
+/// one physical reader, including serial takeover of a preloaded source;
+/// separate active physical readers require separate states.
+///
+/// Keeps preparation statistics at a stable address for readers that retain a
+/// reference to them. Snapshots combine these counters with the active reader's
+/// raw statistics, leaving conversion of totals to metrics to FileDataSource.
+/// Cancellation destroys the reader before releasing its preparation inputs,
+/// state, and specification, and is safe to repeat.
 class FileSplitReaderAdapter final : public FileScanReader {
  public:
   FileSplitReaderAdapter(

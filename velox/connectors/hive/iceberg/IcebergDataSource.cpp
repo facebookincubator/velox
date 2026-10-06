@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"

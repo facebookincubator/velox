@@ -18,6 +18,7 @@
 
 #include <utility>
 
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"

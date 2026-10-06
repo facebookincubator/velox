@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -880,7 +881,7 @@ TEST_F(FileDataSourceTest, fileScanSpecPreservesLogicalInputsAndPolicy) {
         assignments,
         context_.get(),
         hiveConfig_,
-        FileScanOptions{extract});
+        FileScanSpec::Options{extract});
     EXPECT_EQ(fileScanSpec->originalRemainingFilter(), expression);
     EXPECT_EQ(fileScanSpec->assignments().at("alias"), assignments.at("alias"));
     EXPECT_TRUE(fileScanSpec->outputType()->equivalent(*outputType));
@@ -1011,7 +1012,7 @@ TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
             assignments,
             context_.get(),
             hiveConfig_,
-            FileScanOptions{extractFilter});
+            FileScanSpec::Options{extractFilter});
         FileDataSource source(
             fileScanSpec, &fileFactory_, nullptr, context_.get(), hiveConfig_);
         source.addSplit(HiveConnectorSplitBuilder(file->getPath())

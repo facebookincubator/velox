@@ -63,6 +63,7 @@ velox_add_library(
   FileIndexReader.h
   FileProperties.h
   FileScanSpec.h
+  FileScanState.h
   FileScanReader.h
   FileSplitReaderAdapter.h
   FileSplitReader.h

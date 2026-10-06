@@ -22,6 +22,9 @@
 
 namespace facebook::velox::connector::hive {
 
+/// Outcome of one bounded read attempt. Separates logical output availability
+/// from new physical scanning progress: any state may report progress, while
+/// returning cached output may require no additional physical reads.
 struct ScanReadResult {
   enum class State { kData, kBlocked, kEnd };
 
@@ -29,13 +32,26 @@ struct ScanReadResult {
       : state(state), physicalRowsScanned(physicalRowsScanned) {}
 
   State state;
-  // New physical progress, independent of the number of output rows, in all
-  // three states. Cached output may have no new physical progress.
+  /// New physical progress, independent of the number of output rows, in all
+  /// three states. Cached output may have no new physical progress.
   uint64_t physicalRowsScanned{0};
 };
 
-/// Produces batches for one logical ConnectorSplit. A logical split need not
-/// correspond to a single physical file.
+/// Execution interface for one logical ConnectorSplit, driven by
+/// FileDataSource. Implementations manage the physical inputs and pending work
+/// needed to produce its batches. A logical split may read one file or combine
+/// multiple inputs, and may return buffered output after physical reads stop.
+///
+/// Explicit data, blocked, and end results distinguish an empty filtered batch
+/// from waiting for input or exhausting the split. Physical progress is
+/// reported separately so cached output does not inflate scanned-row counts.
+/// FileDataSource owns the reusable output slot and applies the remaining
+/// filter and output post-processing to the returned logical rows.
+///
+/// Implementations keep their borrowed preparation inputs alive while readers
+/// use them. They provide non-consuming cumulative statistics snapshots and
+/// release inputs and pending work on cancellation or destruction. The caller
+/// takes the final snapshot before releasing the reader's resources.
 class FileScanReader {
  public:
   virtual ~FileScanReader() = default;

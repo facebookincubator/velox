@@ -25,6 +25,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/FileSplitReaderAdapter.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -68,7 +69,7 @@ FileDataSource::FileDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<FileConfig>& fileConfig,
-    FileScanOptions options)
+    FileScanSpec::Options options)
     : FileDataSource(
           std::make_shared<const FileScanSpec>(
               outputType,

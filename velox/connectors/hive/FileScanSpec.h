@@ -22,21 +22,7 @@
 namespace facebook::velox::connector::hive {
 
 class FileConfig;
-
-struct FileScanOptions {
-  // When false, keep the entire remaining expression for post-read evaluation.
-  // Explicit table-handle subfield filters still apply to physical reads.
-  bool extractRemainingFilter{true};
-};
-
-/// Mutable state for exactly one physical reader. Never share this state
-/// between concurrently active readers, even when they share a FileScanSpec.
-struct FileScanState {
-  common::SubfieldFilters filters;
-  std::shared_ptr<common::ScanSpec> scanSpec;
-  std::shared_ptr<common::MetadataFilter> metadataFilter;
-  RowTypePtr readerProducedType;
-};
+struct FileScanState;
 
 /// Immutable connector-level description of the columns and predicates for a
 /// logical scan. Multiple data sources or physical readers with the same scan
@@ -46,7 +32,7 @@ struct FileScanState {
 /// partition and synthesized columns, required subfields, extraction chains,
 /// and post-read column processing. Preserves the original predicates and
 /// derives the physical filters, remaining expression, and column demands
-/// according to FileScanOptions. Columns needed only by the remaining
+/// according to FileScanSpec::Options. Columns needed only by the remaining
 /// expression are included in the reader's input requirements.
 ///
 /// The DWIO common::ScanSpec is a mutable tree describing how one physical
@@ -55,6 +41,8 @@ struct FileScanState {
 /// reader. The overload accepting physical column demands supports additions
 /// such as Hive bucket conversion columns. File-specific constants, filter
 /// adaptation, and other reader mutations remain local to that FileScanState.
+/// The caller owns each returned state; this specification stores no state
+/// instances and does not participate in their mutation or cleanup.
 ///
 /// Owns the handles, typed expressions, and subfields backing its derived
 /// column demands. Readers borrowing these inputs must retain this object's
@@ -67,9 +55,27 @@ struct FileScanState {
 /// the connector and reader layers that consume this specification.
 class FileScanSpec {
  public:
+  /// Controls how construction derives physical filters from the logical
+  /// predicates. These options describe preparation policy and contain no
+  /// per-reader execution state.
+  struct Options {
+    /// When false, keep the entire remaining expression for post-read
+    /// evaluation. Explicit table-handle subfield filters still apply to
+    /// physical reads.
+    bool extractRemainingFilter{true};
+  };
+
   using Subfields =
       folly::F14FastMap<std::string, std::vector<const common::Subfield*>>;
   using ColumnHandles = std::unordered_map<std::string, FileColumnHandlePtr>;
+
+  /// Prepares a specification using the default Options.
+  FileScanSpec(
+      const RowTypePtr& outputType,
+      const FileTableHandlePtr& tableHandle,
+      const ColumnHandleMap& assignments,
+      const ConnectorQueryCtx* context,
+      const std::shared_ptr<FileConfig>& config);
 
   FileScanSpec(
       const RowTypePtr& outputType,
@@ -77,7 +83,7 @@ class FileScanSpec {
       const ColumnHandleMap& assignments,
       const ConnectorQueryCtx* context,
       const std::shared_ptr<FileConfig>& config,
-      FileScanOptions options = {});
+      Options options);
 
   ~FileScanSpec() = default;
 
