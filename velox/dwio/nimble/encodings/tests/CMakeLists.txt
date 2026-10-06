@@ -18,6 +18,7 @@ add_library(
   ../selection/tests/RandomEncodingSelectionPolicy.cpp
   TestUtils.h
   SharedDictionaryEncodingTestUtils.h
+  SubIntSplitRangeListReads.h
 )
 target_link_libraries(nimble_encodings_tests_utils nimble_encodings fsst)
 
@@ -82,7 +83,20 @@ add_executable(
 )
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
-  target_sources(nimble_encodings_tests PRIVATE SubIntSplitEncodingTest.cpp)
+  target_sources(
+    nimble_encodings_tests
+    PRIVATE
+      SubIntSplitEncodingTest.cpp
+      SubIntSplitCostModelsTest.cpp
+      SubIntSplitEncodingViewTest.cpp
+      SubIntSplitSelectorTest.cpp
+      SubIntSplitDecodeOptionsTest.cpp
+      SubIntSplitPlannerOptionsTest.cpp
+      SubIntSplitDeltaTest.cpp
+      SubIntSplitSectionTransformTest.cpp
+      SubIntSplitTransformedEncodingTest.cpp
+      EncodingSizeEstimationTest.cpp
+  )
 endif()
 
 add_test(nimble_encodings_tests nimble_encodings_tests)

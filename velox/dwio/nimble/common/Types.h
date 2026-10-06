@@ -182,6 +182,14 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   ALPRD = 26,
+  /// SubIntSplit whose sections carry a reversible transform. A distinct type
+  /// rather than a flag inside SubIntSplit, so that a reader without transform
+  /// support fails on an encoding it does not know instead of decoding the
+  /// sections and skipping the inverse, which would return transformed values
+  /// as though they were the originals.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  SubIntSplitReordered = 27,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
