@@ -68,6 +68,7 @@ UcxPartitionedOutput::UcxPartitionedOutput(
     int32_t operatorId,
     exec::DriverCtx* ctx,
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+    bool eagerFlush,
     const std::shared_ptr<UcxOutputQueueManager>& queueManager)
     : Operator(
           ctx,
@@ -86,7 +87,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       driverId_(ctx->driverId),
       targetRowsPerChunk_(ctx->queryConfig().get<int64_t>(
           CudfConfig::kUcxPartitionedOutputBatchRows,
-          CudfConfig::getInstance().partitionedOutputBatchRows)) {
+          CudfConfig::getInstance().partitionedOutputBatchRows)),
+      eagerFlush_(
+          eagerFlush || ctx->queryConfig().partitionedOutputEagerFlush()) {
   VELOX_CHECK_NOT_NULL(
       queueManager, "UcxPartitionedOutput requires an output queue manager");
   VELOX_CHECK(
@@ -129,7 +132,8 @@ void UcxPartitionedOutput::addInput(RowVectorPtr input) {
   pendingRows_ += cudfVector->size();
   pendingInputs_.push_back(std::move(cudfVector));
 
-  if (targetRowsPerChunk_ <= 0 || pendingRows_ >= targetRowsPerChunk_) {
+  if (eagerFlush_ || targetRowsPerChunk_ <= 0 ||
+      pendingRows_ >= targetRowsPerChunk_) {
     flushPending();
   }
 }

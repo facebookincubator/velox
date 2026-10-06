@@ -57,15 +57,12 @@ void registerUcxTransports() {
           [](int32_t operatorId,
              exec::DriverCtx* ctx,
              const std::shared_ptr<const core::PartitionedOutputNode>& node,
-             bool /*eagerFlush*/,
+             bool eagerFlush,
              const std::shared_ptr<UcxOutputQueueManager>& manager)
               -> std::unique_ptr<exec::Operator> {
             checkCudfEnabledForUcx(ctx->queryConfig());
-            // 'eagerFlush' is not honored: UcxPartitionedOutput batches by row
-            // count (CudfConfig::kUcxPartitionedOutputBatchRows) because a
-            // packed GPU table is the unit of transfer.
             return std::make_unique<UcxPartitionedOutput>(
-                operatorId, ctx, node, manager);
+                operatorId, ctx, node, eagerFlush, manager);
           }),
       /*overwrite=*/true);
 
