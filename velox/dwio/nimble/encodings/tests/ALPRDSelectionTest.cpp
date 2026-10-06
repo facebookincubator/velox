@@ -28,6 +28,36 @@ namespace {
 
 using ReadFactors = std::vector<std::pair<EncodingType, float>>;
 
+// Reports a complete size estimate for a bound child encoding.
+template <typename T>
+class EstimatedReplayPolicy : public ReplayedEncodingSelectionPolicy<T> {
+ public:
+  EstimatedReplayPolicy(EncodingType encodingType, uint64_t estimatedSize)
+      : ReplayedEncodingSelectionPolicy<T>{
+            EncodingLayout{encodingType, {}, CompressionType::Uncompressed, {}},
+            std::nullopt,
+            [](DataType type) {
+              return ManualEncodingSelectionPolicyFactory{
+                  {{EncodingType::Trivial, 1}}, std::nullopt}
+                  .createPolicy(type);
+            }},
+        estimatedSize_{estimatedSize} {}
+
+  EncodingSelectionResult select(
+      std::span<const typename TypeTraits<T>::physicalType> values,
+      const Statistics<typename TypeTraits<T>::physicalType>& statistics,
+      const Encoding::Options& options) override {
+    auto result =
+        ReplayedEncodingSelectionPolicy<T>::select(values, statistics, options);
+    result.estimatedSize = estimatedSize_;
+    return result;
+  }
+
+ private:
+  // Includes all prefix and padding bytes chosen by the policy.
+  const uint64_t estimatedSize_;
+};
+
 ReadFactors candidates() {
   // Equal weights test size selection independently of deployment tuning.
   return {
@@ -326,6 +356,40 @@ TYPED_TEST(ALPRDSelectionTest, validatesChildPolicyLogicalType) {
       velox::VeloxRuntimeError);
 }
 
+TYPED_TEST(ALPRDSelectionTest, preservesPolicyProvidedChildEstimate) {
+  using PhysicalType = typename TestFixture::PhysicalType;
+  const auto values = this->makeValues(16, 2);
+  constexpr uint64_t kEstimatedSize = 1'234;
+  for (auto encodingType :
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::Varint}) {
+    SCOPED_TRACE(toString(encodingType));
+    EstimatedReplayPolicy<PhysicalType> policy{encodingType, kEstimatedSize};
+    EXPECT_EQ(
+        detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+            values, values.size(), this->options_, policy),
+        kEstimatedSize);
+
+    // An estimate for the sample cannot stand in for the larger target stream.
+    // Re-estimating the bound codec must use the target row count instead.
+    ReplayedEncodingSelectionPolicy<PhysicalType> replay{
+        EncodingLayout{encodingType, {}, CompressionType::Uncompressed, {}},
+        std::nullopt,
+        [](DataType type) {
+          return ManualEncodingSelectionPolicyFactory{
+              {{EncodingType::Trivial, 1}}, std::nullopt}
+              .createPolicy(type);
+        }};
+    constexpr uint32_t kNumRows = 1'024;
+    EXPECT_EQ(
+        detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+            values, kNumRows, this->options_, policy),
+        detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+            values, kNumRows, this->options_, replay));
+  }
+}
+
 TYPED_TEST(ALPRDSelectionTest, estimatesLargeInputFromBoundedSample) {
   using PhysicalType = typename TestFixture::PhysicalType;
   const auto values = this->makeValues(65'536, 2);
@@ -362,6 +426,8 @@ TYPED_TEST(ALPRDSelectionTest, projectsChildCostsBeforeSelection) {
     };
     ManualEncodingSelectionPolicy<uint16_t> codePolicy{
         children, std::nullopt, EncodingIdentifiers::ALPRD::Codes};
+    const auto sample = std::span<const uint16_t>{codes}.first(1'024);
+    const auto sampleStatistics = Statistics<uint16_t>::create(sample);
     // These weights favor Trivial for the sample but FixedBitWidth for the
     // full code stream, where its fixed overhead is amortized over more rows.
     for (uint32_t numRows : {1'024, 65'536}) {
@@ -372,6 +438,13 @@ TYPED_TEST(ALPRDSelectionTest, projectsChildCostsBeforeSelection) {
           result.encodingType,
           numRows == 1'024 ? EncodingType::Trivial
                            : EncodingType::FixedBitWidth);
+      const auto sampledResult =
+          codePolicy.select(sample, [&](EncodingType type) {
+            return detail::EncodingSizeEstimation<uint16_t>::estimateSize(
+                type, numRows, sampleStatistics, this->options_);
+          });
+      EXPECT_EQ(sampledResult.encodingType, result.encodingType);
+      EXPECT_EQ(sampledResult.estimatedSize, result.estimatedSize);
     }
 
     const auto result =

@@ -71,11 +71,11 @@ std::span<const T> sampleFilteredValues(
 
 // Estimates a floating-point container using its actual value-child policy.
 // Returns nullopt for encodings other than Dictionary, RLE and MainlyConstant.
-// values may be a sample; numRows is the target full-stream size.
+// Uses sampleValues to estimate the target stream of numRows values.
 template <typename T>
 std::optional<uint64_t> estimateNestedFloatingPointSize(
     EncodingType encodingType,
-    std::span<const typename TypeTraits<T>::physicalType> values,
+    std::span<const typename TypeTraits<T>::physicalType> sampleValues,
     uint32_t numRows,
     const Statistics<typename TypeTraits<T>::physicalType>& statistics,
     EncodingSelectionPolicyBase& policy,
@@ -89,7 +89,7 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
   }
   // Project an observed child count to numRows, rounding up to a whole row.
   const auto scaleCount = [&](uint64_t count) -> uint32_t {
-    return (count * numRows + values.size() - 1) / values.size();
+    return (count * numRows + sampleValues.size() - 1) / sampleValues.size();
   };
   const auto prefixSize =
       EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
@@ -102,7 +102,7 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
     case EncodingType::Dictionary: {
       const auto& counts = statistics.uniqueCounts().value();
       // A dictionary alphabet is a set, so count each sampled key once rather
-      // than retaining the original values' frequency weights.
+      // than retaining the observed frequency weights.
       uint32_t sampled{0};
       for (const auto& [value, count] : counts) {
         storage[sampled++] = value;
@@ -122,7 +122,7 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
       const auto numRuns = statistics.consecutiveRepeatCount();
       std::optional<PhysicalType> previous;
       sample = sampleFilteredValues(
-          values,
+          sampleValues,
           numRuns,
           [&](PhysicalType value) {
             if (previous == value) {
@@ -144,10 +144,10 @@ std::optional<uint64_t> estimateNestedFloatingPointSize(
     }
     case EncodingType::MainlyConstant: {
       const auto common = statistics.uniqueCounts()->mostFrequent().value();
-      const auto numUncommon = values.size() - common.second;
+      const auto numUncommon = sampleValues.size() - common.second;
       if (numUncommon != 0) {
         sample = sampleFilteredValues(
-            values,
+            sampleValues,
             numUncommon,
             [&](PhysicalType value) { return value != common.first; },
             storage);
@@ -191,6 +191,11 @@ class SampledCost {
       EncodingType encodingType,
       EncodingSelectionPolicyBase* policy);
 
+  // Converts a built-in estimate to serialized bytes, including prefix and
+  // padding adjustments. Policy-provided estimates already include these.
+  uint64_t serializedSize(EncodingType encodingType, uint64_t estimatedSize)
+      const;
+
   // Observed values and the full stream length they represent.
   const std::span<const PhysicalType> sampleValues_;
   const uint32_t numRows_;
@@ -218,46 +223,32 @@ SampledCost<T>::SampledCost(
 template <typename T>
 uint64_t SampledCost<T>::selectedSize() {
   EncodingType selectedEncoding{EncodingType::Trivial};
-  std::optional<uint64_t> size;
-  if (const auto* manual =
-          dynamic_cast<const ManualEncodingSelectionPolicy<T>*>(&policy_)) {
-    // Compare every candidate after projecting its cost to the target stream.
-    // Sampled candidates retain the existing container heuristics to bound
-    // recursive training, even when the sample contains every input row.
+  if (auto* manual =
+          dynamic_cast<ManualEncodingSelectionPolicy<T>*>(&policy_)) {
+    // The policy compares candidates using their full-stream costs. Sampled
+    // candidates retain the existing container heuristics to bound recursive
+    // training, even when the sample contains every input row.
     NIMBLE_CHECK_LE(sampleValues_.size(), numRows_);
-    if (!sampleValues_.empty()) {
-      float minCost = std::numeric_limits<float>::max();
-      for (const auto& [encodingType, readFactor] :
-           manual->candidateEncodingReadFactors()) {
-        const auto estimatedSize = estimateSize(
-            encodingType,
-            (encodingType == EncodingType::ALP ||
-             encodingType == EncodingType::ALPRD)
-                ? &policy_
-                : nullptr);
-        if (!estimatedSize.has_value()) {
-          continue;
-        }
-        const auto cost = *estimatedSize * readFactor;
-        if (cost < minCost) {
-          minCost = cost;
-          selectedEncoding = encodingType;
-          size = estimatedSize;
-        }
-      }
+    const auto result = manual->select(sampleValues_, [&](EncodingType type) {
+      return estimateSize(
+          type,
+          (type == EncodingType::ALP || type == EncodingType::ALPRD) ? &policy_
+                                                                     : nullptr);
+    });
+    selectedEncoding = result.encodingType;
+    if (result.estimatedSize) {
+      return serializedSize(selectedEncoding, *result.estimatedSize);
     }
   } else {
     const auto result = policy_.select(sampleValues_, statistics_, options_);
     selectedEncoding = result.encodingType;
     // A policy's estimate describes its input, so reuse it only when the
     // sample covers the full stream. The selected layout remains binding.
-    if (numRows_ == sampleValues_.size()) {
-      size = result.estimatedSize;
+    if (numRows_ == sampleValues_.size() && result.estimatedSize) {
+      return *result.estimatedSize;
     }
   }
-  if (!size) {
-    size = estimateSize(selectedEncoding, &policy_);
-  }
+  const auto size = estimateSize(selectedEncoding, &policy_);
   const auto prefixSize =
       EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
   if (!size) {
@@ -265,15 +256,25 @@ uint64_t SampledCost<T>::selectedSize() {
     // binding and use an uncompressed size as the training approximation.
     return prefixSize + 1 + uint64_t{numRows_} * sizeof(PhysicalType);
   }
-  if (selectedEncoding == EncodingType::Trivial ||
-      selectedEncoding == EncodingType::FixedBitWidth ||
-      selectedEncoding == EncodingType::Varint) {
-    *size = *size - EncodingPrefix::kFixedPrefixSize + prefixSize;
-    if (selectedEncoding == EncodingType::FixedBitWidth) {
-      *size += FixedBitArray::bufferSize(0, 0);
+  return serializedSize(selectedEncoding, *size);
+}
+
+template <typename T>
+uint64_t SampledCost<T>::serializedSize(
+    EncodingType encodingType,
+    uint64_t estimatedSize) const {
+  if (encodingType == EncodingType::Trivial ||
+      encodingType == EncodingType::FixedBitWidth ||
+      encodingType == EncodingType::Varint) {
+    // These built-in estimators include a fixed six-byte prefix. Replace it
+    // with the prefix that the writer will emit for the target row count.
+    estimatedSize = estimatedSize - EncodingPrefix::kFixedPrefixSize +
+        EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
+    if (encodingType == EncodingType::FixedBitWidth) {
+      estimatedSize += FixedBitArray::bufferSize(0, 0);
     }
   }
-  return *size;
+  return estimatedSize;
 }
 
 template <typename T>
@@ -321,6 +322,8 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
     return size ? std::optional<uint64_t>{*size - samplePrefixSize + prefixSize}
                 : std::nullopt;
   }
+  // Use the framework's row-count estimator when the observed statistics
+  // suffice. Other codecs need the sample values before extrapolation.
   if constexpr (!isStringType<T>()) {
     if (encodingType == EncodingType::Trivial ||
         encodingType == EncodingType::FixedBitWidth ||

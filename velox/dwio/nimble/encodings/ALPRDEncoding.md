@@ -163,15 +163,16 @@ latter is the total row count of the stream being estimated. For example,
 1,024 sampled values can represent a stream containing 1,000,000 values. The
 sample may also contain the full input.
 
-The shared cost model reads a manual child policy's effective candidates and
-read factors, estimates each candidate for the full stream, and then compares
+The shared cost model supplies full-stream estimates to the manual child
+policy's non-virtual `select(values, estimateSize)` overload. The policy reuses
+its candidate traversal, read factors and fallback rules to compare
 `estimatedSize * readFactor`. The parent sums the selected children's estimated
 bytes; read factors affect the choice, not the byte count. Replayed and custom
 policies select through their existing `select(values, statistics, options)`
 interface; the model retains
 that selection and projects its cost when needed. A policy-provided size is
-reused only when the sample contains the full stream. Sampling and target row
-counts do not extend the selection policy's virtual interface.
+reused unchanged only when the sample contains the full stream. Sampling and
+target row counts do not extend the selection policy's virtual interface.
 
 For codecs using the generic extrapolation path, the estimate is:
 
@@ -185,8 +186,13 @@ Here `sampleSizeBytes` is the sample's estimated encoded size in bytes. The
 outer prefix is counted once, using the full row count, since its varint length
 may change with that count. Existing composite estimates on this path scale
 their inner metadata together with the payload as a conservative heuristic.
-Varint retains its estimator's fixed-prefix convention for policy scoring;
-the selected child's size is then corrected for the actual prefix option.
+Trivial, FixedBitWidth and Varint retain their existing estimators' fixed-prefix
+convention for policy scoring. When one of these estimates is selected, its
+fixed six-byte prefix is replaced with the actual prefix size for the target
+row count and prefix option. FixedBitWidth also adds its serialized padding.
+This conversion applies only to results from these built-in estimators;
+policy-provided estimates already describe the child's size and are not
+adjusted again.
 
 Codec-specific models handle costs that do not follow this formula. Constant
 stores its value once and only adjusts the prefix. Trivial, FixedBitWidth and

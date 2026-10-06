@@ -123,6 +123,19 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
+    return select(values, [&](EncodingType encodingType) {
+      return detail::EncodingSizeEstimation<T>::estimateSize(
+          encodingType, values, statistics, options, this);
+    });
+  }
+
+  /// Selects configured candidates using caller-supplied byte estimates.
+  /// Sampled encodings can estimate their target streams while reusing the
+  /// policy's read factors, fallback rules and compression configuration.
+  template <typename SizeEstimator>
+  EncodingSelectionResult select(
+      std::span<const physicalType> values,
+      const SizeEstimator& estimateSize) {
     NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
     if (values.empty()) {
       return {
@@ -151,9 +164,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
-      const auto estimatedSize =
-          detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options, this);
+      const auto estimatedSize = estimateSize(encodingType);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
