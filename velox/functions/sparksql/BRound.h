@@ -30,18 +30,7 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Identifies the decimal HALF_EVEN special form.
-inline constexpr const char* kBRoundDecimal = "decimal_bround";
-
 namespace detail {
-
-inline constexpr int64_t kMaxJavaBigIntegerPowerOfTenExponent = 536'870'919;
-
-FOLLY_ALWAYS_INLINE Status broundUnderflowError(int32_t scale) {
-  return threadSkipErrorDetails()
-      ? Status::UserError()
-      : Status::UserError("Underflow while rounding to scale {}", scale);
-}
 
 Status broundFloatingPoint(float value, int32_t scale, float& result);
 
@@ -82,9 +71,6 @@ broundIntegral(T value, int32_t scale, bool ansiEnabled, T& result) {
   }
 
   const int64_t roundingDigitCount = -static_cast<int64_t>(scale);
-  if (roundingDigitCount > kMaxJavaBigIntegerPowerOfTenExponent) {
-    return broundUnderflowError(scale);
-  }
   if (roundingDigitCount > std::numeric_limits<T>::digits10 + 1) {
     result = 0;
     return Status::OK();
@@ -150,7 +136,7 @@ struct BRoundFunction {
   bool ansiEnabled_{false};
 };
 
-/// Registers primitive bround functions and the decimal_bround special form.
+/// Registers primitive bround functions.
 void registerBRoundFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::functions::sparksql

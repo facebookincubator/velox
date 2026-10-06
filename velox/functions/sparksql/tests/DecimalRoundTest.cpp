@@ -16,13 +16,11 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 
-#include <bit>
 #include <limits>
 #include <string>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
-#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -47,28 +45,6 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
       return {
           std::min(
               newPrecision,
-              static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-          0};
-    }
-    const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
-    return {
-        std::min(
-            integralLeastNumDigits + newScale,
-            static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-        newScale};
-  }
-
-  static std::pair<uint8_t, uint8_t> getBRoundResultPrecisionScale(
-      uint8_t precision,
-      uint8_t scale,
-      int32_t roundScale) {
-    const int32_t integralLeastNumDigits = precision - scale + 1;
-    if (roundScale < 0) {
-      const int32_t requiredPrecision = std::bit_cast<int32_t>(
-          uint32_t{0} - static_cast<uint32_t>(roundScale) + uint32_t{1});
-      return {
-          std::min(
-              std::max(integralLeastNumDigits, requiredPrecision),
               static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
           0};
     }
@@ -108,9 +84,8 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
 
     const auto [inputPrecision, inputScale] =
         getDecimalPrecisionScale(*inputType);
-    const auto [resultPrecision, resultScale] = functionName == kBRoundDecimal
-        ? getBRoundResultPrecisionScale(inputPrecision, inputScale, scale)
-        : getResultPrecisionScale(inputPrecision, inputScale, scale);
+    const auto [resultPrecision, resultScale] =
+        getResultPrecisionScale(inputPrecision, inputScale, scale);
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale), std::move(inputs), functionName);
   }
@@ -120,7 +95,7 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
     const auto [inputPrecision, inputScale] =
         getDecimalPrecisionScale(*inputType);
     const auto [resultPrecision, resultScale] =
-        getBRoundResultPrecisionScale(inputPrecision, inputScale, 0);
+        getResultPrecisionScale(inputPrecision, inputScale, 0);
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale),
         std::vector<core::TypedExprPtr>{
@@ -173,6 +148,20 @@ TEST_F(DecimalRoundTest, round) {
       makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 2)),
       std::nullopt,
       makeFlatVector<int64_t>({1, 6, -10, 0}, DECIMAL(2, 0)));
+
+  // Preserve a caller-resolved result precision.
+  const auto inputType = DECIMAL(3, 2);
+  auto expression = std::make_shared<const core::CallTypedExpr>(
+      DECIMAL(3, 0),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
+          std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(0)),
+      },
+      kRoundDecimal);
+  testEncodings(
+      expression,
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, inputType)},
+      makeFlatVector<int64_t>({1, 6, -10, 0}, DECIMAL(3, 0)));
 
   // Round to negative decimal scale.
   testDecimalRound(
@@ -301,22 +290,6 @@ TEST_F(DecimalRoundTest, bround) {
           },
           DECIMAL(19, 0)),
       kBRoundDecimal);
-
-  testDecimalRound(
-      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(3, 2)),
-      std::numeric_limits<int32_t>::min(),
-      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(2, 0)),
-      kBRoundDecimal);
-  testDecimalRound(
-      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(3, 2)),
-      std::numeric_limits<int32_t>::min() + 1,
-      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(2, 0)),
-      kBRoundDecimal);
-  testDecimalRound(
-      makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(3, 2)),
-      std::numeric_limits<int32_t>::min() + 2,
-      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)),
-      kBRoundDecimal);
 }
 
 TEST_F(DecimalRoundTest, broundNulls) {
@@ -350,50 +323,42 @@ TEST_F(DecimalRoundTest, broundNulls) {
           {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(37, 0)));
 }
 
-TEST_F(DecimalRoundTest, broundExtremeScaleUnderflow) {
+TEST_F(DecimalRoundTest, broundExtremeNegativeScales) {
   const auto type = DECIMAL(3, 2);
   const auto input = makeFlatVector<int64_t>({0, 1, 0, -1, 0}, type);
+  testDecimalRound(
+      input,
+      std::numeric_limits<int32_t>::min(),
+      makeFlatVector<int128_t>({0, 0, 0, 0, 0}, DECIMAL(38, 0)),
+      kBRoundDecimal);
   const auto expression = createDecimalRound(
       type, std::numeric_limits<int32_t>::min(), false, kBRoundDecimal);
-  VELOX_ASSERT_THROW(
-      evaluate(expression, makeRowVector({input})),
-      "Underflow while rounding to scale -2147483648");
-
   const auto tryExpression = std::make_shared<const core::CallTypedExpr>(
       expression->type(), std::vector<core::TypedExprPtr>{expression}, "try");
   testEncodings(
       tryExpression,
       {input},
-      makeNullableFlatVector<int64_t>(
-          {0, std::nullopt, 0, std::nullopt, 0}, DECIMAL(2, 0)));
-}
+      makeFlatVector<int128_t>({0, 0, 0, 0, 0}, DECIMAL(38, 0)));
 
-TEST_F(DecimalRoundTest, broundUnderflowBoundary) {
-  constexpr int32_t kMaximumSupportedScale =
-      2 - detail::kMaxJavaBigIntegerPowerOfTenExponent;
-  constexpr int32_t kFirstUnderflowScale = kMaximumSupportedScale - 1;
-  const auto type = DECIMAL(3, 2);
-
+  const auto maximum = DecimalUtil::kPowersOfTen[38] - 1;
   testDecimalRound(
-      makeFlatVector<int64_t>({1, -1, 0}, type),
-      kMaximumSupportedScale,
-      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({maximum, -maximum}, DECIMAL(38, 0)),
+      std::numeric_limits<int32_t>::min(),
+      makeFlatVector<int128_t>({0, 0}, DECIMAL(38, 0)),
       kBRoundDecimal);
 
-  const auto input = makeFlatVector<int64_t>({0, 1, 0, -1, 0}, type);
-  const auto expression =
-      createDecimalRound(type, kFirstUnderflowScale, false, kBRoundDecimal);
+  const auto boundaryInput =
+      makeFlatVector<int128_t>({maximum, -maximum}, DECIMAL(38, 0));
+  const auto boundaryExpression =
+      createDecimalRound(DECIMAL(38, 0), -38, false, kBRoundDecimal);
   VELOX_ASSERT_THROW(
-      evaluate(expression, makeRowVector({input})),
-      "Underflow while rounding to scale -536870918");
-
-  const auto tryExpression = std::make_shared<const core::CallTypedExpr>(
-      expression->type(), std::vector<core::TypedExprPtr>{expression}, "try");
-  testEncodings(
-      tryExpression,
-      {input},
-      makeNullableFlatVector<int128_t>(
-          {0, std::nullopt, 0, std::nullopt, 0}, DECIMAL(38, 0)));
+      evaluate(boundaryExpression, makeRowVector({boundaryInput})),
+      "Decimal overflow in bround.");
+  testDecimalRound(
+      boundaryInput,
+      -39,
+      makeFlatVector<int128_t>({0, 0}, DECIMAL(38, 0)),
+      kBRoundDecimal);
 }
 
 TEST_F(DecimalRoundTest, broundOverflow) {
@@ -402,7 +367,8 @@ TEST_F(DecimalRoundTest, broundOverflow) {
   const auto input =
       makeRowVector({makeFlatVector<int128_t>({maximum, -maximum}, type)});
   const auto expression = createDecimalRound(type, -1, false, kBRoundDecimal);
-  VELOX_ASSERT_THROW(evaluate(expression, input), "Decimal overflow");
+  VELOX_ASSERT_THROW(
+      evaluate(expression, input), "Decimal overflow in bround.");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

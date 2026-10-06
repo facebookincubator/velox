@@ -49,6 +49,7 @@ class DecimalRoundOps {
     std::optional<int128_t> divideFactor;
     std::optional<int128_t> multiplyFactor;
     int128_t overflowBound;
+    bool roundsToZero;
   };
 
   static int32_t clampScale(int32_t scale) {
@@ -63,9 +64,10 @@ class DecimalRoundOps {
       uint8_t resultPrecision,
       uint8_t resultScale);
 
-  static int32_t extractConstantScaleArg(
+  static std::optional<int32_t> extractConstantScaleArg(
       const exec::ExprPtr& expr,
-      std::string_view funcName);
+      std::string_view funcName,
+      bool allowNull);
 
   template <template <typename, typename> class Policy>
   static std::shared_ptr<exec::VectorFunction> createFunction(
@@ -134,6 +136,9 @@ class DecimalRoundFunction : public exec::VectorFunction {
         if constexpr (Policy::canOverflow) {
           if (FOLLY_UNLIKELY(!rounded.has_value())) {
             flat->setNull(row, true);
+            if constexpr (Policy::reportOverflow) {
+              context.setStatus(row, Policy::overflowStatus());
+            }
             return;
           }
         }
@@ -147,6 +152,9 @@ class DecimalRoundFunction : public exec::VectorFunction {
         if constexpr (Policy::canOverflow) {
           if (FOLLY_UNLIKELY(!rounded.has_value())) {
             flat->setNull(row, true);
+            if constexpr (Policy::reportOverflow) {
+              context.setStatus(row, Policy::overflowStatus());
+            }
             return;
           }
         }
@@ -170,6 +178,7 @@ namespace {
 template <typename TResult, typename TInput>
 struct RoundHalfUpPolicy {
   static constexpr bool canOverflow = false;
+  static constexpr bool reportOverflow = false;
 
   explicit RoundHalfUpPolicy(const DecimalRoundOps::ScaleFactors& factors)
       : factors_(factors) {}
@@ -201,6 +210,59 @@ struct RoundHalfUpPolicy {
   const DecimalRoundOps::ScaleFactors factors_;
 };
 
+// Half-even rounding (Spark's ROUND_HALF_EVEN).
+template <typename TResult, typename TInput>
+struct RoundHalfEvenPolicy {
+  static constexpr bool canOverflow = true;
+  static constexpr bool reportOverflow = true;
+
+  explicit RoundHalfEvenPolicy(const DecimalRoundOps::ScaleFactors& factors)
+      : factors_(factors) {}
+
+  std::optional<TResult> applyOne(const TInput& input) const {
+    if (factors_.roundsToZero) {
+      return TResult{0};
+    }
+
+    int128_t rounded = input;
+    if (factors_.divideFactor.has_value()) {
+      const int128_t divisor = factors_.divideFactor.value();
+      const int128_t quotient = rounded / divisor;
+      const int128_t remainder = rounded % divisor;
+      const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
+      const int128_t half = divisor / 2;
+      rounded = quotient;
+      if (absoluteRemainder > half ||
+          (absoluteRemainder == half && quotient % 2 != 0)) {
+        rounded += input < 0 ? -1 : 1;
+      }
+    }
+
+    if (factors_.multiplyFactor.has_value()) {
+      const int128_t multiplier = factors_.multiplyFactor.value();
+      const int128_t maxAbs = factors_.overflowBound / multiplier;
+      if (rounded >= maxAbs || rounded <= -maxAbs) {
+        return std::nullopt;
+      }
+      rounded *= multiplier;
+    }
+    if (rounded >= factors_.overflowBound ||
+        rounded <= -factors_.overflowBound) {
+      return std::nullopt;
+    }
+    return static_cast<TResult>(rounded);
+  }
+
+  static Status overflowStatus() {
+    return threadSkipErrorDetails()
+        ? Status::UserError()
+        : Status::UserError("Decimal overflow in bround.");
+  }
+
+ private:
+  const DecimalRoundOps::ScaleFactors factors_;
+};
+
 // Directional rounding (ceil toward +∞, floor toward -∞). May overflow
 // because rounding away from zero can push a value past the maximum
 // representable precision. The 'ceiling' parameter selects the direction:
@@ -208,6 +270,7 @@ struct RoundHalfUpPolicy {
 template <typename TResult, typename TInput, bool ceiling>
 struct DirectionalRoundPolicy {
   static constexpr bool canOverflow = true;
+  static constexpr bool reportOverflow = false;
 
   explicit DirectionalRoundPolicy(const DecimalRoundOps::ScaleFactors& factors)
       : factors_(factors) {}
@@ -264,10 +327,18 @@ struct FloorPolicy : DirectionalRoundPolicy<TResult, TInput, false> {
 
 } // namespace
 
-/// Spark decimal_round special form. Defined in .cpp because external callers
+enum class RoundMode {
+  kHalfUp,
+  kHalfEven,
+};
+
+/// Spark decimal round special form. Defined in .cpp because external callers
 /// only need registerDecimalRoundingForms().
 class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
  public:
+  DecimalRoundCallToSpecialForm(RoundMode mode, std::string_view functionName)
+      : mode_(mode), functionName_(functionName) {}
+
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
   exec::ExprPtr constructSpecialForm(
@@ -278,6 +349,10 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
 
   static std::pair<uint8_t, uint8_t>
   getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
+
+ private:
+  const RoundMode mode_;
+  const std::string functionName_;
 };
 
 DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
@@ -293,6 +368,9 @@ DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
   factors.resultPrecision = resultPrecision;
   factors.resultScale = resultScale;
   factors.overflowBound = DecimalUtil::kPowersOfTen[resultPrecision];
+  factors.roundsToZero =
+      static_cast<int64_t>(inputScale) - static_cast<int64_t>(scale) >
+      LongDecimalType::kMaxPrecision;
 
   if (factors.scale < static_cast<int32_t>(inputScale)) {
     const int32_t divDigits = static_cast<int32_t>(inputScale) - factors.scale;
@@ -309,9 +387,10 @@ DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
   return factors;
 }
 
-int32_t DecimalRoundOps::extractConstantScaleArg(
+std::optional<int32_t> DecimalRoundOps::extractConstantScaleArg(
     const exec::ExprPtr& expr,
-    std::string_view funcName) {
+    std::string_view funcName,
+    bool allowNull) {
   VELOX_USER_CHECK_EQ(
       expr->type()->kind(),
       TypeKind::INTEGER,
@@ -328,10 +407,11 @@ int32_t DecimalRoundOps::extractConstantScaleArg(
       "ConstantExpr must hold a constant-encoded vector.");
   auto* constantVector =
       constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
-  VELOX_USER_CHECK(
-      !constantVector->isNullAt(0),
-      "The second argument of {} must not be NULL.",
-      funcName);
+  if (constantVector->isNullAt(0)) {
+    VELOX_USER_CHECK(
+        allowNull, "The second argument of {} must not be NULL.", funcName);
+    return std::nullopt;
+  }
   return constantVector->valueAt(0);
 }
 
@@ -362,7 +442,8 @@ DecimalRoundCallToSpecialForm::getResultPrecisionScale(
 
 TypePtr DecimalRoundCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& /*argTypes*/) {
-  VELOX_FAIL("Decimal round function does not support type resolution.");
+  VELOX_FAIL(
+      "{} special form does not support type resolution.", functionName_);
 }
 
 exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
@@ -373,30 +454,58 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
   VELOX_USER_CHECK(
       type->isDecimal(),
       "The result type of {} must be decimal.",
-      kRoundDecimal);
+      functionName_);
   VELOX_USER_CHECK(
       args.size() >= 1 && args.size() <= 2,
       "{} expects one or two arguments.",
-      kRoundDecimal);
+      functionName_);
   VELOX_USER_CHECK(
       args[0]->type()->isDecimal(),
       "The first argument of {} must be decimal.",
-      kRoundDecimal);
+      functionName_);
 
   int32_t scale = 0;
+  std::shared_ptr<exec::ConstantExpr> scaleExpression;
   if (args.size() > 1) {
-    scale = DecimalRoundOps::extractConstantScaleArg(args[1], kRoundDecimal);
+    const auto extractedScale = DecimalRoundOps::extractConstantScaleArg(
+        args[1], functionName_, mode_ == RoundMode::kHalfEven);
+    if (!extractedScale.has_value()) {
+      scaleExpression = std::dynamic_pointer_cast<exec::ConstantExpr>(args[1]);
+    } else {
+      scale = extractedScale.value();
+    }
   }
 
-  auto func = DecimalRoundOps::createFunction<RoundHalfUpPolicy>(
-      args[0]->type(), scale, type);
+  if (mode_ == RoundMode::kHalfEven) {
+    const auto [inputPrecision, inputScale] =
+        getDecimalPrecisionScale(*args[0]->type());
+    const auto [resultPrecision, resultScale] =
+        getResultPrecisionScale(inputPrecision, inputScale, scale);
+    const auto expectedType = DECIMAL(resultPrecision, resultScale);
+    VELOX_USER_CHECK(
+        type->equivalent(*expectedType),
+        "Invalid result type for {}: expected {}, got {}.",
+        functionName_,
+        expectedType->toString(),
+        type->toString());
+  }
+  if (scaleExpression) {
+    return std::make_shared<exec::ConstantExpr>(BaseVector::createNullConstant(
+        type, 1, scaleExpression->value()->pool()));
+  }
+
+  auto func = mode_ == RoundMode::kHalfUp
+      ? DecimalRoundOps::createFunction<RoundHalfUpPolicy>(
+            args[0]->type(), scale, type)
+      : DecimalRoundOps::createFunction<RoundHalfEvenPolicy>(
+            args[0]->type(), scale, type);
 
   return std::make_shared<exec::Expr>(
       type,
       std::move(args),
       std::move(func),
       exec::VectorFunctionMetadata{},
-      std::string(kRoundDecimal),
+      functionName_,
       trackCpuUsage);
 }
 
@@ -432,7 +541,8 @@ class DecimalCeilFloorCallToSpecialForm
         funcName_);
 
     const int32_t scale =
-        DecimalRoundOps::extractConstantScaleArg(args[1], funcName_);
+        DecimalRoundOps::extractConstantScaleArg(args[1], funcName_, false)
+            .value();
 
     auto func = ceiling_ ? DecimalRoundOps::createFunction<CeilPolicy>(
                                args[0]->type(), scale, type)
@@ -457,7 +567,13 @@ class DecimalCeilFloorCallToSpecialForm
 
 void registerDecimalRoundingForms() {
   exec::registerFunctionCallToSpecialForm(
-      kRoundDecimal, std::make_unique<DecimalRoundCallToSpecialForm>());
+      kRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm>(
+          RoundMode::kHalfUp, kRoundDecimal));
+  exec::registerFunctionCallToSpecialForm(
+      kBRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm>(
+          RoundMode::kHalfEven, kBRoundDecimal));
   exec::registerFunctionCallToSpecialForm(
       kCeilDecimal,
       std::make_unique<DecimalCeilFloorCallToSpecialForm>(true, kCeilDecimal));

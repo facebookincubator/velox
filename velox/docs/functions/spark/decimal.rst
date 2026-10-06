@@ -279,10 +279,10 @@ Decimal Special Forms
     retained digit is even. ``scale`` defaults to 0 and must be a constant
     INTEGER.
 
-    Result precision and scale follow Spark's decimal BROUND rules. Values that
-    do not fit the resolved result precision raise an overflow error. A nonzero
-    input raises an underflow error when an extreme negative scale exceeds
-    Java's supported ``BigInteger`` power range.
+    Result precision and scale use the same Spark rules as ``decimal_round``.
+    Values that do not fit the resolved result precision raise an overflow
+    error. Inputs return zero when an extreme negative scale exceeds the
+    meaningful decimal digit range.
 
     ::
 

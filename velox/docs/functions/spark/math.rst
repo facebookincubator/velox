@@ -80,10 +80,9 @@ Mathematical Functions
     INTEGER expression. Decimal inputs use ``decimal_bround``.
 
     Integral overflow follows Spark's two's-complement wraparound when ANSI
-    mode is disabled and raises an error when ANSI mode is enabled. A nonzero
-    integral input raises an underflow error, independent of ANSI mode, when an
-    extreme negative scale exceeds Java's supported ``BigInteger`` power
-    range.
+    mode is disabled and raises an error when ANSI mode is enabled. Integral
+    inputs return zero when an extreme negative scale exceeds their meaningful
+    digit range.
 
     Floating-point values are scaled by a power of ten, rounded using
     ``std::nearbyint``, and scaled back. This uses Velox's default

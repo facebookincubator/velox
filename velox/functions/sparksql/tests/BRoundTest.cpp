@@ -83,33 +83,37 @@ class BRoundTest : public SparkFunctionBaseTest {
     EXPECT_EQ(bround<T>(minimum, -1), wrappedNegative);
 
     setAnsiEnabled(true);
-    VELOX_ASSERT_THROW(bround<T>(maximum, -1), "Arithmetic overflow");
-    VELOX_ASSERT_THROW(bround<T>(minimum, -1), "Arithmetic overflow");
+    VELOX_ASSERT_THROW(
+        bround<T>(maximum, -1),
+        fmt::format(
+            "Arithmetic overflow in bround({}, -1)",
+            static_cast<int64_t>(maximum)));
+    VELOX_ASSERT_THROW(
+        bround<T>(minimum, -1),
+        fmt::format(
+            "Arithmetic overflow in bround({}, -1)",
+            static_cast<int64_t>(minimum)));
     EXPECT_EQ(bround<T>(T{25}, -1), T{20});
     EXPECT_EQ(bround<T>(T{-35}, -1), T{-40});
   }
 
   template <typename T>
-  void testIntegralExtremeScaleUnderflow() {
-    constexpr int32_t kMaximumSupportedScale =
-        -detail::kMaxJavaBigIntegerPowerOfTenExponent;
-    constexpr int32_t kFirstUnderflowScale = kMaximumSupportedScale - 1;
-    constexpr auto kMinimumScale = std::numeric_limits<int32_t>::min();
+  void testIntegralExtremeNegativeScales() {
+    constexpr int32_t firstFastZeroScale =
+        -(std::numeric_limits<T>::digits10 + 2);
     for (const bool ansiEnabled : {false, true}) {
       setAnsiEnabled(ansiEnabled);
-      EXPECT_EQ(bround<T>(T{1}, kMaximumSupportedScale), T{0});
-      EXPECT_EQ(bround<T>(T{0}, kFirstUnderflowScale), T{0});
-      VELOX_ASSERT_THROW(
-          bround<T>(T{1}, kFirstUnderflowScale),
-          "Underflow while rounding to scale -536870920");
-      EXPECT_EQ(bround<T>(T{0}, kMinimumScale), T{0});
-      VELOX_ASSERT_THROW(
-          bround<T>(T{1}, kMinimumScale),
-          "Underflow while rounding to scale -2147483648");
+      EXPECT_EQ(bround<T>(T{1}, firstFastZeroScale), T{0});
+      EXPECT_EQ(bround<T>(T{-1}, firstFastZeroScale), T{0});
+      EXPECT_EQ(bround<T>(T{1}, std::numeric_limits<int32_t>::min()), T{0});
+      EXPECT_EQ(bround<T>(T{-1}, std::numeric_limits<int32_t>::min()), T{0});
+      EXPECT_EQ(bround<T>(T{0}, std::numeric_limits<int32_t>::min()), T{0});
       EXPECT_EQ(
           (evaluateOnce<T, T>(
-              "try(bround(c0, cast(-536870920 as integer)))", T{1})),
-          std::nullopt);
+              fmt::format(
+                  "try(bround(c0, cast({} as integer)))", firstFastZeroScale),
+              T{1})),
+          T{0});
     }
   }
 };
@@ -147,13 +151,7 @@ TEST_F(BRoundTest, floatingPointNeighbors) {
 }
 
 TEST_F(BRoundTest, floatingPointExtremePositiveScales) {
-  // Characterization test. For scales >= 309, 10^scale is not finite, so
-  // 'bround' deliberately returns the binary value unchanged instead of
-  // rounding (see broundFloatingPointImpl). True HALF_EVEN decimal rounding
-  // would instead snap the smallest subnormals toward zero or onto the quantum
-  // grid (e.g. bround(denorm_min, 323) would be 0 and bround(6e-310, 309) would
-  // be 1e-309); 'bround' does not reproduce that here. These assertions pin the
-  // documented simplified behavior rather than the exact decimal result.
+  // Values are preserved when the power-of-ten scale is not finite.
   const auto minimum = std::numeric_limits<double>::denorm_min();
   EXPECT_EQ(bround<double>(minimum, 309), minimum);
   EXPECT_EQ(bround<double>(minimum, 323), minimum);
@@ -233,11 +231,11 @@ TEST_F(BRoundTest, integralTypesAndEncodings) {
   EXPECT_EQ(bround<int64_t>(42, 5), 42);
 }
 
-TEST_F(BRoundTest, integralExtremeScaleUnderflow) {
-  testIntegralExtremeScaleUnderflow<int8_t>();
-  testIntegralExtremeScaleUnderflow<int16_t>();
-  testIntegralExtremeScaleUnderflow<int32_t>();
-  testIntegralExtremeScaleUnderflow<int64_t>();
+TEST_F(BRoundTest, integralExtremeNegativeScales) {
+  testIntegralExtremeNegativeScales<int8_t>();
+  testIntegralExtremeNegativeScales<int16_t>();
+  testIntegralExtremeNegativeScales<int32_t>();
+  testIntegralExtremeNegativeScales<int64_t>();
 }
 
 TEST_F(BRoundTest, integralOverflowMode) {
@@ -257,7 +255,7 @@ TEST_F(BRoundTest, integralOverflowMode) {
   setAnsiEnabled(true);
   VELOX_ASSERT_THROW(
       bround<int64_t>(std::numeric_limits<int64_t>::max(), -19),
-      "Arithmetic overflow");
+      "Arithmetic overflow in bround(9223372036854775807, -19)");
 }
 
 TEST_F(BRoundTest, capturesAnsiModeAtInitialization) {
