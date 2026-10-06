@@ -202,6 +202,74 @@ TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
       makeFlatVector<int64_t>({1}, TIME_MICRO_UTC()));
 }
 
+TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({2, 1}),
+       makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"k"})
+                  .rowNumber({})
+                  .orderBy({"k ASC"}, false)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector(
+      {"k", "row_number"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({2, 1})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto stats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(stats.count("RowNumber"), 1);
+  EXPECT_EQ(stats.count("OrderBy"), 1);
+  EXPECT_EQ(stats.count("CudfFromVelox"), 0);
+  EXPECT_EQ(stats.count("CudfOrderBy"), 0);
+}
+
+TEST_F(ToCudfSelectionTest, unsupportedTypeBeforeLocalBoundary) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({2, 1}),
+       makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
+  auto other = makeRowVector({"k"}, {makeFlatVector<int64_t>({3})});
+  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2, 3})});
+
+  for (bool merge : {false, true}) {
+    SCOPED_TRACE(merge ? "LocalMerge" : "LocalPartition");
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<core::PlanNodePtr> sources{
+        PlanBuilder(planNodeIdGenerator)
+            .values({input})
+            .project({"k"})
+            .orderBy({"k"}, true)
+            .planNode(),
+        PlanBuilder(planNodeIdGenerator)
+            .values({other})
+            .orderBy({"k"}, true)
+            .planNode()};
+
+    PlanBuilder builder(planNodeIdGenerator);
+    if (merge) {
+      builder.localMerge({"k"}, sources);
+    } else {
+      builder.localPartition({}, sources);
+    }
+    auto plan = builder.orderBy({"k"}, false).planNode();
+
+    AssertQueryBuilder(plan)
+        .config("cudf.enabled", true)
+        .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+        .maxDrivers(2)
+        .assertResults(expected);
+  }
+}
+
 TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   auto input = makeRowVector(
       {"amount", "event_ts"},

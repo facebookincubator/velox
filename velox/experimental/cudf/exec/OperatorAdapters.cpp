@@ -826,14 +826,15 @@ class LocalPartitionAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = canHandle(op) && localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalPartitionAdapter {}, PlanNode id: {}",
           !canHandle(op) ? "operator is not LocalPartition"
               : !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -890,13 +891,14 @@ class LocalExchangeAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalExchangeAdapter {}, PlanNode id: {}",
           !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -1107,7 +1109,8 @@ class CallbackSinkAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto supported = planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-            nullptr;
+            nullptr &&
+        !subtreeHasUnsupportedType(planNode);
     if (!supported) {
       LOG_FALLBACK(
           "CallbackSink operator not supported on cuDF, PlanNode id: {}",
@@ -1152,7 +1155,8 @@ class LocalMergeAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     return planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        !subtreeHasUnsupportedType(planNode);
   }
 
   bool acceptsGpuInput() const override {

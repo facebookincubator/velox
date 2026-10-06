@@ -137,7 +137,8 @@ bool CompileState::compile(bool allowCpuFallback) {
   // operators in the pipeline must also stay on CPU.
   // TODO: This is conservative — once set, it never resets, so a later
   // operator whose inputs drop the unsupported column will still stay on CPU.
-  // A more precise version could resume GPU once types are supported again.
+  // Resuming GPU once types are supported again requires coordinated backend
+  // selection across joins and local exchanges.
   bool skipGpuReplacement = false;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
@@ -160,7 +161,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     const auto& planNode = thisOpProps.planNode;
 
-    if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
+    if (!skipGpuReplacement and previousOperatorIsNotGpu and
+        thisOpProps.acceptsGpuInput and planNode) {
       // Check that the previous operator's output types can be converted to
       // cuDF.  If not, skip both the CudfFromVelox insertion and the current
       // operator's GPU replacement so the whole pipeline stays on CPU.
