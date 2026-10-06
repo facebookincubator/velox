@@ -14,17 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfExpand.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include "velox/expression/Expr.h"
-
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/table/table.hpp>
 
@@ -34,168 +31,190 @@ CudfExpand::CudfExpand(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExpandNode>& expandNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           expandNode->outputType(),
-          operatorId,
           expandNode->id(),
-          "CudfExpand"),
-      NvtxHelper(
+          "CudfExpand",
           nvtx3::rgb{255, 165, 0}, // Orange
-          operatorId,
-          fmt::format("[{}]", expandNode->id())) {
+          NvtxMethodFlag::kGetOutput | NvtxMethodFlag::kClose) {
   const auto& inputType = expandNode->inputType();
-  const auto numRows = expandNode->projections().size();
-  fieldProjections_.reserve(numRows);
-  constantProjections_.reserve(numRows);
-  constantOutputs_.reserve(numRows);
+  const auto numProjections = expandNode->projections().size();
   const auto numColumns = expandNode->names().size();
+  fieldProjections_.reserve(numProjections);
+  constantProjections_.reserve(numProjections);
   for (const auto& rowProjections : expandNode->projections()) {
-    std::vector<column_index_t> rowProjection;
-    rowProjection.reserve(numColumns);
-    std::vector<std::shared_ptr<const core::ConstantTypedExpr>>
-        constantProjection;
+    std::vector<column_index_t> fieldProjection;
+    fieldProjection.reserve(numColumns);
+    std::vector<core::ConstantTypedExprPtr> constantProjection;
     constantProjection.reserve(numColumns);
     for (const auto& columnProjection : rowProjections) {
       if (auto field = core::TypedExprs::asFieldAccess(columnProjection)) {
-        rowProjection.push_back(inputType->getChildIdx(field->name()));
+        fieldProjection.push_back(inputType->getChildIdx(field->name()));
         constantProjection.push_back(nullptr);
       } else if (
           auto constant = core::TypedExprs::asConstant(columnProjection)) {
-        rowProjection.push_back(kConstantChannel);
+        fieldProjection.push_back(kConstantChannel);
         constantProjection.push_back(constant);
       } else {
-        VELOX_USER_FAIL(
-            "Expand operator doesn't support this expression. Only column references and constants are supported. {}",
-            columnProjection->toString());
+        // ExpandNode only accepts field accesses and constants.
+        VELOX_UNREACHABLE(
+            "Unexpected Expand projection: {}", columnProjection->toString());
       }
     }
-
-    fieldProjections_.emplace_back(std::move(rowProjection));
+    fieldProjections_.emplace_back(std::move(fieldProjection));
     constantProjections_.emplace_back(std::move(constantProjection));
   }
 }
 
-void CudfExpand::initialize() {
-  if (constantProjections_.empty()) {
-    return;
+namespace {
+
+// Mirrors the types makeScalarFromConstantExpr() can build.
+bool isSupportedConstantType(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::INTEGER:
+      return !type->isIntervalYearMonth();
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
   }
-  const auto numColumns = constantProjections_[0].size();
-  for (const auto& projections : constantProjections_) {
-    std::vector<std::unique_ptr<cudf::scalar>> constantOutput;
-    constantOutput.reserve(numColumns);
-    for (const auto& constant : projections) {
-      if (constant) {
-        VELOX_CHECK(!constant->hasValueVector());
-        constantOutput.push_back(
-            makeScalarFromVariant(constant->type(), constant->value()));
-      } else {
-        constantOutput.push_back(nullptr);
+}
+
+} // namespace
+
+bool CudfExpand::canRunOnGPU(
+    const core::ExpandNode& expandNode,
+    std::string* reason) {
+  for (const auto& rowProjections : expandNode.projections()) {
+    for (const auto& columnProjection : rowProjections) {
+      if (core::TypedExprs::isConstant(columnProjection) &&
+          !isSupportedConstantType(columnProjection->type())) {
+        if (reason != nullptr) {
+          *reason = fmt::format(
+              "Expand constant type is not supported: {}",
+              columnProjection->type()->toString());
+        }
+        return false;
       }
     }
-    constantOutputs_.emplace_back(std::move(constantOutput));
   }
+  return true;
 }
 
 bool CudfExpand::needsInput() const {
   return !noMoreInput_ && input_ == nullptr;
 }
 
-void CudfExpand::addInput(RowVectorPtr input) {
+void CudfExpand::doAddInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
-RowVectorPtr CudfExpand::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfExpand::doGetOutput() {
   if (!input_) {
     return nullptr;
   }
 
-  const auto numInput = input_->size();
+  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
+  VELOX_CHECK_NOT_NULL(cudfInput, "CudfExpand expects CudfVector input");
 
-  auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input_);
-  VELOX_CHECK_NOT_NULL(
-      cudfInput, "CudfExpand expects CudfVector input, got regular RowVector");
+  const auto numRows = cudfInput->size();
+  // Read before release() below, which invalidates the vector.
+  const auto stream = cudfInput->stream();
+  const auto outputMr = get_output_mr();
 
-  const auto& rowProjection = fieldProjections_[rowIndex_];
-  const auto& constantProjection = constantOutputs_[rowIndex_];
-  const auto numColumns = rowProjection.size();
+  if (constantScalars_.empty()) {
+    constantScalars_.reserve(constantProjections_.size());
+    for (const auto& constantProjection : constantProjections_) {
+      std::vector<std::unique_ptr<cudf::scalar>> scalars;
+      scalars.reserve(constantProjection.size());
+      for (const auto& constant : constantProjection) {
+        scalars.push_back(
+            constant ? makeScalarFromConstantExpr(
+                           constant, pool(), std::nullopt, stream)
+                     : nullptr);
+      }
+      constantScalars_.emplace_back(std::move(scalars));
+    }
+  }
 
-  auto stream = cudfInput->stream();
+  const auto& fieldProjection = fieldProjections_[projectionIndex_];
+  const auto& scalars = constantScalars_[projectionIndex_];
+  const auto numColumns = fieldProjection.size();
 
-  // Check if this is the last projection
-  const bool isLastProjection = (rowIndex_ == fieldProjections_.size() - 1);
-
-  // Build output columns
   std::vector<std::unique_ptr<cudf::column>> outputColumns;
   outputColumns.reserve(numColumns);
 
-  if (isLastProjection) {
-    // Last projection: move columns from input table when possible
-    auto inputTable = cudfInput->release();
-    auto inputColumns = inputTable->release();
+  if (projectionIndex_ == fieldProjections_.size() - 1) {
+    // The input is not needed after the last projection, so its columns can
+    // be moved into the output instead of copied. A column projected more
+    // than once is copied for all but its last use.
+    auto inputColumns = cudfInput->release()->release();
+    VELOX_CHECK_EQ(inputColumns.size(), input_->type()->size());
 
-    // Count how many times each input column is used in this projection
-    std::vector<int> columnUseCount(inputColumns.size(), 0);
-    for (auto i = 0; i < numColumns; ++i) {
-      if (rowProjection[i] != kConstantChannel) {
-        columnUseCount[rowProjection[i]]++;
+    std::vector<int32_t> remainingUses(inputColumns.size(), 0);
+    for (const auto channel : fieldProjection) {
+      if (channel != kConstantChannel) {
+        ++remainingUses[channel];
       }
     }
 
-    // Track remaining uses for each column
-    std::vector<int> columnRemainingUses = columnUseCount;
-
-    for (auto i = 0; i < numColumns; ++i) {
-      if (rowProjection[i] == kConstantChannel) {
-        const auto& scalar = constantProjection[i];
+    for (size_t i = 0; i < numColumns; ++i) {
+      const auto channel = fieldProjection[i];
+      if (channel == kConstantChannel) {
         outputColumns.push_back(
             cudf::make_column_from_scalar(
-                *scalar, numInput, stream, get_output_mr()));
+                *scalars[i], numRows, stream, outputMr));
+      } else if (--remainingUses[channel] == 0) {
+        outputColumns.push_back(std::move(inputColumns[channel]));
       } else {
-        auto colIdx = rowProjection[i];
-        columnRemainingUses[colIdx]--;
-
-        if (columnRemainingUses[colIdx] == 0) {
-          // Last use of this column, can move
-          outputColumns.push_back(std::move(inputColumns[colIdx]));
-        } else {
-          // Not the last use, must copy
-          outputColumns.push_back(
-              std::make_unique<cudf::column>(
-                  *inputColumns[colIdx], stream, get_output_mr()));
-        }
+        outputColumns.push_back(
+            std::make_unique<cudf::column>(
+                *inputColumns[channel], stream, outputMr));
       }
     }
   } else {
-    // Not last projection: copy columns from table view
+    // TODO: Avoid deep copies by letting the output reference the input
+    // columns, copying only when a downstream operator needs to own them.
     auto inputTableView = cudfInput->getTableView();
-
-    for (auto i = 0; i < numColumns; ++i) {
-      if (rowProjection[i] == kConstantChannel) {
-        const auto& scalar = constantProjection[i];
+    for (size_t i = 0; i < numColumns; ++i) {
+      const auto channel = fieldProjection[i];
+      if (channel == kConstantChannel) {
         outputColumns.push_back(
             cudf::make_column_from_scalar(
-                *scalar, numInput, stream, get_output_mr()));
+                *scalars[i], numRows, stream, outputMr));
       } else {
-        auto inputColumn = inputTableView.column(rowProjection[i]);
         outputColumns.push_back(
             std::make_unique<cudf::column>(
-                inputColumn, stream, get_output_mr()));
+                inputTableView.column(channel), stream, outputMr));
       }
     }
   }
 
-  ++rowIndex_;
-  if (rowIndex_ == fieldProjections_.size()) {
-    rowIndex_ = 0;
+  ++projectionIndex_;
+  if (projectionIndex_ == fieldProjections_.size()) {
+    projectionIndex_ = 0;
     input_ = nullptr;
   }
 
-  // Create output table and wrap in CudfVector
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
-  return std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, numInput, std::move(outputTable), stream);
+  return std::make_shared<CudfVector>(
+      pool(), outputType_, numRows, std::move(outputTable), stream);
+}
+
+void CudfExpand::doClose() {
+  Operator::close();
+  constantScalars_.clear();
 }
 
 } // namespace facebook::velox::cudf_velox

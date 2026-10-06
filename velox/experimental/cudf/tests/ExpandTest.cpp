@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -38,6 +38,19 @@ class CudfExpandTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
+  static bool hasOperator(
+      const std::shared_ptr<Task>& task,
+      std::string_view operatorType) {
+    for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == operatorType) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   RowVectorPtr makeRowVectorData(vector_size_t size) {
     return makeRowVector(
         {"k1", "k2", "a", "b"},
@@ -54,18 +67,45 @@ class CudfExpandTest : public HiveConnectorTestBase {
 TEST_F(CudfExpandTest, simpleConstant) {
   auto data = makeRowVectorData(3);
   auto children = data->children();
-  // Add simple constant columns (no complex types like arrays)
   children.push_back(makeFlatVector<int64_t>({100, 100, 100}));
   children.push_back(makeNullConstant(TypeKind::INTEGER, 3));
   auto expected = makeRowVector(children);
 
   auto plan =
-      PlanBuilder(pool())
+      PlanBuilder()
           .values({data})
           .expand({{"k1", "k2", "a", "b", "100 as c", "null::integer as d"}})
           .planNode();
 
   assertQuery(plan, expected);
+}
+
+// Complex-type constants cannot be built as cuDF scalars, so Expand must stay
+// on the CPU.
+TEST_F(CudfExpandTest, complexConstantFallsBackToCpu) {
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+
+  auto data = makeRowVectorData(3);
+  auto children = data->children();
+  children.push_back(
+      makeArrayVector<int64_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}));
+  children.push_back(makeAllNullArrayVector(3, BIGINT()));
+  auto expected = makeRowVector(children);
+
+  auto plan = PlanBuilder(pool())
+                  .values({data})
+                  .expand(
+                      {{"k1",
+                        "k2",
+                        "a",
+                        "b",
+                        "ARRAY[1, 2, 3] as c",
+                        "null::bigint[] as d"}})
+                  .planNode();
+
+  auto task = assertQuery(plan, expected);
+  EXPECT_TRUE(hasOperator(task, OperatorType::kExpand));
+  EXPECT_FALSE(hasOperator(task, "CudfExpand"));
 }
 
 TEST_F(CudfExpandTest, groupingSets) {
@@ -179,19 +219,25 @@ TEST_F(CudfExpandTest, duplicateColumnProjection) {
   assertQuery(plan, "SELECT k1 as c1, k1 as c2, a, b, 0 as gid FROM tmp");
 }
 
-TEST_F(CudfExpandTest, invalidUseCases) {
-  auto data = makeRowVector(
-      ROW({"k1", "k2", "a", "b"}, {BIGINT(), BIGINT(), BIGINT(), VARCHAR()}),
-      10);
+// Exercises the per-batch projection cycle, including moving columns out of
+// each batch on its last projection while a column is also projected twice.
+TEST_F(CudfExpandTest, multipleBatches) {
+  std::vector<RowVectorPtr> data{
+      makeRowVectorData(100), makeRowVectorData(200), makeRowVectorData(300)};
 
-  VELOX_ASSERT_USER_THROW(
-      PlanBuilder().values({data}).expand(
-          {{"k1", "k1", "a", "b", "0 as gid"},
-           {"k1", "null", "a", "b", "1"},
-           {"null", "null", "a", "b", "2"}}),
-      "Found duplicate column name in Expand plan node: k1.");
+  createDuckDbTable(data);
 
-  VELOX_ASSERT_RUNTIME_THROW(
-      PlanBuilder().values({data}).expand({}),
-      "projections must not be empty.");
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .expand(
+                      {{"k1 as c1", "k1 as c2", "a", "0 as gid"},
+                       {"k2", "null", "a", "1"},
+                       {"null", "k1", "a", "2"}})
+                  .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k1, a, 0 FROM tmp "
+      "UNION ALL SELECT k2, null, a, 1 FROM tmp "
+      "UNION ALL SELECT null, k1, a, 2 FROM tmp");
 }

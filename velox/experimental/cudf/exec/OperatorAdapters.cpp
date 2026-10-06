@@ -1251,8 +1251,17 @@ class ExpandAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::ExpandNode>(planNode) !=
-        nullptr;
+    auto expandNode =
+        std::dynamic_pointer_cast<const core::ExpandNode>(planNode);
+    if (!expandNode) {
+      return false;
+    }
+    std::string reason;
+    if (!CudfExpand::canRunOnGPU(*expandNode, &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {

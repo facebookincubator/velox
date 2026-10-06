@@ -16,27 +16,33 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 
-#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
 #include <cudf/scalar/scalar.hpp>
 
 namespace facebook::velox::cudf_velox {
 
-class CudfExpand : public exec::Operator, public NvtxHelper {
+/// GPU implementation of the Expand operator. Takes a single input batch and
+/// produces one output batch per projection list. Each output column is either
+/// an input column or a constant.
+class CudfExpand : public CudfOperatorBase {
  public:
   CudfExpand(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExpandNode>& expandNode);
 
+  /// Returns true if every constant in the projections has a type CudfExpand
+  /// can materialize as a cuDF column. On failure, 'reason' is populated with
+  /// an explanation when non-null.
+  static bool canRunOnGPU(
+      const core::ExpandNode& expandNode,
+      std::string* reason);
+
   bool needsInput() const override;
-
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
@@ -46,19 +52,29 @@ class CudfExpand : public exec::Operator, public NvtxHelper {
     return noMoreInput_ && input_ == nullptr;
   }
 
- private:
-  void initialize() override;
+ protected:
+  void doAddInput(RowVectorPtr input) override;
 
+  RowVectorPtr doGetOutput() override;
+
+  void doClose() override;
+
+ private:
+  // Input channel for each output column, one list per projection.
+  // kConstantChannel marks columns taken from 'constantProjections_'.
   std::vector<std::vector<column_index_t>> fieldProjections_;
 
-  std::vector<std::vector<std::shared_ptr<const core::ConstantTypedExpr>>>
-      constantProjections_;
+  // Constant expression for each output column, one list per projection.
+  // Null where the column is an input field.
+  std::vector<std::vector<core::ConstantTypedExprPtr>> constantProjections_;
 
-  // Store cuDF scalars for constant values
-  std::vector<std::vector<std::unique_ptr<cudf::scalar>>> constantOutputs_;
+  // cuDF scalars built from 'constantProjections_' on the first input batch,
+  // reused for every batch.
+  std::vector<std::vector<std::unique_ptr<cudf::scalar>>> constantScalars_;
 
-  // Used to indicate the index of fieldProjections_.
-  int32_t rowIndex_{0};
+  // Index into 'fieldProjections_' of the next projection to output for the
+  // current input batch.
+  size_t projectionIndex_{0};
 };
 
 } // namespace facebook::velox::cudf_velox
