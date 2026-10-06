@@ -16,6 +16,7 @@
 #define NIMBLE_ENCODING_SELECTION_DEBUG
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -179,6 +180,60 @@ TEST(EncodingSelectionTest, manualSelectionReturnsSelectedEstimate) {
   verifySelectedEstimate<uint32_t>(nimble::CompressionOptions{
       .compressionAcceptRatio = 0.0,
   });
+}
+
+// The screen drops the costly candidates a sample rules out and nothing else.
+// On a near-unique stream MainlyConstant and Dictionary lose to bit packing by
+// far more than the margin, while Trivial and FixedBitWidth are never
+// screened. On a stream of a few values the costly ones are what wins.
+TEST(EncodingSelectionTest, screenDropsCostlyCandidatesTheSampleRulesOut) {
+  const std::vector<std::pair<nimble::EncodingType, float>> candidates{
+      {nimble::EncodingType::Trivial, 0.7f},
+      {nimble::EncodingType::FixedBitWidth, 0.9f},
+      {nimble::EncodingType::MainlyConstant, 1.0f},
+      {nimble::EncodingType::Dictionary, 1.0f},
+      {nimble::EncodingType::RLE, 1.0f},
+  };
+  const auto typesOf = [](const auto& entries) {
+    std::vector<nimble::EncodingType> types;
+    for (const auto& entry : entries) {
+      types.push_back(entry.first);
+    }
+    return types;
+  };
+
+  std::vector<uint32_t> nearUnique(200'000);
+  for (uint32_t i = 0; i < nearUnique.size(); ++i) {
+    nearUnique[i] = (i * 2'654'435'761u) & 0xFF'FFFF;
+  }
+  std::vector<uint32_t> fewValues(200'000);
+  for (uint32_t i = 0; i < fewValues.size(); ++i) {
+    fewValues[i] = i % 97 == 0 ? 1'000'000 : 7;
+  }
+
+  nimble::Encoding::Options options;
+  auto unscreened = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{nearUnique}, unscreened, options);
+  EXPECT_EQ(typesOf(candidates), typesOf(unscreened));
+
+  options.selectionScreenRows = 16'384;
+  auto screened = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{nearUnique}, screened, options);
+  const auto screenedTypes = typesOf(screened);
+  const auto contains = [](const auto& types, nimble::EncodingType type) {
+    return std::find(types.begin(), types.end(), type) != types.end();
+  };
+  EXPECT_TRUE(contains(screenedTypes, nimble::EncodingType::Trivial));
+  EXPECT_TRUE(contains(screenedTypes, nimble::EncodingType::FixedBitWidth));
+  EXPECT_FALSE(contains(screenedTypes, nimble::EncodingType::MainlyConstant));
+  EXPECT_FALSE(contains(screenedTypes, nimble::EncodingType::Dictionary));
+
+  auto kept = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{fewValues}, kept, options);
+  EXPECT_TRUE(contains(typesOf(kept), nimble::EncodingType::MainlyConstant));
 }
 
 TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {

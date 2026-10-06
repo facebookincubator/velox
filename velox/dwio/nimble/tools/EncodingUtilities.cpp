@@ -76,6 +76,7 @@ void extractCompressionType(
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
     case EncodingType::FrequencyPartition:
     case EncodingType::FOR:
     case EncodingType::Huffman:
@@ -145,6 +146,7 @@ void traverseEncodings(
     // SubIntSplit integration is disabled; treat it as having no nested
     // encoding to traverse.
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {

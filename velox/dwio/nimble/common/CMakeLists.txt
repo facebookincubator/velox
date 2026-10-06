@@ -35,6 +35,7 @@ add_library(
   NimbleException.h
   MetricsLogger.h
   FixedBitArray.h
+  RadixSort.h
   FeatureGate.h
   Exceptions.h
   ExceptionHelper.h
