@@ -473,6 +473,34 @@ Mathematical Functions
 
     Returns the hyperbolic tangent of ``x``.
 
+.. spark:function:: try_add(x, y) -> [same as x]
+
+    Returns the result of adding ``x`` to ``y``. The types of ``x`` and ``y``
+    must be the same. For integral types, overflow returns NULL. Corresponds to
+    Spark's ``try_add``. Unlike ``try(checked_add(x, y))``, errors from ``x``
+    and ``y`` are not turned into NULL. ::
+
+        SELECT try_add(2147483647, 1); -- NULL
+        SELECT try_add(1, 2); -- 3
+
+.. spark:function:: try_multiply(x, y) -> [same as x]
+
+    Returns the result of multiplying ``x`` by ``y``. The types of ``x`` and
+    ``y`` must be the same. For integral types, overflow returns NULL.
+    Corresponds to Spark's ``try_multiply``. ::
+
+        SELECT try_multiply(2147483647, 2); -- NULL
+        SELECT try_multiply(3, -4); -- -12
+
+.. spark:function:: try_subtract(x, y) -> [same as x]
+
+    Returns the result of subtracting ``y`` from ``x``. The types of ``x`` and
+    ``y`` must be the same. For integral types, overflow returns NULL.
+    Corresponds to Spark's ``try_subtract``. ::
+
+        SELECT try_subtract(-2147483648, 1); -- NULL
+        SELECT try_subtract(5, 2); -- 3
+
 .. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
 
     Returns the negative of ``x``. Corresponds to Spark's operator ``-``.

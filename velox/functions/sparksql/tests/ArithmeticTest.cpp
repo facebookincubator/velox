@@ -251,6 +251,14 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
+  std::optional<T> tryArithmetic(
+      const std::string& func,
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
+  }
+
+  template <typename T>
   std::optional<int64_t> checkedDiv(
       std::optional<T> numerator,
       std::optional<T> denominator) {
@@ -860,6 +868,59 @@ TEST_F(ArithmeticTest, checkedMultiply) {
       INT64_MAX, 2, "Arithmetic overflow: 9223372036854775807 * 2");
   EXPECT_EQ(checkedMultiply<float>(kInf, 1), kInf);
   EXPECT_EQ(checkedMultiply<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, tryAdd) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_add", INT8_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_add", INT16_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", INT32_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_add", INT64_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_add", INT64_MIN, -1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", 1, 2), 3);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<float>("try_add", kInf, 1), kInf);
+  EXPECT_EQ(tryArithmetic<double>("try_add", kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, trySubtract) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_subtract", INT8_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_subtract", INT16_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", INT32_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_subtract", INT64_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", 5, 2), 3);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_subtract", 5, std::nullopt), std::nullopt);
+  EXPECT_EQ(tryArithmetic<double>("try_subtract", kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, tryMultiply) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_multiply", INT8_MAX, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_multiply", INT16_MAX, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_multiply", INT32_MAX, 2), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int64_t>("try_multiply", INT64_MIN, -1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_multiply", 3, -4), -12);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_multiply", std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<double>("try_multiply", kInfDouble, 2), kInfDouble);
+}
+
+// Unlike try(checked_add(...)), the try_ functions return NULL only for their
+// own overflow. An error from an argument is still thrown.
+TEST_F(ArithmeticTest, tryArithmeticKeepsArgumentErrors) {
+  const std::optional<int32_t> max = INT32_MAX;
+  const std::optional<int32_t> one = 1;
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(checked_add(checked_add(c0, c1), c1))", max, one),
+      std::nullopt);
+  for (const auto& func : {"try_add", "try_subtract", "try_multiply"}) {
+    SCOPED_TRACE(func);
+    VELOX_ASSERT_THROW(
+        evaluateOnce<int32_t>(
+            fmt::format("{}(checked_add(c0, c1), c1)", func), max, one),
+        "Arithmetic overflow: 2147483647 + 1");
+  }
 }
 
 TEST_F(ArithmeticTest, checkedDivide) {
