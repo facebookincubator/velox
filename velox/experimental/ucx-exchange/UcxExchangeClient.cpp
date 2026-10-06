@@ -189,7 +189,7 @@ std::string UcxExchangeClient::toString() const {
 folly::dynamic UcxExchangeClient::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
-  obj["closed"] = closed_;
+  obj["closed"] = closed_.load(std::memory_order_relaxed);
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
   {

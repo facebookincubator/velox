@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include "velox/exec/ExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
@@ -90,7 +91,9 @@ class UcxExchangeClient
 
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<UcxExchangeSource>> sources_;
-  bool closed_{false};
+  // Written under queue_->mutex(). Atomic so that toJson() can report it
+  // without taking that mutex.
+  std::atomic<bool> closed_{false};
 
   // Total number of packed columns in flight.
   int64_t totalPendingColumns_{0};
