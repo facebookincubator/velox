@@ -17,18 +17,22 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <cstring>
+#include <limits>
+#include <numeric>
 #include <sstream>
 
 #include <folly/Singleton.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/geospatial/GeometrySerde.h"
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyRegistration.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/vector/DecodedVector.h"
 
 #define USE_UNSTABLE_GEOS_CPP_API 1
@@ -75,12 +79,13 @@ const std::vector<std::string> kEmptyKinds = {
     "MULTIPOLYGON EMPTY",
     "GEOMETRYCOLLECTION EMPTY"};
 
-class IcebergGeometryReadTest : public test::IcebergTestBase {
+class IcebergGeospatialReadTest : public test::IcebergTestBase {
  protected:
   void SetUp() override {
     test::IcebergTestBase::SetUp();
     folly::SingletonVault::singleton()->registrationComplete();
     registerGeometryType();
+    registerSphericalGeographyType();
     fileFormat_ = dwio::common::FileFormat::PARQUET;
   }
 
@@ -93,8 +98,9 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     return out.str();
   }
 
-  // Velox's internal geometry encoding, i.e. what a GEOMETRY vector must hold.
-  static std::string toVeloxGeometry(const std::string& wkt) {
+  // Velox's internal geospatial encoding, i.e. what a GEOMETRY or
+  // SPHERICAL_GEOGRAPHY vector must hold.
+  static std::string toVeloxGeospatial(const std::string& wkt) {
     geos::io::WKTReader wktReader;
     std::string out;
     common::geospatial::GeometrySerializer::serialize(
@@ -114,6 +120,16 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     return bytes;
   }
 
+  // ISO WKB for a little-endian XY point with arbitrary ordinates.
+  static std::string pointWkb(double x, double y) {
+    std::string bytes;
+    bytes.push_back(1);
+    appendUint32Le(bytes, 1);
+    appendDoubleLe(bytes, x);
+    appendDoubleLe(bytes, y);
+    return bytes;
+  }
+
   VectorPtr makeVarbinaryVector(
       const std::vector<std::optional<std::string>>& values) {
     return makeFlatVector<StringView>(
@@ -127,13 +143,24 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
 
   VectorPtr makeGeometryVector(
       const std::vector<std::optional<std::string>>& values) {
+    return makeGeospatialVector(values, GEOMETRY());
+  }
+
+  VectorPtr makeGeographyVector(
+      const std::vector<std::optional<std::string>>& values) {
+    return makeGeospatialVector(values, SPHERICAL_GEOGRAPHY());
+  }
+
+  VectorPtr makeGeospatialVector(
+      const std::vector<std::optional<std::string>>& values,
+      const TypePtr& type) {
     return makeFlatVector<StringView>(
         values.size(),
         [&](vector_size_t i) {
           return values[i].has_value() ? StringView(*values[i]) : StringView();
         },
         [&](vector_size_t i) { return !values[i].has_value(); },
-        GEOMETRY());
+        type);
   }
 
   // Writes 'vectors' as Iceberg Parquet data files and scans them back with
@@ -156,50 +183,151 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
         .splits(createSplitsForDirectory(dataPath))
         .assertResults(expected);
   }
+
+  // Applies an equality delete on a 'type' column, GEOMETRY or
+  // SPHERICALGEOGRAPHY, whose delete file holds one of two base values as ISO
+  // WKB, and asserts that exactly the matching base row is deleted.
+  void assertEqualityDeleteOnGeospatialColumn(const TypePtr& type) {
+    const std::string matchWkt = "POINT (10 20)";
+    const std::string keepWkt = "LINESTRING (0 0, 1 1)";
+
+    // Base file: written as binary WKB and read back as 'type', which is how a
+    // real Iceberg geometry or geography data file looks on disk.
+    auto baseDirectory = test::TempDirectoryPath::create();
+    auto baseData = makeRowVector(
+        {"id", "geom"},
+        {makeFlatVector<int64_t>({1, 2}),
+         makeVarbinaryVector({toWkb(matchWkt), toWkb(keepWkt)})});
+    auto baseSink =
+        createDataSinkAndAppendData({baseData}, baseDirectory->getPath());
+    baseSink->close();
+    // Release the sink before creating the next one: each sink adds a writer
+    // sub-pool named "part[0]" under the shared connector pool, so two live
+    // sinks would collide on that name.
+    baseSink.reset();
+    auto baseSplits = createSplitsForDirectory(baseDirectory->getPath());
+    ASSERT_EQ(baseSplits.size(), 1);
+    const auto baseFilePath =
+        std::dynamic_pointer_cast<HiveConnectorSplit>(baseSplits[0])->filePath;
+
+    // Equality-delete file: one row carrying G_match as ISO WKB, exactly as
+    // another engine would have written it. Written as Parquet like the base
+    // file, so this test stays inside the PR's Parquet-only geometry scope.
+    auto deleteDirectory = test::TempDirectoryPath::create();
+    auto deleteData =
+        makeRowVector({"geom"}, {makeVarbinaryVector({toWkb(matchWkt)})});
+    auto deleteSink =
+        createDataSinkAndAppendData({deleteData}, deleteDirectory->getPath());
+    deleteSink->close();
+    deleteSink.reset();
+    auto deleteSplits = createSplitsForDirectory(deleteDirectory->getPath());
+    ASSERT_EQ(deleteSplits.size(), 1);
+    const auto deleteFilePath =
+        std::dynamic_pointer_cast<HiveConnectorSplit>(deleteSplits[0])
+            ->filePath;
+
+    // Field id 2 is the second top-level column, "geom".
+    IcebergDeleteFile equalityDelete(
+        FileContent::kEqualityDeletes,
+        deleteFilePath,
+        dwio::common::FileFormat::PARQUET,
+        1,
+        getFileSize(deleteFilePath),
+        /*equalityFieldIds=*/{2});
+
+    const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), type});
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(tableSchema)
+                    .dataColumns(tableSchema)
+                    .endTableScan()
+                    .planNode();
+
+    // G_match is deleted; G_keep survives. Without the delete-side conversion
+    // the delete key hashes as raw WKB while the base row hashes as internal
+    // bytes, nothing matches, and both rows come back.
+    auto expected = makeRowVector(
+        {"id", "geom"},
+        {makeFlatVector<int64_t>({2}),
+         makeGeospatialVector({toVeloxGeospatial(keepWkt)}, type)});
+
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeIcebergSplits(baseFilePath, {equalityDelete}))
+        .assertResults(expected);
+  }
 };
 
 // ---------------------------------------------------------------------------
 // Vector-level tests for the converter the Iceberg connector owns.
 // ---------------------------------------------------------------------------
 
-TEST_F(IcebergGeometryReadTest, containsGeometryDetection) {
-  // Nothing but an actual GEOMETRY may switch the conversion on.
-  EXPECT_FALSE(containsGeometry(VARBINARY()));
-  EXPECT_FALSE(containsGeometry(VARCHAR()));
-  EXPECT_FALSE(containsGeometry(ROW({"a", "b"}, {BIGINT(), VARBINARY()})));
-  EXPECT_FALSE(containsGeometry(ARRAY(VARBINARY())));
-  EXPECT_FALSE(containsGeometry(MAP(VARCHAR(), VARBINARY())));
+TEST_F(IcebergGeospatialReadTest, containsGeospatialDetection) {
+  // Nothing but an actual GEOMETRY or SPHERICALGEOGRAPHY may switch the
+  // conversion on.
+  EXPECT_FALSE(containsGeospatial(VARBINARY()));
+  EXPECT_FALSE(containsGeospatial(VARCHAR()));
+  EXPECT_FALSE(containsGeospatial(ROW({"a", "b"}, {BIGINT(), VARBINARY()})));
+  EXPECT_FALSE(containsGeospatial(ARRAY(VARBINARY())));
+  EXPECT_FALSE(containsGeospatial(MAP(VARCHAR(), VARBINARY())));
 
-  EXPECT_TRUE(containsGeometry(GEOMETRY()));
-  EXPECT_TRUE(containsGeometry(ROW({"a", "g"}, {BIGINT(), GEOMETRY()})));
-  EXPECT_TRUE(containsGeometry(ARRAY(GEOMETRY())));
-  EXPECT_TRUE(containsGeometry(MAP(VARCHAR(), GEOMETRY())));
-  EXPECT_TRUE(containsGeometry(ARRAY(ROW({"g"}, {GEOMETRY()}))));
+  for (const auto& type :
+       {TypePtr(GEOMETRY()), TypePtr(SPHERICAL_GEOGRAPHY())}) {
+    EXPECT_TRUE(containsGeospatial(type)) << type->toString();
+    EXPECT_TRUE(containsGeospatial(ROW({"a", "g"}, {BIGINT(), type})));
+    EXPECT_TRUE(containsGeospatial(ARRAY(type)));
+    EXPECT_TRUE(containsGeospatial(MAP(VARCHAR(), type)));
+    EXPECT_TRUE(containsGeospatial(ARRAY(ROW({"g"}, {type}))));
+  }
 }
 
-TEST_F(IcebergGeometryReadTest, flatVectorAllGeometryKinds) {
+TEST_F(IcebergGeospatialReadTest, flatVectorAllGeometryKinds) {
   std::vector<std::optional<std::string>> wkb;
   std::vector<std::optional<std::string>> expected;
   for (const auto& wkt : kAllKinds) {
     wkb.emplace_back(toWkb(wkt));
-    expected.emplace_back(toVeloxGeometry(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
   }
   for (const auto& wkt : kEmptyKinds) {
     wkb.emplace_back(toWkb(wkt));
-    expected.emplace_back(toVeloxGeometry(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
   }
   // Nulls interleaved at both ends.
   wkb.emplace_back(std::nullopt);
   expected.emplace_back(std::nullopt);
 
   auto input = makeVarbinaryVector(wkb);
-  auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+  auto converted = convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
 
   ASSERT_TRUE(isGeometryType(converted->type()));
   velox::test::assertEqualVectors(makeGeometryVector(expected), converted);
 }
 
-TEST_F(IcebergGeometryReadTest, dictionaryVectorIsConvertedOncePerEntry) {
+// Geography shares the geometry encoding, so every kind converts to the same
+// bytes, in a SPHERICALGEOGRAPHY vector. All the shapes lie within longitude
+// and latitude ranges.
+TEST_F(IcebergGeospatialReadTest, flatVectorAllGeographyKinds) {
+  std::vector<std::optional<std::string>> wkb;
+  std::vector<std::optional<std::string>> expected;
+  for (const auto& wkt : kAllKinds) {
+    wkb.emplace_back(toWkb(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
+  }
+  for (const auto& wkt : kEmptyKinds) {
+    wkb.emplace_back(toWkb(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
+  }
+  wkb.emplace_back(std::nullopt);
+  expected.emplace_back(std::nullopt);
+
+  auto input = makeVarbinaryVector(wkb);
+  auto converted =
+      convertIcebergGeospatial(input, SPHERICAL_GEOGRAPHY(), pool(), "geog");
+
+  ASSERT_TRUE(isSphericalGeographyType(converted->type()));
+  velox::test::assertEqualVectors(makeGeographyVector(expected), converted);
+}
+
+TEST_F(IcebergGeospatialReadTest, dictionaryVectorIsConvertedOncePerEntry) {
   const std::vector<std::string> distinctWkt = {
       "POINT (1 2)", "LINESTRING (0 0, 1 1)", "POLYGON ((0 0, 1 0, 1 1, 0 0))"};
   std::vector<std::optional<std::string>> distinctWkb;
@@ -222,7 +350,7 @@ TEST_F(IcebergGeometryReadTest, dictionaryVectorIsConvertedOncePerEntry) {
   ASSERT_EQ(dictionary->encoding(), VectorEncoding::Simple::DICTIONARY);
 
   auto converted =
-      convertIcebergGeometry(dictionary, GEOMETRY(), pool(), "geom");
+      convertIcebergGeospatial(dictionary, GEOMETRY(), pool(), "geom");
 
   // The dictionary wrapping is preserved, so a repeated value is parsed once
   // per dictionary entry rather than once per row.
@@ -241,15 +369,15 @@ TEST_F(IcebergGeometryReadTest, dictionaryVectorIsConvertedOncePerEntry) {
     if (i % 5 == 4) {
       expected.emplace_back(std::nullopt);
     } else {
-      expected.emplace_back(toVeloxGeometry(distinctWkt[i % 3]));
+      expected.emplace_back(toVeloxGeospatial(distinctWkt[i % 3]));
     }
   }
   velox::test::assertEqualVectors(makeGeometryVector(expected), converted);
 }
 
-TEST_F(IcebergGeometryReadTest, nullConstantVector) {
+TEST_F(IcebergGeospatialReadTest, nullConstantVector) {
   auto input = BaseVector::createNullConstant(VARBINARY(), 5, pool());
-  auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+  auto converted = convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
   ASSERT_TRUE(isGeometryType(converted->type()));
   ASSERT_EQ(converted->size(), 5);
   for (vector_size_t i = 0; i < 5; ++i) {
@@ -261,13 +389,13 @@ TEST_F(IcebergGeometryReadTest, nullConstantVector) {
 // re-wrapped, rather than flattened and re-parsed per row. Such a vector does
 // not arise from a scan today, but preserving the encoding keeps the converter
 // correct and O(1) if a scan later emits CONSTANT for a uniform-value column.
-TEST_F(IcebergGeometryReadTest, nonNullConstantVectorPreservesEncoding) {
+TEST_F(IcebergGeospatialReadTest, nonNullConstantVectorPreservesEncoding) {
   const std::string wkt = "POINT (10 20)";
   auto value = makeVarbinaryVector({toWkb(wkt)});
   auto input = BaseVector::wrapInConstant(5, 0, value);
   ASSERT_EQ(input->encoding(), VectorEncoding::Simple::CONSTANT);
 
-  auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+  auto converted = convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
 
   EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
   EXPECT_TRUE(isGeometryType(converted->type()));
@@ -282,19 +410,19 @@ TEST_F(IcebergGeometryReadTest, nonNullConstantVectorPreservesEncoding) {
 
   velox::test::assertEqualVectors(
       BaseVector::wrapInConstant(
-          5, 0, makeGeometryVector({toVeloxGeometry(wkt)})),
+          5, 0, makeGeometryVector({toVeloxGeospatial(wkt)})),
       converted);
 }
 
 // The converter must not parse a value that no selected row can reach.
-TEST_F(IcebergGeometryReadTest, constantVectorWithEmptySelectionIsNotParsed) {
+TEST_F(IcebergGeospatialReadTest, constantVectorWithEmptySelectionIsNotParsed) {
   // Deliberately invalid WKB: if the value were parsed, this would throw.
   auto value = makeVarbinaryVector({std::string("\x01\x02\x03", 3)});
   auto input = BaseVector::wrapInConstant(4, 0, value);
 
   SelectivityVector noRows(4, false);
   auto converted =
-      convertIcebergGeometry(input, GEOMETRY(), noRows, pool(), "geom");
+      convertIcebergGeospatial(input, GEOMETRY(), noRows, pool(), "geom");
 
   EXPECT_TRUE(isGeometryType(converted->type()));
   ASSERT_EQ(converted->size(), 4);
@@ -306,7 +434,7 @@ TEST_F(IcebergGeometryReadTest, constantVectorWithEmptySelectionIsNotParsed) {
 // A partially selected constant still converts its single value once; the
 // constant result carries that value at every position, which is what CONSTANT
 // encoding means.
-TEST_F(IcebergGeometryReadTest, constantVectorWithPartialSelection) {
+TEST_F(IcebergGeospatialReadTest, constantVectorWithPartialSelection) {
   const std::string wkt = "LINESTRING (0 0, 10 10, 20 20)";
   auto value = makeVarbinaryVector({toWkb(wkt)});
   auto input = BaseVector::wrapInConstant(4, 0, value);
@@ -316,21 +444,21 @@ TEST_F(IcebergGeometryReadTest, constantVectorWithPartialSelection) {
   someRows.setValid(2, true);
   someRows.updateBounds();
   auto converted =
-      convertIcebergGeometry(input, GEOMETRY(), someRows, pool(), "geom");
+      convertIcebergGeospatial(input, GEOMETRY(), someRows, pool(), "geom");
 
   EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
   EXPECT_TRUE(isGeometryType(converted->type()));
   EXPECT_EQ(converted->wrappedIndex(3), 0);
   velox::test::assertEqualVectors(
       BaseVector::wrapInConstant(
-          4, 0, makeGeometryVector({toVeloxGeometry(wkt)})),
+          4, 0, makeGeometryVector({toVeloxGeospatial(wkt)})),
       converted);
 }
 
 // A constant complex value goes through the same ROW recursion as a flat one,
 // so the geometry leaf is converted and the outer CONSTANT encoding is
 // preserved.
-TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
+TEST_F(IcebergGeospatialReadTest, constantRowWithGeometryField) {
   const std::string wkt = "POINT (3 4)";
   auto row = makeRowVector(
       {"id", "geom"},
@@ -338,7 +466,8 @@ TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
   auto input = BaseVector::wrapInConstant(3, 0, row);
   auto targetType = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
 
-  auto converted = convertIcebergGeometry(input, targetType, pool(), "nested");
+  auto converted =
+      convertIcebergGeospatial(input, targetType, pool(), "nested");
 
   EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
   ASSERT_TRUE(converted->type()->equivalent(*targetType));
@@ -353,7 +482,7 @@ TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
           makeRowVector(
               {"id", "geom"},
               {makeFlatVector<int64_t>({7}),
-               makeGeometryVector({toVeloxGeometry(wkt)})})),
+               makeGeometryVector({toVeloxGeospatial(wkt)})})),
       converted);
 }
 
@@ -361,72 +490,14 @@ TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
 // mandates, while the base rows it is probed against have already been
 // re-encoded into Velox's internal geometry encoding. Both sides have to be
 // hashed in the same logical encoding or the delete silently never matches.
-TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
-  const std::string matchWkt = "POINT (10 20)";
-  const std::string keepWkt = "LINESTRING (0 0, 1 1)";
+TEST_F(IcebergGeospatialReadTest, equalityDeleteOnGeometryColumn) {
+  assertEqualityDeleteOnGeospatialColumn(GEOMETRY());
+}
 
-  // Base file: written as binary WKB and read back as GEOMETRY, which is how a
-  // real Iceberg geometry data file looks on disk.
-  auto baseDirectory = test::TempDirectoryPath::create();
-  auto baseData = makeRowVector(
-      {"id", "geom"},
-      {makeFlatVector<int64_t>({1, 2}),
-       makeVarbinaryVector({toWkb(matchWkt), toWkb(keepWkt)})});
-  auto baseSink =
-      createDataSinkAndAppendData({baseData}, baseDirectory->getPath());
-  baseSink->close();
-  // Release the sink before creating the next one: each sink adds a writer
-  // sub-pool named "part[0]" under the shared connector pool, so two live
-  // sinks would collide on that name.
-  baseSink.reset();
-  auto baseSplits = createSplitsForDirectory(baseDirectory->getPath());
-  ASSERT_EQ(baseSplits.size(), 1);
-  const auto baseFilePath =
-      std::dynamic_pointer_cast<HiveConnectorSplit>(baseSplits[0])->filePath;
-
-  // Equality-delete file: one row carrying G_match as ISO WKB, exactly as
-  // another engine would have written it. Written as Parquet like the base
-  // file, so this test stays inside the PR's Parquet-only geometry scope.
-  auto deleteDirectory = test::TempDirectoryPath::create();
-  auto deleteData =
-      makeRowVector({"geom"}, {makeVarbinaryVector({toWkb(matchWkt)})});
-  auto deleteSink =
-      createDataSinkAndAppendData({deleteData}, deleteDirectory->getPath());
-  deleteSink->close();
-  deleteSink.reset();
-  auto deleteSplits = createSplitsForDirectory(deleteDirectory->getPath());
-  ASSERT_EQ(deleteSplits.size(), 1);
-  const auto deleteFilePath =
-      std::dynamic_pointer_cast<HiveConnectorSplit>(deleteSplits[0])->filePath;
-
-  // Field id 2 is the second top-level column, "geom".
-  IcebergDeleteFile equalityDelete(
-      FileContent::kEqualityDeletes,
-      deleteFilePath,
-      dwio::common::FileFormat::PARQUET,
-      1,
-      getFileSize(deleteFilePath),
-      /*equalityFieldIds=*/{2});
-
-  const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(tableSchema)
-                  .dataColumns(tableSchema)
-                  .endTableScan()
-                  .planNode();
-
-  // G_match is deleted; G_keep survives. Without the delete-side conversion the
-  // delete key hashes as raw WKB while the base row hashes as internal bytes,
-  // nothing matches, and both rows come back.
-  auto expected = makeRowVector(
-      {"id", "geom"},
-      {makeFlatVector<int64_t>({2}),
-       makeGeometryVector({toVeloxGeometry(keepWkt)})});
-
-  exec::test::AssertQueryBuilder(plan)
-      .splits(makeIcebergSplits(baseFilePath, {equalityDelete}))
-      .assertResults(expected);
+// Geography values take the same WKB -> internal re-encoding on both sides, so
+// the delete key and the base row hash alike.
+TEST_F(IcebergGeospatialReadTest, equalityDeleteOnGeographyColumn) {
+  assertEqualityDeleteOnGeospatialColumn(SPHERICAL_GEOGRAPHY());
 }
 
 // A hash join on a GEOMETRY key must return the matching Iceberg row even with
@@ -435,7 +506,7 @@ TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
 // BytesValues filter built from the build side and evaluated by the scan
 // against the file bytes would drop the row. No filter may be produced for
 // this custom VARBINARY-backed type, leaving the join to do the matching.
-TEST_F(IcebergGeometryReadTest, geometryHashJoinWithDynamicFilterPushdown) {
+TEST_F(IcebergGeospatialReadTest, geometryHashJoinWithDynamicFilterPushdown) {
   const std::string matchWkt = "POINT (10 20)";
   const std::string otherWkt = "LINESTRING (0 0, 1 1)";
 
@@ -450,7 +521,7 @@ TEST_F(IcebergGeometryReadTest, geometryHashJoinWithDynamicFilterPushdown) {
   // Build side: the same shape, already in Velox's internal encoding, which is
   // what a GEOMETRY vector anywhere in the plan carries.
   auto buildData = makeRowVector(
-      {"bgeom"}, {makeGeometryVector({toVeloxGeometry(matchWkt)})});
+      {"bgeom"}, {makeGeometryVector({toVeloxGeospatial(matchWkt)})});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
@@ -495,16 +566,16 @@ TEST_F(IcebergGeometryReadTest, geometryHashJoinWithDynamicFilterPushdown) {
   }
 }
 
-TEST_F(IcebergGeometryReadTest, invalidWkbErrorNamesColumnPath) {
+TEST_F(IcebergGeospatialReadTest, invalidWkbErrorNamesColumnPath) {
   auto shortValue = makeVarbinaryVector({std::string("\x01\x02\x03", 3)});
   VELOX_ASSERT_THROW(
-      convertIcebergGeometry(shortValue, GEOMETRY(), pool(), "shapes.geom"),
+      convertIcebergGeospatial(shortValue, GEOMETRY(), pool(), "shapes.geom"),
       "Iceberg geometry column 'shapes.geom'");
 
   auto badByteOrder =
       makeVarbinaryVector({typeCodeOnlyWkb(1).replace(0, 1, "\x07")});
   VELOX_ASSERT_THROW(
-      convertIcebergGeometry(badByteOrder, GEOMETRY(), pool(), "geom"),
+      convertIcebergGeospatial(badByteOrder, GEOMETRY(), pool(), "geom"),
       "unknown byte order marker");
 
   // A valid header with a truncated body: GEOS rejects it and the message still
@@ -512,15 +583,15 @@ TEST_F(IcebergGeometryReadTest, invalidWkbErrorNamesColumnPath) {
   auto truncated =
       makeVarbinaryVector({std::string("\x01\x01\x00\x00\x00\x00\x00", 7)});
   VELOX_ASSERT_THROW(
-      convertIcebergGeometry(truncated, GEOMETRY(), pool(), "geom"),
+      convertIcebergGeospatial(truncated, GEOMETRY(), pool(), "geom"),
       "Iceberg geometry column 'geom'");
 }
 
-TEST_F(IcebergGeometryReadTest, zmAndEwkbAreRejectedNotFlattened) {
+TEST_F(IcebergGeospatialReadTest, zmAndEwkbAreRejectedNotFlattened) {
   auto expectFailure = [&](uint32_t typeCode, const std::string& message) {
     auto input = makeVarbinaryVector({typeCodeOnlyWkb(typeCode)});
     VELOX_ASSERT_THROW(
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"), message);
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom"), message);
   };
 
   expectFailure(1001, "contains Z coordinates");
@@ -532,12 +603,106 @@ TEST_F(IcebergGeometryReadTest, zmAndEwkbAreRejectedNotFlattened) {
   expectFailure(15, "unsupported WKB geometry type code 15");
 }
 
+// Iceberg geography coordinates are WGS84 longitude/latitude. A file written by
+// another engine may hold values Presto's to_spherical_geography would reject,
+// and those must fail the read rather than surface as a SPHERICALGEOGRAPHY.
+TEST_F(IcebergGeospatialReadTest, geographyCoordinatesAreRangeChecked) {
+  auto expectFailure = [&](const std::string& wkb, const std::string& message) {
+    auto input = makeVarbinaryVector({wkb});
+    VELOX_ASSERT_THROW(
+        convertIcebergGeospatial(input, SPHERICAL_GEOGRAPHY(), pool(), "geog"),
+        message);
+  };
+  const std::string kLongitude =
+      "Invalid value in Iceberg geography column 'geog': Longitude must be between -180 and 180";
+  const std::string kLatitude =
+      "Invalid value in Iceberg geography column 'geog': Latitude must be between -90 and 90";
+
+  expectFailure(toWkb("POINT (180.5 0)"), kLongitude);
+  expectFailure(toWkb("POINT (-181 0)"), kLongitude);
+  expectFailure(toWkb("POINT (0 90.5)"), kLatitude);
+  expectFailure(toWkb("POINT (0 -91)"), kLatitude);
+  // Latitude/longitude swapped, a common writer bug.
+  expectFailure(toWkb("POINT (37.7749 -122.4194)"), kLatitude);
+
+  // Every coordinate is checked, not only the first or the outer shape.
+  expectFailure(toWkb("LINESTRING (0 0, 10 10, 200 10)"), kLongitude);
+  expectFailure(
+      toWkb("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (1 1, 2 1, 2 95, 1 1))"),
+      kLatitude);
+  expectFailure(
+      toWkb("GEOMETRYCOLLECTION (POINT (1 2), MULTIPOINT ((0 0), (0 100)))"),
+      kLatitude);
+
+  // NaN and infinity are out of range. POINT EMPTY is also NaN, NaN on disk,
+  // so only a single NaN ordinate is invalid.
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  const auto infinity = std::numeric_limits<double>::infinity();
+  expectFailure(pointWkb(nan, 0), kLongitude);
+  expectFailure(pointWkb(0, nan), kLatitude);
+  expectFailure(pointWkb(infinity, 0), kLongitude);
+  expectFailure(pointWkb(0, -infinity), kLatitude);
+
+  // Geography is two-dimensional like geometry; the error names the type.
+  expectFailure(
+      typeCodeOnlyWkb(1001),
+      "Iceberg geography column 'geog' contains Z coordinates; Velox SPHERICALGEOGRAPHY supports only two-dimensional (XY) geometries");
+}
+
+TEST_F(IcebergGeospatialReadTest, geographyRangeBoundariesAreAccepted) {
+  const std::vector<std::string> wkts = {
+      "POINT (180 90)",
+      "POINT (-180 -90)",
+      "LINESTRING (-180 0, 180 0)",
+      "POLYGON ((-180 -90, 180 -90, 180 90, -180 90, -180 -90))",
+      "POINT EMPTY",
+      "MULTIPOINT EMPTY",
+  };
+  std::vector<std::optional<std::string>> wkb;
+  std::vector<std::optional<std::string>> expected;
+  for (const auto& wkt : wkts) {
+    wkb.emplace_back(toWkb(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
+  }
+  auto converted = convertIcebergGeospatial(
+      makeVarbinaryVector(wkb), SPHERICAL_GEOGRAPHY(), pool(), "geog");
+  velox::test::assertEqualVectors(makeGeographyVector(expected), converted);
+}
+
+// Only geography carries a coordinate system. A geometry is planar with no
+// bounds, so the same out-of-range values must still read as GEOMETRY.
+TEST_F(IcebergGeospatialReadTest, geometryCoordinatesAreNotRangeChecked) {
+  const std::string wkt = "LINESTRING (500 -500, 1000 1000)";
+  auto converted = convertIcebergGeospatial(
+      makeVarbinaryVector({toWkb(wkt)}), GEOMETRY(), pool(), "geom");
+  velox::test::assertEqualVectors(
+      makeGeometryVector({toVeloxGeospatial(wkt)}), converted);
+}
+
+// Validation runs on live positions only, like parsing: a row a filter or
+// delete has already removed must not fail the read.
+TEST_F(IcebergGeospatialReadTest, unselectedGeographyValuesAreNotValidated) {
+  const std::string valid = "POINT (1 2)";
+  auto input = makeVarbinaryVector(
+      {toWkb(valid), toWkb("POINT (500 500)"), std::nullopt});
+  SelectivityVector rows(input->size());
+  rows.setValid(1, false);
+  rows.updateBounds();
+
+  auto converted = convertIcebergGeospatial(
+      input, SPHERICAL_GEOGRAPHY(), rows, pool(), "geog");
+  velox::test::assertEqualVectors(
+      makeGeographyVector(
+          {toVeloxGeospatial(valid), std::nullopt, std::nullopt}),
+      converted);
+}
+
 // The children of a MULTIPOINT/MULTILINESTRING/MULTIPOLYGON/GEOMETRYCOLLECTION
 // each carry their own WKB header, so a collection whose own type word says XY
 // can still contain a Z/M/ZM/EWKB child. GEOS parses such a payload and
 // GeometrySerializer would then write X and Y only, silently discarding the
 // extra ordinate. Validation therefore has to walk every nested header.
-TEST_F(IcebergGeometryReadTest, nestedWkbHeadersAreValidated) {
+TEST_F(IcebergGeospatialReadTest, nestedWkbHeadersAreValidated) {
   // A child geometry with an arbitrary type word and 'numOrdinates' doubles.
   auto child = [](uint32_t typeCode, int numOrdinates, bool hasSrid = false) {
     std::string out;
@@ -566,7 +731,7 @@ TEST_F(IcebergGeometryReadTest, nestedWkbHeadersAreValidated) {
   auto expectFailure = [&](const std::string& wkb, const std::string& message) {
     auto input = makeVarbinaryVector({wkb});
     VELOX_ASSERT_THROW(
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"), message);
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom"), message);
   };
 
   const std::string xyPoint = child(1, 2);
@@ -602,7 +767,7 @@ TEST_F(IcebergGeometryReadTest, nestedWkbHeadersAreValidated) {
 
 // The validator must accept every legal nested XY shape, including empties and
 // both byte orders, so the recursive check does not over-reject.
-TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
+TEST_F(IcebergGeospatialReadTest, nestedXyWkbIsAccepted) {
   // Held as std::string rather than iterated straight off a braced list of
   // string literals: binding 'const std::string&' to a 'const char*' element
   // would construct a temporary per iteration, which
@@ -619,10 +784,11 @@ TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
   };
   for (const auto& wkt : nestedXyWkts) {
     auto input = makeVarbinaryVector({toWkb(wkt)});
-    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    auto converted =
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
     ASSERT_TRUE(isGeometryType(converted->type())) << wkt;
     velox::test::assertEqualVectors(
-        makeGeometryVector({toVeloxGeometry(wkt)}), converted);
+        makeGeometryVector({toVeloxGeospatial(wkt)}), converted);
   }
 }
 
@@ -630,7 +796,7 @@ TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
 // GEOMETRYCOLLECTION level costs about nine bytes on disk but one frame in both
 // this validator and in geos::io::WKBReader::read, and the GEOS version Velox
 // pins has no depth cap of its own, so the limit has to be enforced here.
-TEST_F(IcebergGeometryReadTest, wkbNestingDepthIsBounded) {
+TEST_F(IcebergGeospatialReadTest, wkbNestingDepthIsBounded) {
   // A chain of 'collectionLevels' nested GEOMETRYCOLLECTIONs wrapping one
   // POINT. Total nesting depth is collectionLevels + 1 (the point itself).
   auto nestedCollections = [](int collectionLevels) {
@@ -654,7 +820,8 @@ TEST_F(IcebergGeometryReadTest, wkbNestingDepthIsBounded) {
   // accepted, so the cap does not reject legitimately nested data.
   {
     auto input = makeVarbinaryVector({nestedCollections(99)});
-    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    auto converted =
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
     ASSERT_TRUE(isGeometryType(converted->type()));
     ASSERT_EQ(converted->size(), 1);
     EXPECT_FALSE(converted->isNullAt(0));
@@ -664,7 +831,7 @@ TEST_F(IcebergGeometryReadTest, wkbNestingDepthIsBounded) {
   {
     auto input = makeVarbinaryVector({nestedCollections(100)});
     VELOX_ASSERT_THROW(
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"),
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom"),
         "Iceberg geometry column 'geom' is nested more than 100 levels deep");
   }
 
@@ -673,18 +840,18 @@ TEST_F(IcebergGeometryReadTest, wkbNestingDepthIsBounded) {
   {
     auto input = makeVarbinaryVector({nestedCollections(50'000)});
     VELOX_ASSERT_THROW(
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"),
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom"),
         "nested more than 100 levels deep");
   }
 }
 
 // A malformed or truncated payload must produce a user error rather than an
 // out-of-bounds read while walking nested headers.
-TEST_F(IcebergGeometryReadTest, malformedNestedWkbIsRejectedSafely) {
+TEST_F(IcebergGeospatialReadTest, malformedNestedWkbIsRejectedSafely) {
   auto expectFailure = [&](const std::string& wkb) {
     auto input = makeVarbinaryVector({wkb});
     VELOX_ASSERT_THROW(
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"), "geom");
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom"), "geom");
   };
 
   // A collection claiming two children but carrying none.
@@ -717,10 +884,10 @@ TEST_F(IcebergGeometryReadTest, malformedNestedWkbIsRejectedSafely) {
   expectFailure(trailing);
 }
 
-TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {
+TEST_F(IcebergGeospatialReadTest, nestedRowArrayAndMap) {
   const std::string wkt = "POINT (3 4)";
   const auto wkb = toWkb(wkt);
-  const auto expectedBytes = toVeloxGeometry(wkt);
+  const auto expectedBytes = toVeloxGeospatial(wkt);
 
   // ROW(BIGINT, GEOMETRY)
   {
@@ -730,7 +897,7 @@ TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {
          makeVarbinaryVector({wkb, std::nullopt})});
     auto targetType = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
     auto converted =
-        convertIcebergGeometry(input, targetType, pool(), "nested");
+        convertIcebergGeospatial(input, targetType, pool(), "nested");
     ASSERT_TRUE(converted->type()->equivalent(*targetType));
     velox::test::assertEqualVectors(
         makeRowVector(
@@ -745,7 +912,7 @@ TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {
     auto input = makeArrayVector<StringView>(
         {{StringView(wkb)}, {StringView(wkb), StringView(wkb)}}, VARBINARY());
     auto converted =
-        convertIcebergGeometry(input, ARRAY(GEOMETRY()), pool(), "shapes");
+        convertIcebergGeospatial(input, ARRAY(GEOMETRY()), pool(), "shapes");
     ASSERT_TRUE(converted->type()->equivalent(*ARRAY(GEOMETRY())));
     auto* array = converted->as<ArrayVector>();
     ASSERT_EQ(array->size(), 2);
@@ -772,7 +939,7 @@ TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {
         keys,
         values);
     auto targetType = MAP(VARCHAR(), GEOMETRY());
-    auto converted = convertIcebergGeometry(input, targetType, pool(), "m");
+    auto converted = convertIcebergGeospatial(input, targetType, pool(), "m");
     ASSERT_TRUE(converted->type()->equivalent(*targetType));
     auto* map = converted->as<MapVector>();
     ASSERT_TRUE(isGeometryType(map->mapValues()->type()));
@@ -784,13 +951,57 @@ TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {
   }
 }
 
-TEST_F(IcebergGeometryReadTest, arrayWithGapsAndNonZeroOffsets) {
+TEST_F(IcebergGeospatialReadTest, nestedGeography) {
+  const std::string wkt = "POINT (3 4)";
+  const auto wkb = toWkb(wkt);
+  const auto expectedBytes = toVeloxGeospatial(wkt);
+  const auto outOfRange = toWkb("POINT (3 400)");
+
+  auto targetType =
+      ROW({"id", "arr", "m"},
+          {BIGINT(),
+           ARRAY(SPHERICAL_GEOGRAPHY()),
+           MAP(VARCHAR(), SPHERICAL_GEOGRAPHY())});
+  auto makeInput = [&](const std::string& mapValue) {
+    return makeRowVector(
+        {"id", "arr", "m"},
+        {makeFlatVector<int64_t>({1}),
+         makeArrayVector<StringView>({{StringView(wkb)}}, VARBINARY()),
+         makeMapVector(
+             {0},
+             makeFlatVector<StringView>({"k"}),
+             makeFlatVector<StringView>({StringView(mapValue)}, VARBINARY()))});
+  };
+
+  auto converted =
+      convertIcebergGeospatial(makeInput(wkb), targetType, pool(), "nested");
+  ASSERT_TRUE(converted->type()->equivalent(*targetType));
+  auto* row = converted->as<RowVector>();
+  auto* array = row->childAt(1)->as<ArrayVector>();
+  ASSERT_TRUE(isSphericalGeographyType(array->elements()->type()));
+  EXPECT_EQ(
+      array->elements()->asFlatVector<StringView>()->valueAt(0).str(),
+      expectedBytes);
+  auto* map = row->childAt(2)->as<MapVector>();
+  ASSERT_TRUE(isSphericalGeographyType(map->mapValues()->type()));
+  EXPECT_EQ(
+      map->mapValues()->asFlatVector<StringView>()->valueAt(0).str(),
+      expectedBytes);
+
+  // A nested out-of-range value fails, naming the path to it.
+  VELOX_ASSERT_THROW(
+      convertIcebergGeospatial(
+          makeInput(outOfRange), targetType, pool(), "nested"),
+      "Invalid value in Iceberg geography column 'nested.m[value]': Latitude must be between -90 and 90");
+}
+
+TEST_F(IcebergGeospatialReadTest, arrayWithGapsAndNonZeroOffsets) {
   // The elements vector is deliberately *not* packed: unreferenced positions
   // hold bytes that are not WKB at all, and the first row starts at a non-zero
   // offset. Conversion must read only the positions the offsets/sizes reach, so
   // nothing here can be parsed by accident.
   const auto wkb = toWkb("POINT (1 2)");
-  const auto expectedBytes = toVeloxGeometry("POINT (1 2)");
+  const auto expectedBytes = toVeloxGeospatial("POINT (1 2)");
   const std::string garbage = "definitely not wkb";
 
   auto elements = makeVarbinaryVector(
@@ -808,7 +1019,7 @@ TEST_F(IcebergGeometryReadTest, arrayWithGapsAndNonZeroOffsets) {
       pool(), ARRAY(VARBINARY()), nullptr, 2, offsets, sizes, elements);
 
   auto converted =
-      convertIcebergGeometry(input, ARRAY(GEOMETRY()), pool(), "shapes");
+      convertIcebergGeospatial(input, ARRAY(GEOMETRY()), pool(), "shapes");
 
   auto* array = converted->as<ArrayVector>();
   ASSERT_EQ(array->size(), 2);
@@ -833,7 +1044,7 @@ TEST_F(IcebergGeometryReadTest, arrayWithGapsAndNonZeroOffsets) {
   EXPECT_TRUE(out->isNullAt(6));
 }
 
-TEST_F(IcebergGeometryReadTest, nullArrayRowsDoNotReachTheirElements) {
+TEST_F(IcebergGeospatialReadTest, nullArrayRowsDoNotReachTheirElements) {
   // A null array row must not cause its element range to be parsed.
   const auto wkb = toWkb("POINT (1 2)");
   auto elements = makeVarbinaryVector({std::string("not wkb"), wkb});
@@ -844,20 +1055,20 @@ TEST_F(IcebergGeometryReadTest, nullArrayRowsDoNotReachTheirElements) {
       pool(), ARRAY(VARBINARY()), nulls, 2, offsets, sizes, elements);
 
   auto converted =
-      convertIcebergGeometry(input, ARRAY(GEOMETRY()), pool(), "shapes");
+      convertIcebergGeospatial(input, ARRAY(GEOMETRY()), pool(), "shapes");
   auto* array = converted->as<ArrayVector>();
   EXPECT_TRUE(array->isNullAt(0));
   EXPECT_TRUE(array->elements()->isNullAt(0));
   EXPECT_EQ(
       array->elements()->asFlatVector<StringView>()->valueAt(1).str(),
-      toVeloxGeometry("POINT (1 2)"));
+      toVeloxGeospatial("POINT (1 2)"));
 }
 
-TEST_F(IcebergGeometryReadTest, dictionaryWrappedArray) {
+TEST_F(IcebergGeospatialReadTest, dictionaryWrappedArray) {
   // The ARRAY itself is dictionary-wrapped: only the base rows the indices
   // reach may be converted.
   const auto wkb = toWkb("POINT (7 8)");
-  const auto expectedBytes = toVeloxGeometry("POINT (7 8)");
+  const auto expectedBytes = toVeloxGeospatial("POINT (7 8)");
   auto elements =
       makeVarbinaryVector({wkb, std::string("not wkb at all"), wkb});
   auto offsets = makeIndices({0, 1, 2});
@@ -870,7 +1081,7 @@ TEST_F(IcebergGeometryReadTest, dictionaryWrappedArray) {
   auto dictionary = BaseVector::wrapInDictionary(nullptr, indices, 4, base);
 
   auto converted =
-      convertIcebergGeometry(dictionary, ARRAY(GEOMETRY()), pool(), "shapes");
+      convertIcebergGeospatial(dictionary, ARRAY(GEOMETRY()), pool(), "shapes");
   ASSERT_EQ(converted->encoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(converted->size(), 4);
   auto* convertedBase = converted->valueVector()->as<ArrayVector>();
@@ -882,7 +1093,7 @@ TEST_F(IcebergGeometryReadTest, dictionaryWrappedArray) {
 }
 
 TEST_F(
-    IcebergGeometryReadTest,
+    IcebergGeospatialReadTest,
     dictionaryOfGeometryLeafIgnoresUnreferencedEntries) {
   // Only the referenced dictionary entries are parsed, so a dictionary that
   // also holds non-WKB entries for other columns/batches does not break the
@@ -894,32 +1105,32 @@ TEST_F(
   auto dictionary = BaseVector::wrapInDictionary(nullptr, indices, 5, base);
 
   auto converted =
-      convertIcebergGeometry(dictionary, GEOMETRY(), pool(), "geom");
+      convertIcebergGeospatial(dictionary, GEOMETRY(), pool(), "geom");
   ASSERT_EQ(converted->encoding(), VectorEncoding::Simple::DICTIONARY);
   auto* out = converted->valueVector()->asFlatVector<StringView>();
-  EXPECT_EQ(out->valueAt(0).str(), toVeloxGeometry("POINT (3 4)"));
+  EXPECT_EQ(out->valueAt(0).str(), toVeloxGeospatial("POINT (3 4)"));
   EXPECT_TRUE(out->isNullAt(1));
-  EXPECT_EQ(out->valueAt(2).str(), toVeloxGeometry("POINT (3 4)"));
+  EXPECT_EQ(out->valueAt(2).str(), toVeloxGeospatial("POINT (3 4)"));
   EXPECT_TRUE(out->isNullAt(3));
 }
 
-TEST_F(IcebergGeometryReadTest, slicedGeometryVector) {
+TEST_F(IcebergGeospatialReadTest, slicedGeometryVector) {
   // A sliced (non-zero offset) input: only the slice's own positions are live.
   const auto wkb = toWkb("POINT (5 6)");
   auto full = makeVarbinaryVector(
       {std::string("garbage"), wkb, wkb, std::string("garbage")});
   auto sliced = full->slice(1, 2);
 
-  auto converted = convertIcebergGeometry(sliced, GEOMETRY(), pool(), "geom");
+  auto converted = convertIcebergGeospatial(sliced, GEOMETRY(), pool(), "geom");
   ASSERT_EQ(converted->size(), 2);
   DecodedVector decoded(*converted);
   EXPECT_EQ(
-      decoded.valueAt<StringView>(0).str(), toVeloxGeometry("POINT (5 6)"));
+      decoded.valueAt<StringView>(0).str(), toVeloxGeospatial("POINT (5 6)"));
   EXPECT_EQ(
-      decoded.valueAt<StringView>(1).str(), toVeloxGeometry("POINT (5 6)"));
+      decoded.valueAt<StringView>(1).str(), toVeloxGeospatial("POINT (5 6)"));
 }
 
-TEST_F(IcebergGeometryReadTest, mapWithGapsAndNestedNulls) {
+TEST_F(IcebergGeospatialReadTest, mapWithGapsAndNestedNulls) {
   // MAP keys and values are indexed by the same offsets/sizes; unreferenced
   // value slots must not be parsed and nested nulls must survive.
   const auto wkb = toWkb("POINT (9 9)");
@@ -939,20 +1150,20 @@ TEST_F(IcebergGeometryReadTest, mapWithGapsAndNestedNulls) {
       values);
 
   auto converted =
-      convertIcebergGeometry(input, MAP(VARCHAR(), GEOMETRY()), pool(), "m");
+      convertIcebergGeospatial(input, MAP(VARCHAR(), GEOMETRY()), pool(), "m");
   auto* map = converted->as<MapVector>();
   EXPECT_EQ(map->offsetAt(0), 1);
   EXPECT_EQ(map->sizeAt(0), 2);
   auto* out = map->mapValues()->asFlatVector<StringView>();
   EXPECT_TRUE(out->isNullAt(0));
-  EXPECT_EQ(out->valueAt(1).str(), toVeloxGeometry("POINT (9 9)"));
+  EXPECT_EQ(out->valueAt(1).str(), toVeloxGeospatial("POINT (9 9)"));
   EXPECT_TRUE(out->isNullAt(2));
   EXPECT_TRUE(out->isNullAt(3));
   // Keys are shared with the input, not rebuilt.
   EXPECT_EQ(map->mapKeys().get(), keys.get());
 }
 
-TEST_F(IcebergGeometryReadTest, rowWithNullsInsideArray) {
+TEST_F(IcebergGeospatialReadTest, rowWithNullsInsideArray) {
   // ARRAY(ROW(..., GEOMETRY)): the element rows are positional, and the array's
   // offsets still decide which of them are live.
   const auto wkb = toWkb("POINT (2 3)");
@@ -972,12 +1183,13 @@ TEST_F(IcebergGeometryReadTest, rowWithNullsInsideArray) {
       rowElements);
 
   auto targetType = ARRAY(ROW({"geom", "label"}, {GEOMETRY(), VARCHAR()}));
-  auto converted = convertIcebergGeometry(input, targetType, pool(), "shapes");
+  auto converted =
+      convertIcebergGeospatial(input, targetType, pool(), "shapes");
   auto* array = converted->as<ArrayVector>();
   auto* rows = array->elements()->as<RowVector>();
   auto* geom = rows->childAt(0)->asFlatVector<StringView>();
   EXPECT_TRUE(geom->isNullAt(0)); // unreferenced
-  EXPECT_EQ(geom->valueAt(1).str(), toVeloxGeometry("POINT (2 3)"));
+  EXPECT_EQ(geom->valueAt(1).str(), toVeloxGeospatial("POINT (2 3)"));
   EXPECT_TRUE(geom->isNullAt(2)); // referenced but null
 }
 
@@ -987,12 +1199,12 @@ TEST_F(IcebergGeometryReadTest, rowWithNullsInsideArray) {
 
 #ifdef VELOX_ENABLE_PARQUET
 
-TEST_F(IcebergGeometryReadTest, parquetGeometryColumn) {
+TEST_F(IcebergGeospatialReadTest, parquetGeometryColumn) {
   std::vector<std::optional<std::string>> wkb;
   std::vector<std::optional<std::string>> expected;
   for (const auto& wkt : kAllKinds) {
     wkb.emplace_back(toWkb(wkt));
-    expected.emplace_back(toVeloxGeometry(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
   }
   wkb.emplace_back(std::nullopt);
   expected.emplace_back(std::nullopt);
@@ -1027,7 +1239,7 @@ TEST_F(IcebergGeometryReadTest, parquetGeometryColumn) {
       {expectedVector});
 }
 
-TEST_F(IcebergGeometryReadTest, parquetGeometryAcrossBatchesAndDictionaries) {
+TEST_F(IcebergGeospatialReadTest, parquetGeometryAcrossBatchesAndDictionaries) {
   // Few distinct values repeated many times over several batches: the Parquet
   // writer dictionary encodes the column and the reader hands the same
   // dictionary to consecutive batches.
@@ -1038,7 +1250,7 @@ TEST_F(IcebergGeometryReadTest, parquetGeometryAcrossBatchesAndDictionaries) {
   std::vector<std::optional<std::string>> expectedCycle;
   for (const auto& wkt : kAllKinds) {
     wkbCycle.emplace_back(toWkb(wkt));
-    expectedCycle.emplace_back(toVeloxGeometry(wkt));
+    expectedCycle.emplace_back(toVeloxGeospatial(wkt));
   }
 
   std::vector<RowVectorPtr> data;
@@ -1069,7 +1281,57 @@ TEST_F(IcebergGeometryReadTest, parquetGeometryAcrossBatchesAndDictionaries) {
   assertScan(data, ROW({"id", "geom"}, {BIGINT(), GEOMETRY()}), expected);
 }
 
-TEST_F(IcebergGeometryReadTest, plainEncodedGeometryColumn) {
+TEST_F(IcebergGeospatialReadTest, parquetGeographyColumn) {
+  std::vector<std::optional<std::string>> wkb;
+  std::vector<std::optional<std::string>> expected;
+  for (const auto& wkt : kAllKinds) {
+    wkb.emplace_back(toWkb(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
+  }
+  wkb.emplace_back(std::nullopt);
+  expected.emplace_back(std::nullopt);
+  std::vector<int64_t> ids(wkb.size());
+  std::iota(ids.begin(), ids.end(), 0);
+
+  auto data = makeRowVector(
+      {"id", "geog"}, {makeFlatVector<int64_t>(ids), makeVarbinaryVector(wkb)});
+  auto expectedVector = makeRowVector(
+      {"id", "geog"},
+      {makeFlatVector<int64_t>(ids), makeGeographyVector(expected)});
+  assertScan(
+      {data},
+      ROW({"id", "geog"}, {BIGINT(), SPHERICAL_GEOGRAPHY()}),
+      {expectedVector});
+}
+
+// An out-of-range value in a data file fails the scan with the column and the
+// offending coordinate, rather than surfacing as a SPHERICALGEOGRAPHY.
+TEST_F(
+    IcebergGeospatialReadTest,
+    parquetGeographyWithInvalidCoordinatesFailsScan) {
+  auto data = makeRowVector(
+      {"id", "geog"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeVarbinaryVector({toWkb("POINT (1 2)"), toWkb("POINT (200 2)")})});
+  const auto outputDirectory = test::TempDirectoryPath::create();
+  const auto dataSink =
+      createDataSinkAndAppendData({data}, outputDirectory->getPath());
+  dataSink->close();
+
+  auto plan =
+      exec::test::PlanBuilder()
+          .startTableScan(test::kIcebergConnectorId)
+          .outputType(ROW({"id", "geog"}, {BIGINT(), SPHERICAL_GEOGRAPHY()}))
+          .endTableScan()
+          .planNode();
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan)
+          .splits(createSplitsForDirectory(outputDirectory->getPath()))
+          .copyResults(pool()),
+      "Invalid value in Iceberg geography column 'geog': Longitude must be between -180 and 180; found 200");
+}
+
+TEST_F(IcebergGeospatialReadTest, plainEncodedGeometryColumn) {
   // Distinct, long values so the Parquet writer falls back to plain encoding.
   std::vector<std::optional<std::string>> wkb;
   std::vector<std::optional<std::string>> expected;
@@ -1084,7 +1346,7 @@ TEST_F(IcebergGeometryReadTest, plainEncodedGeometryColumn) {
     }
     wkt << ")";
     wkb.emplace_back(toWkb(wkt.str()));
-    expected.emplace_back(toVeloxGeometry(wkt.str()));
+    expected.emplace_back(toVeloxGeospatial(wkt.str()));
   }
 
   auto data = makeRowVector({"geom"}, {makeVarbinaryVector(wkb)});
@@ -1092,7 +1354,7 @@ TEST_F(IcebergGeometryReadTest, plainEncodedGeometryColumn) {
   assertScan({data}, ROW({"geom"}, {GEOMETRY()}), {expectedVector});
 }
 
-TEST_F(IcebergGeometryReadTest, genericBinaryColumnIsNotDecoded) {
+TEST_F(IcebergGeospatialReadTest, genericBinaryColumnIsNotDecoded) {
   // Same bytes, but the query asks for VARBINARY: the Iceberg schema does not
   // say geometry, so nothing is parsed and the bytes are returned verbatim.
   std::vector<std::optional<std::string>> wkb;
@@ -1103,19 +1365,19 @@ TEST_F(IcebergGeometryReadTest, genericBinaryColumnIsNotDecoded) {
   assertScan({data}, ROW({"payload"}, {VARBINARY()}), {data});
 }
 
-TEST_F(IcebergGeometryReadTest, veloxInternalGeometryBytesAreNotReparsed) {
+TEST_F(IcebergGeospatialReadTest, veloxInternalGeometryBytesAreNotReparsed) {
   // A column holding Velox's *internal* geometry encoding (as a file written
   // from an existing GEOMETRY vector would) is not WKB. Read as VARBINARY it
   // must come back byte-identical; nothing may attempt to parse it.
   std::vector<std::optional<std::string>> internalBytes;
   for (const auto& wkt : kAllKinds) {
-    internalBytes.emplace_back(toVeloxGeometry(wkt));
+    internalBytes.emplace_back(toVeloxGeospatial(wkt));
   }
   auto data = makeRowVector({"payload"}, {makeVarbinaryVector(internalBytes)});
   assertScan({data}, ROW({"payload"}, {VARBINARY()}), {data});
 }
 
-TEST_F(IcebergGeometryReadTest, hiveConnectorDoesNotConvert) {
+TEST_F(IcebergGeospatialReadTest, hiveConnectorDoesNotConvert) {
   // The critical negative case: the generic Parquet reader must not decode WKB
   // just because the requested type is GEOMETRY. Only the Iceberg connector
   // converts, so the same file scanned through the Hive connector returns the
@@ -1151,7 +1413,7 @@ TEST_F(IcebergGeometryReadTest, hiveConnectorDoesNotConvert) {
   }
 }
 
-TEST_F(IcebergGeometryReadTest, geometryParquetFileWrittenByAnotherEngine) {
+TEST_F(IcebergGeospatialReadTest, geometryParquetFileWrittenByAnotherEngine) {
   // A real Iceberg v3 data file produced outside Velox: a single `binary`
   // column carrying the GEOMETRY logical annotation and ISO WKB payloads.
   // Reading it as GEOMETRY must yield Velox's internal encoding for each shape.
@@ -1168,7 +1430,7 @@ TEST_F(IcebergGeometryReadTest, geometryParquetFileWrittenByAnotherEngine) {
 
   std::vector<std::optional<std::string>> expected;
   for (const auto& wkt : fileContents) {
-    expected.emplace_back(toVeloxGeometry(wkt));
+    expected.emplace_back(toVeloxGeospatial(wkt));
   }
 
   auto plan = exec::test::PlanBuilder()
@@ -1181,7 +1443,45 @@ TEST_F(IcebergGeometryReadTest, geometryParquetFileWrittenByAnotherEngine) {
       .assertResults(makeRowVector({"geom"}, {makeGeometryVector(expected)}));
 }
 
-TEST_F(IcebergGeometryReadTest, tableWithoutGeometryIsUntouched) {
+TEST_F(IcebergGeospatialReadTest, geographyParquetFileWrittenByAnotherEngine) {
+  // An Iceberg v3 geography data file written by parquet-java 1.16.0 as
+  // Presto's Java writer does: a `binary` column with field id 1 carrying the
+  // GEOGRAPHY logical annotation (default CRS and algorithm) and ISO WKB
+  // payloads. Velox's Parquet thrift schema does not define that annotation, so
+  // this also covers a reader that must skip it.
+  auto path = facebook::velox::test::getDataFilePath(
+      "velox/connectors/hive/iceberg/tests", "examples/geography.parquet");
+
+  const std::vector<std::optional<std::string>> fileContents = {
+      "POINT (-122.4194 37.7749)",
+      "LINESTRING (-122.4194 37.7749, -118.2437 34.0522)",
+      "POLYGON ((-10 -10, 10 -10, 10 10, -10 10, -10 -10))",
+      "MULTIPOINT ((0 0), (180 90), (-180 -90))",
+      "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
+      "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))",
+      "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))",
+      "POINT EMPTY",
+      std::nullopt,
+  };
+
+  std::vector<std::optional<std::string>> expected;
+  for (const auto& wkt : fileContents) {
+    expected.emplace_back(
+        wkt.has_value() ? std::optional(toVeloxGeospatial(*wkt))
+                        : std::nullopt);
+  }
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"geog"}, {SPHERICAL_GEOGRAPHY()}))
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(path))
+      .assertResults(makeRowVector({"geog"}, {makeGeographyVector(expected)}));
+}
+
+TEST_F(IcebergGeospatialReadTest, tableWithoutGeospatialIsUntouched) {
   auto data = makeRowVector(
       {"id", "name", "payload"},
       {makeFlatVector<int64_t>({1, 2, 3}),
@@ -1194,7 +1494,7 @@ TEST_F(IcebergGeometryReadTest, tableWithoutGeometryIsUntouched) {
       {data});
 }
 
-TEST_F(IcebergGeometryReadTest, nonParquetGeometryIsRejected) {
+TEST_F(IcebergGeospatialReadTest, nonParquetGeometryIsRejected) {
   // Iceberg also maps geometry onto ORC/DWRF binary, and the converter is
   // format-agnostic, but only the Parquet path has a fixture. Refuse the rest
   // instead of returning unverified values.
@@ -1213,7 +1513,7 @@ TEST_F(IcebergGeometryReadTest, nonParquetGeometryIsRejected) {
       exec::test::AssertQueryBuilder(plan)
           .splits(makeIcebergSplits(filePath->getPath()))
           .copyResults(pool()),
-      "Reading Iceberg geometry columns is only supported for Parquet files");
+      "Reading Iceberg geometry or geography columns is only supported for Parquet files");
 }
 
 // Geometry support is read-only. The reader re-encodes the file's ISO WKB into
@@ -1224,23 +1524,34 @@ TEST_F(IcebergGeometryReadTest, nonParquetGeometryIsRejected) {
 // The sink rejects the write instead. Once the writer converts internal -> WKB,
 // this test should be replaced by a GEOMETRY vector -> write -> read round
 // trip.
-TEST_F(IcebergGeometryReadTest, writingGeometryIsRejected) {
+TEST_F(IcebergGeospatialReadTest, writingGeospatialIsRejected) {
   const auto outputDirectory = test::TempDirectoryPath::create();
 
   VELOX_ASSERT_THROW(
       createDataSink(ROW({"geom"}, {GEOMETRY()}), outputDirectory->getPath()),
-      "Writing an Iceberg geometry column is not supported");
+      "Writing an Iceberg geometry or geography column is not supported");
 
   // Nested geometry is rejected on the same grounds.
   VELOX_ASSERT_THROW(
       createDataSink(
           ROW({"r"}, {ROW({"geom"}, {GEOMETRY()})}),
           outputDirectory->getPath()),
-      "Writing an Iceberg geometry column is not supported");
+      "Writing an Iceberg geometry or geography column is not supported");
   VELOX_ASSERT_THROW(
       createDataSink(
           ROW({"a"}, {ARRAY(GEOMETRY())}), outputDirectory->getPath()),
-      "Writing an Iceberg geometry column is not supported");
+      "Writing an Iceberg geometry or geography column is not supported");
+
+  // Geography is rejected on the same grounds, at any depth.
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"geog"}, {SPHERICAL_GEOGRAPHY()}), outputDirectory->getPath()),
+      "Writing an Iceberg geometry or geography column is not supported");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"m"}, {MAP(VARCHAR(), SPHERICAL_GEOGRAPHY())}),
+          outputDirectory->getPath()),
+      "Writing an Iceberg geometry or geography column is not supported");
 
   // A geometry-free schema still writes.
   EXPECT_NO_THROW(createDataSink(

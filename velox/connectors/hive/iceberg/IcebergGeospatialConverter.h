@@ -18,6 +18,7 @@
 #include <string>
 
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -31,13 +32,20 @@
 /// encoding produced by `common::geospatial::GeometrySerializer`, so the bytes
 /// must be re-encoded exactly once on read.
 ///
+/// An Iceberg `geography` column (Parquet: `binary` with the `GEOGRAPHY`
+/// logical type) holds the same ISO WKB and maps to SPHERICAL_GEOGRAPHY(),
+/// which shares the GEOMETRY() encoding. The re-encoding is therefore the same,
+/// plus the coordinate validation Presto's `to_spherical_geography` applies:
+/// Iceberg geography coordinates are WGS84 longitude/latitude, and a file
+/// written by another engine may hold values Presto could never construct.
+///
 /// Conversion ownership: the Iceberg connector owns this conversion, and only
 /// the Iceberg connector performs it. `IcebergSplitReader` resolves the
 /// affected output channels once per split from the Iceberg-derived reader
-/// output type and calls `convertIcebergGeometry` on those channels alone. The
-/// format-generic readers (`velox/dwio/parquet`, `velox/dwio/dwrf`, ...) have
-/// no knowledge of GEOMETRY: they read the column by its physical file type,
-/// which is VARBINARY. Consequently
+/// output type and calls `convertIcebergGeospatial` on those channels alone.
+/// The format-generic readers (`velox/dwio/parquet`, `velox/dwio/dwrf`, ...)
+/// have no knowledge of GEOMETRY: they read the column by its physical file
+/// type, which is VARBINARY. Consequently
 ///   * an unannotated Parquet/ORC `binary` column is never reinterpreted as
 ///   WKB,
 ///   * a Hive (non-Iceberg) table is never converted, even if the query type is
@@ -48,25 +56,33 @@
 ///   * Gluten/Spark Parquet reads are byte-for-byte unaffected.
 namespace facebook::velox::connector::hive::iceberg {
 
-/// True when 'type' is GEOMETRY() or transitively contains it. Cheap and used
-/// to decide, once per split, whether any conversion work is needed at all.
+/// True when 'type' is an Iceberg geospatial type, i.e. GEOMETRY() or
+/// SPHERICAL_GEOGRAPHY().
+inline bool isGeospatialType(const TypePtr& type) {
+  return isGeometryType(type) || isSphericalGeographyType(type);
+}
+
+/// True when 'type' is a geospatial type or transitively contains one, i.e.
+/// when the file bytes of a column of this type are, somewhere, WKB. Cheap and
+/// used to decide, once per split, whether any conversion work is needed at
+/// all.
 ///
-/// Defined inline here rather than in IcebergGeometryConverter.cpp on purpose:
-/// that translation unit is only compiled when VELOX_ENABLE_GEO is ON (see
-/// CMakeLists.txt), whereas this predicate is called from two places that are
-/// compiled in both configurations -- IcebergSplitReader::prepareSplit(), which
-/// needs it to detect a geometry column and fail with a clear message in a
-/// geospatial-free build, and the IcebergDataSink constructor's write guard.
-/// Moving the body to the .cpp would leave both of those with an undefined
-/// reference when linking a VELOX_ENABLE_GEO=OFF build. The function is a pure
-/// type predicate with no GEOS dependency, so keeping it in the header costs
-/// nothing.
-inline bool containsGeometry(const TypePtr& type) {
-  if (isGeometryType(type)) {
+/// Defined inline here rather than in IcebergGeospatialConverter.cpp on
+/// purpose: that translation unit is only compiled when VELOX_ENABLE_GEO is ON
+/// (see CMakeLists.txt), whereas this predicate is called from places that are
+/// compiled in both configurations -- IcebergSplitReader::prepareSplit() and
+/// EqualityDeleteFileReader, which need it to detect a geospatial column and
+/// fail with a clear message in a geospatial-free build, and the
+/// IcebergDataSink constructor's write guard. Moving the body to the .cpp
+/// would leave those with an undefined reference when linking a
+/// VELOX_ENABLE_GEO=OFF build. The function is a pure type predicate with no
+/// GEOS dependency, so keeping it in the header costs nothing.
+inline bool containsGeospatial(const TypePtr& type) {
+  if (isGeospatialType(type)) {
     return true;
   }
   for (auto i = 0; i < type->size(); ++i) {
-    if (containsGeometry(type->childAt(i))) {
+    if (containsGeospatial(type->childAt(i))) {
       return true;
     }
   }
@@ -75,7 +91,7 @@ inline bool containsGeometry(const TypePtr& type) {
 
 /// Re-encodes the Iceberg WKB payload of 'input' into Velox's internal geometry
 /// encoding and returns a vector whose type is 'targetType' (i.e. carries
-/// GEOMETRY() at the geometry positions).
+/// GEOMETRY() or SPHERICAL_GEOGRAPHY() at the geospatial positions).
 ///
 /// 'input' holds the bytes as read from the file: a VARBINARY-typed scalar
 /// vector for a top-level geometry column, or a ROW/ARRAY/MAP whose leaves are
@@ -90,7 +106,8 @@ inline bool containsGeometry(const TypePtr& type) {
 /// position is live, which is what a table scan output is.
 ///
 /// Encodings are preserved where that is safe and cheaper:
-///   * FLAT      -> a new flat GEOMETRY vector; nulls are preserved.
+///   * FLAT      -> a new flat GEOMETRY or SPHERICAL_GEOGRAPHY vector; nulls
+///                  are preserved.
 ///   * DICTIONARY-> the referenced dictionary values are converted once into a
 ///   *new* dictionary (the
 ///                  shared Parquet dictionary is never mutated) and the
@@ -112,8 +129,10 @@ inline bool containsGeometry(const TypePtr& type) {
 /// Throws a user error when a live value is not WKB, when it uses Z/M
 /// coordinates or EWKB (which Velox's two-dimensional GEOMETRY cannot
 /// represent), or when the geometry kind is unsupported. Dimensions are never
-/// silently dropped.
-VectorPtr convertIcebergGeometry(
+/// silently dropped. For SPHERICAL_GEOGRAPHY() it also throws when a
+/// non-empty value has a longitude outside [-180, 180] or a latitude outside
+/// [-90, 90], including NaN and infinite coordinates.
+VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     const SelectivityVector& rows,
@@ -122,7 +141,7 @@ VectorPtr convertIcebergGeometry(
 
 /// Convenience overload for the table-scan case, where every position of
 /// 'input' is live.
-VectorPtr convertIcebergGeometry(
+VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     memory::MemoryPool* pool,
