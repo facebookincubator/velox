@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/text/reader/TextFieldParser.h"
+#include "velox/common/text/TextFieldParser.h"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <cctype>
@@ -26,20 +26,22 @@
 namespace facebook::velox::text {
 
 namespace {
-// Null-terminates `field` into either `stackBuf` (for short fields) or
-// `heapBuf` (for longer fields), and returns a pointer to the
+constexpr size_t kStackBufferSize{64};
+
+// Null-terminates `field` into either `stackBuffer` (for short fields) or
+// `heapBuffer` (for longer fields), and returns a pointer to the
 // null-terminated data suitable for sscanf.
 const char* nullTerminate(
     std::string_view field,
-    char (&stackBuf)[TextFieldParser::kStackBufSize],
-    std::string& heapBuf) {
-  if (field.size() < TextFieldParser::kStackBufSize) {
-    std::memcpy(stackBuf, field.data(), field.size());
-    stackBuf[field.size()] = '\0';
-    return stackBuf;
+    char (&stackBuffer)[kStackBufferSize],
+    std::string& heapBuffer) {
+  if (field.size() < kStackBufferSize) {
+    std::memcpy(stackBuffer, field.data(), field.size());
+    stackBuffer[field.size()] = '\0';
+    return stackBuffer;
   }
-  heapBuf.assign(field.data(), field.size());
-  return heapBuf.c_str();
+  heapBuffer.assign(field.data(), field.size());
+  return heapBuffer.c_str();
 }
 } // namespace
 
@@ -54,28 +56,30 @@ std::optional<int64_t> TextFieldParser::parseInt64(
     return std::nullopt;
   }
 
-  char stackBuf[kStackBufSize];
-  std::string heapBuf;
-  const char* cstr = nullTerminate(field, stackBuf, heapBuf);
+  char stackBuffer[kStackBufferSize];
+  std::string heapBuffer;
+  const char* nullTerminatedField =
+      nullTerminate(field, stackBuffer, heapBuffer);
 
   int64_t value{0};
-  long long scanPos{0};
+  long long scanPosition{0};
   errno = 0;
-  const int scanCount = std::sscanf(cstr, "%" SCNd64 "%lln", &value, &scanPos);
+  const int scanCount = std::sscanf(
+      nullTerminatedField, "%" SCNd64 "%lln", &value, &scanPosition);
   if (scanCount != 1 || errno == ERANGE) {
     return std::nullopt;
   }
 
-  if (static_cast<size_t>(scanPos) < field.size()) {
+  if (static_cast<size_t>(scanPosition) < field.size()) {
     if (!allowTrailingDecimal) {
       return std::nullopt;
     }
-    for (size_t i = static_cast<size_t>(scanPos); i < field.size(); ++i) {
-      const char c = cstr[i];
-      if (i == static_cast<size_t>(scanPos) && c == '.') {
+    for (size_t i = static_cast<size_t>(scanPosition); i < field.size(); ++i) {
+      const char character = nullTerminatedField[i];
+      if (i == static_cast<size_t>(scanPosition) && character == '.') {
         continue;
       }
-      if (c >= '0' && c <= '9') {
+      if (character >= '0' && character <= '9') {
         continue;
       }
       return std::nullopt;

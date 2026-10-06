@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/FromCsv.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -23,11 +24,13 @@
 #include <vector>
 
 #include <fast_float/fast_float.h>
+#include <folly/Conv.h>
 
-#include "velox/dwio/text/reader/TextFieldParser.h"
+#include "velox/common/text/TextFieldParser.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -38,21 +41,18 @@ namespace {
 // Maximum CSV input line size (10 MB) to prevent DoS from unbounded allocation.
 constexpr size_t kMaxCsvLineSize = 10 * 1024 * 1024;
 
-// Trims leading and trailing ASCII CSV whitespace (space, tab, CR, LF).
-// Used for the per-type REAL/DOUBLE trim path (Java's parseFloat/parseDouble
-// accept surrounding whitespace).
+// Trims leading and trailing code units from U+0000 through U+0020, matching
+// the Java String.trim semantics used by Float.parseFloat and
+// Double.parseDouble.
 // Integer, boolean, decimal, VARCHAR, and VARBINARY fields are NOT trimmed.
-std::string_view trimWhitespace(std::string_view input) {
+std::string_view trimJavaWhitespace(std::string_view input) {
   size_t start{0};
   while (start < input.size() &&
-         (input[start] == ' ' || input[start] == '\t' || input[start] == '\r' ||
-          input[start] == '\n')) {
+         static_cast<unsigned char>(input[start]) <= 0x20) {
     ++start;
   }
   size_t end{input.size()};
-  while (end > start &&
-         (input[end - 1] == ' ' || input[end - 1] == '\t' ||
-          input[end - 1] == '\r' || input[end - 1] == '\n')) {
+  while (end > start && static_cast<unsigned char>(input[end - 1]) <= 0x20) {
     --end;
   }
   return input.substr(start, end - start);
@@ -62,39 +62,34 @@ std::string_view trimWhitespace(std::string_view input) {
 // signature small and makes it clear which state is meant to be recycled
 // across rows to avoid per-row allocation.
 //
-// - `fields`: parsed field values.
-// - `fieldWasQuoted`: parallel to `fields` (same size), 1 if the field was
-//   successfully parsed as a properly-closed quoted CSV token, 0 for
-//   unquoted fields or literal-fallback fields from malformed quotes. This
-//   distinction is required for correct `nullValue` handling: Spark's
-//   `from_csv` `nullValue` (default "") matches only unquoted-empty tokens,
-//   so quoted-empty `""` must produce an empty string rather than NULL.
-//   `vector<char>` (not `vector<bool>`) is used to avoid the proxy-reference
-//   specialization and keep pointer/index semantics identical to `fields`.
-// - `quotedContent`: scratch buffer used while building the value of a
-//   quoted field. Reused across rows and across fields within a row.
+// - `fields`: parsed field values as views. Unquoted fields point directly
+//   into the input line. Every field that starts with a quote (closed,
+//   unclosed, or malformed fallback) points into `quotedArena`.
+// - `quotedArena`: owns processed bytes for quoted fields. Each field adds no
+//   more bytes than its raw input span; the malformed fallback is exactly
+//   tight because it re-emits the opening quote that was not copied earlier.
+//   Reserving the line length therefore prevents mid-row reallocation and
+//   keeps all views stable until the next `splitCsvLine` call.
 struct SplitCsvBuffers {
-  std::vector<std::string> fields;
-  std::vector<char> fieldWasQuoted;
-  std::string quotedContent;
+  std::vector<std::string_view> fields;
+  std::string quotedArena;
 };
 
 // Splits a single CSV line into fields, handling quoted fields.
 // Follows Spark's CSV parsing rules (Univocity defaults):
 // - Fields may be enclosed in double quotes.
-// - Inside a quoted field, the escape character (backslash '\' by Spark
-//   default) followed by a quote emits a literal quote. Doubled quotes ("")
-//   also emit a literal quote (RFC 4180 compatibility, matching Univocity's
-//   default quoteEscape == quote). Pass '\0' as `escape` to disable.
+// - Inside a quoted field, Spark's default backslash escape decodes \" and
+//   \\. In a run of N quotes, N-1 quotes are emitted and the last quote is
+//   considered as a possible closing quote. Pass '\0' as `escape` to disable.
 // - Unquoted fields are taken as-is.
 // - unescapedQuoteHandling=STOP_AT_DELIMITER: after the closing quote,
 //   only ASCII whitespace may appear before the next delimiter. Any other
-//   trailing characters cause the entire field — from the opening quote
-//   up to the next delimiter — to be taken as literal text.
+//   trailing characters produce the opening quote, already-decoded quoted
+//   content, and the raw remainder up to the next delimiter.
 // maxFields: stop parsing once this many fields are produced (0 = unlimited).
-// buffers: reusable per-row state. `fields` and `fieldWasQuoted` are cleared
-//   at function entry; `quotedContent` is cleared lazily on entry to each
-//   quoted-field branch (so callers do not need to reset it between rows).
+// buffers: reusable per-row state. `fields` and `quotedArena` are cleared at
+//   function entry; `quotedArena` is reserved to the line length so callers do
+//   not need to reset it between rows.
 void splitCsvLine(
     std::string_view line,
     char delimiter,
@@ -102,17 +97,18 @@ void splitCsvLine(
     size_t maxFields,
     SplitCsvBuffers& buffers) {
   auto& fields = buffers.fields;
-  auto& fieldWasQuoted = buffers.fieldWasQuoted;
-  auto& quotedContent = buffers.quotedContent;
+  auto& quotedArena = buffers.quotedArena;
   fields.clear();
-  fieldWasQuoted.clear();
+  quotedArena.clear();
+  // Each quoted field contributes at most its raw span, so one line-sized
+  // reservation keeps every arena-backed view stable for the row.
+  quotedArena.reserve(line.size());
   VELOX_DCHECK_LE(
       line.size(),
       kMaxCsvLineSize,
       "splitCsvLine called with oversized input — caller should guard.");
   if (maxFields > 0) {
     fields.reserve(maxFields);
-    fieldWasQuoted.reserve(maxFields);
   }
   size_t i{0};
   bool trailingDelimiter{false};
@@ -123,85 +119,90 @@ void splitCsvLine(
     }
     trailingDelimiter = false;
     if (line[i] == '"') {
-      // Quoted field: build content, handling escaped quotes.
-      // Spark's default unescapedQuoteHandling=STOP_AT_DELIMITER: if the
-      // quote is not properly closed before EOL, treat it as literal text
-      // and re-parse from the opening quote as an unquoted field.
-      quotedContent.clear();
+      // Quoted field using Spark's fixed Univocity defaults: quote='"',
+      // escape='\\', escapeEscape='\\', and STOP_AT_DELIMITER.
+      const size_t quotedStart = quotedArena.size();
       size_t j = i + 1;
       bool closedProperly{false};
+      bool literalFallback{false};
       while (j < line.size()) {
-        if (escape != '\0' && line[j] == escape && j + 1 < line.size() &&
-            line[j + 1] == '"') {
-          // Escape char followed by quote — emit a literal quote.
-          quotedContent.push_back('"');
-          j += 2;
-        } else if (line[j] == '"') {
-          if (j + 1 < line.size() && line[j + 1] == '"') {
-            // Doubled quote — emit a single quote (RFC 4180).
-            quotedContent.push_back('"');
+        if (escape != '\0' && line[j] == escape) {
+          if (j + 1 < line.size() &&
+              (line[j + 1] == escape || line[j + 1] == '"')) {
+            quotedArena.push_back(line[j + 1]);
             j += 2;
+          } else if (j + 1 == line.size()) {
+            ++j;
           } else {
-            // End of quoted field.
+            quotedArena.push_back(line[j]);
+            ++j;
+          }
+        } else if (line[j] != '"') {
+          quotedArena.push_back(line[j]);
+          ++j;
+        } else {
+          // With Spark's default escape='\\', a doubled quote emits one quote,
+          // while the second quote remains the candidate closing quote.
+          while (j + 1 < line.size() && line[j + 1] == '"') {
+            quotedArena.push_back('"');
+            ++j;
+          }
+
+          const size_t afterQuote = j + 1;
+          size_t k = afterQuote;
+          while (k < line.size() &&
+                 static_cast<unsigned char>(line[k]) <= ' ' &&
+                 line[k] != delimiter) {
+            ++k;
+          }
+          if (k == line.size() || line[k] == delimiter) {
             closedProperly = true;
+            j = k;
             break;
           }
-        } else {
-          quotedContent.push_back(line[j]);
-          ++j;
+
+          // An unescaped quote followed by non-whitespace is retained
+          // literally, together with the opening quote and all content through
+          // the next delimiter.
+          size_t end = k;
+          while (end < line.size() && line[end] != delimiter) {
+            ++end;
+          }
+          quotedArena.push_back('"');
+          quotedArena.append(line.data() + afterQuote, end - afterQuote);
+          quotedArena.push_back('"');
+          std::rotate(
+              quotedArena.begin() + quotedStart,
+              quotedArena.end() - 1,
+              quotedArena.end());
+          fields.push_back(std::string_view(quotedArena).substr(quotedStart));
+          i = end;
+          if (i < line.size()) {
+            ++i;
+            trailingDelimiter = true;
+          }
+          literalFallback = true;
+          break;
         }
       }
+      if (literalFallback) {
+        continue;
+      }
       if (!closedProperly) {
-        // Unclosed quote: Spark's UnivocityParser strips the opening quote
-        // and returns the rest as the field value. Skip past the opening
-        // quote character (at position i) and take the remainder up to the
-        // next delimiter.
-        size_t start = i + 1; // skip opening quote
-        i = start;
-        while (i < line.size() && line[i] != delimiter) {
-          ++i;
+        // At EOF, Univocity returns the processed field content. A bare
+        // opening quote is retained as a literal quote.
+        if (i + 1 == line.size()) {
+          quotedArena.push_back('"');
         }
-        fields.emplace_back(line.substr(start, i - start));
-        fieldWasQuoted.push_back(0);
-        if (i < line.size()) {
-          ++i; // skip delimiter
+        fields.push_back(std::string_view(quotedArena).substr(quotedStart));
+        i = line.size();
+      } else {
+        fields.push_back(std::string_view(quotedArena).substr(quotedStart));
+        if (j < line.size()) {
+          ++j; // Skip delimiter.
           trailingDelimiter = true;
         }
-      } else {
-        // Advance past closing quote.
-        ++j;
-        // Spark/Univocity default unescapedQuoteHandling=STOP_AT_DELIMITER:
-        // skip ASCII whitespace (chars <= ' ') between the closing quote and
-        // the next delimiter. If the next non-whitespace character is the
-        // delimiter or end of line, accept the parsed quoted content.
-        // Otherwise, treat the entire field — from the opening quote up to
-        // the next delimiter — as literal text.
-        size_t k = j;
-        while (k < line.size() && static_cast<unsigned char>(line[k]) <= ' ' &&
-               line[k] != delimiter) {
-          ++k;
-        }
-        if (k == line.size() || line[k] == delimiter) {
-          fields.push_back(std::move(quotedContent));
-          fieldWasQuoted.push_back(1);
-          if (k < line.size()) {
-            ++k; // Skip delimiter.
-            trailingDelimiter = true;
-          }
-          i = k;
-        } else {
-          // Garbage after close — fall back to literal from opening quote.
-          size_t start = i;
-          while (i < line.size() && line[i] != delimiter) {
-            ++i;
-          }
-          fields.emplace_back(line.substr(start, i - start));
-          fieldWasQuoted.push_back(0);
-          if (i < line.size()) {
-            ++i; // Skip delimiter.
-            trailingDelimiter = true;
-          }
-        }
+        i = j;
       }
     } else {
       // Unquoted field.
@@ -209,8 +210,7 @@ void splitCsvLine(
       while (i < line.size() && line[i] != delimiter) {
         ++i;
       }
-      fields.emplace_back(line.substr(start, i - start));
-      fieldWasQuoted.push_back(0);
+      fields.push_back(line.substr(start, i - start));
       if (i < line.size()) {
         ++i; // skip delimiter
         trailingDelimiter = true;
@@ -221,8 +221,7 @@ void splitCsvLine(
   // An empty input line also produces one empty field.
   if ((trailingDelimiter || line.empty()) &&
       (maxFields == 0 || fields.size() < maxFields)) {
-    fields.emplace_back();
-    fieldWasQuoted.push_back(0);
+    fields.push_back(std::string_view{});
   }
 }
 
@@ -240,8 +239,8 @@ std::string_view stripLeadingPlus(std::string_view input) {
   return input;
 }
 
-// Checks if a numeric string starts with hex prefix (0x/0X), optionally after
-// a sign character. Java's Integer.parseInt and Double.parseDouble reject hex.
+// Checks if a numeric string starts with a hex prefix (0x/0X), optionally
+// after a sign character.
 bool hasHexPrefix(std::string_view input) {
   if (input.size() >= 2 && input[0] == '0' &&
       (input[1] == 'x' || input[1] == 'X')) {
@@ -267,12 +266,12 @@ bool parseInt(std::string_view input, T& out) {
   if (input.empty()) {
     return false;
   }
-  auto numStr = stripLeadingPlus(input);
-  if (numStr.empty()) {
+  auto numericString = stripLeadingPlus(input);
+  if (numericString.empty()) {
     return false;
   }
   auto parsed = ::facebook::velox::text::TextFieldParser::parseNarrowInteger<T>(
-      numStr, /*allowTrailingDecimal=*/false);
+      numericString, /*allowTrailingDecimal=*/false);
   if (!parsed.has_value()) {
     return false;
   }
@@ -280,10 +279,10 @@ bool parseInt(std::string_view input, T& out) {
   return true;
 }
 
-// Parses a floating-point string matching Spark/Java semantics.
-// Accepts: decimal notation, "NaN" (exact), "Infinity"/"-Infinity"/"+Infinity",
-//          "Inf"/"-Inf" (Spark CSV defaults: positiveInf="Inf",
-//          negativeInf="-Inf").
+// Parses the supported Spark/Java floating-point formats.
+// Accepts: decimal notation, "NaN"/"+NaN"/"-NaN",
+//          "Infinity"/"-Infinity"/"+Infinity", "Inf"/"-Inf" (Spark CSV
+//          defaults: positiveInf="Inf", negativeInf="-Inf").
 // Rejects: hex floats (0x...), case-insensitive nan/inf variants.
 // Overflow returns ±Infinity (matching Java's parseDouble("1e400") = Infinity).
 //
@@ -292,147 +291,285 @@ bool parseInt(std::string_view input, T& out) {
 // nan/inf via boost::iequals) is reconciled with Spark's case-sensitive,
 // Java-style overflow→±Inf / underflow→±0 semantics.
 
-// Classification of what `fast_float::from_chars` overflow means for a given
-// input, per Java's Float.parseFloat / Double.parseDouble semantics:
-//   - kPositiveInfinity: magnitude too large, positive sign (e.g. "1e400").
-//   - kNegativeInfinity: magnitude too large, negative sign (e.g. "-1e400").
-//   - kPositiveZero: magnitude too small (underflow), positive sign.
-//   - kNegativeZero: magnitude too small (underflow), negative sign.
-enum class FloatOverflow {
-  kPositiveInfinity,
-  kNegativeInfinity,
-  kPositiveZero,
-  kNegativeZero,
-};
-
-// Determines which of the four Java overflow outcomes `numStr` maps to when
-// `fast_float::from_chars` reports `result_out_of_range`. Called only after
-// preprocessing has stripped leading '+' and type-suffix, so `numStr` is a
-// canonical decimal (possibly with exponent) beginning with '-' or a digit.
-FloatOverflow classifyFloatOverflow(std::string_view numStr) {
-  const bool negative = !numStr.empty() && numStr[0] == '-';
-
-  // Explicit "e-" / "E-" exponent → underflow to zero.
-  for (size_t k{0}; k < numStr.size(); ++k) {
-    const char c = numStr[k];
-    if (c == 'e' || c == 'E') {
-      const bool negativeExponent =
-          (k + 1 < numStr.size() && numStr[k + 1] == '-');
-      if (negativeExponent) {
-        return negative ? FloatOverflow::kNegativeZero
-                        : FloatOverflow::kPositiveZero;
-      }
-      return negative ? FloatOverflow::kNegativeInfinity
-                      : FloatOverflow::kPositiveInfinity;
-    }
-  }
-
-  // No exponent notation: distinguish "0.000...0001" (underflow, |x| < 1)
-  // from "999...999" (overflow, |x| >= 1) by looking at leading zeros and
-  // the position of the decimal point.
-  std::string_view absStr = numStr;
-  if (negative) {
-    absStr.remove_prefix(1);
-  }
-  size_t i{0};
-  while (i < absStr.size() && absStr[i] == '0') {
-    ++i;
-  }
-  const bool magnitudeBelowOne = !absStr.empty() &&
-      (absStr[0] == '.' || (i > 0 && i < absStr.size() && absStr[i] == '.') ||
-       i == absStr.size());
-  if (magnitudeBelowOne) {
-    return negative ? FloatOverflow::kNegativeZero
-                    : FloatOverflow::kPositiveZero;
-  }
-  return negative ? FloatOverflow::kNegativeInfinity
-                  : FloatOverflow::kPositiveInfinity;
-}
-
-template <typename T>
-T floatOverflowValue(FloatOverflow overflow) {
-  switch (overflow) {
-    case FloatOverflow::kPositiveInfinity:
-      return std::numeric_limits<T>::infinity();
-    case FloatOverflow::kNegativeInfinity:
-      return -std::numeric_limits<T>::infinity();
-    case FloatOverflow::kPositiveZero:
-      return T(0);
-    case FloatOverflow::kNegativeZero:
-      return T(-0.0);
-  }
-  VELOX_UNREACHABLE();
-}
-
 template <typename T>
 bool parseFloat(std::string_view input, T& out) {
   if (input.empty()) {
     return false;
   }
-  // Match Spark: exact "NaN" only (Java's parseDouble("NaN") returns NaN).
-  if (input == "NaN") {
-    out = std::numeric_limits<T>::quiet_NaN();
-    return true;
-  }
-  // Match Spark CSV defaults: positiveInf="Inf", negativeInf="-Inf".
-  // Also accept "Infinity"/"+Infinity"/"-Infinity" per Java's parseDouble.
-  if (input == "Infinity" || input == "+Infinity" || input == "Inf") {
+
+  // Match Spark CSV's short infinity sentinels against the untrimmed token.
+  if (input == "Inf") {
     out = std::numeric_limits<T>::infinity();
     return true;
   }
-  if (input == "-Infinity" || input == "-Inf") {
+  if (input == "-Inf") {
     out = -std::numeric_limits<T>::infinity();
     return true;
   }
-  // Reject hex float notation (0x/0X) which Java's parseDouble does not accept.
-  if (hasHexPrefix(input)) {
+
+  const auto trimmed = trimJavaWhitespace(input);
+  if (trimmed.empty()) {
+    return false;
+  }
+  // Java's floating-point parser accepts an optional sign on NaN.
+  if (trimmed == "NaN" || trimmed == "+NaN" || trimmed == "-NaN") {
+    out = std::numeric_limits<T>::quiet_NaN();
+    return true;
+  }
+  if (trimmed == "Infinity" || trimmed == "+Infinity") {
+    out = std::numeric_limits<T>::infinity();
+    return true;
+  }
+  if (trimmed == "-Infinity") {
+    out = -std::numeric_limits<T>::infinity();
+    return true;
+  }
+  // Java's parser does not accept the short Spark CSV sentinels.
+  if (trimmed == "Inf" || trimmed == "-Inf") {
+    return false;
+  }
+  // The decimal fast_float path does not support hexadecimal literals.
+  if (hasHexPrefix(trimmed)) {
     return false;
   }
   // Strip leading '+' before parsing (Spark/Java accepts "+1.23" but
   // fast_float rejects it). Guard against malformed "+-" or "++".
-  auto numStr = stripLeadingPlus(input);
-  if (numStr.empty()) {
+  auto numericString = stripLeadingPlus(trimmed);
+  if (numericString.empty()) {
     return false;
   }
   // Java's Float.parseFloat / Double.parseDouble accept a single trailing
   // type-suffix character (f/F/d/D), e.g. "1.0f" or "2D". Strip exactly one
   // such suffix before delegating to fast_float; a second suffix or other
   // trailing garbage will be caught as a parse error below.
-  if (numStr.size() >= 2) {
-    const char last = numStr.back();
+  if (numericString.size() >= 2) {
+    const char last = numericString.back();
     if (last == 'f' || last == 'F' || last == 'd' || last == 'D') {
-      const char prev = numStr[numStr.size() - 2];
+      const char previous = numericString[numericString.size() - 2];
       // Only strip if the preceding character is a digit or '.', so we don't
       // truncate "Inf"/"NaN" tokens (already handled above) or accept inputs
       // like "abcf".
-      if ((prev >= '0' && prev <= '9') || prev == '.') {
-        numStr = numStr.substr(0, numStr.size() - 1);
+      if ((previous >= '0' && previous <= '9') || previous == '.') {
+        numericString = numericString.substr(0, numericString.size() - 1);
       }
     }
   }
   // Use fast_float: locale-independent, allocation-free, cross-platform.
   T value;
-  auto [ptr, ec] = fast_float::from_chars(
-      numStr.data(), numStr.data() + numStr.size(), value);
-  if (ec == std::errc::result_out_of_range &&
-      ptr == numStr.data() + numStr.size() && !numStr.empty()) {
-    // Numeric overflow or underflow — Java returns ±Infinity for overflow,
-    // ±0 for underflow. Delegate the classification to a dedicated helper
-    // so the hot fast_float path stays legible.
-    out = floatOverflowValue<T>(classifyFloatOverflow(numStr));
+  auto [parseEnd, parseError] = fast_float::from_chars(
+      numericString.data(), numericString.data() + numericString.size(), value);
+  if (parseError == std::errc::result_out_of_range &&
+      parseEnd == numericString.data() + numericString.size() &&
+      !numericString.empty()) {
+    // Overflow or underflow. fast_float already saturates `value` to
+    // ±infinity (overflow) or ±0 (underflow) with the correct sign before
+    // reporting result_out_of_range, matching Java's Float.parseFloat /
+    // Double.parseDouble semantics, so the saturated value is returned as-is.
+    out = value;
     return true;
   }
-  if (ec != std::errc{} || ptr != numStr.data() + numStr.size()) {
+  if (parseError != std::errc{} ||
+      parseEnd != numericString.data() + numericString.size()) {
     return false;
   }
-  // Reject case-insensitive nan/inf variants that from_chars may accept
-  // (e.g., "nan", "inf", "INFINITY"). Only the exact forms handled above
-  // are valid per Spark/Java semantics.
+  // Reject case-insensitive nan/inf variants that from_chars may accept.
+  // Only the exact forms handled above are valid per Spark/Java semantics.
   if (std::isnan(value) || std::isinf(value)) {
     return false;
   }
   out = value;
   return true;
+}
+
+bool normalizeScientificDecimal(
+    std::string_view input,
+    uint8_t precision,
+    uint8_t targetScale,
+    std::string& normalized,
+    bool& isZero) {
+  const auto exponentPos = input.find_first_of("eE");
+  if (exponentPos == std::string_view::npos) {
+    return true;
+  }
+
+  auto exponentText = input.substr(exponentPos + 1);
+  bool negativeExponent{false};
+  if (!exponentText.empty() &&
+      (exponentText.front() == '+' || exponentText.front() == '-')) {
+    negativeExponent = exponentText.front() == '-';
+    exponentText.remove_prefix(1);
+  }
+  if (exponentText.empty()) {
+    return false;
+  }
+  uint64_t magnitude{0};
+  const auto [end, error] = std::from_chars(
+      exponentText.data(),
+      exponentText.data() + exponentText.size(),
+      magnitude);
+  if (error != std::errc{} ||
+      end != exponentText.data() + exponentText.size() ||
+      magnitude > 9'999'999'999ULL) {
+    return false;
+  }
+
+  auto mantissa = input.substr(0, exponentPos);
+  bool negative{false};
+  if (!mantissa.empty() &&
+      (mantissa.front() == '+' || mantissa.front() == '-')) {
+    negative = mantissa.front() == '-';
+    mantissa.remove_prefix(1);
+  }
+  std::string digits;
+  digits.reserve(mantissa.size());
+  bool sawDecimalPoint{false};
+  size_t fractionDigits{0};
+  for (const char c : mantissa) {
+    if (c == '.') {
+      if (sawDecimalPoint) {
+        return false;
+      }
+      sawDecimalPoint = true;
+    } else if (c >= '0' && c <= '9') {
+      digits.push_back(c);
+      if (sawDecimalPoint) {
+        ++fractionDigits;
+      }
+    } else {
+      return false;
+    }
+  }
+  if (digits.empty()) {
+    return false;
+  }
+
+  const int64_t exponent = negativeExponent ? -static_cast<int64_t>(magnitude)
+                                            : static_cast<int64_t>(magnitude);
+  const int64_t decimalScale = static_cast<int64_t>(fractionDigits) - exponent;
+  if (decimalScale < std::numeric_limits<int32_t>::min() ||
+      decimalScale > std::numeric_limits<int32_t>::max()) {
+    return false;
+  }
+
+  const auto firstNonZero = digits.find_first_not_of('0');
+  if (firstNonZero == std::string::npos) {
+    isZero = true;
+    return true;
+  }
+  digits.erase(0, firstNonZero);
+
+  if (decimalScale > (int64_t{1} << 29)) {
+    return false;
+  }
+
+  normalized.clear();
+  if (negative) {
+    normalized.push_back('-');
+  }
+  if (decimalScale <= 0) {
+    const auto trailingZeros = static_cast<uint64_t>(-decimalScale);
+    if (digits.size() + trailingZeros > precision) {
+      return false;
+    }
+    normalized.append(digits);
+    normalized.append(trailingZeros, '0');
+  } else if (static_cast<uint64_t>(decimalScale) >= digits.size()) {
+    const auto leadingZeros =
+        static_cast<uint64_t>(decimalScale) - digits.size();
+    if (leadingZeros > targetScale) {
+      isZero = true;
+      return true;
+    }
+    normalized.append("0.");
+    normalized.append(leadingZeros, '0');
+    normalized.append(digits);
+  } else {
+    const auto integerDigits = digits.size() - decimalScale;
+    if (integerDigits > precision) {
+      return false;
+    }
+    normalized.append(digits.data(), integerDigits);
+    normalized.push_back('.');
+    normalized.append(digits.data() + integerDigits, decimalScale);
+  }
+  return true;
+}
+
+template <typename T>
+bool parseDecimal(
+    std::string_view field,
+    uint8_t precision,
+    uint8_t scale,
+    T& value) {
+  std::string normalized;
+  if (field.find(',') != std::string_view::npos) {
+    normalized.reserve(field.size());
+    for (const char c : field) {
+      if (c != ',') {
+        normalized.push_back(c);
+      }
+    }
+    field = normalized;
+  }
+  std::string scientific;
+  bool isZero{false};
+  if (!normalizeScientificDecimal(
+          field, precision, scale, scientific, isZero)) {
+    return false;
+  }
+  if (isZero) {
+    value = 0;
+    return true;
+  }
+  if (!scientific.empty()) {
+    field = scientific;
+  }
+
+  try {
+    return DecimalUtil::castFromString(
+               StringView(field.data(), field.size()), precision, scale, value)
+        .ok();
+  } catch (const folly::ConversionError&) {
+    return false;
+  } catch (const VeloxException&) {
+    return false;
+  }
+}
+
+Timestamp toSparkTimestamp(
+    util::ParsedTimestampWithTimeZone parsed,
+    const tz::TimeZone* sessionTimeZone) {
+  if (parsed.timeZone != nullptr) {
+    toGMTWithGapCorrection(parsed.timestamp, *parsed.timeZone);
+    return parsed.timestamp;
+  }
+  if (!parsed.offsetMillis.has_value() && sessionTimeZone != nullptr) {
+    toGMTWithGapCorrection(parsed.timestamp, *sessionTimeZone);
+    return parsed.timestamp;
+  }
+  return util::fromParsedTimestampWithTimeZone(parsed, nullptr);
+}
+
+std::string_view trimSparkDateTimeWhitespace(std::string_view input) {
+  const auto isTrimmedByte = [](char c) {
+    const auto byte = static_cast<unsigned char>(c);
+    return byte <= 0x20 || byte == 0x7f;
+  };
+  while (!input.empty() && isTrimmedByte(input.front())) {
+    input.remove_prefix(1);
+  }
+  while (!input.empty() && isTrimmedByte(input.back())) {
+    input.remove_suffix(1);
+  }
+  return input;
+}
+
+bool isSparkTimestampRange(const Timestamp& timestamp) {
+  const int128_t micros =
+      int128_t(timestamp.getSeconds()) * util::kMicrosPerSec +
+      timestamp.getNanos() / util::kNanosPerMicro;
+  return micros >= std::numeric_limits<int64_t>::min() &&
+      micros <= std::numeric_limits<int64_t>::max();
 }
 
 bool isSupportedLeafType(const TypePtr& type) {
@@ -459,19 +596,14 @@ bool isSupportedLeafType(const TypePtr& type) {
 // Parses a CSV string into a ROW (struct) type. Fields are matched
 // positionally to the schema columns.
 //
-// Note: We do not reuse velox/dwio/text/reader/TextReader because it is
-// designed for file-level multi-line streaming I/O with headers and schema
-// inference. from_csv operates on single-string inputs (one row = one CSV line)
-// where the schema is known at plan time. A custom lightweight parser avoids
-// that overhead.
-//
 // Supported field types:
 //   BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
 //   VARBINARY, DECIMAL (short and long), DATE, TIMESTAMP.
 //
-// Key Behavior (matches Spark's from_csv with default options):
+// Key behavior (matches the supported Spark from_csv default options):
 // - NULL input returns NULL struct.
-// - Empty or whitespace-only input returns a non-null struct with null fields.
+// - Empty input returns a non-null struct with null fields.
+// - Whitespace-only fields are parsed according to the target type.
 // - Fewer CSV fields than schema columns: remaining columns are NULL.
 // - More CSV fields than schema columns: extra fields are ignored.
 // - Fields that cannot be parsed to the target type become NULL.
@@ -481,12 +613,12 @@ bool isSupportedLeafType(const TypePtr& type) {
 // - TIMESTAMP fields use session timezone for naive timestamps.
 class FromCsvFunction : public exec::VectorFunction {
  public:
-  // Spark's `from_csv` SQL function (1-arg form) currently exposes no options
-  // to the caller, so all Univocity-parser settings are pinned to Spark's
+  // Spark's supported two-argument SQL overload resolves the schema into the
+  // result type, leaving one expression child for the CSV value. It exposes no
+  // options map, so all Univocity-parser settings are pinned to Spark's
   // documented defaults: delimiter=',', quote='"', escape='\\' (backslash),
-  // nullValue="", ignoreLeadingWhiteSpace=false,
-  // ignoreTrailingWhiteSpace=false. Only `sessionTimeZone` varies (resolved
-  // from QueryConfig at plan time and used for naive TIMESTAMP fields).
+  // nullValue="", ignoreLeadingWhiteSpace=false, and
+  // ignoreTrailingWhiteSpace=false. Only `sessionTimeZone` varies.
   FromCsvFunction(
       const TypePtr& outputType,
       const tz::TimeZone* sessionTimeZone)
@@ -518,11 +650,12 @@ class FromCsvFunction : public exec::VectorFunction {
       TypePtr type;
     };
     std::vector<ColumnInfo> columns(numFields);
-    for (column_index_t col = 0; col < numFields; ++col) {
-      columns[col] = {
-          flatResult->childAt(col).get(),
-          rowType.childAt(col)->kind(),
-          rowType.childAt(col)};
+    for (column_index_t columnIndex = 0; columnIndex < numFields;
+         ++columnIndex) {
+      columns[columnIndex] = {
+          flatResult->childAt(columnIndex).get(),
+          rowType.childAt(columnIndex)->kind(),
+          rowType.childAt(columnIndex)};
     }
 
     // Reusable per-row buffers to avoid per-row allocation. See
@@ -535,17 +668,18 @@ class FromCsvFunction : public exec::VectorFunction {
         return;
       }
 
-      const auto csvStr = decodedInput->valueAt<StringView>(row);
-      auto csvView = std::string_view(csvStr.data(), csvStr.size());
+      const auto csvString = decodedInput->valueAt<StringView>(row);
+      const auto csvStringView =
+          std::string_view(csvString.data(), csvString.size());
 
       bits::clearNull(rawResultNulls, row);
 
-      // Guard against extremely large inputs — return non-null row with
-      // all-null fields (DoS mitigation, consistent with Spark permissive
-      // mode).
-      if (csvView.size() > kMaxCsvLineSize) {
-        for (column_index_t col = 0; col < numFields; ++col) {
-          columns[col].child->setNull(row, true);
+      // Guard against extremely large inputs with a permissive-shaped result:
+      // a non-null row whose fields are null.
+      if (csvStringView.size() > kMaxCsvLineSize) {
+        for (column_index_t columnIndex = 0; columnIndex < numFields;
+             ++columnIndex) {
+          columns[columnIndex].child->setNull(row, true);
         }
         return;
       }
@@ -555,31 +689,24 @@ class FromCsvFunction : public exec::VectorFunction {
         return;
       }
 
-      splitCsvLine(csvView, kDelimiter, kEscape, numFields, buffers);
+      splitCsvLine(csvStringView, kDelimiter, kEscape, numFields, buffers);
 
-      for (column_index_t col = 0; col < numFields; ++col) {
-        auto* childVector = columns[col].child;
-        auto typeKind = columns[col].kind;
-        const auto& colType = columns[col].type;
+      for (column_index_t columnIndex = 0; columnIndex < numFields;
+           ++columnIndex) {
+        auto* childVector = columns[columnIndex].child;
+        const auto typeKind = columns[columnIndex].kind;
+        const auto& columnType = columns[columnIndex].type;
 
-        if (static_cast<size_t>(col) < buffers.fields.size()) {
-          const auto& fieldStr = buffers.fields[col];
-          // With the 1-arg `from_csv` form Spark pins
-          // ignoreLeadingWhiteSpace=false and ignoreTrailingWhiteSpace=false,
-          // so no field-level trim runs here. Per-type trim (REAL/DOUBLE)
-          // still happens inside setCsvFieldToChild. When the 3-arg
-          // `from_csv(str, schema, map)` overload lands, reintroduce the
-          // configurable trim branch that reads from per-instance members.
-          std::string_view fieldView(fieldStr);
+        if (static_cast<size_t>(columnIndex) < buffers.fields.size()) {
+          const auto field = buffers.fields[columnIndex];
+          // The supported overload pins parser-level whitespace trimming off.
+          // Type-specific conversion rules are applied below.
           // Check against nullValue sentinel (default: empty string → null).
-          // Skip this check for quoted fields: Spark's `from_csv` `nullValue`
-          // matches only unquoted-empty tokens; a quoted-empty `""` yields a
-          // literal empty string via the `emptyValue` option (default "").
-          if (!buffers.fieldWasQuoted[col] && fieldView == kNullValue) {
+          if (field == kNullValue) {
             childVector->setNull(row, true);
           } else {
             childVector->setNull(row, false);
-            setCsvFieldToChild(childVector, row, fieldView, typeKind, colType);
+            setCsvFieldToChild(childVector, row, field, typeKind, columnType);
           }
         } else {
           // Missing field — set null.
@@ -599,8 +726,7 @@ class FromCsvFunction : public exec::VectorFunction {
   // - REAL/DOUBLE: Trimmed. Java's parseDouble/parseFloat accept whitespace.
   // - DECIMAL: No trimming. Java's BigDecimal(String) rejects surrounding
   //   whitespace.
-  // - DATE: No trimming. Parsed as yyyy-MM-dd (Spark's default dateFormat).
-  // - TIMESTAMP: No trimming. Parsed as yyyy-MM-dd'T'HH:mm:ss (best-effort).
+  // - DATE/TIMESTAMP: Spark trimAll bytes are removed before parsing.
   // - VARCHAR/VARBINARY: No trimming. Whitespace is preserved as-is.
   void setCsvFieldToChild(
       BaseVector* child,
@@ -647,13 +773,17 @@ class FromCsvFunction : public exec::VectorFunction {
       case TypeKind::INTEGER: {
         // Could be either INTEGER or DATE (days since epoch).
         if (type->isDate()) {
-          // Parse as yyyy-MM-dd (Spark's default dateFormat for from_csv).
-          auto result = util::fromDateString(
-              StringView(field.data(), field.size()),
-              util::ParseMode::kSparkCast);
-          if (result.hasValue()) {
-            child->asFlatVector<int32_t>()->set(row, result.value());
-          } else {
+          try {
+            const auto cleaned = trimSparkDateTimeWhitespace(field);
+            auto result = util::fromDateString(
+                StringView(cleaned.data(), cleaned.size()),
+                util::ParseMode::kSparkCast);
+            if (result.hasValue()) {
+              child->asFlatVector<int32_t>()->set(row, result.value());
+            } else {
+              child->setNull(row, true);
+            }
+          } catch (const VeloxException&) {
             child->setNull(row, true);
           }
         } else {
@@ -671,11 +801,8 @@ class FromCsvFunction : public exec::VectorFunction {
         // Could be either BIGINT or SHORT DECIMAL (precision <= 18).
         if (type->isShortDecimal()) {
           auto [precision, scale] = getDecimalPrecisionScale(*type);
-          StringView sv(field.data(), field.size());
           int64_t decimalValue{0};
-          auto status =
-              DecimalUtil::castFromString(sv, precision, scale, decimalValue);
-          if (status.ok()) {
+          if (parseDecimal(field, precision, scale, decimalValue)) {
             child->asFlatVector<int64_t>()->set(row, decimalValue);
           } else {
             child->setNull(row, true);
@@ -693,12 +820,8 @@ class FromCsvFunction : public exec::VectorFunction {
       }
       case TypeKind::REAL: {
         auto* flat = child->asFlatVector<float>();
-        // Trim whitespace: Java's Float.parseFloat accepts surrounding
-        // whitespace. This is idempotent if the caller already trimmed via
-        // ignoreLeadingWhiteSpace/ignoreTrailingWhiteSpace config.
-        auto trimmed = trimWhitespace(field);
         float value;
-        if (parseFloat<float>(trimmed, value)) {
+        if (parseFloat<float>(field, value)) {
           flat->set(row, value);
         } else {
           child->setNull(row, true);
@@ -707,11 +830,8 @@ class FromCsvFunction : public exec::VectorFunction {
       }
       case TypeKind::DOUBLE: {
         auto* flat = child->asFlatVector<double>();
-        // Trim whitespace: Java's Double.parseDouble accepts surrounding
-        // whitespace.
-        auto trimmed = trimWhitespace(field);
         double value;
-        if (parseFloat<double>(trimmed, value)) {
+        if (parseFloat<double>(field, value)) {
           flat->set(row, value);
         } else {
           child->setNull(row, true);
@@ -733,11 +853,8 @@ class FromCsvFunction : public exec::VectorFunction {
         if (type->isLongDecimal()) {
           // LONG DECIMAL (precision > 18).
           auto [precision, scale] = getDecimalPrecisionScale(*type);
-          StringView sv(field.data(), field.size());
           int128_t decimalValue{0};
-          auto status =
-              DecimalUtil::castFromString(sv, precision, scale, decimalValue);
-          if (status.ok()) {
+          if (parseDecimal(field, precision, scale, decimalValue)) {
             child->asFlatVector<int128_t>()->set(row, decimalValue);
           } else {
             child->setNull(row, true);
@@ -748,17 +865,23 @@ class FromCsvFunction : public exec::VectorFunction {
         break;
       }
       case TypeKind::TIMESTAMP: {
-        // Parse timestamp string and apply session timezone for naive
-        // timestamps (no timezone offset in the string). Spark's from_csv
-        // uses session timezone via TimestampFormatter.
-        auto result = util::fromTimestampWithTimezoneString(
-            StringView(field.data(), field.size()),
-            util::TimestampParseMode::kSparkCast);
-        if (result.hasValue()) {
-          auto ts = util::fromParsedTimestampWithTimeZone(
-              result.value(), sessionTimeZone_);
-          child->asFlatVector<Timestamp>()->set(row, ts);
-        } else {
+        try {
+          const auto cleaned = trimSparkDateTimeWhitespace(field);
+          auto result = util::fromTimestampWithTimezoneString(
+              StringView(cleaned.data(), cleaned.size()),
+              util::TimestampParseMode::kSparkCast);
+          if (result.hasValue()) {
+            const auto timestamp =
+                toSparkTimestamp(result.value(), sessionTimeZone_);
+            if (isSparkTimestampRange(timestamp)) {
+              child->asFlatVector<Timestamp>()->set(row, timestamp);
+            } else {
+              child->setNull(row, true);
+            }
+          } else {
+            child->setNull(row, true);
+          }
+        } catch (const VeloxException&) {
           child->setNull(row, true);
         }
         break;
@@ -778,15 +901,10 @@ class FromCsvFunction : public exec::VectorFunction {
   // creates a fresh Expr per query, so per-query TZ overrides take effect.
   const tz::TimeZone* sessionTimeZone_;
 
-  // Pinned Univocity CSV options — Spark 1-arg `from_csv` exposes no way to
-  // override these. If/when the 3-arg `from_csv(str, schema, map)` overload
-  // is added, these become per-instance fields wired from the options map.
-  //
-  // Additional options currently pinned to Spark defaults but not visible here
-  // because the code path they gate is inlined at its point of use (or absent
-  // for the 1-arg form):
+  // Pinned Univocity CSV options for the supported two-argument SQL overload.
+  // Additional defaults are enforced at their points of use:
   //   - ignoreLeadingWhiteSpace = false, ignoreTrailingWhiteSpace = false
-  //     (no per-field trim; per-type trim for REAL/DOUBLE only).
+  //     (type-specific conversion still trims REAL/DOUBLE and DATE/TIMESTAMP).
   //   - quote = '"' (hard-coded in splitCsvLine).
   //   - mode = PERMISSIVE (parse failures produce NULLs, never throw).
   static constexpr char kDelimiter{','};
@@ -806,7 +924,10 @@ exec::ExprPtr FromCsvCallToSpecialForm::constructSpecialForm(
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
     const core::QueryConfig& config) {
-  VELOX_USER_CHECK_EQ(args.size(), 1, "from_csv expects one argument.");
+  VELOX_USER_CHECK_EQ(
+      args.size(),
+      1,
+      "from_csv expects one value argument after schema resolution.");
   VELOX_USER_CHECK_EQ(
       args[0]->type()->kind(),
       TypeKind::VARCHAR,
@@ -829,16 +950,16 @@ exec::ExprPtr FromCsvCallToSpecialForm::constructSpecialForm(
   // interprets naive timestamps (no timezone in string) using the session
   // timezone.
   const tz::TimeZone* sessionTimeZone = nullptr;
-  const auto sessionTzName = config.sessionTimezone();
-  if (!sessionTzName.empty()) {
-    sessionTimeZone = tz::locateZone(sessionTzName);
+  const auto sessionTimezoneName = config.sessionTimezone();
+  if (!sessionTimezoneName.empty()) {
+    sessionTimeZone = tz::locateZone(sessionTimezoneName);
   }
 
-  auto func = std::make_shared<FromCsvFunction>(type, sessionTimeZone);
+  auto function = std::make_shared<FromCsvFunction>(type, sessionTimeZone);
   return std::make_shared<exec::Expr>(
       type,
       std::move(args),
-      func,
+      function,
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
       kFromCsv,
       trackCpuUsage);

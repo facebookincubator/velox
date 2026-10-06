@@ -20,8 +20,8 @@
 #include <string>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/common/text/TextFieldParser.h"
 #include "velox/dwio/common/exception/Exceptions.h"
-#include "velox/dwio/text/reader/TextFieldParser.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
@@ -810,10 +810,8 @@ bool unacceptableFloatingPoint(std::string& s) {
 }
 
 // Trims all ASCII control-and-space characters (bytes <= 0x20) from both
-// ends of `s` in place. This is the legacy Hive text-reader semantics —
-// intentionally broader than TextFieldParser's Spark CSV trim (which strips
-// only ' ', '\t', '\r', '\n'). Do not unify the two without confirming that
-// no Hive test relies on stripping other control bytes.
+// ends of `s` in place, preserving the text reader's existing floating-point
+// parsing behavior.
 void trimStringInPlace(std::string& s) {
   const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
   size_t start = 0;

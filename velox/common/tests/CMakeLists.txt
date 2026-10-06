@@ -22,3 +22,13 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
 )
+
+add_executable(velox_text_field_parser_test TextFieldParserTest.cpp)
+add_test(velox_text_field_parser_test velox_text_field_parser_test)
+
+target_link_libraries(
+  velox_text_field_parser_test
+  velox_common_text_field_parser
+  GTest::gtest
+  GTest::gtest_main
+)

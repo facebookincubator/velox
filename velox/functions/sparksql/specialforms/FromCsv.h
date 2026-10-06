@@ -19,23 +19,26 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// Resolves and constructs Spark's from_csv special form.
 class FromCsvCallToSpecialForm : public exec::FunctionCallToSpecialForm {
  public:
-  /// Throws a "not supported" user error. The result type of from_csv cannot
-  /// be inferred from the argument types alone; callers must supply the
-  /// expected ROW type explicitly at call-site resolution.
+  /// Always fails via VELOX_FAIL. The result type of from_csv cannot be
+  /// inferred from the argument types alone; callers must supply the expected
+  /// ROW type explicitly at call-site resolution.
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
   /// Constructs the special-form expression for from_csv. Wraps a custom
   /// VectorFunction that parses each input CSV string into a row of the
-  /// requested ROW type, returning NULL for malformed or oversized input
-  /// (PERMISSIVE mode).
+  /// requested ROW type. A NULL input produces a NULL row. Malformed,
+  /// oversized, or type-incompatible fields produce a non-null row with the
+  /// affected children set to NULL (PERMISSIVE mode).
   exec::ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  /// Registered function name.
   static constexpr const char* kFromCsv = "from_csv";
 };
 

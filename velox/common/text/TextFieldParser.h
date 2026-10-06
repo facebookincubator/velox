@@ -27,14 +27,10 @@ namespace facebook::velox::text {
 /// Groups the field-level parsers shared by the Hive text-file reader
 /// (TextReader) and the Spark `from_csv` special form (FromCsv). Opt-in flags
 /// preserve each caller's semantics:
-///   - allowTrailingDecimal: accept "123.45" as 123 (Hive) vs reject (Spark).
-///   - allowOneZero: accept "0"/"1" as booleans (Hive) vs reject (Spark).
+///   - allowTrailingDecimal: accept "123.45" as 123 when enabled.
+///   - allowOneZero: accept "0"/"1" as booleans when enabled.
 class TextFieldParser {
  public:
-  /// Stack buffer size used for null-terminating short numeric fields before
-  /// passing to sscanf, avoiding heap allocation in the hot path.
-  static constexpr size_t kStackBufSize = 64;
-
   /// Parses a narrow signed integer (int8, int16, int32, int64) with
   /// overflow checking against `T`'s range. See parseInt64 (private) for
   /// details on `allowTrailingDecimal`.
@@ -56,9 +52,9 @@ class TextFieldParser {
   }
 
   /// Parses a boolean from `field`. Accepts case-insensitive "TRUE"/"FALSE".
-  /// When `allowOneZero` is true (Hive), also accepts the single characters
-  /// '1' and '0'. Returns std::nullopt for any other input, including empty
-  /// input or values with surrounding whitespace.
+  /// When `allowOneZero` is true, also accepts the single characters '1' and
+  /// '0'. Returns std::nullopt for any other input, including empty input or
+  /// values with surrounding whitespace.
   static std::optional<bool> parseBoolean(
       std::string_view field,
       bool allowOneZero);
@@ -68,8 +64,9 @@ class TextFieldParser {
   // parseNarrowInteger; kept private because it has no direct external
   // callers.
   //
-  // Rejects empty input, leading whitespace, and any non-digit/non-sign
-  // first character. When `allowTrailingDecimal` is true (Hive default),
+  // Rejects empty input, leading whitespace, and any first character other
+  // than '-' or an ASCII digit; a leading '+' is rejected. When
+  // `allowTrailingDecimal` is true (Hive default),
   // trailing characters are accepted iff they form a valid decimal
   // continuation (one optional '.' followed by digits, e.g. "123.45" → 123).
   // When false (Spark `from_csv` default), any trailing character causes

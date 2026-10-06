@@ -39,7 +39,7 @@ velox_link_libraries(
   velox_functions_spark_specialforms
   fmt::fmt
   FastFloat::fast_float
-  velox_dwio_text_reader
+  velox_common_text_field_parser
   velox_spark_query_config
   velox_functions_lib
   velox_functions_json
