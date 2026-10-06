@@ -3139,8 +3139,8 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are constant, since the
-    // reader recovers the in-map state from value stream presence.
+    // When enabled, skip encoding constant in-map streams, since the reader
+    // recovers the in-map state from value stream presence.
     //
     // All-false is dropped here: the key really is absent from this stripe,
     // which is exactly what the reader concludes from two missing streams.

@@ -50,12 +50,18 @@ namespace facebook::velox::connector::hive::iceberg {
 ///     "fileSizeInBytes": <total file size>,
 ///     "metrics": {"recordCount": <numPositions>},
 ///     "partitionSpecJson": 0,
+///     "partitionDataJson": "{\"partitionValues\":[...]}",
 ///     "fileFormat": "PUFFIN",
 ///     "referencedDataFile": "<data file path>",
 ///     "content": "POSITION_DELETES",
 ///     "contentOffset": <blob offset within puffin>,
 ///     "contentSizeInBytes": <blob length>
 ///   }
+/// partitionDataJson carries the row-id's partition_data field verbatim
+/// (already in {"partitionValues":[...]} shape, synthesized per split by the
+/// reader). It is present only when non-empty: unpartitioned tables
+/// synthesize "" and the Java commit path (buildDeletionVectorEntry) requires
+/// the key solely for partitioned tables, mirroring IcebergDataSink.
 class IcebergDeletionVectorSink : public DataSink {
  public:
   IcebergDeletionVectorSink(
@@ -76,9 +82,14 @@ class IcebergDeletionVectorSink : public DataSink {
   Stats stats() const override;
 
   // Per-referenced-data-file accumulator. Builds a roaring bitmap from
-  // incoming positions; flushed to a Puffin file in close().
+  // incoming positions; flushed to a Puffin file in close(). partitionData
+  // carries the row-id's partition_data field verbatim (the per-split
+  // PartitionData JSON the reader synthesized); it is emitted as
+  // partitionDataJson so the coordinator can reconstruct the DV with the
+  // real spec and partition on commit.
   struct PerFileState {
     DeletionVectorWriter writer;
+    std::string partitionData;
   };
 
  private:
@@ -94,7 +105,13 @@ class IcebergDeletionVectorSink : public DataSink {
   // deterministic. On first creation, if the insert handle carries an existing
   // deletion vector for 'path', seeds the writer with its positions so the
   // emitted DV is the union of old and newly-deleted positions.
-  PerFileState& findOrCreatePerFile(const std::string& path);
+  // 'partitionData' is the row-id's partition_data field for the current row;
+  // it is recorded on first creation and must agree on later rows for the
+  // same file (same data file implies same partition). May be empty for
+  // unpartitioned tables.
+  PerFileState& findOrCreatePerFile(
+      const std::string& path,
+      std::string partitionData);
 
   // Reads the existing deletion vector for 'dataFile' (as described by the
   // insert handle) and adds its positions to 'state.writer' exactly once.
