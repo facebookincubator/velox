@@ -186,20 +186,36 @@ Here `sampleSizeBytes` is the sample's estimated encoded size in bytes. The
 outer prefix is counted once, using the full row count, since its varint length
 may change with that count. Existing composite estimates on this path scale
 their inner metadata together with the payload as a conservative heuristic.
-Trivial, FixedBitWidth and Varint retain their existing estimators' fixed-prefix
-convention for policy scoring. When one of these estimates is selected, its
-fixed six-byte prefix is replaced with the actual prefix size for the target
-row count and prefix option. FixedBitWidth also adds its serialized padding.
-This conversion applies only to results from these built-in estimators;
-policy-provided estimates already describe the child's size and are not
-adjusted again.
+Trivial, FixedBitWidth, Varint and SimdForBitpack retain their existing
+estimators' fixed-prefix convention for policy scoring. After selecting a
+child, `NestedAlpSizeEstimation::serializedSize` replaces its estimated
+six-byte prefix with the prefix for the target row count and prefix option.
+FixedBitWidth also adds its seven serialized padding bytes. ALP_RD's split
+shortlist uses the same conversion for its FixedBitWidth estimates.
+
+This conversion is local to ALP and ALP_RD. General encoding estimators and
+ordinary policy selection retain their existing behavior. Keeping selection
+scores distinct from serialized byte estimates preserves the child writer's
+scoring convention, including its read factors. A custom policy's complete size
+estimate is returned unchanged and never passed through the built-in conversion.
+Updating ALP or ALP_RD costs can still change the winning encoding when they
+participate in selection.
 
 Codec-specific models handle costs that do not follow this formula. Constant
-stores its value once and only adjusts the prefix. Trivial, FixedBitWidth and
-SimdForBitpack use the total row count with sample statistics. ALP transforms
-its sample with its own exponent and factor, then estimates its three children
-using this same policy-aware model. Selected FixedBitWidth child sizes include
-the padding required by the serialized representation.
+stores its value once and only adjusts the prefix. Varint stores its baseline
+once per stream, so its projected serialized size is:
+
+```text
+estimatedSize = fullPrefixSize + baselineSize
+    + (sampleSizeBytes - samplePrefixSize - baselineSize)
+        * numRows / numSampleRows
+```
+
+Here `baselineSize` is the physical integer width in bytes. Trivial,
+FixedBitWidth and SimdForBitpack use the total row count with sample statistics.
+ALP transforms its sample with its own exponent and factor, then estimates its
+three children using this same policy-aware model. Selected FixedBitWidth child
+sizes include the padding required by the serialized representation.
 
 ALP's encoded integer stream represents `numRows` values. Its exception
 positions and original exception values each represent

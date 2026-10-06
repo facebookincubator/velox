@@ -36,6 +36,17 @@ class NestedAlpSizeEstimation {
   static uint32_t
   sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
 
+  /// Converts a built-in child estimate to the bytes counted by ALP and ALPRD.
+  /// Trivial, FixedBitWidth, Varint and SimdForBitpack use fixed-prefix
+  /// selection estimates; their serialized prefixes follow numRows and options.
+  /// Also includes FixedBitWidth padding. Other estimates pass through.
+  /// Policy-provided sizes must not be passed to this conversion.
+  static uint64_t serializedSize(
+      EncodingType encodingType,
+      uint64_t estimatedSize,
+      uint32_t numRows,
+      const Encoding::Options& options);
+
   /// Returns the selected child's estimated bytes, including its prefix and
   /// padding. Read factors influence selection but are not part of this size.
   /// The policy supplies child choices; its selection methods may update

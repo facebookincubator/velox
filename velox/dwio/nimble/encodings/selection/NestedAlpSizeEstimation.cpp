@@ -35,6 +35,27 @@ uint32_t NestedAlpSizeEstimation::sampledRowIndex(
   return begin + folly::hash::twang_mix64(sampleIndex + 1) % (end - begin);
 }
 
+uint64_t NestedAlpSizeEstimation::serializedSize(
+    EncodingType encodingType,
+    uint64_t estimatedSize,
+    uint32_t numRows,
+    const Encoding::Options& options) {
+  if (encodingType == EncodingType::Trivial ||
+      encodingType == EncodingType::FixedBitWidth ||
+      encodingType == EncodingType::Varint ||
+      encodingType == EncodingType::SimdForBitpack) {
+    // Preserve the built-in selection scores used by child writers. ALP and
+    // ALPRD count the selected child's actual prefix and padding in their size.
+    NIMBLE_DCHECK_GE(estimatedSize, EncodingPrefix::kFixedPrefixSize);
+    estimatedSize = estimatedSize - EncodingPrefix::kFixedPrefixSize +
+        EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
+    if (encodingType == EncodingType::FixedBitWidth) {
+      estimatedSize += FixedBitArray::bufferSize(0, 0);
+    }
+  }
+  return estimatedSize;
+}
+
 namespace {
 
 // Samples the derived sequence without allocating a full run-value or uncommon
@@ -186,15 +207,11 @@ class SampledCost {
   uint64_t selectedSize();
 
  private:
+  // Uses the writer's selection-size convention for candidate comparison.
   // A supplied policy also estimates explicitly bound container children.
-  std::optional<uint64_t> estimateSize(
+  std::optional<uint64_t> estimateSelectionSize(
       EncodingType encodingType,
       EncodingSelectionPolicyBase* policy);
-
-  // Converts a built-in estimate to serialized bytes, including prefix and
-  // padding adjustments. Policy-provided estimates already include these.
-  uint64_t serializedSize(EncodingType encodingType, uint64_t estimatedSize)
-      const;
 
   // Observed values and the full stream length they represent.
   const std::span<const PhysicalType> sampleValues_;
@@ -230,14 +247,15 @@ uint64_t SampledCost<T>::selectedSize() {
     // training, even when the sample contains every input row.
     NIMBLE_CHECK_LE(sampleValues_.size(), numRows_);
     const auto result = manual->select(sampleValues_, [&](EncodingType type) {
-      return estimateSize(
+      return estimateSelectionSize(
           type,
           (type == EncodingType::ALP || type == EncodingType::ALPRD) ? &policy_
                                                                      : nullptr);
     });
     selectedEncoding = result.encodingType;
     if (result.estimatedSize) {
-      return serializedSize(selectedEncoding, *result.estimatedSize);
+      return NestedAlpSizeEstimation::serializedSize(
+          selectedEncoding, *result.estimatedSize, numRows_, options_);
     }
   } else {
     const auto result = policy_.select(sampleValues_, statistics_, options_);
@@ -248,7 +266,7 @@ uint64_t SampledCost<T>::selectedSize() {
       return *result.estimatedSize;
     }
   }
-  const auto size = estimateSize(selectedEncoding, &policy_);
+  const auto size = estimateSelectionSize(selectedEncoding, &policy_);
   const auto prefixSize =
       EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
   if (!size) {
@@ -256,29 +274,12 @@ uint64_t SampledCost<T>::selectedSize() {
     // binding and use an uncompressed size as the training approximation.
     return prefixSize + 1 + uint64_t{numRows_} * sizeof(PhysicalType);
   }
-  return serializedSize(selectedEncoding, *size);
+  return NestedAlpSizeEstimation::serializedSize(
+      selectedEncoding, *size, numRows_, options_);
 }
 
 template <typename T>
-uint64_t SampledCost<T>::serializedSize(
-    EncodingType encodingType,
-    uint64_t estimatedSize) const {
-  if (encodingType == EncodingType::Trivial ||
-      encodingType == EncodingType::FixedBitWidth ||
-      encodingType == EncodingType::Varint) {
-    // These built-in estimators include a fixed six-byte prefix. Replace it
-    // with the prefix that the writer will emit for the target row count.
-    estimatedSize = estimatedSize - EncodingPrefix::kFixedPrefixSize +
-        EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
-    if (encodingType == EncodingType::FixedBitWidth) {
-      estimatedSize += FixedBitArray::bufferSize(0, 0);
-    }
-  }
-  return estimatedSize;
-}
-
-template <typename T>
-std::optional<uint64_t> SampledCost<T>::estimateSize(
+std::optional<uint64_t> SampledCost<T>::estimateSelectionSize(
     EncodingType encodingType,
     EncodingSelectionPolicyBase* policy) {
   if constexpr (isFloatingPointType<T>()) {
@@ -337,6 +338,15 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
   if (!size) {
     return std::nullopt;
   }
+  if (encodingType == EncodingType::Varint) {
+    // Varint stores one baseline per stream. Project only the histogram's
+    // payload bytes, preserving the fixed-prefix convention for selection.
+    constexpr auto kHeaderSize =
+        EncodingPrefix::kFixedPrefixSize + sizeof(PhysicalType);
+    NIMBLE_DCHECK_GE(*size, kHeaderSize);
+    return kHeaderSize +
+        (*size - kHeaderSize) * numRows_ / sampleValues_.size();
+  }
   // Project the sampled bytes after the outer prefix to the full row count:
   //
   //   estimatedSize = fullPrefixSize
@@ -349,18 +359,9 @@ std::optional<uint64_t> SampledCost<T>::estimateSize(
   // Existing composite estimates are heuristics. Scaling their inner metadata
   // along with the payload is conservative; it avoids assuming a different
   // child codec merely because the sample is small.
-  //
-  // Varint's existing estimator uses a fixed prefix. Keep that convention for
-  // policy scoring, then correct it for the selected child's serialized size.
-  const auto estimatedPrefixSize = encodingType == EncodingType::Varint
-      ? EncodingPrefix::kFixedPrefixSize
-      : prefixSize;
-  const auto estimatedSamplePrefixSize = encodingType == EncodingType::Varint
-      ? EncodingPrefix::kFixedPrefixSize
-      : samplePrefixSize;
-  return estimatedPrefixSize +
-      (*size - std::min<uint64_t>(*size, estimatedSamplePrefixSize)) *
-      numRows_ / sampleValues_.size();
+  return prefixSize +
+      (*size - std::min<uint64_t>(*size, samplePrefixSize)) * numRows_ /
+      sampleValues_.size();
 }
 
 } // namespace

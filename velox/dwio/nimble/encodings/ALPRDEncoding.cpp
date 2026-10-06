@@ -157,9 +157,11 @@ uint64_t scalarChildSize(
   }
   return std::min(
       prefixSize + 1 + uint64_t{numRows} * sizeof(T),
-      FixedBitWidthEncoding<T>::estimateSize(numRows, *min, *max, options) -
-          EncodingPrefix::kFixedPrefixSize + prefixSize +
-          FixedBitArray::bufferSize(0, 0));
+      detail::NestedAlpSizeEstimation::serializedSize(
+          EncodingType::FixedBitWidth,
+          FixedBitWidthEncoding<T>::estimateSize(numRows, *min, *max, options),
+          numRows,
+          options));
 }
 
 uint64_t splitSize(
