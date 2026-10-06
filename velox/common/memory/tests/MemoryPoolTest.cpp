@@ -3829,6 +3829,95 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->stats().numShrinks, 0);
 }
 
+TEST_P(MemoryPoolTest, tryReserveWithinCapacity) {
+  constexpr int64_t kCapacity = 64 * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = 1 * GB;
+  options.arbitratorCapacity = 1 * GB;
+  setupMemory(options);
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool("noGrowReserve", 1 * GB);
+  static_cast<MemoryPoolImpl*>(root.get())->testingSetCapacity(kCapacity);
+  auto child = root->addLeafChild("noGrowReserve", isLeafThreadSafe_);
+
+  ASSERT_TRUE(child->tryReserveWithinCapacity(32 * MB));
+  EXPECT_EQ(child->reservedBytes(), 32 * MB);
+  EXPECT_EQ(root->reservedBytes(), 32 * MB);
+  EXPECT_EQ(root->stats().numCapacityGrowths, 0);
+
+  child->reportExternalAllocation(32 * MB);
+  const auto childReservation = child->reservedBytes();
+  const auto rootReservation = root->reservedBytes();
+  ASSERT_FALSE(child->tryReserveWithinCapacity(40 * MB));
+  EXPECT_EQ(child->reservedBytes(), childReservation);
+  EXPECT_EQ(root->reservedBytes(), rootReservation);
+  EXPECT_EQ(root->capacity(), kCapacity);
+  EXPECT_EQ(root->stats().numCapacityGrowths, 0);
+
+  ASSERT_TRUE(child->tryReserveWithinCapacity(32 * MB));
+  EXPECT_EQ(root->reservedBytes(), kCapacity);
+  child->reportExternalAllocation(32 * MB);
+  ASSERT_FALSE(child->tryReserveWithinCapacity(1));
+  EXPECT_EQ(child->usedBytes(), kCapacity);
+  EXPECT_EQ(root->reservedBytes(), kCapacity);
+  EXPECT_EQ(root->stats().numCapacityGrowths, 0);
+
+  child->reportExternalFree(kCapacity);
+  child->release();
+  EXPECT_EQ(child->usedBytes(), 0);
+  EXPECT_EQ(child->reservedBytes(), 0);
+  EXPECT_EQ(root->reservedBytes(), 0);
+
+  auto contenderA = root->addLeafChild("noGrowReserveA", isLeafThreadSafe_);
+  auto contenderB = root->addLeafChild("noGrowReserveB", isLeafThreadSafe_);
+  std::atomic_int successes{0};
+  std::thread threadA([&]() {
+    successes += contenderA->tryReserveWithinCapacity(40 * MB) ? 1 : 0;
+  });
+  std::thread threadB([&]() {
+    successes += contenderB->tryReserveWithinCapacity(40 * MB) ? 1 : 0;
+  });
+  threadA.join();
+  threadB.join();
+  EXPECT_EQ(successes, 1);
+  EXPECT_EQ(root->reservedBytes(), 40 * MB);
+  EXPECT_LE(root->reservedBytes(), root->capacity());
+  contenderA->release();
+  contenderB->release();
+  EXPECT_EQ(root->reservedBytes(), 0);
+
+  abortPool(child.get());
+  ASSERT_TRUE(root->aborted());
+  EXPECT_FALSE(child->tryReserveWithinCapacity(1 * MB));
+  EXPECT_EQ(root->reservedBytes(), 0);
+}
+
+TEST_P(MemoryPoolTest, tryReserveWithinCapacityDuringArbitration) {
+  constexpr int64_t kCapacity = 64 * MB;
+  auto root = getMemoryManager()->addRootPool("boundedReserve", 1 * GB);
+  static_cast<MemoryPoolImpl*>(root.get())->testingSetCapacity(kCapacity);
+  auto child = root->addLeafChild("requestor", isLeafThreadSafe_);
+  auto sibling = root->addLeafChild("reclaimer", isLeafThreadSafe_);
+  ScopedMemoryArbitrationContext arbitration(root.get());
+
+  // Ordinary reservations may overuse capacity during reclamation. This API
+  // must still enforce the granted capacity and leave failed requests
+  // untouched.
+  EXPECT_FALSE(child->tryReserveWithinCapacity(2 * kCapacity));
+  EXPECT_EQ(root->reservedBytes(), 0);
+  ASSERT_TRUE(sibling->maybeReserve(2 * kCapacity));
+  ASSERT_GT(root->reservedBytes(), root->capacity());
+  const auto reservations = root->reservedBytes();
+  // Reusing a leaf's held reservation does not increase the root commitment.
+  EXPECT_TRUE(sibling->tryReserveWithinCapacity(8 * MB));
+  EXPECT_EQ(root->reservedBytes(), reservations);
+  EXPECT_NO_THROW(EXPECT_FALSE(child->tryReserveWithinCapacity(8 * MB)));
+  EXPECT_EQ(child->reservedBytes(), 0);
+  EXPECT_EQ(root->reservedBytes(), reservations);
+  EXPECT_EQ(root->stats().numCapacityGrowths, 0);
+  sibling->release();
+}
+
 TEST_P(MemoryPoolTest, maybeReserveFailWithAbort) {
   constexpr int64_t kMaxSize = 1 * GB; // 1GB
   MemoryManager::Options options;

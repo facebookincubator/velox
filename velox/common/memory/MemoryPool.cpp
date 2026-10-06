@@ -926,6 +926,35 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   return true;
 }
 
+bool MemoryPoolImpl::tryReserveWithinCapacity(uint64_t increment) {
+  CHECK_AND_INC_MEM_OP_STATS(this, Reserves);
+  TestValue::adjust(
+      "facebook::velox::common::memory::MemoryPoolImpl::tryReserveWithinCapacity",
+      this);
+  VELOX_CHECK(isLeaf());
+  if (!trackUsage_) {
+    return false;
+  }
+
+  constexpr int32_t kGrowthQuantum = 8 << 20;
+  const auto reservationToAdd = bits::roundUp(increment, kGrowthQuantum);
+  int64_t reservationIncrement;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    reservationIncrement = reservationSizeLocked(reservationToAdd);
+    if (reservationIncrement == 0) {
+      minReservationBytes_ = tsanAtomicValue(reservationBytes_);
+      sanityCheckLocked();
+      return true;
+    }
+  }
+
+  // Root capacity admission is committed before the infallible hierarchy
+  // updates. The leaf update also establishes minReservationBytes_ under the
+  // same leaf lock, so release() cannot race between those two actions.
+  return tryIncrementReservationWithinCapacity(reservationIncrement);
+}
+
 void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
   if (FOLLY_LIKELY(trackUsage_)) {
     if (FOLLY_LIKELY(threadSafe_)) {
@@ -1005,6 +1034,39 @@ void MemoryPoolImpl::incrementReservationThreadSafe(
       this);
   // NOTE: if memory arbitration succeeds, it should have already committed
   // the reservation 'size' in the root memory pool.
+}
+
+bool MemoryPoolImpl::tryIncrementReservationWithinCapacity(uint64_t size) {
+  VELOX_CHECK_GT(size, 0);
+  if (parent_ != nullptr) {
+    if (!toImpl(parent_)->tryIncrementReservationWithinCapacity(size)) {
+      return false;
+    }
+    std::lock_guard<std::mutex> l(mutex_);
+    incrementReservationLocked(size);
+    if (isLeaf()) {
+      minReservationBytes_ = tsanAtomicValue(reservationBytes_);
+      sanityCheckLocked();
+    }
+    return true;
+  }
+
+  std::lock_guard<std::mutex> l(mutex_);
+  if (aborted_) {
+    return false;
+  }
+  // Reclamation can temporarily overuse root capacity. Decline further
+  // reservation growth without turning this supported state into an error.
+  if (reservationBytes_ > capacity_) {
+    return false;
+  }
+  const auto availableCapacity =
+      static_cast<uint64_t>(capacity_ - reservationBytes_);
+  if (size > availableCapacity) {
+    return false;
+  }
+  incrementReservationLocked(size);
+  return true;
 }
 
 void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
