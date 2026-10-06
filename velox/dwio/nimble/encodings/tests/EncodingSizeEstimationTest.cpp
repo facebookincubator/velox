@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <limits>
+#include <random>
 #include <string>
 
 #include "velox/dwio/nimble/common/Types.h"
@@ -285,6 +286,73 @@ TEST_F(EncodingSizeEstimationTest, mainlyConstantOverPricedForDenseData) {
   // Priced as the flat other-values stream plus the is-common bitmap, so the
   // estimate exceeds the flat other-values alone.
   EXPECT_GT(mc.value(), std::min(fixedBitWidth.value(), trivial.value()));
+}
+
+// Selection skips estimating a candidate whose lower bound already costs as
+// much as the cheapest so far, so a bound above its estimate would change what
+// selection chooses. Held against the estimate on streams that give each term
+// of the bound a different binding constraint: near-unique, a dominant value at
+// either end of the range and in its middle, few distinct values spread wide,
+// and a skew of a few frequent values over many rare ones.
+TEST_F(EncodingSizeEstimationTest, sizeLowerBoundNeverExceedsEstimate) {
+  std::mt19937_64 rng(2'026);
+  const auto check = [&]<typename T>(
+                         const std::vector<T>& data, const std::string& name) {
+    using Est = detail::EncodingSizeEstimation<T>;
+    using Physical = typename TypeTraits<T>::physicalType;
+    const std::span<const Physical> values{
+        reinterpret_cast<const Physical*>(data.data()), data.size()};
+    const auto stats = Statistics<Physical>::create(values);
+    for (const auto encodingType :
+         {EncodingType::MainlyConstant, EncodingType::Dictionary}) {
+      SCOPED_TRACE(name + " " + std::string(toString(encodingType)));
+      const auto bound = Est::estimateSizeLowerBound(
+          encodingType, values, stats, defaultOptions_);
+      const auto estimate =
+          Est::estimateSize(encodingType, values, stats, defaultOptions_);
+      EXPECT_TRUE(bound.has_value());
+      if (bound.has_value() && estimate.has_value()) {
+        EXPECT_LE(bound.value(), estimate.value());
+      }
+    }
+  };
+  for (const size_t rows : {1'000, 70'000}) {
+    const auto suffix = " rows=" + std::to_string(rows);
+    std::vector<uint64_t> unique(rows);
+    for (auto& value : unique) {
+      value = rng();
+    }
+    check(unique, "near-unique" + suffix);
+
+    for (const uint64_t common :
+         {uint64_t{0}, uint64_t{1} << 40, ~uint64_t{0}}) {
+      std::vector<uint64_t> dominant(rows, common);
+      for (size_t i = 0; i < rows; i += 3) {
+        dominant[i] = rng() >> 1;
+      }
+      check(dominant, "dominant " + std::to_string(common) + suffix);
+    }
+
+    std::vector<uint32_t> spread(rows);
+    for (auto& value : spread) {
+      value = static_cast<uint32_t>(rng() % 5) * 1'000'000;
+    }
+    check(spread, "few spread" + suffix);
+
+    std::vector<uint32_t> skewed(rows);
+    for (size_t i = 0; i < rows; ++i) {
+      const uint64_t draw = rng();
+      skewed[i] = static_cast<uint32_t>(
+          (draw & 3) != 0 ? draw % 3 : (draw >> 8) % 400'000);
+    }
+    check(skewed, "skewed" + suffix);
+
+    std::vector<int32_t> negative(rows);
+    for (auto& value : negative) {
+      value = static_cast<int32_t>(rng());
+    }
+    check(negative, "signed" + suffix);
+  }
 }
 
 TEST_F(EncodingSizeEstimationTest, fixedBitWidthEstimateUsesExactBits) {
@@ -852,6 +920,194 @@ TEST_F(EncodingSizeEstimationTest, rleSmallForLongRuns) {
   ASSERT_TRUE(trivialSize.has_value());
   EXPECT_LT(rleSize.value(), trivialSize.value());
 }
+
+// Estimates under subintsplit::Options::sectionEstimatorRefinements, which
+// SubIntSplit sets for its sections.
+Encoding::Options sectionRefinementOptions() {
+  Encoding::Options options;
+  options.subIntSplit.sectionEstimatorRefinements = true;
+  return options;
+}
+
+TEST_F(EncodingSizeEstimationTest, fixedBitWidthRefinementCountsSlopBytes) {
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> data(1'000);
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    data[i] = 100 + i;
+  }
+  const auto stats = Statistics<uint32_t>::create(data);
+
+  const auto plain = Est::estimateSize(
+      EncodingType::FixedBitWidth, data.size(), stats, defaultOptions_);
+  const auto refined = Est::estimateSize(
+      EncodingType::FixedBitWidth,
+      data.size(),
+      stats,
+      sectionRefinementOptions());
+  ASSERT_TRUE(plain.has_value());
+  ASSERT_TRUE(refined.has_value());
+  // The seven bytes FixedBitArray::bufferSize reserves past the last value.
+  EXPECT_EQ(refined.value(), plain.value() + 7);
+}
+
+TEST_F(
+    EncodingSizeEstimationTest,
+    mainlyConstantRefinementPricesUncommonRange) {
+  // The common value is a sentinel at the top of the range, so pricing the
+  // other values over the whole stream's range charges each of them 32 bits,
+  // while their own range needs 10.
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> data(10'000, std::numeric_limits<uint32_t>::max());
+  for (uint32_t i = 0; i < data.size(); i += 5) {
+    data[i] = i % 1'000;
+  }
+  const auto stats = Statistics<uint32_t>::create(data);
+  Encoding::Options plainOptions;
+  plainOptions.fixedBitWidthUseExactBits = true;
+  auto refinedOptions = plainOptions;
+  refinedOptions.subIntSplit.sectionEstimatorRefinements = true;
+
+  const auto plain = Est::estimateSize(
+      EncodingType::MainlyConstant, data.size(), stats, plainOptions);
+  const auto refined = Est::estimateSize(
+      EncodingType::MainlyConstant, data.size(), stats, refinedOptions);
+  ASSERT_TRUE(plain.has_value());
+  ASSERT_TRUE(refined.has_value());
+  const uint64_t uncommonCount = data.size() / 5;
+  EXPECT_LT(refined.value() + uncommonCount * 20 / 8, plain.value());
+}
+
+TEST_F(
+    EncodingSizeEstimationTest,
+    mainlyConstantRefinementPricesBitmapAndDictionary) {
+  // The low bits of delta-coded Snowflake IDs: one residual in most rows and a
+  // few dozen values spread over a wide range between them. Nested selection
+  // stores MainlyConstant's mask as a bitmap and its other values as a
+  // Dictionary, about a bit per row plus a byte per other value. Priced as a
+  // SparseBool mask plus FixedBitWidth values, the estimate is several times
+  // that and loses to RLE, whose run values are priced with Dictionary.
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  constexpr uint32_t kCommon{2};
+  constexpr uint32_t kDistinctUncommon{80};
+  std::vector<uint32_t> data(20'000, kCommon);
+  uint64_t uncommonCount{0};
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    // About one row in eight, spread without regular runs.
+    if (((i * 2'654'435'761U) >> 29) == 0) {
+      data[i] = 1 + 100'003 * (i % kDistinctUncommon);
+      ++uncommonCount;
+    }
+  }
+  const auto stats = Statistics<uint32_t>::create(data);
+
+  const auto estimate = Est::estimateSize(
+      EncodingType::MainlyConstant,
+      data.size(),
+      stats,
+      sectionRefinementOptions());
+  ASSERT_TRUE(estimate.has_value());
+  const uint64_t bitmapPlusDictionary = data.size() / 8 + uncommonCount;
+  EXPECT_LT(estimate.value(), 2 * bitmapPlusDictionary);
+}
+
+TEST_F(EncodingSizeEstimationTest, rleRunLengthsNotWidenedByOneLongRun) {
+  // The writer hands run lengths to nested selection, which stores a stream
+  // of mostly-equal lengths with one outlier far below one fixed width per
+  // length. Pricing them as FixedBitWidth over [minRepeat, maxRepeat] lets the
+  // single long run set the width charged to every run.
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  constexpr uint32_t kShortRuns{4'096};
+  constexpr uint32_t kLongRun{200'000};
+
+  std::vector<uint32_t> data;
+  data.reserve(kShortRuns + kLongRun);
+  for (uint32_t i = 0; i < kShortRuns; ++i) {
+    data.push_back(3 + (i & 1U));
+  }
+  data.insert(data.end(), kLongRun, 7);
+  const auto stats = Statistics<uint32_t>::create(data);
+  const uint64_t runCount = stats.consecutiveRepeatCount();
+  ASSERT_EQ(runCount, kShortRuns + 1);
+
+  const auto options = sectionRefinementOptions();
+  const auto flatLengthsEstimate =
+      RLEEncoding<uint32_t>::estimateSize(data.size(), stats, options);
+  const auto estimate =
+      Est::estimateSize(EncodingType::RLE, data.size(), stats, options);
+  ASSERT_TRUE(estimate.has_value());
+
+  // The flat form charges 18 bits per length; stored as the common length
+  // plus one exception, a length costs a few bits at most.
+  EXPECT_LT(estimate.value(), flatLengthsEstimate - runCount * 14 / 8);
+
+  // Without the refinements, run lengths keep the flat price.
+  EXPECT_EQ(
+      Est::estimateSize(EncodingType::RLE, data.size(), stats, defaultOptions_),
+      RLEEncoding<uint32_t>::estimateSize(data.size(), stats, defaultOptions_));
+}
+
+TEST_F(EncodingSizeEstimationTest, rleRunLengthsNeverPricedAboveFlatWidth) {
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+
+  std::vector<uint32_t> data;
+  for (uint32_t run = 0; run < 1'000; ++run) {
+    data.insert(data.end(), 1 + (run * 7919) % 300, run);
+  }
+  const auto stats = Statistics<uint32_t>::create(data);
+
+  const auto options = sectionRefinementOptions();
+  const auto estimate =
+      Est::estimateSize(EncodingType::RLE, data.size(), stats, options);
+  ASSERT_TRUE(estimate.has_value());
+  EXPECT_LE(
+      estimate.value(),
+      RLEEncoding<uint32_t>::estimateSize(data.size(), stats, options));
+}
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+TEST_F(EncodingSizeEstimationTest, deltaPricesSmallStepsNarrow) {
+  // A slowly rising counter: every step is at most 3, so the deltas need two
+  // bits where the values themselves need eighteen.
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> data(100'000);
+  uint32_t value{0};
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    data[i] = value;
+    value += i % 4;
+  }
+  const auto stats = Statistics<uint32_t>::create(data);
+  Encoding::Options options;
+  options.fixedBitWidthUseExactBits = true;
+
+  const auto delta =
+      Est::estimateSize(EncodingType::Delta, data.size(), stats, options);
+  const auto fixedBitWidth = Est::estimateSize(
+      EncodingType::FixedBitWidth, data.size(), stats, options);
+  ASSERT_TRUE(delta.has_value());
+  ASSERT_TRUE(fixedBitWidth.has_value());
+  EXPECT_LT(delta.value() * 4, fixedBitWidth.value());
+}
+
+TEST_F(EncodingSizeEstimationTest, forValuesEstimateSeesLocalFrames) {
+  // Each 128-row frame spans 16 values, but the column spans the whole type,
+  // so only the estimate that walks the frames can see the narrow range.
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> data(128 * 256);
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    data[i] = (i / 128) * 16'777'216u + i % 16;
+  }
+  const std::span<const uint32_t> values{data};
+  const auto stats = Statistics<uint32_t>::create(values);
+
+  const auto fromValues =
+      Est::estimateSize(EncodingType::FOR, values, stats, defaultOptions_);
+  const auto fromStatistics =
+      Est::estimateSize(EncodingType::FOR, data.size(), stats, defaultOptions_);
+  ASSERT_TRUE(fromValues.has_value());
+  ASSERT_TRUE(fromStatistics.has_value());
+  EXPECT_LT(fromValues.value() * 4, fromStatistics.value());
+}
+#endif
 
 TEST_F(EncodingSizeEstimationTest, fbwSmallForNarrowRange) {
   using Est = detail::EncodingSizeEstimation<uint32_t>;

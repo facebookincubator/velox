@@ -29,28 +29,39 @@
 
 namespace facebook::nimble {
 
+/// Each distinct value of a stream with the number of rows holding it.
+///
+/// Held either as a hash map or as a vector sorted by value, a cost decision
+/// made in Statistics; consumers are indifferent to the iteration order.
 template <typename T, typename InputType = T>
 class UniqueValueCounts {
  public:
   using MapType = absl::flat_hash_map<T, uint64_t>;
+  using value_type = typename MapType::value_type;
+
+  /// Entries in ascending value order, each value appearing once.
+  using SortedType = std::vector<value_type>;
 
   struct Iterator {
     using iterator_category = std::forward_iterator_tag;
     using value_type = typename MapType::value_type;
     using difference_type = typename MapType::difference_type;
     using const_reference = typename MapType::const_reference;
-    using const_iterator = typename MapType::const_iterator;
 
     const_reference operator*() const {
-      return *iterator_;
+      return sortedEntry_ != nullptr ? *sortedEntry_ : *mapIterator_;
     }
-    const_iterator operator->() const {
-      return iterator_;
+    const value_type* operator->() const {
+      return &**this;
     }
 
     // Prefix increment
     Iterator& operator++() {
-      ++iterator_;
+      if (sortedEntry_ != nullptr) {
+        ++sortedEntry_;
+      } else {
+        ++mapIterator_;
+      }
       return *this;
     }
 
@@ -62,17 +73,23 @@ class UniqueValueCounts {
     }
 
     friend bool operator==(const Iterator& a, const Iterator& b) {
-      return a.iterator_ == b.iterator_;
+      return a.sortedEntry_ == b.sortedEntry_ &&
+          (a.sortedEntry_ != nullptr || a.mapIterator_ == b.mapIterator_);
     }
     friend bool operator!=(const Iterator& a, const Iterator& b) {
-      return a.iterator_ != b.iterator_;
+      return !(a == b);
     }
 
    private:
     explicit Iterator(typename MapType::const_iterator iterator)
-        : iterator_{iterator} {}
+        : mapIterator_{iterator} {}
+    explicit Iterator(const value_type* sortedEntry)
+        : sortedEntry_{sortedEntry} {}
 
-    typename MapType::const_iterator iterator_;
+    typename MapType::const_iterator mapIterator_{};
+    // Null when iterating the map. Statistics never builds an empty sorted
+    // vector, whose data pointer may itself be null.
+    const value_type* sortedEntry_{nullptr};
 
     friend class UniqueValueCounts<T, InputType>;
   };
@@ -80,6 +97,16 @@ class UniqueValueCounts {
   using const_iterator = Iterator;
 
   uint64_t at(T key) const noexcept {
+    if (sorted_) {
+      const auto it = std::lower_bound(
+          sortedCounts_.begin(),
+          sortedCounts_.end(),
+          key,
+          [](const value_type& entry, const T& value) {
+            return entry.first < value;
+          });
+      return it != sortedCounts_.end() && it->first == key ? it->second : 0;
+    }
     auto it = uniqueCounts_.find(key);
     if (it == uniqueCounts_.end()) {
       return 0;
@@ -88,18 +115,16 @@ class UniqueValueCounts {
   }
 
   size_t size() const noexcept {
-    return uniqueCounts_.size();
+    return sorted_ ? sortedCounts_.size() : uniqueCounts_.size();
   }
 
   std::optional<std::pair<T, uint64_t>> mostFrequent() const noexcept {
-    if (uniqueCounts_.empty()) {
+    if (size() == 0) {
       return std::nullopt;
     }
     if (!mostFrequent_.has_value()) {
       const auto it = std::max_element(
-          uniqueCounts_.cbegin(),
-          uniqueCounts_.cend(),
-          [](const auto& left, const auto& right) {
+          cbegin(), cend(), [](const auto& left, const auto& right) {
             if (left.second != right.second) {
               return left.second < right.second;
             }
@@ -114,7 +139,7 @@ class UniqueValueCounts {
     static_assert(nimble::isStringType<T>());
     if (!uniqueStringBytes_.has_value()) {
       uint64_t totalBytes = 0;
-      for (const auto& unique : uniqueCounts_) {
+      for (const auto& unique : *this) {
         totalBytes += unique.first.size();
       }
       uniqueStringBytes_ = totalBytes;
@@ -123,25 +148,31 @@ class UniqueValueCounts {
   }
 
   const_iterator begin() const noexcept {
-    return Iterator{uniqueCounts_.cbegin()};
+    return sorted_ ? Iterator{sortedCounts_.data()}
+                   : Iterator{uniqueCounts_.cbegin()};
   }
   const_iterator cbegin() const noexcept {
-    return Iterator{uniqueCounts_.cbegin()};
+    return begin();
   }
 
   const_iterator end() const noexcept {
-    return Iterator{uniqueCounts_.cend()};
+    return sorted_ ? Iterator{sortedCounts_.data() + sortedCounts_.size()}
+                   : Iterator{uniqueCounts_.cend()};
   }
   const_iterator cend() const noexcept {
-    return Iterator{uniqueCounts_.cend()};
+    return end();
   }
 
   UniqueValueCounts() = default;
   explicit UniqueValueCounts(MapType&& uniqueCounts)
       : uniqueCounts_{std::move(uniqueCounts)} {}
+  explicit UniqueValueCounts(SortedType&& sortedCounts)
+      : sortedCounts_{std::move(sortedCounts)}, sorted_{true} {}
 
  private:
   MapType uniqueCounts_;
+  SortedType sortedCounts_;
+  bool sorted_{false};
   mutable std::optional<std::pair<T, uint64_t>> mostFrequent_;
   mutable std::optional<uint64_t> uniqueStringBytes_;
 };
@@ -261,6 +292,25 @@ class Statistics {
     return uniqueCounts_.value();
   }
 
+  /// A lower bound on the number of distinct values: the number of distinct
+  /// offsets from min in their low kDistinctBoundBits bits. Exact where the
+  /// unique counts are already built or every offset fits in those bits;
+  /// otherwise costs one pass and an L2-sized bitmap, far cheaper than
+  /// counting the distinct values outright.
+  uint64_t distinctLowerBound() const {
+    static_assert(nimble::isIntegralType<T>());
+    if (uniqueCounts_.has_value() && uniqueCounts_->has_value()) {
+      return uniqueCounts_->value().size();
+    }
+    if (!distinctLowerBound_.has_value()) {
+      populateDistinctLowerBound();
+    }
+    return distinctLowerBound_.value();
+  }
+
+  /// Low bits of the offsets from min that distinctLowerBound() tells apart.
+  static constexpr int kDistinctBoundBits{20};
+
   /// Returns one value per consecutive run in input order. The sequence is
   /// computed lazily and cached independently from aggregate repeat metrics.
   const std::vector<T>& runValues() const {
@@ -287,11 +337,56 @@ class Statistics {
     return runValues_.emplace(std::move(values));
   }
 
+  /// Returns the length of each consecutive run in input order, aligned with
+  /// runValues(). Computed lazily and cached.
+  const std::vector<uint32_t>& runLengths() const {
+    if (runLengths_.has_value()) {
+      return runLengths_.value();
+    }
+    std::vector<uint32_t> lengths;
+    if (!data_.empty()) {
+      lengths.reserve(consecutiveRepeatCount());
+      uint32_t length{1};
+      for (size_t i = 1; i < data_.size(); ++i) {
+        if (data_[i] == data_[i - 1]) {
+          ++length;
+        } else {
+          lengths.push_back(length);
+          length = 1;
+        }
+      }
+      lengths.push_back(length);
+    }
+    return runLengths_.emplace(std::move(lengths));
+  }
+
   struct BlockStats {
     uint64_t count;
     uint64_t min;
     uint64_t max;
   };
+
+  /// Aggregates over adjacent value pairs, in input order. Grouped because
+  /// they all come from one pass over consecutive pairs.
+  struct AdjacentPairStats {
+    /// Pairs where the later value is not below the earlier one, i.e. steps an
+    /// encoding storing non-negative deltas can represent without restating.
+    uint64_t nonDecreasingCount{0};
+    /// Largest step over a non-decreasing pair; sizes a fixed-width delta
+    /// array, which must cover the widest delta it stores.
+    uint64_t maxIncrease{0};
+    /// Sum of |v[i] - v[i-1]| over every pair.
+    uint64_t sumAbsoluteDelta{0};
+  };
+
+  /// See AdjacentPairStats. Empty for a stream of fewer than two values.
+  const AdjacentPairStats& adjacentPairStats() const noexcept {
+    static_assert(nimble::isIntegralType<T>());
+    if (!adjacentPairStats_.has_value()) {
+      populateAdjacentPairStats();
+    }
+    return adjacentPairStats_.value();
+  }
 
   const std::vector<BlockStats>& minMaxBlocks(
       uint16_t blockSize = kBlockBitPackingBlockSize) const noexcept {
@@ -312,6 +407,7 @@ class Statistics {
   // Compares against the first value and stops at the first mismatch.
   void populateIsConstant() const noexcept;
   void populateUniques() const;
+  void populateAdjacentPairStats() const;
   void populateMinMax() const;
   void populateBucketCounts() const;
   void populateMinMaxBlocks(uint16_t blockSize) const;
@@ -321,6 +417,7 @@ class Statistics {
   // Checks signed logical order over unsigned physical input values.
   void populateSignedOrderNonDecreasing() const noexcept;
   void populateStringLength() const;
+  void populateDistinctLowerBound() const;
 
   mutable std::optional<uint64_t> consecutiveRepeatCount_;
   mutable std::optional<uint64_t> minRepeat_;
@@ -339,9 +436,30 @@ class Statistics {
   mutable std::optional<std::vector<uint64_t>> bucketCounts_;
   mutable std::optional<std::vector<BlockStats>> minMaxBlocks_;
   mutable uint16_t minMaxBlockSize_{0};
+  mutable std::optional<std::vector<uint32_t>> runLengths_;
+  mutable std::optional<AdjacentPairStats> adjacentPairStats_;
   mutable std::optional<std::optional<UniqueValueCounts<T, InputType>>>
       uniqueCounts_;
   mutable std::optional<std::vector<T>> runValues_;
+  mutable std::optional<uint64_t> distinctLowerBound_;
 };
+
+/// Copies `numBlocks` contiguous blocks of `blockRows` rows, spread evenly
+/// over `values`, so runs, frames and local ranges survive in the sample.
+/// `values` must hold at least `numBlocks * blockRows` rows.
+template <typename T>
+std::vector<T> sampleSpreadBlocks(
+    std::span<const T> values,
+    size_t numBlocks,
+    size_t blockRows) {
+  std::vector<T> sample;
+  sample.reserve(numBlocks * blockRows);
+  const size_t stride = values.size() / numBlocks;
+  for (size_t block = 0; block < numBlocks; ++block) {
+    const auto first = values.begin() + block * stride;
+    sample.insert(sample.end(), first, first + blockRows);
+  }
+  return sample;
+}
 
 } // namespace facebook::nimble

@@ -32,7 +32,6 @@
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
-DEFINE_bool(validate, false, "Round-trip check before measuring");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
 constexpr std::string_view kDriver = "bench_decode_bulk";
@@ -80,12 +79,35 @@ int runBenchmark() {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",        "dtype",       "dataset",       "encoding",
-      "family",        "variant",     "is_sequential", "fast_skip",
-      "random_access", "N",           "seed",          "cache_state",
-      "evict_method",  "evict_ns",    "payload_bytes", "compression_ratio",
-      "iterations",    "warmup",      "time_ns",       "time_p90_ns",
-      "time_min_ns",   "decode_Meps", "decode_MBps",   "skipped"};
+      "driver",
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "inventory",
+      "transform",
+      "input_order",
+      "is_sequential",
+      "fast_skip",
+      "random_access",
+      "N",
+      "seed",
+      "cache_state",
+      "evict_method",
+      "evict_ns",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "decode_Meps",
+      "decode_MBps",
+      "skipped"};
+  csvColumns.push_back("validated");
+  appendAccessColumns(csvColumns);
 
   std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_decode_bulk.csv"
                                                        : FLAGS_mlidc_output_csv;
@@ -96,7 +118,7 @@ int runBenchmark() {
   }
 
   std::vector<Elem> sink(n, Elem{});
-  int validateFailures = 0;
+  ValidationLedger ledger;
 
   MeasureSpec spec;
   spec.iterations = iters;
@@ -118,23 +140,19 @@ int runBenchmark() {
           ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
           : 0.0;
 
-      if (FLAGS_validate && enc.variant != "fpe_noindex") {
-        std::vector<Elem> check(n);
-        target->materializeAll(check.data(), n);
-        bool ok = true;
-        for (uint32_t i = 0; i < n; ++i) {
-          if (check[i] != data[i]) {
-            ok = false;
-            break;
-          }
-        }
-        if (!ok) {
-          std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
-                    << "\n";
-          ++validateFailures;
-          writeSkipRow<Elem>(csv, kDriver, ds.name, enc);
-          continue;
-        }
+      // The timed read is materializeAll, so the check before timing is the
+      // same read.
+      ValidationReference<Elem> reference;
+      if (ledger.enabled() &&
+          !ledger.check(enc.name, ds.name, "materializeAll", [&] {
+            if (auto mismatch = ValidationReference<Elem>::build(
+                    *target, enc, data, reference)) {
+              return mismatch;
+            }
+            return validateMaterializeAll<Elem>(*target, reference.values());
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [] {});
+        continue;
       }
 
       auto cell = makeCellCache<Elem>(
@@ -145,9 +163,26 @@ int runBenchmark() {
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
 
+      // A view's construction cost is charged here so a bulk read through a
+      // view accounts for both build and read, not just the read.
+      const auto build = measureAccessStructureBuild<Elem>(
+          spec, cell.controller, cell.targets, *target);
+
+      poisonOutput<Elem>(sink);
       auto result = measure(spec, cell.controller, cell.targets, [&]() {
         target->materializeAll(sink.data(), n);
       });
+
+      // What the last timed iteration wrote, which catches an arm whose warm
+      // reads differ from its first.
+      if (ledger.enabled() &&
+          !ledger.check(enc.name, ds.name, "timed output", [&] {
+            return firstMismatch<Elem>(sink, reference.values());
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [] {});
+        csv.flush();
+        continue;
+      }
 
       const double timeNs = static_cast<double>(result.time.median_ns);
       const double meps =
@@ -171,7 +206,10 @@ int runBenchmark() {
       setTimingColumns(csv, result);
       csv.set("decode_Meps", meps);
       csv.set("decode_MBps", mbps);
+      setAccessColumns<Elem>(
+          csv, *target, build.time.median_ns, result.time.median_ns);
       csv.set("skipped", int64_t{0});
+      csv.set("validated", ledger.enabled() ? int64_t{1} : int64_t{0});
       csv.endRow();
       csv.flush();
     }
@@ -179,11 +217,7 @@ int runBenchmark() {
 
   std::cout << "\nResults written to: " << csvPath << "\n";
 
-  if (validateFailures > 0) {
-    std::cerr << validateFailures << " validation failure(s)\n";
-    return 2;
-  }
-  return 0;
+  return ledger.exitCode();
 }
 
 } // namespace

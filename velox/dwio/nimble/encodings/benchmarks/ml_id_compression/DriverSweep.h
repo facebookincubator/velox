@@ -18,26 +18,71 @@
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BlockCodecTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ResultWriter.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/Validation.h"
 
 // Scaffolding shared by the sweep drivers. Every driver walks the same shape:
 // build the encoder and dataset suites, loop over both, encode, set up the
 // cache for one cell, measure, then write a row. Only the measurement and the
 // driver-specific columns differ, and those stay in the driver.
 
+DECLARE_string(mlidc_input_order);
+
 namespace facebook::nimble::mlidc {
+
+/// Overrides the upstream SubIntSplit switches named in `features`, a
+/// comma-separated list where a name sets its switch on and no-<name> sets it
+/// off. Throws on a name it does not know. Most switches are SubIntSplit
+/// tuning; delta is an Encoding::Options field.
+inline void applyUpstreamFeatures(
+    std::string_view features,
+    Encoding::Options& options,
+    subintsplit::TuningConfig& tuning) {
+  size_t start = 0;
+  while (start < features.size()) {
+    const size_t end = std::min(features.find(',', start), features.size());
+    std::string_view name = features.substr(start, end - start);
+    start = end + 1;
+    if (name.empty()) {
+      continue;
+    }
+    const bool on = !name.starts_with("no-");
+    if (!on) {
+      name.remove_prefix(3);
+    }
+    if (name == "delta") {
+      options.subIntSplitDeltaPreTransform = on;
+    } else if (name == "trim") {
+      tuning.selector.trimConstantPlanes = on;
+    } else if (name == "prune") {
+      tuning.selector.boundaryPruneThreshold =
+          on ? subintsplit::kBoundaryPruneThreshold : 0.0;
+    } else if (name == "fold") {
+      tuning.foldConstantSections = on;
+    } else if (name == "passthrough") {
+      tuning.passThrough = on;
+    } else if (name == "visitorblock") {
+      tuning.visitorBlockBuffer = on;
+    } else {
+      NIMBLE_UNSUPPORTED("Unknown upstream SubIntSplit feature: {}", name);
+    }
+  }
+}
 
 /// Holds the encoder and dataset suites a sweep driver walks, with the cache
 /// topology the measurements run against.
@@ -74,10 +119,74 @@ makeSweepContext(bool withOpenZL, CacheState cacheState, uint32_t rows) {
   context.cacheState = cacheState;
   context.rows = rows;
   context.encoders = buildDefaultEncoders<T>();
+  // Zstd as an arm in its own right, in fixed-size blocks; needs no OpenZL.
+  for (auto& entry : buildZstdBlockEncoders<T>()) {
+    context.encoders.push_back(std::move(entry));
+  }
+  // The same blocks, kept once decoded, so decoding "one block" does not
+  // decompress the entire column the way a whole-payload inner would.
+  for (auto& entry : buildZstdBlockEncoders<T>()) {
+    if (entry.variant == "block-" + std::to_string(kLazyBlockElementCount)) {
+      context.encoders.push_back(
+          withBlockLazyMaterialization<T>(
+              std::move(entry), kLazyBlockElementCount));
+    }
+  }
+  // Zstd over the whole column, and the same bytes materialized once on
+  // first access: the amortisation question for a blackbox codec.
+  context.encoders.push_back(buildZstdWholeEncoder<T>());
+  context.encoders.push_back(
+      withMaterializedAccess<T>(buildZstdWholeEncoder<T>()));
   if (withOpenZL) {
     // Serves partial reads by decompressing the whole column, which is the
     // comparison the decode drivers exist to make.
     context.encoders.push_back(buildOpenZLEncoder<T>());
+    // The same frame, decompressed once and then served from memory, since
+    // otherwise a blackbox codec has only one way to answer a probe.
+    context.encoders.push_back(
+        withMaterializedAccess<T>(buildOpenZLEncoder<T>()));
+    // The same codec deployed the way a columnar format deploys one,
+    // separating the codec from the granularity it is shipped at.
+    for (auto& entry : buildOpenZLBlockEncoders<T>()) {
+      context.encoders.push_back(std::move(entry));
+    }
+    // Holds only the blocks a workload actually reached, unlike
+    // openzl/auto+materialize which holds the whole decoded column.
+    for (auto& entry : buildOpenZLBlockEncoders<T>()) {
+      if (entry.variant == "block-" + std::to_string(kLazyBlockElementCount)) {
+        context.encoders.push_back(
+            withBlockLazyMaterialization<T>(
+                std::move(entry), kLazyBlockElementCount));
+      }
+    }
+  }
+  // Applied last so it can select an OpenZL entry too. Comma-separated names
+  // matched against the CSV's encoding column; an unknown name is an error.
+  if (!FLAGS_mlidc_encoders.empty()) {
+    std::vector<EncoderEntry<T>> filtered;
+    std::stringstream names(FLAGS_mlidc_encoders);
+    std::string want;
+    while (std::getline(names, want, ',')) {
+      if (want.empty()) {
+        continue;
+      }
+      auto it = std::find_if(
+          context.encoders.begin(),
+          context.encoders.end(),
+          [&](const auto& entry) { return entry.name == want; });
+      NIMBLE_USER_CHECK(
+          it != context.encoders.end(), "Unknown encoder name: {}", want);
+      filtered.push_back(std::move(*it));
+    }
+    context.encoders = std::move(filtered);
+  }
+  // Outermost and after every arm is registered, blackbox codecs included,
+  // so a writer-sized chunk is what selection, the planner and each codec
+  // see.
+  VELOX_CHECK_GE(FLAGS_mlidc_chunk_rows, 0);
+  for (auto& entry : context.encoders) {
+    entry = withChunking<T>(
+        std::move(entry), static_cast<uint32_t>(FLAGS_mlidc_chunk_rows));
   }
   context.datasets = defaultDatasets<T>();
   context.topology = CacheTopology::detect();
@@ -109,6 +218,9 @@ void setIdentityColumns(
   csv.set("encoding", encoder.name);
   csv.set("family", encoder.family);
   csv.set("variant", encoder.variant);
+  csv.set("inventory", encoder.inventory);
+  csv.set("transform", encoder.transform);
+  csv.set("input_order", FLAGS_mlidc_input_order);
   csv.set("is_sequential", encoder.isSequential ? int64_t{1} : int64_t{0});
 }
 
@@ -133,6 +245,26 @@ void writeSkipRow(
   csv.endRow();
 }
 
+/// Writes the row that records a cell whose reads did not return the input.
+///
+/// Unlike writeSkipRow() it carries the identity columns, since the arm did
+/// encode, and whatever cell coordinates setCell adds, so the failed cell can
+/// be found. It carries no timing: skipped=1 and validated=0.
+template <typename T, typename SetCell>
+void writeValidationFailureRow(
+    CsvResultWriter& csv,
+    std::string_view driver,
+    const std::string& dataset,
+    const EncoderEntry<T>& encoder,
+    SetCell&& setCell) {
+  csv.beginRow();
+  setIdentityColumns<T>(csv, driver, dataset, encoder);
+  setCell();
+  csv.set("skipped", int64_t{1});
+  csv.set("validated", int64_t{0});
+  csv.endRow();
+}
+
 /// Encodes data with one encoder, or returns nullptr after writing a skip row.
 ///
 /// An encoder that cannot represent a dataset throws from its factory, which is
@@ -146,9 +278,63 @@ std::unique_ptr<NimbleBenchTargetBase<T>> makeTargetOrSkip(
     std::string_view driver,
     const std::string& dataset) {
   facebook::nimble::Encoding::Options options;
+  subintsplit::TuningConfig tuning;
+  // Withdraws FrequencyPartition from the encodings the split planner may
+  // cost a section against. This moves the boundaries the DP picks, not just
+  // which encoding a section names, since the DP minimises over section cost.
+  if (FLAGS_mlidc_sis_withdraw_frequency_partition) {
+    tuning.allowedEncodings = {
+        facebook::nimble::EncodingType::Trivial,
+        facebook::nimble::EncodingType::RLE,
+        facebook::nimble::EncodingType::Dictionary,
+        facebook::nimble::EncodingType::FixedBitWidth,
+        facebook::nimble::EncodingType::Varint,
+        facebook::nimble::EncodingType::Delta,
+        facebook::nimble::EncodingType::Constant,
+        facebook::nimble::EncodingType::MainlyConstant,
+        facebook::nimble::EncodingType::PFOR,
+        facebook::nimble::EncodingType::SimdForBitpack,
+        facebook::nimble::EncodingType::BlockBitPacking,
+        facebook::nimble::EncodingType::FOR,
+        facebook::nimble::EncodingType::Huffman,
+        facebook::nimble::EncodingType::DeltaBlock,
+    };
+  }
+  // Holds the planner to the codec set sections are held to; see
+  // --mlidc_sis_allowed_encodings.
+  if (auto allowed = sisAllowedEncodings(); !allowed.empty()) {
+    tuning.allowedEncodings = std::move(allowed);
+  }
+  // Zero by default, so every driver's selection is unchanged unless the flag
+  // is set; reaches every arm through the tuning each factory is handed.
+  tuning.selector.decodeWeighting = {
+      .weight = FLAGS_mlidc_sis_decode_weight,
+      .accessPattern = static_cast<subintsplit::DecodeAccessPattern>(
+          FLAGS_mlidc_sis_decode_access_pattern),
+      .readPath = static_cast<subintsplit::DecodeReadPath>(
+          FLAGS_mlidc_sis_decode_read_path),
+  };
+  tuning.maxSizeRegression = FLAGS_mlidc_sis_max_size_regression;
+  tuning.rowFrame = FLAGS_mlidc_sis_row_frame;
+  // Admission and the estimate guards decide whether a stream picks
+  // SubIntSplit at all, so they stay on the options selection reads.
+  options.subIntSplit.admission =
+      static_cast<subintsplit::SubIntSplitAdmission>(FLAGS_mlidc_sis_admission);
+  options.subIntSplit.admissionForces = FLAGS_mlidc_sis_admission_forces;
+  options.subIntSplit.estimateCompressionGuard =
+      FLAGS_mlidc_sis_estimate_compression_guard;
+  options.subIntSplit.estimateBitFlipScreen =
+      FLAGS_mlidc_sis_estimate_bitflip_screen;
+  applyUpstreamFeatures(FLAGS_mlidc_sis_upstream_features, options, tuning);
+  // Which arm is being built is known here, so the encode cache reads it from
+  // here rather than threading it through every encode signature.
+  setCacheContext(encoder.name);
   try {
-    return encoder.factory(data, options);
+    auto target = encoder.factory(data, options, tuning);
+    clearCacheContext();
+    return target;
   } catch (const std::exception& ex) {
+    clearCacheContext();
     std::cerr << "  [SKIP] " << encoder.name << ": " << ex.what() << "\n";
     writeSkipRow(csv, driver, dataset, encoder);
     return nullptr;
@@ -225,6 +411,70 @@ inline void setTimingColumns(
   csv.set("time_ns", result.time.median_ns);
   csv.set("time_p90_ns", result.time.p90_ns);
   csv.set("time_min_ns", result.time.min_ns);
+}
+
+/// Adds the columns that carry a target's read path and the two halves of
+/// its cost: what building the access structure cost, and what a read cost
+/// once it was built.
+inline void appendAccessColumns(std::vector<std::string>& columns) {
+  columns.push_back("read_path");
+  columns.push_back("builds_access_structure");
+  columns.push_back("build_ns");
+  columns.push_back("time_incl_build_ns");
+  columns.push_back("resident_bytes");
+}
+
+/// Measures what building the target's access structure costs, and leaves it
+/// built.
+///
+/// Returns zeros for a target with nothing to build. That is the honest answer
+/// rather than a missing one: a cursor arm's build cost really is nothing, and
+/// an amortisation plot that joins the two needs the zero in order to draw the
+/// flat line the cursor arm makes.
+template <typename T>
+MeasureResult measureAccessStructureBuild(
+    const MeasureSpec& spec,
+    CacheController& controller,
+    const EvictionTargets& targets,
+    NimbleBenchTargetBase<T>& target) {
+  if (!target.buildsAccessStructure()) {
+    return MeasureResult{};
+  }
+  auto result = measure(spec, controller, targets, [&]() {
+    target.discardAccessStructure();
+    target.buildAccessStructure();
+  });
+  // Left built on purpose: the per-read measurement that follows excludes
+  // construction and must not find the structure discarded.
+  target.buildAccessStructure();
+  return result;
+}
+
+/// Sets the access-path columns.
+///
+/// buildNs is what measureAccessStructureBuild() reported and timeNs the
+/// measured read time that excludes it, so the row carries both and their sum
+/// and a reader never has to guess which of the two a number is.
+///
+/// resident_bytes is sampled here, which is after that row's reads rather than
+/// after its build. That ordering is the point: an arm that materialises
+/// lazily has no final footprint until a workload has touched it, so sampling
+/// at construction would report every lazy arm at its compressed size and
+/// erase the axis. It also means the column answers the question the time
+/// columns cannot -- what an arm is holding in order to go that fast.
+template <typename T>
+void setAccessColumns(
+    CsvResultWriter& csv,
+    const NimbleBenchTargetBase<T>& target,
+    int64_t buildNs,
+    int64_t timeNs) {
+  csv.set("read_path", std::string(readPathName(target.readPath())));
+  csv.set(
+      "builds_access_structure",
+      target.buildsAccessStructure() ? int64_t{1} : int64_t{0});
+  csv.set("build_ns", buildNs);
+  csv.set("time_incl_build_ns", timeNs + buildNs);
+  csv.set("resident_bytes", static_cast<int64_t>(target.residentBytes()));
 }
 
 } // namespace facebook::nimble::mlidc

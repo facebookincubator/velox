@@ -50,7 +50,6 @@ target_link_libraries(
   nimble_encodings
   nimble_common
   gtest
-  gtest_main
   gflags::gflags
   glog::glog
   Folly::folly
@@ -73,7 +72,6 @@ target_link_libraries(
   nimble_encodings
   nimble_common
   gtest
-  gtest_main
   gflags::gflags
   glog::glog
   Folly::folly
@@ -85,4 +83,212 @@ add_test(
   nimble_encoding_view_fuzzer_tests
   --view_fuzzer_iterations=2
   --view_fuzzer_max_rows=128
+)
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_tuning_fuzzer_tests SubIntSplitTuningFuzzerTest.cpp)
+  velox_add_test_headers(nimble_subintsplit_tuning_fuzzer_tests SubIntSplitFuzzer.h)
+
+  target_compile_definitions(
+    nimble_subintsplit_tuning_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_tuning_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_tuning_fuzzer_tests
+    nimble_subintsplit_tuning_fuzzer_tests
+    --sis_tuning_fuzzer_iterations=1
+    --sis_tuning_fuzzer_max_rows=256
+  )
+endif()
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_view_fuzzer_tests SubIntSplitEncodingViewFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_view_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_view_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_view_fuzzer_tests
+    nimble_subintsplit_view_fuzzer_tests
+    --sis_view_fuzzer_iterations=2
+    --sis_view_fuzzer_max_rows=128
+  )
+endif()
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_row_frame_fuzzer_tests SubIntSplitRowFrameFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_row_frame_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_row_frame_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_row_frame_fuzzer_tests
+    nimble_subintsplit_row_frame_fuzzer_tests
+    --sis_row_frame_fuzzer_iterations=1
+    --sis_row_frame_fuzzer_max_rows=256
+  )
+endif()
+
+add_executable(nimble_selection_statistics_fuzzer_tests SelectionStatisticsFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+)
+
+add_test(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_selection_statistics_fuzzer_tests
+  --selection_fuzzer_iterations=2
+)
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_key_reorder_fuzzer_tests SubIntSplitKeyReorderFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_key_reorder_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_key_reorder_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_key_reorder_fuzzer_tests
+    nimble_subintsplit_key_reorder_fuzzer_tests
+    --sis_reorder_fuzzer_iterations=1
+    --sis_reorder_fuzzer_max_rows=256
+  )
+endif()
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_planner_fuzzer_tests SubIntSplitPlannerFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_planner_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_planner_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_planner_fuzzer_tests
+    nimble_subintsplit_planner_fuzzer_tests
+    --sis_planner_fuzzer_iterations=1
+    --sis_planner_fuzzer_max_rows=256
+  )
+endif()
+
+if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_executable(nimble_subintsplit_admission_fuzzer_tests SubIntSplitAdmissionFuzzerTest.cpp)
+
+  target_compile_definitions(
+    nimble_subintsplit_admission_fuzzer_tests
+    PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  )
+
+  target_link_libraries(
+    nimble_subintsplit_admission_fuzzer_tests
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    gtest
+    gflags::gflags
+    glog::glog
+    Folly::folly
+    velox_memory
+  )
+
+  add_test(
+    nimble_subintsplit_admission_fuzzer_tests
+    nimble_subintsplit_admission_fuzzer_tests
+    --sis_admission_fuzzer_iterations=1
+    --sis_admission_fuzzer_max_rows=512
+  )
+endif()
+
+add_executable(nimble_estimator_refinement_fuzzer_tests EstimatorRefinementFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_encodings_tests_utils
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+  velox_memory
+)
+
+add_test(
+  nimble_estimator_refinement_fuzzer_tests
+  nimble_estimator_refinement_fuzzer_tests
+  --estimator_fuzzer_iterations=2
+  --estimator_fuzzer_max_rows=1024
 )

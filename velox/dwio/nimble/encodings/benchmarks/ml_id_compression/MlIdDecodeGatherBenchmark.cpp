@@ -34,23 +34,40 @@
 DEFINE_int32(selectivity_steps, 8, "Steps in the selectivity axis");
 DEFINE_int32(run_length_steps, 6, "Steps in the run-length axis");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
-DEFINE_bool(validate, false, "Round-trip check before measuring");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
+DEFINE_string(
+    selectivity_values,
+    "",
+    "Explicit selectivity ladder, comma separated, e.g. "
+    "0.001,0.01,0.05,0.10,0.33,0.66,1.0. Empty keeps the linear axis built "
+    "from --selectivity_steps.\n"
+    "A linear axis spends most of its cells where nothing happens. Measured "
+    "on snowflake, the run-length axis spans 60.45x at selectivity 0.05 (1.8 "
+    "to 107.0 Meps) and 1.01x at selectivity 1.0: small gathers carry all the "
+    "nuance and large ones coalesce, so the ladder wants to be dense at the "
+    "bottom rather than evenly spaced.");
+DEFINE_string(
+    run_length_values,
+    "",
+    "Explicit run-length ladder, comma separated. Empty keeps the log axis "
+    "built from --run_length_steps.");
 
 namespace facebook::nimble::mlidc {
 namespace {
 
-std::vector<std::pair<uint32_t, uint32_t>> toRanges(const GatherTrace& t) {
-  std::vector<std::pair<uint32_t, uint32_t>> ranges;
+std::vector<nimble::RowRange> toRanges(const GatherTrace& t) {
+  std::vector<nimble::RowRange> ranges;
   ranges.reserve(t.ranges.size());
   for (const auto& r : t.ranges)
     ranges.emplace_back(
-        static_cast<uint32_t>(r.begin), static_cast<uint32_t>(r.size()));
+        static_cast<uint32_t>(r.begin), static_cast<uint32_t>(r.end));
   return ranges;
 }
 
 } // namespace
 } // namespace facebook::nimble::mlidc
+
+#include <sstream>
 
 constexpr std::string_view kDriver = "bench_decode_gather";
 
@@ -74,12 +91,43 @@ int runBenchmark() {
     return 1;
   }
 
-  const auto selectivityAxis =
-      linSpaced(0.05, 1.0, static_cast<size_t>(FLAGS_selectivity_steps));
-  const auto runLengthAxis = logSpaced(
-      1,
-      std::max<size_t>(1, n / 4),
-      static_cast<size_t>(FLAGS_run_length_steps));
+  // An explicit ladder overrides the generated axis, kept as an override
+  // rather than a new default so a run without the flags stays reproducible.
+  const auto parseDoubles = [](const std::string& text) {
+    std::vector<double> out;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      if (!item.empty()) {
+        out.push_back(std::stod(item));
+      }
+    }
+    return out;
+  };
+  const auto parseSizes = [](const std::string& text) {
+    std::vector<size_t> out;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      if (!item.empty()) {
+        out.push_back(static_cast<size_t>(std::stoull(item)));
+      }
+    }
+    return out;
+  };
+
+  auto selectivityAxis = parseDoubles(FLAGS_selectivity_values);
+  if (selectivityAxis.empty()) {
+    selectivityAxis =
+        linSpaced(0.05, 1.0, static_cast<size_t>(FLAGS_selectivity_steps));
+  }
+  auto runLengthAxis = parseSizes(FLAGS_run_length_values);
+  if (runLengthAxis.empty()) {
+    runLengthAxis = logSpaced(
+        1,
+        std::max<size_t>(1, n / 4),
+        static_cast<size_t>(FLAGS_run_length_steps));
+  }
 
   auto contextOrNull =
       makeSweepContext<Elem>(/*withOpenZL=*/true, cacheState, n);
@@ -113,6 +161,9 @@ int runBenchmark() {
       "encoding",
       "family",
       "variant",
+      "inventory",
+      "transform",
+      "input_order",
       "is_sequential",
       "N",
       "seed",
@@ -133,7 +184,9 @@ int runBenchmark() {
       "time_p90_ns",
       "time_min_ns",
       "gather_Meps",
-      "skipped"};
+      "skipped",
+      "validated"};
+  appendAccessColumns(csvColumns);
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_gather.csv"
       : FLAGS_mlidc_output_csv;
@@ -142,7 +195,7 @@ int runBenchmark() {
     writeRunManifest(FLAGS_mlidc_output_manifest);
 
   std::vector<Elem> sink(n, Elem{});
-  int validateFailures = 0;
+  ValidationLedger ledger;
   MeasureSpec spec;
   spec.iterations = iters;
   spec.warmup = 2;
@@ -160,36 +213,19 @@ int runBenchmark() {
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
           spec,
-          enc.wholePayloadCodec,
+          target->readPath(),
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
 
-      if (FLAGS_validate && enc.variant != "fpe_noindex") {
-        GatherAccessParams vp{
-            .start = 0,
-            .span = n,
-            .selectivity = 0.3,
-            .runLength = 4,
-            .gapModel = GapModel::UniformDeterministic,
-            .seed = seed};
-        auto trace = buildGatherTrace(n, vp);
-        auto ranges = toRanges(trace);
-        std::vector<Elem> check(trace.selectedRows);
-        target->skipThenMaterialize(ranges, check.data());
-        bool ok = true;
-        size_t idx = 0;
-        for (const auto& r : trace.ranges)
-          for (size_t i = r.begin; i < r.end; ++i, ++idx)
-            if (check[idx] != data[i])
-              ok = false;
-        if (!ok) {
-          std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
-                    << "\n";
-          ++validateFailures;
-          writeSkipRow<Elem>(csv, kDriver, ds.name, enc);
-          continue;
-        }
+      ValidationReference<Elem> reference;
+      if (ledger.enabled() &&
+          !ledger.check(enc.name, ds.name, "reference", [&] {
+            return ValidationReference<Elem>::build(
+                *target, enc, data, reference);
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [] {});
+        continue;
       }
 
       auto cell = makeCellCache<Elem>(
@@ -199,6 +235,12 @@ int runBenchmark() {
           std::span<std::byte>(
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
+
+      // Measured once per encoder rather than per cell: the build does not
+      // depend on which gather runs against it, and every cell reports it so
+      // the gather time can be read with or without construction.
+      const auto build = measureAccessStructureBuild<Elem>(
+          encSpec, cell.controller, cell.targets, *target);
 
       for (double sigma : selectivityAxis) {
         for (size_t rl : runLengthAxis) {
@@ -213,10 +255,44 @@ int runBenchmark() {
           if (trace.selectedRows == 0)
             continue;
           auto ranges = toRanges(trace);
+          const auto setCellColumns = [&] {
+            csv.set("selectivity", sigma);
+            csv.set("run_length", static_cast<int64_t>(rl));
+            csv.set("selectivity_achieved", trace.selectivityAchieved);
+            csv.set("range_count", static_cast<int64_t>(trace.rangeCount));
+            csv.set("selected_rows", static_cast<int64_t>(trace.selectedRows));
+            csv.set("gap_model", std::string(gapModelName(p.gapModel)));
+          };
+          const std::string cellName =
+              fmt::format("selectivity={} run_length={}", sigma, rl);
+          // The gather this cell times, over the same range list, before
+          // timing and again on the output of its last timed iteration.
+          if (ledger.enabled() &&
+              !ledger.check(enc.name, ds.name, cellName, [&] {
+                return validateGather<Elem>(
+                    *target, reference.values(), ranges);
+              })) {
+            writeValidationFailureRow<Elem>(
+                csv, kDriver, ds.name, enc, setCellColumns);
+            continue;
+          }
 
+          poisonOutput<Elem>(std::span<Elem>(sink.data(), trace.selectedRows));
           auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
             target->skipThenMaterialize(ranges, sink.data());
           });
+
+          if (ledger.enabled() &&
+              !ledger.check(enc.name, ds.name, cellName + " timed output", [&] {
+                return checkGatherOutput<Elem>(
+                    std::span<const Elem>(sink.data(), trace.selectedRows),
+                    reference.values(),
+                    ranges);
+              })) {
+            writeValidationFailureRow<Elem>(
+                csv, kDriver, ds.name, enc, setCellColumns);
+            continue;
+          }
 
           const double timeNs = static_cast<double>(result.time.median_ns);
           const double meps = timeNs > 0.0
@@ -230,15 +306,13 @@ int runBenchmark() {
           setCacheColumns(csv, cell.controller, result);
           setPayloadColumns(csv, payloadBytes, context.rawBytes());
           setMeasureColumns(csv, encSpec);
-          csv.set("selectivity", sigma);
-          csv.set("run_length", static_cast<int64_t>(rl));
-          csv.set("selectivity_achieved", trace.selectivityAchieved);
-          csv.set("range_count", static_cast<int64_t>(trace.rangeCount));
-          csv.set("selected_rows", static_cast<int64_t>(trace.selectedRows));
-          csv.set("gap_model", std::string(gapModelName(p.gapModel)));
+          setCellColumns();
           setTimingColumns(csv, result);
           csv.set("gather_Meps", meps);
+          setAccessColumns<Elem>(
+              csv, *target, build.time.median_ns, result.time.median_ns);
           csv.set("skipped", int64_t{0});
+          csv.set("validated", ledger.enabled() ? int64_t{1} : int64_t{0});
           csv.endRow();
         }
       }
@@ -247,11 +321,7 @@ int runBenchmark() {
   }
 
   std::cout << "Results written to: " << csvPath << "\n";
-  if (validateFailures > 0) {
-    std::cerr << validateFailures << " validation failure(s)\n";
-    return 2;
-  }
-  return 0;
+  return ledger.exitCode();
 }
 
 } // namespace

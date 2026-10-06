@@ -36,7 +36,6 @@
 
 DEFINE_int32(probes, 65536, "Number of point lookups per measurement");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
-DEFINE_bool(validate, false, "Round-trip check before measuring");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
 constexpr std::string_view kDriver = "bench_decode_point";
@@ -92,6 +91,9 @@ int runBenchmark() {
       "encoding",
       "family",
       "variant",
+      "inventory",
+      "transform",
+      "input_order",
       "is_sequential",
       "N",
       "seed",
@@ -111,7 +113,9 @@ int runBenchmark() {
       "Mprobes_ps",
       "clock_overhead_ns",
       "emulated_point_read",
-      "skipped"};
+      "skipped",
+      "validated"};
+  appendAccessColumns(csvColumns);
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_point.csv"
       : FLAGS_mlidc_output_csv;
@@ -129,7 +133,7 @@ int runBenchmark() {
   const PointTrace trace = buildPointTrace(traceParams);
 
   Elem sink{};
-  int validateFailures = 0;
+  ValidationLedger ledger;
   MeasureSpec spec;
   spec.iterations = iters;
   spec.warmup = 2;
@@ -149,7 +153,7 @@ int runBenchmark() {
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
           spec,
-          enc.wholePayloadCodec,
+          target->readPath(),
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
@@ -157,45 +161,76 @@ int runBenchmark() {
           ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
           : 0.0;
 
-      if (FLAGS_validate && enc.variant != "fpe_noindex") {
-        bool ok = true;
-        Elem check{};
-        for (size_t idx : trace.indices) {
-          target->materializeRange(static_cast<uint32_t>(idx), 1, &check);
-          ok = check == data[idx];
-          if (!ok)
-            break;
-        }
-        if (!ok) {
-          std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
-                    << "\n";
-          ++validateFailures;
-          writeSkipRow<Elem>(csv, kDriver, ds.name, enc);
-          continue;
-        }
-      }
-
       auto cell = makeCellCache<Elem>(
           context.cacheState,
           context.topology,
           *target,
           std::span<std::byte>(reinterpret_cast<std::byte*>(&sink), kElemSize));
 
+      // What building the access structure costs, measured once and reported
+      // beside the per-probe time rather than folded into it, so a view arm
+      // reports both numbers from one run. Leaves the structure built for the
+      // probe measurement below.
+      const auto build = measureAccessStructureBuild<Elem>(
+          encSpec, cell.controller, cell.targets, *target);
+
       // Every probe against a whole-payload codec decompresses the entire
       // column, so the full probe count would take hours. Per-probe cost is
       // constant, so a prefix of the trace yields the same ns_per_probe.
-      const size_t encProbes = enc.wholePayloadCodec
+      const size_t encProbes = target->readPath() == ReadPath::kWholePayload
           ? std::min<size_t>(
                 probes,
                 static_cast<size_t>(
                     std::max(1, FLAGS_mlidc_block_codec_probes)))
           : probes;
 
+      // Exactly the probes the timed loop issues, in its order, against the
+      // structure it reads through.
+      const std::span<const size_t> timedProbes(
+          trace.indices.data(), encProbes);
+      ValidationReference<Elem> reference;
+      if (ledger.enabled() && !ledger.check(enc.name, ds.name, "probes", [&] {
+            if (auto mismatch = ValidationReference<Elem>::build(
+                    *target, enc, data, reference)) {
+              return mismatch;
+            }
+            return validatePoints<Elem>(
+                *target, reference.values(), timedProbes);
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [&] {
+          csv.set("probes", static_cast<int64_t>(encProbes));
+        });
+        csv.flush();
+        continue;
+      }
+
+      poisonOutput<Elem>(std::span<Elem>(&sink, 1));
       auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
         for (size_t i = 0; i < encProbes; ++i)
           target->materializeRange(
               static_cast<uint32_t>(trace.indices[i]), 1, &sink);
       });
+
+      // The sink holds only the last probe of the last timed iteration, so
+      // the warm target's probes are replayed as well.
+      if (ledger.enabled() &&
+          !ledger.check(enc.name, ds.name, "timed output", [&] {
+            const size_t lastRow = timedProbes.back();
+            if (auto mismatch = firstMismatch<Elem>(
+                    std::span<const Elem>(&sink, 1),
+                    reference.values().subspan(lastRow, 1),
+                    lastRow)) {
+              return mismatch;
+            }
+            return validatePoints<Elem>(
+                *target, reference.values(), timedProbes);
+          })) {
+        writeValidationFailureRow<Elem>(csv, kDriver, ds.name, enc, [&] {
+          csv.set("probes", static_cast<int64_t>(encProbes));
+        });
+        csv.flush();
+        continue;
+      }
 
       const double timeNs = static_cast<double>(result.time.median_ns);
       const double nsPerProbe =
@@ -223,8 +258,16 @@ int runBenchmark() {
       csv.set("ns_per_probe", nsPerProbe);
       csv.set("Mprobes_ps", mProbesPerSec);
       csv.set("clock_overhead_ns", clockOverhead.median_ns);
-      csv.set("emulated_point_read", int64_t{1});
+      // True when the arm answers a one-row probe by decoding more than one
+      // row: a cursor replay from row zero, a whole block, or a whole payload.
+      csv.set(
+          "emulated_point_read",
+          servesPointReadDirectly(target->readPath()) ? int64_t{0}
+                                                      : int64_t{1});
+      setAccessColumns<Elem>(
+          csv, *target, build.time.median_ns, result.time.median_ns);
       csv.set("skipped", int64_t{0});
+      csv.set("validated", ledger.enabled() ? int64_t{1} : int64_t{0});
       csv.endRow();
       csv.flush();
       std::cout << "  " << enc.name << ": " << payloadBytes << " B, "
@@ -233,11 +276,7 @@ int runBenchmark() {
   }
 
   std::cout << "\nResults written to: " << csvPath << "\n";
-  if (validateFailures > 0) {
-    std::cerr << validateFailures << " validation failure(s)\n";
-    return 2;
-  }
-  return 0;
+  return ledger.exitCode();
 }
 
 } // namespace

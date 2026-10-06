@@ -16,6 +16,7 @@
 #define NIMBLE_ENCODING_SELECTION_DEBUG
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -181,6 +182,60 @@ TEST(EncodingSelectionTest, manualSelectionReturnsSelectedEstimate) {
   });
 }
 
+// The screen drops the costly candidates a sample rules out and nothing else.
+// On a near-unique stream MainlyConstant and Dictionary lose to bit packing by
+// far more than the margin, while Trivial and FixedBitWidth are never
+// screened. On a stream of a few values the costly ones are what wins.
+TEST(EncodingSelectionTest, screenDropsCostlyCandidatesTheSampleRulesOut) {
+  const std::vector<std::pair<nimble::EncodingType, float>> candidates{
+      {nimble::EncodingType::Trivial, 0.7f},
+      {nimble::EncodingType::FixedBitWidth, 0.9f},
+      {nimble::EncodingType::MainlyConstant, 1.0f},
+      {nimble::EncodingType::Dictionary, 1.0f},
+      {nimble::EncodingType::RLE, 1.0f},
+  };
+  const auto typesOf = [](const auto& entries) {
+    std::vector<nimble::EncodingType> types;
+    for (const auto& entry : entries) {
+      types.push_back(entry.first);
+    }
+    return types;
+  };
+
+  std::vector<uint32_t> nearUnique(200'000);
+  for (uint32_t i = 0; i < nearUnique.size(); ++i) {
+    nearUnique[i] = (i * 2'654'435'761u) & 0xFF'FFFF;
+  }
+  std::vector<uint32_t> fewValues(200'000);
+  for (uint32_t i = 0; i < fewValues.size(); ++i) {
+    fewValues[i] = i % 97 == 0 ? 1'000'000 : 7;
+  }
+
+  nimble::Encoding::Options options;
+  auto unscreened = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{nearUnique}, unscreened, options);
+  EXPECT_EQ(typesOf(candidates), typesOf(unscreened));
+
+  options.selectionScreenRows = 16'384;
+  auto screened = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{nearUnique}, screened, options);
+  const auto screenedTypes = typesOf(screened);
+  const auto contains = [](const auto& types, nimble::EncodingType type) {
+    return std::find(types.begin(), types.end(), type) != types.end();
+  };
+  EXPECT_TRUE(contains(screenedTypes, nimble::EncodingType::Trivial));
+  EXPECT_TRUE(contains(screenedTypes, nimble::EncodingType::FixedBitWidth));
+  EXPECT_FALSE(contains(screenedTypes, nimble::EncodingType::MainlyConstant));
+  EXPECT_FALSE(contains(screenedTypes, nimble::EncodingType::Dictionary));
+
+  auto kept = candidates;
+  nimble::screenCandidatesBySample<uint32_t>(
+      std::span<const uint32_t>{fewValues}, kept, options);
+  EXPECT_TRUE(contains(typesOf(kept), nimble::EncodingType::MainlyConstant));
+}
+
 TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {
   const std::vector<uint32_t> values{1, 2, 3};
   const auto valueSpan =
@@ -194,6 +249,36 @@ TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {
 
   EXPECT_EQ(selection.encodingType, nimble::EncodingType::Trivial);
   EXPECT_FALSE(selection.estimatedSize.has_value());
+}
+
+// Values spanning 31 bits pack slightly smaller than Trivial's 32, but
+// Trivial's 0.7 read factor still wins the weighted comparison against
+// FixedBitWidth's 0.9. Section estimator refinements withhold that discount
+// where Trivial is the larger encoding, so there FixedBitWidth wins.
+TEST(EncodingSelectionTest, sectionRefinementsWithholdTrivialDiscount) {
+  std::vector<uint32_t> values(4'096);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = (i * 2'654'435'761u) & 0x7FFF'FFFF;
+  }
+  const auto valueSpan =
+      std::span<const uint32_t>{values.data(), values.size()};
+  const auto statistics = nimble::Statistics<uint32_t>::create(valueSpan);
+  nimble::ManualEncodingSelectionPolicy<uint32_t> policy{
+      {{nimble::EncodingType::Trivial, 0.7},
+       {nimble::EncodingType::FixedBitWidth, 0.9}},
+      std::nullopt,
+      std::nullopt};
+
+  nimble::Encoding::Options options;
+  options.fixedBitWidthUseExactBits = true;
+  EXPECT_EQ(
+      policy.select(valueSpan, statistics, options).encodingType,
+      nimble::EncodingType::Trivial);
+
+  options.subIntSplit.sectionEstimatorRefinements = true;
+  EXPECT_EQ(
+      policy.select(valueSpan, statistics, options).encodingType,
+      nimble::EncodingType::FixedBitWidth);
 }
 
 // EncodingFactory reads Huffman back through RETURN_ENCODING_BY_INTEGER_TYPE,

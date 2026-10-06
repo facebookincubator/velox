@@ -79,6 +79,11 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier ExceptionHighParts = 3;
   };
 
+  struct SubIntSplit {
+    // No named constants: section identifiers are the section index itself
+    // (0..splitCount-1, max 64), used directly by callers.
+  };
+
   struct FrequencyPartition {
     // Partition metadata
     // Eventually we may want to allow for non-power-of-two bit partitions, but
@@ -101,6 +106,7 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Keys32Bit = 13;
     // Unencoded partition (raw values that don't fit in any tier)
     static constexpr NestedEncodingIdentifier UnencodedValues = 14;
+    static constexpr NestedEncodingIdentifier TierTags = 15;
   };
 
   struct Pfor {

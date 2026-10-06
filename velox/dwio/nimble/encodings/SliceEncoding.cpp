@@ -351,6 +351,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
     case EncodingType::FrequencyPartition:
     case EncodingType::FOR:
     case EncodingType::Fsst:
@@ -434,6 +435,7 @@ size_t applyValueDeltaPushdown(
     case EncodingType::SimdForBitpack:
     case EncodingType::BlockBitPacking:
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
     case EncodingType::FrequencyPartition:
     case EncodingType::FOR:
     case EncodingType::Fsst:
