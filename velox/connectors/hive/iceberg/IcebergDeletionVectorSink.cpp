@@ -36,9 +36,17 @@ namespace {
 constexpr int32_t kFilePathChannel = 0;
 constexpr int32_t kPositionChannel = 1;
 constexpr int32_t kExpectedChannelCount = 2;
+// Index of the partition_data field in the 4-field Iceberg row-id ROW
+// ROW<file_path, pos, spec_id, partition_data>. Only meaningful on the
+// row-id-struct path; the legacy flat path carries no partition.
+constexpr int32_t kPartitionDataChannel = 3;
 
 // Builds the JSON commit fragment the coordinator consumes for one written
-// deletion-vector Puffin file.
+// deletion-vector Puffin file. 'partitionData' is the row-id's partition_data
+// field verbatim (already in {"partitionValues":[...]} shape); it is emitted
+// as partitionDataJson only when non-empty. Unpartitioned tables synthesize
+// "" and the Java commit path requires the key solely for partitioned
+// tables, mirroring IcebergDataSink.
 std::string buildDeletionVectorCommitMessage(
     const std::string& puffinPath,
     uint64_t fileSize,
@@ -46,13 +54,17 @@ std::string buildDeletionVectorCommitMessage(
     int64_t partitionSpecId,
     const std::string& referencedDataFile,
     uint64_t contentOffset,
-    uint64_t contentLength) {
+    uint64_t contentLength,
+    const std::string& partitionData) {
   folly::dynamic msg = folly::dynamic::object;
   msg["path"] = puffinPath;
   msg["fileSizeInBytes"] = static_cast<int64_t>(fileSize);
   msg["metrics"] =
       folly::dynamic::object("recordCount", static_cast<int64_t>(recordCount));
   msg["partitionSpecJson"] = partitionSpecId;
+  if (!partitionData.empty()) {
+    msg["partitionDataJson"] = partitionData;
+  }
   msg["fileFormat"] = "PUFFIN";
   msg["referencedDataFile"] = referencedDataFile;
   msg["content"] = "POSITION_DELETES";
@@ -147,6 +159,22 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
     const SelectivityVector baseRows(rowId->size());
     DecodedVector decodedFilePath(*rowId->childAt(kFilePathChannel), baseRows);
     DecodedVector decodedPosition(*rowId->childAt(kPositionChannel), baseRows);
+    // Field 3 carries the per-split PartitionData JSON the reader synthesized
+    // ("" for unpartitioned tables). It is threaded into PerFileState so the
+    // commit message can carry partitionDataJson for partitioned tables.
+    // The row-id ROW always has at least 4 fields here: the constructor
+    // requires a ROW whose first two fields are (VARCHAR, BIGINT), and the
+    // Iceberg row-id shape appends spec_id + partition_data after those.
+    VELOX_USER_CHECK_GE(
+        rowId->childrenSize(),
+        kPartitionDataChannel + 1,
+        "row-id ROW must carry the partition_data field, got {} fields",
+        rowId->childrenSize());
+    VELOX_USER_CHECK(
+        rowId->childAt(kPartitionDataChannel)->type()->isVarchar(),
+        "row-id partition_data field must be VARCHAR");
+    DecodedVector decodedPartitionData(
+        *rowId->childAt(kPartitionDataChannel), baseRows);
     for (vector_size_t i = 0; i < numRows; ++i) {
       if (decodedRowId.isNullAt(i)) {
         continue;
@@ -157,8 +185,19 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
       VELOX_USER_CHECK(
           !decodedPosition.isNullAt(row), "Null pos in DELETE input row");
       const auto pathSlice = decodedFilePath.valueAt<StringView>(row);
-      PerFileState& state =
-          findOrCreatePerFile(std::string(pathSlice.data(), pathSlice.size()));
+      // A null partition field means unpartitioned (Java emits "" there);
+      // normalize to "" so the commit message omits the key, matching
+      // IcebergDataSink.
+      std::string partitionData;
+      if (!decodedPartitionData.isNullAt(row)) {
+        const auto partitionSlice =
+            decodedPartitionData.valueAt<StringView>(row);
+        partitionData =
+            std::string(partitionSlice.data(), partitionSlice.size());
+      }
+      PerFileState& state = findOrCreatePerFile(
+          std::string(pathSlice.data(), pathSlice.size()),
+          std::move(partitionData));
       state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(row));
     }
     return;
@@ -176,21 +215,37 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
     VELOX_USER_CHECK(
         !decodedPosition.isNullAt(i), "Null pos in DELETE input row");
     const auto pathSlice = decodedFilePath.valueAt<StringView>(i);
-    PerFileState& state =
-        findOrCreatePerFile(std::string(pathSlice.data(), pathSlice.size()));
+    // Legacy flat layout carries no partition: the merge-sink delete batch
+    // projects only (file_path, pos). Partitioned writes through this path
+    // omit partitionDataJson, and the Java commit side rejects them loudly
+    // for partitioned tables (matching prior behavior).
+    PerFileState& state = findOrCreatePerFile(
+        std::string(pathSlice.data(), pathSlice.size()), /*partitionData=*/"");
     state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(i));
   }
 }
 
 IcebergDeletionVectorSink::PerFileState&
-IcebergDeletionVectorSink::findOrCreatePerFile(const std::string& path) {
+IcebergDeletionVectorSink::findOrCreatePerFile(
+    const std::string& path,
+    std::string partitionData) {
   if (auto it = perFileIndex_.find(path); it != perFileIndex_.end()) {
-    return perFile_[it->second].second;
+    auto& state = perFile_[it->second].second;
+    // Same data file implies same partition; a mismatch is driven by
+    // query data (user error surface), so use VELOX_USER_CHECK_EQ to
+    // match the sibling input-shape checks above.
+    VELOX_USER_CHECK_EQ(
+        state.partitionData,
+        partitionData,
+        "Conflicting partition_data for data file {}",
+        path);
+    return state;
   }
   const size_t index = perFile_.size();
   perFile_.emplace_back(path, PerFileState{});
   perFileIndex_.emplace(path, index);
   PerFileState& state = perFile_.back().second;
+  state.partitionData = std::move(partitionData);
   seedFromExistingDeletionVector(state, path);
   return state;
 }
@@ -301,7 +356,8 @@ bool IcebergDeletionVectorSink::finish() {
         partitionSpecId,
         entry.first,
         offset,
-        length));
+        length,
+        entry.second.partitionData));
   }
   return true;
 }

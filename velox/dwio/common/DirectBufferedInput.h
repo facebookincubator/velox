@@ -86,14 +86,12 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
       uint64_t /* groupId */,
       const std::vector<LoadRequest*>& requests,
       memory::MemoryPool* pool,
-      int32_t loadQuantum,
-      bool sharedAllocationEnabled)
+      int32_t loadQuantum)
       : CoalescedLoad({}, {}),
         ioStatistics_(ioStatistics),
         ioStats_(ioStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
-        sharedAllocationEnabled_(sharedAllocationEnabled),
         pool_(pool),
         sharedAllocation_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
@@ -155,9 +153,6 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   const std::shared_ptr<velox::IoStats> ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
-  // Whether the shared allocation may back this load's buffers at all. When
-  // false, every request keeps its own page-rounded allocation.
-  const bool sharedAllocationEnabled_;
   memory::MemoryPool* const pool_;
   // Shared allocation backing all non-tiny request buffers; bump-packs them
   // into a few allocations, freed as a unit on destruction.

@@ -180,6 +180,15 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
   }
 
+  // Runtime stats omit zero-valued counters, so a missing stat reads as zero.
+  static int64_t getTableScanRuntimeStat(
+      const std::shared_ptr<Task>& task,
+      std::string_view name) {
+    const auto runtimeStats = getTableScanRuntimeStats(task);
+    const auto it = runtimeStats.find(std::string(name));
+    return it == runtimeStats.end() ? 0 : it->second.sum;
+  }
+
   // Verifies I/O is bounded by one footer and one data read of the unique file.
   static void assertStorageReadStats(
       const std::unordered_map<std::string, RuntimeMetric>& runtimeStats,
@@ -752,7 +761,6 @@ TEST_F(TableScanTest, filterPushdown) {
   // EXPECT_LT(tableScanStats.inputRows, tableScanStats.rawInputRows);
   EXPECT_EQ(tableScanStats.inputRows, tableScanStats.outputRows);
 
-#if 0
   // Repeat the same but do not project out the filtered columns.
   assignments.clear();
   assignments["c0"] =
@@ -767,10 +775,10 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // TODO: zero column non-empty table is not possible in cudf, need to implement.
-  // Do the same for count, no columns projected out.
+  // Count with no projections, however the filter columns c1 and c3 are still
+  // read.
   assignments.clear();
   assertQuery(
       PlanBuilder()
@@ -779,20 +787,14 @@ TEST_F(TableScanTest, filterPushdown) {
           .tableHandle(tableHandle)
           .assignments(assignments)
           .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
+          .singleAggregation({}, {"count(1)"})
           .planNode(),
       filePaths,
-      "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT count(*) FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // Do the same for count, no filter, no projections.
+  // Do the same for count, no filter, no projections. Only the footer is read.
   assignments.clear();
-  // subfieldFilters.clear(); // Explicitly clear this.
-  tableHandle = makeTableHandle(
-      "parquet_table",
-      rowType,
-      false,
-      nullptr,
-      nullptr);
+  tableHandle = makeTableHandle("parquet_table", rowType);
   assertQuery(
       PlanBuilder()
           .startTableScan()
@@ -800,11 +802,10 @@ TEST_F(TableScanTest, filterPushdown) {
           .tableHandle(tableHandle)
           .assignments(assignments)
           .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
+          .singleAggregation({}, {"count(1)"})
           .planNode(),
       filePaths,
       "SELECT count(*) FROM tmp");
-#endif
 }
 
 // Disable this test and the one below for now, pending a CUDF fix.
@@ -1001,6 +1002,119 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       tableScanNode(),
       makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
+}
+
+// Verify that a `count(*)` scan with no projected columns returns the correct
+// row count from the Parquet footer
+TEST_F(TableScanTest, countStarNoProjectedColumns) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  // Scans no columns, the shape a `SELECT count(*)` plan produces.
+  auto countStarPlan = PlanBuilder(pool_.get())
+                           .startTableScan()
+                           .outputType(ROW({}, {}))
+                           .tableHandle(makeTableHandle())
+                           .endTableScan()
+                           .singleAggregation({}, {"count(1)"})
+                           .planNode();
+
+  // Counts the same rows through a decoded column, the oracle for the
+  // footer-derived counts below.
+  auto countColumnPlan = PlanBuilder(pool_.get())
+                             .startTableScan()
+                             .outputType(ROW({"c0"}, {INTEGER()}))
+                             .tableHandle(makeTableHandle())
+                             .endTableScan()
+                             .singleAggregation({}, {"count(1)"})
+                             .planNode();
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+  const auto halfFileSize = fileSize / 2;
+
+  const auto countRows = [&](const core::PlanNodePtr& plan,
+                             uint64_t start,
+                             uint64_t length) {
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .split(Split(makeCudfHiveConnectorSplit(
+                          filePath->getPath(), start, length)))
+                      .copyResults(pool_.get(), task);
+    EXPECT_EQ(result->size(), 1);
+    // A footer-only scan reads no column chunks.
+    if (plan == countStarPlan) {
+      EXPECT_LT(
+          getTableScanRuntimeStat(task, io::kStorageReadBytes), fileSize / 4);
+    }
+    return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+  };
+
+  // A split owns only the row groups that start inside its byte range, so a
+  // whole-file footer count would over-count either half.
+  const auto firstHalf = countRows(countStarPlan, 0, halfFileSize);
+  const auto secondHalf =
+      countRows(countStarPlan, halfFileSize, fileSize - halfFileSize);
+  EXPECT_EQ(firstHalf, countRows(countColumnPlan, 0, halfFileSize));
+  EXPECT_EQ(
+      secondHalf,
+      countRows(countColumnPlan, halfFileSize, fileSize - halfFileSize));
+  EXPECT_EQ(firstHalf + secondHalf, 10'000);
+
+  // A split that starts past the last row group owns no rows.
+  EXPECT_EQ(countRows(countStarPlan, fileSize, 1), 0);
+}
+
+// A remaining filter that folds to a constant must either keep the row count
+// from the footer or skip the split without reading any columns.
+TEST_F(TableScanTest, constantRemainingFilter) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  using CountAndSkippedSplits = std::pair<int64_t, int64_t>;
+  const auto countRows = [&](const core::TypedExprPtr& remainingFilter) {
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(ROW({}, {}))
+                    .tableHandle(makeTableHandle(
+                        "parquet_table", rowType_, {}, remainingFilter))
+                    .endTableScan()
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .split(makeCudfHiveSplit(filePath->getPath()))
+                      .copyResults(pool_.get(), task);
+    EXPECT_EQ(result->size(), 1);
+    return CountAndSkippedSplits{
+        result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0),
+        getTableScanRuntimeStat(task, "skippedSplits")};
+  };
+
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true)),
+      CountAndSkippedSplits(10'000, 0));
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), false)),
+      CountAndSkippedSplits(0, 1));
+  EXPECT_EQ(
+      countRows(
+          std::make_shared<core::ConstantTypedExpr>(
+              BOOLEAN(), Variant::null(TypeKind::BOOLEAN))),
+      CountAndSkippedSplits(0, 1));
+
+  // A non-constant filter that references no column is rejected.
+  auto randomFilter = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::CallTypedExpr>(
+              DOUBLE(), std::vector<core::TypedExprPtr>{}, "rand"),
+          std::make_shared<core::ConstantTypedExpr>(DOUBLE(), 0.5),
+      },
+      "gt");
+  VELOX_ASSERT_USER_THROW(
+      countRows(randomFilter), "references no column is not supported");
 }
 
 // Verify that extractFiltersFromRemainingFilter extracts simple single-column

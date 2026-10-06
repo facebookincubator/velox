@@ -20,6 +20,7 @@ add_executable(
   EncodedVectorCopyTest.cpp
   EncodingTest.cpp
   EnsureWritableVectorTest.cpp
+  FlatMapKeyIndexTest.cpp
   FlatMapVectorTest.cpp
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp

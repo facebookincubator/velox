@@ -17,6 +17,7 @@
 #include "velox/exec/Cursor.h"
 
 #include <folly/OperationCancelled.h>
+#include <folly/Synchronized.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
 #include <optional>
@@ -415,8 +416,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   bool moveNext(ContinueFuture* future) override {
     while (true) {
       start();
-      if (error_) {
-        std::rethrow_exception(error_);
+      if (auto error = error_.copy()) {
+        std::rethrow_exception(error);
       }
 
       // Task might be aborted before start.
@@ -477,7 +478,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   }
 
   void setError(std::exception_ptr error) override {
-    error_ = error;
+    *error_.wlock() = error;
     if (task_) {
       task_->setError(error);
     }
@@ -521,7 +522,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   RowVectorPtr current_;
   bool atEnd_{false};
   tsan_atomic<bool> noMoreSplits_{false};
-  std::exception_ptr error_;
+
+  // Gives an injected error precedence over the task's own error.
+  folly::Synchronized<std::exception_ptr> error_;
 };
 
 class SingleThreadedTaskCursor : public TaskCursorBase {

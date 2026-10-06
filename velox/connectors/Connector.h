@@ -823,13 +823,20 @@ class Connector {
  public:
   explicit Connector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config = nullptr)
-      : id_(id), config_(std::move(config)) {}
+      std::shared_ptr<const config::ConfigBase> config = nullptr,
+      std::string owner = {})
+      : id_(id), config_(std::move(config)), owner_(std::move(owner)) {}
 
   virtual ~Connector() = default;
 
   const std::string& connectorId() const {
     return id_;
+  }
+
+  /// Returns the owner to attribute connector exceptions to, or an empty
+  /// string if no owner was specified.
+  const std::string& owner() const {
+    return owner_;
   }
 
   const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
@@ -983,6 +990,7 @@ class Connector {
 
   const std::string id_;
   const std::shared_ptr<const config::ConfigBase> config_;
+  const std::string owner_;
 
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
