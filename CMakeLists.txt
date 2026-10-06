@@ -518,6 +518,12 @@ if(ENABLE_ALL_WARNINGS)
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
+  # nvcc otherwise takes its host compiler from PATH, which may differ from
+  # CMAKE_CXX_COMPILER and give .cu files a different standard library. Must be
+  # set before enable_language(CUDA) reads it.
+  if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+    set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
+  endif()
   enable_language(CUDA)
   # Use same C++ standard throughout
   set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
