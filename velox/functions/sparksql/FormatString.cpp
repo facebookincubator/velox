@@ -130,8 +130,8 @@ static constexpr int kMaxFormattedSize = 1 << 20; // 1 MiB.
 template <typename... Values>
 void snprintfAppend(std::string& output, const char* format, Values... values) {
   std::array<char, 128> buffer;
-  int formattedSize =
-      std::snprintf(buffer.data(), buffer.size(), format, values...);
+  int formattedSize{
+      std::snprintf(buffer.data(), buffer.size(), format, values...)};
   VELOX_CHECK_GE(formattedSize, 0, "snprintf encoding error in format_string");
   VELOX_CHECK_LE(
       formattedSize,
@@ -144,7 +144,7 @@ void snprintfAppend(std::string& output, const char* format, Values... values) {
     return;
   }
 
-  size_t oldSize = output.size();
+  size_t oldSize{output.size()};
   output.resize(oldSize + outputSize + 1);
   std::snprintf(output.data() + oldSize, outputSize + 1, format, values...);
   output.resize(oldSize + outputSize); // Trim the trailing NUL.
@@ -153,9 +153,9 @@ void snprintfAppend(std::string& output, const char* format, Values... values) {
 // Builds the string specifier Java uses for null values: width and
 // left-alignment are preserved, while numeric flags are ignored.
 std::string makeNullSpecifier(std::string_view specifier) {
-  std::string result = "%";
-  size_t i = 1;
-  bool leftAlign = false;
+  std::string result{"%"};
+  size_t i{1};
+  bool leftAlign{false};
   while (i < specifier.size() &&
          (specifier[i] == '-' || specifier[i] == '+' || specifier[i] == '0' ||
           specifier[i] == ' ')) {
@@ -166,7 +166,7 @@ std::string makeNullSpecifier(std::string_view specifier) {
     result += '-';
   }
   while (i < specifier.size() && specifier[i] >= '0' && specifier[i] <= '9') {
-    result += specifier[i++];
+    result.push_back(specifier[i++]);
   }
   result += 's';
   return result;
@@ -174,6 +174,9 @@ std::string makeNullSpecifier(std::string_view specifier) {
 
 // Keeps parsed pattern data reusable across rows with a constant pattern.
 struct FormatPart {
+  FormatPart(std::string formatText, std::optional<size_t> argumentIndex)
+      : formatText{std::move(formatText)}, argumentIndex{argumentIndex} {}
+
   // Contains literal bytes when argumentIndex is empty; otherwise, contains
   // the original validated conversion specifier.
   std::string formatText;
@@ -196,7 +199,7 @@ void formatOneValue(
     const TypePtr& argumentType,
     std::string& output) {
   const auto& specifier = part.formatText;
-  char conversion = specifier.back();
+  char conversion{specifier.back()};
 
   // Java's Formatter formats null as "null" for all conversion types,
   // applying string width from the specifier. Uppercase conversions
@@ -227,22 +230,22 @@ void formatOneValue(
       break;
     }
     case 'd': {
-      int64_t value = valueToLong(decoded, row, argumentType);
+      int64_t value{valueToLong(decoded, row, argumentType)};
       snprintfAppend(output, part.printfSpecifier.c_str(), value);
       break;
     }
     case 'o': {
-      uint64_t value = valueToUnsigned(decoded, row, argumentType);
+      uint64_t value{valueToUnsigned(decoded, row, argumentType)};
       snprintfAppend(output, part.printfSpecifier.c_str(), value);
       break;
     }
     case 'x': {
-      uint64_t value = valueToUnsigned(decoded, row, argumentType);
+      uint64_t value{valueToUnsigned(decoded, row, argumentType)};
       snprintfAppend(output, part.printfSpecifier.c_str(), value);
       break;
     }
     case 'X': {
-      uint64_t value = valueToUnsigned(decoded, row, argumentType);
+      uint64_t value{valueToUnsigned(decoded, row, argumentType)};
       snprintfAppend(output, part.printfSpecifier.c_str(), value);
       break;
     }
@@ -252,160 +255,196 @@ void formatOneValue(
   }
 }
 
-// Parses and validates a normalized pattern into reusable formatting parts.
-std::vector<FormatPart> parsePattern(
-    std::string_view pattern,
-    size_t numArguments) {
-  std::vector<FormatPart> parts;
-  std::string literal;
-  size_t argumentIndex = 1;
-  size_t i = 0;
+bool isFormatFlag(char character) {
+  return character == '-' || character == '+' || character == '0' ||
+      character == ' ';
+}
 
-  auto flushLiteral = [&]() {
+bool isDigit(char character) {
+  return character >= '0' && character <= '9';
+}
+
+std::string
+parseFlags(std::string_view pattern, size_t& position, std::string& specifier) {
+  std::string flags;
+  while (position < pattern.size() && isFormatFlag(pattern[position])) {
+    VELOX_USER_CHECK(
+        flags.find(pattern[position]) == std::string::npos,
+        "Duplicate flag in format_string: '{}'",
+        pattern[position]);
+    flags += pattern[position];
+    specifier += pattern[position++];
+  }
+  return flags;
+}
+
+void parseBoundedDigits(
+    std::string_view pattern,
+    size_t& position,
+    std::string& specifier,
+    std::string_view component) {
+  size_t value{0};
+  while (position < pattern.size() && isDigit(pattern[position])) {
+    const auto digit{static_cast<size_t>(pattern[position] - '0')};
+    VELOX_USER_CHECK_LE(
+        value,
+        (static_cast<size_t>(kMaxFormattedSize) - digit) / 10,
+        "format_string size exceeds supported maximum for {}",
+        component);
+    value = value * 10 + digit;
+    specifier += pattern[position++];
+  }
+}
+
+void validateSpecifier(
+    std::string_view flags,
+    bool hasWidth,
+    bool hasPrecision,
+    char conversion,
+    std::string_view specifier) {
+  const bool hasLeftAlign{flags.find('-') != std::string::npos};
+  const bool hasPlus{flags.find('+') != std::string::npos};
+  const bool hasSpace{flags.find(' ') != std::string::npos};
+  const bool hasZero{flags.find('0') != std::string::npos};
+  VELOX_USER_CHECK(
+      (!hasLeftAlign && !hasZero) || hasWidth,
+      "format_string flags '-' and '0' require a width");
+  VELOX_USER_CHECK(
+      !(hasLeftAlign && hasZero),
+      "format_string does not support combining '-' and '0'");
+  VELOX_USER_CHECK(
+      !(hasPlus && hasSpace),
+      "format_string does not support combining '+' and space");
+
+  switch (conversion) {
+    case 's':
+      VELOX_USER_CHECK(
+          flags.empty() && !hasWidth && !hasPrecision,
+          "format_string supports only bare %s");
+      return;
+    case 'd':
+      VELOX_USER_CHECK(
+          !hasPrecision, "format_string does not support integer precision");
+      return;
+    case 'o':
+    case 'x':
+    case 'X':
+      VELOX_USER_CHECK(
+          !hasPrecision && !hasPlus && !hasSpace,
+          "Unsupported flags or precision for integral format_string: {}",
+          specifier);
+      return;
+    default:
+      VELOX_USER_FAIL(
+          "Unsupported format conversion character: '{}'", conversion);
+  }
+}
+
+void appendFormatPart(
+    std::vector<FormatPart>& parts,
+    std::string specifier,
+    size_t argumentIndex,
+    char conversion) {
+  parts.emplace_back(std::move(specifier), argumentIndex);
+  auto& part{parts.back()};
+  part.nullSpecifier = makeNullSpecifier(part.formatText);
+  switch (conversion) {
+    case 'd':
+      part.printfSpecifier =
+          part.formatText.substr(0, part.formatText.size() - 1) + PRId64;
+      return;
+    case 'o':
+      part.printfSpecifier =
+          part.formatText.substr(0, part.formatText.size() - 1) + PRIo64;
+      return;
+    case 'x':
+      part.printfSpecifier =
+          part.formatText.substr(0, part.formatText.size() - 1) + PRIx64;
+      return;
+    case 'X':
+      part.printfSpecifier =
+          part.formatText.substr(0, part.formatText.size() - 1) + PRIX64;
+      return;
+    case 's':
+      return;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+void parsePattern(
+    std::string_view pattern,
+    size_t numArguments,
+    std::vector<FormatPart>& parts) {
+  parts.clear();
+  std::string literal;
+  size_t argumentIndex{1};
+  size_t position{0};
+
+  const auto flushLiteral = [&]() {
     if (!literal.empty()) {
-      parts.push_back({std::move(literal), std::nullopt, "", ""});
+      parts.emplace_back(std::move(literal), std::nullopt);
       literal.clear();
     }
   };
 
-  while (i < pattern.size()) {
-    if (pattern[i] != '%') {
-      literal += pattern[i++];
+  while (position < pattern.size()) {
+    if (pattern[position] != '%') {
+      literal += pattern[position++];
       continue;
     }
 
-    if (i + 1 < pattern.size() && pattern[i + 1] == '%') {
+    if (position + 1 < pattern.size() && pattern[position + 1] == '%') {
       literal += '%';
-      i += 2;
+      position += 2;
       continue;
     }
 
     flushLiteral();
     std::string specifier{"%"};
-    ++i;
+    ++position;
 
-    std::string flags;
-    while (i < pattern.size() &&
-           (pattern[i] == '-' || pattern[i] == '+' || pattern[i] == '0' ||
-            pattern[i] == ' ')) {
-      VELOX_USER_CHECK(
-          flags.find(pattern[i]) == std::string::npos,
-          "Duplicate flag in format_string: '{}'",
-          pattern[i]);
-      flags += pattern[i];
-      specifier += pattern[i++];
-    }
+    const auto flags{parseFlags(pattern, position, specifier)};
+    const auto widthStart{position};
+    parseBoundedDigits(pattern, position, specifier, "width");
+    const bool hasWidth{position > widthStart};
 
-    const auto widthStart = i;
-    size_t width = 0;
-    while (i < pattern.size() && pattern[i] >= '0' && pattern[i] <= '9') {
-      const auto digit = static_cast<size_t>(pattern[i] - '0');
-      VELOX_USER_CHECK(
-          width <= (static_cast<size_t>(kMaxFormattedSize) - digit) / 10,
-          "format_string width must not exceed {}",
-          kMaxFormattedSize);
-      width = width * 10 + digit;
-      specifier += pattern[i++];
-    }
-    const bool hasWidth = i > widthStart;
-
-    bool hasPrecision = false;
-    if (i < pattern.size() && pattern[i] == '.') {
+    bool hasPrecision{false};
+    if (position < pattern.size() && pattern[position] == '.') {
       hasPrecision = true;
-      specifier += pattern[i++];
-      const auto precisionStart = i;
-      size_t precision = 0;
-      while (i < pattern.size() && pattern[i] >= '0' && pattern[i] <= '9') {
-        const auto digit = static_cast<size_t>(pattern[i] - '0');
-        VELOX_USER_CHECK(
-            precision <= (static_cast<size_t>(kMaxFormattedSize) - digit) / 10,
-            "format_string precision must not exceed {}",
-            kMaxFormattedSize);
-        precision = precision * 10 + digit;
-        specifier += pattern[i++];
-      }
-      VELOX_USER_CHECK(
-          i > precisionStart,
+      specifier += pattern[position++];
+      const auto precisionStart{position};
+      parseBoundedDigits(pattern, position, specifier, "precision");
+      VELOX_USER_CHECK_GT(
+          position,
+          precisionStart,
           "format_string precision requires at least one digit");
     }
 
-    VELOX_USER_CHECK(
-        i < pattern.size(), "Incomplete format specifier in format_string");
-    const char conversion = pattern[i++];
+    VELOX_USER_CHECK_LT(
+        position,
+        pattern.size(),
+        "Incomplete format specifier in format_string");
+    const char conversion{pattern[position++]};
     specifier += conversion;
+    validateSpecifier(flags, hasWidth, hasPrecision, conversion, specifier);
 
-    const bool hasLeftAlign = flags.find('-') != std::string::npos;
-    const bool hasPlus = flags.find('+') != std::string::npos;
-    const bool hasSpace = flags.find(' ') != std::string::npos;
-    const bool hasZero = flags.find('0') != std::string::npos;
-    VELOX_USER_CHECK(
-        (!hasLeftAlign && !hasZero) || hasWidth,
-        "format_string flags '-' and '0' require a width");
-    VELOX_USER_CHECK(
-        !(hasLeftAlign && hasZero),
-        "format_string does not support combining '-' and '0'");
-    VELOX_USER_CHECK(
-        !(hasPlus && hasSpace),
-        "format_string does not support combining '+' and space");
-
-    switch (conversion) {
-      case 's':
-        VELOX_USER_CHECK(
-            flags.empty() && !hasWidth && !hasPrecision,
-            "format_string supports only bare %s");
-        break;
-      case 'd':
-        VELOX_USER_CHECK(
-            !hasPrecision, "format_string does not support integer precision");
-        break;
-      case 'o':
-      case 'x':
-      case 'X':
-        VELOX_USER_CHECK(
-            !hasPrecision && !hasPlus && !hasSpace,
-            "Unsupported flags or precision for integral format_string: {}",
-            specifier);
-        break;
-      default:
-        VELOX_USER_FAIL(
-            "Unsupported format conversion character: '{}'", conversion);
-    }
-
-    VELOX_USER_CHECK(
-        argumentIndex < numArguments,
-        "Not enough arguments for format_string: specifier {} ({}) has no "
-        "argument; {} provided",
+    VELOX_USER_CHECK_LT(
         argumentIndex,
-        specifier,
-        numArguments - 1);
-    FormatPart part{std::move(specifier), argumentIndex++, "", ""};
-    part.nullSpecifier = makeNullSpecifier(part.formatText);
-    switch (conversion) {
-      case 'd':
-        part.printfSpecifier =
-            part.formatText.substr(0, part.formatText.size() - 1) + PRId64;
-        break;
-      case 'o':
-        part.printfSpecifier =
-            part.formatText.substr(0, part.formatText.size() - 1) + PRIo64;
-        break;
-      case 'x':
-        part.printfSpecifier =
-            part.formatText.substr(0, part.formatText.size() - 1) + PRIx64;
-        break;
-      case 'X':
-        part.printfSpecifier =
-            part.formatText.substr(0, part.formatText.size() - 1) + PRIX64;
-        break;
-      case 's':
-        break;
-      default:
-        VELOX_UNREACHABLE();
-    }
-    parts.push_back(std::move(part));
+        numArguments,
+        "Not enough arguments for format_string: specifier '{}'",
+        specifier);
+    appendFormatPart(parts, std::move(specifier), argumentIndex++, conversion);
   }
 
   flushLiteral();
+}
+
+std::vector<FormatPart> parsePattern(
+    std::string_view pattern,
+    size_t numArguments) {
+  std::vector<FormatPart> parts;
+  parsePattern(pattern, numArguments, parts);
   return parts;
 }
 
@@ -443,15 +482,16 @@ class FormatStringFunction : public exec::VectorFunction {
       }
     }
 
+    std::vector<FormatPart> perRowParts;
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      std::vector<FormatPart> perRowParts;
       const std::vector<FormatPart>* parts;
       if (constantParts.has_value()) {
         parts = &constantParts.value();
       } else {
-        perRowParts = parsePattern(
+        parsePattern(
             normalizeUtf8(decodedArguments[0]->valueAt<StringView>(row)),
-            arguments.size());
+            arguments.size(),
+            perRowParts);
         parts = &perRowParts;
       }
 
@@ -576,15 +616,13 @@ exec::ExprPtr FormatStringCallToSpecialForm::constructSpecialForm(
     std::vector<exec::ExprPtr>&& arguments,
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
-  auto numArguments = arguments.size();
-  VELOX_USER_CHECK(
-      numArguments >= 1,
-      "format_string requires at least one argument: {}",
-      numArguments);
+  const auto numArguments{arguments.size()};
+  VELOX_USER_CHECK_GE(
+      numArguments, 1, "format_string requires at least one argument");
   VELOX_USER_CHECK(
       arguments[0]->type()->isVarchar(),
       "The first argument of format_string must be a varchar: {}",
-      arguments[0]->type()->toString());
+      arguments[0]->type());
 
   return std::make_shared<FormatStringExpr>(
       type, std::move(arguments), trackCpuUsage);

@@ -162,6 +162,7 @@ String Functions
 .. spark:function:: format_string(format, arguments...) -> varchar
 
     Formats the arguments using a subset of Java's printf-style syntax.
+    ``printf`` is an alias for ``format_string`` and supports the same syntax.
     See `Spark's format_string documentation
     <https://spark.apache.org/docs/latest/api/sql/index.html#format_string>`_
     for the canonical function behavior.

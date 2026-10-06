@@ -224,7 +224,7 @@ TEST_F(FormatStringTest, rejectsUnsupportedConversionsAndOptions) {
 
   VELOX_ASSERT_USER_THROW(
       evaluateOnce<StringView>("format_string()"),
-      "format_string requires at least one argument: 0");
+      "format_string requires at least one argument");
   VELOX_ASSERT_USER_THROW(
       evaluate<SimpleVector<StringView>>(
           "format_string(c0)", makeRowVector({integers})),
@@ -264,12 +264,15 @@ TEST_F(FormatStringTest, rejectsMalformedFormatsAndMissingArguments) {
   VELOX_ASSERT_USER_THROW(
       evaluate<SimpleVector<StringView>>(
           "format_string('%99999999d', c0)", makeRowVector({integers})),
-      "format_string width must not exceed 1048576");
+      "format_string size exceeds supported maximum for width");
+  VELOX_ASSERT_USER_THROW(
+      evaluate<SimpleVector<StringView>>(
+          "format_string('%.99999999d', c0)", makeRowVector({integers})),
+      "format_string size exceeds supported maximum for precision");
   VELOX_ASSERT_USER_THROW(
       evaluate<SimpleVector<StringView>>(
           "format_string('%d %d', c0)", makeRowVector({integers})),
-      "Not enough arguments for format_string: specifier 2 (%d) has no "
-      "argument; 1 provided");
+      "Not enough arguments for format_string: specifier '%d'");
   VELOX_ASSERT_USER_THROW(
       evaluate<SimpleVector<StringView>>(
           "format_string('%', c0)", makeRowVector({integers})),
