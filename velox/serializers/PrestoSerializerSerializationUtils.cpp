@@ -1171,6 +1171,9 @@ int32_t rowsToRanges(
     auto* mutableNonNullRows = nonNullHolder.get(numRows);
     auto* mutableInnerRows = innerRowsHolder.get(numRows);
     numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableNonNullRows);
+    if (sizesPtr && numInner != numRows) {
+      *sizesPtr[0] += bits::nbytes(numRows);
+    }
     if (stream) {
       stream->appendLengths(
           nulls, rows, numInner, [&](auto row) { return sizes[row]; });
