@@ -1758,30 +1758,79 @@ RowVectorPtr toHost(const RowVectorPtr& batch, memory::MemoryPool* pool) {
 }
 
 // Collects a consumer Task's output. The Consumer callback runs on driver
-// threads, so the batches need their own lock.
+// threads, so the batches need their own lock. The callback holds the store
+// rather than 'this': a Task can outlive a case that failed early.
 class TaskShuffleResults {
  public:
   exec::Consumer consumer() {
     return
-        [this](
+        [batches = batches_](
             RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
           if (batch != nullptr && batch->size() > 0) {
-            batches_.wlock()->push_back(std::move(batch));
+            batches->wlock()->push_back(std::move(batch));
           }
           return exec::BlockingReason::kNotBlocked;
         };
   }
 
   std::vector<RowVectorPtr> batches() const {
-    return batches_.copy();
+    return batches_->copy();
   }
 
   void clear() {
-    batches_.wlock()->clear();
+    batches_->wlock()->clear();
   }
 
  private:
-  folly::Synchronized<std::vector<RowVectorPtr>> batches_;
+  const std::shared_ptr<folly::Synchronized<std::vector<RowVectorPtr>>>
+      batches_{
+          std::make_shared<folly::Synchronized<std::vector<RowVectorPtr>>>()};
+};
+
+// The UCX round trip goes through the communicator's event loop, so allow well
+// over waitForTaskCompletion's 1s default.
+constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
+
+// Cancels the Tasks a case started, and waits for their drivers to stop, when
+// it goes out of scope. A case that bails out early -- a failed ASSERT or
+// VELOX_CHECK -- would otherwise leave producers blocked in the process-wide
+// UcxOutputQueueManager for every later case, running over cuDF state that
+// CudfRegistration has already torn down. Then it drops 'results', whose
+// vectors come from the Tasks' operator pools, before the Tasks themselves go.
+// The wait is bounded: a Task that does not stop in time is reported as a test
+// failure rather than hanging the binary, which would hide which case failed.
+// Declare it after the CudfRegistration and TaskShuffleResults it protects.
+class StartedTasks {
+ public:
+  explicit StartedTasks(TaskShuffleResults* results) : results_(results) {}
+
+  StartedTasks(const StartedTasks&) = delete;
+  StartedTasks& operator=(const StartedTasks&) = delete;
+
+  ~StartedTasks() {
+    for (const auto& task : tasks_) {
+      if (!task->requestCancel().wait(
+              std::chrono::microseconds(kTaskShuffleMaxWaitMicros))) {
+        ADD_FAILURE() << "Task did not stop after cancellation: "
+                      << task->taskId();
+      }
+    }
+    if (results_ != nullptr) {
+      results_->clear();
+    }
+  }
+
+  void add(std::shared_ptr<exec::Task> task) {
+    tasks_.push_back(std::move(task));
+  }
+
+  void add(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+    tasks_.insert(tasks_.end(), tasks.begin(), tasks.end());
+  }
+
+ private:
+  TaskShuffleResults* const results_;
+  std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
 
 // Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter, and
@@ -1819,10 +1868,6 @@ vector_size_t totalRows(const std::vector<RowVectorPtr>& batches) {
   }
   return total;
 }
-
-// The UCX round trip goes through the communicator's event loop, so allow well
-// over waitForTaskCompletion's 1s default.
-constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
 
 // Starts one 'Values -> PartitionedOutput' Task per entry in 'producers', all
 // on 'transportKind'. The Tasks are returned rather than waited for: a producer
@@ -1969,11 +2014,13 @@ std::vector<RowVectorPtr> runTaskShuffle(
     const std::function<exec::Split(const std::string&)>& splitFor,
     memory::MemoryPool* pool,
     exec::TaskStats* consumerStats) {
-  auto producerTasks = startTaskShuffleProducers(transportKind, producers);
-
   TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
+  auto producerTasks = startTaskShuffleProducers(transportKind, producers);
+  startedTasks.add(producerTasks);
   auto consumerTask =
       makeTaskShuffleTask(consumerTaskId, consumerPlan, results.consumer());
+  startedTasks.add(consumerTask);
   consumerTask->start(1);
   for (const auto& producer : producers) {
     consumerTask->addSplit(consumerNodeId, splitFor(producer.first));
@@ -2131,14 +2178,16 @@ TEST_F(UcxExchangeFocusedTest, zeroColumnPayloadKeepsItsRowCount) {
                           .planFragment();
 
   const auto producerTaskId = taskPrefix + "zeroColumnProducer";
-  auto producerTasks = startTaskShuffleProducers(
-      std::string{core::TransportKind::kUcx}, {{producerTaskId, batches}});
-
   // Not runTaskShuffle(): its toHost() converts through taskShuffleRowType(),
   // and there is nothing to convert here. The counts are read directly instead.
   TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
+  auto producerTasks = startTaskShuffleProducers(
+      std::string{core::TransportKind::kUcx}, {{producerTaskId, batches}});
+  startedTasks.add(producerTasks);
   auto consumerTask = makeTaskShuffleTask(
       taskPrefix + "zeroColumnConsumer", consumerPlan, results.consumer());
+  startedTasks.add(consumerTask);
   consumerTask->start(1);
   consumerTask->addSplit(exchangeNodeId, remoteSplit(producerTaskId, 0));
   consumerTask->noMoreSplits(exchangeNodeId);
@@ -2301,7 +2350,10 @@ TEST_F(
       kNumProducers,
       kNumRowsPerProducer);
   const auto expected = allBatchesOf(producers);
+  TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
   auto producerTasks = startTaskShuffleProducers(ucx, producers);
+  startedTasks.add(producerTasks);
 
   // The Task under test: a kUcx merge exchange straight into a kUcx partitioned
   // output, which is the all-GPU driver.
@@ -2320,6 +2372,7 @@ TEST_F(
           .planFragment();
   const auto sorterTaskId = taskPrefix + "gpuMergeSorter";
   auto sorterTask = makeTaskShuffleTask(sorterTaskId, sorterPlan, nullptr);
+  startedTasks.add(sorterTask);
   sorterTask->start(1);
   for (const auto& producer : producers) {
     sorterTask->addSplit(mergeNodeId, remoteSplit(producer.first, 0));
@@ -2334,9 +2387,9 @@ TEST_F(
           .exchange(taskShuffleRowType(), taskShuffleSerdeKind(), ucx)
           .capturePlanNodeId(drainNodeId)
           .planFragment();
-  TaskShuffleResults results;
   auto drainTask = makeTaskShuffleTask(
       taskPrefix + "gpuMergeDrain", drainPlan, results.consumer());
+  startedTasks.add(drainTask);
   drainTask->start(1);
   drainTask->addSplit(drainNodeId, remoteSplit(sorterTaskId, 0));
   drainTask->noMoreSplits(drainNodeId);
