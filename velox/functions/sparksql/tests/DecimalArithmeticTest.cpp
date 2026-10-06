@@ -1279,6 +1279,40 @@ TEST_F(DecimalArithmeticTest, checkedDivide) {
           DECIMAL(20, 2), DECIMAL(17, 3), 500, 1000)),
       HugeInt::parse("500000000000000000"));
 
+  // Negative dividend, negative divisor, and both negative.
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -500, 1000)),
+      HugeInt::parse("-500000000000000000000"));
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 500, -1000)),
+      HugeInt::parse("-500000000000000000000"));
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -500, -1000)),
+      HugeInt::parse("500000000000000000000"));
+
+  // Only the divisor is checked for zero, so a zero dividend returns 0.
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 0, 1000)),
+      0);
+
+  // NULL input returns NULL, even with a zero divisor.
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), std::nullopt, 1000)),
+      std::nullopt);
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 500, std::nullopt)),
+      std::nullopt);
+  EXPECT_EQ(
+      (checkedDivide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), std::nullopt, 0)),
+      std::nullopt);
+
   // Division by zero throws (and try() returns null) for all type combos.
   assertErrorForCheckedDivide<int64_t, int64_t>(
       DECIMAL(17, 3), DECIMAL(17, 3), 500, 0, "Division by zero");
