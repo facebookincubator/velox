@@ -22,9 +22,11 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorExceptionProperties.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
@@ -35,6 +37,9 @@ namespace {
 class TestConnector : public connector::Connector {
  public:
   TestConnector(const std::string& id) : connector::Connector(id) {}
+
+  TestConnector(const std::string& id, std::string owner)
+      : connector::Connector(id, nullptr, std::move(owner)) {}
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr& /* outputType */,
@@ -52,6 +57,36 @@ class TestConnector : public connector::Connector {
     VELOX_NYI();
   }
 };
+
+TEST(ConnectorTest, exceptionProperties) {
+  auto makeProperties = [](VeloxException::Type /*exceptionType*/,
+                           void* untypedConnector)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    const auto* connector = static_cast<const Connector*>(untypedConnector);
+    auto properties = std::make_shared<ConnectorExceptionProperties>();
+    properties->owner = connector->owner();
+    properties->connectorId = connector->connectorId();
+    properties->tableName = "orders";
+    return properties;
+  };
+
+  auto connector = std::make_shared<TestConnector>("test", "test-owner");
+  ExceptionContextSetter context(
+      {.arg = connector.get(), .propertiesFunc = makeProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& exception) {
+    VeloxUserError veloxException(
+        std::current_exception(), exception.what(), false);
+    const auto properties =
+        std::dynamic_pointer_cast<const ConnectorExceptionProperties>(
+            veloxException.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "test-owner");
+    EXPECT_EQ(properties->connectorId, "test");
+    EXPECT_EQ(properties->tableName, "orders");
+  }
+}
 
 TEST(ConnectorTest, registryOperations) {
   const int32_t numConnectors = 10;
