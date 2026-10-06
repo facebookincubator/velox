@@ -354,6 +354,42 @@ TEST_F(UcxTransportRegistrationTest, ucxEntriesRequireCudfEnabledForQuery) {
       "The UCX exchange transport requires cuDF for this query");
 }
 
+// When the query sets nothing, the check falls back to the process-wide
+// CudfConfig::enabled. That is the "disable globally, enable per query" setup,
+// in which the cuDF adapter skips conversion and this check is the only
+// safeguard.
+TEST_F(UcxTransportRegistrationTest, ucxEntryFollowsProcessWideCudfEnabled) {
+  registerCudfWithExchange(true);
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool savedEnabled = config.enabled;
+  SCOPE_EXIT {
+    config.enabled = savedEnabled;
+  };
+  config.enabled = false;
+
+  auto entry =
+      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+
+  auto unsetTask = makeTask(
+      "test-ucx-global-cudf-disabled-task",
+      makeExchangePlan(TransportKind::kUcx),
+      /*queryConfig=*/{});
+  VELOX_ASSERT_USER_THROW(
+      entry->makeClient(makeClientContext(unsetTask)),
+      "The UCX exchange transport requires cuDF for this query");
+
+  auto enabledTask = makeTask(
+      "test-ucx-query-cudf-enabled-task",
+      makeExchangePlan(TransportKind::kUcx),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "true"}});
+  auto client = entry->makeClient(makeClientContext(enabledTask));
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
+      nullptr);
+  client->close();
+}
+
 TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
   registerCudfWithExchange(true);
 
