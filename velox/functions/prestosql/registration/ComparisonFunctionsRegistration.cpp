@@ -100,6 +100,8 @@ void registerComparisonFunctions(
   registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
       {prefix + "distinct_from"}, {}, true, defaultOwner);
 
+  registerFunction<BetweenFunction, bool, bool, bool, bool>(
+      {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"}, {}, true, defaultOwner);
   registerFunction<BetweenFunction, bool, int16_t, int16_t, int16_t>(
