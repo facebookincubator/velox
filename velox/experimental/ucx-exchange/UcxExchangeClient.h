@@ -38,19 +38,15 @@ class UcxExchangeClient
   /// Flow control limit on the number of elements buffered in the queue.
   static constexpr int32_t kDefaultMaxQueuedColumns = 32;
 
-  /// Max wait for a batch of data to accumulate in the queue.
-  static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
-
   /// @param taskId Id of the consuming task, for logging.
-  /// @param destination Index of the partition to fetch from the producers.
+  /// @param destination Partition the consuming task reads. Only validated:
+  /// each split URL names the partition its source fetches.
   /// @param numberOfConsumers Number of UcxExchange operators sharing this
   /// client.
-  /// @param requestDataSizesMaxWaitSec Max wait for a data-size request.
   UcxExchangeClient(
       std::string taskId,
       int destination,
-      int32_t numberOfConsumers,
-      int32_t requestDataSizesMaxWaitSec = 10);
+      int32_t numberOfConsumers);
 
   ~UcxExchangeClient() override;
 
@@ -85,22 +81,10 @@ class UcxExchangeClient
   PackedTableWithStreamPtr
   next(int consumerId, bool* atEnd, ContinueFuture* future);
 
-  /// Max wait for a data-size request to a producer.
-  std::chrono::seconds requestDataSizesMaxWaitSec() const {
-    return requestDataSizesMaxWaitSec_;
-  }
-
-  /// Ids of the upstream tasks added so far.
-  const std::unordered_set<std::string>& getRemoteTaskIdList() const {
-    return remoteTaskIds_;
-  }
-
  private:
   // Handy for ad-hoc logging.
   const std::string taskId_;
-  const int destination_;
   const int32_t maxQueuedColumns_;
-  const std::chrono::seconds requestDataSizesMaxWaitSec_;
 
   const std::shared_ptr<UcxExchangeQueue> queue_;
 

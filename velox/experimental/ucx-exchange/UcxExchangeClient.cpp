@@ -23,12 +23,9 @@ namespace facebook::velox::ucx_exchange {
 UcxExchangeClient::UcxExchangeClient(
     std::string taskId,
     int destination,
-    int32_t numberOfConsumers,
-    int32_t requestDataSizesMaxWaitSec)
+    int32_t numberOfConsumers)
     : taskId_{std::move(taskId)},
-      destination_(destination),
       maxQueuedColumns_(kDefaultMaxQueuedColumns),
-      requestDataSizesMaxWaitSec_(requestDataSizesMaxWaitSec),
       queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
   VELOX_CHECK_GE(
       destination, 0, "Exchange client destination must not be negative");
