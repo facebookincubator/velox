@@ -312,6 +312,14 @@ class TableEvolutionFuzzer {
       double bytesPerRow,
       int64_t targetBatchBytes = kTargetBatchBytes);
 
+  /// Rounds every timestamp in 'vector' that falls inside the second before
+  /// the Unix epoch and has a fractional part down to that whole second.
+  /// Descends into the elements, keys, values and children of complex vectors,
+  /// which must all be flat. DWRF reads such a timestamp back one second later,
+  /// to match the Java ORC writer, and the generated rows are the oracle for
+  /// every file format.
+  static void roundDownUnrepresentableTimestamps(const VectorPtr& vector);
+
   explicit TableEvolutionFuzzer(const Config& config);
 
   static const std::string& connectorId();
@@ -366,6 +374,17 @@ class TableEvolutionFuzzer {
   static std::vector<std::string> projectedColumnNames(
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
+
+  /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
+  /// order. If any cursor fails, waits for the others to finish, then rethrows
+  /// the error of the first failed cursor in 'cursors'. With OOM injection
+  /// enabled, an injected OOM ends a cursor early with the rows read so far.
+  /// When this returns, 'executor' holds no reference to any cursor, so the
+  /// caller holds the last reference to every task and can destroy the tasks
+  /// before the memory pools their plans reference.
+  static std::vector<std::vector<RowVectorPtr>> runTaskCursors(
+      const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+      folly::Executor& executor);
 
   void run();
 
