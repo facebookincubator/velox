@@ -41,14 +41,29 @@ class RoundTest : public SparkFunctionBaseTest {
 TEST_F(RoundTest, finiteInputsDoNotProduceNonFiniteResults) {
   EXPECT_EQ(round<double>(-3.5, 308), -3.5);
 
-  const auto minimum = std::numeric_limits<double>::denorm_min();
-  EXPECT_EQ(round<double>(minimum, 309), minimum);
+  const auto doubleMinimum = std::numeric_limits<double>::denorm_min();
+  EXPECT_EQ(round<double>(doubleMinimum, 309), doubleMinimum);
   EXPECT_EQ(
-      round<double>(minimum, std::numeric_limits<int32_t>::max()), minimum);
+      round<double>(doubleMinimum, std::numeric_limits<int32_t>::max()),
+      doubleMinimum);
   EXPECT_EQ(round<double>(1.0, std::numeric_limits<int32_t>::min()), 0.0);
 
+  const auto floatMinimum = std::numeric_limits<float>::denorm_min();
+  EXPECT_EQ(round<float>(floatMinimum, 309), floatMinimum);
+  EXPECT_EQ(round<float>(-3.5F, 308), -3.5F);
+
   const auto floatMaximum = std::numeric_limits<float>::max();
-  EXPECT_EQ(round<float>(floatMaximum, 40), floatMaximum);
+  EXPECT_EQ(round<float>(floatMaximum, -35), floatMaximum);
+  EXPECT_EQ(round<float>(-floatMaximum, -35), -floatMaximum);
+}
+
+TEST_F(RoundTest, ordinaryValues) {
+  EXPECT_EQ(round<double>(2.5), 3.0);
+  EXPECT_EQ(round<double>(-2.5), -3.0);
+  EXPECT_EQ(round<float>(1.5F), 2.0F);
+  EXPECT_EQ(round<double>(1.234, 2), 1.23);
+  EXPECT_EQ(round<double>(125.0, -1), 130.0);
+  EXPECT_EQ(round<double>(17'592'186'044'416.25, 1), 17'592'186'044'416.3);
 }
 
 TEST_F(RoundTest, canonicalZero) {

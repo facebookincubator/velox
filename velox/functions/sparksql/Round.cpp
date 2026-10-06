@@ -17,6 +17,9 @@
 #include "velox/functions/sparksql/Round.h"
 
 #include <cmath>
+#include <limits>
+
+#include "velox/functions/prestosql/ArithmeticImpl.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -28,8 +31,12 @@ T canonicalizeZero(T value) {
 
 template <typename T>
 T finiteOrOriginal(double candidate, T original) {
-  const auto result = static_cast<T>(candidate);
-  return std::isfinite(result) ? canonicalizeZero(result) : original;
+  if (!std::isfinite(candidate) ||
+      candidate > static_cast<double>(std::numeric_limits<T>::max()) ||
+      candidate < static_cast<double>(std::numeric_limits<T>::lowest())) {
+    return original;
+  }
+  return canonicalizeZero(static_cast<T>(candidate));
 }
 
 template <typename T>
@@ -44,8 +51,8 @@ T roundFloatingPointImpl(T input, int32_t scale) {
     return canonicalizeZero(std::round(input));
   }
 
-  const double factor = std::pow(10.0, scale);
   if (scale < 0) {
+    const double factor = std::pow(10.0, scale);
     if (factor == 0) {
       return 0;
     }
@@ -57,28 +64,8 @@ T roundFloatingPointImpl(T input, int32_t scale) {
     return finiteOrOriginal(rounded / factor, input);
   }
 
-  if (!std::isfinite(factor)) {
-    return input;
-  }
-  const double scaled = static_cast<double>(input) * factor;
-  if (!std::isfinite(scaled)) {
-    return input;
-  }
-
-  const T truncated = std::trunc(input);
-  const T fraction = input - truncated;
-  if (fraction == 0) {
-    return input;
-  }
-
-  double candidate;
-  if (std::abs(input) < 17'592'186'044'415.F) {
-    candidate = std::round(scaled) / factor;
-  } else {
-    candidate =
-        truncated + std::round(static_cast<double>(fraction) * factor) / factor;
-  }
-  return finiteOrOriginal(candidate, input);
+  return finiteOrOriginal(
+      facebook::velox::functions::round(input, scale), input);
 }
 
 } // namespace

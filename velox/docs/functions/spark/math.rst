@@ -424,8 +424,10 @@ Mathematical Functions
     For floating-point inputs, returns positive zero if an extreme negative
     scale underflows the scale factor. Returns ``x`` unchanged if scaling or
     conversion would otherwise turn a finite input into infinity or NaN. This
-    prevents non-finite artifacts but can differ from Spark's decimal rounding
-    for subnormal values at extreme positive scales.
+    prevents non-finite artifacts. Unlike Spark, this also preserves a finite
+    ``REAL`` input when the rounded value exceeds the finite ``REAL`` range.
+    Results can also differ from Spark's decimal rounding for subnormal values
+    at extreme positive scales.
 
 .. spark:function:: sec(x) -> double
 
