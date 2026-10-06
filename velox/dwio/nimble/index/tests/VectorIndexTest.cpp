@@ -545,6 +545,10 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },
       TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      TestParam{
           .indexType = VectorIndexType::kHnswSq8,
           .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
       },
@@ -887,6 +891,11 @@ TEST_F(VectorIndexTest, searchFiltersRowsBeforeTopK) {
       },
       TestParam{
           .indexType = VectorIndexType::kIvfRaBitQ,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
               std::numeric_limits<uint32_t>::max()),
       },
@@ -1478,6 +1487,11 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
       },
       {
           .indexType = VectorIndexType::kIvfRaBitQ,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
           .metric = VectorDistanceMetric::kL2,
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },

@@ -29,6 +29,7 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#include <faiss/IndexIVFRaBitQFastScan.h>
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/impl/IDSelector.h>
 #include <faiss/impl/zerocopy_io.h>
@@ -82,6 +83,9 @@ bool checkIndexType(const faiss::Index& index, VectorIndexType indexType) {
       return dynamic_cast<const faiss::IndexIVFPQ*>(&index) != nullptr;
     case VectorIndexType::kIvfRaBitQ:
       return dynamic_cast<const faiss::IndexIVFRaBitQ*>(&index) != nullptr;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return dynamic_cast<const faiss::IndexIVFRaBitQFastScan*>(&index) !=
+          nullptr;
     case VectorIndexType::kHnswSq8:
       return dynamic_cast<const faiss::IndexHNSWSQ*>(&index) != nullptr;
     default:
@@ -253,12 +257,17 @@ void searchIvfIndex(
       partitionLabels.data(),
       searchParameters.quantizer_params);
 
-  // Pass request-local statistics to avoid FAISS's process-global
-  // indexIVF_stats, which is not safe for concurrent searches.
+  // Pass request-local statistics to implementations that support them to
+  // avoid FAISS's process-global indexIVF_stats during concurrent searches.
+  // FastScan does not populate IndexIVFStats.
   //
   // TODO: Aggregate per-search FAISS statistics in VectorIndex for
   // observability.
   faiss::IndexIVFStats searchStats;
+  auto* searchStatsPtr =
+      dynamic_cast<const faiss::IndexIVFRaBitQFastScan*>(&index) == nullptr
+      ? &searchStats
+      : nullptr;
   index.search_preassigned(
       numQueries,
       queryVectors,
@@ -269,7 +278,7 @@ void searchIvfIndex(
       labels,
       /*store_pairs=*/false,
       &searchParameters,
-      &searchStats);
+      searchStatsPtr);
 }
 
 // Returns whether the runtime index type belongs to the IVF family.
@@ -281,6 +290,7 @@ bool isIvfIndexType(VectorIndexType indexType) {
     case VectorIndexType::kIvfSq8:
     case VectorIndexType::kIvfPq:
     case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kIvfRaBitQFastScan:
       return true;
   }
   NIMBLE_UNREACHABLE(
