@@ -25,8 +25,7 @@ namespace {
 // resolution.
 //
 // TODO: transcribe the full Presto Java `TypeCoercion` table. Today's set
-// matches Velox's defaults plus BIGINT -> REAL (Presto allows this lossy
-// conversion; Velox defaults do not).
+// matches Velox's defaults plus BIGINT -> REAL and UNKNOWN -> DECIMAL(1, 0).
 std::vector<CoercionEntry> prestoRules() {
   std::vector<CoercionEntry> rules;
 
@@ -56,6 +55,7 @@ std::vector<CoercionEntry> prestoRules() {
        SMALLINT(),
        INTEGER(),
        BIGINT(),
+       DECIMAL(1, 0),
        REAL(),
        DOUBLE(),
        VARCHAR(),

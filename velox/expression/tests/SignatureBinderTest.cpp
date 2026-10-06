@@ -152,6 +152,24 @@ TEST(SignatureBinderTest, unknown) {
   }
 }
 
+TEST(SignatureBinderTest, partialBindingWithCoercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("array(T)")
+                       .argumentType("array(T)")
+                       .argumentType("function(T,boolean)")
+                       .build();
+  const std::vector<TypePtr> actualTypes{ARRAY(VARCHAR()), nullptr};
+  exec::SignatureBinder binder(
+      *signature, actualTypes, TypeCoercer::defaults());
+  std::vector<Coercion> coercions;
+
+  ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+  VELOX_ASSERT_EQ_TYPES(
+      binder.tryResolveType(signature->argumentTypes()[1].parameters()[0]),
+      VARCHAR());
+}
+
 TEST(SignatureBinderTest, decimals) {
   // Decimal Add/Subtract.
   {
@@ -403,6 +421,18 @@ TEST(SignatureBinderTest, decimals) {
 
     testSignatureBinder(signature, {DECIMAL(38, 0)}, VARCHAR());
     assertCannotBind(signature, {DECIMAL(18, 6)});
+  }
+
+  // A numeric constraint outside the binder's integer range is invalid.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision", "2147483648")
+                         .returnType("boolean")
+                         .argumentType("decimal(precision, 0)")
+                         .build();
+
+    assertCannotBind(signature, {DECIMAL(10, 0)});
+    assertCannotBind(signature, {INTEGER()}, /*allowCoercion=*/true);
   }
 }
 
@@ -1727,7 +1757,6 @@ TEST(SignatureBinderTest, unknownDoesNotBindWithoutCoercion) {
 
   assertCannotBind(signature, {UNKNOWN()});
 
-  // decimal(P,S) leaves precision and scale unbound, so even coercion fails.
   auto decimalSignature = exec::FunctionSignatureBuilder()
                               .integerVariable("a_precision")
                               .integerVariable("a_scale")
@@ -1736,6 +1765,16 @@ TEST(SignatureBinderTest, unknownDoesNotBindWithoutCoercion) {
                               .build();
 
   assertCannotBind(decimalSignature, {UNKNOWN()}, /*allowCoercion=*/true);
+
+  // A dialect rule can supply decimal parameters for UNKNOWN.
+  const TypeCoercer coercer({{UNKNOWN(), DECIMAL(1, 0), 1}});
+  const std::vector<TypePtr> actualTypes{UNKNOWN()};
+  exec::SignatureBinder binder(*decimalSignature, actualTypes, coercer);
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_EQ(coercions.size(), 1);
+  VELOX_ASSERT_EQ_TYPES(coercions[0].type, DECIMAL(1, 0));
+  VELOX_ASSERT_EQ_TYPES(binder.tryResolveReturnType(), BIGINT());
 }
 
 TEST(SignatureBinderTest, unknownCoercesToBoundDecimal) {
@@ -2020,6 +2059,235 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     VELOX_ASSERT_EQ_TYPES(coercions[0], BIGINT());
     ASSERT_EQ(coercions[1], nullptr);
   }
+
+  // Coercion to a parameterized scalar type binds its parameters from the
+  // coercion target.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .integerVariable("precision")
+            .integerVariable("scale")
+            .returnType("decimal(precision, scale)")
+            .argumentType("decimal(precision, scale)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(10, 0));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(10, 0));
+  }
+
+  // A fixed parameterized target can widen the rule's minimum target.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .returnType("decimal(12, 2)")
+            .argumentType("decimal(12, 2)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(12, 2));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(12, 2));
+  }
+
+  // A partially fixed target binds its variable to the least compatible type.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        exec::FunctionSignatureBuilder()
+            .integerVariable("precision")
+            .returnType("decimal(precision, 20)")
+            .argumentType("decimal(precision, 20)")
+            .build(),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {INTEGER()}, coercions, TypeCoercer::defaults());
+    VELOX_ASSERT_EQ_TYPES(type, DECIMAL(30, 20));
+    ASSERT_EQ(coercions.size(), 1);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], DECIMAL(30, 20));
+  }
+}
+
+TEST(SignatureBinderTest, decimalLiteralParametersWithCoercion) {
+  // Every integer width binds the DECIMAL target supplied by its coercion
+  // rule.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .integerVariable("scale")
+                         .returnType("decimal(precision, scale)")
+                         .argumentType("decimal(precision, scale)")
+                         .build();
+    testCoercions(signature, {TINYINT()}, {DECIMAL(3, 0)}, DECIMAL(3, 0));
+    testCoercions(signature, {SMALLINT()}, {DECIMAL(5, 0)}, DECIMAL(5, 0));
+    testCoercions(signature, {INTEGER()}, {DECIMAL(10, 0)}, DECIMAL(10, 0));
+    testCoercions(signature, {BIGINT()}, {DECIMAL(19, 0)}, DECIMAL(19, 0));
+  }
+
+  // A fixed scale widens precision to preserve the actual type's integral
+  // digits.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .returnType("decimal(precision, 2)")
+                         .argumentType("decimal(precision, 2)")
+                         .build();
+    testCoercions(
+        signature, {DECIMAL(10, 0)}, {DECIMAL(12, 2)}, DECIMAL(12, 2));
+  }
+
+  // Shared parameters resolve before either argument's coercion is recorded.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .integerVariable("scale")
+                         .returnType("decimal(precision, scale)")
+                         .argumentType("decimal(precision, scale)")
+                         .argumentType("decimal(precision, scale)")
+                         .build();
+    testCoercions(
+        signature,
+        {DECIMAL(10, 2), DECIMAL(10, 8)},
+        {DECIMAL(16, 8), DECIMAL(16, 8)},
+        DECIMAL(16, 8));
+    testCoercions(
+        signature,
+        {DECIMAL(10, 8), DECIMAL(10, 2)},
+        {DECIMAL(16, 8), DECIMAL(16, 8)},
+        DECIMAL(16, 8));
+  }
+
+  // Parameterized coercion works inside a container.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .integerVariable("scale")
+                         .returnType("decimal(precision, scale)")
+                         .argumentType("array(decimal(precision, scale))")
+                         .build();
+    testCoercions(
+        signature, {ARRAY(INTEGER())}, {ARRAY(DECIMAL(10, 0))}, DECIMAL(10, 0));
+  }
+
+  // A fully fixed target cannot widen without changing its literals.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("decimal(10, 2)")
+                         .build();
+    assertCannotBind(signature, {DECIMAL(10, 0)}, /*allowCoercion=*/true);
+  }
+}
+
+TEST(SignatureBinderTest, constrainedLiteralParametersWithCoercion) {
+  // A constraint can validate a literal parameter supplied by coercion.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision", "min(precision, 18)")
+                         .integerVariable("scale")
+                         .returnType("decimal(precision, scale)")
+                         .argumentType("decimal(precision, scale)")
+                         .build();
+    testCoercions(signature, {INTEGER()}, {DECIMAL(10, 0)}, DECIMAL(10, 0));
+  }
+
+  // Constraints are checked after shared literal parameters reach their final
+  // values.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .integerVariable("derived", "precision + 1")
+                         .returnType("decimal(derived, 0)")
+                         .argumentType("decimal(precision, 0)")
+                         .argumentType("decimal(derived, 0)")
+                         .argumentType("decimal(precision, 0)")
+                         .build();
+    assertCannotBind(
+        signature,
+        {DECIMAL(10, 0), DECIMAL(11, 0), DECIMAL(12, 0)},
+        /*allowCoercion=*/true);
+    testCoercions(
+        signature,
+        {DECIMAL(10, 0), DECIMAL(13, 0), DECIMAL(12, 0)},
+        {DECIMAL(12, 0), nullptr, nullptr},
+        DECIMAL(13, 0));
+  }
+}
+
+TEST(SignatureBinderTest, invalidLiteralParameterConstraintWithCoercion) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("precision", "precision +")
+                       .returnType("boolean")
+                       .argumentType("decimal(precision, 0)")
+                       .build();
+  const std::vector<TypePtr> actualTypes{INTEGER()};
+  exec::SignatureBinder binder(
+      *signature, actualTypes, TypeCoercer::defaults());
+  std::vector<Coercion> coercions;
+  VELOX_ASSERT_THROW(binder.tryBindWithCoercions(coercions), "syntax error");
+}
+
+TEST(SignatureBinderTest, failedCoercionRestoresBindings) {
+  // Failure while inferring a target does not retain provisional bindings.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .returnType("decimal(precision, 0)")
+                         .argumentType("decimal(precision, 20)")
+                         .build();
+    const std::vector<TypePtr> actualTypes{BIGINT()};
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+    ASSERT_EQ(binder.tryResolveReturnType(), nullptr);
+  }
+
+  // Failure after inference does not retain provisional bindings.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("precision")
+                         .returnType("decimal(precision, 0)")
+                         .argumentType("decimal(precision, 0)")
+                         .argumentType("varchar")
+                         .build();
+    const std::vector<TypePtr> actualTypes{INTEGER(), BIGINT()};
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+    ASSERT_EQ(binder.tryResolveReturnType(), nullptr);
+  }
+}
+
+TEST(SignatureBinderTest, invalidFixedLiteralCoercionTarget) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("decimal(10, 256)")
+                       .build();
+  assertCannotBind(signature, {INTEGER()}, /*allowCoercion=*/true);
+}
+
+TEST(SignatureBinderTest, decimalArithmeticWithInteger) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("a_precision")
+                       .integerVariable("a_scale")
+                       .integerVariable("b_precision")
+                       .integerVariable("b_scale")
+                       .returnType("decimal(a_precision, a_scale)")
+                       .argumentType("decimal(a_precision, a_scale)")
+                       .argumentType("decimal(b_precision, b_scale)")
+                       .build();
+  testCoercions(
+      signature,
+      {DECIMAL(38, 8), INTEGER()},
+      {nullptr, DECIMAL(10, 0)},
+      DECIMAL(38, 8));
 }
 
 // Two DECIMALs of different precision or scale bound to one type variable, as

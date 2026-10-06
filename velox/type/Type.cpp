@@ -1466,8 +1466,31 @@ class DecimalParametricType {
     VELOX_USER_CHECK(parameters[1].kind == TypeParameterKind::kLongLiteral);
     VELOX_USER_CHECK(parameters[1].longLiteral.has_value());
 
+    const auto precision = parameters[0].longLiteral.value();
+    const auto scale = parameters[1].longLiteral.value();
+    VELOX_USER_CHECK_GE(
+        precision,
+        ShortDecimalType::kMinPrecision,
+        "Decimal precision must be at least {}: {}",
+        ShortDecimalType::kMinPrecision,
+        precision);
+    VELOX_USER_CHECK_LE(
+        precision,
+        LongDecimalType::kMaxPrecision,
+        "Decimal precision must not exceed {}: {}",
+        LongDecimalType::kMaxPrecision,
+        precision);
+    VELOX_USER_CHECK_GE(
+        scale, 0, "Decimal scale must be non-negative: {}", scale);
+    VELOX_USER_CHECK_LE(
+        scale,
+        precision,
+        "Decimal scale must not exceed precision {}: {}",
+        precision,
+        scale);
+
     return DECIMAL(
-        parameters[0].longLiteral.value(), parameters[1].longLiteral.value());
+        static_cast<uint8_t>(precision), static_cast<uint8_t>(scale));
   }
 };
 

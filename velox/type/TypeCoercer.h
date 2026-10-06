@@ -185,13 +185,10 @@ struct CoercionEntry {
 /// Cost magnitudes. Overload resolution sums per-argument coercion costs
 /// (Coercion::overallCost) to compare candidate signatures. For sums to
 /// be meaningful, every CoercionEntry.cost in a single TypeCoercer
-/// instance must be in the same small magnitude -- today's defaults use
-/// costs 1-9, one per source-type series. A dialect that mixes costs of
-/// vastly different magnitudes (e.g., 1-10 for some entries, 100-1000
-/// for others) will produce surprising tie-breaking. There is no
-/// hardcoded surcharge added at lookup time: the dialect's rule cost is
-/// returned verbatim, including for INT -> DECIMAL widening -- the rule's
-/// stored cost applies to every compatible target (p, s).
+/// instance must be in the same small magnitude. Velox defaults assign
+/// consecutive costs within each source-type series, ranging from 1 to 9.
+/// Rule lookup returns the configured cost verbatim. For INTEGER -> DECIMAL
+/// widening, the stored cost applies to every compatible target (p, s).
 ///
 /// DECIMAL handling is two-step: the dialect's rule resolves a
 /// fixed-(p, s) decimal, then the type system's generic DECIMAL->DECIMAL
@@ -251,6 +248,13 @@ class TypeCoercer {
   /// target, ranked above every UNKNOWN->scalar rule.
   std::optional<Coercion> coerce(const TypePtr& fromType, const TypePtr& toType)
       const;
+
+  /// Returns the rule-defined target for coercing 'fromType' to a scalar type
+  /// named 'toTypeName', or std::nullopt. This supports binding parameters of
+  /// a target type before the fully resolved target is available.
+  std::optional<Coercion> tryCoerceToTypeBase(
+      const Type& fromType,
+      std::string_view toTypeName) const;
 
   /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
   /// 'b' are coercible to. Returns nullptr if no such type exists.

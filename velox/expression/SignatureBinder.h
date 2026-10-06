@@ -92,11 +92,6 @@ class SignatureBinderBase {
       bool allowCoercion,
       Coercion& coercion);
 
-  // Try to bind the integer parameter from the actualType.
-  bool tryBindIntegerParameters(
-      const std::vector<exec::TypeSignature>& parameters,
-      const TypePtr& actualType);
-
   bool tryBind(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType,
@@ -199,12 +194,20 @@ class SignatureBinder : private SignatureBinderBase {
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
 
-  // Pre-binds type variables to their least common super type across all
-  // arguments. Runs before the main binding loop. Only binds type variables,
-  // not integer variables (e.g. decimal precision/scale) -- those are bound
-  // later by tryBind. Does not check base type name match since coercion may
-  // change the base type. Returns false if a type variable conflict is found
-  // that would prevent binding; true otherwise.
+  // Binds arguments and leaves inferred bindings in place on failure.
+  bool tryBindImpl(bool allowCoercions, std::vector<Coercion>& coercions);
+
+  // Binds literal parameters to a common type across all actual arguments.
+  bool tryBindLiteralParametersWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
+
+  // Validates constrained literal variables after all arguments are bound.
+  bool validateLiteralParameterConstraints() const;
+
+  // Pre-binds type and literal variables to their least common super type
+  // across all arguments. Runs before the main binding loop, which records the
+  // coercions after all variables have their final values.
   bool tryBindVariablesWithCoercion(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);

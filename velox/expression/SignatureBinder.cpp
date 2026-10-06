@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string.hpp>
+#include <charconv>
+#include <limits>
 #include <optional>
+#include <string_view>
 
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
@@ -28,12 +31,26 @@ bool isAny(const TypeSignature& typeSignature) {
   return typeSignature.baseName() == "any";
 }
 
-/// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
-  return !str.empty() &&
-      std::find_if(str.begin(), str.end(), [](unsigned char c) {
+bool containsOnlyDigits(std::string_view value) {
+  return !value.empty() &&
+      std::find_if(value.begin(), value.end(), [](unsigned char c) {
         return !std::isdigit(c);
-      }) == str.end();
+      }) == value.end();
+}
+
+// Parses a digit-only literal that fits the binder's integer range.
+std::optional<int> tryParseInteger(std::string_view value) {
+  if (!containsOnlyDigits(value)) {
+    return std::nullopt;
+  }
+
+  int result{0};
+  const auto [end, error] =
+      std::from_chars(value.data(), value.data() + value.size(), result);
+  if (error != std::errc{} || end != value.data() + value.size()) {
+    return std::nullopt;
+  }
+  return result;
 }
 
 std::optional<int> tryResolveLongLiteral(
@@ -42,10 +59,9 @@ std::optional<int> tryResolveLongLiteral(
     std::unordered_map<std::string, int>& integerVariablesBindings) {
   const auto& variable = parameter.baseName();
 
-  if (isPositiveInteger(variable)) {
-    // Handle constant.
-    return atoi(variable.c_str());
-  };
+  if (containsOnlyDigits(variable)) {
+    return tryParseInteger(variable);
+  }
 
   {
     auto integerIt = integerVariablesBindings.find(variable);
@@ -99,6 +115,20 @@ std::optional<VarcharEnumParameter> tryResolveVarcharEnumLiteral(
   return std::nullopt;
 }
 
+// Extracts only long literals that fit the binder's integer range.
+std::optional<int> tryGetIntegerLiteral(const TypeParameter& parameter) {
+  if (parameter.kind != TypeParameterKind::kLongLiteral) {
+    return std::nullopt;
+  }
+
+  const auto value = parameter.longLiteral.value();
+  if (value < std::numeric_limits<int>::min() ||
+      value > std::numeric_limits<int>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(value);
+}
+
 // If the parameter is a named field from a row, ensure the names are
 // compatible. For example:
 //
@@ -127,6 +157,10 @@ std::optional<Coercion> coerceToBoundType(
     const TypePtr& boundType) {
   if (actualType->isDecimal() && boundType->isDecimal() &&
       !actualType->equivalent(*boundType)) {
+    const auto commonType = coercer.leastCommonSuperType(actualType, boundType);
+    if (!commonType || !commonType->equivalent(*boundType)) {
+      return std::nullopt;
+    }
     return Coercion{.type = boundType, .cost = 1};
   }
   return coercer.coerce(actualType, boundType);
@@ -144,6 +178,43 @@ bool SignatureBinder::tryBind() {
 }
 
 bool SignatureBinder::tryBind(
+    bool allowCoercions,
+    std::vector<Coercion>& coercions) {
+  const bool hasUnresolvedArgument = std::ranges::any_of(
+      actualTypes_,
+      [](const TypePtr& actualType) { return actualType == nullptr; });
+  if (!allowCoercions || hasUnresolvedArgument) {
+    // Partial bindings from resolved arguments are used to type lambda inputs.
+    return tryBindImpl(allowCoercions, coercions);
+  }
+
+  const auto originalTypeBindings = typeVariablesBindings_;
+  const auto originalIntegerBindings = integerVariablesBindings_;
+  const auto originalLongEnumBindings = longEnumVariablesBindings_;
+  const auto originalVarcharEnumBindings = varcharEnumVariablesBindings_;
+
+  const auto restoreBindings = [&]() {
+    typeVariablesBindings_ = originalTypeBindings;
+    integerVariablesBindings_ = originalIntegerBindings;
+    longEnumVariablesBindings_ = originalLongEnumBindings;
+    varcharEnumVariablesBindings_ = originalVarcharEnumBindings;
+    coercions.clear();
+  };
+
+  try {
+    if (tryBindImpl(allowCoercions, coercions)) {
+      return true;
+    }
+  } catch (...) {
+    restoreBindings();
+    throw;
+  }
+
+  restoreBindings();
+  return false;
+}
+
+bool SignatureBinder::tryBindImpl(
     bool allowCoercions,
     std::vector<Coercion>& coercions) {
   const auto numActualTypes = actualTypes_.size();
@@ -176,6 +247,10 @@ bool SignatureBinder::tryBind(
           return false;
         }
       }
+    }
+
+    if (!validateLiteralParameterConstraints()) {
+      return false;
     }
   }
 
@@ -260,8 +335,9 @@ bool SignatureBinderBase::checkOrSetVarcharEnumParameter(
 bool SignatureBinderBase::checkOrSetIntegerParameter(
     const std::string& parameterName,
     int value) {
-  if (isPositiveInteger(parameterName)) {
-    return atoi(parameterName.c_str()) == value;
+  if (containsOnlyDigits(parameterName)) {
+    const auto literal = tryParseInteger(parameterName);
+    return literal && literal.value() == value;
   }
   if (!variables().contains(parameterName)) {
     // Return false if the parameter is not found in the signature.
@@ -269,9 +345,10 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   }
 
   const auto& constraint = variables().at(parameterName).constraint();
-  if (isPositiveInteger(constraint) && atoi(constraint.c_str()) != value) {
-    // Return false if the actual value does not match the constraint.
-    return false;
+  if (containsOnlyDigits(constraint)) {
+    const auto literal = tryParseInteger(constraint);
+    // Return false if the constraint is out of range or does not match.
+    return literal && literal.value() == value;
   }
 
   auto integerIt = integerVariablesBindings_.find(parameterName);
@@ -284,6 +361,205 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
 
   // Bind the variable.
   integerVariablesBindings_[parameterName] = value;
+  return true;
+}
+
+namespace {
+
+// Preserves existing bindings for shared variables while seeding unbound ones
+// from the actual type.
+std::optional<std::vector<int>> tryResolveProvisionalLiteralParameters(
+    const std::vector<exec::TypeSignature>& parameters,
+    std::span<const TypeParameter> actualParameters,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
+    std::unordered_map<std::string, int>& integerVariablesBindings) {
+  if (parameters.size() != actualParameters.size()) {
+    return std::nullopt;
+  }
+
+  std::vector<int> provisionalValues;
+  provisionalValues.reserve(parameters.size());
+  for (auto i = 0; i < parameters.size(); ++i) {
+    const auto actualValue = tryGetIntegerLiteral(actualParameters[i]);
+    if (!actualValue) {
+      return std::nullopt;
+    }
+
+    const auto& parameterName = parameters[i].baseName();
+    if (containsOnlyDigits(parameterName)) {
+      const auto literal = tryParseInteger(parameterName);
+      if (!literal) {
+        return std::nullopt;
+      }
+      provisionalValues.push_back(literal.value());
+      continue;
+    }
+
+    const auto variableIt = variables.find(parameterName);
+    if (variableIt == variables.end() ||
+        !variableIt->second.isIntegerParameter()) {
+      return std::nullopt;
+    }
+
+    const auto binding =
+        integerVariablesBindings.emplace(parameterName, actualValue.value())
+            .first;
+    provisionalValues.push_back(binding->second);
+  }
+  return provisionalValues;
+}
+
+// Widens a variable DECIMAL precision to preserve the source's integral
+// digits, then validates the resulting precision and scale.
+bool tryWidenDecimalParameters(
+    const TypePtr& actualType,
+    const std::vector<exec::TypeSignature>& parameters,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
+    std::unordered_map<std::string, int>& integerVariablesBindings,
+    std::vector<int>& provisionalValues) {
+  if (!actualType->isDecimal() || parameters.size() != 2) {
+    return true;
+  }
+
+  const auto& precisionName = parameters[0].baseName();
+  const auto precisionVariable = variables.find(precisionName);
+  if (precisionVariable != variables.end() &&
+      precisionVariable->second.isIntegerParameter()) {
+    const auto [sourcePrecision, sourceScale] =
+        getDecimalPrecisionScale(*actualType);
+    const auto targetScale = provisionalValues.at(1);
+    const auto minimumPrecision =
+        static_cast<int64_t>(sourcePrecision) - sourceScale + targetScale;
+    if (minimumPrecision < 1 || minimumPrecision < targetScale ||
+        minimumPrecision > LongDecimalType::kMaxPrecision) {
+      return false;
+    }
+    if (provisionalValues.at(0) < minimumPrecision) {
+      const auto widenedPrecision = static_cast<int>(minimumPrecision);
+      provisionalValues.at(0) = widenedPrecision;
+      integerVariablesBindings[precisionName] = widenedPrecision;
+    }
+  }
+
+  return provisionalValues.at(0) >= 1 &&
+      provisionalValues.at(0) <= LongDecimalType::kMaxPrecision &&
+      provisionalValues.at(1) >= 0 &&
+      provisionalValues.at(1) <= provisionalValues.at(0);
+}
+
+// Requires the common type to retain the formal type's base and arity so its
+// literal parameters still describe this signature.
+TypePtr tryResolveLiteralParameterTarget(
+    const TypeCoercer& coercer,
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    const std::vector<int>& provisionalValues) {
+  std::vector<TypeParameter> provisionalParameters;
+  provisionalParameters.reserve(provisionalValues.size());
+  for (const auto value : provisionalValues) {
+    provisionalParameters.emplace_back(value);
+  }
+
+  TypePtr provisionalType;
+  try {
+    provisionalType = getType(
+        boost::algorithm::to_upper_copy(typeSignature.baseName()),
+        provisionalParameters);
+  } catch (const std::exception&) {
+    return nullptr;
+  }
+
+  auto targetType = provisionalType
+      ? coercer.leastCommonSuperType(actualType, provisionalType)
+      : nullptr;
+  if (!targetType ||
+      !boost::algorithm::iequals(
+          targetType->name(), typeSignature.baseName()) ||
+      targetType->parameters().size() != typeSignature.parameters().size()) {
+    return nullptr;
+  }
+  return targetType;
+}
+
+// Rejects fixed-literal mismatches before replacing provisional bindings with
+// the target's parameters.
+bool tryBindTargetLiteralParameters(
+    const std::vector<exec::TypeSignature>& parameters,
+    const TypePtr& targetType,
+    std::unordered_map<std::string, int>& integerVariablesBindings) {
+  for (auto i = 0; i < parameters.size(); ++i) {
+    const auto targetValue = tryGetIntegerLiteral(targetType->parameters()[i]);
+    if (!targetValue) {
+      return false;
+    }
+
+    const auto& parameterName = parameters[i].baseName();
+    if (containsOnlyDigits(parameterName)) {
+      const auto literal = tryParseInteger(parameterName);
+      if (!literal || literal.value() != targetValue.value()) {
+        return false;
+      }
+      continue;
+    }
+    integerVariablesBindings[parameterName] = targetValue.value();
+  }
+  return true;
+}
+
+} // namespace
+
+bool SignatureBinder::tryBindLiteralParametersWithCoercion(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType) {
+  const auto& parameters = typeSignature.parameters();
+  auto provisionalValues = tryResolveProvisionalLiteralParameters(
+      parameters,
+      actualType->parameters(),
+      variables(),
+      integerVariablesBindings_);
+  if (!provisionalValues) {
+    return false;
+  }
+
+  if (!tryWidenDecimalParameters(
+          actualType,
+          parameters,
+          variables(),
+          integerVariablesBindings_,
+          provisionalValues.value())) {
+    return false;
+  }
+
+  const auto targetType = tryResolveLiteralParameterTarget(
+      coercer_, typeSignature, actualType, provisionalValues.value());
+  if (!targetType) {
+    return false;
+  }
+  return tryBindTargetLiteralParameters(
+      parameters, targetType, integerVariablesBindings_);
+}
+
+bool SignatureBinder::validateLiteralParameterConstraints() const {
+  for (const auto& [name, variable] : variables()) {
+    if (!variable.isIntegerParameter() || variable.constraint().empty()) {
+      continue;
+    }
+
+    const auto binding = integerVariablesBindings_.find(name);
+    if (binding == integerVariablesBindings_.end()) {
+      continue;
+    }
+
+    auto calculatedBindings = integerVariablesBindings_;
+    expression::calculation::evaluate(
+        fmt::format("{}={}", name, variable.constraint()), calculatedBindings);
+
+    const auto calculated = calculatedBindings.find(name);
+    if (calculated == calculatedBindings.end() ||
+        calculated->second != binding->second) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -353,6 +629,10 @@ bool SignatureBinderBase::tryBind(
 bool SignatureBinder::tryBindVariablesWithCoercion(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
+  if (isAny(typeSignature)) {
+    return true;
+  }
+
   const auto& baseName = typeSignature.baseName();
 
   auto variableIt = variables().find(baseName);
@@ -394,22 +674,39 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
 
   const auto& params = typeSignature.parameters();
 
-  // Bind the type variables to UNKNOWN so the parameterized formal resolves.
-  if (actualType->isUnknown()) {
-    for (const auto& param : params) {
-      if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
-        return false;
+  auto typeToBind = actualType;
+  if (!boost::algorithm::iequals(baseName, actualType->name())) {
+    const auto typeName = boost::algorithm::to_upper_copy(baseName);
+    const auto baseCoercion =
+        coercer_.tryCoerceToTypeBase(*actualType, typeName);
+    if (!baseCoercion) {
+      if (actualType->isUnknown()) {
+        // Bind type variables to UNKNOWN so the parameterized formal resolves.
+        for (const auto& param : params) {
+          if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
+            return false;
+          }
+        }
+        return true;
       }
+      return false;
     }
-    return true;
+    typeToBind = baseCoercion->type;
   }
 
-  if (params.size() != actualType->parameters().size()) {
+  if (params.size() != typeToBind->parameters().size()) {
     return false;
   }
 
+  if (!params.empty() &&
+      std::ranges::all_of(typeToBind->parameters(), [](const auto& parameter) {
+        return parameter.kind == TypeParameterKind::kLongLiteral;
+      })) {
+    return tryBindLiteralParametersWithCoercion(typeSignature, typeToBind);
+  }
+
   for (auto i = 0; i < params.size(); i++) {
-    const auto& actualParameter = actualType->parameters()[i];
+    const auto& actualParameter = typeToBind->parameters()[i];
     if (actualParameter.kind == TypeParameterKind::kType) {
       if (!tryBindVariablesWithCoercion(params[i], actualParameter.type)) {
         return false;
@@ -433,6 +730,31 @@ bool SignatureBinderBase::tryBind(
   if (auto result = checkSetTypeVariable(
           typeSignature, actualType, allowCoercion, coercion)) {
     return result.value();
+  }
+
+  if (allowCoercion && !typeSignature.parameters().empty()) {
+    const auto resolvedType = SignatureBinder::tryResolveType(
+        typeSignature,
+        variables(),
+        typeVariablesBindings_,
+        integerVariablesBindings_,
+        longEnumVariablesBindings_,
+        varcharEnumVariablesBindings_);
+    if (resolvedType &&
+        std::ranges::all_of(
+            resolvedType->parameters(), [](const auto& parameter) {
+              return parameter.kind == TypeParameterKind::kLongLiteral;
+            })) {
+      const auto availableCoercion =
+          coerceToBoundType(coercer_, actualType, resolvedType);
+      if (!availableCoercion) {
+        return false;
+      }
+      if (availableCoercion->cost > 0) {
+        coercion = availableCoercion.value();
+      }
+      return true;
+    }
   }
 
   // Type is not a variable.

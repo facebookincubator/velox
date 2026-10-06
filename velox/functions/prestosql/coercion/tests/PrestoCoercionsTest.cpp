@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
+
 namespace facebook::velox::functions::prestosql {
 namespace {
 
@@ -50,6 +52,14 @@ TEST(PrestoCoercionsTest, sanity) {
   EXPECT_TRUE(tc.coerce(DATE(), TIMESTAMP()).has_value());
   EXPECT_TRUE(tc.coerce(REAL(), DOUBLE()).has_value());
   EXPECT_TRUE(tc.coerce(UNKNOWN(), VARCHAR()).has_value());
+}
+
+TEST(PrestoCoercionsTest, unknownToDecimalBase) {
+  auto coercion =
+      typeCoercer().tryCoerceToTypeBase(*UNKNOWN(), DECIMAL(1, 0)->name());
+
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, DECIMAL(1, 0));
 }
 
 } // namespace

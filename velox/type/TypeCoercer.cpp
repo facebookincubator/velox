@@ -203,6 +203,14 @@ std::optional<Coercion> TypeCoercer::coerce(
   return std::nullopt;
 }
 
+std::optional<Coercion> TypeCoercer::tryCoerceToTypeBase(
+    const Type& fromType,
+    std::string_view toTypeName) const {
+  const auto it = rules_.find({fromType.name(), std::string{toTypeName}});
+  return it == rules_.end() ? std::nullopt
+                            : std::optional<Coercion>{it->second};
+}
+
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const TypePtr& toType) const {

@@ -418,9 +418,9 @@ Cost magnitudes
 Overload resolution sums per-argument coercion costs
 (``Coercion::overallCost``) to compare candidate signatures. For sums to
 be meaningful, every ``CoercionEntry.cost`` in a single ``TypeCoercer``
-instance must be in the same small magnitude -- today's defaults use
-costs 1-9, one per source-type series. There is no hardcoded surcharge
-added at lookup time: the dialect's rule cost is returned verbatim.
+instance must be in the same small magnitude. Velox defaults assign
+consecutive costs within each source-type series, ranging from 1 to 9. Rule
+lookup returns the configured cost verbatim.
 
 DECIMAL
 ^^^^^^^
@@ -470,9 +470,9 @@ in two places:
 * ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
   computes the common ``(p, s)`` for plan-level operations (UNION, CASE
   result type, etc.).
-* ``SignatureBinder``'s integer-parameter binding handles function
-  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
-  integer variables from the actual argument types.
+* ``SignatureBinder`` binds ``P`` and ``S`` in ``DECIMAL(P, S)`` signatures
+  from the common type of actual DECIMAL arguments and rule-defined coercion
+  targets.
 
 *DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
 ``DECIMAL(p2, s2)`` iff:
@@ -548,12 +548,14 @@ BIGINT           DECIMAL(19, 0), REAL, DOUBLE
 REAL             DOUBLE
 DECIMAL          REAL, DOUBLE
 DATE             TIMESTAMP
-UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
-                 VARCHAR, VARBINARY
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, DECIMAL(1, 0),
+                 REAL, DOUBLE, VARCHAR, VARBINARY
 ==============   ==========================================================
 
 Differences from Velox's defaults:
 
+* ``UNKNOWN -> DECIMAL(1, 0)`` is added so an unknown literal can bind to a
+  parameterized DECIMAL signature.
 * ``BIGINT -> REAL`` is added. The BIGINT row becomes
   ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
   ordering. This makes ``divide(real, bigint)`` resolve to

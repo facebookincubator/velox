@@ -243,6 +243,18 @@ TEST(TypeCoercerTest, coerceUnknownToParameterizedScalar) {
   VELOX_EXPECT_EQ_TYPES(coercion->type, DECIMAL(10, 2));
 }
 
+TEST(TypeCoercerTest, coerceToTypeBase) {
+  const auto& coercer = TypeCoercer::defaults();
+
+  auto coercion =
+      coercer.tryCoerceToTypeBase(*INTEGER(), DECIMAL(1, 0)->name());
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, DECIMAL(10, 0));
+
+  EXPECT_FALSE(coercer.tryCoerceToTypeBase(*DOUBLE(), DECIMAL(1, 0)->name()));
+  EXPECT_FALSE(coercer.tryCoerceToTypeBase(*UNKNOWN(), DECIMAL(1, 0)->name()));
+}
+
 TEST(TypeCoercerTest, coerceContainerResolvesToTargetType) {
   const auto& coercer = TypeCoercer::defaults();
 
