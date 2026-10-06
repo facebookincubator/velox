@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Options.h"
 
 #include <memory>
 #include <string_view>
@@ -163,18 +164,18 @@ class Encoding {
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
-    ///
-    /// A monotone counter's low bits are maximally random viewed absolutely
-    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
-    /// compress them while the delta form is trivial. This mirrors OpenZL,
-    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
-    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
-    /// huge unsigned values.
-    ///
-    /// Delta-encoded streams can only be read sequentially from row 0, so
-    /// skip() and readWithVisitor() reject them. Do not enable for production
-    /// until restatement points are added.
+    /// A monotone counter's low bits are nearly random viewed absolutely but
+    /// nearly constant viewed as deltas, so this can compress cases no
+    /// per-bit-range encoding can. Delta-encoded streams can only be read
+    /// sequentially from row 0: skip() decodes every skipped row, point and
+    /// range reads cost a full scan, and the delta form carries no row frame
+    /// or section transforms. Do not enable for production until restatement
+    /// points are added.
     bool subIntSplitDeltaPreTransform{false};
+
+    /// Settings top-level selection consults about SubIntSplit; see
+    /// subintsplit::Options.
+    subintsplit::Options subIntSplit{};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
