@@ -585,6 +585,47 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
   }
 }
 
+TEST_F(VectorIndexTest, searchStats) {
+  constexpr uint32_t kNumQueries{3};
+  const auto data = generateRandomVectors(500, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  {
+    const auto written =
+        writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+    const auto results = readIndex(written)->search({
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_GT(results.stats().routingTiming.wallNanos, 0);
+    EXPECT_GT(results.stats().searchTiming.wallNanos, 0);
+    ASSERT_TRUE(results.stats().ivf.has_value());
+    EXPECT_GT(results.stats().ivf->numPartitionsScanned, 0);
+    EXPECT_GT(results.stats().ivf->numDistanceComputations, 0);
+  }
+
+  {
+    const auto written = writeIndexFromVectors(
+        makeConfig(VectorIndexType::kIvfRaBitQFastScan), data);
+    const auto results = readIndex(written)->search({
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_GT(results.stats().routingTiming.wallNanos, 0);
+    EXPECT_GT(results.stats().searchTiming.wallNanos, 0);
+    EXPECT_FALSE(results.stats().ivf.has_value());
+  }
+}
+
 TEST_F(VectorIndexTest, searchRejectsInvalidConfig) {
   constexpr uint32_t kNumVectors{100};
   const auto data = generateRandomVectors(kNumVectors, kDimensions);
