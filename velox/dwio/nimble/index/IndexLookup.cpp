@@ -58,7 +58,9 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
       .executor = options.ioOptions->ioExecutor().get(),
       .fileHandle = options.fileHandle,
-      .cache = options.cache};
+      .cache = options.cache,
+      .maxCacheEntrySize = options.maxCacheEntrySize,
+  };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }
 

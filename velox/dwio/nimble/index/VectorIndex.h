@@ -18,12 +18,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
+#include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -45,22 +51,114 @@ namespace facebook::nimble::index {
 /// necessary.
 class VectorIndex {
  public:
-  /// Configures one nearest-neighbor query.
-  struct SearchConfig {
-    /// Supplies a query with the same dimensionality as the indexed vectors.
-    std::vector<float> queryVector;
+  /// Defines index-specific search behavior.
+  struct SearchOptions {
+    enum class Kind {
+      kIvf,
+      kHnsw,
+    };
 
-    /// Sets the maximum number of nearest neighbors to return.
+    virtual ~SearchOptions() = default;
+
+    virtual Kind kind() const = 0;
+  };
+
+  /// Configures IVF-specific search behavior.
+  struct IvfSearchOptions final : SearchOptions {
+    explicit IvfSearchOptions(uint32_t _numProbes)
+        : IvfSearchOptions{_numProbes, 0, false} {}
+
+    explicit IvfSearchOptions(
+        uint32_t _numProbes,
+        uint64_t _maxCodes,
+        bool _ensureTopKFull)
+        : numProbes{_numProbes},
+          maxCodes{_maxCodes},
+          ensureTopKFull{_ensureTopKFull} {}
+
+    Kind kind() const override {
+      return Kind::kIvf;
+    }
+
+    /// Sets the number of coarse partitions to probe.
+    const uint32_t numProbes;
+
+    /// Limits distance computations per query. Zero allows unlimited scans.
+    const uint64_t maxCodes;
+
+    /// Allows scans beyond maxCodes until FAISS can fill the requested Top-K.
+    const bool ensureTopKFull;
+  };
+
+  /// Configures HNSW-specific search behavior.
+  struct HnswSearchOptions final : SearchOptions {
+    explicit HnswSearchOptions(uint32_t _searchDepth)
+        : searchDepth{_searchDepth} {}
+
+    Kind kind() const override {
+      return Kind::kHnsw;
+    }
+
+    /// Sets the HNSW candidate-list size. Filtered searches may require a
+    /// larger depth because FAISS applies row eligibility to result admission,
+    /// while graph traversal still visits ineligible rows.
+    const uint32_t searchDepth;
+  };
+
+  /// Configures one or more nearest-neighbor queries.
+  struct SearchConfig {
+    /// Identifies rows that may participate in nearest-neighbor search.
+    ///
+    /// Bitmap storage must remain valid and immutable until search returns.
+    class RowSelection {
+     public:
+      /// Selects every indexed row.
+      static RowSelection all();
+
+      /// Creates a selection from an LSB-first bitmap. Bit i selects row i
+      /// covered by the index and is stored in byte i / 8. The bitmap must
+      /// contain ceil(numVectors() / 8) bytes.
+      static RowSelection fromBitmap(std::span<const uint8_t> bitmap);
+
+      /// Creates a selection from a half-open index-local row range.
+      static RowSelection fromRange(RowRange range);
+
+      /// Returns the bitmap when this selection uses one.
+      std::optional<std::span<const uint8_t>> bitmap() const;
+
+      /// Returns the range when this selection uses one.
+      std::optional<RowRange> range() const;
+
+     private:
+      struct AllRows {};
+
+      using Selection =
+          std::variant<AllRows, std::span<const uint8_t>, RowRange>;
+
+      explicit RowSelection(Selection selection);
+
+      // Stores exactly one supported row selection.
+      Selection selection_;
+    };
+
+    /// Supplies contiguous query vectors. The number of elements must be a
+    /// positive multiple of the index dimensionality.
+    std::vector<float> queryVectors;
+
+    /// Sets the maximum number of nearest neighbors returned per query.
     uint32_t numNeighbors{10};
 
-    /// Sets the number of IVF partitions to probe. IVF first assigns the query
-    /// to its nearest partitions, then searches vectors only within them.
-    /// Higher values generally improve recall at the cost of more work.
-    uint32_t numProbes{32};
+    /// Limits FAISS OpenMP parallelism across queries in this batch. A value
+    /// above one does not accelerate a single-query batch. Keep this at one
+    /// when the caller already parallelizes independent searches.
+    uint32_t numSearchThreads{1};
 
-    /// Sets the HNSW candidate-list size used while traversing the graph.
-    /// Higher values generally improve recall at the cost of more work.
-    uint32_t hnswSearchDepth{32};
+    /// Configures the selected index implementation.
+    std::shared_ptr<const SearchOptions> searchOptions;
+
+    /// Restricts every query to the same set of eligible indexed rows. All
+    /// indexed rows are eligible by default.
+    RowSelection rowSelection{RowSelection::all()};
   };
 
   /// Identifies one nearest-neighbor match and its metric-specific score.
@@ -71,6 +169,79 @@ class VectorIndex {
     /// Contains squared Euclidean distance for L2, where smaller is better.
     /// Contains similarity for cosine and dot product, where larger is better.
     float score{0};
+  };
+
+  /// Reports work performed by an IVF implementation.
+  struct IvfSearchStats {
+    /// Counts IVF partitions scanned across all queries.
+    size_t numPartitionsScanned{0};
+
+    /// Counts distance computations across all queries.
+    size_t numDistanceComputations{0};
+
+    /// Counts updates to native TopK heaps across all queries.
+    size_t numHeapUpdates{0};
+  };
+
+  /// Reports work performed by one native search batch.
+  struct SearchStats {
+    /// Counts queries processed by the native search.
+    size_t numQueries{0};
+
+    /// Counts neighbors returned across all queries.
+    size_t numResults{0};
+
+    // TODO: Replace calling-thread CPU in both timings with CPU aggregated
+    // across FAISS workers for multi-threaded searches.
+    /// Measures coarse partition assignment for IVF searches.
+    velox::CpuWallTiming routingTiming;
+
+    /// Measures native index search after any IVF routing.
+    velox::CpuWallTiming searchTiming;
+
+    /// Contains IVF counters when the implementation reports them.
+    std::optional<IvfSearchStats> ivf;
+  };
+
+  /// Stores batch results contiguously while preserving each query's
+  /// score-ordered range.
+  class SearchResults {
+   public:
+    /// Constructs results from flat matches and per-query offsets.
+    SearchResults(
+        std::vector<SearchResult> results,
+        std::vector<size_t> resultOffsets,
+        SearchStats stats);
+
+    SearchResults(const SearchResults&) = delete;
+    SearchResults& operator=(const SearchResults&) = delete;
+    SearchResults(SearchResults&&) = default;
+    SearchResults& operator=(SearchResults&&) = default;
+    ~SearchResults() = default;
+
+    /// Returns the number of queries represented by this result.
+    size_t numQueries() const;
+
+    /// Returns the total number of neighbors across all queries.
+    size_t totalNumResults() const;
+
+    /// Returns the score-ordered results for one query.
+    folly::Range<const SearchResult*> results(size_t queryIndex) const&;
+    folly::Range<const SearchResult*> results(size_t queryIndex) const&& =
+        delete;
+
+    /// Returns native search statistics.
+    const SearchStats& stats() const;
+
+   private:
+    // Stores all matches in query order.
+    std::vector<SearchResult> results_;
+
+    // Locates each query's half-open range in results_.
+    std::vector<size_t> resultOffsets_;
+
+    // Stores work performed by the native search.
+    SearchStats stats_;
   };
 
   /// Describes the logical vector index stored in a Nimble file.
@@ -99,9 +270,8 @@ class VectorIndex {
 
   ~VectorIndex();
 
-  /// Searches for nearest neighbors in score order. Row IDs are not
-  /// numerically ordered.
-  std::vector<SearchResult> search(const SearchConfig& config) const;
+  /// Searches query vectors together and preserves query order.
+  SearchResults search(const SearchConfig& config) const;
 
   /// Returns the column name this index was built on.
   const std::string& columnName() const;
@@ -140,8 +310,8 @@ class VectorIndex {
   // Bounds valid row IDs returned by FAISS.
   const uint64_t numVectors_;
 
-  // Keeps zero-copy FAISS views valid for this index's lifetime.
-  const std::shared_ptr<const void> indexData_;
+  // Keeps zero-copy FAISS views valid for index types that use them.
+  std::shared_ptr<const void> indexData_;
 
   // Remains immutable so concurrent searches only read shared state.
   const std::unique_ptr<faiss::Index> faissIndex_;
