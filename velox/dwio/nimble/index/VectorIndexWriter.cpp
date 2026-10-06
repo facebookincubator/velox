@@ -30,6 +30,7 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#include <faiss/IndexIVFRaBitQFastScan.h>
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/impl/io.h>
 #include <faiss/index_io.h>
@@ -52,6 +53,8 @@ constexpr uint32_t kMaxHnswNumConnections{512};
 constexpr int kHnswConstructionSearchDepth{200};
 
 constexpr uint8_t kMaxPqBits{24};
+
+constexpr uint8_t kRaBitQQueryBits{4};
 
 // Clamps the requested partition count to the available training data.
 uint32_t calculateNumPartitions(
@@ -184,6 +187,13 @@ std::unique_ptr<faiss::Index> createFaissIndex(
       index = std::make_unique<faiss::IndexIVFRaBitQ>(
           quantizer.get(), dimensions, numPartitions, faissMetric);
       break;
+    case VectorIndexType::kIvfRaBitQFastScan: {
+      auto fastScanIndex = std::make_unique<faiss::IndexIVFRaBitQFastScan>(
+          quantizer.get(), dimensions, numPartitions, faissMetric);
+      fastScanIndex->qb = kRaBitQQueryBits;
+      index = std::move(fastScanIndex);
+      break;
+    }
     case VectorIndexType::kHnswSq8:
       NIMBLE_UNREACHABLE("HNSW index must be created before IVF dispatch");
     default:
