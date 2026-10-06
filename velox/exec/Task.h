@@ -34,6 +34,7 @@
 namespace facebook::velox::exec {
 
 class OutputBufferManager;
+struct ExchangeTransportEntry;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -943,11 +944,18 @@ class Task : public std::enable_shared_from_this<Task> {
   // Creates driver factories.
   void createDriverFactoriesLocked(uint32_t maxDrivers);
 
-  // Creates the output buffer in partitioned output buffer manager if needed.
-  void initializePartitionOutput();
+  // Creates exchange clients and the output buffer in the partitioned output
+  // buffer manager. Returns false if the task was terminated before this
+  // initialization acquired 'mutex_'.
+  bool initializePartitionOutput();
 
-  // Creates and starts drivers.
-  void createAndStartDrivers(uint32_t concurrentSplitGroups);
+  // Creates and starts drivers. Returns false if the task was terminated before
+  // this acquired 'mutex_'.
+  bool createAndStartDrivers(uint32_t concurrentSplitGroups);
+
+  // Marks planned drivers that were never tracked as finished. Called when
+  // startup stops.
+  void finishUnstartedDrivers();
 
   // Creates a bunch of drivers for the given split group.
   std::vector<std::shared_ptr<Driver>> createDriversLocked(
@@ -1030,6 +1038,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // output buffer.
   void maybeRemoveFromOutputBufferManager();
 
+  // Completes output-buffer initialization and removes the task if termination
+  // won the race.
+  void finishOutputBufferInitialization();
+
   // Returns task execution error message or empty string if not error
   // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
@@ -1095,7 +1107,7 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Add remote split to InMemoryExchangeClient for the specified plan node.
+  /// Adds a remote split to ExchangeClient for the specified plan node.
   /// Used to close remote sources that are added after the task completed
   /// early.
   void addRemoteSplit(
@@ -1212,29 +1224,36 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
-  // Create an exchange client for the specified exchange plan node at a given
-  // pipeline.
+  // Creates a pipeline's exchange client and retains the entry that builds its
+  // matching operator. Custom leaf nodes use the built-in in-memory transport.
+  // Must be called with 'mutex_' held. Throws a user error for an unavailable
+  // transport or unsupported merge exchange.
   void createExchangeClientLocked(
       int32_t pipelineId,
-      const core::PlanNodeId& planNodeId,
+      const core::PlanNodePtr& planNode,
       int32_t numberOfConsumers);
 
   // Get a shared reference to the exchange client with the specified exchange
   // plan node 'planNodeId'. The function returns null if there is no client
   // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
-  std::shared_ptr<InMemoryExchangeClient> getExchangeClient(
+  std::shared_ptr<ExchangeClient> getExchangeClient(
       const core::PlanNodeId& planNodeId) const {
     std::lock_guard<std::timed_mutex> l(mutex_);
     return getExchangeClientLocked(planNodeId);
   }
 
-  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       const core::PlanNodeId& planNodeId) const;
 
   // Get a shared reference to the exchange client with the specified
   // 'pipelineId'. The function returns null if there is no client created for
   // 'pipelineId' set in 'exchangeClients_'.
-  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      int32_t pipelineId) const;
+
+  // Returns the exchange transport entry resolved for 'pipelineId', or null if
+  // the pipeline does not read from an exchange.
+  std::shared_ptr<ExchangeTransportEntry> getExchangeTransportEntryLocked(
       int32_t pipelineId) const;
 
   // Builds the query trace config.
@@ -1342,12 +1361,18 @@ class Task : public std::enable_shared_from_this<Task> {
   // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
   // Hence, exchange clients can be indexed either by pipeline ID or by plan
   // node ID.
-  std::vector<std::shared_ptr<InMemoryExchangeClient>> exchangeClients_;
+  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
 
   // Exchange clients keyed by the corresponding Exchange plan node ID. Used to
   // process remaining remote splits after the task has completed early.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<InMemoryExchangeClient>>
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
       exchangeClientByPlanNode_;
+
+  // Entry that created each pipeline's client and builds its operators. Entries
+  // outlive termination because clients kept for late splits may depend on
+  // entry-owned state.
+  std::vector<std::shared_ptr<ExchangeTransportEntry>>
+      exchangeTransportEntries_;
 
   // Pool of unique row ids shared by all AssignUniqueId operators in this task.
   // See uniqueRowIdPool().
@@ -1442,6 +1467,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // drivers finish their work. We use this number to detect when the Task is
   // completed.
   uint32_t numFinishedDrivers_{0};
+  // Drivers placed in 'drivers_'. Each tracked driver is accounted exactly once
+  // by normal removal or termination.
+  uint32_t numTrackedDrivers_{0};
   // Reflects number of drivers required to process single split group during
   // grouped execution. Zero for a completely ungrouped execution.
   uint32_t numDriversPerSplitGroup_{0};
@@ -1538,6 +1566,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // task has no partitioned output.
   PartitionedOutputFactory outputOperatorFactory_;
 
+  // Set under 'mutex_' after initializeTask() returns or throws. Whichever path
+  // observes both this flag and task termination owns buffer removal.
+  bool outputBufferInitializationFinished_{false};
+
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.
   bool noMoreOutputBuffers_{false};
@@ -1617,9 +1649,8 @@ class TaskListener {
       std::exception_ptr error,
       const TaskStats& stats,
       const core::PlanFragment& /*fragment*/,
-      const std::unordered_map<
-          core::PlanNodeId,
-          std::shared_ptr<InMemoryExchangeClient>>&
+      const std::
+          unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>&
       /*exchangeClientMap*/) {
     onTaskCompletion(taskUuid, taskId, state, error, stats);
   }

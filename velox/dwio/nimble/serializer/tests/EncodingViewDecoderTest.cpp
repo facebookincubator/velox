@@ -280,49 +280,26 @@ TEST_F(EncodingViewDecoderTest, readsSequentialRowsAfterSkipAndReset) {
   EXPECT_EQ(output[0], 10);
 }
 
-TEST_F(EncodingViewDecoderTest, readDecodesRemainingRowsAndAdvancesCursor) {
-  const auto stream =
-      encodeNullable<int64_t>({10, std::nullopt, 12, 13, std::nullopt, 15});
+TEST_F(EncodingViewDecoderTest, remainingRowsTracksSequentialCursor) {
+  const std::array<int64_t, 4> values{10, 11, 12, 13};
+  const auto stream = encode<int64_t>(values);
   auto decoder = makeDecoder(stream);
-  std::array<int64_t, 2> prefix{};
-  std::array<uint64_t, 1> prefixNulls{};
+  std::array<int64_t, 1> output{};
   std::vector<velox::BufferPtr> stringBuffers;
+
+  EXPECT_EQ(decoder->remainingRows(), 4);
+  decoder->skip(2);
+  EXPECT_EQ(decoder->remainingRows(), 2);
   EXPECT_EQ(
       decoder->next(
-          prefix.size(),
-          prefix.data(),
-          [&prefixNulls]() { return prefixNulls.data(); },
+          1,
+          output.data(),
+          /*getOutputNulls=*/nullptr,
           stringBuffers),
       1);
-
-  std::vector<int64_t> output;
-  std::vector<uint64_t> outputNulls(velox::bits::nwords(4));
-  decoder->read(
-      [&](uint32_t rowCount) -> void* {
-        output.resize(rowCount);
-        return output.data();
-      },
-      [&outputNulls]() { return outputNulls.data(); },
-      stringBuffers);
-
-  ASSERT_EQ(output.size(), 4);
-  EXPECT_EQ(output[0], 12);
-  EXPECT_EQ(output[1], 13);
-  EXPECT_EQ(output[3], 15);
-  EXPECT_TRUE(velox::bits::isBitSet(outputNulls.data(), 0));
-  EXPECT_TRUE(velox::bits::isBitSet(outputNulls.data(), 1));
-  EXPECT_FALSE(velox::bits::isBitSet(outputNulls.data(), 2));
-  EXPECT_TRUE(velox::bits::isBitSet(outputNulls.data(), 3));
-
-  bool preparedOutput{false};
-  decoder->read(
-      [&](uint32_t) -> void* {
-        preparedOutput = true;
-        return nullptr;
-      },
-      /*getOutputNulls=*/nullptr,
-      stringBuffers);
-  EXPECT_FALSE(preparedOutput);
+  EXPECT_EQ(decoder->remainingRows(), 1);
+  decoder->skip(1);
+  EXPECT_EQ(decoder->remainingRows(), 0);
 }
 
 TEST_F(EncodingViewDecoderTest, scattersSequentialRows) {

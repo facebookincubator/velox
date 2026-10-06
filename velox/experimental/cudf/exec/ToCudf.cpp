@@ -30,6 +30,7 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
+#include "velox/common/base/Exceptions.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -352,15 +353,20 @@ void registerCudf() {
   initializeGpuCapabilities(contextDevice);
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
+  auto base = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr);
-  mr_ = std::move(mr);
+  // Wrap the device resource in a statistics adaptor so that
+  // cudfAllocatedBytes() can report live device memory.
+  statsMr_.emplace(std::move(base));
+  mr_ = statsMr_.value();
+  cudf::set_current_device_resource(mr_.value());
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
-        outputMrMode, CudfConfig::getInstance().memoryPercent);
+    outputStatsMr_.emplace(
+        cudf_velox::createMemoryResource(
+            outputMrMode, CudfConfig::getInstance().memoryPercent));
+    output_mr_ = outputStatsMr_.value();
   } else {
     output_mr_ = mr_;
   }
@@ -385,8 +391,12 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  // Reset the any_resource copies before the adaptors they were copied from,
+  // so that the wrapped upstream resources are released here.
   output_mr_.reset();
   mr_.reset();
+  outputStatsMr_.reset();
+  statsMr_.reset();
   // Undo registerCudf()'s operator adapter registration.
   OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
@@ -424,8 +434,22 @@ void CudfConfig::initialize(
     outputMemoryResource = config[kCudfOutputMr];
   }
   if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
-    batchSizeMinThreshold =
+    const auto targetRows =
         folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+    VELOX_USER_CHECK_GT(
+        targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+    batchSizeMinThreshold = targetRows;
+  }
+  if (config.find(kCudfBatchSizeMinBytes) != config.end()) {
+    // tryTo so that a negative or malformed value is a user error, not a
+    // folly::ConversionError.
+    const auto& value = config[kCudfBatchSizeMinBytes];
+    const auto targetBytes = folly::tryTo<uint64_t>(value);
+    VELOX_USER_CHECK(
+        targetBytes.hasValue() && targetBytes.value() > 0,
+        "cuDF BatchConcat minimum byte target must be a positive integer: {}",
+        value);
+    batchSizeMinBytes = targetBytes.value();
   }
   if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
     batchSizeMaxThreshold =

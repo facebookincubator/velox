@@ -137,19 +137,15 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     connectorPool_ =
         root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
 
-    connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
-        opPool_.get(),
-        connectorPool_.get(),
-        connectorSessionProperties_.get(),
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.HiveDataSinkTest",
-        "task.HiveDataSinkTest",
-        "planNodeId.HiveDataSinkTest",
-        0,
-        "");
+    connectorQueryCtx_ =
+        connector::ConnectorQueryCtx::Builder()
+            .operatorPool(opPool_.get())
+            .connectorPool(connectorPool_.get())
+            .sessionProperties(connectorSessionProperties_.get())
+            .queryId("query.HiveDataSinkTest")
+            .taskId("task.HiveDataSinkTest")
+            .planNodeId("planNodeId.HiveDataSinkTest")
+            .build();
   }
 
   std::shared_ptr<connector::hive::HiveInsertTableHandle>
@@ -755,34 +751,27 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
       spillDirectory = TempDirectoryPath::create();
       spillConfig = getSpillConfig(
           spillDirectory->getPath(), testData.writerFlushThreshold);
-      auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-          opPool_.get(),
-          connectorPool_.get(),
-          connectorSessionProperties_.get(),
-          spillConfig.get(),
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.HiveDataSinkTest",
-          "task.HiveDataSinkTest",
-          "planNodeId.HiveDataSinkTest",
-          0,
-          "");
+      auto connectorQueryCtx =
+          connector::ConnectorQueryCtx::Builder()
+              .operatorPool(opPool_.get())
+              .connectorPool(connectorPool_.get())
+              .sessionProperties(connectorSessionProperties_.get())
+              .spillConfig(spillConfig.get())
+              .queryId("query.HiveDataSinkTest")
+              .taskId("task.HiveDataSinkTest")
+              .planNodeId("planNodeId.HiveDataSinkTest")
+              .build();
       setConnectorQueryContext(std::move(connectorQueryCtx));
     } else {
-      auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-          opPool_.get(),
-          connectorPool_.get(),
-          connectorSessionProperties_.get(),
-          nullptr,
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.HiveDataSinkTest",
-          "task.HiveDataSinkTest",
-          "planNodeId.HiveDataSinkTest",
-          0,
-          "");
+      auto connectorQueryCtx =
+          connector::ConnectorQueryCtx::Builder()
+              .operatorPool(opPool_.get())
+              .connectorPool(connectorPool_.get())
+              .sessionProperties(connectorSessionProperties_.get())
+              .queryId("query.HiveDataSinkTest")
+              .taskId("task.HiveDataSinkTest")
+              .planNodeId("planNodeId.HiveDataSinkTest")
+              .build();
       setConnectorQueryContext(std::move(connectorQueryCtx));
     }
 
@@ -896,34 +885,27 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     if (testData.writerSpillEnabled) {
       spillDirectory = TempDirectoryPath::create();
       spillConfig = getSpillConfig(spillDirectory->getPath(), 0);
-      auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-          opPool_.get(),
-          connectorPool_.get(),
-          connectorSessionProperties_.get(),
-          spillConfig.get(),
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.HiveDataSinkTest",
-          "task.HiveDataSinkTest",
-          "planNodeId.HiveDataSinkTest",
-          0,
-          "");
+      auto connectorQueryCtx =
+          connector::ConnectorQueryCtx::Builder()
+              .operatorPool(opPool_.get())
+              .connectorPool(connectorPool_.get())
+              .sessionProperties(connectorSessionProperties_.get())
+              .spillConfig(spillConfig.get())
+              .queryId("query.HiveDataSinkTest")
+              .taskId("task.HiveDataSinkTest")
+              .planNodeId("planNodeId.HiveDataSinkTest")
+              .build();
       setConnectorQueryContext(std::move(connectorQueryCtx));
     } else {
-      auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-          opPool_.get(),
-          connectorPool_.get(),
-          connectorSessionProperties_.get(),
-          nullptr,
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.HiveDataSinkTest",
-          "task.HiveDataSinkTest",
-          "planNodeId.HiveDataSinkTest",
-          0,
-          "");
+      auto connectorQueryCtx =
+          connector::ConnectorQueryCtx::Builder()
+              .operatorPool(opPool_.get())
+              .connectorPool(connectorPool_.get())
+              .sessionProperties(connectorSessionProperties_.get())
+              .queryId("query.HiveDataSinkTest")
+              .taskId("task.HiveDataSinkTest")
+              .planNodeId("planNodeId.HiveDataSinkTest")
+              .build();
       setConnectorQueryContext(std::move(connectorQueryCtx));
     }
 
@@ -1037,19 +1019,16 @@ TEST_F(HiveDataSinkTest, sortWriterMemoryReclaimDuringFinish) {
       HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "1");
   connectorSessionProperties_->set(
       HiveConfig::kSortWriterMaxOutputRowsSession, "100");
-  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      spillConfig.get(),
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "query.HiveDataSinkTest",
-      "task.HiveDataSinkTest",
-      "planNodeId.HiveDataSinkTest",
-      0,
-      "");
+  auto connectorQueryCtx =
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(opPool_.get())
+          .connectorPool(connectorPool_.get())
+          .sessionProperties(connectorSessionProperties_.get())
+          .spillConfig(spillConfig.get())
+          .queryId("query.HiveDataSinkTest")
+          .taskId("task.HiveDataSinkTest")
+          .planNodeId("planNodeId.HiveDataSinkTest")
+          .build();
   setConnectorQueryContext(std::move(connectorQueryCtx));
   auto dataSink = createDataSink(
       rowType_,
@@ -1102,19 +1081,16 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
       getSpillConfig(spillDirectory->getPath(), 0);
   // Triggers the memory reservation in sort buffer.
   spillConfig->minSpillableReservationPct = 1'000;
-  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      spillConfig.get(),
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "query.HiveDataSinkTest",
-      "task.HiveDataSinkTest",
-      "planNodeId.HiveDataSinkTest",
-      0,
-      "");
+  auto connectorQueryCtx =
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(opPool_.get())
+          .connectorPool(connectorPool_.get())
+          .sessionProperties(connectorSessionProperties_.get())
+          .spillConfig(spillConfig.get())
+          .queryId("query.HiveDataSinkTest")
+          .taskId("task.HiveDataSinkTest")
+          .planNodeId("planNodeId.HiveDataSinkTest")
+          .build();
   setConnectorQueryContext(std::move(connectorQueryCtx));
 
   auto dataSink = createDataSink(
@@ -1958,19 +1934,16 @@ TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
   // Setup memory pools with spill config to enable reclaim
   auto spillDirectory = TempDirectoryPath::create();
   auto spillConfig = getSpillConfig(spillDirectory->getPath(), 1 << 30);
-  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      spillConfig.get(),
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "query.HiveDataSinkTest",
-      "task.HiveDataSinkTest",
-      "planNodeId.HiveDataSinkTest",
-      0,
-      "");
+  auto connectorQueryCtx =
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(opPool_.get())
+          .connectorPool(connectorPool_.get())
+          .sessionProperties(connectorSessionProperties_.get())
+          .spillConfig(spillConfig.get())
+          .queryId("query.HiveDataSinkTest")
+          .taskId("task.HiveDataSinkTest")
+          .planNodeId("planNodeId.HiveDataSinkTest")
+          .build();
   setConnectorQueryContext(std::move(connectorQueryCtx));
 
   auto dataSink = createDataSink(rowType_, outputDirectory->getPath());

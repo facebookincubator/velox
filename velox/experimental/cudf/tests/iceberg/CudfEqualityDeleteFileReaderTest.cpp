@@ -633,6 +633,56 @@ TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
       .assertResults({expected});
 }
 
+/// Verifies that lowercase table names match mixed-case data and delete file
+/// columns when file column names are read as lowercase, for both a
+/// filter-only column and an equality delete key missing from the output.
+TEST_P(CudfEqualityDeleteFileReaderTest, mixedCaseFileColumnNames) {
+  auto data = makeRowVector(
+      {"Id", "Key_Col", "Value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto deleteData = makeRowVector({"Key_Col"}, {makeFlatVector<int64_t>({30})});
+  auto deleteFile = TempFilePath::create();
+  const auto deleteFileFormat = GetParam();
+  writeDeleteFile(deleteFileFormat, deleteFile->getPath(), {deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      deleteFile->getPath(),
+      toDwioFormat(deleteFileFormat),
+      1,
+      getFileSize(deleteFile->getPath()),
+      /*equalityFieldIds=*/{2});
+
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .connectorId(kCudfIcebergConnectorId)
+          .outputType(ROW({"value"}, {VARCHAR()}))
+          .dataColumns(
+              ROW({"id", "key_col", "value"}, {BIGINT(), BIGINT(), VARCHAR()}))
+          .subfieldFilter("id >= 2")
+          .endTableScan()
+          .planNode();
+
+  auto expected =
+      makeRowVector({"value"}, {makeFlatVector<std::string>({"b", "d", "e"})});
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          facebook::velox::connector::hive::HiveConfig::
+              kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .splits(makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile}))
+      .assertResults({expected});
+}
+
 INSTANTIATE_TEST_SUITE_P(
     DeleteFormats,
     CudfEqualityDeleteFileReaderTest,

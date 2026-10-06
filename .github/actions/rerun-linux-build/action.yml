@@ -68,20 +68,27 @@ runs:
         echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
         echo "run_status=$run_status" >> "$GITHUB_OUTPUT"
 
-        # The `Full build mode` job in linux-build-base.yml is gated on
-        # `is-full-mode` alone and resolves to `completed:skipped` the
-        # moment a selective run starts. Any other state means the run
-        # is already full and a re-run would repeat it. Treat absence
-        # (job missing from the response) as "re-run anyway".
-        marker_conclusion=$(gh_api "/repos/$REPO/actions/runs/$run_id/jobs" \
-          --jq '[.jobs[] | select(.name | test("^Build with GCC / Full build mode"))][0].conclusion // ""')
-        if [ -n "$marker_conclusion" ] && [ "$marker_conclusion" != "skipped" ]; then
+        # The `Ubuntu debug with system dependencies` job in
+        # linux-build-base.yml is gated on `is-full-mode` and resolves
+        # to `completed:skipped` immediately when the workflow starts
+        # in selective mode. Any other state (in_progress, queued, or
+        # completed with a non-skipped conclusion) means the existing
+        # run is already in full mode — a rerun would produce identical
+        # output and waste CI. Treat absence (job not found in the API
+        # response) as "rerun anyway" to be conservative.
+        #
+        # NOTE: This heuristic relies on the contract that Ubuntu debug
+        # only runs in full mode. If selective mode ever starts running
+        # Ubuntu debug, this check will incorrectly skip valid reruns.
+        ubuntu_conclusion=$(gh_api "/repos/$REPO/actions/runs/$run_id/jobs" \
+          --jq '[.jobs[] | select(.name | test("^Build with GCC / Ubuntu debug"))][0].conclusion // ""')
+        if [ -n "$ubuntu_conclusion" ] && [ "$ubuntu_conclusion" != "skipped" ]; then
           already_full="true"
         else
           already_full="false"
         fi
         echo "already_full=$already_full" >> "$GITHUB_OUTPUT"
-        echo "Found run $run_id (status=$run_status, full_mode_marker=$marker_conclusion, already_full=$already_full)"
+        echo "Found run $run_id (status=$run_status, ubuntu_debug=$ubuntu_conclusion, already_full=$already_full)"
 
     - name: Cancel in-flight run if needed
       if: |

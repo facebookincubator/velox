@@ -371,6 +371,18 @@ TEST_F(FlatMapVectorTest, withNulls) {
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 2));
 }
 
+TEST_F(FlatMapVectorTest, containsNullAtValues) {
+  auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
+      {{{1L, 10L}, {2L, 20L}}},
+      {{{1L, 11L}, {2L, std::nullopt}}},
+      {{{1L, std::nullopt}}},
+  });
+
+  EXPECT_FALSE(flatMapVector->containsNullAt(0));
+  EXPECT_TRUE(flatMapVector->containsNullAt(1));
+  EXPECT_TRUE(flatMapVector->containsNullAt(2));
+}
+
 TEST_F(FlatMapVectorTest, nullInMaps) {
   // Construct a flat map with two null BufferPtrs in the inMaps vector.
   auto vectorSize = 1;
@@ -630,6 +642,37 @@ TEST_F(FlatMapVectorTest, setDistinctKeys) {
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)101), std::nullopt);
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)102), std::nullopt);
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)103), std::nullopt);
+}
+
+TEST_F(FlatMapVectorTest, appendDistinctKey) {
+  auto makeVector = [&] {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(BIGINT(), REAL()),
+        nullptr,
+        2,
+        maker_.flatVector<int64_t>({101, 102}),
+        std::vector<VectorPtr>{nullptr, nullptr},
+        std::vector<BufferPtr>{});
+  };
+  auto newKeys = maker_.flatVector<int64_t>({103});
+
+  // Append before any lookup.
+  {
+    auto vector = makeVector();
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
+
+  // Append after a lookup.
+  {
+    auto vector = makeVector();
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), std::nullopt);
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
 }
 
 TEST_F(FlatMapVectorTest, sortedKeyIndices) {

@@ -70,8 +70,10 @@ namespace facebook::velox::exec::rpc {
 /// - Async RPC callbacks may run on any thread (transport executor pool).
 ///   All cross-thread coordination goes through RPCState, which is fully
 ///   mutex-protected (see RPCState.h for per-method annotations).
-/// - RPCRateLimiter tokens use RAII: destruction (including from cancelled
-///   futures) automatically releases the slot and wakes a parked driver.
+/// - RPCState owns each RAII admission lease until its response completes.
+///   Completion applies canonical shared overload feedback before releasing
+///   admission; the driver applies its local and aggregate feedback later when
+///   it consumes the ready response.
 ///
 class RPCOperator : public exec::Operator {
  public:
@@ -144,9 +146,17 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
+  static inline const std::string kRpcRateLimiterHardLimit{
+      "rpcRateLimiterHardLimit"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
   static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
+  static inline const std::string kRpcRateLimiterLimitMilli{
+      "rpcRateLimiterLimitMilli"};
+  static inline const std::string kRpcRateLimiterMinLimitMilli{
+      "rpcRateLimiterMinLimitMilli"};
+  static inline const std::string kRpcRateLimiterServiceHorizonNanos{
+      "rpcRateLimiterServiceHorizonNanos"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -200,11 +210,9 @@ class RPCOperator : public exec::Operator {
   // Send whatever admission currently allows of that work.
   void drainPending();
 
-  // The end-of-input drain, shared by both modes. Sends what admission allows;
-  // once nothing is left, declares the input closed. If work remains and this
-  // driver has nothing in flight, only another driver's release can help, so
-  // it parks on the backend. Returns a reason only in that parking case --
-  // otherwise the caller carries on to its own finish handling.
+  // Drains BATCH input at end-of-input. Sends what admission allows; once
+  // nothing is left, declares the input closed. If work remains and this
+  // driver has nothing in flight, it parks on backend admission.
   std::optional<exec::BlockingReason> drainOrParkOnAdmission(
       ContinueFuture* future);
 
@@ -269,7 +277,8 @@ class RPCOperator : public exec::Operator {
   void recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
-      int64_t successUnits);
+      const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
+      bool sharedOverloadHandled);
 
   // isBlocked() decomposed. Each returns the reason to hand the driver; the
   // try* helpers return nullopt when the state reports finished, which the

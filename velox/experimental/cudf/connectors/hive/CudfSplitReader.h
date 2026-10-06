@@ -170,6 +170,9 @@ class CudfSplitReader : public NvtxHelper {
   // Whether to prepend a row index column to the output.
   bool prependRowIndex_{false};
 
+  // Whether Parquet column names are matched case-insensitively.
+  bool caseInsensitiveColumnNames_{false};
+
  private:
   // Stores row group indices for one Parquet source.
   using RowGroupIndices = std::vector<cudf::size_type>;
@@ -204,7 +207,7 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the row groups to read, grouped into passes bounded by the pass
   // read limit. Empty when the split has no row groups left after pruning.
-  RowGroupPasses selectRowGroupPasses() const;
+  RowGroupPasses selectRowGroupPasses();
 
   // Wait for the column chunks of the current pass, fetching them first if
   // that has not started yet, and set up its chunked read.

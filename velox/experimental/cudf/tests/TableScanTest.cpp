@@ -611,6 +611,55 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
   EXPECT_EQ(planStats.at(plan->id()).outputRows, 0);
 }
 
+// Table schemas use lowercase names while the file keeps mixed-case names. The
+// filter-only column must still be read so the pushed-down filter can find it.
+TEST_F(TableScanTest, mixedCaseFileColumnNames) {
+  auto vector = makeRowVector(
+      {"Filter_Col", "Value_Col"},
+      {makeFlatVector<std::string>({"a", "b", "c", "d"}),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  auto rowType = ROW({"filter_col", "value_col"}, {VARCHAR(), BIGINT()});
+  auto outputType = ROW({"value_col"}, {BIGINT()});
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "filter_col",
+              std::make_unique<common::BytesRange>(
+                  "b",
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  "",
+                  /*upperUnbounded*/ true,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .build();
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .outputType(outputType)
+          .tableHandle(makeTableHandle(
+              "parquet_table", rowType, std::move(subfieldFilters), nullptr))
+          .assignments(
+              facebook::velox::exec::test::HiveConnectorTestBase::
+                  allRegularColumns(outputType))
+          .endTableScan()
+          .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          facebook::velox::connector::hive::HiveConfig::
+              kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .splits(makeCudfHiveConnectorSplits({filePath}))
+      .assertResults("SELECT Value_Col FROM tmp WHERE Filter_Col >= 'b'");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ,
     TableScanTestParameterized,
