@@ -96,6 +96,8 @@ class IndexLookup {
     const velox::FileHandle* fileHandle{nullptr};
     /// Data cache for index metadata. Set with fileHandle for cached path.
     velox::cache::AsyncDataCache* cache{nullptr};
+    /// Maximum decompressed index metadata size admitted to the data cache.
+    std::optional<uint32_t> maxCacheEntrySize;
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.
     bool pinIndex{false};
