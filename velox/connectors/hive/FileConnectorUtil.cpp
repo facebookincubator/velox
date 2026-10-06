@@ -106,8 +106,6 @@ void configureReaderOptions(
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
-  readerOptions.setDirectBufferedInputSharedAllocation(
-      fileConfig->directBufferedInputSharedAllocation(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
   readerOptions.setMaxCoalesceDistance(

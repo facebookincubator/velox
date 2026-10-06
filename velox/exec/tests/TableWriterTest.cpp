@@ -2355,6 +2355,31 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
   }
 }
 
+// A worker fragment may start zero tasks when its scan has no splits. The
+// coordinator's TableWriteMerge must still produce the final summary even
+// though it receives no pages from workers.
+TEST_F(BasicTableWriterTest, mergeNoInput) {
+  const auto stats = TableWriterTestBase::generateColumnStatsSpec(
+      "min", {}, core::AggregationNode::Step::kFinal);
+
+  auto plan =
+      PlanBuilder()
+          .values({makeRowVector(TableWriteTraits::outputType(stats), 1)})
+          .filter("false")
+          .tableWriteMerge(stats)
+          .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ(TableWriteTraits::getRowCount(result), 0);
+  EXPECT_TRUE(result->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(1));
+
+  const auto context = TableWriteTraits::getTableCommitContext(result);
+  const folly::dynamic expectedContext =
+      folly::dynamic::object(TableWriteTraits::klastPageContextKey, true);
+  EXPECT_EQ(context, expectedContext);
+}
+
 // Verifies TableWriteMerge with kFinal step and multiple drivers.
 // Each driver runs TableWrite(kPartial), LocalGather collects, and
 // TableWriteMerge(kFinal) produces final statistics.

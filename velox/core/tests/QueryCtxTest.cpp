@@ -27,6 +27,64 @@ class QueryCtxTest : public testing::Test {
   }
 };
 
+TEST_F(QueryCtxTest, credentialKeysWrite) {
+  const std::string key{"token"};
+  const std::string credential{"secret"};
+
+  // Absent from the config: the credential becomes the stored value.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config;
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_TRUE(keys.isQueryConfigCredential(key));
+    EXPECT_FALSE(keys.isConnectorCredential("hive", key));
+  }
+
+  // kReplace overwrites whatever was there.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, "other"}};
+    keys.write(
+        config, "", key, credential, CredentialKeys::OnConflict::kReplace);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_TRUE(keys.isQueryConfigCredential(key));
+  }
+
+  // kKeep leaves a different value in place. Recording the name anyway would
+  // redact a property that replay has to parse back.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, "other"}};
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), "other");
+    EXPECT_FALSE(keys.isQueryConfigCredential(key));
+  }
+
+  // kKeep over a value that happens to equal the credential records nothing
+  // either. The stored value is the config's own, and redacting a typed
+  // property because a credential collided with it would break replay.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config{{key, credential}};
+    keys.write(config, "", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_FALSE(keys.isQueryConfigCredential(key));
+  }
+
+  // A connector id routes the record away from the query config.
+  {
+    CredentialKeys keys;
+    std::unordered_map<std::string, std::string> config;
+    keys.write(
+        config, "hive", key, credential, CredentialKeys::OnConflict::kKeep);
+    EXPECT_EQ(config.at(key), credential);
+    EXPECT_FALSE(keys.isQueryConfigCredential(key));
+    EXPECT_TRUE(keys.isConnectorCredential("hive", key));
+    EXPECT_FALSE(keys.isConnectorCredential("iceberg", key));
+  }
+}
+
 TEST_F(QueryCtxTest, withSysRootPool) {
   auto queryCtx = QueryCtx::create(
       nullptr,
