@@ -245,10 +245,12 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
       *task->queryCtx(), exchangeNode->transportKind());
   ASSERT_NE(entry, nullptr);
 
-  auto client = entry->makeClient(makeClientContext(task));
-  ASSERT_NE(
-      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
-      nullptr);
+  auto clientContext = makeClientContext(task);
+  clientContext.numberOfConsumers = 2;
+  auto client = entry->makeClient(clientContext);
+  auto ucxClient =
+      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client);
+  ASSERT_NE(ucxClient, nullptr);
 
   auto exchangeOperator =
       entry->makeExchangeOperator(0, driverCtx.get(), exchangeNode, client);
@@ -268,6 +270,17 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
   EXPECT_TRUE(properties.canRunOnGPU);
   EXPECT_TRUE(properties.producesGpuOutput);
   EXPECT_FALSE(properties.acceptsGpuInput);
+
+  // The factory must pass numberOfConsumers to the client's queue. Register
+  // both consumers as waiters while the queue is empty so that passing 1 would
+  // fail deterministically on the second call.
+  bool atEnd{false};
+  ContinueFuture firstFuture = ContinueFuture::makeEmpty();
+  ContinueFuture secondFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(ucxClient->next(0, &atEnd, &firstFuture), nullptr);
+  EXPECT_FALSE(atEnd);
+  EXPECT_EQ(ucxClient->next(1, &atEnd, &secondFuture), nullptr);
+  EXPECT_FALSE(atEnd);
 
   exchangeOperator->close();
   client->close();
