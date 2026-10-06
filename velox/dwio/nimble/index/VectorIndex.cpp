@@ -29,8 +29,10 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#include <faiss/IndexIVFRaBitQFastScan.h>
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/impl/IDSelector.h>
+#include <faiss/impl/io.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
@@ -55,8 +57,30 @@ namespace {
 // single-query batch remains single-threaded.
 constexpr int kIvfParallelModeQueries{3};
 
-// Deserializes one FAISS index from caller-owned zero-copy storage.
-std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
+// Returns whether deserialization creates views into the serialized input.
+bool usesZeroCopyReader(VectorIndexType indexType) {
+  switch (indexType) {
+    case VectorIndexType::kIvfFlat:
+    case VectorIndexType::kIvfSq8:
+    case VectorIndexType::kIvfPq:
+    case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kHnswSq8:
+      return true;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      // FastScan requires aligned, owning BlockInvertedLists.
+      // TODO: Add aligned zero-copy BlockInvertedLists deserialization in
+      // FAISS, then use the zero-copy reader for FastScan.
+      return false;
+    default:
+      NIMBLE_UNREACHABLE(
+          "Unsupported vector index type: {}", static_cast<int>(indexType));
+  }
+}
+
+// Wrapping the source prevents FAISS from creating views into serialized data.
+std::unique_ptr<faiss::Index> readFaissIndex(
+    std::string_view serializedIndex,
+    VectorIndexType indexType) {
   NIMBLE_CHECK_FILE(
       !serializedIndex.empty(), "FAISS index data must not be empty");
   // Upstream FAISS takes a mutable pointer but does not modify the input.
@@ -64,6 +88,10 @@ std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
       reinterpret_cast<const uint8_t*>(serializedIndex.data()));
   faiss::ZeroCopyIOReader reader(serializedData, serializedIndex.size());
   try {
+    if (!usesZeroCopyReader(indexType)) {
+      faiss::BufferedIOReader copyingReader{&reader};
+      return std::unique_ptr<faiss::Index>(faiss::read_index(&copyingReader));
+    }
     return std::unique_ptr<faiss::Index>(faiss::read_index(&reader));
   } catch (const std::exception& error) {
     NIMBLE_FILE_FAIL("Failed to deserialize FAISS index: {}", error.what());
@@ -82,6 +110,9 @@ bool checkIndexType(const faiss::Index& index, VectorIndexType indexType) {
       return dynamic_cast<const faiss::IndexIVFPQ*>(&index) != nullptr;
     case VectorIndexType::kIvfRaBitQ:
       return dynamic_cast<const faiss::IndexIVFRaBitQ*>(&index) != nullptr;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return dynamic_cast<const faiss::IndexIVFRaBitQFastScan*>(&index) !=
+          nullptr;
     case VectorIndexType::kHnswSq8:
       return dynamic_cast<const faiss::IndexHNSWSQ*>(&index) != nullptr;
     default:
@@ -201,6 +232,7 @@ void searchHnswIndex(
 // Searches an IVF index without updating FAISS process-global statistics.
 void searchIvfIndex(
     const faiss::IndexIVF& index,
+    VectorIndexType indexType,
     faiss::idx_t numQueries,
     uint32_t requestedNumProbes,
     uint64_t maxCodes,
@@ -253,12 +285,15 @@ void searchIvfIndex(
       partitionLabels.data(),
       searchParameters.quantizer_params);
 
-  // Pass request-local statistics to avoid FAISS's process-global
-  // indexIVF_stats, which is not safe for concurrent searches.
+  // Pass request-local statistics to implementations that support them to
+  // avoid FAISS's process-global indexIVF_stats during concurrent searches.
+  // FastScan does not populate IndexIVFStats.
   //
   // TODO: Aggregate per-search FAISS statistics in VectorIndex for
   // observability.
   faiss::IndexIVFStats searchStats;
+  auto* searchStatsPtr =
+      indexType == VectorIndexType::kIvfRaBitQFastScan ? nullptr : &searchStats;
   index.search_preassigned(
       numQueries,
       queryVectors,
@@ -269,7 +304,7 @@ void searchIvfIndex(
       labels,
       /*store_pairs=*/false,
       &searchParameters,
-      &searchStats);
+      searchStatsPtr);
 }
 
 // Returns whether the runtime index type belongs to the IVF family.
@@ -281,6 +316,7 @@ bool isIvfIndexType(VectorIndexType indexType) {
     case VectorIndexType::kIvfSq8:
     case VectorIndexType::kIvfPq:
     case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kIvfRaBitQFastScan:
       return true;
   }
   NIMBLE_UNREACHABLE(
@@ -309,6 +345,7 @@ void searchFaissIndex(
         velox::checkedPointerCast<const faiss::IndexIVF>(&index);
     searchIvfIndex(
         *ivfIndex,
+        indexType,
         numQueries,
         ivfSearchOptions->numProbes,
         ivfSearchOptions->maxCodes,
@@ -613,7 +650,10 @@ VectorIndex::VectorIndex(
       indexType_{metadata.indexType},
       numVectors_{metadata.numVectors},
       indexData_{std::move(indexData)},
-      faissIndex_{readFaissIndex(serializedIndex)} {
+      faissIndex_{readFaissIndex(serializedIndex, indexType_)} {
+  if (!usesZeroCopyReader(indexType_)) {
+    indexData_.reset();
+  }
   NIMBLE_CHECK_FILE_EQ(
       faissIndex_->d,
       static_cast<int>(dimensions_),

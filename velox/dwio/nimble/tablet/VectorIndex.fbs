@@ -36,6 +36,7 @@ enum VectorIndexType : byte {
   IVF_SQ8,
   IVF_PQ,
   IVF_RABITQ,
+  IVF_RABITQ_FAST_SCAN,
   HNSW_SQ8,
 }
 

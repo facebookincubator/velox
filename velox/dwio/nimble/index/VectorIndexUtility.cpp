@@ -103,6 +103,8 @@ serialization::VectorIndexType toSerializedIndexType(
       return serialization::VectorIndexType_IVF_PQ;
     case VectorIndexType::kIvfRaBitQ:
       return serialization::VectorIndexType_IVF_RABITQ;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN;
     case VectorIndexType::kHnswSq8:
       return serialization::VectorIndexType_HNSW_SQ8;
     default:
@@ -121,6 +123,9 @@ VectorIndexType fromSerializedIndexType(int8_t indexType) {
       return VectorIndexType::kIvfPq;
     case static_cast<int8_t>(serialization::VectorIndexType_IVF_RABITQ):
       return VectorIndexType::kIvfRaBitQ;
+    case static_cast<int8_t>(
+        serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN):
+      return VectorIndexType::kIvfRaBitQFastScan;
     case static_cast<int8_t>(serialization::VectorIndexType_HNSW_SQ8):
       return VectorIndexType::kHnswSq8;
     default:
