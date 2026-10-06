@@ -1834,11 +1834,11 @@ class StartedTasks {
   std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
 
-// Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter, and
-// the transport registrations and memory resources it installs, do not outlive
-// the case even if the body throws. unregisterCudf() empties output_mr_, which
-// main() seeded for the whole binary, so the previous value is put back for the
-// cases that run later and still allocate through get_output_mr().
+// Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter and the
+// transport registrations it installs do not outlive the case even if the body
+// throws. unregisterCudf() empties output_mr_, which main() seeded for the
+// whole binary, so the previous value is put back for the cases that run later
+// and still allocate through get_output_mr().
 class CudfRegistration {
  public:
   CudfRegistration() : previousOutputMr_(cudf_velox::output_mr_) {
@@ -2074,8 +2074,8 @@ TEST_F(UcxExchangeFocusedTest, taskShuffleOverUcx) {
   registerSerdes();
   const auto taskPrefix = getUniqueTaskPrefix();
 
-  // registerCudf() is what seeds both transport registries in this tree, so it
-  // is a prerequisite of the Task-level path and not just of the merge case.
+  // registerCudf() is what seeds both transport registries, so it is a
+  // prerequisite of the Task-level path and not just of the merge case.
   exec::ExchangeTransportRegistry::unregisterAll();
   exec::OutputTransportRegistry::unregisterAll();
   CudfRegistration cudfRegistration;
@@ -2145,12 +2145,12 @@ TEST_F(UcxExchangeFocusedTest, taskShuffleOverUcx) {
 // travels beside the data, in MetadataMsg on the remote path and in the
 // registry entry on the intra-node one.
 //
-// The row count is the entire observable result here, which is the point. With
-// the count derived from the packed table instead, UcxExchange rebuilt a 0-row
-// vector and the consumer task died on
-// "Operator::getOutput() must return nullptr or a non-empty vector", which a
-// downstream global aggregation would then swallow into a wrong scalar rather
-// than an error -- SELECT count(*) over such a plan returned 0.
+// The row count is the entire observable result here, which is the point. If
+// UcxExchange derived the count from the packed table instead, it would rebuild
+// a 0-row vector and the consumer task would die on "Operator::getOutput() must
+// return nullptr or a non-empty vector"; a downstream global aggregation would
+// turn that into a wrong scalar rather than an error -- SELECT count(*) over
+// such a plan would return 0.
 TEST_F(UcxExchangeFocusedTest, zeroColumnPayloadKeepsItsRowCount) {
   registerSerdes();
   const auto taskPrefix = getUniqueTaskPrefix();
@@ -2227,12 +2227,12 @@ TEST_F(UcxExchangeFocusedTest, zeroColumnPayloadKeepsItsRowCount) {
   EXPECT_EQ(receivedRows, kExpectedRows);
 }
 
-// End-to-end guard on the merge path this tree restored: a kUcx
-// MergeExchangeNode runs as UcxExchange followed by CudfOrderBy, because
-// UcxExchangeClient multiplexes every source into one queue and so destroys the
-// per-source orderings exec::MergeExchange relies on. The transport builds only
-// the exchange; the sort is spliced in behind it by the cuDF
-// driver-adaptation pass, which is also what renumbers the operator ids.
+// End-to-end check of the UCX merge path: a kUcx MergeExchangeNode runs as
+// UcxExchange followed by CudfOrderBy, because UcxExchangeClient multiplexes
+// every source into one queue and so destroys the per-source orderings
+// exec::MergeExchange relies on. The transport builds only the exchange; the
+// sort is spliced in behind it by the cuDF driver-adaptation pass, which is
+// also what renumbers the operator ids.
 //
 // Two properties are asserted, and only two: global ordering, since nothing
 // about merge internals, batch boundaries or per-source runs survives that
@@ -2327,18 +2327,14 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
 // the GPU, so the cuDF pass splices in no conversion operator and the merge
 // expansion is the only replacement made.
 //
-// That distinction is the whole point of the case. When the transport built
-// both operators itself it numbered them by plan node, giving them the same
-// operatorId, and any unrelated splice hid it again --
+// That distinction is the whole point of the case.
 // DriverFactory::replaceOperators renumbers the entire driver, so a single
 // CudfToVelox in front of a CPU sink is enough to make the ids come out
-// consecutive. mergeExchangeOverUcxIsGloballyOrdered ends in a CallbackSink and
-// therefore cannot see the difference. This pipeline ends in
-// UcxPartitionedOutput, which consumes CudfVectors, so nothing is spliced and
-// the ids are whatever produced them: [0, 1, 2] when the expansion goes through
-// replaceOperators, and a repeated id when it does not -- [0, 0, 2] with the
-// registry-side expansion, which numbered the output operator after two
-// operators rather than one.
+// consecutive whatever produced them, and
+// mergeExchangeOverUcxIsGloballyOrdered, which ends in a CallbackSink, cannot
+// see a repeated id. This pipeline ends in UcxPartitionedOutput, which consumes
+// CudfVectors, so nothing else is spliced and the ids are whatever the merge
+// expansion produced: [0, 1, 2] when it goes through replaceOperators.
 //
 // Three Tasks are needed to reach that shape: the two producers feed the merge,
 // and a third Task drains the sorted output so the middle Task can finish and
