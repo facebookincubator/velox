@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/CpuFilterFallback.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -106,15 +107,22 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
-  // TODO: ConnectorQueryCtx does not expose the session QueryCtx, only an
-  // ExpressionEvaluator, so constant folding here runs against a transient
-  // QueryCtx with default query config rather than the session's. Passing the
-  // real session QueryCtx (e.g. by exposing it on ConnectorQueryCtx) should be
-  // figured out later. A local QueryCtx is required because
-  // expression::optimize constant-folds through exec::ExprSet, whose
-  // constructor dereferences the QueryCtx unconditionally; a null QueryCtx
-  // would crash.
-  auto optimizeQueryCtx = core::QueryCtx::create();
+  // ConnectorQueryCtx exposes no session QueryCtx, so the remaining filter is
+  // optimized and compiled against a local one carrying the session settings
+  // expressions read: the time zone and whether to apply it. A local QueryCtx
+  // is needed at all because expression::optimize constant-folds through
+  // exec::ExprSet, which dereferences it.
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
+  // An empty time zone is not a valid setting; leaving it unset means UTC.
+  if (!connectorQueryCtx->sessionTimezone().empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone,
+        connectorQueryCtx->sessionTimezone());
+  }
+  auto optimizeQueryCtx = core::QueryCtx::create(
+      nullptr, core::QueryConfig{std::move(sessionSettings)});
   optimizedRemainingFilter_ = remainingFilter
       ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
       : nullptr;
@@ -138,7 +146,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     // directly.
     auto const remainingFilterType = getTableRowType();
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_,
+        remainingFilterType,
+        pool_,
+        optimizeQueryCtx->queryConfig());
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
@@ -309,12 +320,26 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     for (auto& col : cudfTableColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterResult =
-        cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());
+    gpu_sfi::GpuSfiErrors errors(stream, get_temp_mr());
+    auto filterResult = cudfRemainingFilterExpression_->eval(
+        inputViews, stream, get_temp_mr(), /*finalize=*/true, &errors);
+    // Checked before the retention mask drops the declined row.
+    std::unique_ptr<cudf::column> recovered;
+    if (errors.resolve() != gpu_sfi::ErrorClass::kNone) {
+      recovered = reevaluateFilterOnCpu(
+          optimizedRemainingFilter_,
+          getTableRowType(),
+          inputViews,
+          cpuRemainingFilter_,
+          expressionEvaluator_,
+          pool_,
+          stream);
+    }
+    auto mask = recovered != nullptr ? recovered->view() : asView(filterResult);
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_retention_mask(
-        *originalTable, asView(filterResult), stream, get_output_mr());
+        *originalTable, mask, stream, get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);

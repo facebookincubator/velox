@@ -95,7 +95,8 @@ TEST_F(
       queryCtx_.get(),
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }

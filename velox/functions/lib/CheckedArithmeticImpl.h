@@ -17,38 +17,39 @@
 #pragma once
 
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/Macros.h"
 
 // Forwarding the definitions here so that codegen can still use functions in
 // this namespace.
 namespace facebook::velox::functions {
 
 template <typename T>
-T checkedPlus(const T& a, const T& b) {
+VELOX_GPU_COMPATIBLE T checkedPlus(const T& a, const T& b) {
   return facebook::velox::checkedPlus(a, b);
 }
 
 template <typename T>
-T checkedMinus(const T& a, const T& b) {
+VELOX_GPU_COMPATIBLE T checkedMinus(const T& a, const T& b) {
   return facebook::velox::checkedMinus(a, b);
 }
 
 template <typename T>
-T checkedMultiply(const T& a, const T& b) {
+VELOX_GPU_COMPATIBLE T checkedMultiply(const T& a, const T& b) {
   return facebook::velox::checkedMultiply(a, b);
 }
 
 template <typename T>
-T checkedDivide(const T& a, const T& b) {
+VELOX_GPU_COMPATIBLE T checkedDivide(const T& a, const T& b) {
   return facebook::velox::checkedDivide(a, b);
 }
 
 template <typename T>
-T checkedModulus(const T& a, const T& b) {
+VELOX_GPU_COMPATIBLE T checkedModulus(const T& a, const T& b) {
   return facebook::velox::checkedModulus(a, b);
 }
 
 template <typename T>
-T checkedNegate(const T& a) {
+VELOX_GPU_COMPATIBLE T checkedNegate(const T& a) {
   return facebook::velox::checkedNegate(a);
 }
 
