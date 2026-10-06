@@ -28,8 +28,8 @@ namespace facebook::nimble {
 /// Serializer converts Velox vectors into a serialized nimble format.
 ///
 /// This class provides a lightweight serialization interface for converting
-/// Velox vectors to nimble encoded byte streams. It supports flat map encoding
-/// for specified columns via Serializer::Options::flatMapColumns.
+/// Velox vectors to nimble encoded byte streams. It supports FlatMap and
+/// Hybrid FlatMap encoding through SerializerOptions column configuration.
 class Serializer {
  public:
   using Options = SerializerOptions;
@@ -95,6 +95,12 @@ class Serializer {
   // In-map stream offsets for skipping constant FlatMap key-presence streams.
   // Mutable because FlatMap keys can be added during const serialize().
   mutable folly::F14FastSet<uint32_t> inMapStreamOffsets_;
+  // Hybrid metadata offsets whose all-false streams can be omitted. Registered
+  // during initialize() and only read during serialize().
+  folly::F14FastSet<uint32_t> hybridMetadataStreamOffsets_;
+  // Non-Default groups have fixed key catalogs, so all-true key-presence
+  // streams at these offsets can also be omitted.
+  folly::F14FastSet<uint32_t> hybridNonDefaultGroupKeyPresenceOffsets_;
 };
 
 template <typename T>
@@ -116,20 +122,26 @@ void Serializer::serialize(
       // Omit any null stream that carries no actual nulls, even when a
       // validity bitmap was allocated (hasNulls() true but all-true). Such
       // streams are reconstructed as all-true on read. This must match the
-      // null-barrier flag (computed from hasNullValues()): writing an all-true
-      // null stream would make it present in only some batches of a dense
-      // concat run, which the reader cannot stitch.
+      // required-barrier flag (computed from hasNullValues()): writing an
+      // all-true null stream would make it present in only some batches of a
+      // dense concat run, which the reader cannot stitch.
       if (!streamData->hasNullValues()) {
         continue;
       }
     }
-    if (!inMapStreamOffsets_.empty()) {
-      const auto streamOffset = streamData->descriptor().offset();
-      if (inMapStreamOffsets_.contains(streamOffset)) {
-        streamData->materialize();
-        if (isConstantBoolStream(streamData->data())) {
-          continue;
-        }
+    const auto streamOffset = streamData->descriptor().offset();
+    const bool isHybridMetadataStream =
+        hybridMetadataStreamOffsets_.contains(streamOffset);
+    if (inMapStreamOffsets_.contains(streamOffset) || isHybridMetadataStream) {
+      streamData->materialize();
+      const auto data = streamData->data();
+      const bool shouldOmit = isHybridMetadataStream
+          ? (isAllFalseBoolStream(data) ||
+             (hybridNonDefaultGroupKeyPresenceOffsets_.contains(streamOffset) &&
+              isAllTrueBoolStream(data)))
+          : isConstantBoolStream(data);
+      if (shouldOmit) {
+        continue;
       }
     }
     streamWriter.writeData(*streamData);

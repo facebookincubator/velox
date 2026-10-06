@@ -17,6 +17,7 @@
 #include "velox/exec/Cursor.h"
 
 #include <folly/OperationCancelled.h>
+#include <folly/Synchronized.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
 #include <optional>
@@ -377,7 +378,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             return;
           }
           queue->close();
-        });
+        },
+        params.fixedPointOptions);
 
     if (beforeTaskStart_) {
       beforeTaskStart_(*task_);
@@ -414,8 +416,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   bool moveNext(ContinueFuture* future) override {
     while (true) {
       start();
-      if (error_) {
-        std::rethrow_exception(error_);
+      if (auto error = error_.copy()) {
+        std::rethrow_exception(error);
       }
 
       // Task might be aborted before start.
@@ -476,7 +478,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   }
 
   void setError(std::exception_ptr error) override {
-    error_ = error;
+    *error_.wlock() = error;
     if (task_) {
       task_->setError(error);
     }
@@ -520,7 +522,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   RowVectorPtr current_;
   bool atEnd_{false};
   tsan_atomic<bool> noMoreSplits_{false};
-  std::exception_ptr error_;
+
+  // Gives an injected error precedence over the task's own error.
+  folly::Synchronized<std::exception_ptr> error_;
 };
 
 class SingleThreadedTaskCursor : public TaskCursorBase {
@@ -551,7 +555,9 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
         Task::ExecutionMode::kSerial,
         std::function<BlockingReason(RowVectorPtr, bool, ContinueFuture*)>{},
         0,
-        std::move(spillDiskOpts));
+        std::move(spillDiskOpts),
+        /*onError=*/nullptr,
+        params.fixedPointOptions);
 
     VELOX_CHECK(
         task_->supportSerialExecutionMode(),
@@ -894,7 +900,12 @@ class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
         std::move(planFragment_),
         params.destination,
         std::move(queryCtx_),
-        Task::ExecutionMode::kSerial);
+        Task::ExecutionMode::kSerial,
+        Consumer{},
+        /*memoryArbitrationPriority=*/0,
+        /*spillDiskOpts=*/std::nullopt,
+        /*onError=*/nullptr,
+        params.fixedPointOptions);
   }
 
   // no-op
@@ -1008,7 +1019,11 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
             traceState_.consumerPromise.setValue();
           }
           return exec::BlockingReason::kWaitForConsumer;
-        });
+        },
+        /*memoryArbitrationPriority=*/0,
+        /*spillDiskOpts=*/std::nullopt,
+        /*onError=*/nullptr,
+        params.fixedPointOptions);
   }
 
   void start() override {

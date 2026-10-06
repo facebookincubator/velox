@@ -18,11 +18,13 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 
 namespace facebook::nimble::index {
@@ -36,8 +38,12 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
     velox::memory::MemoryPool& pool,
     std::string_view encodedData,
     std::function<void*(uint32_t)> stringBufferFactory) {
+  NIMBLE_CHECK_GE(
+      encodedData.size(),
+      EncodingPrefix::kRowCountOffset,
+      "Key encoding is truncated.");
   auto encoding = EncodingFactory().create(
-      pool, encodedData, stringBufferFactory, Encoding::Options{});
+      pool, encodedData, std::move(stringBufferFactory), Encoding::Options{});
   NIMBLE_CHECK_EQ(
       encoding->dataType(),
       DataType::String,
@@ -66,7 +72,7 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
 namespace {
 
 // Walks pre-materialized key views.
-class TrivialKeyCursor final : public KeyEncoding::Cursor {
+class TrivialKeyCursor final : public KeyCursor {
  public:
   TrivialKeyCursor(
       const std::string_view* position,
@@ -122,8 +128,7 @@ std::vector<std::string> TrivialKeyEncoding::materialize(
   return result;
 }
 
-std::unique_ptr<KeyEncoding::Cursor> TrivialKeyEncoding::cursor(
-    uint32_t startRow) const {
+std::unique_ptr<KeyCursor> TrivialKeyEncoding::cursor(uint32_t startRow) const {
   NIMBLE_CHECK_LT(startRow, values_.size());
   return std::make_unique<TrivialKeyCursor>(
       values_.data() + startRow, values_.data() + values_.size());
@@ -174,7 +179,7 @@ class PrefixKeyEncoding::KeyScratch {
 // Decodes prefix-compressed keys one row at a time, carrying the previous
 // key forward as the shared prefix instead of restarting from a restart
 // point on every row.
-class PrefixKeyEncoding::PrefixKeyCursor final : public KeyEncoding::Cursor {
+class PrefixKeyEncoding::PrefixKeyCursor final : public KeyCursor {
  public:
   // Decodes forward from the restart point enclosing 'startRow', which leaves
   // scratch_ holding the preceding key so the first next() has the right
@@ -323,8 +328,7 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
   return std::nullopt;
 }
 
-std::unique_ptr<KeyEncoding::Cursor> PrefixKeyEncoding::cursor(
-    uint32_t startRow) const {
+std::unique_ptr<KeyCursor> PrefixKeyEncoding::cursor(uint32_t startRow) const {
   NIMBLE_CHECK_LT(startRow, rowCount_);
 
   const uint32_t restartIndex = startRow / restartInterval_;

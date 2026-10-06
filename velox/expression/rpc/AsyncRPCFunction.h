@@ -72,6 +72,10 @@ struct TextPayload {
   std::string text;
 
   explicit TextPayload(std::string value) : text(std::move(value)) {}
+
+  int64_t retainedBytes() const noexcept {
+    return static_cast<int64_t>(text.capacity());
+  }
 };
 
 /// Wraps text as a response payload. Returns the payload by value: it is
@@ -147,10 +151,10 @@ class AsyncRPCFunction {
   /// reserves backend capacity. Implementations may resolve and validate
   /// input-dependent transport/admission configuration and cache parsed row
   /// state consumed by dispatchPerRow() or accumulateBatch(). admissionKey()
-  /// and configuredCeiling() must remain stable after the first
-  /// kRequiresAdmission result. A kLocalOnly result promises that dispatch for
-  /// every selected row returns an immediately ready, non-exceptional response
-  /// without contacting a backend.
+  /// configuredCeiling(), and configuredAdaptiveFloor() must remain stable
+  /// after the first kRequiresAdmission result. A kLocalOnly result promises
+  /// that dispatch for every selected row returns an immediately ready,
+  /// non-exceptional response without contacting a backend.
   virtual AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
       const SelectivityVector& /*rows*/,
       const std::vector<VectorPtr>& /*args*/) {
@@ -178,9 +182,18 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the adaptive-window floor requested by the resolved backend.
+  /// The operator seals it on the limiter identified by admissionKey(). A
+  /// positive legacy session override takes precedence; zero delegates here.
+  virtual double configuredAdaptiveFloor() const {
+    return 50.0;
+  }
+
   /// Identifies the shared admission bucket for this function.
   /// Empty string uses the global default bucket. The key may include more
   /// than a service tier, such as a credential discriminator or tenant.
+  /// Functions returning the same key must declare the same stable ceiling
+  /// and adaptive floor; the first query fixes both for the worker lifetime.
   virtual std::string admissionKey() const {
     return "";
   }
@@ -316,8 +329,8 @@ class AsyncRPCFunction {
     /// Unit completed cleanly, but its latency is not a congestion sample.
     /// Recover shared admission without updating the gradient window.
     kSuccessNoLatency,
-    /// Backend shed load (rate limited, or timed out under pressure) — shrink
-    /// the window. Only this signal backs off.
+    /// Backend shed load. Backs off both controllers unless canonical typed
+    /// overload already backed off shared admission at completion time.
     kOverloaded,
     /// Unit failed without explicit evidence of overload. Neither controller
     /// reacts; reducing admission concurrency would not address this signal.
@@ -326,13 +339,14 @@ class AsyncRPCFunction {
     kNone,
   };
 
-  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
-  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient
-  /// and recovers shared admission; kSuccessNoLatency only recovers shared
-  /// admission; kOverloaded applies a multiplicative decrease to both
-  /// controllers; kNonOverloadError reports a failure without moving either
-  /// controller; and kNone skips evaluation. Defaults to kNone (no congestion
-  /// control).
+  /// Evaluates aggregate congestion on the driver after a drained set of
+  /// PER_ROW responses or one BATCH completes. Canonical typed overload may
+  /// already have backed off shared admission at completion time so the permit
+  /// can be released without waiting for downstream output; that marker takes
+  /// precedence and prevents duplicate shared feedback. This method remains
+  /// authoritative for function-specific classification, aggregate success
+  /// recovery, and driver-local feedback when no canonical overload marker is
+  /// present. Defaults to kNone.
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;

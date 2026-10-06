@@ -171,6 +171,50 @@ std::unique_ptr<nimble::StreamLoader> createStream(
   return std::make_unique<TestStreamLoader>(std::move(stream));
 }
 
+TEST(ChunkedStreamDecoderTest, remainingRowsTracksCurrentChunk) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  std::vector<nimble::Vector<int32_t>> values;
+  values.emplace_back(pool.get(), 3);
+  values.emplace_back(pool.get(), 2);
+  for (uint32_t i = 0; i < values[0].size(); ++i) {
+    values[0][i] = i;
+  }
+  for (uint32_t i = 0; i < values[1].size(); ++i) {
+    values[1][i] = i + values[0].size();
+  }
+  std::vector<std::optional<nimble::Vector<bool>>> nulls(values.size());
+  auto streamLoader =
+      createStream<nimble::TrivialEncoding<int32_t>>(*pool, values, nulls);
+  nimble::ChunkedStreamDecoder decoder{
+      *pool,
+      std::make_unique<nimble::InMemoryChunkedStream>(
+          *pool, std::move(streamLoader)),
+      [](velox::memory::MemoryPool& pool,
+         std::string_view data,
+         std::function<void*(uint32_t)> stringBufferFactory) {
+        return nimble::legacy::EncodingFactory().create(
+            pool, data, std::move(stringBufferFactory));
+      },
+      /*stringDecoderZeroCopy=*/false,
+      /*metricsLogger=*/{}};
+
+  EXPECT_EQ(decoder.remainingRows(), 3);
+  std::array<int32_t, 2> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+  EXPECT_EQ(
+      decoder.next(
+          output.size(),
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      output.size());
+  EXPECT_EQ(decoder.remainingRows(), 1);
+  decoder.skip(1);
+  EXPECT_EQ(decoder.remainingRows(), 2);
+  decoder.skip(2);
+  EXPECT_EQ(decoder.remainingRows(), 0);
+}
+
 template <typename T>
 T getValue(const std::vector<nimble::Vector<T>>& data, size_t offset) {
   size_t i = 0;

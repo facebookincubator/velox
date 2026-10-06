@@ -739,7 +739,7 @@ class SelectiveNimbleReaderTest
 //   - Sparse + Nulls
 TEST_P(SelectiveNimbleReaderTest, basic) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  auto c0 = makeFlatVector<int64_t>(1009, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(1009);
   auto* rawC0 = c0->mutableRawValues();
   std::default_random_engine rng(42);
   std::shuffle(rawC0, rawC0 + 809, rng);
@@ -765,7 +765,7 @@ TEST_P(SelectiveNimbleReaderTest, basic) {
 TEST_P(SelectiveNimbleReaderTest, currentStripe) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatIdentityVector<int64_t>(200),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -779,7 +779,7 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
   // anyway, so that this factory is usable on its own rather than only behind
   // a wrapper that fills them in.
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatIdentityVector<int64_t>(200),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -805,8 +805,7 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
 TEST_P(SelectiveNimbleReaderTest, denseWithNulls) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
-      makeRowVector(
-          {makeFlatVector<int64_t>(103, folly::identity)}, nullEvery(11)),
+      makeRowVector({makeFlatIdentityVector<int64_t>(103)}, nullEvery(11)),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -1044,7 +1043,7 @@ TEST_P(SelectiveNimbleReaderTest, denseMostlyNulls) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto isNull = [](auto i) { return i != 53; };
   auto input = makeRowVector({
-      makeRowVector({makeFlatVector<int64_t>(103, folly::identity)}, isNull),
+      makeRowVector({makeFlatIdentityVector<int64_t>(103)}, isNull),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -1054,7 +1053,7 @@ TEST_P(SelectiveNimbleReaderTest, denseMostlyNulls) {
 
 TEST_P(SelectiveNimbleReaderTest, sparseMostlyNulls) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  auto c0 = makeFlatVector<int64_t>(101, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(101);
   auto input = makeRowVector({
       c0,
       makeRowVector({c0}, [](auto i) { return i % 17 != 0; }),
@@ -1176,10 +1175,10 @@ TEST_P(SelectiveNimbleReaderTest, filterIsNull) {
 TEST_P(SelectiveNimbleReaderTest, multiChunkInt16RowSetOverBoundary) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto chunk1 = makeRowVector({
-      makeFlatVector<int16_t>(10, folly::identity),
+      makeFlatIdentityVector<int16_t>(10),
   });
   auto chunk2 = makeRowVector({
-      makeFlatVector<int16_t>(3, folly::identity),
+      makeFlatIdentityVector<int16_t>(3),
   });
   std::vector<std::pair<EncodingType, float>> readFactors;
   ManualEncodingSelectionPolicyFactory encodingFactory(readFactors);
@@ -1453,7 +1452,7 @@ TEST_P(SelectiveNimbleReaderTest, dictionary) {
 
 TEST_P(SelectiveNimbleReaderTest, smallDictionaryValue) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  auto c0 = makeFlatVector<int8_t>(257, folly::identity);
+  auto c0 = makeFlatIdentityVector<int8_t>(257);
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -1683,8 +1682,8 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
+      makeFlatIdentityVector<int32_t>(kSize),
       makeFlatVector<double>(kSize, [](auto i) { return i * 1.5; }),
   });
 
@@ -1781,9 +1780,9 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedRowPartialProjection) {
 
   // Schema: ROW{a: BIGINT, b: ROW{x: INT, y: DOUBLE}}
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeRowVector({
-          makeFlatVector<int32_t>(kSize, folly::identity),
+          makeFlatIdentityVector<int32_t>(kSize),
           makeFlatVector<double>(kSize, [](auto i) { return i * 1.5; }),
       }),
   });
@@ -1837,8 +1836,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableNested) {
 
   // Nested ROW with 50% nulls — the null overhead should be reflected.
   auto input = makeRowVector({
-      makeRowVector(
-          {makeFlatVector<int64_t>(kSize, folly::identity)}, nullEvery(2)),
+      makeRowVector({makeFlatIdentityVector<int64_t>(kSize)}, nullEvery(2)),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -1856,7 +1854,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNoStats) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
 
   // Write file without vectorized stats by using an older writer config.
@@ -1880,7 +1878,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyColumn) {
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeMapVector<int32_t, int32_t>(
           kSize,
           [](auto) { return 10; }, // 10 keys per row
@@ -1966,7 +1964,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringColumn) {
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeMapVector<StringView, StringView>(
           kSize,
           [](auto) { return 5; },
@@ -2046,7 +2044,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeMapVector<StringView, StringView>(
           kSize,
           [](auto) { return 5; },
@@ -2661,7 +2659,7 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddPrimitiveField) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
             },
             hasNulls ? nullEvery(11) : nullptr);
       },
@@ -2672,7 +2670,7 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddPrimitiveField) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
                 makeNullConstant(TypeKind::BIGINT, 101),
             },
             hasNulls ? nullEvery(11) : nullptr);
@@ -2685,7 +2683,7 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddComplexField) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
             },
             hasNulls ? nullEvery(11) : nullptr);
       },
@@ -2696,7 +2694,7 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddComplexField) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
                 BaseVector::createNullConstant(ARRAY(BIGINT()), 101, pool()),
             },
             hasNulls ? nullEvery(11) : nullptr);
@@ -2709,9 +2707,9 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddNestedStruct) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
                 makeRowVector({
-                    makeFlatVector<int32_t>(101, folly::identity),
+                    makeFlatIdentityVector<int32_t>(101),
                 }),
             },
             hasNulls ? nullEvery(11) : nullptr);
@@ -2723,9 +2721,9 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddNestedStruct) {
       [&](bool hasNulls) {
         return makeRowVector(
             {
-                makeFlatVector<int32_t>(101, folly::identity),
+                makeFlatIdentityVector<int32_t>(101),
                 makeRowVector({
-                    makeFlatVector<int32_t>(101, folly::identity),
+                    makeFlatIdentityVector<int32_t>(101),
                     makeNullConstant(TypeKind::REAL, 101),
                 }),
                 BaseVector::createNullConstant(
@@ -2742,11 +2740,11 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionFilterOnMissingSubfield) {
   // there as well to avoid unnecessary IO.  For now let's make sure subfield is
   // handled in file reader.
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(101, folly::identity),
+      makeFlatIdentityVector<int32_t>(101),
   });
   auto file = test::createNimbleFile(*rootPool(), input);
   auto expected = makeRowVector({
-      makeFlatVector<int32_t>(101, folly::identity),
+      makeFlatIdentityVector<int32_t>(101),
       BaseVector::createNullConstant(ROW({"c1c0"}, {BIGINT()}), 101, pool()),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -3825,7 +3823,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaSawtoothSmallBatches) {
 
 TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneIntegralFilter) {
   auto firstStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+      makeFlatIdentityVector<int64_t>(100),
   });
   auto secondStripe = makeRowVector({
       makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
@@ -3874,7 +3872,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneIntegralFilter) {
 // skippedStrides assertion rather than spinning until the test times out.
 TEST_P(SelectiveNimbleReaderTest, stripeStatsPruningDisabledReadsAllStripes) {
   auto firstStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+      makeFlatIdentityVector<int64_t>(100),
   });
   auto secondStripe = makeRowVector({
       makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
@@ -3922,7 +3920,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruningDisabledReadsAllStripes) {
 // would fail every read of the file with no way to turn it off.
 TEST_P(SelectiveNimbleReaderTest, corruptStripeStatsSectionStillReads) {
   auto firstStripe = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+      makeFlatIdentityVector<int64_t>(100),
   });
   auto secondStripe = makeRowVector({
       makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
@@ -4245,7 +4243,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsString) {
 TEST_P(SelectiveNimbleReaderTest, columnStatisticsOutOfRange) {
   constexpr int kSize = 10;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   WriterOptions writerOptions;
   writerOptions.enableVectorizedStats = true;
@@ -4268,7 +4266,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsOutOfRange) {
 TEST_P(SelectiveNimbleReaderTest, columnStatisticsNoStats) {
   constexpr int kSize = 10;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
   });
   WriterOptions writerOptions;
   writerOptions.enableVectorizedStats = false;
@@ -4432,7 +4430,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionSizeResultVectorReuse) {
   }
   auto keys = makeFlatVector<StringView>(
       kNumRows * 2, [&](auto i) { return StringView(keyStrs[i]); });
-  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(kNumRows * 2);
   std::vector<vector_size_t> offsets(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
     offsets[i] = i * 2;
@@ -4721,7 +4719,7 @@ class SmallFilePreloadTest : public ::testing::Test,
 
 TEST_F(SmallFilePreloadTest, preloadReducesPreadCalls) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(500, folly::identity),
+      makeFlatIdentityVector<int64_t>(500),
       makeFlatVector<int64_t>(500, [](auto i) { return i * 10; }),
   });
   auto nimbleFile = test::createNimbleFile(*rootPool_, input);
@@ -4760,7 +4758,7 @@ TEST_F(SmallFilePreloadTest, preloadReducesPreadCalls) {
 
 TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(500, folly::identity),
+      makeFlatIdentityVector<int64_t>(500),
       makeFlatVector<int64_t>(500, [](auto i) { return i * 10; }),
   });
   auto nimbleFile = test::createNimbleFile(*rootPool_, input);
@@ -4799,7 +4797,7 @@ TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
 // Preload must skip when a cache is present, else it bypasses the data cache.
 TEST_F(SmallFilePreloadTest, cachePresentSkipsPreload) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(500, folly::identity),
+      makeFlatIdentityVector<int64_t>(500),
       makeFlatVector<int64_t>(500, [](auto i) { return i * 10; }),
   });
   auto nimbleFile = test::createNimbleFile(*rootPool_, input);
