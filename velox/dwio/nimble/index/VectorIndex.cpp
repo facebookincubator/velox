@@ -20,7 +20,6 @@
 #include <cstring>
 #include <exception>
 #include <limits>
-#include <optional>
 #include <variant>
 
 #include <faiss/Index.h>
@@ -30,13 +29,19 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#include <faiss/IndexIVFRaBitQFastScan.h>
 #include <faiss/IndexScalarQuantizer.h>
+#include <faiss/impl/IDSelector.h>
+#include <faiss/impl/io.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <folly/synchronization/CallOnce.h>
+#include <omp.h>
 
+#include "velox/common/Casts.h"
 #include "velox/common/io/Options.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
@@ -47,8 +52,35 @@ namespace facebook::nimble::index {
 
 namespace {
 
-// Deserializes one FAISS index from caller-owned zero-copy storage.
-std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
+// Mode 3 assigns whole queries, rather than query-list pairs, to OpenMP
+// workers. This preserves each query's ordered list scan for max_codes, but a
+// single-query batch remains single-threaded.
+constexpr int kIvfParallelModeQueries{3};
+
+// Returns whether deserialization creates views into the serialized input.
+bool usesZeroCopyReader(VectorIndexType indexType) {
+  switch (indexType) {
+    case VectorIndexType::kIvfFlat:
+    case VectorIndexType::kIvfSq8:
+    case VectorIndexType::kIvfPq:
+    case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kHnswSq8:
+      return true;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      // FastScan requires aligned, owning BlockInvertedLists.
+      // TODO: Add aligned zero-copy BlockInvertedLists deserialization in
+      // FAISS, then use the zero-copy reader for FastScan.
+      return false;
+    default:
+      NIMBLE_UNREACHABLE(
+          "Unsupported vector index type: {}", static_cast<int>(indexType));
+  }
+}
+
+// Wrapping the source prevents FAISS from creating views into serialized data.
+std::unique_ptr<faiss::Index> readFaissIndex(
+    std::string_view serializedIndex,
+    VectorIndexType indexType) {
   NIMBLE_CHECK_FILE(
       !serializedIndex.empty(), "FAISS index data must not be empty");
   // Upstream FAISS takes a mutable pointer but does not modify the input.
@@ -56,6 +88,10 @@ std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
       reinterpret_cast<const uint8_t*>(serializedIndex.data()));
   faiss::ZeroCopyIOReader reader(serializedData, serializedIndex.size());
   try {
+    if (!usesZeroCopyReader(indexType)) {
+      faiss::BufferedIOReader copyingReader{&reader};
+      return std::unique_ptr<faiss::Index>(faiss::read_index(&copyingReader));
+    }
     return std::unique_ptr<faiss::Index>(faiss::read_index(&reader));
   } catch (const std::exception& error) {
     NIMBLE_FILE_FAIL("Failed to deserialize FAISS index: {}", error.what());
@@ -74,6 +110,9 @@ bool checkIndexType(const faiss::Index& index, VectorIndexType indexType) {
       return dynamic_cast<const faiss::IndexIVFPQ*>(&index) != nullptr;
     case VectorIndexType::kIvfRaBitQ:
       return dynamic_cast<const faiss::IndexIVFRaBitQ*>(&index) != nullptr;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return dynamic_cast<const faiss::IndexIVFRaBitQFastScan*>(&index) !=
+          nullptr;
     case VectorIndexType::kHnswSq8:
       return dynamic_cast<const faiss::IndexHNSWSQ*>(&index) != nullptr;
     default:
@@ -82,17 +121,23 @@ bool checkIndexType(const faiss::Index& index, VectorIndexType indexType) {
   }
 }
 
-// Copies a query and normalizes it when FAISS uses inner product for cosine.
-std::vector<float> prepareQueryVector(
-    const std::vector<float>& queryVector,
-    VectorDistanceMetric metric) {
-  auto preparedQuery = queryVector;
+// Normalizes a copy for cosine and otherwise uses the caller's storage.
+const float* prepareQueryVectors(
+    const std::vector<float>& queryVectors,
+    VectorDistanceMetric metric,
+    faiss::idx_t numQueries,
+    uint32_t dimensions,
+    std::vector<float>& normalizedQueries) {
+  if (metric != VectorDistanceMetric::kCosine) {
+    return queryVectors.data();
+  }
+  normalizedQueries = queryVectors;
   normalizeVectors(
       metric,
-      /*numVectors=*/1,
-      static_cast<uint32_t>(preparedQuery.size()),
-      preparedQuery.data());
-  return preparedQuery;
+      static_cast<uint64_t>(numQueries),
+      dimensions,
+      normalizedQueries.data());
+  return normalizedQueries.data();
 }
 
 // Serializes HNSW searches because FAISS updates process-global statistics.
@@ -101,86 +146,250 @@ folly::Synchronized<std::monostate>& hnswSearchGuard() {
   return *guard;
 }
 
-// VectorIndex::search accepts one query vector per call.
-constexpr faiss::idx_t kNumQueriesPerSearch{1};
+// Adapts one Nimble row selection to FAISS.
+class FaissRowSelection {
+ public:
+  // Validates the selection and borrows bitmap data without copying it.
+  FaissRowSelection(
+      const VectorIndex::SearchConfig::RowSelection& rowSelection,
+      uint64_t numVectors) {
+    if (const auto bitmap = rowSelection.bitmap()) {
+      const auto expectedBitmapBytes = (numVectors + 7) / 8;
+      NIMBLE_USER_CHECK_EQ(
+          bitmap->size(),
+          expectedBitmapBytes,
+          "Row selection bitmap size does not match the index");
+      selector_.emplace<faiss::IDSelectorBitmap>(
+          bitmap->size(), bitmap->data());
+      return;
+    }
 
-// Runs one search without mutating shared request parameters or IVF statistics.
-void searchFaissIndex(
-    const faiss::Index& index,
-    VectorIndexType indexType,
-    const VectorIndex::SearchConfig& config,
-    const float* queryVector,
-    faiss::idx_t maxNumNeighbors,
-    float* scores,
-    faiss::idx_t* labels) {
-  if (indexType == VectorIndexType::kHnswSq8) {
-    NIMBLE_CHECK_NOT_NULL(
-        dynamic_cast<const faiss::IndexHNSW*>(&index),
-        "FAISS index metadata requires an HNSW index");
-    NIMBLE_USER_CHECK_GT(
-        config.hnswSearchDepth, 0, "HNSW search depth must be positive");
+    const auto range = rowSelection.range();
+    if (!range.has_value()) {
+      return;
+    }
     NIMBLE_USER_CHECK_LE(
-        config.hnswSearchDepth,
-        static_cast<uint32_t>(std::numeric_limits<int>::max()),
-        "HNSW search depth exceeds the FAISS limit");
-    faiss::SearchParametersHNSW searchParameters;
-    searchParameters.efSearch = static_cast<int>(config.hnswSearchDepth);
-    // FAISS updates process-global HNSW statistics during search.
-    const auto hnswSearchLock = hnswSearchGuard().wlock();
-    index.search(
-        kNumQueriesPerSearch,
-        queryVector,
-        maxNumNeighbors,
-        scores,
-        labels,
-        &searchParameters);
-    return;
+        range->startRow, range->endRow, "Row selection range must be ordered");
+    NIMBLE_USER_CHECK_LE(
+        range->endRow,
+        numVectors,
+        "Row selection range exceeds the index row count");
+    selector_.emplace<faiss::IDSelectorRange>(range->startRow, range->endRow);
   }
 
-  const auto* ivfIndex = dynamic_cast<const faiss::IndexIVF*>(&index);
-  NIMBLE_CHECK_NOT_NULL(ivfIndex, "FAISS index metadata requires an IVF index");
-  NIMBLE_CHECK_NOT_NULL(ivfIndex->quantizer);
-  NIMBLE_CHECK_NOT_NULL(
-      dynamic_cast<const faiss::IndexFlat*>(ivfIndex->quantizer),
-      "FAISS IVF index requires a flat quantizer");
+  // Applies the adapted selector to FAISS search parameters.
+  void applyTo(faiss::SearchParameters& searchParameters) {
+    if (auto* bitmap = std::get_if<faiss::IDSelectorBitmap>(&selector_)) {
+      searchParameters.sel = bitmap;
+    } else if (auto* range = std::get_if<faiss::IDSelectorRange>(&selector_)) {
+      searchParameters.sel = range;
+    }
+    // FAISS interprets a null selector as selecting every indexed row.
+  }
+
+ private:
+  // Owns one adapted selector and borrows bitmap storage when applicable.
+  std::variant<std::monostate, faiss::IDSelectorBitmap, faiss::IDSelectorRange>
+      selector_;
+};
+
+// Searches an HNSW index with request-local parameters.
+void searchHnswIndex(
+    const faiss::IndexHNSW& index,
+    faiss::idx_t numQueries,
+    uint32_t hnswSearchDepth,
+    const float* queryVectors,
+    faiss::idx_t maxNumNeighbors,
+    float* scores,
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection) {
   NIMBLE_USER_CHECK_GT(
-      config.numProbes, 0, "Number of probed partitions must be positive");
+      hnswSearchDepth, 0, "HNSW search depth must be positive");
+  const auto effectiveSearchDepth =
+      std::min<uint64_t>(hnswSearchDepth, static_cast<uint64_t>(index.ntotal));
+  NIMBLE_USER_CHECK_LE(
+      effectiveSearchDepth,
+      static_cast<uint64_t>(std::numeric_limits<int>::max()),
+      "HNSW search depth exceeds the FAISS limit");
+  NIMBLE_USER_CHECK_LE(
+      maxNumNeighbors,
+      static_cast<faiss::idx_t>(std::numeric_limits<int>::max()),
+      "Number of neighbors exceeds the HNSW limit");
+  faiss::SearchParametersHNSW searchParameters;
+  searchParameters.efSearch = static_cast<int>(effectiveSearchDepth);
+  rowSelection.applyTo(searchParameters);
+  // FAISS updates process-global HNSW statistics during search.
+  const auto hnswSearchLock = hnswSearchGuard().wlock();
+  index.search(
+      numQueries,
+      queryVectors,
+      maxNumNeighbors,
+      scores,
+      labels,
+      &searchParameters);
+}
+
+// Searches an IVF index without updating FAISS process-global statistics.
+void searchIvfIndex(
+    const faiss::IndexIVF& index,
+    VectorIndexType indexType,
+    faiss::idx_t numQueries,
+    uint32_t requestedNumProbes,
+    uint64_t maxCodes,
+    bool ensureTopKFull,
+    const float* queryVectors,
+    faiss::idx_t maxNumNeighbors,
+    float* scores,
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
+  const auto* quantizer =
+      velox::checkedPointerCast<const faiss::IndexFlat>(index.quantizer);
+  NIMBLE_USER_CHECK_GT(
+      requestedNumProbes, 0, "Number of probed partitions must be positive");
   faiss::SearchParametersIVF searchParameters;
+  rowSelection.applyTo(searchParameters);
+  NIMBLE_USER_CHECK_LE(
+      maxCodes,
+      static_cast<uint64_t>(std::numeric_limits<size_t>::max()),
+      "Maximum scanned codes exceeds the FAISS limit");
+  searchParameters.max_codes = static_cast<size_t>(maxCodes);
+  searchParameters.ensure_topk_full = ensureTopKFull;
   const auto numProbes = static_cast<faiss::idx_t>(
-      std::min(ivfIndex->nlist, static_cast<size_t>(config.numProbes)));
+      std::min(index.nlist, static_cast<size_t>(requestedNumProbes)));
   NIMBLE_CHECK_GT(numProbes, 0);
   searchParameters.nprobe = static_cast<size_t>(numProbes);
-  std::vector<float> centroidScores(static_cast<size_t>(numProbes));
-  std::vector<faiss::idx_t> partitionLabels(static_cast<size_t>(numProbes));
+  static const size_t kMaxPartitionAssignments = std::min({
+      std::vector<float>{}.max_size(),
+      std::vector<faiss::idx_t>{}.max_size(),
+      static_cast<size_t>(std::min<uint64_t>(
+          std::numeric_limits<faiss::idx_t>::max(),
+          std::numeric_limits<size_t>::max())),
+  });
+  NIMBLE_USER_CHECK_LE(
+      static_cast<size_t>(numQueries),
+      kMaxPartitionAssignments / static_cast<size_t>(numProbes),
+      "Query batch and probe count exceed the supported size");
+  const auto numPartitionAssignments =
+      static_cast<size_t>(numQueries) * static_cast<size_t>(numProbes);
+  std::vector<float> centroidScores(numPartitionAssignments);
+  std::vector<faiss::idx_t> partitionLabels(numPartitionAssignments);
 
   // IVF search first finds the nearest coarse partitions, then scans vectors
   // assigned to those partitions. Keeping the stages explicit lets the second
   // pass use request-local statistics instead of FAISS's process-global state.
-  ivfIndex->quantizer->search(
-      kNumQueriesPerSearch,
-      queryVector,
-      numProbes,
-      centroidScores.data(),
-      partitionLabels.data(),
-      searchParameters.quantizer_params);
+  {
+    velox::CpuWallTimer timer{stats.routingTiming};
+    quantizer->search(
+        numQueries,
+        queryVectors,
+        numProbes,
+        centroidScores.data(),
+        partitionLabels.data(),
+        searchParameters.quantizer_params);
+  }
 
-  // Pass request-local statistics to avoid FAISS's process-global
-  // indexIVF_stats, which is not safe for concurrent searches.
-  //
-  // TODO: Aggregate per-search FAISS statistics in VectorIndex for
-  // observability.
+  // Pass request-local statistics to implementations that support them to
+  // avoid FAISS's process-global indexIVF_stats during concurrent searches.
+  // FastScan does not populate IndexIVFStats.
   faiss::IndexIVFStats searchStats;
-  ivfIndex->search_preassigned(
-      kNumQueriesPerSearch,
-      queryVector,
+  const auto supportsSearchStats =
+      indexType != VectorIndexType::kIvfRaBitQFastScan;
+  auto* searchStatsPtr = supportsSearchStats ? &searchStats : nullptr;
+  {
+    velox::CpuWallTimer timer{stats.searchTiming};
+    index.search_preassigned(
+        numQueries,
+        queryVectors,
+        maxNumNeighbors,
+        partitionLabels.data(),
+        centroidScores.data(),
+        scores,
+        labels,
+        /*store_pairs=*/false,
+        &searchParameters,
+        searchStatsPtr);
+  }
+  if (supportsSearchStats) {
+    stats.ivf = VectorIndex::IvfSearchStats{
+        .numPartitionsScanned = searchStats.nlist,
+        .numDistanceComputations = searchStats.ndis,
+        .numHeapUpdates = searchStats.nheap_updates,
+    };
+  }
+}
+
+// Returns whether the runtime index type belongs to the IVF family.
+bool isIvfIndexType(VectorIndexType indexType) {
+  switch (indexType) {
+    case VectorIndexType::kHnswSq8:
+      return false;
+    case VectorIndexType::kIvfFlat:
+    case VectorIndexType::kIvfSq8:
+    case VectorIndexType::kIvfPq:
+    case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return true;
+  }
+  NIMBLE_UNREACHABLE(
+      "Unsupported vector index type: {}", static_cast<int>(indexType));
+}
+
+// Dispatches a batch using the selected index-specific options.
+void searchFaissIndex(
+    const faiss::Index& index,
+    VectorIndexType indexType,
+    faiss::idx_t numQueries,
+    const VectorIndex::SearchOptions& searchOptions,
+    const float* queryVectors,
+    faiss::idx_t maxNumNeighbors,
+    float* scores,
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
+  if (isIvfIndexType(indexType)) {
+    NIMBLE_USER_CHECK(
+        searchOptions.kind() == VectorIndex::SearchOptions::Kind::kIvf,
+        "IVF index requires IVF search options");
+    const auto ivfSearchOptions =
+        velox::checkedPointerCast<const VectorIndex::IvfSearchOptions>(
+            &searchOptions);
+    const auto* ivfIndex =
+        velox::checkedPointerCast<const faiss::IndexIVF>(&index);
+    searchIvfIndex(
+        *ivfIndex,
+        indexType,
+        numQueries,
+        ivfSearchOptions->numProbes,
+        ivfSearchOptions->maxCodes,
+        ivfSearchOptions->ensureTopKFull,
+        queryVectors,
+        maxNumNeighbors,
+        scores,
+        labels,
+        rowSelection,
+        stats);
+    return;
+  }
+
+  NIMBLE_USER_CHECK(
+      searchOptions.kind() == VectorIndex::SearchOptions::Kind::kHnsw,
+      "HNSW index requires HNSW search options");
+  const auto hnswSearchOptions =
+      velox::checkedPointerCast<const VectorIndex::HnswSearchOptions>(
+          &searchOptions);
+  const auto* hnswIndex =
+      velox::checkedPointerCast<const faiss::IndexHNSW>(&index);
+  velox::CpuWallTimer timer{stats.searchTiming};
+  searchHnswIndex(
+      *hnswIndex,
+      numQueries,
+      hnswSearchOptions->searchDepth,
+      queryVectors,
       maxNumNeighbors,
-      partitionLabels.data(),
-      centroidScores.data(),
       scores,
       labels,
-      /*store_pairs=*/false,
-      &searchParameters,
-      &searchStats);
+      rowSelection);
 }
 
 // Validates metadata before allocating or deserializing a FAISS index.
@@ -279,6 +488,40 @@ MetadataSection parseVectorIndexSection(
 
 } // namespace
 
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::all() {
+  return RowSelection{AllRows{}};
+}
+
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::fromBitmap(
+    std::span<const uint8_t> bitmap) {
+  return RowSelection{bitmap};
+}
+
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::fromRange(RowRange range) {
+  return RowSelection{range};
+}
+
+std::optional<std::span<const uint8_t>>
+VectorIndex::SearchConfig::RowSelection::bitmap() const {
+  if (const auto* bitmap = std::get_if<std::span<const uint8_t>>(&selection_)) {
+    return *bitmap;
+  }
+  return std::nullopt;
+}
+
+std::optional<RowRange> VectorIndex::SearchConfig::RowSelection::range() const {
+  if (const auto* range = std::get_if<RowRange>(&selection_)) {
+    return *range;
+  }
+  return std::nullopt;
+}
+
+VectorIndex::SearchConfig::RowSelection::RowSelection(Selection selection)
+    : selection_{std::move(selection)} {}
+
 // Owns the state required to create the index input on first use.
 struct VectorIndexDirectory::InputState {
   explicit InputState(const IndexLookup::Options& sourceOptions)
@@ -292,6 +535,7 @@ struct VectorIndexDirectory::InputState {
             .ioOptions = ioOptions.get(),
             .fileHandle = sourceOptions.fileHandle,
             .cache = sourceOptions.cache,
+            .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
         } {
@@ -421,7 +665,10 @@ VectorIndex::VectorIndex(
       indexType_{metadata.indexType},
       numVectors_{metadata.numVectors},
       indexData_{std::move(indexData)},
-      faissIndex_{readFaissIndex(serializedIndex)} {
+      faissIndex_{readFaissIndex(serializedIndex, indexType_)} {
+  if (!usesZeroCopyReader(indexType_)) {
+    indexData_.reset();
+  }
   NIMBLE_CHECK_FILE_EQ(
       faissIndex_->d,
       static_cast<int>(dimensions_),
@@ -437,55 +684,175 @@ VectorIndex::VectorIndex(
   NIMBLE_CHECK_FILE(
       checkIndexType(*faissIndex_, indexType_),
       "FAISS index type disagrees with its metadata");
+  if (isIvfIndexType(indexType_)) {
+    auto* ivfIndex =
+        velox::checkedPointerCast<faiss::IndexIVF>(faissIndex_.get());
+    ivfIndex->parallel_mode = kIvfParallelModeQueries;
+  }
 }
 
 VectorIndex::~VectorIndex() = default;
 
-std::vector<VectorIndex::SearchResult> VectorIndex::search(
+VectorIndex::SearchResults::SearchResults(
+    std::vector<SearchResult> results,
+    std::vector<size_t> resultOffsets,
+    SearchStats stats)
+    : results_{std::move(results)},
+      resultOffsets_{std::move(resultOffsets)},
+      stats_{std::move(stats)} {
+  NIMBLE_CHECK_GT(
+      resultOffsets_.size(), 1, "Search result must contain query offsets");
+  NIMBLE_CHECK_EQ(
+      resultOffsets_.front(), 0, "Search result must start at offset zero");
+  NIMBLE_CHECK_EQ(
+      resultOffsets_.back(),
+      results_.size(),
+      "Search result final offset must match the result count");
+  for (size_t queryIndex = 0; queryIndex + 1 < resultOffsets_.size();
+       ++queryIndex) {
+    NIMBLE_CHECK_LE(
+        resultOffsets_[queryIndex],
+        resultOffsets_[queryIndex + 1],
+        "Search result offsets must be monotonic");
+  }
+}
+
+size_t VectorIndex::SearchResults::numQueries() const {
+  return resultOffsets_.size() - 1;
+}
+
+size_t VectorIndex::SearchResults::totalNumResults() const {
+  return results_.size();
+}
+
+folly::Range<const VectorIndex::SearchResult*>
+VectorIndex::SearchResults::results(size_t queryIndex) const& {
+  NIMBLE_CHECK_LT(queryIndex, numQueries());
+  if (results_.empty()) {
+    return {results_.data(), results_.data()};
+  }
+  return {
+      results_.data() + resultOffsets_[queryIndex],
+      results_.data() + resultOffsets_[queryIndex + 1],
+  };
+}
+
+const VectorIndex::SearchStats& VectorIndex::SearchResults::stats() const {
+  return stats_;
+}
+
+VectorIndex::SearchResults VectorIndex::search(
     const SearchConfig& config) const {
+  NIMBLE_USER_CHECK(
+      !config.queryVectors.empty(), "Query vector batch must not be empty");
   NIMBLE_USER_CHECK_EQ(
-      config.queryVector.size(),
-      static_cast<size_t>(dimensions_),
-      "Query vector dimensions do not match the index");
+      config.queryVectors.size() % dimensions_,
+      0,
+      "Query vector batch must contain complete vectors");
+  NIMBLE_USER_CHECK_NOT_NULL(
+      config.searchOptions, "Search options must be set");
   NIMBLE_USER_CHECK_GT(
       config.numNeighbors, 0, "Number of neighbors must be positive");
+  NIMBLE_USER_CHECK_GT(
+      config.numSearchThreads, 0, "Number of search threads must be positive");
+  NIMBLE_USER_CHECK_LE(
+      config.numSearchThreads,
+      static_cast<uint32_t>(std::numeric_limits<int>::max()),
+      "Number of search threads exceeds the OpenMP limit");
+  const auto previousNumThreads = omp_get_max_threads();
+  // omp_set_num_threads updates the calling OpenMP task's nthreads-var ICV,
+  // so concurrent searches on other driver threads retain their own budgets.
+  omp_set_num_threads(static_cast<int>(config.numSearchThreads));
+  SCOPE_EXIT {
+    omp_set_num_threads(previousNumThreads);
+  };
+  const auto numQueries = config.queryVectors.size() / dimensions_;
+  NIMBLE_USER_CHECK_LE(
+      numQueries,
+      static_cast<size_t>(std::numeric_limits<faiss::idx_t>::max()),
+      "Number of query vectors exceeds the FAISS limit");
 
-  const auto queryVector = prepareQueryVector(config.queryVector, metric_);
+  FaissRowSelection rowSelection{config.rowSelection, numVectors_};
+
+  std::vector<float> normalizedQueries;
+  const auto* queryData = prepareQueryVectors(
+      config.queryVectors,
+      metric_,
+      static_cast<faiss::idx_t>(numQueries),
+      dimensions_,
+      normalizedQueries);
 
   const auto maxNumNeighbors = static_cast<faiss::idx_t>(
       std::min<uint64_t>(config.numNeighbors, numVectors_));
-  std::vector<float> scores(static_cast<size_t>(maxNumNeighbors));
-  std::vector<faiss::idx_t> labels(static_cast<size_t>(maxNumNeighbors));
+  NIMBLE_CHECK_GT(maxNumNeighbors, 0);
+  static const size_t kMaxResultSlots = std::min({
+      std::vector<float>{}.max_size(),
+      std::vector<faiss::idx_t>{}.max_size(),
+      std::vector<SearchResult>{}.max_size(),
+      static_cast<size_t>(std::min<uint64_t>(
+          std::numeric_limits<faiss::idx_t>::max(),
+          std::numeric_limits<size_t>::max())),
+  });
+  NIMBLE_USER_CHECK_LE(
+      numQueries,
+      kMaxResultSlots / static_cast<size_t>(maxNumNeighbors),
+      "Query batch and neighbor count exceed the supported size");
+  const auto numResultSlots = numQueries * static_cast<size_t>(maxNumNeighbors);
+  std::vector<float> scores(numResultSlots);
+  std::vector<faiss::idx_t> labels(numResultSlots);
 
+  SearchStats searchStats{
+      .numQueries = numQueries,
+  };
   searchFaissIndex(
       *faissIndex_,
       indexType_,
-      config,
-      queryVector.data(),
+      static_cast<faiss::idx_t>(numQueries),
+      *config.searchOptions,
+      queryData,
       maxNumNeighbors,
       scores.data(),
-      labels.data());
+      labels.data(),
+      rowSelection,
+      searchStats);
 
-  std::vector<SearchResult> results;
-  results.reserve(static_cast<size_t>(maxNumNeighbors));
-  for (faiss::idx_t i = 0; i < maxNumNeighbors; ++i) {
-    if (labels[i] == -1) {
-      // FAISS uses -1 for unfilled slots when the probed partitions contain
-      // fewer candidates than requested. All later slots are also unfilled.
-      break;
+  std::vector<size_t> resultOffsets(numQueries + 1, 0);
+  for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
+    const auto resultOffset = queryIndex * static_cast<size_t>(maxNumNeighbors);
+    size_t numQueryResults{0};
+    // FAISS uses -1 for unfilled slots when the probed partitions contain
+    // fewer candidates than requested. All later slots are also unfilled.
+    while (numQueryResults < static_cast<size_t>(maxNumNeighbors) &&
+           labels[resultOffset + numQueryResults] != -1) {
+      ++numQueryResults;
     }
-    NIMBLE_CHECK_LT(
-        static_cast<uint64_t>(labels[i]),
-        numVectors_,
-        "FAISS returned an out-of-range row ID");
-    results.push_back(
-        SearchResult{
-            .rowId = labels[i],
-            .score = scores[i],
-        });
+    resultOffsets[queryIndex + 1] = resultOffsets[queryIndex] + numQueryResults;
   }
 
-  return results;
+  std::vector<SearchResult> results;
+  results.reserve(resultOffsets.back());
+  for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
+    const auto resultOffset = queryIndex * static_cast<size_t>(maxNumNeighbors);
+    const auto numQueryResults =
+        resultOffsets[queryIndex + 1] - resultOffsets[queryIndex];
+    for (size_t resultIndex = 0; resultIndex < numQueryResults; ++resultIndex) {
+      const auto flatResultIndex = resultOffset + resultIndex;
+      NIMBLE_CHECK_FILE_GE(
+          labels[flatResultIndex], 0, "FAISS returned a negative row ID");
+      NIMBLE_CHECK_FILE_LT(
+          static_cast<uint64_t>(labels[flatResultIndex]),
+          numVectors_,
+          "FAISS returned an out-of-range row ID");
+      results.push_back({
+          .rowId = labels[flatResultIndex],
+          .score = scores[flatResultIndex],
+      });
+    }
+  }
+
+  searchStats.numResults = results.size();
+  return SearchResults{
+      std::move(results), std::move(resultOffsets), std::move(searchStats)};
 }
 
 const std::string& VectorIndex::columnName() const {
