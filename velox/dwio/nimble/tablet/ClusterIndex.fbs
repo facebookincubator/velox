@@ -37,8 +37,7 @@ table ClusterIndexPartition {
   chunk_keys:[string];
 }
 
-/// Root index table for the built-in Nimble cluster index implementation.
-/// Referenced by IndexDescriptor name "nimble.cluster.v1".
+/// Root index table shared by the flat and hierarchical cluster indexes.
 table ClusterIndex {
   /// Names of columns used for indexing.
   index_columns:[string];
@@ -60,6 +59,7 @@ table ClusterIndex {
   /// Row count per partition. Used to compute partition-level row ranges
   /// without external stripe info. Size equals number of partitions.
   partition_row_counts:[uint32];
+
 }
 
 root_type ClusterIndex;

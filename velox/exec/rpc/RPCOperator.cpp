@@ -29,6 +29,11 @@
 
 namespace facebook::velox::exec::rpc {
 
+namespace {
+constexpr int64_t kLegacyFixedLimit{200};
+constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+} // namespace
+
 RPCOperator::RPCOperator(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -40,7 +45,8 @@ RPCOperator::RPCOperator(
           rpcNode->id(),
           "RPC"),
       rpcNode_(std::move(rpcNode)),
-      state_(std::make_shared<RPCState>()),
+      state_(
+          std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
   // Configure RPCState with the streaming mode and the congestion-window
   // tunables. The two knobs are registered QueryConfig properties
@@ -177,21 +183,44 @@ void RPCOperator::initializeRateLimiter() {
       .state = state_, .limiter = limiter_, .function = function_};
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
+  const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
+  const auto sessionHardLimit = queryConfig.rpcRateLimiterHardLimit();
+  VELOX_USER_CHECK_GE(
+      sessionFloor, 0, "rpc.ratelimiter.min_limit must be non-negative");
+  VELOX_USER_CHECK_GE(
+      legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
+  VELOX_USER_CHECK_GE(
+      sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
   // The first query fixes this shared controller's configuration.
   // initializeOnce applies the function and session settings atomically.
-  limiter_->initializeOnce([this,
-                            &queryConfig](RPCRateLimiter::Config& config) {
-    if (const auto fnCeiling = function_->configuredCeiling(); fnCeiling > 0) {
-      config.ceiling = fnCeiling;
-    }
-    config.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
-    config.floor = queryConfig.rpcRateLimiterMinLimit();
-    config.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
-    // 0 keeps whatever the function asked for; any positive value wins.
-    if (const auto rlMax = queryConfig.rpcRateLimiterMaxLimit(); rlMax > 0) {
-      config.ceiling = rlMax;
-    }
-  });
+  limiter_->initializeOnce(
+      [this, &queryConfig, sessionFloor, legacySessionLimit, sessionHardLimit](
+          RPCRateLimiter::Config& config) {
+        config.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+        config.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
+                                        : function_->configuredAdaptiveFloor();
+        config.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+
+        const auto functionLimit = function_->configuredCeiling();
+        if (sessionHardLimit < 0) {
+          if (functionLimit > 0) {
+            config.ceiling = functionLimit;
+          }
+          if (legacySessionLimit > 0) {
+            config.ceiling = legacySessionLimit;
+          }
+        } else if (functionLimit > 0 && sessionHardLimit > 0) {
+          config.ceiling = std::min(functionLimit, sessionHardLimit);
+        } else if (functionLimit > 0) {
+          config.ceiling = functionLimit;
+        } else if (sessionHardLimit > 0) {
+          config.ceiling = sessionHardLimit;
+        } else {
+          config.ceiling =
+              config.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
+        }
+      });
 }
 
 bool RPCOperator::needsInput() const {
@@ -365,25 +394,26 @@ void RPCOperator::dispatchRowsUnderAdmission() {
     size_t reservedIndex = 0;
     for (auto& [originalRowIndex, future] : futures) {
       auto rowId = globalRowIdCounter_++;
-      // One pre-reserved slot per row, handed to the continuation so it is
-      // released when the row completes.
-      auto token = std::make_shared<RPCRateLimiter::Token>(
-          std::move(reserved[reservedIndex++]));
+      // RPCState owns one pre-reserved lease per row until completion, when it
+      // applies canonical overload feedback and releases admission.
+      auto admissionLease =
+          limiter_->makeLease(std::move(reserved[reservedIndex++]));
       auto wrapped =
           std::move(future)
               .within(kBatchRpcTimeout)
-              .deferValue([rowId, token](RPCResponse resp) {
+              .deferValue([rowId](RPCResponse resp) {
                 resp.rowId = rowId;
                 return resp;
               })
-              .deferError([token](folly::exception_wrapper error) {
+              .deferError([](folly::exception_wrapper error) {
                 return folly::makeSemiFuture<RPCResponse>(std::move(error));
               });
       state_->addPendingRow(
           state_,
           rowId,
           RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
-          std::move(wrapped));
+          std::move(wrapped),
+          std::move(admissionLease));
     }
     pendingCursor_ += numRowsInChunk;
   }
@@ -462,18 +492,22 @@ void checkNoFrameworkFailures(
     const std::string& functionName,
     const std::vector<RPCResponse>& responses) {
   for (const auto& response : responses) {
-    VELOX_CHECK(
-        response.errorKind() != velox::rpc::RPCErrorKind::kUnset,
-        "RPC function '{}' returned an unset response for row {}",
-        functionName,
-        response.rowId);
-    if (response.errorKind() == velox::rpc::RPCErrorKind::kInternalError) {
-      VELOX_FAIL(
-          "RPC function failed internally: function '{}', row {}, error: {}",
-          functionName,
-          response.rowId,
-          response.error().message);
+    const auto kind = response.errorKind();
+    if (velox::rpc::errorCategory(kind) !=
+        velox::rpc::RPCErrorCategory::kFramework) {
+      continue;
     }
+    if (kind == velox::rpc::RPCErrorKind::kUnset) {
+      VELOX_FAIL(
+          "RPC function '{}' returned an unset response for row {}",
+          functionName,
+          response.rowId);
+    }
+    VELOX_FAIL(
+        "RPC function failed internally: function '{}', row {}, error: {}",
+        functionName,
+        response.rowId,
+        response.error().message);
   }
 }
 
@@ -505,13 +539,18 @@ void RPCOperator::resolveLocalOnlyInput(
       const auto rowId = globalRowIdCounter_++;
       auto response = std::move(future).get();
       response.rowId = rowId;
-      claimedRows_.push_back(
-          RPCState::ReadyRow{
-              .rowId = rowId,
-              .location = {batchIndex, originalRowIndex},
-              .response = std::move(response),
-              .rttNs = 0,
-          });
+      RPCState::ReadyRow readyRow{
+          .rowId = rowId,
+          .location = {batchIndex, originalRowIndex},
+          .charge = {},
+          .response = std::move(response),
+          .sharedOverloadHandled = false,
+          .admissionEpoch = std::nullopt,
+          .rttNs = 0,
+      };
+      readyRow.charge =
+          state_->chargePayloadBytes(readyRow.response.retainedBytes());
+      claimedRows_.push_back(std::move(readyRow));
     }
     return;
   }
@@ -546,14 +585,21 @@ void RPCOperator::resolveLocalOnlyInput(
       0,
       "RPC function '{}' retained rows after flushing local-only input",
       function_->name());
-  claimedBatch_ = RPCState::ReadyBatch{
+  auto responses = scatterIntoBatchOrder(std::move(future).get(), rowIds);
+  RPCState::ReadyBatch readyBatch{
       .batchId = 0,
-      .responses = scatterIntoBatchOrder(std::move(future).get(), rowIds),
+      .charge = {},
+      .responses = std::move(responses),
       .error = std::nullopt,
       .admissionUnits = 0,
+      .sharedOverloadHandled = false,
+      .admissionEpoch = std::nullopt,
       .rowLocations = std::move(rowLocations),
       .rttNs = 0,
   };
+  readyBatch.charge = state_->chargePayloadBytes(
+      velox::rpc::totalResponseRetainedBytes(readyBatch.responses));
+  claimedBatch_ = std::move(readyBatch);
 }
 
 bool RPCOperator::flushBatchRequests(int32_t maxRows) {
@@ -646,28 +692,31 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
   auto future = function_->flushBatch(flushCount);
 
   const auto admissionUnits = static_cast<int64_t>(reserved.size());
-  auto tokens =
-      std::make_shared<std::vector<RPCRateLimiter::Token>>(std::move(reserved));
+  auto admissionLease = limiter_->makeLease(std::move(reserved));
 
   // deferError runs before deferValue, so a failed batch becomes one
   // position-tagged error per row and passes through the same scatter checks as
-  // a successful batch. Share row IDs and admission tokens across both
-  // continuations; retaining the tokens holds every backend slot until the
-  // chain settles.
+  // a successful batch. RPCState owns the admission lease separately: its
+  // completion callback applies canonical typed-overload backoff before
+  // releasing admission, while these continuations only normalize and scatter
+  // responses.
   auto rowIdsPtr = std::make_shared<std::vector<int64_t>>(std::move(rowIds));
   auto wrapped =
       std::move(future)
           .within(kBatchRpcTimeout)
-          .deferError(
-              [rowIdsPtr, tokens](const folly::exception_wrapper& error) {
-                return degradeBatchFailureToRowErrors(*rowIdsPtr, error);
-              })
-          .deferValue([rowIdsPtr, tokens](std::vector<RPCResponse> responses) {
+          .deferError([rowIdsPtr](const folly::exception_wrapper& error) {
+            return degradeBatchFailureToRowErrors(*rowIdsPtr, error);
+          })
+          .deferValue([rowIdsPtr](std::vector<RPCResponse> responses) {
             return scatterIntoBatchOrder(std::move(responses), *rowIdsPtr);
           });
 
   state_->addPendingBatch(
-      state_, std::move(wrapped), std::move(rowLocations), admissionUnits);
+      state_,
+      std::move(wrapped),
+      std::move(rowLocations),
+      admissionUnits,
+      std::move(admissionLease));
   return true;
 }
 
@@ -761,38 +810,37 @@ RowVectorPtr RPCOperator::finishIfDrained() {
 void RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
-    int64_t successUnits) {
+    const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
+    bool sharedOverloadHandled) {
   if (limiter_ == nullptr) {
     return;
   }
-  // Two AIMD controllers at different scopes, both driven by the function's
-  // overload verdict (see RPCRateLimiter.h / CongestionController.h and the
-  // function's CongestionPolicy):
-  //  - the per-driver window halves on overload, else feeds the successful
-  //    round trips to its latency gradient;
-  //  - the backend's shared cap halves on overload and recovers additively on
-  //    success.
-  // Only the function's explicit overload verdict shrinks either window. Such
-  // failures can be low-latency, so the verdict, rather than RTT alone, must
-  // drive backoff. A non-overload error leaves both windows unchanged.
-  if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
+  // Canonical typed overload is applied to the shared limiter by the
+  // completion callback before admission is released. Apply the same signal
+  // to the driver-local window, but keep shared success accounting separate:
+  // epoch checks reject stale successes while preserving recovery earned by
+  // newer work drained alongside an older overload.
+  const bool overloadObserved = sharedOverloadHandled ||
+      signal == AsyncRPCFunction::CongestionSignal::kOverloaded;
+  if (overloadObserved) {
     state_->onUnitError();
-    limiter_->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
-    return;
-  }
-  if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
+    if (!sharedOverloadHandled) {
+      limiter_->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
+    }
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
   }
-  if (signal == AsyncRPCFunction::CongestionSignal::kSuccess ||
-      signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency) {
-    limiter_->onOutcome(RPCRateLimiter::Outcome::kSuccess, successUnits);
+
+  int64_t serviceHorizonNs = roundTripTimesNs.empty()
+      ? 0
+      : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
+  for (const auto& [overloadEpoch, successUnits] : successUnitsByEpoch) {
+    limiter_->onSuccessForEpoch(overloadEpoch, successUnits, serviceHorizonNs);
+    serviceHorizonNs = 0;
   }
 }
 
 RowVectorPtr RPCOperator::outputPerRow() {
-  // Drip buffered rows after completions may have freed admission capacity.
-  dispatchRowsUnderAdmission();
-
   if (claimedRows_.empty()) {
     return finishIfDrained();
   }
@@ -809,6 +857,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
   std::vector<RPCResponse> responses;
   std::vector<std::pair<int32_t, vector_size_t>> locations;
   std::vector<int64_t> roundTripTimesNs;
+  std::vector<std::pair<uint64_t, int64_t>> successUnitsByEpoch;
   responses.reserve(claimedRows_.size());
   locations.reserve(claimedRows_.size());
   roundTripTimesNs.reserve(claimedRows_.size());
@@ -824,6 +873,20 @@ RowVectorPtr RPCOperator::outputPerRow() {
     // the gradient/baseline.
     if (!hasError) {
       roundTripTimesNs.push_back(row.rttNs);
+      if (row.admissionEpoch.has_value()) {
+        const auto overloadEpoch = row.admissionEpoch.value();
+        const auto it = std::find_if(
+            successUnitsByEpoch.begin(),
+            successUnitsByEpoch.end(),
+            [overloadEpoch](const auto& entry) {
+              return entry.first == overloadEpoch;
+            });
+        if (it == successUnitsByEpoch.end()) {
+          successUnitsByEpoch.emplace_back(overloadEpoch, 1);
+        } else {
+          ++it->second;
+        }
+      }
     }
     responses.push_back(std::move(row.response));
     locations.emplace_back(row.location.batchIndex, row.location.rowIndex);
@@ -832,14 +895,23 @@ RowVectorPtr RPCOperator::outputPerRow() {
   checkNoFrameworkFailures(function_->name(), responses);
 
   if (!claimedRowsAreLocalOnly_) {
+    const bool sharedOverloadHandled = std::any_of(
+        claimedRows_.begin(), claimedRows_.end(), [](const auto& row) {
+          return row.sharedOverloadHandled;
+        });
     recordCongestion(
         function_->evaluateCongestion(responses),
         roundTripTimesNs,
-        static_cast<int64_t>(roundTripTimesNs.size()));
+        successUnitsByEpoch,
+        sharedOverloadHandled);
+    // Apply the completed rows' driver-local feedback before admitting more
+    // buffered work. Completion already released the shared admission lease.
+    dispatchRowsUnderAdmission();
   }
 
   auto output = buildOutputVector(responses, locations);
   numResponsesReceived_ += numRows;
+  responses.clear();
   claimedRows_.clear();
   claimedRowsAreLocalOnly_ = false;
   return output;
@@ -872,10 +944,16 @@ RowVectorPtr RPCOperator::outputBatch() {
   // native batch, or one per emitted RPC for a fan-out batch.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
   if (claimedBatch_->admissionUnits > 0) {
+    std::vector<std::pair<uint64_t, int64_t>> successUnitsByEpoch;
+    if (claimedBatch_->admissionEpoch.has_value()) {
+      successUnitsByEpoch.emplace_back(
+          claimedBatch_->admissionEpoch.value(), claimedBatch_->admissionUnits);
+    }
     recordCongestion(
         function_->evaluateCongestion(claimedBatch_->responses),
         roundTripTimesNs,
-        claimedBatch_->admissionUnits);
+        successUnitsByEpoch,
+        claimedBatch_->sharedOverloadHandled);
   }
 
   auto output = buildOutputFromReadyBatch(*claimedBatch_);
@@ -950,6 +1028,10 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       return exec::BlockingReason::kNotBlocked;
     case RPCState::ClaimResult::kMustWait:
       return park(future, std::move(waitFuture), /*isBackpressure=*/false);
+    case RPCState::ClaimResult::kIdle:
+      VELOX_CHECK(
+          hasPendingRows(), "PER_ROW state is idle with no undispatched input");
+      return parkOnAdmission(future);
     case RPCState::ClaimResult::kFinished:
       return std::nullopt;
   }
@@ -975,16 +1057,14 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnBatch(
 
 exec::BlockingReason RPCOperator::blockedInPerRow(ContinueFuture* future) {
   if (noMoreInput_ || isDraining()) {
-    // Resume the drain: rows admission held back still have to go out, and
-    // noMoreInput()/startDrain() defer the end-of-input signal until they do.
-    // Mirrors blockedInBatch(); defensive for the same reason described on the
-    // guard in noMoreInput().
-    if (auto reason = drainOrParkOnAdmission(future)) {
-      return reason.value();
+    dispatchRowsUnderAdmission();
+    if (!hasPendingRows()) {
+      state_->setNoMoreInput();
     }
 
-    // Finishing: nothing more will be dispatched, so the only outcomes are a
-    // completed row, a wait on one, or the stream running out.
+    // Claim a completed row before waiting for more admission. Completion
+    // releases shared admission, but the ready row still carries driver-local
+    // feedback that must be applied before dispatching more work.
     if (auto reason = tryClaimOrParkOnRow(future)) {
       return reason.value();
     }
@@ -1127,20 +1207,20 @@ void RPCOperator::close() {
   // callbacks (via shared_ptr capture), so dropping our reference is not enough
   // to free the input vectors: those belong to upstream operators' memory pools
   // and must be released here, on the driver thread, while those pools are
-  // still alive. Otherwise the retained reservation makes the arbitrator's
+  // still alive. Otherwise the retained external-memory charge makes the
   // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
   // worker, or a late callback frees into pools that are already gone.
   // Stop publishing to stats() first: the write blocks until any in-progress
   // sample has finished reading RPCState, so the reset below cannot free it
   // underneath the collector thread.
   *liveStatsSources_.wlock() = LiveStatsSources{};
+  claimedRows_.clear();
+  claimedBatch_.reset();
   if (state_ != nullptr) {
-    state_->releaseAllInputBatches();
+    state_->close();
   }
   state_.reset();
   function_.reset();
-  claimedRows_.clear();
-  claimedBatch_.reset();
   batchRowLocations_.clear();
   batchRowIds_.clear();
   reusableIndices_.reset();
@@ -1250,10 +1330,18 @@ void RPCOperator::addLiveProgressStats(
     const auto limiterStats = sources->limiter->stats();
     stats.runtimeStats[kRpcRateLimiterCap] =
         RuntimeMetric(limiterStats.capacity);
+    stats.runtimeStats[kRpcRateLimiterHardLimit] =
+        RuntimeMetric(limiterStats.hardLimit);
     stats.runtimeStats[kRpcRateLimiterPeakPending] =
         RuntimeMetric(limiterStats.peakPending);
     stats.runtimeStats[kRpcRateLimiterMinCap] =
         RuntimeMetric(limiterStats.lowWaterCapacity);
+    stats.runtimeStats[kRpcRateLimiterLimitMilli] =
+        RuntimeMetric(limiterStats.limitMilli);
+    stats.runtimeStats[kRpcRateLimiterMinLimitMilli] =
+        RuntimeMetric(limiterStats.lowWaterLimitMilli);
+    stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
+        RuntimeMetric(limiterStats.serviceHorizonNanos);
   }
   if (!includeGauges) {
     return;

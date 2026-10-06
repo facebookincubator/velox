@@ -106,8 +106,6 @@ void configureReaderOptions(
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
-  readerOptions.setDirectBufferedInputSharedAllocation(
-      fileConfig->directBufferedInputSharedAllocation(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
   readerOptions.setMaxCoalesceDistance(
@@ -232,8 +230,8 @@ void configureRowReaderOptions(
         fileConfig->nimbleStringDecoderZeroCopy(sessionProperties));
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
-    rowReaderOptions.setNimbleIntegerDictionaryAwareFiltering(
-        fileConfig->nimbleIntegerDictionaryAwareFiltering(sessionProperties));
+    rowReaderOptions.setNimbleDictionaryAwareReads(
+        fileConfig->nimbleDictionaryAwareReads(sessionProperties));
   }
 }
 

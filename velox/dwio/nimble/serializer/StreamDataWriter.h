@@ -579,7 +579,7 @@ class StreamDataWriter {
   std::vector<uint32_t> streamSizes_;
   // Byte offset of the serialization header flags byte, patched in close().
   size_t headerFlagsOffset_{0};
-  bool requiresNullBarrier_{false};
+  bool requiredBarrier_{false};
 };
 
 template <typename T>
@@ -594,7 +594,8 @@ StreamDataWriter<T>::StreamDataWriter(
       pool_{pool},
       streamEncodingBuffer_{std::make_unique<nimble::Buffer>(*pool)},
       streamEncodingLayouts_{streamEncodingLayouts},
-      outputBuffer_{buffer} {
+      outputBuffer_{buffer},
+      requiredBarrier_{!options_.hybridFlatMapColumns.empty()} {
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
 
   const auto version = options_.version;
@@ -607,7 +608,7 @@ StreamDataWriter<T>::StreamDataWriter(
   NIMBLE_CHECK_LT(
       headerFlagsOffset_,
       outputBuffer_.size(),
-      "Invalid null barrier flag offset");
+      "Invalid required barrier flag offset");
   NIMBLE_CHECK_EQ(
       static_cast<uint8_t>(outputBuffer_.data()[headerFlagsOffset_]),
       SerializationHeader::kStreamVarintRowCountFlag,
@@ -628,7 +629,7 @@ void StreamDataWriter<T>::writeData(const nimble::StreamData& streamData) {
   }
 
   if (streamData.isNullStream()) {
-    requiresNullBarrier_ |= streamData.hasNullValues();
+    requiredBarrier_ |= streamData.hasNullValues();
     NIMBLE_CHECK(
         data.empty(), "null streams should not carry a separate data payload");
     const auto streamPayload = detail::boolsAsStringView(nonNulls);
@@ -696,13 +697,13 @@ void StreamDataWriter<T>::close() {
   NIMBLE_CHECK_LT(
       headerFlagsOffset_,
       outputBuffer_.size(),
-      "Invalid null barrier flag offset");
+      "Invalid required barrier flag offset");
   NIMBLE_CHECK(
       options_.encodingOptions.useVarintRowCount,
       "Non-tablet writers must use varint stream row counts");
   outputBuffer_.data()[headerFlagsOffset_] =
       static_cast<char>(detail::makeFlagsByte(
-          requiresNullBarrier_,
+          requiredBarrier_,
           /*streamEncodingUsesVarintRowCount=*/true,
           /*streamHasChunkHeader=*/false));
 

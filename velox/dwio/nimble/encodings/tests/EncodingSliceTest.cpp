@@ -264,12 +264,14 @@ class EncodingSliceTest : public ::testing::Test {
     if constexpr (std::is_same_v<
                       EncodingType,
                       nimble::MainlyConstantEncoding<T>>) {
-      const auto fullRange = offset == 0 && length == values.size();
+      // An all-common range comes back as Constant either way: encode() emits
+      // Constant when every source row is the common value, and slice()
+      // downgrades an all-common sub-range the same way.
       bool onlyCommonRows{true};
       for (uint32_t row = offset; row < offset + length; ++row) {
         onlyCommonRows &= row % 5 != 2;
       }
-      if (!fullRange && onlyCommonRows) {
+      if (onlyCommonRows) {
         expectedEncodingType = nimble::EncodingType::Constant;
       }
     }

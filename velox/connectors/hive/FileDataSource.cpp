@@ -544,6 +544,7 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
   FileScanBatchEvent fileEvent;
   fileEvent.numRows = event.numRows;
   fileEvent.wallTimeMicros = event.wallTimeMicros;
+  fileEvent.planNodeId = event.planNodeId;
   fileEvent.storageReadBytes = storageReadBytesDelta;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();

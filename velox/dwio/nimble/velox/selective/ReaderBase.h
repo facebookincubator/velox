@@ -254,7 +254,7 @@ class StripeStreams {
     return stripe_;
   }
 
-  const index::ClusterIndex* clusterIndex() const {
+  const index::ClusterIndexBase* clusterIndex() const {
     return readerBase_->tablet().clusterIndex();
   }
 

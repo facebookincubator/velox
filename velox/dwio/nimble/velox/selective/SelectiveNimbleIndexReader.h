@@ -281,7 +281,7 @@ class SelectiveNimbleIndexReader : public velox::dwio::common::IndexReader {
   // physical format. Used for column reader construction.
   const velox::RowTypePtr fileOutputType_;
 
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
 
   StripeStreams streams_;
   int32_t numStripes_{0};

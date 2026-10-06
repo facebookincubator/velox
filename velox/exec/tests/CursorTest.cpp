@@ -15,7 +15,11 @@
  */
 
 #include "velox/exec/Cursor.h"
+
 #include <folly/OperationCancelled.h>
+#include <barrier>
+#include <thread>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -125,6 +129,40 @@ TEST_F(CursorTest, asyncDrainParallelMultipleProducers) {
   // multi-producer wakeup path and fail here loudly.
   EXPECT_EQ(cursor->task()->numOutputDrivers(), kNumDrivers);
   EXPECT_EQ(drainAsync(*cursor), kNumDrivers * kRowsPerDriver);
+}
+
+TEST_F(CursorTest, setErrorConcurrentWithMoveNext) {
+  constexpr std::string_view kErrorMessage{"injected cursor error"};
+
+  auto cursor = TaskCursor::create(makeParams(/*serialExecution=*/false));
+
+  const auto error = [&] {
+    try {
+      VELOX_FAIL("{}", kErrorMessage);
+    } catch (...) {
+      return std::current_exception();
+    }
+  }();
+  cursor->setError(error);
+  cursor->start();
+
+  std::barrier startBarrier{2};
+  std::thread errorThread([&] {
+    startBarrier.arrive_and_wait();
+    cursor->setError(error);
+  });
+
+  startBarrier.arrive_and_wait();
+  std::exception_ptr cursorError;
+  try {
+    cursor->moveNext();
+  } catch (...) {
+    cursorError = std::current_exception();
+  }
+  errorThread.join();
+
+  ASSERT_TRUE(cursorError);
+  VELOX_ASSERT_THROW(std::rethrow_exception(cursorError), kErrorMessage);
 }
 
 // After the task is cancelled, the parallel cursor surfaces cooperative

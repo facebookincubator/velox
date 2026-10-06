@@ -23,11 +23,11 @@
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
 
 namespace facebook::nimble::index {
 
-/// Thread-safe random-access key store for index lookups.
+/// Thread-safe random-access reader for a flat encoding of packed keys.
 ///
 /// Provides seek(), get(), and materialize() for key-to-row resolution.
 /// Fully decoupled from the sequential Encoding API — takes raw encoded
@@ -43,35 +43,9 @@ namespace facebook::nimble::index {
 ///       restart interval).
 class KeyEncoding {
  public:
-  /// Forward cursor over keys in row order.
-  ///
-  /// Sequential reads through a cursor are cheaper than repeated get():
-  /// prefix-encoded keys decode incrementally from the preceding key instead
-  /// of restarting from the enclosing restart point, and no key is copied
-  /// into an owned string.
-  ///
-  /// A cursor carries the read position, and for prefix encodings the buffer
-  /// the key is rebuilt in, so a single cursor is not thread-safe. Cursors
-  /// share no state with one another, so concurrent readers each take their
-  /// own rather than locking around a shared one.
-  class Cursor {
-   public:
-    virtual ~Cursor() = default;
-
-    /// Returns whether next() has another key to return.
-    virtual bool hasNext() const = 0;
-
-    /// Returns the key at the cursor's row and advances by one row. The
-    /// returned view stays valid until the next next() call or until the
-    /// cursor is destroyed, whichever comes first. Throws when hasNext() is
-    /// false; advancing past the last row would otherwise read out of
-    /// bounds.
-    virtual std::string_view next() = 0;
-  };
-
   virtual ~KeyEncoding() = default;
 
-  /// Creates the appropriate KeyEncoding from raw encoded data.
+  /// Creates the appropriate flat KeyEncoding from raw encoded data.
   ///
   /// Internally creates a temporary Encoding to parse/decompress the data,
   /// extracts what it needs, then discards the temporary Encoding. The
@@ -104,9 +78,7 @@ class KeyEncoding {
   /// Returns a cursor positioned at 'startRow', which must be a valid row.
   /// The cursor reads through this encoding, which must outlive it.
   /// Safe to call concurrently; the returned cursor is single-threaded.
-  virtual std::unique_ptr<Cursor> cursor(uint32_t startRow) const = 0;
-
-  virtual EncodingType encodingType() const = 0;
+  virtual std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const = 0;
 
   virtual uint32_t rowCount() const = 0;
 };
@@ -126,11 +98,7 @@ class TrivialKeyEncoding final : public KeyEncoding {
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
-  std::unique_ptr<Cursor> cursor(uint32_t startRow) const override;
-
-  EncodingType encodingType() const override {
-    return EncodingType::Trivial;
-  }
+  std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const override;
 
   uint32_t rowCount() const override {
     return static_cast<uint32_t>(values_.size());
@@ -158,11 +126,7 @@ class PrefixKeyEncoding final : public KeyEncoding {
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
-  std::unique_ptr<Cursor> cursor(uint32_t startRow) const override;
-
-  EncodingType encodingType() const override {
-    return EncodingType::Prefix;
-  }
+  std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const override;
 
   uint32_t rowCount() const override {
     return rowCount_;

@@ -49,6 +49,8 @@ class ChunkedStreamDecoder : public Decoder {
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
 
+  uint32_t remainingRows() override;
+
   uint32_t read(
       std::span<const uint32_t> rows,
       DataType dataType,

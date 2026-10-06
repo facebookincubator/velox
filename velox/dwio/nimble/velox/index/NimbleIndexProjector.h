@@ -131,7 +131,8 @@ class NimbleIndexProjector {
     uint64_t maxRowsPerRequest{0};
     /// Maximum tolerated avoidable row overfetch per stripe before stream
     /// slicing is applied. 0.0 slices whenever any overfetch can be removed;
-    /// 1.0 disables slicing.
+    /// 1.0 disables slicing. Hybrid FlatMap projections always retain the
+    /// full stripe because their streams use a key-major layout.
     double maxOverfetchRowsRatio{1.0};
     /// When set, every request whose results were cut short by a limit
     /// (maxRows, maxBytes, or maxRowsPerRequest) is given a resume key so the
@@ -139,12 +140,6 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
-    /// When set, every stream this call reads from storage is checked against
-    /// the checksum recorded in its stripe group, and a mismatch fails the
-    /// call. Asking for this on a file that records no checksums fails the
-    /// call; a file recording a checksum type this binary cannot build is
-    /// rejected earlier, when the projector is created.
-    bool verifyStreamChecksums{false};
   };
 
   /// Request for a batch of index lookups.
@@ -239,6 +234,12 @@ class NimbleIndexProjector {
     uint64_t numProjectedRows{0};
     /// Total serialized or vector-retained output bytes.
     uint64_t numOutputBytes{0};
+    /// Projected stream bytes charged against Options::maxBytes: the running
+    /// total that decides where a byte-limited projection stops.
+    uint64_t numPlannedBytes{0};
+    /// Number of projections that stopped with stripes left to read because
+    /// numPlannedBytes reached Options::maxBytes.
+    uint32_t numMaxBytesTruncations{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
@@ -264,7 +265,8 @@ class NimbleIndexProjector {
       std::unique_ptr<DataInput> dataInput,
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<velox::io::IoStatistics> ioStats);
+      std::shared_ptr<velox::io::IoStatistics> ioStats,
+      bool verifyStreamChecksums);
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
@@ -330,8 +332,8 @@ class NimbleIndexProjector {
     std::vector<uint32_t> stripeIndices;
     // Total rows in each planned stripe.
     std::vector<uint32_t> numRows;
-    // Whether each planned stripe needs the Row/FlatMap null-barrier path.
-    std::vector<bool> requiresNullBarriers;
+    // Whether each planned stripe must be decoded independently.
+    std::vector<bool> requiredBarriers;
     // Number of projected streams present in each planned stripe.
     std::vector<uint32_t> numStreams;
     // Total logical bytes across all projected streams in each planned stripe.
@@ -364,7 +366,7 @@ class NimbleIndexProjector {
   struct StripeStreams {
     uint32_t numStreams{0};
     uint64_t projectedBytes{0};
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
   };
 
   // Locates this stripe's projected streams, staging them at the tail of
@@ -382,7 +384,8 @@ class NimbleIndexProjector {
       const StripeStreams& streams);
 
   // Computes the stripe-relative body range based on request row ranges and
-  // Options::maxOverfetchRowsRatio.
+  // Options::maxOverfetchRowsRatio. Hybrid FlatMap projections always retain
+  // the full stripe because their physical streams are key-major.
   RowRange stripeRowRangeToPack(size_t stripeOffset) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
@@ -478,7 +481,7 @@ class NimbleIndexProjector {
   struct PackedStripe {
     folly::IOBuf body;
     RowRange rowRange;
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
     bool streamHasChunkHeader{false};
   };
 
@@ -517,14 +520,17 @@ class NimbleIndexProjector {
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
   velox::memory::MemoryPool* const pool_;
   std::unique_ptr<DataInput> dataInput_;
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
+  // True when every emitted slice must preserve a native HFM batch boundary,
+  // even if the selected group has no physical stream in a stripe.
+  const bool hasProjectedHybridFlatMaps_{false};
   // Verifies a stream read from storage against the checksum recorded in its
-  // stripe group. Built for any file that records a checksum type, and null
-  // only when the file records none; whether a given project() call uses it is
-  // Options::verifyStreamChecksums. Stateful, so it relies on this class being
+  // stripe group. Built only when ReaderOptions::verifyStreamChecksums() is set
+  // and the file records per-stream checksums, so null means this projector
+  // does not verify. Stateful, so it relies on this class being
   // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
   // Reused across stripes; its raw input format is fixed by the tablet.
