@@ -81,6 +81,10 @@ TEST(VectorIndexUtilityTest, indexTypeConversions) {
           serialization::VectorIndexType_IVF_RABITQ,
       },
       TestCase{
+          VectorIndexType::kIvfRaBitQFastScan,
+          serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN,
+      },
+      TestCase{
           VectorIndexType::kHnswSq8,
           serialization::VectorIndexType_HNSW_SQ8,
       },

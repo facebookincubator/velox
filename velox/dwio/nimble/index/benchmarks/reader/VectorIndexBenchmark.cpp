@@ -68,8 +68,8 @@ DEFINE_uint32(
 DEFINE_string(
     vector_index_type,
     "ivf_rabitq",
-    "Index type to benchmark: ivf_flat, ivf_sq8, ivf_pq, ivf_rabitq, or "
-    "hnsw_sq8.");
+    "Index type to benchmark: ivf_flat, ivf_sq8, ivf_pq, ivf_rabitq, "
+    "ivf_rabitq_fast_scan, or hnsw_sq8.");
 DEFINE_string(
     vector_index_metric,
     "cosine",
@@ -234,6 +234,9 @@ VectorIndexType parseIndexType(std::string_view name) {
   }
   if (name == "ivf_rabitq") {
     return VectorIndexType::kIvfRaBitQ;
+  }
+  if (name == "ivf_rabitq_fast_scan") {
+    return VectorIndexType::kIvfRaBitQFastScan;
   }
   if (name == "hnsw_sq8") {
     return VectorIndexType::kHnswSq8;

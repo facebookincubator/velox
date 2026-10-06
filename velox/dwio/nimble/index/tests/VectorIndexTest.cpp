@@ -545,6 +545,10 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },
       TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      TestParam{
           .indexType = VectorIndexType::kHnswSq8,
           .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
       },
@@ -891,6 +895,11 @@ TEST_F(VectorIndexTest, searchFiltersRowsBeforeTopK) {
               std::numeric_limits<uint32_t>::max()),
       },
       TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+      TestParam{
           .indexType = VectorIndexType::kHnswSq8,
           .searchOptions =
               std::make_shared<VectorIndex::HnswSearchOptions>(kNumVectors),
@@ -1204,6 +1213,27 @@ TEST_F(VectorIndexTest, retainsPoolBackedSerializedIndex) {
   EXPECT_EQ(pool()->usedBytes(), bytesBeforeLoad);
 }
 
+TEST_F(VectorIndexTest, releasesPoolBackedSerializedFastScanIndex) {
+  constexpr uint32_t kNumVectors{500};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfRaBitQFastScan),
+      {makeInputFromVectors(data, kDimensions)});
+
+  const auto bytesBeforeLoad = pool()->usedBytes();
+  const auto reader = readIndex(written);
+  ASSERT_NE(reader, nullptr);
+  EXPECT_LT(pool()->usedBytes() - bytesBeforeLoad, written.indexData.size());
+
+  std::vector<float> queryVector(data.begin(), data.begin() + kDimensions);
+  const auto searchResult = reader->search({
+      .queryVectors = std::move(queryVector),
+      .numNeighbors = 5,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  EXPECT_FALSE(searchResult.results(0).empty());
+}
+
 TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
   constexpr uint32_t kNumVectors{100};
   auto written = std::make_shared<WrittenIndexes>(writeIndex(
@@ -1478,6 +1508,11 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
       },
       {
           .indexType = VectorIndexType::kIvfRaBitQ,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+      {
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
           .metric = VectorDistanceMetric::kL2,
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },
