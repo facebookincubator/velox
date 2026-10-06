@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
@@ -47,10 +48,14 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <tuple>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -251,7 +256,81 @@ CudfSplitReader::~CudfSplitReader() {
 
 void CudfSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
+  // Read file metadata and cache schema information
+  cacheSchemaFromMetadata();
+
+  // No columns to read (e.g. `count(*)`): take the row count from the footer.
+  noColumnsToRead_ = readColumnNames_.empty();
+  if (noColumnsToRead_) {
+    VELOX_CHECK_NULL(
+        pushdownFilter(),
+        "A footer-derived row count cannot honor a pushed-down filter");
+    return;
+  }
+
   createCudfReader();
+}
+
+void CudfSplitReader::cacheSchemaFromMetadata() {
+  // Read file metadatas if not already
+  fileMetaDatas();
+
+  VELOX_CHECK_EQ(
+      fileMetaData_.size(),
+      1,
+      "Expected a single parquet footer for the split's data file");
+  const auto& meta = fileMetaData_.front();
+  VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
+  VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
+  std::tie(baseReadOffset_, splitRowCount_) = computeSplitRowRange();
+
+  const auto& root = meta.schema.front();
+  fileColumnNames_.clear();
+  fileColumnNames_.reserve(root.children_idx.size());
+  for (const auto childIdx : root.children_idx) {
+    VELOX_CHECK_LT(
+        childIdx,
+        meta.schema.size(),
+        "Parquet schema child index out of range");
+    const auto& name = meta.schema[childIdx].name;
+    fileColumnNames_.insert(
+        caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name);
+  }
+}
+
+std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
+    const {
+  // Note: This function implements the same logic as cuDF's hybrid scan
+  // reader's `filter_row_groups_with_byte_range()` API
+  const auto rowGroupOffset = [](const auto& rowGroup) {
+    if (rowGroup.file_offset.has_value()) {
+      return rowGroup.file_offset.value();
+    }
+    if (rowGroup.columns.front().file_offset != 0) {
+      return rowGroup.columns.front().file_offset;
+    }
+    const auto& column = rowGroup.columns.front().meta_data;
+    return column.dictionary_page_offset != 0
+        ? std::min(column.dictionary_page_offset, column.data_page_offset)
+        : column.data_page_offset;
+  };
+
+  std::size_t startRow{0};
+  std::size_t numRows{0};
+  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+    VELOX_CHECK(
+        not rowGroup.columns.empty(),
+        "Parquet footer reports a row group with no column chunks");
+    const auto offset = rowGroupOffset(rowGroup);
+    if (std::cmp_less(offset, split_->start)) {
+      startRow += rowGroup.num_rows;
+    } else if (offset - split_->start < split_->size()) {
+      numRows += rowGroup.num_rows;
+    }
+  }
+  return {startRow, numRows};
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
@@ -277,7 +356,7 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   }
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
+std::optional<CudfSplitReader::TableChunk> CudfSplitReader::next(
     uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
@@ -296,7 +375,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   cudaLaunchHostFunc(
       stream_.get(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
 
-  return std::move(chunkOpt.value());
+  return chunkOpt;
 }
 
 void CudfSplitReader::setConnectorQueryCtx(
@@ -308,7 +387,23 @@ void CudfSplitReader::setConnectorQueryCtx(
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::TableChunk> CudfSplitReader::readNextChunk() {
+  if (noColumnsToRead_) {
+    // A Velox vector holds at most `vector_size_t` rows, so the footer row
+    // count of a larger split is returned over several tables.
+    const auto numRows = std::min<std::size_t>(
+        splitRowCount_,
+        static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max()));
+    if (numRows == 0) {
+      return std::nullopt;
+    }
+    splitRowCount_ -= numRows;
+    return TableChunk{
+        std::make_unique<cudf::table>(
+            std::vector<std::unique_ptr<cudf::column>>{}),
+        static_cast<vector_size_t>(numRows)};
+  }
+
   VELOX_CHECK_NOT_NULL(splitReader_, "cuDF parquet reader not present");
   VELOX_CHECK_NOT_NULL(passState_, "Row group pass state not present");
 
@@ -340,12 +435,14 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return castDecimalColumnsToVeloxTypes(
+  auto table = castDecimalColumnsToVeloxTypes(
       std::move(tableWithMetadata.tbl),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
       stream_,
       outputMr);
+  const auto numRows = table->num_rows();
+  return TableChunk{std::move(table), numRows};
 }
 
 void CudfSplitReader::startColumnChunkFetch() {
@@ -412,6 +509,11 @@ void CudfSplitReader::resetSplit() {
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  fileColumnNames_.clear();
+  baseReadOffset_ = 0;
+  splitRowCount_ = 0;
+  readAllFileColumns_ = false;
+  noColumnsToRead_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -555,8 +657,8 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_filter(*filter);
   }
 
-  // Set column projection if needed
-  if (readColumnNames_.size()) {
+  // Skip column selection when reading every file column in file order
+  if (not readAllFileColumns_) {
     readerOptions_.set_column_names(readColumnNames_);
   }
 
@@ -608,6 +710,16 @@ void CudfSplitReader::fileMetaDatas() {
 void CudfSplitReader::createCudfReader() {
   // Read file metadatas
   fileMetaDatas();
+
+  // Check if we are reading all columns in order
+  const auto& schema = fileMetaData_.front().schema;
+  readAllFileColumns_ = std::ranges::equal(
+      schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
+        const auto& name = schema[childIdx].name;
+        return caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name;
+      });
 
   // Setup reader options
   setupReaderOptions();
