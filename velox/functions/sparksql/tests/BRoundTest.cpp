@@ -25,6 +25,7 @@
 #include <fmt/format.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
@@ -175,9 +176,21 @@ TEST_F(BRoundTest, specialValuesAndScales) {
 }
 
 TEST_F(BRoundTest, constantScaleRequired) {
+  const auto signatures =
+      exec::simpleFunctions().getFunctionSignatures("bround");
+  size_t numBinarySignatures{0};
+  for (const auto* signature : signatures) {
+    if (signature->argumentTypes().size() == 2) {
+      ASSERT_EQ(signature->constantArguments().size(), 2);
+      EXPECT_FALSE(signature->constantArguments()[0]);
+      EXPECT_TRUE(signature->constantArguments()[1]);
+      ++numBinarySignatures;
+    }
+  }
+  EXPECT_EQ(numBinarySignatures, 6);
+
   const auto input = makeRowVector(
       {makeFlatVector<double>({2.5, 3.5}), makeFlatVector<int32_t>({0, 1})});
-  VELOX_ASSERT_THROW(evaluate("bround(c0, c1)", input), "constant");
   facebook::velox::test::assertEqualVectors(
       makeFlatVector<double>({2.0, 4.0}),
       evaluate("bround(c0, cast(subtract(1, 1) as integer))", input));
