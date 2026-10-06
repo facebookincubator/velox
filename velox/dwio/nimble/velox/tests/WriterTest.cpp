@@ -2039,6 +2039,65 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
   }
 }
 
+TEST_F(WriterTest, columnReorderingStreamCollocation) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  constexpr int kNumRows = 1'000;
+  // Distinct values per column keep each stream's bytes distinct.
+  auto vector = vectorMaker.rowVector(
+      {"a", "b", "c"},
+      {
+          vectorMaker.flatVector<int64_t>(
+              kNumRows, [](auto row) { return static_cast<int64_t>(row); }),
+          vectorMaker.flatVector<int64_t>(
+              kNumRows, [](auto row) { return static_cast<int64_t>(row * 2); }),
+          vectorMaker.flatVector<int64_t>(
+              kNumRows, [](auto row) { return static_cast<int64_t>(row * 3); }),
+      });
+
+  std::string file;
+  {
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::WriterOptions options;
+    options.columnReordering = std::vector<std::string>{"c", "a"};
+
+    nimble::Writer writer(
+        vector->type(), std::move(writeFile), *rootPool_, std::move(options));
+    writer.write(vector);
+    writer.close();
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_GE(tablet->stripeCount(), 1);
+
+  auto stripeId = tablet->stripeIdentifier(0);
+  const auto streamCount = tablet->streamCount(stripeId);
+  std::vector<nimble::TabletReader::StreamMetadata> streamLocations(
+      streamCount);
+  tablet->streamLocations(stripeId, streamLocations);
+
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const auto& rowSchema = reader.schema()->asRow();
+  std::unordered_map<std::string, uint32_t> columnToStreamId;
+  for (size_t i = 0; i < rowSchema.childrenCount(); ++i) {
+    columnToStreamId[rowSchema.nameAt(i)] =
+        rowSchema.childAt(i)->asScalar().scalarDescriptor().offset();
+  }
+  const auto& c = streamLocations[columnToStreamId.at("c")];
+  const auto& a = streamLocations[columnToStreamId.at("a")];
+  const auto& b = streamLocations[columnToStreamId.at("b")];
+
+  // Listed columns lead in the configured order, back to back, so a reader
+  // fetching both can merge them into one IO.
+  EXPECT_EQ(c.offset + c.size, a.offset)
+      << "Column c should be immediately followed by column a";
+
+  // The unlisted column follows the listed ones.
+  EXPECT_GT(b.offset, a.offset) << "Column b should appear after column a";
+}
+
 TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
