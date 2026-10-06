@@ -1083,9 +1083,12 @@ class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
       : queryCtx_(queryCtx), pool_(pool) {}
 
   std::unique_ptr<ExprSet> compile(
-      const core::TypedExprPtr& expression) override {
+      const core::TypedExprPtr& expression,
+      bool enableConstantFolding = true) override {
     return std::make_unique<ExprSet>(
-        std::vector<core::TypedExprPtr>{expression}, ensureExecCtx());
+        std::vector<core::TypedExprPtr>{expression},
+        ensureExecCtx(),
+        enableConstantFolding);
   }
 
   std::unique_ptr<ExprSet> compile(

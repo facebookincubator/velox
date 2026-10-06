@@ -2541,7 +2541,9 @@ VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
     bool suppressEvaluationFailures) {
-  auto exprSet = evaluator->compile(expr);
+  // Disable constant folding to avoid re-entering ExprOptimizer, which calls
+  // this function to fold each constant subexpression.
+  auto exprSet = evaluator->compile(expr, /*enableConstantFolding=*/false);
   if (!exprSet->exprs()[0]->isConstantExpr()) {
     return nullptr;
   }

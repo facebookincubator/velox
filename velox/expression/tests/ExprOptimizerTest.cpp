@@ -301,19 +301,28 @@ TEST_F(ExprOptimizerTest, queryCtx) {
 }
 
 TEST_F(ExprOptimizerTest, expressionEvaluatorOverload) {
-  // optimize can fold through a core::ExpressionEvaluator, for callers (e.g.
-  // connectors) that have an evaluator but no QueryCtx.
-  const auto emptyRow = ROW({});
-  const auto typedExpr = makeTypedExpr("1 + 2 * 3", emptyRow);
-  const auto queryCtx = core::QueryCtx::create();
-  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool());
+  // The evaluator's time zone differs from the default (UTC), so folding with
+  // the wrong QueryCtx gives a different hour.
+  const auto evaluatorQueryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig({
+          {core::QueryConfig::kSessionTimezone, "Pacific/Apia"},
+          {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      }));
+  exec::SimpleExpressionEvaluator evaluator(evaluatorQueryCtx.get(), pool());
 
-  const auto optimized = expression::optimize(typedExpr, &evaluator);
-  ASSERT_TRUE(*optimized == *makeTypedExpr("7", emptyRow));
-
-  // Results match the default QueryCtx-based overload.
+  const auto typedExpr =
+      makeTypedExpr("hour(from_unixtime(9.98489045321E8))", ROW({}));
   ASSERT_TRUE(
-      *optimized == *expression::optimize(typedExpr, queryCtx.get(), pool()));
+      *expression::optimize(typedExpr, &evaluator) ==
+      *makeTypedExpr("3", ROW({})));
+
+  const auto defaultQueryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator defaultEvaluator(
+      defaultQueryCtx.get(), pool());
+  ASSERT_TRUE(
+      *expression::optimize(typedExpr, &defaultEvaluator) ==
+      *makeTypedExpr("14", ROW({})));
 }
 
 /// Test cast optimization that avoids expression evaluation when input to

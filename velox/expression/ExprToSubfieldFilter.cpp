@@ -29,8 +29,20 @@ namespace {
 VectorPtr toConstant(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator) {
-  return tryEvaluateConstantExpression(
-      expr, evaluator, /*suppressEvaluationFailures=*/true);
+  auto exprSet = evaluator->compile(expr);
+  if (!exprSet->exprs()[0]->isConstantExpr()) {
+    return nullptr;
+  }
+  RowVector input(
+      evaluator->pool(), ROW({}, {}), nullptr, 1, std::vector<VectorPtr>{});
+  SelectivityVector rows(1);
+  VectorPtr result;
+  try {
+    evaluator->evaluate(exprSet.get(), rows, input, result);
+  } catch (const VeloxUserError&) {
+    return nullptr;
+  }
+  return result;
 }
 
 template <typename T>
