@@ -344,13 +344,13 @@ TEST_F(DecimalRoundTest, broundExtremeNegativeScales) {
 
   const auto maximum = DecimalUtil::kPowersOfTen[38] - 1;
   testDecimalRound(
-      makeFlatVector<int128_t>({maximum, -maximum}, DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({maximum, -maximum, 0}, DECIMAL(38, 0)),
       std::numeric_limits<int32_t>::min(),
-      makeFlatVector<int128_t>({0, 0}, DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)),
       kBRoundDecimal);
 
   const auto boundaryInput =
-      makeFlatVector<int128_t>({maximum, -maximum}, DECIMAL(38, 0));
+      makeFlatVector<int128_t>({maximum, -maximum, 0}, DECIMAL(38, 0));
   const auto boundaryExpression =
       createDecimalRound(DECIMAL(38, 0), -38, false, kBRoundDecimal);
   VELOX_ASSERT_THROW(
@@ -359,7 +359,7 @@ TEST_F(DecimalRoundTest, broundExtremeNegativeScales) {
   testDecimalRound(
       boundaryInput,
       -39,
-      makeFlatVector<int128_t>({0, 0}, DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)),
       kBRoundDecimal);
 }
 
