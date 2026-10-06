@@ -557,12 +557,14 @@ TEST_F(RPCStateTest, closeRacingRowCompletionLeavesNoCharge) {
         state, i, RPCState::RowLocation{0, i}, std::move(future));
 
     std::atomic<bool> start{false};
-    std::thread completer([&]() {
+    // Moved into an init-capture rather than captured by reference: a
+    // structured binding cannot be captured before Clang 16.
+    std::thread completer([&start, p = std::move(promise)]() mutable {
       while (!start.load(std::memory_order_acquire)) {
       }
       RPCResponse response;
       response.setPayload(makeTextPayload(std::string(4096, 'x')));
-      promise.setValue(std::move(response));
+      p.setValue(std::move(response));
     });
     start.store(true, std::memory_order_release);
     state->close();
@@ -586,12 +588,14 @@ TEST_F(RPCStateTest, closeRacingBatchCompletionLeavesNoCharge) {
     state->addPendingBatch(state, std::move(future), {}, /*admissionUnits=*/1);
 
     std::atomic<bool> start{false};
-    std::thread completer([&]() {
+    // Moved into an init-capture rather than captured by reference: a
+    // structured binding cannot be captured before Clang 16.
+    std::thread completer([&start, p = std::move(promise)]() mutable {
       while (!start.load(std::memory_order_acquire)) {
       }
       std::vector<RPCResponse> responses(1);
       responses[0].setPayload(makeTextPayload(std::string(4096, 'x')));
-      promise.setValue(std::move(responses));
+      p.setValue(std::move(responses));
     });
     start.store(true, std::memory_order_release);
     state->close();
