@@ -16,7 +16,9 @@
 
 #include <faiss/IndexFlat.h>
 #include <fmt/format.h>
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+#include <omp.h>
 
 #include <algorithm>
 #include <array>
@@ -639,6 +641,93 @@ TEST_F(VectorIndexTest, searchRejectsInvalidConfig) {
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       }),
       "HNSW index requires HNSW search options");
+}
+
+TEST_F(VectorIndexTest, searchControlsAndRestoresThreadCount) {
+  constexpr uint32_t kNumVectors{100};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written =
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+  const auto reader = readIndex(written);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+
+  NIMBLE_ASSERT_USER_THROW(
+      reader->search({
+          .queryVectors = query,
+          .numSearchThreads = 0,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      }),
+      "Number of search threads must be positive");
+
+  const auto previousNumThreads = omp_get_max_threads();
+  omp_set_num_threads(2);
+  SCOPE_EXIT {
+    omp_set_num_threads(previousNumThreads);
+  };
+
+  const auto results = reader->search({
+      .queryVectors = query,
+      .numSearchThreads = 1,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  EXPECT_FALSE(results.results(0).empty());
+  EXPECT_EQ(omp_get_max_threads(), 2);
+
+  NIMBLE_ASSERT_USER_THROW(
+      reader->search({
+          .queryVectors = query,
+          .numSearchThreads = 1,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      }),
+      "IVF index requires IVF search options");
+  EXPECT_EQ(omp_get_max_threads(), 2);
+
+  std::barrier concurrentSearches{2};
+  auto observeThreadBudget = [&](int numThreads) {
+    return std::async(std::launch::async, [&, numThreads] {
+      const auto previous = omp_get_max_threads();
+      omp_set_num_threads(numThreads);
+      SCOPE_EXIT {
+        omp_set_num_threads(previous);
+      };
+      concurrentSearches.arrive_and_wait();
+      return omp_get_max_threads();
+    });
+  };
+  auto oneThread = observeThreadBudget(1);
+  auto threeThreads = observeThreadBudget(3);
+  EXPECT_EQ(oneThread.get(), 1);
+  EXPECT_EQ(threeThreads.get(), 3);
+}
+
+TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written =
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+  const auto reader = readIndex(written);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+
+  const auto limited = reader->search({
+      .queryVectors = query,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max(),
+          /*maxCodes=*/1,
+          /*ensureTopKFull=*/false),
+  });
+  EXPECT_LE(limited.totalNumResults(), 1);
+
+  const auto filled = reader->search({
+      .queryVectors = query,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+          std::numeric_limits<uint32_t>::max(),
+          /*maxCodes=*/1,
+          /*ensureTopKFull=*/true),
+  });
+  EXPECT_EQ(filled.totalNumResults(), kNumNeighbors);
 }
 
 TEST_F(VectorIndexTest, searchClampsOversizedSearchParameters) {
