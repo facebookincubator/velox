@@ -131,11 +131,11 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves equality-delete field IDs to column names and types using the
-  // table handle's full-schema field IDs. Falls back to the legacy one-based
-  // ordinal mapping when those IDs are unavailable or incomplete.
-  std::pair<std::vector<std::string>, std::vector<TypePtr>>
-  resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
+  // Resolves equality-delete field IDs to primitive subfields using Iceberg
+  // column metadata. Top-level fields fall back to the table handle's
+  // full-schema field IDs, or to legacy one-based ordinals when unavailable.
+  std::vector<common::Subfield> resolveEqualityFields(
+      const IcebergDeleteFile& deleteFile) const;
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
@@ -151,12 +151,12 @@ class IcebergSplitReader : public FileSplitReader {
   void configureEqualityDeleteColumns();
 
   // Fails if the reader tree for the current split cannot supply one of
-  // 'equalityColumnNames', which would silently match no row to delete.
+  // 'equalityFields', which would silently match no row to delete.
   // 'configureEqualityDeleteColumns' establishes what is checked, so a failure
   // is an internal error. Reads subscripts the reader tree assigns, so call it
   // only once 'nextRowNumber()' has loaded the first stripe or row group.
   void checkEqualityDeleteColumnsAreReadable(
-      const std::vector<std::string>& equalityColumnNames) const;
+      const std::vector<common::Subfield>& equalityFields) const;
 
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
@@ -225,6 +225,9 @@ class IcebergSplitReader : public FileSplitReader {
   /// Readers for equality delete files.
   std::list<std::unique_ptr<EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
+
+  // Resolved equality fields indexed by delete-file position.
+  std::vector<std::vector<common::Subfield>> equalityFieldsByDeleteFile_;
 
   /// Column handles map shared with IcebergDataSource.
   /// Used for accessing column metadata including initial-default values.
