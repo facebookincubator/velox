@@ -198,6 +198,19 @@ class SplitSelector {
  private:
   using Base = ALPRDEncodingBase;
 
+  // Prepares sample parts for reuse across dictionary sizes at one split width.
+  void splitSample(uint8_t rightBitWidth);
+
+  // Populates codes and exceptions from the current high parts and dictionary.
+  // Returns the number of sampled exceptions.
+  uint32_t buildCodesAndExceptions(const Base::Parameters& parameters);
+
+  // Groups equivalent scalar layouts and keeps the four lowest-cost splits.
+  std::vector<SplitCandidate> shortlistCandidates();
+
+  // Estimates a shortlisted split using its configured child policies.
+  uint64_t estimateCandidateSize(const SplitCandidate& candidate);
+
   // Number of values represented by the sample in the target payload.
   const uint32_t numRows_;
   // Samples remain bounded even when the input span contains all values.
@@ -242,17 +255,57 @@ SplitSelector<PhysicalType>::SplitSelector(
 
 template <typename PhysicalType>
 SplitSelection SplitSelector<PhysicalType>::select() {
+  const auto candidates = shortlistCandidates();
+  SplitSelection best;
+  for (const auto& candidate : candidates) {
+    const auto size = estimateCandidateSize(candidate);
+    if (size < best.size ||
+        (size == best.size &&
+         candidate.parameters.rightBitWidth < best.parameters.rightBitWidth)) {
+      best = {candidate.parameters, size};
+    }
+  }
+  return best;
+}
+
+template <typename PhysicalType>
+void SplitSelector<PhysicalType>::splitSample(uint8_t rightBitWidth) {
+  const auto mask = (PhysicalType{1} << rightBitWidth) - 1;
+  for (uint32_t i = 0; i < numSamples_; ++i) {
+    rightParts_[i] = sample_[i] & mask;
+    highParts_[i] = sample_[i] >> rightBitWidth;
+  }
+}
+
+template <typename PhysicalType>
+uint32_t SplitSelector<PhysicalType>::buildCodesAndExceptions(
+    const Base::Parameters& parameters) {
+  uint32_t numSampleExceptions{0};
+  for (uint32_t i = 0; i < numSamples_; ++i) {
+    uint16_t code{0};
+    while (code < parameters.dictionarySize &&
+           parameters.dictionary[code] != highParts_[i]) {
+      ++code;
+    }
+    if (code == parameters.dictionarySize) {
+      exceptionPositions_[numSampleExceptions] = samplePositions_[i];
+      exceptionHighParts_[numSampleExceptions++] = highParts_[i];
+      code = 0;
+    }
+    codes_[i] = code;
+  }
+  return numSampleExceptions;
+}
+
+template <typename PhysicalType>
+std::vector<SplitCandidate> SplitSelector<PhysicalType>::shortlistCandidates() {
   std::vector<SplitCandidate> candidates;
   candidates.reserve(Base::kMaxHighBitWidth * Base::kMaxDictionarySize);
   for (uint8_t highBitWidth = 1; highBitWidth <= Base::kMaxHighBitWidth;
        ++highBitWidth) {
     const uint8_t rightBitWidth = sizeof(PhysicalType) * 8 - highBitWidth;
-    const auto mask = (PhysicalType{1} << rightBitWidth) - 1;
-    for (uint32_t i = 0; i < numSamples_; ++i) {
-      rightParts_[i] = sample_[i] & mask;
-      highParts_[i] = sample_[i] >> rightBitWidth;
-      sortedHighParts_[i] = highParts_[i];
-    }
+    splitSample(rightBitWidth);
+    std::copy_n(highParts_.begin(), numSamples_, sortedHighParts_.begin());
     std::sort(sortedHighParts_.begin(), sortedHighParts_.begin() + numSamples_);
     uint32_t numPrefixes{0};
     for (uint32_t i = 0; i < numSamples_; ++i) {
@@ -276,22 +329,14 @@ SplitSelection SplitSelector<PhysicalType>::select() {
         {rightParts_.data(), numSamples_}, numRows_, options_);
     for (uint8_t dictionarySize = 1; dictionarySize <= maxDictionarySize;
          ++dictionarySize) {
-      uint32_t sampleExceptions{0};
-      for (uint32_t i = 0; i < numSamples_; ++i) {
-        uint16_t code{0};
-        while (code < dictionarySize &&
-               frequencies_[code].first != highParts_[i]) {
-          ++code;
-        }
-        if (code == dictionarySize) {
-          exceptionPositions_[sampleExceptions] = samplePositions_[i];
-          exceptionHighParts_[sampleExceptions++] = highParts_[i];
-          code = 0;
-        }
-        codes_[i] = code;
+      Base::Parameters parameters{
+          .rightBitWidth = rightBitWidth, .dictionarySize = dictionarySize};
+      for (uint8_t i = 0; i < dictionarySize; ++i) {
+        parameters.dictionary[i] = frequencies_[i].first;
       }
+      const auto numSampleExceptions = buildCodesAndExceptions(parameters);
       const uint32_t numExceptions =
-          (uint64_t{sampleExceptions} * numRows_ + numSamples_ - 1) /
+          (uint64_t{numSampleExceptions} * numRows_ + numSamples_ - 1) /
           numSamples_;
       const std::array<uint64_t, 4> childSizes{
           scalarChildSize<uint16_t>(
@@ -300,23 +345,18 @@ SplitSelection SplitSelector<PhysicalType>::select() {
           numExceptions == 0
               ? 0
               : scalarChildSize<uint32_t>(
-                    {exceptionPositions_.data(), sampleExceptions},
+                    {exceptionPositions_.data(), numSampleExceptions},
                     numExceptions,
                     options_),
           numExceptions == 0
               ? 0
               : scalarChildSize<uint16_t>(
-                    {exceptionHighParts_.data(), sampleExceptions},
+                    {exceptionHighParts_.data(), numSampleExceptions},
                     numExceptions,
                     options_),
       };
-      Base::Parameters parameters{
-          .rightBitWidth = rightBitWidth, .dictionarySize = dictionarySize};
-      for (uint8_t i = 0; i < dictionarySize; ++i) {
-        parameters.dictionary[i] = frequencies_[i].first;
-      }
       // Equivalent scalar layouts must not crowd out other split shapes. On
-      // ties keep the narrower right part, as in the final scoring below.
+      // ties keep the narrower right part.
       const auto equivalent = std::find_if(
           candidates.begin(), candidates.end(), [&](const auto& candidate) {
             return candidate.parameters.dictionarySize == dictionarySize &&
@@ -352,68 +392,45 @@ SplitSelection SplitSelector<PhysicalType>::select() {
             ? lhs.parameters.rightBitWidth < rhs.parameters.rightBitWidth
             : lhs.parameters.dictionarySize < rhs.parameters.dictionarySize;
       });
-  SplitSelection best;
-  for (uint32_t candidateIndex = 0; candidateIndex < numCandidates;
-       ++candidateIndex) {
-    const auto& candidate = candidates[candidateIndex];
-    const auto& parameters = candidate.parameters;
-    const auto mask = (PhysicalType{1} << parameters.rightBitWidth) - 1;
-    uint32_t sampleExceptions{0};
-    for (uint32_t i = 0; i < numSamples_; ++i) {
-      rightParts_[i] = sample_[i] & mask;
-      const uint16_t high = sample_[i] >> parameters.rightBitWidth;
-      uint16_t code{0};
-      while (code < parameters.dictionarySize &&
-             parameters.dictionary[code] != high) {
-        ++code;
-      }
-      if (code == parameters.dictionarySize) {
-        exceptionPositions_[sampleExceptions] = samplePositions_[i];
-        exceptionHighParts_[sampleExceptions++] = high;
-        code = 0;
-      }
-      codes_[i] = code;
-    }
-    const auto numExceptions = candidate.numExceptions;
-    const std::array<uint64_t, 4> childSizes{
-        detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-            {codes_.data(), numSamples_},
-            numRows_,
-            options_,
-            *nestedEncodingPolicies_.codes),
-        detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
-            {rightParts_.data(), numSamples_},
-            numRows_,
-            options_,
-            *nestedEncodingPolicies_.rightParts),
-        numExceptions == 0
-            ? 0
-            : detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
-                  {exceptionPositions_.data(), sampleExceptions},
-                  numExceptions,
-                  options_,
-                  *nestedEncodingPolicies_.exceptionPositions),
-        numExceptions == 0
-            ? 0
-            : detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-                  {exceptionHighParts_.data(), sampleExceptions},
-                  numExceptions,
-                  options_,
-                  *nestedEncodingPolicies_.exceptionHighParts),
-    };
-    const auto size = splitSize(
-        parameters.dictionarySize,
-        numRows_,
-        numExceptions,
-        childSizes,
-        options_);
-    if (size < best.size ||
-        (size == best.size &&
-         parameters.rightBitWidth < best.parameters.rightBitWidth)) {
-      best = {parameters, size};
-    }
-  }
-  return best;
+  candidates.resize(numCandidates);
+  return candidates;
+}
+
+template <typename PhysicalType>
+uint64_t SplitSelector<PhysicalType>::estimateCandidateSize(
+    const SplitCandidate& candidate) {
+  const auto& parameters = candidate.parameters;
+  splitSample(parameters.rightBitWidth);
+  const auto numSampleExceptions = buildCodesAndExceptions(parameters);
+  const auto numExceptions = candidate.numExceptions;
+  const std::array<uint64_t, 4> childSizes{
+      detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
+          {codes_.data(), numSamples_},
+          numRows_,
+          options_,
+          *nestedEncodingPolicies_.codes),
+      detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
+          {rightParts_.data(), numSamples_},
+          numRows_,
+          options_,
+          *nestedEncodingPolicies_.rightParts),
+      numExceptions == 0
+          ? 0
+          : detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
+                {exceptionPositions_.data(), numSampleExceptions},
+                numExceptions,
+                options_,
+                *nestedEncodingPolicies_.exceptionPositions),
+      numExceptions == 0
+          ? 0
+          : detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
+                {exceptionHighParts_.data(), numSampleExceptions},
+                numExceptions,
+                options_,
+                *nestedEncodingPolicies_.exceptionHighParts),
+  };
+  return splitSize(
+      parameters.dictionarySize, numRows_, numExceptions, childSizes, options_);
 }
 
 template <typename PhysicalType>

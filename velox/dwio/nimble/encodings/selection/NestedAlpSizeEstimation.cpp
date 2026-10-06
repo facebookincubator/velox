@@ -208,10 +208,11 @@ class SampledCost {
 
  private:
   // Uses the writer's selection-size convention for candidate comparison.
-  // A supplied policy also estimates explicitly bound container children.
-  std::optional<uint64_t> estimateSelectionSize(
-      EncodingType encodingType,
-      EncodingSelectionPolicyBase* policy);
+  // Container heuristics bound recursive training across candidates.
+  std::optional<uint64_t> estimateSelectionSize(EncodingType encodingType);
+
+  // Honors child policies when estimating a policy-selected container.
+  std::optional<uint64_t> estimateBoundSize(EncodingType encodingType);
 
   // Observed values and the full stream length they represent.
   const std::span<const PhysicalType> sampleValues_;
@@ -247,10 +248,7 @@ uint64_t SampledCost<T>::selectedSize() {
     // training, even when the sample contains every input row.
     NIMBLE_CHECK_LE(sampleValues_.size(), numRows_);
     const auto result = manual->select(sampleValues_, [&](EncodingType type) {
-      return estimateSelectionSize(
-          type,
-          (type == EncodingType::ALP || type == EncodingType::ALPRD) ? &policy_
-                                                                     : nullptr);
+      return estimateSelectionSize(type);
     });
     selectedEncoding = result.encodingType;
     if (result.estimatedSize) {
@@ -266,7 +264,7 @@ uint64_t SampledCost<T>::selectedSize() {
       return *result.estimatedSize;
     }
   }
-  const auto size = estimateSelectionSize(selectedEncoding, &policy_);
+  const auto size = estimateBoundSize(selectedEncoding);
   const auto prefixSize =
       EncodingPrefix::serializedSize(numRows_, options_.useVarintRowCount);
   if (!size) {
@@ -280,30 +278,18 @@ uint64_t SampledCost<T>::selectedSize() {
 
 template <typename T>
 std::optional<uint64_t> SampledCost<T>::estimateSelectionSize(
-    EncodingType encodingType,
-    EncodingSelectionPolicyBase* policy) {
+    EncodingType encodingType) {
   if constexpr (isFloatingPointType<T>()) {
     if (encodingType == EncodingType::ALPRD) {
       return ALPRDEncodingBase::estimateSize(
-          sampleValues_, numRows_, options_, policy);
+          sampleValues_, numRows_, options_, &policy_);
     }
     if (encodingType == EncodingType::ALP) {
       if (sampleValues_.empty()) {
         return std::nullopt;
       }
       return ALPEncoding<T>::estimateSizeFromSample(
-          numRows_, sampleValues_, options_, policy);
-    }
-    if (policy != nullptr) {
-      if (auto size = estimateNestedFloatingPointSize<T>(
-              encodingType,
-              sampleValues_,
-              numRows_,
-              statistics_,
-              *policy,
-              options_)) {
-        return size;
-      }
+          numRows_, sampleValues_, options_, &policy_);
     }
   }
   if (numRows_ == sampleValues_.size()) {
@@ -362,6 +348,23 @@ std::optional<uint64_t> SampledCost<T>::estimateSelectionSize(
   return prefixSize +
       (*size - std::min<uint64_t>(*size, samplePrefixSize)) * numRows_ /
       sampleValues_.size();
+}
+
+template <typename T>
+std::optional<uint64_t> SampledCost<T>::estimateBoundSize(
+    EncodingType encodingType) {
+  if constexpr (isFloatingPointType<T>()) {
+    if (auto size = estimateNestedFloatingPointSize<T>(
+            encodingType,
+            sampleValues_,
+            numRows_,
+            statistics_,
+            policy_,
+            options_)) {
+      return size;
+    }
+  }
+  return estimateSelectionSize(encodingType);
 }
 
 } // namespace

@@ -17,9 +17,9 @@
 
 namespace facebook::nimble {
 
-template <typename T>
-/* static */ bool
-ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate(
+namespace detail {
+
+bool hasFloatingPointEncodingCandidate(
     const std::vector<std::pair<EncodingType, float>>& candidates) {
   return std::any_of(
       candidates.begin(), candidates.end(), [](const auto& entry) {
@@ -28,10 +28,7 @@ ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate(
       });
 }
 
-template <typename T>
-/* static */ bool
-ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(
-    const EncodingLayout& layout) {
+bool layoutHasFloatingPointEncoding(const EncodingLayout& layout) {
   if (layout.encodingType() == EncodingType::ALP ||
       layout.encodingType() == EncodingType::ALPRD) {
     return true;
@@ -44,28 +41,7 @@ ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(
   return false;
 }
 
-#define INSTANTIATE_POLICY_METHODS(T)                                  \
-  template bool                                                        \
-  ManualEncodingSelectionPolicy<T>::hasFloatingPointEncodingCandidate( \
-      const std::vector<std::pair<EncodingType, float>>&);             \
-  template bool                                                        \
-  ReplayedEncodingSelectionPolicy<T>::layoutHasFloatingPointEncoding(  \
-      const EncodingLayout&)
-
-INSTANTIATE_POLICY_METHODS(int8_t);
-INSTANTIATE_POLICY_METHODS(uint8_t);
-INSTANTIATE_POLICY_METHODS(int16_t);
-INSTANTIATE_POLICY_METHODS(uint16_t);
-INSTANTIATE_POLICY_METHODS(int32_t);
-INSTANTIATE_POLICY_METHODS(uint32_t);
-INSTANTIATE_POLICY_METHODS(int64_t);
-INSTANTIATE_POLICY_METHODS(uint64_t);
-INSTANTIATE_POLICY_METHODS(float);
-INSTANTIATE_POLICY_METHODS(double);
-INSTANTIATE_POLICY_METHODS(bool);
-INSTANTIATE_POLICY_METHODS(std::string_view);
-
-#undef INSTANTIATE_POLICY_METHODS
+} // namespace detail
 
 /* static */ std::vector<std::pair<EncodingType, float>>
 ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {

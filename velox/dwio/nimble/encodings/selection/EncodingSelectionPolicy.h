@@ -38,6 +38,17 @@ namespace facebook::nimble {
 using EncodingSelectionPolicyCreator =
     std::function<std::unique_ptr<EncodingSelectionPolicyBase>(DataType)>;
 
+namespace detail {
+
+/// Checks whether the candidates contain ALP or ALPRD.
+bool hasFloatingPointEncodingCandidate(
+    const std::vector<std::pair<EncodingType, float>>& candidates);
+
+/// Checks whether a layout tree contains ALP or ALPRD.
+bool layoutHasFloatingPointEncoding(const EncodingLayout& layout);
+
+} // namespace detail
+
 // The following enables encoding selection debug messages. By default, these
 // logs are turned off (with zero overhead). In tests (or in debug sessions), we
 // enable these logs.
@@ -235,9 +246,10 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
   bool hasFloatingPointEncodingCandidates() const override {
-    return hasFloatingPointEncodingCandidate(candidateEncodingReadFactors_) ||
+    return detail::hasFloatingPointEncodingCandidate(
+               candidateEncodingReadFactors_) ||
         (nestedEncodingReadFactorsOverride_ &&
-         hasFloatingPointEncodingCandidate(
+         detail::hasFloatingPointEncodingCandidate(
              *nestedEncodingReadFactorsOverride_));
   }
 
@@ -287,10 +299,6 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
  private:
-  // Checks whether the candidates contain ALP or ALPRD.
-  static bool hasFloatingPointEncodingCandidate(
-      const std::vector<std::pair<EncodingType, float>>& candidates);
-
   // Candidate encodings and their read-cost factors. Encoding selection uses
   // estimatedSize * readFactor as the cost, so a lower factor makes an
   // encoding more likely to be picked. Right now, these represent mostly the
@@ -554,7 +562,7 @@ class ReplayedEncodingSelectionPolicy
   }
 
   bool hasFloatingPointEncodingCandidates() const override {
-    return layoutHasFloatingPointEncoding(encodingLayout_) ||
+    return detail::layoutHasFloatingPointEncoding(encodingLayout_) ||
         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
             ->hasFloatingPointEncodingCandidates();
   }
@@ -583,9 +591,6 @@ class ReplayedEncodingSelectionPolicy
   }
 
  private:
-  // Checks whether a layout tree contains ALP or ALPRD.
-  static bool layoutHasFloatingPointEncoding(const EncodingLayout& layout);
-
   const std::optional<CompressionOptions> compressionOptions_;
   const EncodingSelectionPolicyCreator encodingSelectionPolicyCreator_;
   EncodingLayout encodingLayout_;
