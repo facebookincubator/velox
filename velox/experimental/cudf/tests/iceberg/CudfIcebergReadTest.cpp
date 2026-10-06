@@ -1167,6 +1167,56 @@ TEST_F(CudfIcebergReadTest, allInjectedProjectionWithPositionalDeletes) {
       .assertResults({emptyExpected});
 }
 
+/// Verifies that a `count(*)` with no projected columns counts the footer rows
+/// that survive positional deletes.
+TEST_F(CudfIcebergReadTest, countStarWithPositionalDeletes) {
+  auto data =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  // Positional delete removing file rows 0 and 2.
+  auto deleteFilePath = TempFilePath::create();
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto deleteVector = makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {
+          makeFlatVector<std::string>(
+              2, [&](vector_size_t) { return dataFile->getPath(); }),
+          makeFlatVector<int64_t>({0, 2}),
+      });
+  writeDeleteFile(
+      DeleteFileFormat::DWRF, deleteFilePath->getPath(), {deleteVector});
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(deleteFilePath->getPath()));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(ROW({}, {}))
+                  .dataColumns(data->rowType())
+                  .endTableScan()
+                  .singleAggregation({}, {"count(1)"})
+                  .planNode();
+
+  const auto countRows =
+      [&](const std::vector<IcebergDeleteFile>& deleteFiles) {
+        auto result =
+            AssertQueryBuilder(plan)
+                .splits(makeIcebergSplits(dataFile->getPath(), deleteFiles))
+                .copyResults(pool());
+        return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+      };
+
+  EXPECT_EQ(countRows({}), 5);
+  EXPECT_EQ(countRows({deleteFile}), 3);
+}
+
 /// A filter that does not reference an injected column is pushed with rebased
 /// column indices and is not reapplied after the read. A wrong rebase filters
 /// on the wrong column, so the physical columns hold values that select

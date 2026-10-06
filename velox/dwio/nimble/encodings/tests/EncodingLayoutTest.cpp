@@ -564,15 +564,14 @@ TEST(EncodingLayoutTests, replayDictionaryRejectsEmpty) {
       "Dictionary encoding cannot be used with 0 rows.");
 }
 
-TEST(
-    EncodingLayoutTests,
-    replayMainlyConstantDictionaryRejectsEmptyOtherValues) {
+TEST(EncodingLayoutTests, replayMainlyConstantDictionaryOnAllCommonData) {
   // Replay a MainlyConstant whose OtherValues stream is a nested Dictionary.
-  // When every value equals the common value, OtherValues is empty, so the
-  // nested Dictionary replay has nothing to encode -- the data shape that made
-  // fuzzMainlyConstantDictionaryVector flake. The empty inner Dictionary must
-  // reject with an incompatible-encoding error (propagated out of the
-  // MainlyConstant encode) instead of aborting, so the writer can retry.
+  // When every value equals the common value, OtherValues is empty -- the data
+  // shape that made fuzzMainlyConstantDictionaryVector flake. MainlyConstant
+  // now falls back to ConstantEncoding for that input, so the empty inner
+  // Dictionary is never reached. Previously this surfaced as "Dictionary
+  // encoding cannot be used with 0 rows." and depended on the writer retrying
+  // without the captured layout.
   nimble::EncodingLayout mainlyConstant{
       nimble::EncodingType::MainlyConstant,
       {},
@@ -600,9 +599,13 @@ TEST(
 
   // All values identical -> MainlyConstant OtherValues stream is empty.
   std::vector<uint32_t> data(64, 7);
-  NIMBLE_ASSERT_THROW(
-      encodeAndCapture<uint32_t>(std::move(mainlyConstant), data),
-      "Dictionary encoding cannot be used with 0 rows.");
+  const auto captured =
+      encodeAndCapture<uint32_t>(std::move(mainlyConstant), data);
+
+  // The replay produced a ConstantEncoding, so the captured layout describes
+  // Constant with no children rather than the requested MainlyConstant tree.
+  EXPECT_EQ(captured.encodingType(), nimble::EncodingType::Constant);
+  EXPECT_EQ(captured.childrenCount(), 0);
 }
 
 TEST(EncodingLayoutTests, rle) {
