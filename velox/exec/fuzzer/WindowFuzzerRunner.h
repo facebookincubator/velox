@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -61,6 +62,17 @@ class WindowFuzzerRunner {
     if (aggregationSignatures.empty() && windowSignatures.empty()) {
       LOG(ERROR) << "No function registered.";
       exit(1);
+    }
+
+    if (velox::fuzzer::onlyContainsSkippedFunctions(
+            options.onlyFunctions, options.skipFunctions)) {
+      // Printed to stdout rather than logged: the fuzzer CI jobs run with
+      // --stderrthreshold=2, so a warning would not appear in the job output
+      // and the clean exit would look unexplained.
+      std::cout
+          << "All functions requested by 'only' are skipped. Nothing to fuzz."
+          << std::endl;
+      return 0;
     }
 
     auto filteredAggregationSignatures = velox::fuzzer::filterSignatures(

@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/fuzzer/AggregationFuzzer.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
+#include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -94,6 +96,17 @@ class AggregationFuzzerRunner {
     if (signatures.empty()) {
       LOG(ERROR) << "No aggregate functions registered.";
       exit(1);
+    }
+
+    if (velox::fuzzer::onlyContainsSkippedFunctions(
+            options.onlyFunctions, options.skipFunctions)) {
+      // Printed to stdout rather than logged: the fuzzer CI jobs run with
+      // --stderrthreshold=2, so a warning would not appear in the job output
+      // and the clean exit would look unexplained.
+      std::cout
+          << "All functions requested by 'only' are skipped. Nothing to fuzz."
+          << std::endl;
+      return 0;
     }
 
     auto filteredSignatures = velox::fuzzer::filterSignatures(

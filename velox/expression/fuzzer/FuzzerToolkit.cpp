@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
+
+#include <folly/String.h>
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::fuzzer {
@@ -47,6 +49,55 @@ std::string CallableSignature::toString() const {
   buf.append(") -> ");
   buf.append(returnType->toString());
   return buf;
+}
+
+std::unordered_set<std::string> parseFunctionNames(const std::string& names) {
+  std::unordered_set<std::string> nameSet;
+  if (names.empty()) {
+    return nameSet;
+  }
+
+  std::vector<std::string_view> nameList;
+  folly::split(',', names, nameList);
+  for (const auto& name : nameList) {
+    auto str = folly::trimWhitespace(name).toString();
+    folly::toLowerAscii(str);
+    if (!str.empty()) {
+      nameSet.insert(std::move(str));
+    }
+  }
+  return nameSet;
+}
+
+std::unordered_set<std::string> normalizeFunctionNames(
+    const std::unordered_set<std::string>& names) {
+  std::unordered_set<std::string> nameSet;
+  nameSet.reserve(names.size());
+  for (const auto& name : names) {
+    auto str = folly::trimWhitespace(name).toString();
+    folly::toLowerAscii(str);
+    if (!str.empty()) {
+      nameSet.insert(std::move(str));
+    }
+  }
+  return nameSet;
+}
+
+bool onlyContainsSkippedFunctions(
+    const std::string& onlyFunctions,
+    const std::unordered_set<std::string>& skipFunctions) {
+  const auto onlySet = parseFunctionNames(onlyFunctions);
+  if (onlySet.empty()) {
+    return false;
+  }
+
+  const auto skipSet = normalizeFunctionNames(skipFunctions);
+  for (const auto& name : onlySet) {
+    if (skipSet.count(name) == 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void sortCallableSignatures(std::vector<CallableSignature>& signatures) {
