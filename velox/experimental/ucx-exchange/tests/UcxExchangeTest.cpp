@@ -1731,8 +1731,9 @@ RowVectorPtr makeTaskShuffleBatch(
 
 // Brings a batch the consumer saw into 'pool'. CallbackSinkAdapter declares it
 // does not accept GPU input, so CompileState splices a CudfToVelox in front of
-// the sink and the batches arrive on the host; the CudfVector branch is here so
-// a change in that wiring surfaces as a failed assertion rather than a crash.
+// the sink and the batches arrive on the host. The CudfVector branch only keeps
+// a run without that splice from crashing; the cases that care assert the
+// consumer's pipeline shape, which is what catches it.
 // Either way the result is a fresh vector owned by 'pool': what the consumer
 // hands over is allocated from its operator pools, which report a leak and fail
 // the arbitrator's reservation check if anything still references them when the
@@ -2002,9 +2003,11 @@ void expectGloballyOrdered(const std::vector<RowVectorPtr>& batches) {
 // Starts one 'Values -> PartitionedOutput' producer Task per entry in
 // 'producers', all on 'transportKind', then runs 'consumerPlan' against them,
 // feeding it one split per producer built by 'splitFor'. Returns the
-// consumer's output in host memory. Copies the consumer's stats into
-// 'consumerStats' when it is not null, which is the only way to see the
-// consumer's operator pipeline after its Task is gone.
+// consumer's output in host memory. Starts the consumer with
+// 'numConsumerDrivers' drivers; a MergeExchangeNode pipeline runs
+// single-threaded regardless. Copies the consumer's stats into 'consumerStats'
+// when it is not null, which is the only way to see the consumer's operator
+// pipeline after its Task is gone.
 std::vector<RowVectorPtr> runTaskShuffle(
     const std::string& transportKind,
     const std::vector<TaskShuffleProducer>& producers,
@@ -2013,6 +2016,7 @@ std::vector<RowVectorPtr> runTaskShuffle(
     const std::string& consumerTaskId,
     const std::function<exec::Split(const std::string&)>& splitFor,
     memory::MemoryPool* pool,
+    uint32_t numConsumerDrivers,
     exec::TaskStats* consumerStats) {
   TaskShuffleResults results;
   StartedTasks startedTasks(&results);
@@ -2021,7 +2025,7 @@ std::vector<RowVectorPtr> runTaskShuffle(
   auto consumerTask =
       makeTaskShuffleTask(consumerTaskId, consumerPlan, results.consumer());
   startedTasks.add(consumerTask);
-  consumerTask->start(1);
+  consumerTask->start(numConsumerDrivers);
   for (const auto& producer : producers) {
     consumerTask->addSplit(consumerNodeId, splitFor(producer.first));
   }
@@ -2055,25 +2059,6 @@ std::vector<RowVectorPtr> runTaskShuffle(
   return hostBatches;
 }
 
-// Row shape shared by taskShuffleOverUcx and the merge case below.
-constexpr vector_size_t kTaskShuffleRowsPerBatch = 1'000;
-constexpr int kTaskShuffleNumBatches = 3;
-constexpr int64_t kTaskShuffleTotalRows =
-    static_cast<int64_t>(kTaskShuffleNumBatches) * kTaskShuffleRowsPerBatch;
-
-std::vector<RowVectorPtr> makeTaskShuffleBatches(memory::MemoryPool* pool) {
-  std::vector<RowVectorPtr> batches;
-  batches.reserve(kTaskShuffleNumBatches);
-  for (int i = 0; i < kTaskShuffleNumBatches; ++i) {
-    batches.push_back(makeTaskShuffleBatch(
-        pool,
-        /*firstValue=*/i * kTaskShuffleRowsPerBatch,
-        /*stride=*/1,
-        kTaskShuffleRowsPerBatch));
-  }
-  return batches;
-}
-
 } // namespace
 
 // Runs a two-fragment plan over UCX through real Tasks. The
@@ -2082,9 +2067,9 @@ std::vector<RowVectorPtr> makeTaskShuffleBatches(memory::MemoryPool* pool) {
 // LocalPlanner, so the exchange operator is resolved through
 // ExchangeTransportRegistry and the output buffer through
 // OutputTransportRegistry, both keyed by the transportKind on the plan nodes.
-// It is the non-merge control for mergeExchangeOverUcxIsGloballyOrdered: if
-// both fail the Task-level UCX path is at fault, if only the merge case fails
-// the merge expansion is.
+// It is the non-merge control for mergeExchangeOverUcxIsGloballyOrdered: the
+// producers are the same, so if only the merge case fails, the merge expansion
+// is at fault.
 TEST_F(UcxExchangeFocusedTest, taskShuffleOverUcx) {
   registerSerdes();
   const auto taskPrefix = getUniqueTaskPrefix();
@@ -2100,8 +2085,17 @@ TEST_F(UcxExchangeFocusedTest, taskShuffleOverUcx) {
   // CompileState splices a CudfFromVelox between Values and it. Staging the
   // batches on the device first makes that conversion operator call childAt()
   // on a childless CudfVector and the producer task dies with "Trying to access
-  // non-existing child in RowVector".
-  const auto expected = makeTaskShuffleBatches(pool_.get());
+  // non-existing child in RowVector". The producers are the same as in
+  // mergeExchangeOverUcxIsGloballyOrdered, so that the two cases differ only in
+  // plain versus merge exchange.
+  constexpr vector_size_t kNumRowsPerProducer = 512;
+  constexpr int kNumProducers = 2;
+  const auto producers = makeInterleavedProducers(
+      pool_.get(),
+      taskPrefix + "ucxProducer",
+      kNumProducers,
+      kNumRowsPerProducer);
+  const auto expected = allBatchesOf(producers);
 
   core::PlanNodeId exchangeNodeId;
   auto consumerPlan = exec::test::PlanBuilder()
@@ -2112,18 +2106,36 @@ TEST_F(UcxExchangeFocusedTest, taskShuffleOverUcx) {
                           .capturePlanNodeId(exchangeNodeId)
                           .planFragment();
 
+  // Two consumer drivers share the one UcxExchangeClient the factory builds
+  // for them, which is what its numberOfConsumers forwarding is for.
+  exec::TaskStats consumerStats;
   auto actual = runTaskShuffle(
       std::string{core::TransportKind::kUcx},
-      {{taskPrefix + "ucxProducer", expected}},
+      producers,
       consumerPlan,
       exchangeNodeId,
       taskPrefix + "ucxConsumer",
       [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
       pool_.get(),
-      /*consumerStats=*/nullptr);
+      /*numConsumerDrivers=*/2,
+      &consumerStats);
 
-  EXPECT_EQ(totalRows(actual), kTaskShuffleTotalRows);
+  EXPECT_EQ(totalRows(actual), kNumProducers * kNumRowsPerProducer);
   EXPECT_TRUE(exec::test::assertEqualResults(expected, actual));
+
+  // The cuDF pass keeps the registry-built UcxExchange as a GPU source and
+  // converts its output for the CPU sink. A missing adapter would leave the
+  // CudfToVelox out, and CPU fallback would hide it from the row checks above.
+  EXPECT_EQ(consumerStats.numTotalDrivers, 2);
+  ASSERT_EQ(consumerStats.pipelineStats.size(), 1);
+  EXPECT_THAT(
+      operatorTypesOf(consumerStats.pipelineStats[0]),
+      testing::ElementsAre("UcxExchange", "CudfToVelox", "CallbackSink"));
+  // A plain exchange is its node's only operator and counts both sides; only
+  // the merge expansion narrows it.
+  const auto boundaries = planNodeBoundariesOf(consumerStats.pipelineStats[0]);
+  ASSERT_FALSE(boundaries.empty());
+  EXPECT_EQ(boundaries[0], core::PlanNode::Boundary::kBoth);
 }
 
 // A fragment whose output layout is empty ships rows that carry no columns --
@@ -2278,6 +2290,7 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
       taskPrefix + "mergeConsumer",
       [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
       pool_.get(),
+      /*numConsumerDrivers=*/1,
       &consumerStats);
 
   ASSERT_EQ(totalRows(actual), kNumProducers * kNumRowsPerProducer);
