@@ -91,7 +91,8 @@ broundIntegral(T value, int32_t scale, bool ansiEnabled, T& result) {
 }
 
 template <typename T>
-Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
+Status
+broundFloatingPointImpl(T value, int32_t scale, double factor, T& result) {
   static_assert(std::is_floating_point_v<T>);
 
   // Spark rounds a decimal representation produced by the Java runtime.
@@ -107,7 +108,6 @@ Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
   }
 
   if (scale >= 0) {
-    const double factor = std::pow(10.0, static_cast<double>(scale));
     // Preserve the input when the power-of-ten scale is not representable.
     // Native scale-round-unscale cannot define a reliable HALF_EVEN result
     // without a finite factor.
@@ -122,8 +122,6 @@ Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
     }
     result = static_cast<T>(std::nearbyint(scaled) / factor);
   } else {
-    const double factor =
-        std::pow(10.0, static_cast<double>(-static_cast<int64_t>(scale)));
     if (!std::isfinite(factor)) {
       result = 0;
       return Status::OK();
@@ -153,8 +151,18 @@ struct BRoundFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const T* /*value*/,
-      const int32_t* /*scale*/) {
+      const int32_t* scale) {
     ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+    if constexpr (std::is_floating_point_v<T>) {
+      if (scale != nullptr) {
+        floatingPointScale_ = *scale;
+        const int64_t absoluteScale = floatingPointScale_ < 0
+            ? -static_cast<int64_t>(floatingPointScale_)
+            : floatingPointScale_;
+        floatingPointFactor_ =
+            std::pow(10.0, static_cast<double>(absoluteScale));
+      }
+    }
   }
 
   template <typename T>
@@ -166,7 +174,9 @@ struct BRoundFunction {
   FOLLY_ALWAYS_INLINE Status
   call(T& result, const T value, const int32_t scale) {
     if constexpr (std::is_floating_point_v<T>) {
-      return broundFloatingPointImpl(value, scale, result);
+      VELOX_DCHECK_EQ(scale, floatingPointScale_);
+      return broundFloatingPointImpl(
+          value, scale, floatingPointFactor_, result);
     } else {
       return broundIntegral(value, scale, ansiEnabled_, result);
     }
@@ -174,6 +184,8 @@ struct BRoundFunction {
 
  private:
   bool ansiEnabled_{false};
+  int32_t floatingPointScale_{0};
+  double floatingPointFactor_{1};
 };
 
 } // namespace
