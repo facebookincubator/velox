@@ -373,7 +373,8 @@ TEST_F(StringTest, right) {
 }
 
 TEST_F(StringTest, rightMalformedUtf8) {
-  const auto right = [&](const std::string& str, int32_t length) {
+  const auto right = [&](const std::optional<std::string>& str,
+                         const std::optional<int32_t>& length) {
     return evaluateOnce<std::string>("right(c0, c1)", str, length);
   };
 
