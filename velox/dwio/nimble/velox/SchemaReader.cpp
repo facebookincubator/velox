@@ -356,6 +356,12 @@ HybridFlatMapType::HybridFlatMapType(
       "Hybrid FlatMap key kind is unsupported: {}.",
       keyScalarKind_);
   validateHybridFlatMapGroups(groups_);
+  for (const auto& group : groups_) {
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      defaultGroupKeys_.reserve(group.groupKeys.size());
+      defaultGroupKeys_.insert(group.groupKeys.begin(), group.groupKeys.end());
+    }
+  }
 }
 
 const StreamDescriptor& HybridFlatMapType::nullsDescriptor() const {
@@ -389,8 +395,7 @@ std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
   for (size_t i = 0; i < groups_.size(); ++i) {
     const auto& group = groups_[i];
     const bool found = HybridFlatMap::isDefaultGroup(group.groupId)
-        ? std::find(group.groupKeys.begin(), group.groupKeys.end(), key) !=
-            group.groupKeys.end()
+        ? defaultGroupKeys_.contains(key)
         : std::binary_search(
               group.groupKeys.begin(), group.groupKeys.end(), key);
     if (found) {
