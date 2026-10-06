@@ -106,21 +106,6 @@ class FileConfig {
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
 
-  // TODO: Deprecate this gate and pack unconditionally once the shared
-  // allocation has run in production for a while.
-  VELOX_HIVE_CONFIG_LEGACY(
-      kDirectBufferedInputSharedAllocationSession,
-      kDirectBufferedInputSharedAllocation,
-      directBufferedInputSharedAllocation,
-      "reader.direct_buffered_input_shared_allocation",
-      "reader.direct-buffered-input-shared-allocation",
-      bool,
-      false,
-      "Pack a coalesced direct read's buffers into a single shared allocation "
-      "instead of one page-rounded allocation per request. Opt-in: off by "
-      "default, enable per cluster to roll out. Affects which bytes are "
-      "allocated, never which bytes are read.")
-
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleDictionaryAwareReadsSession,
       kNimbleDictionaryAwareReads,

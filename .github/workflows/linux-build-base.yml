@@ -25,8 +25,8 @@ on:
       is-full-mode:
         description: >
           When true, run the full set of build jobs (adapters, ubuntu-debug,
-          fedora-debug, cudf-tests). When false, only adpaters job runs and
-          uses cmake-targets to do a selective build.
+          fedora-debug, cudf-tests). When false, only adapters and
+          ubuntu-debug run, and both use cmake-targets to build selectively.
           Default true preserves prior behavior for callers that do not opt
           into selective builds.
         default: true
@@ -34,9 +34,9 @@ on:
         type: boolean
       cmake-targets:
         description: >
-          Space-separated cmake target list for the adapters job's selective
-          build. Empty = full build, non-empty = selective
-          (builds only the listed targets).
+          Space-separated cmake target list for the selective builds in the
+          adapters and ubuntu-debug jobs. Empty = full build, non-empty =
+          selective (builds only the listed targets).
         default: ''
         required: false
         type: string
@@ -95,6 +95,16 @@ jobs:
           else
             echo "run_clang_tidy=false" >> "$GITHUB_OUTPUT"
           fi
+
+  # Does no work. It runs only in full runs, so rerun-linux-build checks
+  # it to tell whether a run was full. That action finds it by the name
+  # "Full build mode", so rename both together.
+  full-mode-marker:
+    if: ${{ inputs.is-full-mode }}
+    runs-on: 4-core-ubuntu
+    name: Full build mode
+    steps:
+      - run: echo "This run is a full build."
 
   adapters:
     name: Linux release with adapters
@@ -517,26 +527,15 @@ jobs:
   ubuntu-debug:
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
-    # Full-mode only — selective coverage pre-approval comes from the
-    # adapters job. Ubuntu debug is part of the post-approval / on-push
-    # full-coverage suite (catches debug-only assertions and validates
-    # against system Ubuntu deps).
-    #
-    # CONTRACT: the job display name below ("Ubuntu debug with system
-    # dependencies") is matched by .github/actions/rerun-linux-build/
-    # action.yml's `find_run` step via the regex
-    # `^Build with GCC / Ubuntu debug` to detect whether an existing
-    # Linux Build run is already in full mode (skipped → selective;
-    # anything else → full). If you rename this job, update that regex
-    # — otherwise the rerun-skip optimization will silently break and
-    # the action will fall back to "always rerun", wasting CI minutes
-    # on duplicate full builds triggered by approvals / /full-build
-    # comments on PRs whose builds are already in full mode.
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    # Runs in both modes. It is the only Linux debug build, and
+    # DEBUG_ONLY_TEST tests run only in debug builds.
+    if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
+      # Targets to build. Empty means build everything.
+      BUILD_TARGETS: ${{ inputs.cmake-targets }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
@@ -662,7 +661,35 @@ jobs:
              export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
-          make debug 2>&1 | tee /tmp/build-output.log
+
+          # Configure and build in two steps, so the targets can be
+          # checked in between.
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug 2>&1 \
+            | tee /tmp/build-output.log
+
+          targets=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            # The plan can name targets this build does not have, such as
+            # the cloud adapter tests. Ninja fails on any unknown target,
+            # so drop them.
+            ninja -C _build/debug -t targets all \
+              | sed -n 's/^\([A-Za-z0-9_+.-]*\): phony$/\1/p' \
+              | sort -u > available-targets.txt
+            read -ra planned <<< "$BUILD_TARGETS"
+            for target in "${planned[@]}"; do
+              if grep -qxF "$target" available-targets.txt; then
+                targets+=("$target")
+              fi
+            done
+            echo "plan targets : $BUILD_TARGETS"
+            echo "building     : ${targets[*]:-<none matched, building everything>}"
+            # The test step reads this to run only what was built.
+            echo "BUILD_TARGETS=${targets[*]}" >> "$GITHUB_ENV"
+          fi
+
+          # Empty TARGETS builds everything.
+          make build BUILD_DIR=debug TARGETS="${targets[*]}" 2>&1 \
+            | tee -a /tmp/build-output.log
 
       - name: Extract build errors
         id: build-errors
@@ -696,7 +723,20 @@ jobs:
         run: |
           ulimit -n 65536
           cd _build/debug
-          ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+          # In selective mode, run only the tests that were built. Allow
+          # zero tests there, since a change may build none.
+          CTEST_FILTER=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            regex_targets="$(
+              printf '%s\n' $BUILD_TARGETS |
+                sed -e 's/[][(){}.^$*+?|\\]/\\&/g' |
+                paste -sd '|' -
+            )"
+            CTEST_FILTER=(-R "^(${regex_targets})$")
+          else
+            CTEST_FILTER=(--no-tests=error)
+          fi
+          ctest -j 24 --timeout 1800 --output-on-failure "${CTEST_FILTER[@]}" \
             --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
 
       - name: Retry Flaky Tests
@@ -717,10 +757,7 @@ jobs:
           fi
 
   ubuntu-debug-build-status:
-    # Skip when ubuntu-debug is skipped (selective mode) — otherwise
-    # this would post a misleading "passed" status for a job that
-    # didn't run.
-    if: ${{ inputs.is-full-mode && always() }}
+    if: always()
     needs: ubuntu-debug
     runs-on: 4-core-ubuntu
     name: "BUILD: Ubuntu debug with system dependencies"
@@ -746,7 +783,7 @@ jobs:
           if-no-files-found: ignore
 
   ubuntu-debug-test-status:
-    if: ${{ inputs.is-full-mode && always() }}
+    if: always()
     needs: ubuntu-debug
     runs-on: 4-core-ubuntu
     name: "TEST: Ubuntu debug with system dependencies"
