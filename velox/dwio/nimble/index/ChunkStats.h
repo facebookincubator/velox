@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 
 namespace facebook::nimble::index {
@@ -39,7 +40,15 @@ class ChunkStats {
   /// @param indexSection The section containing the serialized root chunk stats
   /// @return A unique pointer to a newly created ChunkStats, or nullptr if the
   ///         section contains no stripe indexes
-  static std::unique_ptr<ChunkStats> create(Section indexSection);
+  static std::unique_ptr<ChunkStats> create(
+      ChunkStatsVersion version,
+      Section indexSection);
+
+  /// Returns true when this file's chunk statistics expose the per-chunk
+  /// metadata required for filter pruning.
+  bool supportsChunkStatsPruning() const {
+    return version_ == ChunkStatsVersion::kV2;
+  }
 
   /// Returns the number of stripe groups indexed.
   uint32_t numGroups() const {
@@ -54,9 +63,11 @@ class ChunkStats {
 
  private:
   explicit ChunkStats(
+      ChunkStatsVersion version,
       Section indexSection,
       std::vector<MetadataSection> groupSections);
 
+  const ChunkStatsVersion version_;
   const Section indexSection_;
   const std::vector<MetadataSection> groupSections_;
 };

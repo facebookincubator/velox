@@ -920,7 +920,7 @@ class ExprSet {
   /// multiple times, the statistics will be aggregated across all calls.
   /// Statistics will be missing for functions and special forms that didn't get
   /// evaluated. If 'excludeSpecialForm' is true, special forms are excluded.
-  std::unordered_map<std::string, exec::ExprStats> stats(
+  folly::F14FastMap<std::string, exec::ExprStats> stats(
       bool excludeSpecialForm = false) const;
 
  protected:
@@ -1027,7 +1027,7 @@ std::string printExprWithStats(const ExprSet& exprSet);
 struct ExprSetCompletionEvent {
   /// Aggregated runtime stats keyed on expression name (e.g. built-in
   /// expression like and, or, switch or a function name).
-  std::unordered_map<std::string, exec::ExprStats> stats;
+  folly::F14FastMap<std::string, exec::ExprStats> stats;
   /// List containing sql representation of each top level expression in ExprSet
   std::vector<std::string> sqls;
   // Query id corresponding query

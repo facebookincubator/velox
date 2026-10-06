@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <utility>
 
 #include <folly/executors/InlineExecutor.h>
@@ -54,7 +55,54 @@ void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
     promise.setValue();
   }
 }
+
+// Completion callbacks can safely classify protocol-level overload errors.
+// Function-specific payload interpretation remains on the driver thread.
+bool isHardOverload(const RPCResponse& response) {
+  return response.hasError() &&
+      velox::rpc::errorCategory(response.errorKind()) ==
+      velox::rpc::RPCErrorCategory::kOverload;
+}
+
+bool containsHardOverload(const std::vector<RPCResponse>& responses) {
+  return std::any_of(responses.begin(), responses.end(), isHardOverload);
+}
 } // namespace
+
+RPCState::PayloadMemoryCharge::PayloadMemoryCharge(
+    std::shared_ptr<memory::MemoryPool> pool,
+    int64_t bytes)
+    : pool_(std::move(pool)), bytes_(bytes) {
+  VELOX_CHECK_GT(bytes_, 0);
+  VELOX_CHECK_NOT_NULL(pool_);
+  pool_->reportExternalAllocation(bytes_);
+}
+
+RPCState::PayloadMemoryCharge::PayloadMemoryCharge(
+    PayloadMemoryCharge&& other) noexcept
+    : pool_(std::move(other.pool_)), bytes_(std::exchange(other.bytes_, 0)) {}
+
+RPCState::PayloadMemoryCharge& RPCState::PayloadMemoryCharge::operator=(
+    PayloadMemoryCharge&& other) noexcept {
+  if (this != &other) {
+    release();
+    pool_ = std::move(other.pool_);
+    bytes_ = std::exchange(other.bytes_, 0);
+  }
+  return *this;
+}
+
+RPCState::PayloadMemoryCharge::~PayloadMemoryCharge() {
+  release();
+}
+
+void RPCState::PayloadMemoryCharge::release() noexcept {
+  if (pool_ != nullptr && bytes_ > 0) {
+    pool_->reportExternalFree(bytes_);
+  }
+  pool_.reset();
+  bytes_ = 0;
+}
 
 // ===== Configuration =====
 // These setters are called during RPCOperator construction, before any
@@ -137,6 +185,50 @@ void RPCState::releaseAllInputBatches() {
                     << inputBatches_.size() << " input batches";
 }
 
+void RPCState::close() {
+  std::vector<ContinuePromise> waiters;
+  std::vector<InputBatchRef> inputBatches;
+  std::deque<ReadyRow> readyRows;
+  std::deque<PendingBatch> pendingBatches;
+  folly::F14FastMap<int64_t, std::shared_ptr<RPCRateLimiter::AdmissionLease>>
+      pendingRowAdmissionLeases;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return;
+    }
+    closed_ = true;
+    inputBatches = std::move(inputBatches_);
+    readyRows = std::move(readyRows_);
+    pendingBatches = std::move(pendingBatches_);
+    pendingRowAdmissionLeases = std::move(pendingRowAdmissionLeases_);
+    waiters = takeWaitersLocked();
+    pool_.reset();
+  }
+  inputBatches.clear();
+  readyRows.clear();
+  pendingBatches.clear();
+  pendingRowAdmissionLeases.clear();
+  fulfillWaiters(waiters);
+}
+
+RPCState::PayloadMemoryCharge RPCState::chargePayloadBytes(int64_t bytes) {
+  if (bytes == 0) {
+    return {};
+  }
+  std::shared_ptr<memory::MemoryPool> pool;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return {};
+    }
+    VELOX_CHECK_GT(bytes, 0);
+    pool = pool_;
+  }
+  VELOX_CHECK_NOT_NULL(pool);
+  return PayloadMemoryCharge{std::move(pool), bytes};
+}
+
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK_LT(
@@ -168,10 +260,14 @@ void RPCState::addPendingRow(
     std::shared_ptr<RPCState> selfPtr,
     int64_t rowId,
     RowLocation location,
-    folly::SemiFuture<RPCResponse> future) {
+    folly::SemiFuture<RPCResponse> future,
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease) {
   auto dispatchTimeNs = steadyNowNs();
   {
     std::lock_guard<std::mutex> l(mutex_);
+    const auto [_, inserted] = pendingRowAdmissionLeases_.try_emplace(
+        rowId, std::move(admissionLease));
+    VELOX_CHECK(inserted, "Duplicate pending RPC row ID: {}", rowId);
     inFlight_++;
     peakInFlight_ = std::max(peakInFlight_, inFlight_);
     RPC_STATE_VLOG(2) << "addPendingRow: rowId=" << rowId
@@ -182,43 +278,58 @@ void RPCState::addPendingRow(
   // timestamp is captured so completion derives the round-trip latency for the
   // gradient window. We capture selfPtr to keep this RPCState alive until the
   // callback fires.
-  auto stateForError = selfPtr;
-  folly::futures::detachOn(
-      folly::getKeepAliveToken(folly::InlineExecutor::instance()),
-      std::move(future)
-          .deferValue(
-              [state = std::move(selfPtr), rowId, location, dispatchTimeNs](
-                  RPCResponse response) mutable {
-                const auto rttNs = steadyNowNs() - dispatchTimeNs;
-                state->completeRow(rowId, location, std::move(response), rttNs);
-              })
-          .deferError(
-              [state = std::move(stateForError),
-               rowId,
-               location,
-               dispatchTimeNs](const folly::exception_wrapper& ew) mutable {
-                const auto rttNs = steadyNowNs() - dispatchTimeNs;
-                RPCResponse errorResponse;
-                errorResponse.rowId = rowId;
-                auto kind = velox::rpc::RPCErrorKind::kInternalError;
-                try {
-                  kind = errorKindFor(ew);
-                  errorResponse.setError(kind, ew.what().toStdString());
-                } catch (...) {
-                  // This detached continuation must always reach completeRow().
-                  // Keep the fallback short enough for the string's inline
-                  // buffer.
-                  errorResponse.setError(kind, "rpc_failure");
-                }
-                state->completeRow(
-                    rowId, location, std::move(errorResponse), rttNs);
-                try {
-                  RPC_STATE_LOG(ERROR)
-                      << "RPC failed for rowId=" << rowId << ": " << ew.what();
-                } catch (...) {
-                  // Logging is best-effort after the row has been retired.
-                }
-              }));
+  try {
+    auto stateForError = selfPtr;
+    folly::futures::detachOn(
+        folly::getKeepAliveToken(folly::InlineExecutor::instance()),
+        std::move(future)
+            .deferValue([state = std::move(selfPtr),
+                         rowId,
+                         location,
+                         dispatchTimeNs](RPCResponse response) mutable {
+              const auto rttNs = steadyNowNs() - dispatchTimeNs;
+              state->completeRow(rowId, location, std::move(response), rttNs);
+            })
+            .deferError(
+                [state = std::move(stateForError),
+                 rowId,
+                 location,
+                 dispatchTimeNs](const folly::exception_wrapper& ew) mutable {
+                  const auto rttNs = steadyNowNs() - dispatchTimeNs;
+                  RPCResponse errorResponse;
+                  errorResponse.rowId = rowId;
+                  auto kind = velox::rpc::RPCErrorKind::kInternalError;
+                  try {
+                    kind = errorKindFor(ew);
+                    errorResponse.setError(kind, ew.what().toStdString());
+                  } catch (...) {
+                    // This detached continuation must always reach
+                    // completeRow(). Keep the fallback short enough for the
+                    // string's inline buffer.
+                    errorResponse.setError(kind, "rpc_failure");
+                  }
+                  state->completeRow(
+                      rowId, location, std::move(errorResponse), rttNs);
+                  try {
+                    RPC_STATE_LOG(ERROR) << "RPC failed for rowId=" << rowId
+                                         << ": " << ew.what();
+                  } catch (...) {
+                    // Logging is best-effort after the row has been retired.
+                  }
+                }));
+  } catch (...) {
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      const auto it = pendingRowAdmissionLeases_.find(rowId);
+      if (it != pendingRowAdmissionLeases_.end()) {
+        lease = std::move(it->second);
+        pendingRowAdmissionLeases_.erase(it);
+      }
+      --inFlight_;
+    }
+    throw;
+  }
 }
 
 void RPCState::completeRow(
@@ -227,26 +338,60 @@ void RPCState::completeRow(
     RPCResponse response,
     int64_t rttNs) {
   std::vector<ContinuePromise> waiters;
+  ReadyRow readyRow{
+      .rowId = rowId,
+      .location = location,
+      .charge = {},
+      .response = std::move(response),
+      .sharedOverloadHandled = false,
+      .admissionEpoch = std::nullopt,
+      .rttNs = rttNs,
+  };
+  std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+  bool missingLease = false;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    // Decrement before queueing so an allocation failure becomes a terminally
-    // observable lost completion. Catching bad_alloc below also lets execution
-    // reach waiter handoff, where the driver can report droppedRows_ instead of
+    const auto it = pendingRowAdmissionLeases_.find(rowId);
+    if (it != pendingRowAdmissionLeases_.end()) {
+      lease = std::move(it->second);
+      pendingRowAdmissionLeases_.erase(it);
+    } else {
+      missingLease = !closed_;
+    }
+  }
+  if (lease != nullptr) {
+    const auto completion =
+        lease->completeAndRelease(isHardOverload(readyRow.response));
+    readyRow.sharedOverloadHandled = completion.sharedOverloadHandled;
+    readyRow.admissionEpoch = completion.overloadEpoch;
+  }
+
+  bool accountingFailed = false;
+  try {
+    readyRow.charge = chargePayloadBytes(readyRow.response.retainedBytes());
+  } catch (...) {
+    accountingFailed = true;
+  }
+
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (missingLease) {
+      accountingFailed = true;
+      RPC_STATE_LOG(ERROR) << "Missing admission lease for rowId=" << rowId;
+    }
+    // A response that cannot be accounted or queued is terminally dropped.
+    // Retire its in-flight slot before recording the drop so the awakened
+    // driver can reach the finish check and report the query error instead of
     // remaining parked.
     inFlight_--;
     ++numCompletionsSignaled_;
-    try {
-      readyRows_.push_back(
-          ReadyRow{
-              .rowId = rowId,
-              .location = location,
-              .response = std::move(response),
-              .rttNs = rttNs});
-    } catch (const std::bad_alloc&) {
-      // Nothing here may allocate: this already runs under an allocation
-      // failure, on a detached continuation. Bump a counter and leave the
-      // reporting to the driver thread -- logging here could throw again and
-      // strand the waiters woken below.
+    if (!closed_ && !accountingFailed) {
+      try {
+        readyRows_.push_back(std::move(readyRow));
+      } catch (...) {
+        ++droppedRows_;
+      }
+    } else if (!closed_ && accountingFailed) {
       ++droppedRows_;
     }
 
@@ -290,7 +435,13 @@ RPCState::ClaimResult RPCState::tryClaimOrWait(
     return ClaimResult::kFinished;
   }
 
-  // Step 3: Must wait — create a promise under the same lock to prevent
+  // Step 3: No local completion can wake this driver. The caller must wait on
+  // shared backend admission if it still has undispatched rows.
+  if (inFlight_ == 0) {
+    return ClaimResult::kIdle;
+  }
+
+  // Step 4: Must wait — create a promise under the same lock to prevent
   // TOCTOU races (no completion can slip between the check and wait).
   RPC_STATE_VLOG(2) << "tryClaimOrWait: must wait (inFlight=" << inFlight_
                     << ")";
@@ -330,7 +481,8 @@ void RPCState::addPendingBatch(
     std::shared_ptr<RPCState> selfPtr,
     folly::SemiFuture<std::vector<RPCResponse>> future,
     std::vector<RowLocation> rowLocations,
-    int64_t admissionUnits) {
+    int64_t admissionUnits,
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease) {
   // Build the callback chain OUTSIDE the lock. .via(InlineExecutor) may drive
   // the chain inline if the future is already resolved, and the
   // thenValue/thenError callbacks acquire mutex_ to notify waiters — holding
@@ -348,14 +500,32 @@ void RPCState::addPendingBatch(
   // time, so the poll path measures dispatch->completion RTT rather than
   // dispatch->poll (which would fold in-operator queueing into the sample).
   auto completionTimeNs = std::make_shared<std::atomic<int64_t>>(0);
+  std::weak_ptr<RPCRateLimiter::AdmissionLease> weakAdmissionLease =
+      admissionLease;
   auto callbackFuture =
       std::move(future)
           .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
-          .thenValue([state = selfPtr,
-                      completionTimeNs](std::vector<RPCResponse> responses) {
-            completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
-            RPC_STATE_VLOG(1)
-                << "Batch completed with " << responses.size() << " responses";
+          .thenValue([state = selfPtr, completionTimeNs, weakAdmissionLease](
+                         std::vector<RPCResponse> responses) {
+            const auto completedAtNs = steadyNowNs();
+            CompletedBatch completed{
+                .charge = {},
+                .responses = std::move(responses),
+                .admissionEpoch = std::nullopt};
+            if (auto lease = weakAdmissionLease.lock()) {
+              const auto completion = lease->completeAndRelease(
+                  containsHardOverload(completed.responses));
+              completed.sharedOverloadHandled =
+                  completion.sharedOverloadHandled;
+              completed.admissionEpoch = completion.overloadEpoch;
+            }
+            const auto retainedBytes =
+                velox::rpc::totalResponseRetainedBytes(completed.responses);
+            RPC_STATE_VLOG(1) << "Batch completed with "
+                              << completed.responses.size() << " responses";
+            completed.charge = state->chargePayloadBytes(retainedBytes);
+            completionTimeNs->store(completedAtNs, std::memory_order_relaxed);
+
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
@@ -363,10 +533,13 @@ void RPCState::addPendingBatch(
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
-            return responses;
+            return completed;
           })
-          .thenError([state = selfPtr,
-                      completionTimeNs](folly::exception_wrapper ew) {
+          .thenError([state = selfPtr, completionTimeNs, weakAdmissionLease](
+                         folly::exception_wrapper ew) {
+            if (auto lease = weakAdmissionLease.lock()) {
+              lease->completeAndRelease(false);
+            }
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             std::vector<ContinuePromise> waiters;
             {
@@ -379,8 +552,7 @@ void RPCState::addPendingBatch(
             // the wake leaves every blocked driver parked forever.
             fulfillWaiters(waiters);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
-            return folly::makeSemiFuture<std::vector<RPCResponse>>(
-                std::move(ew));
+            return folly::makeSemiFuture<CompletedBatch>(std::move(ew));
           })
           .semi();
 
@@ -394,6 +566,7 @@ void RPCState::addPendingBatch(
             .batchId = batchId,
             .future = std::move(callbackFuture),
             .admissionUnits = admissionUnits,
+            .admissionLease = std::move(admissionLease),
             .rowLocations = std::move(rowLocations),
             .dispatchTimeNs = dispatchTimeNs,
             .completionTimeNs = std::move(completionTimeNs)});
@@ -418,9 +591,12 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
   // drops — never a torn read.
   result.rttNs = it->completionTimeNs->load(std::memory_order_relaxed) -
       it->dispatchTimeNs;
-
   try {
-    result.responses = std::move(it->future).get();
+    auto completed = std::move(it->future).get();
+    result.charge = std::move(completed.charge);
+    result.responses = std::move(completed.responses);
+    result.sharedOverloadHandled = completed.sharedOverloadHandled;
+    result.admissionEpoch = completed.admissionEpoch;
     RPC_STATE_VLOG(1) << "extractReadyBatchLocked: batchId=" << result.batchId
                       << " ready with " << result.responses.size()
                       << " responses";

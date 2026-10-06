@@ -186,8 +186,31 @@ jobs:
           response=$(gh_api \
             "/repos/${{ github.repository }}/actions/workflows/dependency-graph.yml/runs?branch=main&status=success&per_page=5" \
             2>/dev/null || true)
-          run_id=$(echo "$response" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)
-          head_sha=$(echo "$response" | jq -r '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
+          # This listing has come back stale, putting a months-old run at
+          # position zero whose artifact had long expired. Sort by date
+          # rather than trusting the order, and take the newest run that
+          # still has the artifact rather than assuming the newest does.
+          run_id=
+          head_sha=
+          while read -r candidate sha; do
+            [[ -z "$candidate" ]] && continue
+            kept=$(gh_api \
+              "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts" \
+              --jq '[.artifacts[]
+                     | select(.name == "dependency-graph" and .expired == false)
+                    ] | length' 2>/dev/null || true)
+            # gh prints its error body to stdout on a failed call, so
+            # only trust a clean number here.
+            if [[ "$kept" =~ ^[0-9]+$ ]] && [[ "$kept" -gt 0 ]]; then
+              run_id=$candidate
+              head_sha=$sha
+              break
+            fi
+            echo "skipping run $candidate: no unexpired dependency-graph artifact"
+          done < <(echo "$response" |
+            jq -r '.workflow_runs
+                   | sort_by(.created_at) | reverse
+                   | .[] | "\(.id) \(.head_sha)"' 2>/dev/null || true)
           if [[ -z "$run_id" ]]; then
             echo "::warning::No cached graph from main; falling back to full build."
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -201,6 +224,10 @@ jobs:
           fi
 
       - name: Download cached graph
+        # The graph is an optimization, so losing it costs a full build
+        # rather than a red check. Without this a download failure fails
+        # the plan job and blocks merge on a PR that is otherwise fine.
+        continue-on-error: true
         if: steps.graph-artifact.outputs.available == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -209,8 +236,21 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.graph-artifact.outputs.run_id }}
 
+      # Checks the file rather than the download step's outcome, so an
+      # empty or truncated artifact is caught too. Runs unconditionally
+      # so the output is always defined for the gates below.
+      - name: Check the graph is usable
+        id: graph
+        run: |
+          if [[ -s dependency-graph.json ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No usable dependency graph; falling back to full build."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run fast-path impact detection
-        if: steps.graph-artifact.outputs.available == 'true'
+        if: steps.graph.outputs.ready == 'true'
         env:
           # Funnel graph_sha through env to avoid zizmor's
           # template-injection warning on direct ${{ ... }} interpolation
@@ -231,12 +271,12 @@ jobs:
           steps.detect.outputs.mode == 'full' ||
           steps.detect.outputs.mode == 'noop' ||
           (steps.detect.outputs.mode == 'fast' &&
-            steps.graph-artifact.outputs.available != 'true')
+            steps.graph.outputs.ready != 'true')
         env:
           IS_APPROVED: ${{ steps.approval.outputs.is_approved }}
           HAS_REQUEST: ${{ steps.comment.outputs.has_request }}
           DETECT_MODE: ${{ steps.detect.outputs.mode }}
-          GRAPH_AVAILABLE: ${{ steps.graph-artifact.outputs.available }}
+          GRAPH_AVAILABLE: ${{ steps.graph.outputs.ready }}
         run: |
           if [[ "$IS_APPROVED" == "true" && "$HAS_REQUEST" == "true" ]]; then
             reason='PR has a standing approval and a `/full-build` comment was posted'
@@ -249,7 +289,7 @@ jobs:
           elif [[ "$DETECT_MODE" == "noop" ]]; then
             reason='no build-relevant files changed under `velox/`'
           elif [[ "$GRAPH_AVAILABLE" != "true" ]]; then
-            reason='no cached dependency graph from main is available'
+            reason='no usable cached dependency graph from main is available'
           else
             reason='unknown'
           fi
@@ -300,7 +340,7 @@ jobs:
         env:
           IS_FORCE_FULL: ${{ steps.force.outputs.is_force_full }}
           DETECT_MODE: ${{ steps.detect.outputs.mode }}
-          GRAPH_AVAILABLE: ${{ steps.graph-artifact.outputs.available }}
+          GRAPH_AVAILABLE: ${{ steps.graph.outputs.ready }}
           CMAKE_TARGETS: ${{ steps.read-targets.outputs.cmake_targets }}
         run: |
           if [[ "$IS_FORCE_FULL" == "true" ]]; then

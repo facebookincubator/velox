@@ -384,21 +384,51 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
     uint32_t groupId,
     std::vector<std::string> groupKeys,
     std::shared_ptr<TypeBuilder> valueType) {
+  const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
+  NIMBLE_CHECK(
+      !isDefaultGroup || !defaultGroupIndex_.has_value(),
+      "Hybrid FlatMap has multiple Default groups.");
   schemaBuilder_.registerChild(valueType);
   auto& group = groups_.emplace_back(
       StoredGroup{
           .groupId = groupId,
           .groupKeys = std::move(groupKeys),
-          .keyDescriptor = std::make_unique<StreamDescriptorBuilder>(
-              schemaBuilder_.allocateStreamOffset(), keyScalarKind_),
+          .keyPresenceDescriptor = std::make_unique<StreamDescriptorBuilder>(
+              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
           .inMapDescriptor = std::make_unique<StreamDescriptorBuilder>(
               schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
           .valueType = std::move(valueType),
       });
+  if (isDefaultGroup) {
+    defaultGroupIndex_ = groups_.size() - 1;
+    defaultGroupKeys_.reserve(group.groupKeys.size());
+    for (const auto& key : group.groupKeys) {
+      NIMBLE_CHECK(
+          defaultGroupKeys_.insert(key).second,
+          "Duplicate Hybrid FlatMap key: '{}'.",
+          key);
+    }
+  }
+  NIMBLE_CHECK_NOT_NULL(
+      group.keyPresenceDescriptor,
+      "Hybrid FlatMap key-presence descriptor is not initialized.");
   return {
-      .keyDescriptor = *group.keyDescriptor,
+      .keyPresenceDescriptor = *group.keyPresenceDescriptor,
       .inMapDescriptor = *group.inMapDescriptor,
   };
+}
+
+void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
+  NIMBLE_CHECK(
+      defaultGroupIndex_.has_value(),
+      "Hybrid FlatMap Default group is not initialized.");
+  auto& group = groups_[*defaultGroupIndex_];
+  NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
+  NIMBLE_CHECK(
+      defaultGroupKeys_.insert(key).second,
+      "Duplicate Hybrid FlatMap key: '{}'.",
+      key);
+  group.groupKeys.push_back(std::move(key));
 }
 
 size_t HybridFlatMapTypeBuilder::groupCount() const {
@@ -409,10 +439,13 @@ HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::groupAt(
     size_t index) const {
   NIMBLE_CHECK_LT(index, groups_.size(), "Index out of range.");
   const auto& group = groups_[index];
+  NIMBLE_CHECK_NOT_NULL(
+      group.keyPresenceDescriptor,
+      "Hybrid FlatMap key-presence descriptor is not initialized.");
   return {
       .groupId = group.groupId,
       .groupKeys = group.groupKeys,
-      .keyDescriptor = *group.keyDescriptor,
+      .keyPresenceDescriptor = *group.keyPresenceDescriptor,
       .inMapDescriptor = *group.inMapDescriptor,
       .valueType = *group.valueType,
   };
@@ -820,8 +853,8 @@ void addSchemaNode(
         const auto& group = hybridMap.groupAt(i);
         nodes.emplace_back(
             Kind::Scalar,
-            group.keyDescriptor.offset(),
-            group.keyDescriptor.scalarKind(),
+            group.keyPresenceDescriptor.offset(),
+            ScalarKind::Bool,
             std::nullopt);
         nodes.emplace_back(
             Kind::Scalar,

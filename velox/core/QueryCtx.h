@@ -19,6 +19,7 @@
 #include <folly/Executor.h>
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <deque>
 #include <functional>
 #include <string_view>
@@ -38,6 +39,57 @@ class TraceCtx;
 namespace facebook::velox::core {
 
 struct PlanFragment;
+
+/// Which config entries of a query hold credentials, per destination.
+///
+/// A credential is written into more than one config, the writes do not all
+/// use the same conflict rule, and the properties they merge with differ, so
+/// the same credential can be the stored value in one config and not in
+/// another. Redacting a name in a config it never reached would destroy a
+/// property that replay still has to read back.
+///
+/// Record through write(). A credential written into a config by any other
+/// means is reported by nothing here, and is redacted only if some other
+/// rule happens to name it.
+class CredentialKeys {
+ public:
+  /// What a write does when the config already holds the key.
+  enum class OnConflict {
+    /// Keep the existing value and record nothing. What is stored came from
+    /// the config itself, so redacting it would break replay.
+    kKeep,
+    /// Replace it. The credential becomes the stored value.
+    kReplace,
+  };
+
+  /// Writes 'credential' into 'config' under 'key', subject to 'onConflict',
+  /// and records 'key' when this write stored it. 'connectorId' empty means
+  /// the query config. 'key' is matched verbatim against what the trace
+  /// writer reads, so a caller that renames keys on their way into a config
+  /// must pass the name the config ends up holding.
+  void write(
+      std::unordered_map<std::string, std::string>& config,
+      std::string_view connectorId,
+      const std::string& key,
+      const std::string& credential,
+      OnConflict onConflict);
+
+  /// Whether write() recorded 'key' for the query config.
+  bool isQueryConfigCredential(std::string_view key) const {
+    return queryConfigKeys_.contains(key);
+  }
+
+  /// Whether write() recorded 'key' for 'connectorId'.
+  bool isConnectorCredential(std::string_view connectorId, std::string_view key)
+      const;
+
+ private:
+  // Keys write() recorded for the query config.
+  folly::F14FastSet<std::string> queryConfigKeys_;
+
+  // Keys write() recorded, per connector id.
+  folly::F14FastMap<std::string, folly::F14FastSet<std::string>> connectorKeys_;
+};
 
 /// Query execution context that manages resources and configuration for a
 /// query.
@@ -180,6 +232,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    Builder& credentialKeys(CredentialKeys keys) {
+      credentialKeys_ = std::move(keys);
+      return *this;
+    }
+
     /// Registers a caller-built root pool under 'tag' on the resulting
     /// QueryCtx. Throws if 'tag' is already present or 'pool' is null. The
     /// pool is typically built through MemoryManager::addCustomRootPool.
@@ -220,6 +277,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     folly::Executor* spillExecutor_{nullptr};
     std::string queryId_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+    CredentialKeys credentialKeys_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
     std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
@@ -276,6 +334,12 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return fsTokenProvider_;
   }
 
+  /// Which of this query's metadata entries hold credentials. Fixed for the
+  /// life of the query, so readers need no synchronization.
+  const CredentialKeys& credentialKeys() const {
+    return credentialKeys_;
+  }
+
   /// Registers a callback to be invoked when this QueryCtx is destroyed.
   /// This allows external resources tied to the query's lifetime to be cleaned
   /// up before the QueryCtx and its members are destructed. For example,
@@ -288,7 +352,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Note: Callbacks are invoked in registration order. Exceptions thrown by
   /// callbacks are caught and logged; they do not prevent subsequent callbacks
   /// from running.
+  ///
+  /// Safe to call concurrently from multiple tasks of the same query.
   void addReleaseCallback(ReleaseCallback callback) {
+    std::lock_guard<std::mutex> l(mutex_);
     releaseCallbacks_.push_back(std::move(callback));
   }
 
@@ -436,7 +503,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
-      TraceCtxProvider traceCtxProvider = nullptr);
+      TraceCtxProvider traceCtxProvider = nullptr,
+      CredentialKeys credentialKeys = {});
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -514,7 +582,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  const CredentialKeys credentialKeys_;
   // Callbacks invoked before destruction to clean up external resources.
+  // Guarded by mutex_; tasks of one query register concurrently.
   std::deque<ReleaseCallback> releaseCallbacks_;
 
   // A function that constructs a custom trace ctx object.

@@ -43,6 +43,9 @@ add_library(
   SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
+  subintsplit/CostModel.cpp
+  subintsplit/CostModel.h
+  subintsplit/EncodingConfig.h
   subintsplit/BitSection.h
   subintsplit/CostModel.h
   subintsplit/DecodeCost.h

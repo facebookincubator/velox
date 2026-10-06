@@ -17,24 +17,25 @@
 #pragma once
 
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 
 inline size_t count_trailing_zeros(uint64_t x) {
-  return x == 0 ? 64 : __builtin_ctzll(x);
+  return std::countr_zero(x);
 }
 
 inline size_t count_trailing_zeros_32bits(uint32_t x) {
-  return x == 0 ? 32 : __builtin_ctz(x);
+  return std::countr_zero(x);
 }
 
 inline size_t count_leading_zeros(uint64_t x) {
-  return x == 0 ? 64 : __builtin_clzll(x);
+  return std::countl_zero(x);
 }
 
 inline size_t count_leading_zeros_32bits(uint32_t x) {
-  return x == 0 ? 32 : __builtin_clz(x);
+  return std::countl_zero(x);
 }
 
 namespace facebook::velox {

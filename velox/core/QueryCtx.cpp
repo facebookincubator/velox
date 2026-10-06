@@ -21,6 +21,37 @@
 
 namespace facebook::velox::core {
 
+void CredentialKeys::write(
+    std::unordered_map<std::string, std::string>& config,
+    std::string_view connectorId,
+    const std::string& key,
+    const std::string& credential,
+    OnConflict onConflict) {
+  const auto [it, inserted] = config.try_emplace(key, credential);
+  if (!inserted) {
+    // A config that already held this name holds its own value. Comparing it
+    // against the credential and recording a match would redact an entry the
+    // config owns, which replay still has to read back.
+    if (onConflict == OnConflict::kKeep) {
+      return;
+    }
+    it->second = credential;
+  }
+
+  if (connectorId.empty()) {
+    queryConfigKeys_.insert(key);
+  } else {
+    connectorKeys_[std::string(connectorId)].insert(key);
+  }
+}
+
+bool CredentialKeys::isConnectorCredential(
+    std::string_view connectorId,
+    std::string_view key) const {
+  const auto it = connectorKeys_.find(connectorId);
+  return it != connectorKeys_.end() && it->second.contains(key);
+}
+
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
@@ -54,7 +85,8 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       spillExecutor_,
       std::move(queryId_),
       std::move(tokenProvider_),
-      std::move(traceCtxProvider_)));
+      std::move(traceCtxProvider_),
+      std::move(credentialKeys_)));
   queryCtx->maybeSetReclaimer();
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
@@ -75,7 +107,8 @@ QueryCtx::QueryCtx(
     folly::Executor* spillExecutor,
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider,
-    TraceCtxProvider traceCtxProvider)
+    TraceCtxProvider traceCtxProvider,
+    CredentialKeys credentialKeys)
     : queryId_(queryId),
       executor_(executor),
       spillExecutor_(spillExecutor),
@@ -84,12 +117,20 @@ QueryCtx::QueryCtx(
       pool_(std::move(pool)),
       queryConfig_{std::move(queryConfig)},
       fsTokenProvider_(std::move(tokenProvider)),
+      credentialKeys_(std::move(credentialKeys)),
       traceCtxProvider_(std::move(traceCtxProvider)) {
   initPool(queryId);
 }
 
 QueryCtx::~QueryCtx() {
-  for (auto& cb : releaseCallbacks_) {
+  // Move the callbacks out before running them: a callback may re-enter
+  // QueryCtx, which would deadlock on mutex_ if it were held here.
+  std::deque<ReleaseCallback> callbacks;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    callbacks.swap(releaseCallbacks_);
+  }
+  for (auto& cb : callbacks) {
     try {
       cb();
     } catch (const std::exception& e) {
