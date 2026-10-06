@@ -16,7 +16,7 @@
 
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
 
-#include <cmath>
+#include <faiss/utils/distances.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 
@@ -45,19 +45,7 @@ void normalizeVectors(
     return;
   }
 
-  for (uint64_t i = 0; i < numVectors; ++i) {
-    float* vector = vectors + i * dimensions;
-    float squaredNorm{0};
-    for (uint32_t j = 0; j < dimensions; ++j) {
-      squaredNorm += vector[j] * vector[j];
-    }
-    const auto norm = std::sqrt(squaredNorm);
-    if (norm > 0) {
-      for (uint32_t j = 0; j < dimensions; ++j) {
-        vector[j] /= norm;
-      }
-    }
-  }
+  faiss::fvec_renorm_L2(dimensions, numVectors, vectors);
 }
 
 serialization::VectorDistanceMetric toSerializedMetric(
