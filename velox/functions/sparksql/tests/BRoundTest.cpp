@@ -146,6 +146,32 @@ TEST_F(BRoundTest, floatingPointNeighbors) {
   EXPECT_EQ(bround<double>(std::nextafter(-0.5, 0.0), 0), 0.0);
 }
 
+TEST_F(BRoundTest, floatingPointExtremePositiveScales) {
+  // Characterization test. For scales >= 309, 10^scale is not finite, so
+  // 'bround' deliberately returns the binary value unchanged instead of
+  // rounding (see broundFloatingPointImpl). True HALF_EVEN decimal rounding
+  // would instead snap the smallest subnormals toward zero or onto the quantum
+  // grid (e.g. bround(denorm_min, 323) would be 0 and bround(6e-310, 309) would
+  // be 1e-309); 'bround' does not reproduce that here. These assertions pin the
+  // documented simplified behavior rather than the exact decimal result.
+  const auto minimum = std::numeric_limits<double>::denorm_min();
+  EXPECT_EQ(bround<double>(minimum, 309), minimum);
+  EXPECT_EQ(bround<double>(minimum, 323), minimum);
+  EXPECT_EQ(bround<double>(minimum, 324), minimum);
+  EXPECT_EQ(bround<double>(3 * minimum, 323), 3 * minimum);
+  EXPECT_EQ(bround<double>(-3 * minimum, 323), -3 * minimum);
+
+  // Normal doubles are preserved exactly at these scales, which here matches
+  // the exact decimal result because their magnitude far exceeds the quantum.
+  EXPECT_EQ(bround<double>(4.7e-36, 309), 4.7e-36);
+  EXPECT_EQ(bround<double>(6e-310, 309), 6e-310);
+  EXPECT_EQ(bround<double>(-6e-310, 309), -6e-310);
+
+  const auto floatMinimum = std::numeric_limits<float>::denorm_min();
+  EXPECT_EQ(bround<float>(floatMinimum, 309), floatMinimum);
+  EXPECT_EQ(bround<float>(-floatMinimum, 309), -floatMinimum);
+}
+
 TEST_F(BRoundTest, specialValuesAndScales) {
   EXPECT_TRUE(
       std::isnan(

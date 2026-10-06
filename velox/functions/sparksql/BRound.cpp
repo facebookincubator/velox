@@ -49,6 +49,15 @@ Status broundFloatingPointImpl(T value, int32_t scale, T& result) {
 
   if (scale >= 0) {
     const double factor = std::pow(10.0, static_cast<double>(scale));
+    // Once 10^scale overflows to infinity (scale >= 309) the scale/round/
+    // unscale approach can no longer be applied. Computing the rounded value
+    // directly would require dividing by the quantum 10^-scale, which for these
+    // scales is itself a rounded subnormal and distorts HALF_EVEN ties, or
+    // staged finite scaling, which perturbs ordinary values by an ULP. Rather
+    // than reproduce those errors, 'bround' leaves the value unchanged at these
+    // extreme scales. This is a deliberate simplification: true decimal
+    // rounding would snap the smallest subnormals toward zero, so results here
+    // can differ from Spark (see the documented floating-point divergence).
     if (!std::isfinite(factor)) {
       result = value;
       return Status::OK();

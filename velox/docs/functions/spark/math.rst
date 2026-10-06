@@ -90,13 +90,17 @@ Mathematical Functions
     round-to-nearest floating-point environment. Because it operates directly
     on the binary floating-point value instead of converting through Java's
     decimal string representation, some results can differ from Spark. NaN and
-    infinity are returned unchanged.
+    infinity are returned unchanged. At very large scales (``d`` greater than or
+    equal to 309) ``10^d`` is no longer finite, so ``bround`` leaves the value
+    unchanged instead of rounding. This is a deliberate simplification; true
+    decimal rounding would snap the smallest subnormal values toward zero, so
+    results at these extreme scales can differ from Spark.
 
     For example, ``bround(0.575, 2)`` returns ``0.57`` in Velox, while Spark's
     decimal conversion returns ``0.58``. Integrations that require exact Spark
     floating-point results should evaluate floating-point ``bround`` in Spark.
     Integral and decimal inputs do not have this floating-point compatibility
-    exception.
+    exception. This matches the binary-rounding semantics of :spark:func:`round`.
 
     See `Spark's BRound expression
     <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
