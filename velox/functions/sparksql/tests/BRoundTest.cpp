@@ -26,7 +26,6 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
-#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql::test {

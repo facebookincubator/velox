@@ -230,19 +230,21 @@ TEST_F(DecimalRoundTest, round) {
       makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1)),
       std::numeric_limits<int32_t>::min(),
       makeFlatVector<int128_t>({0, 0, 0, 0}, DECIMAL(38, 0)));
-
-  // Round to INT_MAX and INT_MIN.
-  testDecimalRound(
-      makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1)),
-      std::numeric_limits<int32_t>::max(),
-      makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(4, 1)));
-  testDecimalRound(
-      makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1)),
-      std::numeric_limits<int32_t>::min(),
-      makeFlatVector<int128_t>({0, 0, 0, 0}, DECIMAL(38, 0)));
 }
 
 TEST_F(DecimalRoundTest, bround) {
+  testDecimalRound(
+      makeFlatVector<int64_t>({250, 350, -250, -350}, DECIMAL(3, 2)),
+      std::nullopt,
+      makeFlatVector<int64_t>({2, 4, -2, -4}, DECIMAL(2, 0)),
+      kBRoundDecimal);
+
+  testDecimalRound(
+      makeFlatVector<int128_t>({25, 35, -25, -35}, DECIMAL(19, 1)),
+      std::nullopt,
+      makeFlatVector<int128_t>({2, 4, -2, -4}, DECIMAL(19, 0)),
+      kBRoundDecimal);
+
   testDecimalRound(
       makeFlatVector<int64_t>({125, 135, 145, -125, -135, -145}, DECIMAL(3, 2)),
       1,
@@ -364,11 +366,20 @@ TEST_F(DecimalRoundTest, broundExtremeNegativeScales) {
 TEST_F(DecimalRoundTest, broundOverflow) {
   const auto type = DECIMAL(38, 0);
   const auto maximum = DecimalUtil::kPowersOfTen[38] - 1;
-  const auto input =
-      makeRowVector({makeFlatVector<int128_t>({maximum, -maximum}, type)});
+  const auto values =
+      makeFlatVector<int128_t>({maximum, 14, -maximum, 25}, type);
+  const auto input = makeRowVector({values});
   const auto expression = createDecimalRound(type, -1, false, kBRoundDecimal);
   VELOX_ASSERT_THROW(
       evaluate(expression, input), "Decimal overflow in bround.");
+
+  const auto tryExpression = std::make_shared<const core::CallTypedExpr>(
+      expression->type(), std::vector<core::TypedExprPtr>{expression}, "try");
+  testEncodings(
+      tryExpression,
+      {values},
+      makeNullableFlatVector<int128_t>(
+          {std::nullopt, 10, std::nullopt, 20}, DECIMAL(38, 0)));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

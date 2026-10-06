@@ -95,21 +95,22 @@ Mathematical Functions
     decimal rounding would snap the smallest subnormal values toward zero, so
     results at these extreme scales can differ from Spark.
 
-    For example, ``bround(0.575, 2)`` returns ``0.57`` in Velox, while Spark's
-    decimal conversion returns ``0.58``. Integrations that require exact Spark
-    floating-point results should evaluate floating-point ``bround`` in Spark.
-    Integral and decimal inputs do not have this floating-point compatibility
-    exception. This matches the binary-rounding semantics of :spark:func:`round`.
+    For example, ``bround(cast(0.575 as DOUBLE), 2)`` returns ``0.57`` in
+    Velox, while Spark's decimal conversion returns ``0.58``. Integrations that
+    require exact Spark floating-point results should evaluate floating-point
+    ``bround`` in Spark. Integral and decimal inputs do not have this
+    floating-point compatibility exception. This matches the binary-rounding
+    semantics of :spark:func:`round`.
 
     See `Spark's BRound expression
     <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
 
     ::
 
-        SELECT bround(2.5);     -- 2.0
-        SELECT bround(3.5);     -- 4.0
-        SELECT bround(2.55, 1); -- 2.6
-        SELECT bround(1.245, 2); -- 1.25
+        SELECT bround(cast(2.5 as DOUBLE));       -- 2.0
+        SELECT bround(cast(3.5 as DOUBLE));       -- 4.0
+        SELECT bround(cast(2.55 as DOUBLE), 1);   -- 2.6
+        SELECT bround(cast(1.245 as DOUBLE), 2);  -- 1.25
 
 .. spark:function:: cbrt(x) -> double
 
