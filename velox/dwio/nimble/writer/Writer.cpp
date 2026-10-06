@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <numeric>
@@ -263,6 +264,26 @@ class WriterContext : public FieldWriterContext {
     return stripeIndex_;
   }
 
+  // Counted from the encode path, which runs concurrently across streams under
+  // writeChunks' ExecutorBarrier. Relaxed ordering is enough: these are pure
+  // tallies, read only after the barrier joins.
+  void incrementEncodingSelectionCacheReplayCount() {
+    encodingSelectionCacheReplayCount_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  uint64_t encodingSelectionCacheReplayCount() const {
+    return encodingSelectionCacheReplayCount_.load(std::memory_order_relaxed);
+  }
+
+  void incrementEncodingSelectionCacheFallbackCount() {
+    encodingSelectionCacheFallbackCount_.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+
+  uint64_t encodingSelectionCacheFallbackCount() const {
+    return encodingSelectionCacheFallbackCount_.load(std::memory_order_relaxed);
+  }
+
  private:
   static bool hasStripeDictionaryConfig(const WriterOptions& options) {
     for (const auto& columnDictionary :
@@ -300,6 +321,8 @@ class WriterContext : public FieldWriterContext {
   uint64_t fileRawBytes_{0};
   std::vector<uint64_t> rowsPerStripe_;
   size_t stripeIndex_{0};
+  std::atomic_uint64_t encodingSelectionCacheReplayCount_{0};
+  std::atomic_uint64_t encodingSelectionCacheFallbackCount_{0};
 };
 
 } // namespace detail
@@ -751,8 +774,14 @@ class WriterStreamContext : public StreamContext {
     return encoding_.has_value() ? &*encoding_ : nullptr;
   }
 
-  void setEncoding(EncodingLayout value) {
-    encoding_.emplace(std::move(value));
+  void setEncoding(EncodingLayout encoding) {
+    encoding_.emplace(std::move(encoding));
+    // Provenance follows the layout: this one came from a caller, not the
+    // cache. Both call sites run while the stream context is being created, so
+    // today there is never a cached layout to displace; keeping the two in
+    // sync here means a later caller cannot charge an external layout's replay
+    // failures to the cache's fallback count.
+    cachedEncoding_ = false;
   }
 
   // Stores the shared dictionary configuration selected for this value stream.
@@ -777,12 +806,27 @@ class WriterStreamContext : public StreamContext {
     sharedDictionaryWriter_ = std::move(writer);
   }
 
+  // Sets a layout captured by the encoding-selection cache. Kept distinct from
+  // setEncoding so a replay failure can be attributed to the cache rather than
+  // to an externally supplied EncodingLayoutTree -- only the cache's own
+  // fallback rate says whether caching is paying off.
+  void setCachedEncoding(EncodingLayout encoding) {
+    encoding_.emplace(std::move(encoding));
+    cachedEncoding_ = true;
+  }
+
+  bool cachedEncoding() const {
+    return cachedEncoding_;
+  }
+
  private:
   bool isNullStream_{false};
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
   mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
+
+  bool cachedEncoding_{false};
 };
 
 // Context attached to one FlatMap TypeBuilder node. It carries the per-key
@@ -1125,6 +1169,7 @@ std::string_view encode(
 template <typename T>
 std::string_view encodeWithFallback(
     const EncodingLayout* encodingLayout,
+    bool layoutFromCache,
     detail::WriterContext& context,
     Buffer& buffer,
     velox::BufferPool* encodingScratchBufferPool,
@@ -1133,6 +1178,9 @@ std::string_view encodeWithFallback(
   NIMBLE_CHECK_NOT_NULL(
       encodingLayout,
       "encodeWithFallback requires a saved encoding layout to replay.");
+  if (layoutFromCache) {
+    context.incrementEncodingSelectionCacheReplayCount();
+  }
   try {
     return encode<T>(
         *encodingLayout,
@@ -1145,6 +1193,9 @@ std::string_view encodeWithFallback(
     // A saved layout can fail to apply to this chunk's data in ways beyond a
     // clean IncompatibleEncoding, so retry on any error rather than keying
     // off a specific (unreliable) error code.
+    if (layoutFromCache) {
+      context.incrementEncodingSelectionCacheFallbackCount();
+    }
     return encode<T>(
         std::nullopt,
         context,
@@ -1207,6 +1258,7 @@ std::string_view encodeStreamTyped(
       writerStreamContext->encoding()) {
     return encodeWithFallback<T>(
         writerStreamContext->encoding(),
+        writerStreamContext->cachedEncoding(),
         context,
         buffer,
         encodingScratchBufferPool,
@@ -1230,7 +1282,7 @@ std::string_view encodeStreamTyped(
   // time, so it stays valid regardless of a later chunk's nulls.
   if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
-        .setEncoding(
+        .setCachedEncoding(
             cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
                 encoded, context.options().buildEncodingOptions())));
   }
@@ -3733,6 +3785,10 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
        nanosMetric(context_->encodingTiming().wallNanos)},
       {std::string{Keys::kEncodingSelectionCpuNanos},
        nanosMetric(context_->encodingSelectionTiming().cpuNanos)},
+      {std::string{Keys::kEncodingSelectionCacheReplayCount},
+       countMetric(context_->encodingSelectionCacheReplayCount())},
+      {std::string{Keys::kEncodingSelectionCacheFallbackCount},
+       countMetric(context_->encodingSelectionCacheFallbackCount())},
       // Distributions are already accumulated as metrics, so they are published
       // verbatim rather than collapsed to a single value.
       {std::string{Keys::kRowsPerStripe},
