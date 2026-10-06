@@ -27,6 +27,7 @@
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
@@ -352,11 +353,15 @@ TEST_F(UcxOutputQueueManagerTest, registersUcxOutputTransport) {
   EXPECT_EQ(
       entryAfterSecondCall->manager, UcxOutputQueueManager::getInstanceRef());
 
-  // Restore the baseline this case found, dropping only this module's entry
-  // rather than every registered transport.
+  // unregisterUcxTransports() erases kUcx from both registries and leaves the
+  // in-memory default alone.
   unregisterUcxTransports();
   EXPECT_EQ(
       exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+  EXPECT_EQ(
+      exec::ExchangeTransportRegistry::tryGet(
           std::string{core::TransportKind::kUcx}),
       nullptr);
   EXPECT_NE(

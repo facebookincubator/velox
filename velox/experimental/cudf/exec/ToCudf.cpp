@@ -314,16 +314,6 @@ void registerCudf() {
   // Register operator adapters
   registerAllOperatorAdapters();
 
-#ifdef VELOX_ENABLE_UCX_EXCHANGE
-  // Advertise the UCX transport only when this process is configured to run it.
-  // Whether a given node uses it is decided by the plan, not here. The
-  // registration lives in the transport's own module; cuDF only decides when to
-  // call it, because today cuDF is the only producer of UCX plans.
-  if (CudfConfig::getInstance().exchange) {
-    ucx_exchange::registerUcxTransports();
-  }
-#endif
-
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
   registerPrestoAggregateFunctions(prefix);
@@ -377,6 +367,19 @@ void registerCudf() {
   if (CudfConfig::getInstance().jitExpressionEnabled) {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
+
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Advertise the UCX transport only when this process is configured to run it,
+  // and only once the memory resources and the driver adapter it relies on are
+  // in place, so that a registerCudf() that fails part way leaves no kUcx
+  // behind; unregisterCudf() withdraws it first. Whether a given node uses it
+  // is decided by the plan, not here. The registration lives in the transport's
+  // own module; cuDF only decides when to call it, because today cuDF is the
+  // only producer of UCX plans.
+  if (CudfConfig::getInstance().exchange) {
+    ucx_exchange::registerUcxTransports();
+  }
+#endif
 
   isCudfRegistered = true;
 }

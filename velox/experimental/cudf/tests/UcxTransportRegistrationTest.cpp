@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/VectorStream.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::exec::test {
@@ -163,6 +164,53 @@ TEST_F(UcxTransportRegistrationTest, exchangeEnabledRegistersUcxTransport) {
       std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
           outputEntry->manager),
       nullptr);
+}
+
+// kUcx relies on the cuDF memory resources and driver adapter, so a
+// registerCudf() that fails part way must not leave it resolvable, and must not
+// stand in the way of a later registerCudf().
+TEST_F(
+    UcxTransportRegistrationTest,
+    failedRegisterCudfPublishesNoUcxTransport) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto savedMemoryResource = config.memoryResource;
+  SCOPE_EXIT {
+    config.memoryResource = savedMemoryResource;
+  };
+  config.exchange = true;
+  config.memoryResource = "not-a-memory-resource";
+
+  VELOX_ASSERT_THROW(
+      cudf_velox::registerCudf(), "Unknown memory resource mode");
+  ASSERT_FALSE(cudf_velox::cudfIsRegistered());
+  const std::string ucx{TransportKind::kUcx};
+  EXPECT_EQ(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_EQ(OutputTransportRegistry::tryGet(ucx), nullptr);
+
+  config.memoryResource = savedMemoryResource;
+  cudf_velox::registerCudf();
+  EXPECT_NE(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_NE(OutputTransportRegistry::tryGet(ucx), nullptr);
+}
+
+// unregisterCudf() withdraws kUcx whatever CudfConfig::exchange says by then,
+// and leaves the in-memory transport in place.
+TEST_F(
+    UcxTransportRegistrationTest,
+    unregisterCudfRemovesUcxTransportAfterConfigChange) {
+  registerCudfWithExchange(true);
+  const std::string ucx{TransportKind::kUcx};
+  ASSERT_NE(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  ASSERT_NE(OutputTransportRegistry::tryGet(ucx), nullptr);
+
+  cudf_velox::CudfConfig::getInstance().exchange = false;
+  cudf_velox::unregisterCudf();
+
+  EXPECT_EQ(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_EQ(OutputTransportRegistry::tryGet(ucx), nullptr);
+  const std::string inMemory{TransportKind::kInMemory};
+  EXPECT_NE(ExchangeTransportRegistry::tryGet(inMemory), nullptr);
+  EXPECT_NE(OutputTransportRegistry::tryGet(inMemory), nullptr);
 }
 
 TEST_F(UcxTransportRegistrationTest, inMemoryTransportIsUnaffected) {
