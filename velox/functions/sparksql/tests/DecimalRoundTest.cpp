@@ -20,6 +20,7 @@
 #include <limits>
 #include <string>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"

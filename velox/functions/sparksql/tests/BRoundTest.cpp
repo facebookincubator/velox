@@ -106,8 +106,8 @@ class BRoundTest : public SparkFunctionBaseTest {
           bround<T>(T{1}, kMinimumScale),
           "Underflow while rounding to scale -2147483648");
       EXPECT_EQ(
-          evaluateOnce<T, T>(
-              "try(bround(c0, cast(-536870920 as integer)))", T{1}),
+          (evaluateOnce<T, T>(
+              "try(bround(c0, cast(-536870920 as integer)))", T{1})),
           std::nullopt);
     }
   }
