@@ -91,9 +91,9 @@ class BitwiseTest : public SparkFunctionBaseTest {
 
   template <typename T>
   std::optional<T> shiftRightUnsigned(
-      std::optional<T> value,
-      std::optional<int32_t> shift) {
-    return evaluateOnce<T>("shiftrightunsigned(c0, c1)", value, shift);
+      std::optional<T> a,
+      std::optional<int32_t> b) {
+    return evaluateOnce<T>("shiftrightunsigned(c0, c1)", a, b);
   }
 };
 
@@ -347,6 +347,7 @@ TEST_F(BitwiseTest, shiftRightUnsigned) {
   EXPECT_EQ(shiftRightUnsigned<int64_t>(kMin64, 63), 1);
   EXPECT_EQ(shiftRightUnsigned<int64_t>(kMin64, 1), 4'611'686'018'427'387'904);
   EXPECT_EQ(shiftRightUnsigned<int64_t>(kMax64, 1), kMax64 >> 1);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(-1, 32), 4'294'967'295);
   EXPECT_EQ(shiftRightUnsigned<int64_t>(42, 0), 42);
 
   // Spark uses the low six bits of the shift amount for BIGINT.
@@ -361,6 +362,7 @@ TEST_F(BitwiseTest, shiftRightUnsigned) {
   EXPECT_EQ(
       shiftRightUnsigned<int32_t>(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(shiftRightUnsigned<int64_t>(std::nullopt, 1), std::nullopt);
+  EXPECT_EQ(shiftRightUnsigned<int64_t>(1, std::nullopt), std::nullopt);
 }
 
 } // namespace

@@ -106,8 +106,6 @@ struct ShiftRightFunction {
   }
 };
 
-/// Performs Spark-compatible logical right shift.
-/// Masks the shift amount to five bits for INTEGER and six bits for BIGINT.
 template <typename T>
 struct ShiftRightUnsignedFunction {
   template <typename TInput1, typename TInput2>
