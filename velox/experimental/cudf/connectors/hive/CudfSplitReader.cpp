@@ -221,6 +221,8 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_->config());
   const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
   baseReaderOpts_.setLoadQuantum(hiveConfig.loadQuantum(sessionProperties));
+  baseReaderOpts_.setDirectBufferedInputSharedAllocation(
+      hiveConfig.directBufferedInputSharedAllocation(sessionProperties));
   baseReaderOpts_.setMaxCoalesceBytes(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
@@ -649,7 +651,7 @@ void CudfSplitReader::setupPageIndexes() {
   splitReader_->setup_page_indexes(pageIndexData);
 }
 
-CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
+CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
   // Filter row groups using row group byte ranges
@@ -678,8 +680,13 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
     return {};
   }
 
+  // Construct row group passes using all (or selected) columns for pass memory
+  // estimation.
   return splitReader_->construct_row_group_passes(
-      rowGroupIndices, passReadLimit_);
+      cudf::io::parquet::experimental::read_columns_mode::ALL_COLUMNS,
+      rowGroupIndices,
+      passReadLimit_,
+      readerOptions_);
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {

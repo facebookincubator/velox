@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -529,6 +530,12 @@ inline bool isConstantBoolStream(std::string_view data) {
 /// reader, so the two constants cannot share a code path.
 inline bool isAllTrueBoolStream(std::string_view data) {
   return !data.empty() && ::memchr(data.data(), 0, data.size()) == nullptr;
+}
+
+/// Returns true if the boolean stream data is non-empty and every byte is
+/// false.
+inline bool isAllFalseBoolStream(std::string_view data) {
+  return !data.empty() && ::memchr(data.data(), 1, data.size()) == nullptr;
 }
 
 } // namespace facebook::nimble
