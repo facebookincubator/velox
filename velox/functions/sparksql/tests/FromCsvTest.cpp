@@ -336,16 +336,16 @@ TEST_F(FromCsvTest, floatTypeSuffixAccepted) {
   EXPECT_TRUE(resultRow->childAt(0)->isNullAt(5));
 }
 
-// Mixed-type single-row sanity check covering int + bool + string + double.
+// Mixed-type sanity check covering int + bool + string + double.
 TEST_F(FromCsvTest, mixedTypes) {
-  auto input =
-      makeFlatVector<std::string>({"42,true,hello,3.14", "0,false,world,2.71"});
+  auto input = makeFlatVector<std::string>(
+      {"42,true,hello,3.14", "0,false,world,2.71", "-7,true,test,0.5"});
   auto expected = makeRowVector(
       {"id", "flag", "name", "score"},
-      {makeFlatVector<int32_t>({42, 0}),
-       makeFlatVector<bool>({true, false}),
-       makeFlatVector<std::string>({"hello", "world"}),
-       makeFlatVector<double>({3.14, 2.71})});
+      {makeFlatVector<int32_t>({42, 0, -7}),
+       makeFlatVector<bool>({true, false, true}),
+       makeFlatVector<std::string>({"hello", "world", "test"}),
+       makeFlatVector<double>({3.14, 2.71, 0.5})});
   testFromCsv(input, expected);
 }
 
@@ -1127,6 +1127,7 @@ TEST_F(FromCsvTest, sparkTimestampParsing) {
       "2024-01-01", // date only defaults to midnight.
       R"("2024-01-01T00:00:00,123")", // comma fraction: rejected.
       "2024-01-01T00:00:00.1234", // extended fraction accepted.
+      "2024-01-01T00:00:00.123456789", // truncated to microseconds.
       "2024-01-01T00:00:00+05", // hour-only offset accepted.
       "garbage", // malformed: rejected.
   });
@@ -1152,8 +1153,10 @@ TEST_F(FromCsvTest, sparkTimestampParsing) {
   EXPECT_FALSE(childA->isNullAt(8));
   EXPECT_EQ(childA->valueAt(8), Timestamp(1'704'067'200, 123'400'000));
   EXPECT_FALSE(childA->isNullAt(9));
-  EXPECT_EQ(childA->valueAt(9), Timestamp(1'704'049'200, 0));
-  EXPECT_TRUE(childA->isNullAt(10));
+  EXPECT_EQ(childA->valueAt(9), Timestamp(1'704'067'200, 123'456'000));
+  EXPECT_FALSE(childA->isNullAt(10));
+  EXPECT_EQ(childA->valueAt(10), Timestamp(1'704'049'200, 0));
+  EXPECT_TRUE(childA->isNullAt(11));
 }
 
 // Backslash escape in quoted fields (Spark default escape='\\').

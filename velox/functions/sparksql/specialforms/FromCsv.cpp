@@ -65,11 +65,12 @@ std::string_view trimJavaWhitespace(std::string_view input) {
 // - `fields`: parsed field values as views. Unquoted fields point directly
 //   into the input line. Every field that starts with a quote (closed,
 //   unclosed, or malformed fallback) points into `quotedArena`.
-// - `quotedArena`: owns processed bytes for quoted fields. Each field adds no
-//   more bytes than its raw input span; the malformed fallback is exactly
-//   tight because it re-emits the opening quote that was not copied earlier.
-//   Reserving the line length therefore prevents mid-row reallocation and
-//   keeps all views stable until the next `splitCsvLine` call.
+// - `quotedArena`: owns processed bytes for quoted fields. On the first quoted
+//   field, it reserves the line length. Each field adds no more bytes than its
+//   raw input span; the malformed fallback is exactly tight because it
+//   re-emits the opening quote that was not copied earlier. This prevents
+//   mid-row reallocation without allocating for rows containing only unquoted
+//   fields and keeps all views stable until the next `splitCsvLine` call.
 struct SplitCsvBuffers {
   std::vector<std::string_view> fields;
   std::string quotedArena;
@@ -88,8 +89,7 @@ struct SplitCsvBuffers {
 //   content, and the raw remainder up to the next delimiter.
 // maxFields: stop parsing once this many fields are produced (0 = unlimited).
 // buffers: reusable per-row state. `fields` and `quotedArena` are cleared at
-//   function entry; `quotedArena` is reserved to the line length so callers do
-//   not need to reset it between rows.
+//   function entry and reserved lazily when the first quoted field is found.
 void splitCsvLine(
     std::string_view line,
     char delimiter,
@@ -100,9 +100,6 @@ void splitCsvLine(
   auto& quotedArena = buffers.quotedArena;
   fields.clear();
   quotedArena.clear();
-  // Each quoted field contributes at most its raw span, so one line-sized
-  // reservation keeps every arena-backed view stable for the row.
-  quotedArena.reserve(line.size());
   VELOX_DCHECK_LE(
       line.size(),
       kMaxCsvLineSize,
@@ -119,6 +116,11 @@ void splitCsvLine(
     }
     trailingDelimiter = false;
     if (line[i] == '"') {
+      // Each quoted field contributes at most its raw span, so one line-sized
+      // reservation keeps every arena-backed view stable for the row.
+      if (quotedArena.capacity() < line.size()) {
+        quotedArena.reserve(line.size());
+      }
       // Quoted field using Spark's fixed Univocity defaults: quote='"',
       // escape='\\', escapeEscape='\\', and STOP_AT_DELIMITER.
       const size_t quotedStart = quotedArena.size();
@@ -872,7 +874,8 @@ class FromCsvFunction : public exec::VectorFunction {
               util::TimestampParseMode::kSparkCast);
           if (result.hasValue()) {
             const auto timestamp =
-                toSparkTimestamp(result.value(), sessionTimeZone_);
+                toSparkTimestamp(result.value(), sessionTimeZone_)
+                    .toPrecision(TimestampPrecision::kMicroseconds);
             if (isSparkTimestampRange(timestamp)) {
               child->asFlatVector<Timestamp>()->set(row, timestamp);
             } else {
