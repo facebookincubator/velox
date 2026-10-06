@@ -27,9 +27,11 @@
 #include <vector>
 
 #include <faiss/IndexFlat.h>
+#include <faiss/impl/IDSelector.h>
 #include <faiss/utils/random.h>
 #include <fmt/format.h>
 #include <folly/Benchmark.h>
+#include <folly/hash/Hash.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -103,6 +105,10 @@ DEFINE_string(
     vector_index_workload,
     "all",
     "Workload to run: write, load, reload_and_search, search, or all.");
+DEFINE_double(
+    vector_index_filter_selectivity,
+    1.0,
+    "Fraction of rows selected by a deterministic row-ID hash.");
 
 namespace facebook::nimble::index {
 namespace {
@@ -110,9 +116,6 @@ namespace {
 constexpr std::string_view kColumnName{"embedding"};
 constexpr double kNanosPerSecond{1'000'000'000};
 constexpr double kNanosPerMicrosecond{1'000};
-constexpr uint64_t kFnv1a64OffsetBasis{14'695'981'039'346'656'037ULL};
-constexpr uint64_t kFnv1a64Prime{1'099'511'628'211ULL};
-
 // Configures one deterministic vector-index benchmark run.
 struct BenchmarkOptions {
   // Sets the number of indexed vectors.
@@ -139,6 +142,7 @@ struct BenchmarkOptions {
   uint32_t benchmarkSeconds;
   // Selects the load, reload-and-search, search, or combined workload.
   std::string workload;
+  double filterSelectivity;
 };
 
 // Accumulates CPU, wall, and per-operation timing for one workload.
@@ -166,8 +170,8 @@ struct RecallResult {
   double recallAtK{0};
   // Measures the fraction of queries containing the exact nearest neighbor.
   double oneRecallAtK{0};
-  // Detects result changes between otherwise comparable benchmark runs.
-  uint64_t resultChecksum{0};
+  // Counts queries that returned fewer than the requested neighbors.
+  uint32_t numUnderfilledQueries{0};
 };
 
 // Owns the deterministic indexed vectors and held-out queries.
@@ -180,6 +184,14 @@ struct SyntheticData {
   std::vector<float> corpus;
   // Held-out query vectors in row-major order.
   std::vector<float> queries;
+};
+
+// Owns one deterministic benchmark row selection.
+struct AllowedRows {
+  // Stores one LSB-first eligibility bit per indexed row.
+  std::vector<uint8_t> bitmap;
+  // Counts eligible rows.
+  uint64_t numRows{0};
 };
 
 // Owns the serialized index payload and its directory section.
@@ -284,6 +296,7 @@ class VectorIndexBenchmark {
         writerPool_{rootPool_->addLeafChild("writer")},
         readerPool_{rootPool_->addLeafChild("reader")} {
     auto syntheticData = makeSyntheticData();
+    allowedRows_ = makeAllowedRows();
     searchConfig_ = makeSearchConfig(syntheticData.queries);
     input_ = makeInput(syntheticData.corpus);
     index_ = writeIndex(input_);
@@ -333,12 +346,13 @@ class VectorIndexBenchmark {
               [this, &index](uint64_t /* operation */) { searchAll(*index); }));
     }
     fmt::print(
-        "Quality: recall@{}={:.4f}, 1-recall@{}={:.4f}, checksum={}\n",
+        "Quality: recall@{}={:.4f}, 1-recall@{}={:.4f}, "
+        "underfilled_queries={}\n",
         effectiveNumNeighbors(),
         recall_.recallAtK,
         effectiveNumNeighbors(),
         recall_.oneRecallAtK,
-        recall_.resultChecksum);
+        recall_.numUnderfilledQueries);
   }
 
   // Prints the complete configuration and serialized index size.
@@ -353,7 +367,8 @@ class VectorIndexBenchmark {
     fmt::print(
         "Nimble vector index: type={}, vectors={}, dimensions={}, "
         "metric={}, {}, queries={}, neighbors={}, data=faiss_smooth, seed={}, "
-        "serialized={} B, workload={}, omp_threads={}\n",
+        "serialized={} B, workload={}, omp_threads={}, "
+        "filter_selectivity={:.4f}, allowed_rows={}\n",
         FLAGS_vector_index_type,
         options_.numVectors,
         options_.dimensions,
@@ -364,12 +379,16 @@ class VectorIndexBenchmark {
         options_.dataSeed,
         index_.indexData.size(),
         options_.workload,
-        FLAGS_vector_index_num_threads);
+        FLAGS_vector_index_num_threads,
+        options_.filterSelectivity,
+        allowedRows_.numRows);
   }
 
  private:
   uint32_t effectiveNumNeighbors() const {
-    return std::min(options_.numNeighbors, options_.numVectors);
+    return static_cast<uint32_t>(std::min<uint64_t>(
+        options_.numNeighbors,
+        std::min<uint64_t>(options_.numVectors, allowedRows_.numRows)));
   }
 
   bool shouldRun(std::string_view workload) const {
@@ -444,6 +463,36 @@ class VectorIndexBenchmark {
     return data;
   }
 
+  // Builds the deterministic set of rows used by filtered searches.
+  AllowedRows makeAllowedRows() const {
+    if (options_.filterSelectivity == 1.0) {
+      return {.numRows = options_.numVectors};
+    }
+    AllowedRows allowedRows{
+        .bitmap = std::vector<uint8_t>((options_.numVectors + 7) / 8),
+    };
+    const auto threshold = static_cast<uint64_t>(
+        options_.filterSelectivity * static_cast<double>(1'000'000));
+    for (uint32_t row = 0; row < options_.numVectors; ++row) {
+      if (folly::hash::twang_mix64(row) % 1'000'000 < threshold) {
+        allowedRows.bitmap[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+        ++allowedRows.numRows;
+      }
+    }
+    VELOX_USER_CHECK_GT(
+        allowedRows.numRows, 0, "Filter selectivity produced no eligible rows");
+    return allowedRows;
+  }
+
+  // Returns a bitmap selection when filtering is enabled.
+  VectorIndex::SearchConfig::RowSelection rowSelection() const {
+    if (allowedRows_.bitmap.empty()) {
+      return VectorIndex::SearchConfig::RowSelection::all();
+    }
+    return VectorIndex::SearchConfig::RowSelection::fromBitmap(
+        allowedRows_.bitmap);
+  }
+
   velox::RowVectorPtr makeInput(const std::vector<float>& vectors) const {
     VELOX_CHECK_EQ(vectors.size() % options_.dimensions, 0);
     const auto numVectors =
@@ -499,6 +548,7 @@ class VectorIndexBenchmark {
         .queryVectors = queries,
         .numNeighbors = effectiveNumNeighbors(),
         .searchOptions = std::move(searchOptions),
+        .rowSelection = rowSelection(),
     };
   }
 
@@ -521,20 +571,31 @@ class VectorIndexBenchmark {
         static_cast<size_t>(options_.numQueries) * numNeighbors);
     std::vector<faiss::idx_t> exactLabels(
         static_cast<size_t>(options_.numQueries) * numNeighbors);
+    std::optional<faiss::IDSelectorBitmap> rowSelector;
+    faiss::SearchParameters searchParameters;
+    if (!allowedRows_.bitmap.empty()) {
+      rowSelector.emplace(
+          allowedRows_.bitmap.size(), allowedRows_.bitmap.data());
+      searchParameters.sel = &rowSelector.value();
+    }
     groundTruth.search(
         options_.numQueries,
         data.queries.data(),
         numNeighbors,
         exactScores.data(),
-        exactLabels.data());
+        exactLabels.data(),
+        &searchParameters);
 
     uint64_t numMatches{0};
     uint64_t numTopOneMatches{0};
-    uint64_t checksum{kFnv1a64OffsetBasis};
+    uint32_t numUnderfilledQueries{0};
     const auto searchResult = index->search(searchConfig_);
     VELOX_CHECK_EQ(searchResult.numQueries(), options_.numQueries);
     for (uint32_t query = 0; query < options_.numQueries; ++query) {
       const auto results = searchResult.results(query);
+      if (results.size() < numNeighbors) {
+        ++numUnderfilledQueries;
+      }
       const auto exactBegin = exactLabels.begin() +
           static_cast<std::ptrdiff_t>(
                                   static_cast<size_t>(query) * numNeighbors);
@@ -552,8 +613,6 @@ class VectorIndexBenchmark {
         if (std::find(exactBegin, exactEnd, result.rowId) != exactEnd) {
           ++numMatches;
         }
-        checksum ^= static_cast<uint64_t>(result.rowId) + 1;
-        checksum *= kFnv1a64Prime;
       }
     }
     return {
@@ -561,7 +620,7 @@ class VectorIndexBenchmark {
             (static_cast<double>(options_.numQueries) * numNeighbors),
         .oneRecallAtK =
             static_cast<double>(numTopOneMatches) / options_.numQueries,
-        .resultChecksum = checksum,
+        .numUnderfilledQueries = numUnderfilledQueries,
     };
   }
 
@@ -628,6 +687,8 @@ class VectorIndexBenchmark {
   const std::shared_ptr<velox::memory::MemoryPool> writerPool_;
   // Accounts for directory metadata and serialized-index I/O buffers.
   const std::shared_ptr<velox::memory::MemoryPool> readerPool_;
+  // Owns the optional eligibility bitmap and its selected-row count.
+  AllowedRows allowedRows_;
   // Stores the held-out queries in one native search batch.
   VectorIndex::SearchConfig searchConfig_;
   // Owns the input reused by write workloads.
@@ -666,6 +727,8 @@ int main(int argc, char** argv) {
   VELOX_USER_CHECK_GT(FLAGS_vector_index_hnsw_search_depth, 0);
   VELOX_USER_CHECK_GT(FLAGS_vector_index_benchmark_seconds, 0);
   VELOX_USER_CHECK_GT(FLAGS_vector_index_num_threads, 0);
+  VELOX_USER_CHECK_GT(FLAGS_vector_index_filter_selectivity, 0.0);
+  VELOX_USER_CHECK_LE(FLAGS_vector_index_filter_selectivity, 1.0);
   VELOX_USER_CHECK(
       FLAGS_vector_index_workload == "all" ||
           FLAGS_vector_index_workload == "write" ||
@@ -702,6 +765,7 @@ int main(int argc, char** argv) {
       .dataSeed = FLAGS_vector_index_data_seed,
       .benchmarkSeconds = FLAGS_vector_index_benchmark_seconds,
       .workload = FLAGS_vector_index_workload,
+      .filterSelectivity = FLAGS_vector_index_filter_selectivity,
   }};
   benchmark.printConfiguration();
   facebook::nimble::index::runBenchmark(benchmark);
