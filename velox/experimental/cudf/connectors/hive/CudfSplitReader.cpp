@@ -226,8 +226,6 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_->config());
   const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
   baseReaderOpts_.setLoadQuantum(hiveConfig.loadQuantum(sessionProperties));
-  baseReaderOpts_.setDirectBufferedInputSharedAllocation(
-      hiveConfig.directBufferedInputSharedAllocation(sessionProperties));
   baseReaderOpts_.setMaxCoalesceBytes(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
