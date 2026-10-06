@@ -76,13 +76,15 @@ else()
 endif()
 # Whether to build the experimental UCX GPU exchange transport
 # (velox/experimental/ucx-exchange) and the cuDF-side registration that selects
-# it. Defaults to whether a system UCX was found, which reproduces the earlier
-# implicit behaviour, but can be forced either way from the command line --
-# -DVELOX_ENABLE_UCX_EXCHANGE=OFF is how the no-UCX configuration is exercised
-# on a host that does have UCX. Declared here rather than next to the other
-# options because the default depends on the probe above; cache variables are
-# global, so every subdirectory sees it. Requires VELOX_ENABLE_CUDF, since this
-# file is only reached when cuDF is enabled and the transport links cudf::cudf.
+# it. Defaults, on the first configure of a build directory, to whether a system
+# UCX was found; the value is cached after that, so a UCX installed later needs
+# -DVELOX_ENABLE_UCX_EXCHANGE=ON. It can be forced either way from the command
+# line -- -DVELOX_ENABLE_UCX_EXCHANGE=OFF is how the no-UCX configuration is
+# exercised on a host that does have UCX. Declared here rather than next to the
+# other options because the default depends on the probe above; cache variables
+# are global, so every subdirectory sees it. Requires VELOX_ENABLE_CUDF, since
+# this file is only reached when cuDF is enabled and the transport links
+# cudf::cudf.
 option(
   VELOX_ENABLE_UCX_EXCHANGE
   "Build the experimental UCX GPU exchange transport. Requires a system UCX install."
@@ -110,6 +112,12 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
 else()
+  if(UCX_FOUND)
+    message(
+      STATUS
+      "UCX found, but VELOX_ENABLE_UCX_EXCHANGE is OFF -- pass -DVELOX_ENABLE_UCX_EXCHANGE=ON to build the UCX exchange"
+    )
+  endif()
   message(STATUS "UCX exchange disabled -- ucxx will not be fetched")
 endif()
 
