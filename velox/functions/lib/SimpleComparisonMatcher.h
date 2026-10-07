@@ -85,9 +85,8 @@ class AnySingleInputMatcher : public Matcher {
  public:
   AnySingleInputMatcher(
       core::TypedExprPtr* expr,
-      core::FieldAccessTypedExprPtr* input,
-      std::unordered_set<std::string> lambdaInputs)
-      : expr_{expr}, input_{input}, lambdaInputs_{std::move(lambdaInputs)} {}
+      core::FieldAccessTypedExprPtr* input)
+      : expr_{expr}, input_{input} {}
 
   bool match(const core::TypedExprPtr& expr) override;
 
@@ -95,6 +94,25 @@ class AnySingleInputMatcher : public Matcher {
   static void collectInputs(
       const core::TypedExprPtr& expr,
       std::unordered_set<core::FieldAccessTypedExprPtr>& inputs);
+
+  core::TypedExprPtr* const expr_;
+  core::FieldAccessTypedExprPtr* const input_;
+};
+
+class AnySingleLambdaInputMatcher : public Matcher {
+ public:
+  AnySingleLambdaInputMatcher(
+      core::TypedExprPtr* expr,
+      core::FieldAccessTypedExprPtr* input,
+      std::unordered_set<std::string> lambdaInputs)
+      : expr_{expr}, input_{input}, lambdaInputs_{std::move(lambdaInputs)} {}
+
+  bool match(const core::TypedExprPtr& expr) override;
+
+ private:
+  bool collectInputs(
+      const core::TypedExprPtr& expr,
+      std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) const;
 
   core::TypedExprPtr* const expr_;
   core::FieldAccessTypedExprPtr* const input_;
@@ -126,9 +144,16 @@ class SimpleComparisonChecker {
 
   std::shared_ptr<Matcher> anySingleInput(
       core::TypedExprPtr* expr,
+      core::FieldAccessTypedExprPtr* input) {
+    return std::make_shared<AnySingleInputMatcher>(expr, input);
+  }
+
+  std::shared_ptr<Matcher> anySingleInput(
+      core::TypedExprPtr* expr,
       core::FieldAccessTypedExprPtr* input,
       const std::unordered_set<std::string>& lambdaInputs) {
-    return std::make_shared<AnySingleInputMatcher>(expr, input, lambdaInputs);
+    return std::make_shared<AnySingleLambdaInputMatcher>(
+        expr, input, lambdaInputs);
   }
 
   std::shared_ptr<Matcher> comparisonConstant(int64_t* value) {
@@ -192,6 +217,11 @@ class SimpleComparisonChecker {
   std::optional<SimpleComparison> isSimpleComparison(
       const std::string& prefix,
       const core::LambdaTypedExpr& expr);
+
+  std::optional<SimpleComparison> isSimpleComparison(
+      const std::string& prefix,
+      const core::LambdaTypedExpr& expr,
+      bool supportsArbitraryComparatorResults);
 };
 
 } // namespace facebook::velox::functions

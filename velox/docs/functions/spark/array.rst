@@ -172,6 +172,7 @@ Array Functions
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
     be orderable. NULL and NaN elements will be placed at the end of the returned array, with NaN elements appearing before NULL elements for floating-point types.
+    Elements that compare equal retain their original relative order.
     NULL values nested inside arrays and rows are ordered first, matching Spark's natural ordering. ::
 
         SELECT array_sort(array(1, 2, 3)); -- [1, 2, 3]
@@ -202,12 +203,11 @@ Array Functions
     Binary, timestamp-without-time-zone, and year-month interval values use their Spark physical
     ordering.
     Transform comparators may use equivalent nested ``if`` forms, equality-position variants, and
-    captured fields shared by both sides of the comparison.
-    If the rewritten function returns NULL, the corresponding element will be placed at the end of the returned array. Please note that due to this rewrite optimization, the NULL handling logic between Spark and Velox differs. In Spark, the position of a NULL element is determined by the comparison of NULL with other elements. ::
+    captured fields shared by both sides of the comparison. The transform must be deterministic.
+    Comparator rewrites that produce a NULL sort key are rejected because ordering the NULL key
+    independently would not preserve Spark's pairwise comparator semantics. ::
 
         SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
-        select array_sort(array("abcd123", "abcd", NULL, "abc"), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ["abc", "abcd", "abcd123", NULL]
-        select array_sort(array("abcd123", "abcd", NULL, "abc"), (left, right) -> if(length(left) > length(right), 1, if(length(left) = length(right), 0, -1))); -- ["abc", "abcd", "abcd123", NULL] different with Spark: ["abc", NULL, "abcd", "abcd123"]
 
 .. spark:function:: array_union(array(E) x, array(E) y) -> array(E)
 

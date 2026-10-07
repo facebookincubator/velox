@@ -35,7 +35,8 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
       true /*ascending*/,
       false /*nullsFirst*/,
       true /*nestedNullsFirst*/,
-      false /*throwOnNestedNull*/);
+      false /*throwOnNestedNull*/,
+      true /*stable*/);
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
@@ -44,6 +45,34 @@ std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
     const core::QueryConfig& config) {
   VELOX_CHECK_EQ(inputArgs.size(), 2);
   return makeArraySortLambdaFunction(name, inputArgs, config, false, false);
+}
+
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeArraySortLambdaFunction(
+      name,
+      inputArgs,
+      config,
+      true /*ascending*/,
+      false /*throwOnNestedNull*/,
+      true /*rejectNullSortKeys*/,
+      true /*skipLambdaForTrivialArrays*/);
+}
+
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeArraySortLambdaFunction(
+      name,
+      inputArgs,
+      config,
+      false /*ascending*/,
+      false /*throwOnNestedNull*/,
+      true /*rejectNullSortKeys*/,
+      true /*skipLambdaForTrivialArrays*/);
 }
 
 // Signatures:

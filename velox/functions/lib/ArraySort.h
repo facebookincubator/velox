@@ -26,6 +26,22 @@ namespace facebook::velox::functions {
 /// descending order.
 /// @param nullsFirst If true, nulls are placed first; otherwise, nulls are
 /// placed last.
+/// @param throwOnNestedNull If true, throw an exception if a nested null is
+/// encountered.
+std::shared_ptr<exec::VectorFunction> makeArraySort(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    bool ascending,
+    bool nullsFirst,
+    bool throwOnNestedNull);
+
+/// Creates array_sort function with independent nested-null ordering.
+///
+/// @param ascending If true, sort in ascending order; otherwise, sort in
+/// descending order.
+/// @param nullsFirst If true, nulls are placed first; otherwise, nulls are
+/// placed last.
 /// @param nestedNullsFirst If true, nulls nested inside complex values are
 /// ordered first; otherwise, they are ordered last.
 /// @param throwOnNestedNull If true, throw an exception if a nested null is
@@ -39,6 +55,29 @@ std::shared_ptr<exec::VectorFunction> makeArraySort(
     bool nestedNullsFirst,
     bool throwOnNestedNull);
 
+/// Creates array_sort function with independent nested-null ordering and
+/// optional stable sorting.
+///
+/// @param ascending If true, sort in ascending order; otherwise, sort in
+/// descending order.
+/// @param nullsFirst If true, nulls are placed first; otherwise, nulls are
+/// placed last.
+/// @param nestedNullsFirst If true, nulls nested inside complex values are
+/// ordered first; otherwise, they are ordered last.
+/// @param throwOnNestedNull If true, throw an exception if a nested null is
+/// encountered.
+/// @param stable If true, preserve the original order of elements that compare
+/// equal.
+std::shared_ptr<exec::VectorFunction> makeArraySort(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    bool ascending,
+    bool nullsFirst,
+    bool nestedNullsFirst,
+    bool throwOnNestedNull,
+    bool stable);
+
 /// Creates array_sort with a lambda function.
 ///
 /// @param ascending If true, sort in ascending order; otherwise, sort in
@@ -51,6 +90,41 @@ std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
     const core::QueryConfig& config,
     bool ascending,
     bool throwOnNestedNull);
+
+/// Creates array_sort with a lambda function.
+///
+/// @param ascending If true, sort in ascending order; otherwise, sort in
+/// descending order.
+/// @param throwOnNestedNull If true, throw an exception if a nested null is
+/// encountered.
+/// @param rejectNullSortKeys If true, throw an exception when the lambda
+/// produces a null sort key.
+std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    bool ascending,
+    bool throwOnNestedNull,
+    bool rejectNullSortKeys);
+
+/// Creates array_sort with a lambda function.
+///
+/// @param ascending If true, sort in ascending order; otherwise, sort in
+/// descending order.
+/// @param throwOnNestedNull If true, throw an exception if a nested null is
+/// encountered.
+/// @param rejectNullSortKeys If true, throw an exception when the lambda
+/// produces a null sort key.
+/// @param skipLambdaForTrivialArrays If true, don't evaluate the lambda for
+/// arrays with fewer than two elements.
+std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    bool ascending,
+    bool throwOnNestedNull,
+    bool rejectNullSortKeys,
+    bool skipLambdaForTrivialArrays);
 
 /// Returns signatures for array_sort function.
 ///
@@ -74,5 +148,18 @@ core::TypedExprPtr rewriteArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr,
     const std::shared_ptr<SimpleComparisonChecker> checker);
+
+core::TypedExprPtr rewriteArraySortCall(
+    const std::string& prefix,
+    const core::TypedExprPtr& expr,
+    const std::shared_ptr<SimpleComparisonChecker> checker,
+    bool supportsArbitraryComparatorResults);
+
+core::TypedExprPtr rewriteArraySortCall(
+    const std::string& prefix,
+    const core::TypedExprPtr& expr,
+    const std::shared_ptr<SimpleComparisonChecker> checker,
+    bool supportsArbitraryComparatorResults,
+    bool rejectNullSortKeys);
 
 } // namespace facebook::velox::functions

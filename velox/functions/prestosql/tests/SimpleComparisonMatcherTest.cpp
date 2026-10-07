@@ -124,8 +124,10 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       std::make_unique<TestFunction>());
 
   const auto inputType =
-      ROW({"a", "captured"},
-          {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()})), BIGINT()});
+      ROW({"a", "captured", "captured_array"},
+          {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()})),
+           BIGINT(),
+           ARRAY(BIGINT())});
 
   auto checker = std::make_unique<SimpleComparisonChecker>();
 
@@ -181,16 +183,22 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
   testMatcher("if(x.f = y.f, 0, if(x.f > y.f, -1, 1))", false);
   testMatcher("if(x.f = y.f, 0, if(y.f < x.f, -1, 1))", false);
 
-  // Non-unit comparator values.
-  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, -10, 37))", true);
-  testMatcher("if(x.f < y.f, -10, if(x.f = y.f, 0, 37))", true);
-  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, 37, -10))", false);
-  testMatcher("if(x.f < y.f, 37, if(x.f = y.f, 0, -10))", false);
+  // Non-unit comparator values are not supported by Presto.
+  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, -10, 37))", std::nullopt);
+  testMatcher("if(x.f < y.f, -10, if(x.f = y.f, 0, 37))", std::nullopt);
+  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, 37, -10))", std::nullopt);
+  testMatcher("if(x.f < y.f, 37, if(x.f = y.f, 0, -10))", std::nullopt);
 
   // Captures shared by the left and right transforms.
   testMatcher(
       "if(coalesce(x.f, captured) < coalesce(y.f, captured), -1, "
       "if(coalesce(x.f, captured) > coalesce(y.f, captured), 1, 0))",
+      true);
+  testMatcher(
+      "if(x.f + cardinality(filter(captured_array, z -> z > captured)) < "
+      "y.f + cardinality(filter(captured_array, z -> z > captured)), -1, "
+      "if(x.f + cardinality(filter(captured_array, z -> z > captured)) > "
+      "y.f + cardinality(filter(captured_array, z -> z > captured)), 1, 0))",
       true);
 
   // Non-matching expressions.
@@ -208,6 +216,24 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
   testMatcher(
       "if(coalesce(x.f, captured) < y.f, -10, "
       "if(coalesce(x.f, captured) > y.f, 37, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cardinality(filter(captured_array, z -> z > y.f)) < "
+      "y.f + cardinality(filter(captured_array, z -> z > x.f)), -1, "
+      "if(x.f + cardinality(filter(captured_array, z -> z > y.f)) > "
+      "y.f + cardinality(filter(captured_array, z -> z > x.f)), 1, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cardinality(filter(captured_array, y -> y > captured)) < "
+      "y.f + cardinality(filter(captured_array, x -> x > captured)), -1, "
+      "if(x.f + cardinality(filter(captured_array, y -> y > captured)) > "
+      "y.f + cardinality(filter(captured_array, x -> x > captured)), 1, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cardinality(filter(captured_array, z -> z > random())) < "
+      "y.f + cardinality(filter(captured_array, z -> z > random())), -1, "
+      "if(x.f + cardinality(filter(captured_array, z -> z > random())) > "
+      "y.f + cardinality(filter(captured_array, z -> z > random())), 1, 0))",
       std::nullopt);
   testMatcher("if(x.f > (y.f + 5), 1, if(x.f < y.f, -1, 0))", std::nullopt);
   testMatcher("x.f + y.f", std::nullopt);
