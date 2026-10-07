@@ -171,7 +171,7 @@ class ColumnVisitor {
         reader_(reader),
         allowNulls_(!TFilter::deterministic || filter.testNull()),
         rows_(&rows[0]),
-        numRows_(rows.size()),
+        numRows_(static_cast<vector_size_t>(rows.size())),
         rowIndex_(0),
         values_(values) {}
 
@@ -692,6 +692,37 @@ inline xsimd::batch<int32_t> loadIndices(const T* values, const A& arch = {}) {
   return detail::LoadIndices<T, A>::apply(values, arch);
 }
 
+// Index types up to 64 bits compare in 64 bits because a narrow index type
+// cannot hold every dictionary size: 65'536 truncates to 0 in uint16_t.
+template <typename TIndex>
+using WideDictionaryIndex =
+    std::conditional_t<(sizeof(TIndex) > sizeof(uint64_t)), TIndex, uint64_t>;
+
+// Kept out of line so the formatting code stays out of the hot loops that
+// check indices.
+template <typename TIndex>
+[[noreturn]] FOLLY_NOINLINE void throwDictionaryIndexOutOfRange(
+    TIndex index,
+    int32_t dictionarySize) {
+  VELOX_USER_FAIL(
+      "Index to dictionary is out of range: {:#x} >= {}",
+      static_cast<WideDictionaryIndex<TIndex>>(index),
+      dictionarySize);
+}
+
+// Throws a user error if 'index' is past the end of the dictionary. Corrupt
+// files can carry such indices.
+template <typename TIndex>
+FOLLY_ALWAYS_INLINE void validateDictionaryIndex(
+    TIndex index,
+    int32_t dictionarySize) {
+  using TWide = WideDictionaryIndex<TIndex>;
+  if (UNLIKELY(
+          static_cast<TWide>(index) >= static_cast<TWide>(dictionarySize))) {
+    throwDictionaryIndexOutOfRange(index, dictionarySize);
+  }
+}
+
 // Copies from 'input' to 'values' and translates  via 'dict'. Only elements
 // where 'dictMask' is true at the element's index are translated, else they are
 // passed as is. The elements of input that are copied to values with or without
@@ -859,6 +890,7 @@ class DictionaryColumnVisitor
 
     const vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
+    validateDictionaryIndex(value, dictionarySize());
     const T valueInDictionary = dict()[value];
     if constexpr (!hasFilter()) {
       super::filterPassed(valueInDictionary);
@@ -982,6 +1014,7 @@ class DictionaryColumnVisitor
       } else {
         dictMask = simd::leadingMask<int32_t>(width);
       }
+      validateBatch(input + i, indices, dictMask);
 
       // Load 8 filter cache values. Defaults the extra to values to 0 if
       // loading less than 8.
@@ -1116,6 +1149,54 @@ class DictionaryColumnVisitor
   }
 
  private:
+  // Checks the in-dictionary lanes of a batch of indices loaded from 'input',
+  // before the filter cache and dictionary reads through them. 'indices' holds
+  // the low 32 bits of each index; the high bits of 64-bit indices must be 0.
+  void validateBatch(
+      const T* input,
+      xsimd::batch<int32_t> indices,
+      xsimd::batch_bool<int32_t> dictMask) const {
+    using TIndex = typename make_index<T>::type;
+    uint16_t lanes = simd::toBitMask(dictMask);
+    if constexpr (sizeof(TIndex) <= sizeof(int64_t)) {
+      if constexpr (sizeof(TIndex) == 2) {
+        // LoadIndices sign-extends 16-bit indices.
+        indices = indices & xsimd::batch<int32_t>(0xffff);
+      }
+      const xsimd::batch<int32_t> zero(0);
+      auto outOfRange = (indices >= xsimd::batch<int32_t>(dictionarySize())) |
+          (indices < zero);
+      if constexpr (sizeof(TIndex) == 8) {
+        lanes &= simd::toBitMask(outOfRange) | highWordsNonZero(input);
+      } else {
+        lanes &= simd::toBitMask(outOfRange);
+      }
+    }
+    while (lanes) {
+      const auto lane = bits::getAndClearLastSetBit(lanes);
+      validateDictionaryIndex(
+          reinterpret_cast<const TIndex*>(input)[lane], dictionarySize());
+    }
+  }
+
+  // Returns a lane mask of the 64-bit indices in 'input' whose high 32 bits are
+  // not all zero. Loads contiguously because gathers are slow.
+  static uint16_t highWordsNonZero(const T* input) {
+    constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
+    constexpr int32_t kWidth64 = xsimd::batch<int64_t>::size;
+    const auto* words = reinterpret_cast<const int64_t*>(input);
+    const xsimd::batch<int64_t> highBits(
+        static_cast<int64_t>(0xffff'ffff'0000'0000ULL));
+    const xsimd::batch<int64_t> zero(0);
+    uint16_t mask{0};
+    for (int32_t i = 0; i < kWidth; i += kWidth64) {
+      mask |=
+          simd::toBitMask((xsimd::load_unaligned(words + i) & highBits) != zero)
+          << i;
+    }
+    return mask;
+  }
+
   template <bool hasInDict, bool scatter>
   void translateScatter(
       const T* input,
@@ -1129,14 +1210,18 @@ class DictionaryColumnVisitor
       T value;
       if (hasInDict) {
         if (bits::isBitSet(inDict(), super::rows_[super::rowIndex_ + i])) {
-          value = dict()[reinterpret_cast<const TIndex*>(input)[i]];
+          const auto index = reinterpret_cast<const TIndex*>(input)[i];
+          validateDictionaryIndex(index, dictionarySize());
+          value = dict()[index];
         } else if (!scatter) {
           continue;
         } else {
           value = input[i];
         }
       } else {
-        value = dict()[reinterpret_cast<const TIndex*>(input)[i]];
+        const auto index = reinterpret_cast<const TIndex*>(input)[i];
+        validateDictionaryIndex(index, dictionarySize());
+        value = dict()[index];
       }
       if (scatter) {
         values[scatterRows[super::rowIndex_ + i]] = value;
@@ -1170,7 +1255,9 @@ class DictionaryColumnVisitor
     using TIndex = typename make_index<T>::type;
     if (!inDict()) {
       for (auto i = 0; i < numValues; ++i) {
-        out[i] = dict()[reinterpret_cast<const TIndex*>(values)[i]];
+        const auto index = reinterpret_cast<const TIndex*>(values)[i];
+        validateDictionaryIndex(index, dictionarySize());
+        out[i] = dict()[index];
       }
     } else if (super::dense) {
       bits::forEachSetBit(
@@ -1179,14 +1266,18 @@ class DictionaryColumnVisitor
           super::rowIndex_ + numValues,
           [&](int row) {
             auto valueIndex = row - super::rowIndex_;
-            out[valueIndex] =
-                dict()[reinterpret_cast<const TIndex*>(values)[valueIndex]];
+            const auto index =
+                reinterpret_cast<const TIndex*>(values)[valueIndex];
+            validateDictionaryIndex(index, dictionarySize());
+            out[valueIndex] = dict()[index];
             return true;
           });
     } else {
       for (auto i = 0; i < numValues; ++i) {
         if (bits::isBitSet(inDict(), super::rows_[super::rowIndex_ + i])) {
-          out[i] = dict()[reinterpret_cast<const TIndex*>(values)[i]];
+          const auto index = reinterpret_cast<const TIndex*>(values)[i];
+          validateDictionaryIndex(index, dictionarySize());
+          out[i] = dict()[index];
         }
       }
     }

@@ -22,9 +22,14 @@
 #include <limits>
 #include <numeric>
 
+#include <gmock/gmock.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::dwio::common {
 namespace {
@@ -166,6 +171,16 @@ class TestColumnReader : public SelectiveColumnReader {
   }
 
   using SelectiveColumnReader::getFlatValues;
+
+  /// Stages raw index values into the internal values buffer for direct
+  /// visitor tests (e.g. DictionaryColumnVisitor::processRun reads indices
+  /// from rawValues_). Callers must ensure capacity for the staged values.
+  template <typename T>
+  void stageRawValues(const std::vector<T>& data) {
+    const auto n = static_cast<vector_size_t>(data.size());
+    ensureValuesCapacity<T>(n);
+    std::memcpy(rawValues_, data.data(), n * sizeof(T));
+  }
 };
 
 class GetFlatValuesTest : public ::testing::Test {
@@ -586,6 +601,305 @@ TEST_F(GetFlatValuesTest, int64ToInt128SparseRowsWithNulls) {
   EXPECT_EQ(flat->valueAt(0), 100);
   EXPECT_TRUE(flat->isNullAt(1));
   EXPECT_EQ(flat->valueAt(2), 500);
+}
+
+// Loads a 3-entry integer dictionary {10, 20, 30} into 'reader's scan state,
+// mimicking SelectiveIntegerDictionaryColumnReader after ensureInitialized().
+// The dictionary buffer stays alive via 'dictHolder'.
+void loadIntegerDictionary(TestColumnReader* reader, BufferPtr& dictHolder) {
+  dictHolder = AlignedBuffer::allocate<int32_t>(3, reader->memoryPool());
+  auto* dictValues = dictHolder->asMutable<int32_t>();
+  dictValues[0] = 10;
+  dictValues[1] = 20;
+  dictValues[2] = 30;
+  reader->scanState().dictionary.values = dictHolder;
+  reader->scanState().dictionary.numValues = 3;
+  reader->scanState().updateRawState();
+}
+
+// Marks which of 'numRows' rows hold dictionary indices; the rest hold literal
+// values. Mirrors the IN_DICTIONARY stream of a DWRF integer dictionary.
+void loadInDictionary(
+    TestColumnReader* reader,
+    const std::vector<bool>& inDictionary,
+    BufferPtr& inDictionaryHolder) {
+  inDictionaryHolder = AlignedBuffer::allocate<bool>(
+      inDictionary.size(), reader->memoryPool(), false);
+  auto* rawInDictionary = inDictionaryHolder->asMutable<uint64_t>();
+  for (size_t i = 0; i < inDictionary.size(); ++i) {
+    bits::setBit(rawInDictionary, i, inDictionary[i]);
+  }
+  reader->scanState().inDictionary = inDictionaryHolder;
+  reader->scanState().updateRawState();
+}
+
+// A corrupt DATA stream can carry a dictionary index past the end of the
+// dictionary. The bulk no-filter path must fail the query instead of
+// segfaulting the worker.
+TEST_F(GetFlatValuesTest, dictionaryBulkIndexOutOfRangeThrows) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  // Indices staged where processRun reads them (input == values + numValues).
+  reader->stageRawValues<int32_t>({0, 2, 5'000'000});
+  const std::vector<int32_t> rowsVec = {0, 1, 2};
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  DictionaryColumnVisitor<
+      int32_t,
+      velox::common::AlwaysTrue,
+      ExtractToReader,
+      true>
+      visitor(
+          dwio::common::alwaysTrue(),
+          reader.get(),
+          rows,
+          ExtractToReader(reader.get()));
+  auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      ([&] {
+        visitor.processRun<false, false, false>(
+            values, 3, nullptr, nullptr, values, numValues);
+      })(),
+      "Index to dictionary");
+}
+
+// In-range indices on the same path translate normally.
+TEST_F(GetFlatValuesTest, dictionaryBulkIndexInRangeSucceeds) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  reader->stageRawValues<int32_t>({2, 0, 1});
+  const std::vector<int32_t> rowsVec = {0, 1, 2};
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  DictionaryColumnVisitor<
+      int32_t,
+      velox::common::AlwaysTrue,
+      ExtractToReader,
+      true>
+      visitor(
+          dwio::common::alwaysTrue(),
+          reader.get(),
+          rows,
+          ExtractToReader(reader.get()));
+  auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
+  int32_t numValues = 0;
+  visitor.processRun<false, false, false>(
+      values, 3, nullptr, nullptr, values, numValues);
+  EXPECT_EQ(numValues, 3);
+  EXPECT_THAT(
+      std::vector<int32_t>(values, values + numValues),
+      testing::ElementsAre(30, 10, 20));
+}
+
+// The filter path reads the filter cache by index before translating, so an
+// out-of-range index must be rejected before that read. The cache is sized past
+// the dictionary so the stray read lands on a byte that reads as a known
+// failure, which would otherwise skip validation and drop the row silently.
+TEST_F(GetFlatValuesTest, dictionaryFilteredIndexOutOfRangeThrows) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  constexpr int32_t kOutOfRangeIndex = 1'000;
+  auto& filterCache = reader->scanState().filterCache;
+  filterCache.resize(kOutOfRangeIndex + 1);
+  simd::memset(
+      filterCache.data(), FilterResult::kUnknown, kOutOfRangeIndex + 1);
+  filterCache[kOutOfRangeIndex] = FilterResult::kFailure;
+  reader->scanState().updateRawState();
+  reader->stageRawValues<int32_t>({0, 1, 2, kOutOfRangeIndex, 0, 1, 2, 0});
+  std::vector<int32_t> rowsVec(8);
+  std::iota(rowsVec.begin(), rowsVec.end(), 0);
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  const velox::common::BigintRange filter(0, 100, false);
+  DictionaryColumnVisitor<int32_t, velox::common::BigintRange, DropValues, true>
+      visitor(filter, reader.get(), rows, DropValues());
+  auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
+  std::vector<int32_t> filterHits(16);
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      ([&] {
+        visitor.processRun<true, false, false>(
+            values, 8, nullptr, filterHits.data(), values, numValues);
+      })(),
+      "Index to dictionary");
+}
+
+// The filter path loads only the low 32 bits of 64-bit indices into SIMD
+// lanes. An index whose low half is in range must still be rejected.
+TEST_F(GetFlatValuesTest, dictionaryFilteredWideIndexOutOfRangeThrows) {
+  auto reader = makeReader(BIGINT());
+  BufferPtr dictHolder =
+      AlignedBuffer::allocate<int64_t>(3, reader->memoryPool());
+  auto* dictValues = dictHolder->asMutable<int64_t>();
+  dictValues[0] = 10;
+  dictValues[1] = 20;
+  dictValues[2] = 30;
+  auto& scanState = reader->scanState();
+  scanState.dictionary.values = dictHolder;
+  scanState.dictionary.numValues = 3;
+  scanState.filterCache.resize(3);
+  simd::memset(scanState.filterCache.data(), FilterResult::kFailure, 3);
+  scanState.updateRawState();
+  constexpr int64_t kWideIndex = (int64_t{1} << 32) | 1;
+  reader->stageRawValues<int64_t>({0, kWideIndex, 2, 0, 0, 0, 0, 0});
+  // The filter path loads a full SIMD batch of row numbers.
+  std::vector<int32_t> rowsVec(16);
+  std::iota(rowsVec.begin(), rowsVec.end(), 0);
+  const RowSet rows(rowsVec.data(), 4);
+  const velox::common::BigintRange filter(0, 100, false);
+  DictionaryColumnVisitor<int64_t, velox::common::BigintRange, DropValues, true>
+      visitor(filter, reader.get(), rows, DropValues());
+  auto* values = reinterpret_cast<int64_t*>(reader->rawValues());
+  std::vector<int32_t> filterHits(16);
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      ([&] {
+        visitor.processRun<true, false, false>(
+            values, 4, nullptr, filterHits.data(), values, numValues);
+      })(),
+      "Index to dictionary is out of range: 0x100000001 >= 3");
+}
+
+// Rows outside the dictionary carry literal values, which may exceed the
+// dictionary size and must pass through untouched.
+TEST_F(GetFlatValuesTest, dictionaryLiteralValuesAreNotValidated) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  BufferPtr inDictionaryHolder;
+  loadInDictionary(reader.get(), {true, false, true}, inDictionaryHolder);
+  auto& filterCache = reader->scanState().filterCache;
+  filterCache.resize(3);
+  simd::memset(filterCache.data(), FilterResult::kUnknown, 3);
+  reader->scanState().updateRawState();
+  // The filter path loads a full SIMD batch of row numbers.
+  std::vector<int32_t> rowsVec(16);
+  std::iota(rowsVec.begin(), rowsVec.end(), 0);
+  const RowSet rows(rowsVec.data(), 3);
+
+  {
+    reader->stageRawValues<int32_t>({2, 5'000'000, 0});
+    auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
+    DictionaryColumnVisitor<
+        int32_t,
+        velox::common::AlwaysTrue,
+        ExtractToReader,
+        true>
+        visitor(
+            dwio::common::alwaysTrue(),
+            reader.get(),
+            rows,
+            ExtractToReader(reader.get()));
+    int32_t numValues = 0;
+    visitor.processRun<false, false, false>(
+        values, 3, nullptr, nullptr, values, numValues);
+    EXPECT_THAT(
+        std::vector<int32_t>(values, values + numValues),
+        testing::ElementsAre(30, 5'000'000, 10));
+  }
+
+  {
+    reader->stageRawValues<int32_t>({2, 5'000'000, 0, 0, 0, 0, 0, 0});
+    auto* values = reinterpret_cast<int32_t*>(reader->rawValues());
+    const velox::common::BigintRange filter(0, 10'000'000, false);
+    DictionaryColumnVisitor<
+        int32_t,
+        velox::common::BigintRange,
+        ExtractToReader,
+        true>
+        visitor(filter, reader.get(), rows, ExtractToReader(reader.get()));
+    std::vector<int32_t> filterHits(16);
+    int32_t numValues = 0;
+    visitor.processRun<true, false, false>(
+        values, 3, nullptr, filterHits.data(), values, numValues);
+    EXPECT_THAT(
+        std::vector<int32_t>(values, values + numValues),
+        testing::ElementsAre(30, 5'000'000, 10));
+  }
+}
+
+// The scalar per-value path (process) validates as well.
+TEST_F(GetFlatValuesTest, dictionaryScalarIndexOutOfRangeThrows) {
+  auto reader = makeReader(INTEGER());
+  BufferPtr dictHolder;
+  loadIntegerDictionary(reader.get(), dictHolder);
+  reader->stageRawValues<int32_t>({0});
+  const std::vector<int32_t> rowsVec = {0};
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  DictionaryColumnVisitor<
+      int32_t,
+      velox::common::AlwaysTrue,
+      ExtractToReader,
+      true>
+      visitor(
+          dwio::common::alwaysTrue(),
+          reader.get(),
+          rows,
+          ExtractToReader(reader.get()));
+  bool atEnd = false;
+  VELOX_ASSERT_THROW(visitor.process(7, atEnd), "Index to dictionary");
+}
+
+// Narrow 16-bit indices exercise the uint64_t promotion path in
+// validateDictionaryIndex: a large dictionary size must not truncate to fit
+// the index type. Covers out-of-range rejection and in-range translation.
+TEST_F(GetFlatValuesTest, dictionarySmallintIndexValidation) {
+  auto reader = makeReader(SMALLINT());
+  BufferPtr dictHolder =
+      AlignedBuffer::allocate<int16_t>(3, reader->memoryPool());
+  auto* dictValues = dictHolder->asMutable<int16_t>();
+  dictValues[0] = 100;
+  dictValues[1] = 200;
+  dictValues[2] = 300;
+  reader->scanState().dictionary.values = dictHolder;
+  reader->scanState().dictionary.numValues = 3;
+  reader->scanState().updateRawState();
+
+  const std::vector<int32_t> rowsVec = {0, 1};
+  const RowSet rows(rowsVec.data(), rowsVec.size());
+  DictionaryColumnVisitor<
+      int16_t,
+      velox::common::AlwaysTrue,
+      ExtractToReader,
+      true>
+      visitor(
+          dwio::common::alwaysTrue(),
+          reader.get(),
+          rows,
+          ExtractToReader(reader.get()));
+  // Index 2 is in range; 40'000 exceeds the 3-entry dictionary.
+  reader->stageRawValues<int16_t>(
+      {static_cast<int16_t>(2), static_cast<int16_t>(40'000)});
+  auto* values = reinterpret_cast<int16_t*>(reader->rawValues());
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      ([&] {
+        visitor.processRun<false, false, false>(
+            values, 2, nullptr, nullptr, values, numValues);
+      })(),
+      "Index to dictionary");
+
+  // All indices in range translate normally.
+  DictionaryColumnVisitor<
+      int16_t,
+      velox::common::AlwaysTrue,
+      ExtractToReader,
+      true>
+      passingVisitor(
+          dwio::common::alwaysTrue(),
+          reader.get(),
+          rows,
+          ExtractToReader(reader.get()));
+  reader->stageRawValues<int16_t>({2, 0});
+  auto* passingValues = reinterpret_cast<int16_t*>(reader->rawValues());
+  int32_t passingNumValues = 0;
+  passingVisitor.processRun<false, false, false>(
+      passingValues, 2, nullptr, nullptr, passingValues, passingNumValues);
+  EXPECT_EQ(passingNumValues, 2);
+  EXPECT_THAT(
+      std::vector<int16_t>(passingValues, passingValues + passingNumValues),
+      testing::ElementsAre(300, 100));
 }
 
 } // namespace
