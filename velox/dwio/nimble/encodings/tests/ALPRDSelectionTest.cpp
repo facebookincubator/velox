@@ -623,6 +623,135 @@ TYPED_TEST(ALPRDSelectionTest, nullableSelectionAndReplay) {
   }
 }
 
+TYPED_TEST(ALPRDSelectionTest, replayLimitsFallbackToUnspecifiedChildren) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  const auto values = this->makeValues(257, 2);
+  ScopedVector<T> logical{
+      values.size(), this->pool_.get(), this->options_.bufferPool};
+  ScopedVector<bool> notNulls{
+      2 * values.size(), this->pool_.get(), this->options_.bufferPool};
+  std::vector<PhysicalType> expected(notNulls.size(), 0);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    logical[i] = std::bit_cast<T>(values[i]);
+    notNulls[2 * i] = true;
+    notNulls[2 * i + 1] = false;
+    expected[2 * i] = values[i];
+  }
+
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  const EncodingLayout packed{
+      EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+  const std::vector<std::pair<EncodingLayout, std::vector<DataType>>> layouts{
+      {trivial, {DataType::Bool}},
+      {packed, {DataType::Bool}},
+      {{EncodingType::Dictionary,
+        {},
+        CompressionType::Uncompressed,
+        {trivial, packed}},
+       {DataType::Bool}},
+      {{EncodingType::RLE,
+        {},
+        CompressionType::Uncompressed,
+        {packed, trivial}},
+       {DataType::Bool}},
+      {{EncodingType::MainlyConstant,
+        {},
+        CompressionType::Uncompressed,
+        {std::nullopt, trivial}},
+       {DataType::Bool, DataType::Bool}},
+      {{EncodingType::RLE,
+        {},
+        CompressionType::Uncompressed,
+        {packed,
+         EncodingLayout{
+             EncodingType::Dictionary,
+             {},
+             CompressionType::Uncompressed,
+             {trivial, std::nullopt}}}},
+       {DataType::Uint32, DataType::Bool}},
+  };
+  for (const auto& [layout, expectedTypes] : layouts) {
+    SCOPED_TRACE(layout.encodingType());
+    std::vector<DataType> fallbackTypes;
+    auto replay = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        layout, std::nullopt, [&](DataType type) {
+          const auto index = fallbackTypes.size();
+          fallbackTypes.push_back(type);
+          NIMBLE_CHECK_LT(
+              index, expectedTypes.size(), "Unexpected fallback call.");
+          NIMBLE_CHECK_EQ(
+              type, expectedTypes[index], "Unexpected fallback type.");
+          return ManualEncodingSelectionPolicyFactory{
+              {{EncodingType::Trivial, 1}}, std::nullopt}
+              .createPolicy(type);
+        });
+    const auto encoded = EncodingFactory::encodeNullable<T>(
+        std::move(replay), logical, notNulls, *this->buffer_, this->options_);
+    EXPECT_THAT(fallbackTypes, ::testing::ElementsAreArray(expectedTypes));
+    const auto childOffset =
+        EncodingPrefix::prefixSize(encoded, this->options_.useVarintRowCount) +
+        sizeof(uint32_t);
+    EXPECT_EQ(
+        EncodingPrefix::dataType(encoded.substr(childOffset)),
+        TypeTraits<PhysicalType>::dataType);
+    EXPECT_EQ(
+        EncodingLayoutCapture::capture(encoded, this->options_).encodingType(),
+        layout.encodingType());
+    this->check(encoded, expected);
+  }
+}
+
+TYPED_TEST(ALPRDSelectionTest, replaySelectsAlpCodecsForUnspecifiedValues) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  const auto values = this->makeValues(257, 2);
+  ScopedVector<T> logical{
+      values.size(), this->pool_.get(), this->options_.bufferPool};
+  ScopedVector<bool> notNulls{
+      2 * values.size(), this->pool_.get(), this->options_.bufferPool};
+  std::vector<PhysicalType> expected(notNulls.size(), 0);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    logical[i] = std::bit_cast<T>(values[i]);
+    notNulls[2 * i] = true;
+    notNulls[2 * i + 1] = false;
+    expected[2 * i] = values[i];
+  }
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  for (auto parent :
+       {EncodingType::Dictionary,
+        EncodingType::RLE,
+        EncodingType::MainlyConstant}) {
+    SCOPED_TRACE(parent);
+    const uint8_t valueChild = parent == EncodingType::Dictionary ? 0 : 1;
+    for (auto child : {EncodingType::ALP, EncodingType::ALPRD}) {
+      SCOPED_TRACE(child);
+      std::vector<std::optional<const EncodingLayout>> children{
+          trivial, trivial};
+      children[valueChild].reset();
+      auto replay = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+          EncodingLayout{
+              parent, {}, CompressionType::Uncompressed, std::move(children)},
+          std::nullopt,
+          [child](DataType type) {
+            return ManualEncodingSelectionPolicyFactory{
+                {{EncodingType::Trivial, 1}, {child, 0.001}}, std::nullopt}
+                .createPolicy(type);
+          });
+      const auto encoded = EncodingFactory::encodeNullable<T>(
+          std::move(replay), logical, notNulls, *this->buffer_, this->options_);
+      const auto layout =
+          EncodingLayoutCapture::capture(encoded, this->options_);
+      EXPECT_EQ(layout.encodingType(), parent);
+      ASSERT_TRUE(layout.child(valueChild));
+      EXPECT_EQ(layout.child(valueChild)->encodingType(), child);
+      this->check(encoded, expected);
+    }
+  }
+}
+
 TYPED_TEST(ALPRDSelectionTest, replayRetainsLayoutAndRetrainsSplit) {
   using T = typename TestFixture::T;
   auto values = this->makeValues(512, 2);

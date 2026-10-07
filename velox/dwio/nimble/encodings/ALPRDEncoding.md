@@ -48,8 +48,11 @@ estimation behavior.
 
 The policy hook `hasAlpOrAlprdCandidates()` reports whether
 configured candidates or replayed layouts include ALP or ALP_RD. This includes
-nested candidate overrides and replay fallback policies. Callers use logical
-floating-point types for nested encoding selection when the hook returns
+nested candidate overrides and replay fallback policies for unspecified value
+encodings. A specified value layout is inspected directly. Missing auxiliary
+layouts, such as null flags or dictionary indices, do not trigger a fallback
+capability query. Callers use logical floating-point types for nested encoding
+selection when the hook returns
 `true`. Its default is `false`.
 The selected encoding determines which type is serialized. NULL handling
 remains the responsibility of the enclosing Nullable wrapper.

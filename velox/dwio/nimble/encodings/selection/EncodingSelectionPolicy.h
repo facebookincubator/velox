@@ -47,6 +47,10 @@ bool hasAlpOrAlprdCandidate(
 /// Checks whether a layout tree contains ALP or ALPRD.
 bool hasAlpOrAlprdEncoding(const EncodingLayout& layout);
 
+/// Checks whether a value child that can select ALP or ALPRD lacks a layout.
+/// Auxiliary streams such as null flags and dictionary indices are excluded.
+bool hasUnspecifiedValueEncoding(const EncodingLayout& layout);
+
 } // namespace detail
 
 // The following enables encoding selection debug messages. By default, these
@@ -548,9 +552,11 @@ class ReplayedEncodingSelectionPolicy
   }
 
   bool hasAlpOrAlprdCandidates() const override {
+    // Only an unspecified value encoding needs the fallback's capabilities.
     return detail::hasAlpOrAlprdEncoding(encodingLayout_) ||
-        encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
-            ->hasAlpOrAlprdCandidates();
+        (detail::hasUnspecifiedValueEncoding(encodingLayout_) &&
+         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
+             ->hasAlpOrAlprdCandidates());
   }
 
  protected:

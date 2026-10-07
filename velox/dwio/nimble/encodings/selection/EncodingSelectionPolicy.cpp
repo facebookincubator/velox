@@ -41,6 +41,31 @@ bool hasAlpOrAlprdEncoding(const EncodingLayout& layout) {
   return false;
 }
 
+bool hasUnspecifiedValueEncoding(const EncodingLayout& layout) {
+  NestedEncodingIdentifier valueChild{0};
+  switch (layout.encodingType()) {
+    case EncodingType::Dictionary:
+      valueChild = EncodingIdentifiers::Dictionary::Alphabet;
+      break;
+    case EncodingType::RLE:
+      valueChild = EncodingIdentifiers::RunLength::RunValues;
+      break;
+    case EncodingType::MainlyConstant:
+      valueChild = EncodingIdentifiers::MainlyConstant::OtherValues;
+      break;
+    case EncodingType::Nullable:
+      valueChild = EncodingIdentifiers::Nullable::Data;
+      break;
+    default:
+      return false;
+  }
+  if (valueChild >= layout.childrenCount()) {
+    return false;
+  }
+  const auto& child = layout.child(valueChild);
+  return !child || hasUnspecifiedValueEncoding(*child);
+}
+
 } // namespace detail
 
 /* static */ std::vector<std::pair<EncodingType, float>>
