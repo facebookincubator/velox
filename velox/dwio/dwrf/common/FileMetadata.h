@@ -331,7 +331,7 @@ class TypeWrapper : public ProtoWrapperBase {
                                         : orcPtr()->subtypes_size();
   }
 
-  const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
+  const ::google::protobuf::RepeatedField<uint32_t>&
   subtypes() {
     return format_ == DwrfFormat::kDwrf ? dwrfPtr()->subtypes()
                                         : orcPtr()->subtypes();
@@ -823,7 +823,7 @@ class FooterWrapper : public ProtoWrapperBase {
     return dwrfPtr()->stripecacheoffsets_size();
   }
 
-  const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
+  const ::google::protobuf::RepeatedField<uint32_t>&
   stripeCacheOffsets() const {
     VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->stripecacheoffsets();
