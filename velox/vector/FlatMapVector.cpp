@@ -95,7 +95,17 @@ void FlatMapVector::setDistinctKeysImpl(VectorPtr distinctKeys) {
       distinctKeys->type()->toString());
 
   distinctKeys_ = std::move(distinctKeys);
-  keyIndex_ = std::make_unique<folly::DelayedInit<detail::FlatMapKeyIndex>>();
+  keyIndex_ = std::make_shared<folly::DelayedInit<detail::FlatMapKeyIndex>>();
+}
+
+void FlatMapVector::shareKeyIndex(const FlatMapVector& other) {
+  if (distinctKeys_ == other.distinctKeys_) {
+    keyIndex_ = other.keyIndex_;
+  }
+}
+
+bool FlatMapVector::testingSharesKeyIndex(const FlatMapVector& other) const {
+  return keyIndex_ == other.keyIndex_;
 }
 
 const detail::FlatMapKeyIndex& FlatMapVector::keyIndex() const {
@@ -103,9 +113,21 @@ const detail::FlatMapKeyIndex& FlatMapVector::keyIndex() const {
       [this] { return detail::FlatMapKeyIndex(*distinctKeys_); });
 }
 
+void FlatMapVector::ensureWritableKeyIndex() {
+  if (keyIndex_.use_count() == 1) {
+    return;
+  }
+  auto index = std::make_shared<folly::DelayedInit<detail::FlatMapKeyIndex>>();
+  if (keyIndex_->has_value()) {
+    index->try_emplace(keyIndex_->value());
+  }
+  keyIndex_ = std::move(index);
+}
+
 void FlatMapVector::appendDistinctKey(
     const VectorPtr& sourceDistinctKeys,
     column_index_t sourceChannel) {
+  ensureWritableKeyIndex();
   const vector_size_t targetChannel = distinctKeys_->size();
 
   distinctKeys_->resize(targetChannel + 1);
@@ -211,7 +233,7 @@ VectorPtr FlatMapVector::slice(vector_size_t offset, vector_size_t length)
     }
   }
 
-  return std::make_shared<FlatMapVector>(
+  auto result = std::make_shared<FlatMapVector>(
       pool_,
       type_,
       sliceNulls(offset, length),
@@ -221,6 +243,8 @@ VectorPtr FlatMapVector::slice(vector_size_t offset, vector_size_t length)
       std::move(inMaps),
       std::nullopt,
       sortedKeys_);
+  result->shareKeyIndex(*this);
+  return result;
 }
 
 VectorPtr FlatMapVector::testingCopyPreserveEncodings(
