@@ -103,7 +103,7 @@ Mathematical Functions
     semantics of :spark:func:`round`.
 
     See `Spark's BRound expression
-    <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+    <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
 
     ::
 
