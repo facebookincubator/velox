@@ -16,8 +16,45 @@
 
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::functions {
+namespace {
+
+bool isDeterministicSpecialForm(std::string_view name) {
+  return name == expression::kAnd || name == expression::kOr ||
+      name == expression::kSwitch || name == expression::kIf ||
+      name == expression::kCoalesce || name == expression::kCast ||
+      name == expression::kTryCast || name == expression::kTry ||
+      name == expression::kRowConstructor || name == expression::kNullIf ||
+      name == expression::kCase || name == expression::kIn ||
+      name == expression::kNot || name == "array_constructor";
+}
+
+bool isDeterministicTransform(const core::TypedExprPtr& expr) {
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expr)) {
+    return isDeterministicTransform(lambda->body());
+  }
+
+  if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    const auto deterministic = facebook::velox::isDeterministic(call->name());
+    if ((!deterministic.has_value() &&
+         !isDeterministicSpecialForm(call->name())) ||
+        (deterministic.has_value() && !deterministic.value())) {
+      return false;
+    }
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (!isDeterministicTransform(input)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 bool Matcher::allMatch(
     const std::vector<core::TypedExprPtr>& exprs,
@@ -58,10 +95,41 @@ bool ComparisonMatcher::match(const core::TypedExprPtr& expr) {
 }
 
 bool AnySingleInputMatcher::match(const core::TypedExprPtr& expr) {
+  std::unordered_set<core::FieldAccessTypedExprPtr> inputs;
+  collectInputs(expr, inputs);
+
+  if (inputs.size() == 1) {
+    *expr_ = expr;
+    *input_ = *inputs.begin();
+    return true;
+  }
+
+  return false;
+}
+
+void AnySingleInputMatcher::collectInputs(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) {
+  if (auto field =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    if (field->isInputColumn()) {
+      inputs.insert(field);
+      return;
+    }
+  }
+
+  for (const auto& input : expr->inputs()) {
+    collectInputs(input, inputs);
+  }
+}
+
+bool AnySingleLambdaInputMatcher::match(const core::TypedExprPtr& expr) {
   // Captured fields are allowed, but the expression must depend on exactly one
   // of the lambda arguments.
   std::unordered_set<core::FieldAccessTypedExprPtr> inputs;
-  collectInputs(expr, inputs);
+  if (!collectInputs(expr, inputs)) {
+    return false;
+  }
 
   core::FieldAccessTypedExprPtr lambdaInput;
   for (const auto& input : inputs) {
@@ -83,20 +151,33 @@ bool AnySingleInputMatcher::match(const core::TypedExprPtr& expr) {
   return true;
 }
 
-void AnySingleInputMatcher::collectInputs(
+bool AnySingleLambdaInputMatcher::collectInputs(
     const core::TypedExprPtr& expr,
-    std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) {
+    std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) const {
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expr)) {
+    for (const auto& name : lambda->signature()->names()) {
+      if (lambdaInputs_.contains(name)) {
+        return false;
+      }
+    }
+    return collectInputs(lambda->body(), inputs);
+  }
+
   if (auto field =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
     if (field->isInputColumn()) {
       inputs.insert(field);
-      return;
+      return true;
     }
   }
 
   for (const auto& input : expr->inputs()) {
-    collectInputs(input, inputs);
+    if (!collectInputs(input, inputs)) {
+      return false;
+    }
   }
+  return true;
 }
 
 bool ComparisonConstantMatcher::match(const core::TypedExprPtr& expr) {
@@ -152,6 +233,13 @@ bool SimpleComparisonChecker::isLessThen(
 std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
     const std::string& prefix,
     const core::LambdaTypedExpr& expr) {
+  return isSimpleComparison(prefix, expr, false);
+}
+
+std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
+    const std::string& prefix,
+    const core::LambdaTypedExpr& expr,
+    bool supportsArbitraryComparatorResults) {
   // First, check the shape of the expression.
   // if (x(a) < y(b), c1, if (u(c) > v(d), c2, c3))
   core::FieldAccessTypedExprPtr a, b, c, d;
@@ -197,6 +285,16 @@ std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
     return std::nullopt;
   }
 
+  if (!supportsArbitraryComparatorResults) {
+    const auto isNormalizedResult = [](int64_t result) {
+      return result == -1 || result == 0 || result == 1;
+    };
+    if (!isNormalizedResult(c1) || !isNormalizedResult(c2) ||
+        !isNormalizedResult(c3)) {
+      return std::nullopt;
+    }
+  }
+
   // Verify that x, y, u, v are the same (except for input column).
   std::unordered_map<std::string, core::TypedExprPtr> inputMapping;
   inputMapping.emplace(
@@ -222,6 +320,9 @@ std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
   }
 
   const auto transform = a->name() == left ? x : y;
+  if (!isDeterministicTransform(transform)) {
+    return std::nullopt;
+  }
 
   if (op1IsEquality) {
     // if (x(a) = y(b), 0,...)

@@ -34,6 +34,20 @@ std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
 
+/// Sorts using a comparator rewritten to an ascending sort key and rejects
+/// null keys that cannot preserve Spark comparator semantics.
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+/// Sorts using a comparator rewritten to a descending sort key and rejects
+/// null keys that cannot preserve Spark comparator semantics.
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
 std::shared_ptr<exec::VectorFunction> makeSortArray(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,

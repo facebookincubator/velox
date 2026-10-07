@@ -125,31 +125,36 @@ void addComparatorBenchmarks(ExpressionBenchmarkBuilder& builder) {
         .withIterations(20)
         .disableTesting()
         .addExpression(
-            "identity",
+            "identityStableComparator",
             "array_sort(c0, (x, y) -> "
-            "if(lessthan(x, y), -10, if(greaterthan(x, y), 37, 0)))")
+            "if(lessthan(x, y), (-10)::integer, "
+            "if(greaterthan(x, y), 37::integer, 0::integer)))")
         .addExpression(
             "descending",
             "array_sort(c0, (x, y) -> "
-            "if(greaterthan(x, y), -10, if(lessthan(x, y), 37, 0)))")
+            "if(greaterthan(x, y), (-10)::integer, "
+            "if(lessthan(x, y), 37::integer, 0::integer)))")
         .addExpression(
             "absoluteValue",
             "array_sort(c0, (x, y) -> "
-            "if(lessthan(abs(x), abs(y)), -10, "
-            "if(greaterthan(abs(x), abs(y)), 37, 0)))")
+            "if(lessthan(abs(x), abs(y)), (-10)::integer, "
+            "if(greaterthan(abs(x), abs(y)), 37::integer, 0::integer)))")
         .addExpression(
             "equalityFirst",
             "array_sort(c0, (x, y) -> "
-            "if(equalto(x, y), 0, if(lessthan(x, y), -10, 37)))")
+            "if(equalto(abs(x), abs(y)), 0::integer, "
+            "if(lessthan(abs(x), abs(y)), (-10)::integer, 37::integer)))")
         .addExpression(
             "caseWhenNormalized",
             "array_sort(c0, (x, y) -> "
-            "if(lessthan(x, y), -1, if(greaterthan(x, y), 1, 0)))")
+            "if(lessthan(abs(x), abs(y)), (-1)::integer, "
+            "if(greaterthan(abs(x), abs(y)), 1::integer, 0::integer)))")
         .addExpression(
             "capturedTransform",
             "array_sort(c0, (x, y) -> "
-            "if(lessthan(greatest(x, c1), greatest(y, c1)), -1, "
-            "if(greaterthan(greatest(x, c1), greatest(y, c1)), 1, 0)))");
+            "if(lessthan(greatest(x, c1), greatest(y, c1)), (-1)::integer, "
+            "if(greaterthan(greatest(x, c1), greatest(y, c1)), "
+            "1::integer, 0::integer)))");
   }
 }
 
@@ -166,6 +171,7 @@ int main(int argc, char** argv) {
   facebook::velox::addDefaultOrderingBenchmarks(builder);
   facebook::velox::addComparatorBenchmarks(builder);
   builder.registerBenchmarks();
+  builder.testBenchmarks();
   folly::runBenchmarks();
   return 0;
 }
