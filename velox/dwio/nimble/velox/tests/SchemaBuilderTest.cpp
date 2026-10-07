@@ -254,11 +254,215 @@ TEST(SchemaBuilderTest, hybridFlatMapTracksDefaultGroupKeys) {
   NIMBLE_ASSERT_THROW(
       hybridMap->appendDefaultGroupKey("observed"),
       "Duplicate Hybrid FlatMap key: 'observed'");
+  hybridMap->appendDefaultGroupKey("b");
+  hybridMap->appendDefaultGroupKey("a");
   EXPECT_EQ(
-      hybridMap->groupAt(0).groupKeys, (std::vector<std::string>{"observed"}));
+      hybridMap->groupAt(0).groupKeys,
+      (std::vector<std::string>{"observed", "b", "a"}));
   EXPECT_EQ(
       hybridMap->groupAt(1).groupKeys,
       (std::vector<std::string>{"configured"}));
+
+  NIMBLE_ASSERT_THROW(
+      hybridMap->appendDefaultGroupKey("b"),
+      "Duplicate Hybrid FlatMap key: 'b'");
+  NIMBLE_ASSERT_THROW(
+      hybridMap->appendDefaultGroupKey("configured"),
+      "Duplicate Hybrid FlatMap key: 'configured'");
+  NIMBLE_ASSERT_THROW(
+      hybridMap->appendDefaultGroupKey(""),
+      "Hybrid FlatMap key cannot be empty");
+  EXPECT_EQ(
+      hybridMap->groupAt(0).groupKeys,
+      (std::vector<std::string>{"observed", "b", "a"}));
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapRejectsDuplicateDefaultKeysAfterGrowth) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+  // Enough keys to reallocate the catalog and rehash its key set.
+  std::vector<std::string> expectedKeys;
+  for (int i = 1'000; i > 0; --i) {
+    expectedKeys.push_back("key" + std::to_string(i));
+    hybridMap->appendDefaultGroupKey(expectedKeys.back());
+  }
+
+  EXPECT_EQ(hybridMap->groupAt(0).groupKeys, expectedKeys);
+  for (const auto& key : {expectedKeys.front(), expectedKeys.back()}) {
+    SCOPED_TRACE(key);
+    NIMBLE_ASSERT_THROW(
+        hybridMap->appendDefaultGroupKey(key),
+        "Duplicate Hybrid FlatMap key: '" + key + "'");
+  }
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapAppendRequiresDefaultGroup) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, /*projection=*/true);
+  hybridMap->addGroup(
+      7, {"configured"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+
+  NIMBLE_ASSERT_THROW(
+      hybridMap->appendDefaultGroupKey("observed"),
+      "Hybrid FlatMap Default group is not initialized");
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapRequiresStrictlySortedConfiguredKeys) {
+  struct InvalidKeys {
+    std::vector<std::string> groupKeys;
+    std::string_view error;
+  };
+  const std::vector<InvalidKeys> cases{
+      {{}, "Hybrid FlatMap group must contain at least one key: 7"},
+      {{"a", ""}, "Hybrid FlatMap key cannot be empty"},
+      {{"b", "a"}, "Hybrid FlatMap group keys must be sorted: 7"},
+      {{"a", "b", "b"}, "Duplicate Hybrid FlatMap key: 'b'"},
+  };
+  for (const auto& invalid : cases) {
+    SCOPED_TRACE(invalid.error);
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+
+    NIMBLE_ASSERT_THROW(
+        hybridMap->addGroup(
+            7,
+            invalid.groupKeys,
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        invalid.error);
+  }
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapKeepsDefaultGroupKeysInGivenOrder) {
+  {
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::String, /*projection=*/true);
+    hybridMap->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        {"z", "b"},
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
+    hybridMap->appendDefaultGroupKey("a");
+
+    EXPECT_EQ(
+        hybridMap->groupAt(0).groupKeys,
+        (std::vector<std::string>{"z", "b", "a"}));
+    NIMBLE_ASSERT_THROW(
+        hybridMap->appendDefaultGroupKey("z"),
+        "Duplicate Hybrid FlatMap key: 'z'");
+  }
+
+  for (const auto& [groupKeys, error] :
+       std::vector<std::pair<std::vector<std::string>, std::string_view>>{
+           {{"x", "y", "x"}, "Duplicate Hybrid FlatMap key: 'x'"},
+           {{"x", ""}, "Hybrid FlatMap key cannot be empty"},
+       }) {
+    SCOPED_TRACE(error);
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+
+    NIMBLE_ASSERT_THROW(
+        hybridMap->addGroup(
+            HybridFlatMap::kDefaultGroupId,
+            groupKeys,
+            builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        error);
+  }
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapRejectsKeysSharedAcrossGroups) {
+  const auto addGroup = [](SchemaBuilder& builder,
+                           HybridFlatMapTypeBuilder& hybridMap,
+                           uint32_t groupId,
+                           std::vector<std::string> groupKeys) {
+    hybridMap.addGroup(
+        groupId,
+        std::move(groupKeys),
+        builder.createScalarTypeBuilder(ScalarKind::Int64));
+  };
+
+  // A configured group overlaps an earlier configured group.
+  {
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    addGroup(builder, *hybridMap, 0, {"a", "b"});
+    NIMBLE_ASSERT_THROW(
+        addGroup(builder, *hybridMap, 1, {"b", "c"}),
+        "Duplicate Hybrid FlatMap key: 'b'");
+  }
+
+  // Default overlaps an earlier configured group.
+  {
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+        ScalarKind::String, /*projection=*/true);
+    addGroup(builder, *hybridMap, 0, {"a"});
+    NIMBLE_ASSERT_THROW(
+        addGroup(
+            builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {"z", "a"}),
+        "Duplicate Hybrid FlatMap key: 'a'");
+  }
+
+  // A configured group overlaps a key seeded in or appended to Default.
+  for (const bool appended : {false, true}) {
+    SCOPED_TRACE(appended);
+    SchemaBuilder builder;
+    auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+    if (appended) {
+      addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {});
+      hybridMap->appendDefaultGroupKey("k");
+    } else {
+      addGroup(builder, *hybridMap, HybridFlatMap::kDefaultGroupId, {"k"});
+    }
+    NIMBLE_ASSERT_THROW(
+        addGroup(builder, *hybridMap, 0, {"k"}),
+        "Duplicate Hybrid FlatMap key: 'k'");
+  }
+}
+
+TEST(SchemaBuilderTest, hybridFlatMapFindsGroupsByKey) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      0, {"a", "c"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      3, {"m", "x"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {"z", "b"},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->appendDefaultGroupKey("k");
+
+  // Each existing key, whether configured, seeded in Default or appended, is
+  // rejected as a new Default key.
+  for (const auto* key : {"a", "c", "m", "x", "z", "b", "k"}) {
+    SCOPED_TRACE(key);
+    NIMBLE_ASSERT_THROW(
+        hybridMap->appendDefaultGroupKey(key), "Duplicate Hybrid FlatMap key");
+  }
+
+  const std::vector<std::pair<std::string, std::optional<size_t>>> expected{
+      {"a", 0},
+      {"c", 0},
+      {"m", 1},
+      {"x", 1},
+      {"z", 2},
+      {"b", 2},
+      {"k", 2},
+      {"d", std::nullopt},
+      {"", std::nullopt},
+  };
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto& hybridMapType = schema->asHybridFlatMap();
+  for (const auto& [key, groupIndex] : expected) {
+    SCOPED_TRACE(key);
+    EXPECT_EQ(hybridMapType.findGroup(key), groupIndex);
+  }
 }
 
 TEST(SchemaBuilderTest, rejectsDuplicateDefaultGroupKeys) {
@@ -729,15 +933,11 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
   {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
-    hybridMap->addGroup(
-        0, {""}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId,
-        {},
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Hybrid FlatMap key cannot be empty");
+        hybridMap->addGroup(
+            0, {""}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        "Hybrid FlatMap key cannot be empty");
   }
 
   {
@@ -762,15 +962,11 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
     hybridMap->addGroup(
         0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        1, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId,
-        {},
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Duplicate Hybrid FlatMap key: 'a'");
+        hybridMap->addGroup(
+            1, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        "Duplicate Hybrid FlatMap key: 'a'");
   }
 
   {
@@ -778,15 +974,11 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
     hybridMap->addGroup(
         0, {"a"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        0, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId,
-        {},
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(), "Duplicate Hybrid FlatMap group ID: 0");
+        hybridMap->addGroup(
+            0, {"b"}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
+        "Duplicate Hybrid FlatMap group ID: 0");
   }
 
   {
@@ -809,15 +1001,10 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
   {
     SchemaBuilder builder;
     auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
-    hybridMap->addGroup(
-        0, {}, builder.createScalarTypeBuilder(ScalarKind::Int64));
-    hybridMap->addGroup(
-        HybridFlatMap::kDefaultGroupId,
-        {},
-        builder.createScalarTypeBuilder(ScalarKind::Int64));
 
     NIMBLE_ASSERT_THROW(
-        builder.schemaNodes(),
+        hybridMap->addGroup(
+            0, {}, builder.createScalarTypeBuilder(ScalarKind::Int64)),
         "Hybrid FlatMap group must contain at least one key: 0");
   }
 
@@ -949,6 +1136,61 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
   EXPECT_EQ(map.groupAt(0).groupKeys, (std::vector<std::string>{"a"}));
   NIMBLE_ASSERT_THROW(
       map.defaultGroup(), "Hybrid FlatMap Default group is missing");
+
+  // Configured keys must be sorted, and Default keys must be unique across
+  // every group but may keep any first-seen order.
+  const auto withKeys = [](std::vector<std::string> configuredKeys,
+                           std::vector<std::string> defaultKeys) {
+    return HybridFlatMap{
+        .groups =
+            {
+                {.groupId = 7, .groupKeys = std::move(configuredKeys)},
+                {.groupId = HybridFlatMap::kDefaultGroupId,
+                 .groupKeys = std::move(defaultKeys)},
+            },
+    };
+  };
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(withKeys({"b", "a"}, {}))),
+      "Hybrid FlatMap group keys must be sorted: 7");
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(withKeys({"a"}, {"x", "y", "x"}))),
+      "Duplicate Hybrid FlatMap key: 'x'");
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(withKeys({"a"}, {"z", "a"}))),
+      "Duplicate Hybrid FlatMap key: 'a'");
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(
+          HybridFlatMap{
+              .groups =
+                  {
+                      {.groupId = 3, .groupKeys = {"a", "b"}},
+                      {.groupId = 7, .groupKeys = {"b"}},
+                  },
+          })),
+      "Duplicate Hybrid FlatMap key: 'b'");
+  NIMBLE_ASSERT_THROW(
+      SchemaReader::getSchema(makeNodes(
+          HybridFlatMap{
+              .groups =
+                  {
+                      {.groupId = 7, .groupKeys = {"a"}},
+                      {.groupId = 7, .groupKeys = {"b"}},
+                  },
+          })),
+      "Duplicate Hybrid FlatMap group ID: 7");
+  {
+    const auto keyedSchema =
+        SchemaReader::getSchema(makeNodes(withKeys({"a", "c"}, {"z", "b"})));
+    const auto& keyedMap = keyedSchema->asHybridFlatMap();
+    EXPECT_EQ(
+        keyedMap.defaultGroup().groupKeys,
+        (std::vector<std::string>{"z", "b"}));
+    EXPECT_EQ(keyedMap.findGroup("c"), 0);
+    EXPECT_EQ(keyedMap.findGroup("z"), 1);
+    EXPECT_EQ(keyedMap.findGroup("b"), 1);
+    EXPECT_FALSE(keyedMap.findGroup("q").has_value());
+  }
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMismatchedValueShapes) {

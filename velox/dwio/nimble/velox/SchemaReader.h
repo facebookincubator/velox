@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 
@@ -283,7 +284,8 @@ class HybridFlatMapType : public Type {
   const Group& defaultGroup() const;
 
   /// Returns the schema-order index of the group containing `key`, including
-  /// Default. Returns `std::nullopt` when the schema has not observed it.
+  /// Default. Configured groups are binary searched and Default uses a hash
+  /// set. Returns `std::nullopt` when the schema has not observed it.
   std::optional<size_t> findGroup(std::string_view key) const;
 
   /// Returns the common logical value type from the first group.
@@ -293,6 +295,9 @@ class HybridFlatMapType : public Type {
   StreamDescriptor nullsDescriptor_;
   const ScalarKind keyScalarKind_;
   std::vector<Group> groups_;
+  // Views into the Default group's keys in groups_, which never changes after
+  // construction.
+  folly::F14FastSet<std::string_view> defaultGroupKeys_;
 };
 
 class ArrayWithOffsetsType : public Type {

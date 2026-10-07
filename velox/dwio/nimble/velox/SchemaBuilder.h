@@ -337,13 +337,18 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
-  /// Registers one physical group and its complete value subtree.
+  /// Registers one physical group and its complete value subtree. Configured
+  /// group keys must be non-empty and strictly ascending. Default keys are kept
+  /// in the given first-seen order. The group ID and every key must be unique
+  /// across all groups.
   GroupDescriptor addGroup(
       uint32_t groupId,
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
-  /// Appends a newly observed key to the Default group's ordered catalog.
+  /// Appends a newly observed key to the Default group's first-seen catalog.
+  /// Fails when `key` is empty or already belongs to any group. Configured
+  /// groups are binary searched and Default keys are checked in a hash set.
   void appendDefaultGroupKey(std::string key);
 
   /// Returns the number of physical groups present in this schema.
@@ -370,14 +375,18 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       ScalarKind keyScalarKind,
       bool requiresDefaultGroup);
 
+  // Returns whether any group holds `key`. Binary searches configured groups
+  // and checks the Default keys in defaultGroupKeys_.
+  bool containsKey(std::string_view key) const;
+
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   StreamDescriptorBuilder nullsDescriptor_;
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys already registered in the Default group's ordered catalog.
-  folly::F14FastSet<std::string> defaultGroupKeys_{};
+  // Keys of the Default group's catalog, for containsKey().
+  folly::F14FastSet<std::string> defaultGroupKeys_;
 
   friend class SchemaBuilder;
 };
