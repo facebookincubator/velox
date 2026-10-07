@@ -41,11 +41,11 @@ using EncodingSelectionPolicyCreator =
 namespace detail {
 
 /// Checks whether the candidates contain ALP or ALPRD.
-bool hasFloatingPointEncodingCandidate(
+bool hasAlpOrAlprdCandidate(
     const std::vector<std::pair<EncodingType, float>>& candidates);
 
 /// Checks whether a layout tree contains ALP or ALPRD.
-bool layoutHasFloatingPointEncoding(const EncodingLayout& layout);
+bool hasAlpOrAlprdEncoding(const EncodingLayout& layout);
 
 } // namespace detail
 
@@ -134,20 +134,6 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
-    return select(values, [&](EncodingType encodingType) {
-      return detail::EncodingSizeEstimation<T>::estimateSize(
-          encodingType, values, statistics, options, this);
-    });
-  }
-
-  /// Selects configured candidates using caller-supplied byte estimates.
-  /// Sampled encodings can estimate their target streams while reusing the
-  /// policy's read factors, fallback rules and compression configuration.
-  template <typename SizeEstimator>
-  EncodingSelectionResult select(
-      std::span<const physicalType> values,
-      const SizeEstimator& estimateSize) {
-    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
     if (values.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
@@ -175,7 +161,9 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
-      const auto estimatedSize = estimateSize(encodingType);
+      const auto estimatedSize =
+          detail::EncodingSizeEstimation<T>::estimateSize(
+              encodingType, values, statistics, options);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
@@ -245,12 +233,10 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
-  bool hasFloatingPointEncodingCandidates() const override {
-    return detail::hasFloatingPointEncodingCandidate(
-               candidateEncodingReadFactors_) ||
+  bool hasAlpOrAlprdCandidates() const override {
+    return detail::hasAlpOrAlprdCandidate(candidateEncodingReadFactors_) ||
         (nestedEncodingReadFactorsOverride_ &&
-         detail::hasFloatingPointEncodingCandidate(
-             *nestedEncodingReadFactorsOverride_));
+         detail::hasAlpOrAlprdCandidate(*nestedEncodingReadFactorsOverride_));
   }
 
   /// Returns the configured candidates for this selection node.
@@ -561,10 +547,10 @@ class ReplayedEncodingSelectionPolicy
     };
   }
 
-  bool hasFloatingPointEncodingCandidates() const override {
-    return detail::layoutHasFloatingPointEncoding(encodingLayout_) ||
+  bool hasAlpOrAlprdCandidates() const override {
+    return detail::hasAlpOrAlprdEncoding(encodingLayout_) ||
         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
-            ->hasFloatingPointEncodingCandidates();
+            ->hasAlpOrAlprdCandidates();
   }
 
  protected:

@@ -19,7 +19,7 @@ namespace facebook::nimble {
 
 namespace detail {
 
-bool hasFloatingPointEncodingCandidate(
+bool hasAlpOrAlprdCandidate(
     const std::vector<std::pair<EncodingType, float>>& candidates) {
   return std::any_of(
       candidates.begin(), candidates.end(), [](const auto& entry) {
@@ -28,13 +28,13 @@ bool hasFloatingPointEncodingCandidate(
       });
 }
 
-bool layoutHasFloatingPointEncoding(const EncodingLayout& layout) {
+bool hasAlpOrAlprdEncoding(const EncodingLayout& layout) {
   if (layout.encodingType() == EncodingType::ALP ||
       layout.encodingType() == EncodingType::ALPRD) {
     return true;
   }
   for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
-    if (layout.child(i) && layoutHasFloatingPointEncoding(*layout.child(i))) {
+    if (layout.child(i) && hasAlpOrAlprdEncoding(*layout.child(i))) {
       return true;
     }
   }

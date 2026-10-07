@@ -144,7 +144,7 @@ class EncodingSelection {
   /// recursively encoding internal nested stream (if further nested encodings
   /// are selected).
   /// LogicalT preserves a floating-point type for ALP/ALPRD and, when the
-  /// policy opts in, for containers whose children may select ALPRD.
+  /// policy opts in, for containers whose children may select ALP or ALPRD.
   template <typename NestedT, typename LogicalT = NestedT>
   std::string_view encodeNested(
       NestedEncodingIdentifier nestedEncodingIdentifier,
@@ -182,10 +182,10 @@ class EncodingSelectionPolicyBase {
   virtual ~EncodingSelectionPolicyBase() = default;
 
   /// Reports whether configured candidates or replayed layouts contain ALP or
-  /// ALPRD. Callers use logical floating-point types for nested selection and
-  /// container cost estimation when this is true. Defaults to false to preserve
-  /// physical selection and existing layouts.
-  virtual bool hasFloatingPointEncodingCandidates() const {
+  /// ALPRD. Callers use logical floating-point types for nested selection when
+  /// this is true. Defaults to false to preserve physical selection and
+  /// layouts.
+  virtual bool hasAlpOrAlprdCandidates() const {
     return false;
   }
 
@@ -266,7 +266,7 @@ std::string_view EncodingSelection<T>::encodeNested(
   EncodingSelectionResult selectionResult{};
   const bool selectWithLogicalType{
       isFloatingPointType<LogicalT>() &&
-      nestedPolicy->hasFloatingPointEncodingCandidates()};
+      nestedPolicy->hasAlpOrAlprdCandidates()};
   if (selectWithLogicalType) {
     nestedPolicy = selectionPolicy_->template create<LogicalT>(
         encodingType(), nestedEncodingIdentifier);

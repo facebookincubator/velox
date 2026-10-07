@@ -24,51 +24,24 @@
 
 namespace facebook::nimble::detail {
 
-/// Shares sampled child-cost estimates between ALP and ALPRD. Manual policies
-/// compare each candidate at full-stream size; other policies retain their
-/// selected layouts. Parameter training remains specific to each encoding.
+/// Shares bounded sampling and scalar child-size heuristics for ALP and ALPRD.
+/// Uses the existing estimators' size convention for default-enabled codecs.
 class NestedAlpSizeEstimation {
  public:
-  /// Maximum number of values sampled from a floating-point container child.
-  static constexpr uint32_t kSampleSize = 1'024;
-
   /// Picks a deterministic offset within an evenly sized sampling interval.
   static uint32_t
   sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
 
-  /// Converts a built-in child estimate to the bytes counted by ALP and ALPRD.
-  /// Trivial, FixedBitWidth, Varint and SimdForBitpack use fixed-prefix
-  /// selection estimates; their serialized prefixes follow numRows and options.
-  /// Also includes FixedBitWidth padding. Other estimates pass through.
-  /// Policy-provided sizes must not be passed to this conversion.
-  static uint64_t serializedSize(
-      EncodingType encodingType,
-      uint64_t estimatedSize,
-      uint32_t numRows,
-      const Encoding::Options& options);
-
-  /// Returns the selected child's estimated bytes, including its prefix and
-  /// padding. Read factors influence selection but are not part of this size.
-  /// The policy supplies child choices; its selection methods may update
-  /// internal state. numRows is the target full-stream size, while sampleValues
-  /// contains the observed sample.
+  /// Estimates a non-empty integer child using its observed value range and
+  /// target row count. Constant stores one value; other ranges use the smaller
+  /// of FixedBitWidth and Trivial. Child writers select encodings
+  /// independently.
   template <typename T>
   static uint64_t estimateChildSize(
-      std::span<const typename TypeTraits<T>::physicalType> sampleValues,
       uint32_t numRows,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase& policy);
-
-  /// Estimates the total size of a floating-point Dictionary, RLE or
-  /// MainlyConstant encoding using its value-child policy. Samples the derived
-  /// child from the complete input; returns nullopt for other encoding types.
-  template <typename T>
-  static std::optional<uint64_t> estimateSize(
-      EncodingType encodingType,
-      std::span<const typename TypeTraits<T>::physicalType> values,
-      const Statistics<typename TypeTraits<T>::physicalType>& statistics,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase& policy);
+      uint64_t minValue,
+      uint64_t maxValue,
+      const Encoding::Options& options);
 };
 
 /// Estimates the nested ALP size from all physical values when `T` is a

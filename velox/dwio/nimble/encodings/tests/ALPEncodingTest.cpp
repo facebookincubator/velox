@@ -213,7 +213,7 @@ TEST(ALPSizeEstimationTest, packsExceptionValuesWhenEstimating) {
   expectEstimateUsesPackedExceptionValues<double>();
 }
 
-TYPED_TEST(ALPEncodingTest, estimatesConfiguredChildren) {
+TYPED_TEST(ALPEncodingTest, heuristicEstimateAndConfiguredChildren) {
   using D = typename TypeParam::data_type;
   using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
   using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
@@ -273,7 +273,9 @@ TYPED_TEST(ALPEncodingTest, estimatesConfiguredChildren) {
         EXPECT_EQ(layout.child(0)->encodingType(), expectedChild);
         ASSERT_TRUE(layout.child(1));
         ASSERT_TRUE(layout.child(2));
-        EXPECT_EQ(*result.estimatedSize, encoded.size());
+        EXPECT_EQ(
+            result.estimatedSize,
+            nimble::ALPEncoding<D>::estimateSize(physicals, options));
         auto decoder = nimble::EncodingFactory(options).create(
             *this->pool_, encoded, nullptr);
         nimble::ScopedVector<PhysicalType> actual{
@@ -288,84 +290,12 @@ TYPED_TEST(ALPEncodingTest, estimatesConfiguredChildren) {
               alpWithFixedBitWidthPayloadLayout(),
               std::nullopt,
               unusedNestedPolicyCreator());
-      const auto estimate = nimble::ALPEncoding<D>::estimateSize(
-          physicals, options, replay.get());
-      ASSERT_TRUE(estimate);
       const auto replayed = nimble::EncodingFactory::encode<D>(
           std::move(replay), values, *this->buffer_, options);
-      EXPECT_EQ(*estimate, replayed.size());
-    }
-  }
-}
-
-TYPED_TEST(ALPEncodingTest, projectsChildCostsBeforeSelection) {
-  using D = typename TypeParam::data_type;
-  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
-  using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
-  constexpr uint32_t kSampleRows{1'024};
-  constexpr uint32_t kTotalRows{65'536};
-  const auto trivial = nimble::EncodingType::Trivial;
-  const auto packed = nimble::EncodingType::FixedBitWidth;
-  nimble::Encoding::Options options{.useVarintRowCount = TypeParam::useVarint};
-  const std::array<uint64_t, 2> encodedRange{0, 2};
-  const auto statistics = nimble::Statistics<uint64_t>::create(encodedRange);
-  for (auto exactBits : {false, true}) {
-    options.fixedBitWidthUseExactBits = exactBits;
-    const auto packedRatio = [&](uint32_t numRows) {
-      return static_cast<double>(
-                 nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
-                     numRows, statistics, options)) /
-          nimble::TrivialEncoding<uint64_t>::estimateSize(numRows);
-    };
-    const auto readFactor = static_cast<float>(
-        (packedRatio(kSampleRows) + packedRatio(kTotalRows)) / 2);
-    const ReadFactors children{{packed, 1}, {trivial, readFactor}};
-    for (auto withExceptions : {false, true}) {
-      for (uint32_t numRows : {kSampleRows, kTotalRows}) {
-        SCOPED_TRACE(
-            fmt::format(
-                "exact={} rows={} exceptions={}",
-                exactBits,
-                numRows,
-                withExceptions));
-        nimble::ScopedVector<D> values{
-            numRows, this->pool_.get(), options.bufferPool};
-        // Both the prefix used by ALP training and its evenly spaced estimate
-        // sample contain both values. Exception blocks have the same frequency
-        // in the sample and full input, including both exception child counts.
-        for (uint32_t i = 0; i < numRows; ++i) {
-          const auto block = i / 64;
-          values[i] = withExceptions && block % 32 == 0
-              ? std::numeric_limits<D>::infinity()
-              : static_cast<D>(block % 2);
-        }
-        const auto physicals =
-            nimble::EncodingPhysicalType<D>::asEncodingPhysicalTypeSpan(
-                std::span<const D>{values});
-        auto policy =
-            std::make_unique<nimble::ManualEncodingSelectionPolicy<D>>(
-                ReadFactors{{nimble::EncodingType::ALP, 1}},
-                std::nullopt,
-                std::nullopt,
-                children);
-        const auto result = policy->select(
-            physicals,
-            nimble::Statistics<PhysicalType>::create(physicals),
-            options);
-        ASSERT_TRUE(result.estimatedSize);
-        const auto encoded = nimble::EncodingFactory::encode<D>(
-            std::move(policy), values, *this->buffer_, options);
-        const auto layout =
-            nimble::EncodingLayoutCapture::capture(encoded, options);
-        ASSERT_EQ(layout.encodingType(), nimble::EncodingType::ALP);
-        ASSERT_TRUE(layout.child(0));
-        // Fixed overhead makes Trivial preferable for the sample and packed
-        // values preferable for the full stream under the same read factors.
-        EXPECT_EQ(
-            layout.child(0)->encodingType(),
-            numRows == kSampleRows ? trivial : packed);
-        EXPECT_EQ(*result.estimatedSize, encoded.size());
-      }
+      const auto replayedLayout =
+          nimble::EncodingLayoutCapture::capture(replayed, options);
+      ASSERT_TRUE(replayedLayout.child(0));
+      EXPECT_EQ(replayedLayout.child(0)->encodingType(), packed);
     }
   }
 }
@@ -380,8 +310,8 @@ TYPED_TEST(ALPEncodingTest, estimatesPeriodicInput) {
   for (uint32_t i = 0; i < values.size(); ++i) {
     values[i] = i % 512;
   }
-  // A fixed stride of 64 observes only eight of the 512 distinct values and
-  // severely underestimates the dictionary-index width of the full stream.
+  // Vary the sample offsets to preserve the range of periodic input. The
+  // writer can choose a Dictionary child even though estimation uses FBW.
   const auto physicals =
       nimble::EncodingPhysicalType<D>::asEncodingPhysicalTypeSpan(
           std::span<const D>{values});

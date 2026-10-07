@@ -135,7 +135,7 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
-  bool hasFloatingPointEncodingCandidates() const override {
+  bool hasAlpOrAlprdCandidates() const override {
     return std::any_of(
         candidateEncodingTypes_.begin(),
         candidateEncodingTypes_.end(),

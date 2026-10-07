@@ -298,6 +298,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     auto writerOptions =
         makeSingleScalarColumnWriterOptions(EncodingType::ALPRD);
     if (automaticSelection) {
+      writerOptions.encodingLayoutTree.reset();
       writerOptions.encodingSelectionPolicyCreator = [](DataType type) {
         return ManualEncodingSelectionPolicyFactory{
             {{EncodingType::Constant, 1},
@@ -332,6 +333,58 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
       auto readers = makeReaders(input, file, scanSpec, zeroCopy);
       validate(*input, *readers.rowReader, 113);
     }
+  }
+
+  template <typename T>
+  void testAlprdIncompatibleChildLayout() {
+    using Physical = typename TypeTraits<T>::physicalType;
+    constexpr auto kRightBits = sizeof(T) * 8 - 16;
+    auto input = makeRowVector({makeFlatVector<T>(1'024, [](auto row) {
+      const Physical high = row % 2 == 0 ? 0x3f00 : 0xbf00;
+      const Physical low = (uint64_t(row) * 0x9e3779b97f4a7c15ULL) &
+          ((Physical{1} << kRightBits) - 1);
+      return std::bit_cast<T>(
+          static_cast<Physical>((high << kRightBits) | low));
+    })});
+    const EncodingLayout constant{
+        EncodingType::Constant, {}, CompressionType::Uncompressed};
+    const EncodingLayout packed{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+    const EncodingLayout layout{
+        EncodingType::ALPRD,
+        {},
+        CompressionType::Uncompressed,
+        {constant, packed, packed, packed}};
+    using StreamLayouts = std::
+        unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>;
+    WriterOptions writerOptions;
+    writerOptions.encodingLayoutTree.emplace(
+        Kind::Row,
+        StreamLayouts{},
+        "",
+        std::vector<EncodingLayoutTree>{EncodingLayoutTree{
+            Kind::Scalar,
+            StreamLayouts{
+                {EncodingLayoutTree::StreamIdentifiers::Scalar::ScalarStream,
+                 layout}},
+            "c0"}});
+    writerOptions.encodingSelectionPolicyCreator = [](DataType type) {
+      return ManualEncodingSelectionPolicyFactory{
+          {{EncodingType::Constant, 1},
+           {EncodingType::Trivial, 1},
+           {EncodingType::FixedBitWidth, 1},
+           {EncodingType::ALPRD, 1}},
+          std::nullopt}
+          .createPolicy(type);
+    };
+    // The trained dictionary needs two codes. The saved Constant child cannot
+    // encode them, so the writer must retry through ordinary selection.
+    const auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+    checkFileEncoding<T>(file, EncodingType::ALPRD, false, true);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    auto readers = makeReaders(input, file, scanSpec, true);
+    validate(*input, *readers.rowReader, 113);
   }
 
   template <typename T>
@@ -452,6 +505,11 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Bool(),
         ::testing::Bool(),
         ::testing::Bool()));
+
+TEST_F(FloatingPointColumnReaderTest, alprdIncompatibleChildLayout) {
+  testAlprdIncompatibleChildLayout<float>();
+  testAlprdIncompatibleChildLayout<double>();
+}
 
 TEST_F(FloatingPointColumnReaderTest, floatingPointCodecsWithNulls) {
   for (auto zeroCopy : {false, true}) {

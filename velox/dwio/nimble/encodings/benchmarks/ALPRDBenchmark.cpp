@@ -453,8 +453,8 @@ void profileDataset(std::string_view dataset) {
       {{"train",
         [&](uint32_t iterations) {
           while (iterations--) {
-            const auto parameters = ALPRDEncodingBase::selectParameters(
-                physicals, options, nullptr);
+            const auto parameters =
+                ALPRDEncodingBase::selectParameters(physicals, options);
             folly::doNotOptimizeAway(parameters);
           }
         }},

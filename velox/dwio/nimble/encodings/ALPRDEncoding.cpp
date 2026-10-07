@@ -15,7 +15,6 @@
  */
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 
-#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 
 namespace facebook::nimble {
@@ -125,45 +124,15 @@ void ALPRDEncodingBase::loadExceptions(
 
 namespace {
 
-// Keeps parameter selection and automatic selection on the same sampled model.
+// Returns the parameters and heuristic size from the same bounded sample.
 struct SplitSelection {
+  // Defines the split and dictionary associated with the estimated size.
   ALPRDEncodingBase::Parameters parameters;
-  // Estimates serialized bytes for all target rows, including the prefix,
-  // split metadata and child payloads. Read factors affect child selection,
-  // not this byte count. The maximum value means no split has been selected.
+  // Includes ALPRD metadata and its four child estimates for all target rows.
   uint64_t size{std::numeric_limits<uint64_t>::max()};
 };
 
-// Uses cheap scalar costs to bound how often split selection invokes
-// potentially expensive nested policies. The final score uses the supplied
-// policy.
-struct SplitCandidate {
-  ALPRDEncodingBase::Parameters parameters;
-  std::array<uint64_t, 4> childSizes;
-  uint32_t numExceptions;
-  uint64_t size;
-};
-
-template <typename T>
-uint64_t scalarChildSize(
-    std::span<const T> sample,
-    uint32_t numRows,
-    const Encoding::Options& options) {
-  const auto [min, max] = std::minmax_element(sample.begin(), sample.end());
-  const auto prefixSize =
-      EncodingPrefix::serializedSize(numRows, options.useVarintRowCount);
-  if (*min == *max) {
-    return prefixSize + sizeof(T);
-  }
-  return std::min(
-      prefixSize + 1 + uint64_t{numRows} * sizeof(T),
-      detail::NestedAlpSizeEstimation::serializedSize(
-          EncodingType::FixedBitWidth,
-          FixedBitWidthEncoding<T>::estimateSize(numRows, *min, *max, options),
-          numRows,
-          options));
-}
-
+// Adds the outer metadata and one length field for each present child.
 uint64_t splitSize(
     uint8_t dictionarySize,
     uint32_t numRows,
@@ -181,131 +150,72 @@ uint64_t splitSize(
   return size;
 }
 
-// Owns the bounded sample and scratch storage for one ALPRD split selection.
+// Owns the bounded sample and frequency storage for ALPRD parameter selection.
 template <typename PhysicalType>
 class SplitSelector {
  public:
-  // Samples the input while retaining positions in the target full stream.
+  // Samples the input while retaining the target row count for cost estimates.
   SplitSelector(
       std::span<const PhysicalType> values,
       uint32_t numRows,
-      const Encoding::Options& options,
-      const ALPRDEncodingBase::NestedEncodingPolicies& nestedEncodingPolicies);
+      const Encoding::Options& options);
 
-  // Shortlists splits with scalar costs, then scores their selected children.
+  // Scores splits using Constant, FixedBitWidth and Trivial child estimates.
   SplitSelection select();
 
  private:
   using Base = ALPRDEncodingBase;
 
-  // Prepares sample parts for reuse across dictionary sizes at one split width.
-  void splitSample(uint8_t rightBitWidth);
-
-  // Populates codes and exceptions from the current high parts and dictionary.
-  // Returns the number of sampled exceptions.
-  uint32_t buildCodesAndExceptions(const Base::Parameters& parameters);
-
-  // Groups equivalent scalar layouts and keeps the four lowest-cost splits.
-  std::vector<SplitCandidate> shortlistCandidates();
-
-  // Estimates a shortlisted split using its configured child policies.
-  uint64_t estimateCandidateSize(const SplitCandidate& candidate);
-
   // Number of values represented by the sample in the target payload.
   const uint32_t numRows_;
-  // Samples remain bounded even when the input span contains all values.
+  // Limits the amount of data inspected for every split width.
   const uint32_t numSamples_;
-  // Borrows the caller's options and child policies for this split selection.
+  // Applies the caller's byte-rounded or exact-bit packing option.
   const Encoding::Options& options_;
-  const Base::NestedEncodingPolicies& nestedEncodingPolicies_;
-  // Original sampled bits and their mapped positions in the target payload.
+  // Retains the original sampled bits across split widths.
   std::array<PhysicalType, Base::kSampleSize> sample_{};
-  std::array<uint32_t, Base::kSampleSize> samplePositions_{};
-  // Reuses split components and frequency storage across candidate widths.
-  std::array<PhysicalType, Base::kSampleSize> rightParts_{};
-  std::array<uint16_t, Base::kSampleSize> highParts_{};
+  // Sorts sampled prefixes for frequency counting.
   std::array<uint16_t, Base::kSampleSize> sortedHighParts_{};
+  // Ranks distinct prefixes by frequency for dictionary construction.
   std::array<std::pair<uint16_t, uint32_t>, Base::kSampleSize> frequencies_{};
-  // Holds the sampled codes and exceptions for the candidate being scored.
-  std::array<uint16_t, Base::kSampleSize> codes_{};
-  std::array<uint32_t, Base::kSampleSize> exceptionPositions_{};
-  std::array<uint16_t, Base::kSampleSize> exceptionHighParts_{};
 };
 
 template <typename PhysicalType>
 SplitSelector<PhysicalType>::SplitSelector(
     std::span<const PhysicalType> values,
     uint32_t numRows,
-    const Encoding::Options& options,
-    const ALPRDEncodingBase::NestedEncodingPolicies& nestedEncodingPolicies)
+    const Encoding::Options& options)
     : numRows_{numRows},
       numSamples_{std::min<uint32_t>(values.size(), Base::kSampleSize)},
-      options_{options},
-      nestedEncodingPolicies_{nestedEncodingPolicies} {
+      options_{options} {
   NIMBLE_CHECK(
       !values.empty(), "ALPRD split selection requires non-empty input.");
   NIMBLE_CHECK_LE(values.size(), numRows_);
   for (uint32_t i = 0; i < numSamples_; ++i) {
-    const auto index = detail::NestedAlpSizeEstimation::sampledRowIndex(
-        i, numSamples_, values.size());
-    sample_[i] = values[index];
-    samplePositions_[i] = uint64_t{index} * numRows_ / values.size();
+    sample_[i] = values[detail::NestedAlpSizeEstimation::sampledRowIndex(
+        i, numSamples_, values.size())];
   }
 }
 
 template <typename PhysicalType>
 SplitSelection SplitSelector<PhysicalType>::select() {
-  const auto candidates = shortlistCandidates();
+  using Cost = detail::NestedAlpSizeEstimation;
   SplitSelection best;
-  for (const auto& candidate : candidates) {
-    const auto size = estimateCandidateSize(candidate);
-    if (size < best.size ||
-        (size == best.size &&
-         candidate.parameters.rightBitWidth < best.parameters.rightBitWidth)) {
-      best = {candidate.parameters, size};
-    }
-  }
-  return best;
-}
-
-template <typename PhysicalType>
-void SplitSelector<PhysicalType>::splitSample(uint8_t rightBitWidth) {
-  const auto mask = (PhysicalType{1} << rightBitWidth) - 1;
-  for (uint32_t i = 0; i < numSamples_; ++i) {
-    rightParts_[i] = sample_[i] & mask;
-    highParts_[i] = sample_[i] >> rightBitWidth;
-  }
-}
-
-template <typename PhysicalType>
-uint32_t SplitSelector<PhysicalType>::buildCodesAndExceptions(
-    const Base::Parameters& parameters) {
-  uint32_t numSampleExceptions{0};
-  for (uint32_t i = 0; i < numSamples_; ++i) {
-    uint16_t code{0};
-    while (code < parameters.dictionarySize &&
-           parameters.dictionary[code] != highParts_[i]) {
-      ++code;
-    }
-    if (code == parameters.dictionarySize) {
-      exceptionPositions_[numSampleExceptions] = samplePositions_[i];
-      exceptionHighParts_[numSampleExceptions++] = highParts_[i];
-      code = 0;
-    }
-    codes_[i] = code;
-  }
-  return numSampleExceptions;
-}
-
-template <typename PhysicalType>
-std::vector<SplitCandidate> SplitSelector<PhysicalType>::shortlistCandidates() {
-  std::vector<SplitCandidate> candidates;
-  candidates.reserve(Base::kMaxHighBitWidth * Base::kMaxDictionarySize);
   for (uint8_t highBitWidth = 1; highBitWidth <= Base::kMaxHighBitWidth;
        ++highBitWidth) {
     const uint8_t rightBitWidth = sizeof(PhysicalType) * 8 - highBitWidth;
-    splitSample(rightBitWidth);
-    std::copy_n(highParts_.begin(), numSamples_, sortedHighParts_.begin());
+    const auto mask = (PhysicalType{1} << rightBitWidth) - 1;
+    PhysicalType minRight{std::numeric_limits<PhysicalType>::max()};
+    PhysicalType maxRight{0};
+    for (uint32_t i = 0; i < numSamples_; ++i) {
+      const auto right = sample_[i] & mask;
+      minRight = std::min(minRight, right);
+      maxRight = std::max(maxRight, right);
+      sortedHighParts_[i] = sample_[i] >> rightBitWidth;
+    }
+    const auto rightSize = Cost::estimateChildSize<PhysicalType>(
+        numRows_, minRight, maxRight, options_);
+
     std::sort(sortedHighParts_.begin(), sortedHighParts_.begin() + numSamples_);
     uint32_t numPrefixes{0};
     for (uint32_t i = 0; i < numSamples_; ++i) {
@@ -325,149 +235,56 @@ std::vector<SplitCandidate> SplitSelector<PhysicalType>::shortlistCandidates() {
           return lhs.second != rhs.second ? lhs.second > rhs.second
                                           : lhs.first < rhs.first;
         });
-    const auto rightSize = scalarChildSize<PhysicalType>(
-        {rightParts_.data(), numSamples_}, numRows_, options_);
+
+    Base::Parameters parameters{.rightBitWidth = rightBitWidth};
+    uint32_t numSampleExceptions{numSamples_};
     for (uint8_t dictionarySize = 1; dictionarySize <= maxDictionarySize;
          ++dictionarySize) {
-      Base::Parameters parameters{
-          .rightBitWidth = rightBitWidth, .dictionarySize = dictionarySize};
-      for (uint8_t i = 0; i < dictionarySize; ++i) {
-        parameters.dictionary[i] = frequencies_[i].first;
-      }
-      const auto numSampleExceptions = buildCodesAndExceptions(parameters);
+      parameters.dictionarySize = dictionarySize;
+      parameters.dictionary[dictionarySize - 1] =
+          frequencies_[dictionarySize - 1].first;
+      numSampleExceptions -= frequencies_[dictionarySize - 1].second;
       const uint32_t numExceptions =
           (uint64_t{numSampleExceptions} * numRows_ + numSamples_ - 1) /
           numSamples_;
-      const std::array<uint64_t, 4> childSizes{
-          scalarChildSize<uint16_t>(
-              {codes_.data(), numSamples_}, numRows_, options_),
-          rightSize,
-          numExceptions == 0
-              ? 0
-              : scalarChildSize<uint32_t>(
-                    {exceptionPositions_.data(), numSampleExceptions},
-                    numExceptions,
-                    options_),
-          numExceptions == 0
-              ? 0
-              : scalarChildSize<uint16_t>(
-                    {exceptionHighParts_.data(), numSampleExceptions},
-                    numExceptions,
-                    options_),
-      };
-      // Equivalent scalar layouts must not crowd out other split shapes. On
-      // ties keep the narrower right part.
-      const auto equivalent = std::find_if(
-          candidates.begin(), candidates.end(), [&](const auto& candidate) {
-            return candidate.parameters.dictionarySize == dictionarySize &&
-                candidate.numExceptions == numExceptions &&
-                candidate.childSizes == childSizes;
-          });
-      if (equivalent != candidates.end()) {
-        equivalent->parameters = parameters;
-      } else {
-        candidates.push_back(
-            {parameters,
-             childSizes,
-             numExceptions,
-             splitSize(
-                 dictionarySize,
-                 numRows_,
-                 numExceptions,
-                 childSizes,
-                 options_)});
+      uint64_t positionsSize{0};
+      uint64_t highPartsSize{0};
+      if (numExceptions != 0) {
+        // Positions are distinct absolute row numbers. Even a single sampled
+        // exception can represent many positions in the full stream.
+        positionsSize = Cost::estimateChildSize<uint32_t>(
+            numExceptions, 0, numExceptions == 1 ? 0 : numRows_ - 1, options_);
+        uint16_t minHigh{std::numeric_limits<uint16_t>::max()};
+        uint16_t maxHigh{0};
+        for (uint32_t i = dictionarySize; i < numPrefixes; ++i) {
+          minHigh = std::min(minHigh, frequencies_[i].first);
+          maxHigh = std::max(maxHigh, frequencies_[i].first);
+        }
+        highPartsSize = Cost::estimateChildSize<uint16_t>(
+            numExceptions, minHigh, maxHigh, options_);
+      }
+      const auto size = splitSize(
+          dictionarySize,
+          numRows_,
+          numExceptions,
+          {
+              Cost::estimateChildSize<uint16_t>(
+                  numRows_, 0, dictionarySize - 1, options_),
+              rightSize,
+              positionsSize,
+              highPartsSize,
+          },
+          options_);
+      // Prefer narrower low parts on ties. Dictionary sizes increase, so
+      // equal costs at one width retain the smaller dictionary.
+      if (size < best.size ||
+          (size == best.size &&
+           rightBitWidth < best.parameters.rightBitWidth)) {
+        best = {parameters, size};
       }
     }
   }
-  constexpr uint32_t kMaxCandidates = 4;
-  const auto numCandidates =
-      std::min<uint32_t>(candidates.size(), kMaxCandidates);
-  std::partial_sort(
-      candidates.begin(),
-      candidates.begin() + numCandidates,
-      candidates.end(),
-      [](const auto& lhs, const auto& rhs) {
-        return lhs.size != rhs.size ? lhs.size < rhs.size
-            : lhs.parameters.rightBitWidth != rhs.parameters.rightBitWidth
-            ? lhs.parameters.rightBitWidth < rhs.parameters.rightBitWidth
-            : lhs.parameters.dictionarySize < rhs.parameters.dictionarySize;
-      });
-  candidates.resize(numCandidates);
-  return candidates;
-}
-
-template <typename PhysicalType>
-uint64_t SplitSelector<PhysicalType>::estimateCandidateSize(
-    const SplitCandidate& candidate) {
-  const auto& parameters = candidate.parameters;
-  splitSample(parameters.rightBitWidth);
-  const auto numSampleExceptions = buildCodesAndExceptions(parameters);
-  const auto numExceptions = candidate.numExceptions;
-  const std::array<uint64_t, 4> childSizes{
-      detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-          {codes_.data(), numSamples_},
-          numRows_,
-          options_,
-          *nestedEncodingPolicies_.codes),
-      detail::NestedAlpSizeEstimation::estimateChildSize<PhysicalType>(
-          {rightParts_.data(), numSamples_},
-          numRows_,
-          options_,
-          *nestedEncodingPolicies_.rightParts),
-      numExceptions == 0
-          ? 0
-          : detail::NestedAlpSizeEstimation::estimateChildSize<uint32_t>(
-                {exceptionPositions_.data(), numSampleExceptions},
-                numExceptions,
-                options_,
-                *nestedEncodingPolicies_.exceptionPositions),
-      numExceptions == 0
-          ? 0
-          : detail::NestedAlpSizeEstimation::estimateChildSize<uint16_t>(
-                {exceptionHighParts_.data(), numSampleExceptions},
-                numExceptions,
-                options_,
-                *nestedEncodingPolicies_.exceptionHighParts),
-  };
-  return splitSize(
-      parameters.dictionarySize, numRows_, numExceptions, childSizes, options_);
-}
-
-template <typename PhysicalType>
-SplitSelection selectSplit(
-    std::span<const PhysicalType> values,
-    uint32_t numRows,
-    const Encoding::Options& options,
-    EncodingSelectionPolicyBase* policy) {
-  NIMBLE_CHECK(
-      !values.empty(), "ALPRD split selection requires non-empty input.");
-  NIMBLE_CHECK_LE(values.size(), numRows);
-  std::unique_ptr<EncodingSelectionPolicyBase> defaultPolicy;
-  if (policy == nullptr) {
-    defaultPolicy =
-        ManualEncodingSelectionPolicyFactory{
-            ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors(),
-            std::nullopt}
-            .createPolicy(TypeTraits<PhysicalType>::dataType);
-    policy = defaultPolicy.get();
-  }
-  return SplitSelector<PhysicalType>{
-      values,
-      numRows,
-      options,
-      ALPRDEncodingBase::NestedEncodingPolicies{
-          .codes = policy->create<uint16_t>(
-              EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
-          .rightParts = policy->create<PhysicalType>(
-              EncodingType::ALPRD, EncodingIdentifiers::ALPRD::RightParts),
-          .exceptionPositions = policy->create<uint32_t>(
-              EncodingType::ALPRD,
-              EncodingIdentifiers::ALPRD::ExceptionPositions),
-          .exceptionHighParts = policy->create<uint16_t>(
-              EncodingType::ALPRD,
-              EncodingIdentifiers::ALPRD::ExceptionHighParts),
-      }}
-      .select();
+  return best;
 }
 
 } // namespace
@@ -475,68 +292,38 @@ SplitSelection selectSplit(
 template <typename PhysicalType>
 ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     std::span<const PhysicalType> values,
-    const Encoding::Options& options,
-    const NestedEncodingPolicies& nestedEncodingPolicies) {
+    const Encoding::Options& options) {
   NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
   return SplitSelector<PhysicalType>{
-      values,
-      static_cast<uint32_t>(values.size()),
-      options,
-      nestedEncodingPolicies}
+      values, static_cast<uint32_t>(values.size()), options}
       .select()
       .parameters;
-}
-
-template <typename PhysicalType>
-ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
-    std::span<const PhysicalType> values,
-    const Encoding::Options& options,
-    EncodingSelectionPolicyBase* policy) {
-  NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-  return selectSplit(values, values.size(), options, policy).parameters;
 }
 
 template <typename PhysicalType>
 std::optional<uint64_t> ALPRDEncodingBase::estimateSize(
     std::span<const PhysicalType> sampleValues,
     uint32_t numRows,
-    const Encoding::Options& options,
-    EncodingSelectionPolicyBase* policy) {
+    const Encoding::Options& options) {
   if (sampleValues.empty()) {
     return std::nullopt;
   }
-  return selectSplit(sampleValues, numRows, options, policy).size;
+  return SplitSelector<PhysicalType>{sampleValues, numRows, options}
+      .select()
+      .size;
 }
 
-template ALPRDEncodingBase::Parameters
-ALPRDEncodingBase::selectParameters<uint32_t>(
-    std::span<const uint32_t>,
-    const Encoding::Options&,
-    const ALPRDEncodingBase::NestedEncodingPolicies&);
-template ALPRDEncodingBase::Parameters
-ALPRDEncodingBase::selectParameters<uint64_t>(
-    std::span<const uint64_t>,
-    const Encoding::Options&,
-    const ALPRDEncodingBase::NestedEncodingPolicies&);
-template ALPRDEncodingBase::Parameters
-ALPRDEncodingBase::selectParameters<uint32_t>(
-    std::span<const uint32_t>,
-    const Encoding::Options&,
-    EncodingSelectionPolicyBase*);
-template ALPRDEncodingBase::Parameters
-ALPRDEncodingBase::selectParameters<uint64_t>(
-    std::span<const uint64_t>,
-    const Encoding::Options&,
-    EncodingSelectionPolicyBase*);
+template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
+    uint32_t>(std::span<const uint32_t>, const Encoding::Options&);
+template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
+    uint64_t>(std::span<const uint64_t>, const Encoding::Options&);
 template std::optional<uint64_t> ALPRDEncodingBase::estimateSize<uint32_t>(
     std::span<const uint32_t>,
     uint32_t,
-    const Encoding::Options&,
-    EncodingSelectionPolicyBase*);
+    const Encoding::Options&);
 template std::optional<uint64_t> ALPRDEncodingBase::estimateSize<uint64_t>(
     std::span<const uint64_t>,
     uint32_t,
-    const Encoding::Options&,
-    EncodingSelectionPolicyBase*);
+    const Encoding::Options&);
 
 } // namespace facebook::nimble

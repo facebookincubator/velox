@@ -360,11 +360,10 @@ TYPED_TEST(ALPRDEncodingTest, splitCostTiePrefersNarrowerRightPart) {
   using Physical = typename TestFixture::Physical;
   const std::vector<Physical> values(
       32, std::bit_cast<Physical>(typename TestFixture::T{1.25}));
-  auto policy = makePolicy<typename TestFixture::T>(makeLayout());
-  // Every split produces one dictionary entry and constant FBW children of
-  // identical serialized sizes. Resolve the tie independently of loop order.
-  const auto parameters = ALPRDEncodingBase::selectParameters<Physical>(
-      values, this->options_, policy.get());
+  // Every split produces one dictionary entry and constant child estimates.
+  // Equal costs prefer the narrower right part.
+  const auto parameters =
+      ALPRDEncodingBase::selectParameters<Physical>(values, this->options_);
   EXPECT_EQ(parameters.rightBitWidth, sizeof(Physical) * 8 - 16);
   EXPECT_EQ(parameters.dictionarySize, 1);
   this->check(this->encode(values), values);

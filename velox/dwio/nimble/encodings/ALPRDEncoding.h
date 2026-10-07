@@ -89,44 +89,21 @@ class ALPRDEncodingBase {
   /// Maximum number of input values inspected by split encoding selection.
   static constexpr uint32_t kSampleSize = 1'024;
 
-  /// Owns the child encoding policies used for split selection.
-  struct NestedEncodingPolicies {
-    /// Selects the uint16 dictionary-code encoding.
-    std::unique_ptr<EncodingSelectionPolicyBase> codes;
-    /// Selects the uint32/uint64 low-part encoding.
-    std::unique_ptr<EncodingSelectionPolicyBase> rightParts;
-    /// Selects the uint32 exception-position encoding.
-    std::unique_ptr<EncodingSelectionPolicyBase> exceptionPositions;
-    /// Selects the uint16 exception-high-part encoding.
-    std::unique_ptr<EncodingSelectionPolicyBase> exceptionHighParts;
-  };
-
-  /// Selects the split using the supplied child encoding policies.
+  /// Selects a split and dictionary using bounded sampling and scalar child
+  /// estimates. Each child writer applies its own encoding selection policy.
   template <typename PhysicalType>
   static Parameters selectParameters(
       std::span<const PhysicalType> values,
-      const Encoding::Options& options,
-      const NestedEncodingPolicies& nestedEncodingPolicies);
+      const Encoding::Options& options);
 
-  /// Selects the split and dictionary using estimated serialized child sizes.
-  /// A null policy uses the existing default child candidates.
-  template <typename PhysicalType>
-  static Parameters selectParameters(
-      std::span<const PhysicalType> values,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase* policy);
-
-  /// Estimates a payload of numRows values from sampleValues, which may
-  /// contain the full input or a representative sample.
-  /// Uses the same bounded split selection as encode(), including child
-  /// policies, prefix sizes, byte rounding, padding and exception metadata.
-  /// Estimates child sizes without serializing the sample.
+  /// Estimates numRows values from a representative sample, which may contain
+  /// the full input. Uses the same split selection as encode(), adding ALPRD
+  /// metadata once to the heuristic child sizes.
   template <typename PhysicalType>
   static std::optional<uint64_t> estimateSize(
       std::span<const PhysicalType> sampleValues,
       uint32_t numRows,
-      const Encoding::Options& options,
-      EncodingSelectionPolicyBase* policy);
+      const Encoding::Options& options);
 
  protected:
   /// Creates a child decoder and rejects NULL wrappers within ALPRD streams.
@@ -256,13 +233,12 @@ class ALPRDEncoding final
         metadata_.exceptionCount);
   }
 
-  /// Estimates the default uncompressed layout without encoding candidates.
+  /// Estimates the full input with the bounded scalar child-cost model.
   static std::optional<uint64_t> estimateSize(
       std::span<const physicalType> values,
       const Encoding::Options& options) {
     NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
-    return ALPRDEncodingBase::estimateSize(
-        values, values.size(), options, /*policy=*/nullptr);
+    return ALPRDEncodingBase::estimateSize(values, values.size(), options);
   }
 
   static std::string_view encode(
@@ -274,23 +250,7 @@ class ALPRDEncoding final
     if (values.empty()) {
       NIMBLE_INCOMPATIBLE_ENCODING("ALPRD cannot encode empty data.");
     }
-    const auto parameters = selectParameters(
-        values,
-        options,
-        NestedEncodingPolicies{
-            .codes = selection.template createNestedPolicy<uint16_t>(
-                EncodingType::ALPRD, EncodingIdentifiers::ALPRD::Codes),
-            .rightParts = selection.template createNestedPolicy<physicalType>(
-                EncodingType::ALPRD, EncodingIdentifiers::ALPRD::RightParts),
-            .exceptionPositions =
-                selection.template createNestedPolicy<uint32_t>(
-                    EncodingType::ALPRD,
-                    EncodingIdentifiers::ALPRD::ExceptionPositions),
-            .exceptionHighParts =
-                selection.template createNestedPolicy<uint16_t>(
-                    EncodingType::ALPRD,
-                    EncodingIdentifiers::ALPRD::ExceptionHighParts),
-        });
+    const auto parameters = selectParameters(values, options);
     const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
     ScopedVector<uint16_t> codes(rowCount, pool, options.bufferPool);

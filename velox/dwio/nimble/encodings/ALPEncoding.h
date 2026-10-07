@@ -530,20 +530,18 @@ class ALPEncoding final
     return {reserved, encodingSize};
   }
 
-  /// Estimates the complete input using bounded sampling and the supplied
-  /// child policy. A null policy uses the default encoding candidates.
+  /// Estimates the complete input using bounded sampling and scalar child
+  /// estimates with the same size convention as other Nimble estimators.
   static std::optional<uint64_t> estimateSize(
       std::span<const physicalType> values,
-      const Encoding::Options& options = {},
-      EncodingSelectionPolicyBase* policy = nullptr);
+      const Encoding::Options& options = {});
 
-  /// Estimates rowCount values from a representative sample. Projects each
-  /// child candidate before selection and adds ALP metadata once.
+  /// Estimates rowCount values from a representative sample. Projects child
+  /// counts before estimating scalar costs and adds ALP metadata once.
   static std::optional<uint64_t> estimateSizeFromSample(
       uint64_t rowCount,
       std::span<const physicalType> sampledValues,
-      const Encoding::Options& options = {},
-      EncodingSelectionPolicyBase* policy = nullptr);
+      const Encoding::Options& options = {});
 
   static uint32_t estimateSampleSize(uint64_t rowCount) {
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);
