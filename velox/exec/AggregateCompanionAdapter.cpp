@@ -64,6 +64,11 @@ void AggregateCompanionFunctionBase::setAllocatorInternal(
   fn_->setAllocator(allocator);
 }
 
+void AggregateCompanionFunctionBase::setConstantInputs(
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->setConstantInputs(constantInputs);
+}
+
 void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
   fn_->destroy(groups);
 }

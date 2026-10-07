@@ -38,6 +38,11 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isReducing() const override final;
 
+  /// Forwards the constant arguments to the wrapped aggregate, which is the
+  /// one that reads them.
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override final;
+
   void destroy(folly::Range<char**> groups) override final;
 
   void initializeNewGroups(
