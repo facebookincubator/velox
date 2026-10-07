@@ -2925,6 +2925,39 @@ TEST_P(SelectiveNimbleReaderTest, nativeFlatMap) {
   }
 }
 
+TEST_P(SelectiveNimbleReaderTest, nativeFlatMapSharesKeyIndexAcrossBatches) {
+  auto input = makeRowVector({makeFlatMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+      {{2, 22}},
+      {{1, 13}, {2, 23}},
+  })});
+  WriterOptions writerOptions;
+  writerOptions.flatMapColumns = {{"c0", {}}};
+  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers = makeReaders(
+      input,
+      file,
+      scanSpec,
+      stringDecoderZeroCopy(),
+      /*preserveFlatMapsInMemory=*/true);
+
+  VectorPtr result = BaseVector::create(input->type(), 0, pool());
+  ASSERT_EQ(readers.rowReader->next(2, result), 2);
+  // Holding the first batch keeps the reader from reusing it for the second.
+  auto firstBatch =
+      BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+  ASSERT_EQ(readers.rowReader->next(2, result), 2);
+  auto secondBatch =
+      BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+
+  ASSERT_NE(firstBatch, secondBatch);
+  EXPECT_TRUE(secondBatch->as<FlatMapVector>()->testingSharesKeyIndex(
+      *firstBatch->as<FlatMapVector>()));
+}
+
 TEST_P(SelectiveNimbleReaderTest, mapAsStruct) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({

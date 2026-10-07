@@ -426,7 +426,24 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
-  readerOutputType_ = splitReader_->readerOutputType();
+
+  auto splitReaderOutputType = splitReader_->readerOutputType();
+  if (readerProducedType_ != nullptr &&
+      splitReaderOutputType->size() > readerProducedType_->size()) {
+    // The split reader appended columns, e.g. an unselected Iceberg
+    // equality-delete or lineage column. next() allocates the output from
+    // 'readerProducedType_', so it has to grow by the same columns.
+    auto names = readerProducedType_->names();
+    auto types = readerProducedType_->children();
+    for (auto i = readerProducedType_->size();
+         i < splitReaderOutputType->size();
+         ++i) {
+      names.push_back(splitReaderOutputType->nameOf(i));
+      types.push_back(splitReaderOutputType->childAt(i));
+    }
+    readerProducedType_ = ROW(std::move(names), std::move(types));
+  }
+  readerOutputType_ = std::move(splitReaderOutputType);
 }
 
 std::optional<RowVectorPtr> FileDataSource::next(
@@ -544,6 +561,7 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
   FileScanBatchEvent fileEvent;
   fileEvent.numRows = event.numRows;
   fileEvent.wallTimeMicros = event.wallTimeMicros;
+  fileEvent.planNodeId = event.planNodeId;
   fileEvent.storageReadBytes = storageReadBytesDelta;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();
