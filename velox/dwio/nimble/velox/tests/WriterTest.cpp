@@ -999,15 +999,28 @@ void testAlpE2EWriterSelection(
 
     const auto captured = captureColumnEncoding(file, leafPool, 0);
     EXPECT_EQ(captured.encodingType(), nimble::EncodingType::ALP);
+    expectRoundTrip(file, leafPool, vector);
   }
 
-  {
+  for (const bool enableNestedAlp : {false, true}) {
+    SCOPED_TRACE(fmt::format("enableNestedAlp={}", enableNestedAlp));
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
     nimble::WriterOptions options;
+    // Explicit child candidates control ALP selection with this option enabled.
     options.allowNestedAlpSelection = true;
+    using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
+    std::optional<ReadFactors> nestedEncodingReadFactors;
+    if (enableNestedAlp) {
+      nestedEncodingReadFactors = ReadFactors{{nimble::EncodingType::ALP, 1.0}};
+    }
     options.encodingSelectionPolicyCreator =
-        makeEncodingSelectionPolicyCreator(nimble::EncodingType::Dictionary);
+        [factory = nimble::ManualEncodingSelectionPolicyFactory{
+             {{nimble::EncodingType::Dictionary, 1.0}},
+             std::nullopt,
+             std::move(nestedEncodingReadFactors)}](nimble::DataType dataType) {
+          return factory.createPolicy(dataType);
+        };
     nimble::Writer writer(
         vector->type(), std::move(writeFile), rootPool, std::move(options));
     writer.write(vector);
@@ -1018,7 +1031,11 @@ void testAlpE2EWriterSelection(
     const auto& alphabet =
         captured.child(nimble::EncodingIdentifiers::Dictionary::Alphabet);
     ASSERT_TRUE(alphabet.has_value());
-    EXPECT_EQ(alphabet->encodingType(), nimble::EncodingType::ALP);
+    EXPECT_EQ(
+        alphabet->encodingType(),
+        enableNestedAlp ? nimble::EncodingType::ALP
+                        : nimble::EncodingType::Trivial);
+    expectRoundTrip(file, leafPool, vector);
   }
 }
 
