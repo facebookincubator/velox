@@ -7,6 +7,42 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
+.. spark:function:: approx_count_distinct_for_intervals(x, endpoints, relativeSD) -> array(bigint)
+
+    Returns the approximate number of distinct values of ``x`` in each interval
+    defined by ``endpoints``. Given endpoints (e1, e2, ..., eN), the result
+    holds the counts for [e1, e2], (e2, e3], ..., (eN-1, eN]. An interval whose
+    two endpoints are equal counts 1. Values outside [e1, eN] and null values
+    are ignored. NaN values are rejected.
+
+    ``endpoints`` must be a constant array of at least two non-null, non-NaN
+    values in ascending order. ``relativeSD`` is the maximum relative standard
+    deviation of the estimates, e.g. 0.05 for 5%. It must be a non-null
+    constant in ``[0.0040625, 0.26]``. If either argument is not a literal, a
+    global aggregation over no rows returns NULL.
+
+    ``x`` and the endpoints can be TINYINT, SMALLINT, INTEGER, BIGINT, REAL,
+    DOUBLE, DECIMAL, DATE, TIMESTAMP, INTERVAL DAY TO SECOND or INTERVAL YEAR
+    TO MONTH. Both are compared as DOUBLE in their own units, so the endpoints
+    should normally have the type of ``x``: DATE in days, TIMESTAMP and
+    INTERVAL DAY TO SECOND in microseconds, and INTERVAL YEAR TO MONTH in
+    months. INTERVAL DAY TO SECOND values that do not fit in Spark's
+    microsecond range are rejected. Values with more than 15 significant digits
+    can lose precision. As in Spark, a REAL endpoint takes the value of its
+    shortest decimal form, so the endpoint 0.1 is the DOUBLE 0.1, while a REAL
+    value of 0.1 is slightly larger.
+
+    Differences from Spark:
+
+    * Estimates come from Velox's HyperLogLog instead of Spark's HLL++. Values
+      are hashed the same way, but the number of registers can differ for the
+      same ``relativeSD``, so estimates are not identical to Spark's. The
+      intermediate format is not compatible with Spark's, so partial and final
+      aggregation must both run in Velox.
+    * Spark only checks that ``relativeSD`` is below about 0.39, and does not
+      check that endpoints are sorted or free of NaN. It also never returns
+      NULL.
+
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
