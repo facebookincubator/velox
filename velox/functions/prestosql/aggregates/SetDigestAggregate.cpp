@@ -344,6 +344,7 @@ std::vector<exec::AggregateRegistrationResult> registerMakeSetDigest(
                 inputType->toString());
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }
@@ -577,6 +578,7 @@ std::vector<exec::AggregateRegistrationResult> registerMergeSetDigest(
           -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<MergeSetDigestAggregate>(resultType);
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

@@ -22,6 +22,11 @@
 
 namespace facebook::velox::core {
 
+namespace {
+constexpr const char* kLegacyTimestampWithTimezone =
+    "legacy_timestamp_with_timezone";
+}
+
 const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     std::vector<config::ConfigProperty> properties;
@@ -35,7 +40,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
-    VELOX_REGISTER_QUERY_CONFIG(kLegacyTimestampWithTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kUseSessionTimezoneForTimestampWithTimezone);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);
@@ -99,6 +104,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kPreferredOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMaxOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMergeJoinOutputBatchStartSize);
+    VELOX_REGISTER_QUERY_CONFIG(kMergeJoinStreamLeftSide);
 
     // Table scan.
     VELOX_REGISTER_QUERY_CONFIG(kTableScanGetOutputTimeLimitMs);
@@ -269,12 +275,22 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterHardLimit);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 
     return properties;
   }();
   return kProperties;
+}
+
+bool QueryConfig::useSessionTimezoneForTimestampWithTimezone() const {
+  const auto useSessionTimezone =
+      get<bool>(kUseSessionTimezoneForTimestampWithTimezone);
+  if (useSessionTimezone.has_value()) {
+    return useSessionTimezone.value();
+  }
+  return !get<bool>(kLegacyTimestampWithTimezone, true);
 }
 
 QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)

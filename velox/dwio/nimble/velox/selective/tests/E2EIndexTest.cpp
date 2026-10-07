@@ -423,6 +423,84 @@ class E2EIndexTestBase : public ::testing::Test {
     return results;
   }
 
+  struct ChunkStatsReadResult {
+    std::vector<RowVectorPtr> rows;
+    RuntimeStats stats;
+  };
+
+  void writeChunkStatsData(
+      const std::vector<RowVectorPtr>& batches,
+      bool enableChunkStats = true,
+      uint32_t maxChunkStringStatSize =
+          ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      uint64_t minStreamChunkRawSize = 0,
+      uint32_t batchesPerStripe = 0,
+      ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2) {
+    sinkData_.clear();
+    auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
+    auto batchesInStripe = std::make_shared<uint32_t>(0);
+    Writer writer(
+        asRowType(batches.front()->type()),
+        std::move(writeFile),
+        *rootPool_,
+        {
+            .enableChunkStats = enableChunkStats,
+            .chunkStatsVersion = chunkStatsVersion,
+            .chunkStatsMinAvgChunks = 0,
+            .maxChunkStringStatSize = maxChunkStringStatSize,
+            .minStreamChunkRawSize = minStreamChunkRawSize,
+            .flushPolicyFactory =
+                [batchesInStripe, batchesPerStripe]() {
+                  return std::make_unique<LambdaFlushPolicy>(
+                      [batchesInStripe,
+                       batchesPerStripe](const StripeProgress&) {
+                        if (batchesPerStripe == 0 ||
+                            ++*batchesInStripe < batchesPerStripe) {
+                          return false;
+                        }
+                        *batchesInStripe = 0;
+                        return true;
+                      },
+                      [](const StripeProgress&) { return true; });
+                },
+            .enableChunking = true,
+            .enableStreamDeduplication = false,
+        });
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+  }
+
+  ChunkStatsReadResult readChunkStatsData(
+      const RowTypePtr& rowType,
+      const std::unordered_map<std::string, std::unique_ptr<Filter>>& filters,
+      double sampleRate = 1.0,
+      uint32_t randomSeed = 0) {
+    auto reader = createReader(sampleRate, randomSeed);
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setRequestedType(rowType);
+    rowReaderOptions.setScanSpec(createScanSpec(rowType, filters));
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    ChunkStatsReadResult readResult;
+    VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+    while (rowReader->next(1'000, result) > 0) {
+      result->loadedVector();
+      readResult.rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+    }
+    rowReader->updateRuntimeStats(readResult.stats);
+    return readResult;
+  }
+
+  static size_t countRows(const std::vector<RowVectorPtr>& batches) {
+    size_t numRows{0};
+    for (const auto& batch : batches) {
+      numRows += batch->size();
+    }
+    return numRows;
+  }
+
   // Compares two sets of results for equality.
   void verifyResultsEqual(
       const std::vector<RowVectorPtr>& withIndex,
@@ -620,6 +698,418 @@ class E2EIndexTest : public E2EIndexTestBase,
         GetParam().enableChunkIndex);
   }
 };
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneSupportedTypesAndNulls) {
+  const auto rowType = ROW(
+      {{"integer", BIGINT()}, {"boolean", BOOLEAN()}, {"string", VARCHAR()}});
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"integer", "boolean", "string"},
+          {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3}),
+           vectorMaker_->flatVector<bool>({false, false, false, false}),
+           vectorMaker_->flatVector<StringView>({"", "a", "b", "c"})}),
+      vectorMaker_->rowVector(
+          {"integer", "boolean", "string"},
+          {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103}),
+           vectorMaker_->flatVector<bool>({true, true, true, true}),
+           vectorMaker_->flatVector<StringView>({"m", "n", "o", "p"})}),
+  };
+  auto nullIntegers = vectorMaker_->flatVector<int64_t>({0, 0, 0, 0});
+  auto nullBooleans =
+      vectorMaker_->flatVector<bool>({false, false, false, false});
+  auto nullStrings = vectorMaker_->flatVector<StringView>({"", "", "", ""});
+  for (vector_size_t row = 0; row < 4; ++row) {
+    nullIntegers->setNull(row, true);
+    nullBooleans->setNull(row, true);
+    nullStrings->setNull(row, true);
+  }
+  batches.push_back(vectorMaker_->rowVector(
+      {"integer", "boolean", "string"},
+      {nullIntegers, nullBooleans, nullStrings}));
+  writeChunkStatsData(batches);
+  const auto onlyM = vectorMaker_->rowVector(
+      {"integer", "boolean", "string"},
+      {vectorMaker_->flatVector<int64_t>({100}),
+       vectorMaker_->flatVector<bool>({true}),
+       vectorMaker_->flatVector<StringView>({"m"})});
+
+  const auto verifyRead = [&](std::string column,
+                              std::unique_ptr<Filter> filter,
+                              std::vector<RowVectorPtr> expectedRows,
+                              int64_t expectedSkippedRows) {
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters.emplace(std::move(column), std::move(filter));
+    const auto result = readChunkStatsData(rowType, filters);
+    verifyResultsEqual(result.rows, expectedRows);
+    EXPECT_EQ(result.stats.chunkSkippedRows, expectedSkippedRows);
+    EXPECT_EQ(result.stats.processedRows, 12);
+  };
+
+  verifyRead(
+      "integer",
+      std::make_unique<BigintRange>(100, 103, false),
+      {batches[1]},
+      8);
+  verifyRead(
+      "boolean", std::make_unique<BoolValue>(true, false), {batches[1]}, 8);
+  verifyRead(
+      "string",
+      std::make_unique<BytesValues>(
+          std::vector<std::string>{"m"}, /*nullAllowed=*/false),
+      {onlyM},
+      8);
+  verifyRead("integer", std::make_unique<IsNull>(), {batches[2]}, 8);
+  verifyRead(
+      "integer", std::make_unique<IsNotNull>(), {batches[0], batches[1]}, 4);
+}
+
+TEST_F(E2EIndexTestBase, v1ChunkStatsDoNotPrune) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+  };
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/0,
+      ChunkStatsVersion::kV1);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(100, 103, false);
+  const auto result = readChunkStatsData(rowType, filters);
+
+  verifyResultsEqual(result.rows, {batches[1]});
+  EXPECT_EQ(result.stats.chunkSkippedRows, 0);
+  EXPECT_EQ(result.stats.processedRows, 8);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsDoNotPruneCompactedTopLevelNulls) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+  };
+  batches[0]->setNull(1, true);
+  writeChunkStatsData(batches);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(200, 203, false);
+  const auto result = readChunkStatsData(rowType, filters);
+
+  verifyResultsEqual(result.rows, {batches[2]});
+  EXPECT_EQ(result.stats.chunkSkippedRows, 0);
+  EXPECT_EQ(result.stats.processedRows, 12);
+
+  filters["value"] = std::make_unique<IsNull>();
+  const auto nullResult = readChunkStatsData(rowType, filters);
+  auto expectedNull = vectorMaker_->rowVector(
+      {"value"}, {vectorMaker_->flatVector<int64_t>({1})});
+  expectedNull->setNull(0, true);
+  verifyResultsEqual(nullResult.rows, {expectedNull});
+  EXPECT_EQ(nullResult.stats.chunkSkippedRows, 0);
+  EXPECT_EQ(nullResult.stats.processedRows, 12);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneOnlyAlignedStripes) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({300, 301, 302, 303})}),
+  };
+  // Compact the child stream only in the first stripe.
+  batches[0]->setNull(1, true);
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/2);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(300, 303, false);
+  const auto result = readChunkStatsData(rowType, filters);
+
+  verifyResultsEqual(result.rows, {batches[3]});
+  EXPECT_EQ(result.stats.chunkSkippedRows, 4);
+  EXPECT_EQ(result.stats.processedRows, 16);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneFloatingPointTypes) {
+  const auto rowType = ROW({{"real", REAL()}, {"double", DOUBLE()}});
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"real", "double"},
+          {vectorMaker_->flatVector<float>({0, 1, 2, 3}),
+           vectorMaker_->flatVector<double>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"real", "double"},
+          {vectorMaker_->flatVector<float>({100, 101, 102, 103}),
+           vectorMaker_->flatVector<double>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"real", "double"},
+          {vectorMaker_->flatVector<float>({200, 201, 202, 203}),
+           vectorMaker_->flatVector<double>({200, 201, 202, 203})}),
+  };
+  writeChunkStatsData(batches);
+
+  const auto verifyRead = [&](std::string column,
+                              std::unique_ptr<Filter> filter) {
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters.emplace(std::move(column), std::move(filter));
+    const auto result = readChunkStatsData(rowType, filters);
+    verifyResultsEqual(result.rows, {batches[1]});
+    EXPECT_EQ(result.stats.chunkSkippedRows, 8);
+    EXPECT_EQ(result.stats.processedRows, 12);
+  };
+
+  verifyRead(
+      "real",
+      std::make_unique<FloatRange>(
+          100,
+          /*lowerUnbounded=*/false,
+          /*lowerExclusive=*/false,
+          103,
+          /*upperUnbounded=*/false,
+          /*upperExclusive=*/false,
+          /*nullAllowed=*/false));
+  verifyRead(
+      "double",
+      std::make_unique<DoubleRange>(
+          100,
+          /*lowerUnbounded=*/false,
+          /*lowerExclusive=*/false,
+          103,
+          /*upperUnbounded=*/false,
+          /*upperExclusive=*/false,
+          /*nullAllowed=*/false));
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsMergeRangesAcrossColumns) {
+  const auto rowType = ROW({"first", "second"}, BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"first", "second"},
+          {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3}),
+           vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+      vectorMaker_->rowVector(
+          {"first", "second"},
+          {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103}),
+           vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"first", "second"},
+          {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203}),
+           vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+  };
+  writeChunkStatsData(batches);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["first"] = std::make_unique<BigintRange>(50, 250, false);
+  filters["second"] = std::make_unique<BigintRange>(50, 250, false);
+  const auto result = readChunkStatsData(rowType, filters);
+
+  verifyResultsEqual(result.rows, {batches[2]});
+  EXPECT_EQ(result.stats.chunkSkippedRows, 8);
+  EXPECT_EQ(result.stats.processedRows, 12);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsUnalignedChunksAcrossStripes) {
+  const auto rowType = ROW({{"narrow", TINYINT()}, {"wide", BIGINT()}});
+  std::vector<RowVectorPtr> batches;
+  for (int8_t batch = 0; batch < 6; ++batch) {
+    const auto firstRow = static_cast<int8_t>(batch * 4);
+    const bool matchesWideFilter = batch == 1 || batch == 3 || batch == 5;
+    batches.push_back(vectorMaker_->rowVector(
+        {"narrow", "wide"},
+        {vectorMaker_->flatVector<int8_t>(
+             4, [firstRow](auto row) { return firstRow + row; }),
+         vectorMaker_->flatVector<int64_t>(4, [matchesWideFilter](auto row) {
+           return matchesWideFilter ? row : 100 + row;
+         })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/24,
+      /*batchesPerStripe=*/3);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["narrow"] = std::make_unique<BigintRange>(4, 19, false);
+  filters["wide"] = std::make_unique<BigintRange>(0, 3, false);
+  const auto result = readChunkStatsData(rowType, filters);
+  const auto expected = vectorMaker_->rowVector(
+      {"narrow", "wide"},
+      {vectorMaker_->flatVector<int8_t>({4, 5, 6, 7, 12, 13, 14, 15}),
+       vectorMaker_->flatVector<int64_t>({0, 1, 2, 3, 0, 1, 2, 3})});
+
+  verifyResultsEqual(result.rows, {expected});
+  EXPECT_EQ(result.stats.chunkSkippedRows, 12);
+  EXPECT_EQ(result.stats.processedRows, 24);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsRefreshAfterDynamicFilter) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+  };
+  writeChunkStatsData(batches);
+
+  auto scanSpec = std::make_shared<ScanSpec>("root");
+  auto* valueSpec = scanSpec->addField("value", 0);
+  auto reader = createReader();
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(rowType);
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  std::vector<RowVectorPtr> rows;
+  VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+  EXPECT_EQ(rowReader->next(2, result), 2);
+  result->loadedVector();
+  rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+  valueSpec->setFilter(std::make_unique<BigintRange>(200, 203, false));
+  rowReader->resetFilterCaches();
+
+  while (rowReader->next(4, result) > 0) {
+    result->loadedVector();
+    rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+  }
+  const auto expected = vectorMaker_->rowVector(
+      {"value"},
+      {vectorMaker_->flatVector<int64_t>({0, 1, 200, 201, 202, 203})});
+  verifyResultsEqual(rows, {expected});
+  RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.chunkSkippedRows, 6);
+  EXPECT_EQ(stats.processedRows, 12);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+  };
+  writeChunkStatsData(batches);
+
+  {
+    auto scanSpec = std::make_shared<ScanSpec>("root");
+    scanSpec->addField("value", 0)
+        ->setFilter(std::make_unique<BigintRange>(100, 203, false));
+    auto reader = createReader();
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setRequestedType(rowType);
+    rowReaderOptions.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    EXPECT_EQ(rowReader->nextRowNumber(), 4);
+    RuntimeStats stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.chunkSkippedRows, 4);
+    EXPECT_EQ(stats.processedRows, 4);
+  }
+
+  {
+    auto scanSpec = std::make_shared<ScanSpec>("root");
+    std::vector<std::unique_ptr<BigintRange>> ranges;
+    ranges.push_back(std::make_unique<BigintRange>(0, 3, false));
+    ranges.push_back(std::make_unique<BigintRange>(200, 203, false));
+    scanSpec->addField("value", 0)
+        ->setFilter(
+            std::make_unique<BigintMultiRange>(std::move(ranges), false));
+    auto reader = createReader();
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setRequestedType(rowType);
+    rowReaderOptions.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+    EXPECT_EQ(rowReader->next(4, result), 4);
+    EXPECT_EQ(rowReader->nextRowNumber(), 8);
+  }
+
+  {
+    auto scanSpec = std::make_shared<ScanSpec>("root");
+    auto* valueSpec = scanSpec->addField("value", 0);
+    auto reader = createReader();
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setRequestedType(rowType);
+    rowReaderOptions.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    EXPECT_EQ(rowReader->nextRowNumber(), 0);
+    valueSpec->setFilter(std::make_unique<BigintRange>(200, 203, false));
+    rowReader->resetFilterCaches();
+    EXPECT_EQ(rowReader->nextRowNumber(), 8);
+  }
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsPreserveRandomSampling) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(10);
+  for (int64_t chunk = 0; chunk < 10; ++chunk) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"value"}, {vectorMaker_->flatVector<int64_t>(20, [chunk](auto row) {
+          return chunk * 100 + row;
+        })}));
+  }
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(500, 999, false);
+
+  constexpr double kSampleRate{0.5};
+  constexpr uint32_t kRandomSeed{42};
+  writeChunkStatsData(batches);
+  const auto withStats =
+      readChunkStatsData(rowType, filters, kSampleRate, kRandomSeed);
+  EXPECT_EQ(withStats.stats.chunkSkippedRows, 0);
+
+  writeChunkStatsData(batches, /*enableChunkStats=*/false);
+  const auto withoutStats =
+      readChunkStatsData(rowType, filters, kSampleRate, kRandomSeed);
+  verifyResultsEqual(withStats.rows, withoutStats.rows);
+}
+
+TEST_F(E2EIndexTestBase, v2SingleChunkUsesNullCountsWithoutBounds) {
+  const auto rowType = ROW("value", VARCHAR());
+  auto values = vectorMaker_->flatVector<StringView>(
+      {"oversized-a", "oversized-b", "oversized-c", "oversized-d"});
+  writeChunkStatsData(
+      {vectorMaker_->rowVector({"value"}, {values})},
+      /*enableChunkStats=*/true,
+      /*maxChunkStringStatSize=*/3);
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<IsNull>();
+  const auto result = readChunkStatsData(rowType, filters);
+  EXPECT_EQ(countRows(result.rows), 0);
+  EXPECT_EQ(result.stats.chunkSkippedRows, 4);
+  EXPECT_EQ(result.stats.processedRows, 4);
+}
 
 // Test with single bigint key column covering various boundary conditions.
 TEST_P(E2EIndexTest, singleBigintKey) {

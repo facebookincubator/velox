@@ -45,3 +45,13 @@ target_link_libraries(
   gflags::gflags
   glog::glog
 )
+
+add_executable(velox_vector_flat_map_vector_benchmark FlatMapVectorBenchmark.cpp)
+target_link_libraries(
+  velox_vector_flat_map_vector_benchmark
+  velox_vector_fuzzer
+  Folly::folly
+  Folly::follybenchmark
+  gflags::gflags
+  glog::glog
+)

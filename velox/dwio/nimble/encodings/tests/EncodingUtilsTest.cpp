@@ -87,6 +87,22 @@ TEST(EncodingUtilsTest, writeVarintString) {
   EXPECT_EQ(readPos, writePos);
 }
 
+TEST(EncodingUtilsTest, readUint32s) {
+  const std::vector<uint32_t> expected{3, 17, 42};
+  std::array<uint32_t, 3> storage{};
+  char* writePosition = reinterpret_cast<char*>(storage.data());
+  for (const auto value : expected) {
+    encoding::writeUint32(value, writePosition);
+  }
+
+  const char* readPosition = reinterpret_cast<const char*>(storage.data());
+  const char* const end = readPosition + sizeof(storage);
+  std::vector<uint32_t> actual(expected.size());
+  encoding::readUint32s(readPosition, std::span<uint32_t>{actual});
+  EXPECT_EQ(actual, expected);
+  EXPECT_EQ(readPosition, end);
+}
+
 TEST(EncodingUtilsTest, copyPackedBits) {
   struct TestCase {
     const char* name;

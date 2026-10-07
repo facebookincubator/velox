@@ -38,6 +38,9 @@ TEST(IndexConfigTest, buildersSetFactoryIdentity) {
       {ClusterIndexConfigBuilder{}.build(),
        IndexFamily::Cluster,
        kClusterIndexName},
+      {ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}.build(),
+       IndexFamily::Cluster,
+       kHierarchicalClusterIndexName},
       {HashIndexConfigBuilder{}.build(),
        IndexFamily::Dense,
        kDenseHashIndexName},
@@ -71,9 +74,9 @@ TEST(IndexConfigTest, buildersPreserveDefaults) {
   const auto& hashOptions = checkedIndexConfig<HashIndexConfig>(*hash);
   EXPECT_TRUE(hashOptions.columns.empty());
   EXPECT_FLOAT_EQ(hashOptions.loadFactor, 0.7f);
-  EXPECT_FALSE(hashOptions.bloomFilter.has_value());
+  EXPECT_EQ(hashOptions.bloomFilter, nullptr);
   EXPECT_EQ(hashOptions.maxPartitionSizeBytes, 0);
-  EXPECT_FLOAT_EQ(BloomFilterConfig{}.bitsPerKey, 10.0f);
+  EXPECT_FLOAT_EQ(BlockedBloomFilterConfig{}.bitsPerKey, 10.0f);
 
   const auto sorted = SortedIndexConfigBuilder{}.build();
   const auto& sortedOptions = checkedIndexConfig<SortedIndexConfig>(*sorted);
@@ -111,6 +114,27 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
   EXPECT_EQ(clusterOptions.maxRowsPerKeyChunk, 123);
   EXPECT_EQ(clusterOptions.keyChunkCompressionType, CompressionType::Lz4);
 
+  const auto hierarchical =
+      ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
+          .withKeyColumns({"key"})
+          .withSortOrders({SortOrder{.ascending = false}})
+          .withEnforceKeyOrder(true)
+          .withNoDuplicateKey(true)
+          .withMaxRowsPerKeyChunk(456)
+          .withKeyChunkCompressionType(CompressionType::Zstd)
+          .build();
+  const auto& hierarchicalOptions =
+      checkedIndexConfig<ClusterIndexConfig>(*hierarchical);
+  EXPECT_EQ(hierarchicalOptions.columns, std::vector<std::string>{"key"});
+  EXPECT_EQ(
+      hierarchicalOptions.sortOrders,
+      std::vector<SortOrder>{SortOrder{.ascending = false}});
+  EXPECT_TRUE(hierarchicalOptions.enforceKeyOrder);
+  EXPECT_TRUE(hierarchicalOptions.noDuplicateKey);
+  EXPECT_EQ(hierarchicalOptions.name, kHierarchicalClusterIndexName);
+  EXPECT_EQ(hierarchicalOptions.maxRowsPerKeyChunk, 456);
+  EXPECT_EQ(hierarchicalOptions.keyChunkCompressionType, CompressionType::Zstd);
+
   const auto hash = HashIndexConfigBuilder{}
                         .withKeyColumns({"key"})
                         .withLoadFactor(0.5f)
@@ -120,7 +144,8 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
   const auto& hashOptions = checkedIndexConfig<HashIndexConfig>(*hash);
   EXPECT_EQ(hashOptions.columns, std::vector<std::string>{"key"});
   EXPECT_FLOAT_EQ(hashOptions.loadFactor, 0.5f);
-  ASSERT_TRUE(hashOptions.bloomFilter.has_value());
+  ASSERT_NE(hashOptions.bloomFilter, nullptr);
+  EXPECT_EQ(hashOptions.bloomFilter->type, BloomFilterType::kBlocked);
   EXPECT_FLOAT_EQ(hashOptions.bloomFilter->bitsPerKey, 7.0f);
   EXPECT_EQ(hashOptions.maxPartitionSizeBytes, 456);
 

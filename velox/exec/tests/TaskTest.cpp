@@ -15,6 +15,11 @@
  */
 
 #include "velox/exec/Task.h"
+
+#include <functional>
+
+#include <gmock/gmock.h>
+
 #include "folly/OperationCancelled.h"
 #include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
@@ -29,6 +34,8 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -148,14 +155,13 @@ class TestSkewedJoinBuild : public exec::Operator {
   void noMoreInput() override {
     Operator::noMoreInput();
     std::vector<ContinuePromise> promises;
-    std::vector<std::shared_ptr<exec::Driver>> peers;
+    std::vector<std::shared_ptr<exec::Operator>> peerOperators;
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
     // state. allPeersFinished is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->task()->allPeersFinished(
-            planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
       return;
     }
     VELOX_FAIL("Last driver should not finish successfully.");
@@ -515,6 +521,100 @@ class TestShouldYieldOperator : public exec::Operator {
   bool shouldYieldResult_{false};
 };
 
+// Hooks invoked by TestExchangeClient's control-plane methods.
+struct TestExchangeClientCallbacks {
+  std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId{};
+  std::function<void()> onNoMoreRemoteTasks{};
+  std::function<void()> onClose{};
+};
+
+class TestExchangeClient : public ExchangeClient {
+ public:
+  explicit TestExchangeClient(TestExchangeClientCallbacks callbacks = {})
+      : callbacks_{std::move(callbacks)} {}
+
+  void addRemoteTaskId(std::string_view remoteTaskId) override {
+    if (callbacks_.onAddRemoteTaskId != nullptr) {
+      callbacks_.onAddRemoteTaskId(remoteTaskId);
+    }
+  }
+
+  void noMoreRemoteTasks() override {
+    if (callbacks_.onNoMoreRemoteTasks != nullptr) {
+      callbacks_.onNoMoreRemoteTasks();
+    }
+  }
+
+  void close() override {
+    if (callbacks_.onClose != nullptr) {
+      callbacks_.onClose();
+    }
+  }
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override {
+    return {};
+  }
+
+  std::string toString() const override {
+    return "test";
+  }
+
+  folly::dynamic toJson() const override {
+    return folly::dynamic::object;
+  }
+
+ private:
+  TestExchangeClientCallbacks callbacks_;
+};
+
+class TestExchangeOperator : public SourceOperator {
+ public:
+  TestExchangeOperator(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::ExchangeNode>& node)
+      : SourceOperator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            "TestExchange") {}
+
+  RowVectorPtr getOutput() override {
+    return nullptr;
+  }
+
+  BlockingReason isBlocked(ContinueFuture* future) override {
+    if (!future_.valid()) {
+      return BlockingReason::kNotBlocked;
+    }
+    *future = std::move(future_);
+    return BlockingReason::kWaitForProducer;
+  }
+
+  bool isFinished() override {
+    return false;
+  }
+
+  void close() override {
+    if (!promise_.isFulfilled()) {
+      promise_.setValue();
+    }
+    SourceOperator::close();
+  }
+
+ private:
+  ContinuePromise promise_{"TestExchangeOperator"};
+  ContinueFuture future_{promise_.getSemiFuture()};
+};
+
+struct TestExchangeTransportState {
+  std::weak_ptr<Task> task;
+  bool clientFactoryCalledWithTaskMutex{false};
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInOperator{nullptr};
+};
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
@@ -811,6 +911,640 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(
       valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
+}
+
+TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
+  // Do not silently fall back when the requested transport is unavailable.
+  const std::string transportKind{"ucx-unregistered"};
+  ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-unregistered",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "No exchange client registered for transport 'ucx-unregistered'");
+  // Count planned drivers as finished when startup fails before creating any.
+  ASSERT_GT(task->numTotalDrivers(), 0);
+  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+}
+
+TEST_F(TaskTest, customExchangeTransportLifecycle) {
+  const std::string transportKind{"test-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  auto transportState = std::make_shared<TestExchangeTransportState>();
+  std::weak_ptr<TestExchangeTransportState> transportStateReference =
+      transportState;
+  bool transportStateAvailableOnNoMoreRemoteTasks{false};
+  bool transportStateAvailableOnLateSplit{false};
+  auto entry = ExchangeTransportEntry::make<TestExchangeClient>(
+      [transportState,
+       transportStateReference,
+       &transportStateAvailableOnNoMoreRemoteTasks,
+       &transportStateAvailableOnLateSplit](const ExchangeClientContext&) {
+        auto task = transportState->task.lock();
+        if (task != nullptr) {
+          std::thread mutexProbe([&] {
+            if (task->mutex().try_lock()) {
+              task->mutex().unlock();
+            } else {
+              transportState->clientFactoryCalledWithTaskMutex = true;
+            }
+          });
+          mutexProbe.join();
+        }
+        auto client =
+            std::make_shared<TestExchangeClient>(TestExchangeClientCallbacks{
+                .onAddRemoteTaskId =
+                    [transportStateReference,
+                     &transportStateAvailableOnLateSplit](
+                        std::string_view remoteTaskId) {
+                      if (remoteTaskId == "late-remote-task") {
+                        transportStateAvailableOnLateSplit =
+                            !transportStateReference.expired();
+                      }
+                    },
+                .onNoMoreRemoteTasks =
+                    [transportStateReference,
+                     &transportStateAvailableOnNoMoreRemoteTasks] {
+                      transportStateAvailableOnNoMoreRemoteTasks =
+                          !transportStateReference.expired();
+                    },
+            });
+        transportState->clientFromFactory = client.get();
+        return client;
+      },
+      [transportState](
+          int32_t operatorId,
+          DriverCtx* ctx,
+          const std::shared_ptr<const core::ExchangeNode>& node,
+          const std::shared_ptr<TestExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        transportState->clientInOperator = client.get();
+        return std::make_unique<TestExchangeOperator>(operatorId, ctx, node);
+      });
+  queryRegistry->insert(transportKind, entry);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-exchange-transport",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  transportState->task = task;
+
+  task->start(1, 1);
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
+  task->noMoreSplits(exchangeNodeId);
+
+  EXPECT_TRUE(transportState->clientFactoryCalledWithTaskMutex);
+  ASSERT_NE(transportState->clientFromFactory, nullptr);
+  EXPECT_EQ(
+      transportState->clientInOperator, transportState->clientFromFactory);
+
+  ASSERT_TRUE(queryRegistry->erase(transportKind));
+  entry.reset();
+  transportState.reset();
+  EXPECT_FALSE(transportStateReference.expired());
+
+  task->requestAbort().wait();
+  EXPECT_TRUE(transportStateAvailableOnNoMoreRemoteTasks);
+
+  // Retain the transport entry after termination so late splits can still use
+  // entry-owned state.
+  EXPECT_FALSE(transportStateReference.expired());
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_TRUE(transportStateAvailableOnLateSplit);
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
+  EXPECT_TRUE(transportStateReference.expired());
+}
+
+TEST_F(TaskTest, customExchangeTransportMergeUsesTaskClient) {
+  // Give the merge builder its transport's Task-level client and retain that
+  // client for late splits.
+  const std::string transportKind{"test-merge-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInMergeBuilder{nullptr};
+  std::vector<std::string> remoteTaskIds;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext&) {
+            auto client = std::make_shared<TestExchangeClient>(
+                TestExchangeClientCallbacks{
+                    .onAddRemoteTaskId =
+                        [&remoteTaskIds](std::string_view remoteTaskId) {
+                          remoteTaskIds.emplace_back(remoteTaskId);
+                        },
+                });
+            clientFromFactory = client.get();
+            return client;
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          },
+          [&clientInMergeBuilder](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientInMergeBuilder = client.get();
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
+          .planFragment();
+  const auto mergeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-merge-exchange",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(1, 1);
+  ASSERT_NE(clientFromFactory, nullptr);
+  EXPECT_EQ(clientInMergeBuilder, clientFromFactory);
+
+  task->requestAbort().wait();
+  task->addSplit(
+      mergeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_THAT(remoteTaskIds, ::testing::ElementsAre("late-remote-task"));
+}
+
+TEST_F(TaskTest, customExchangeTransportContext) {
+  // Task creates one client per pipeline, sized from the session config, and
+  // shares it among the pipeline's drivers.
+  const std::string transportKind{"test-exchange-context"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({
+          {core::QueryConfig::kMaxExchangeBufferSize, "12345678"},
+          {core::QueryConfig::kMinExchangeOutputBatchBytes, "4321"},
+      }));
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  // Copy observed fields because the context is valid only during the call.
+  struct ObservedContext {
+    std::string taskId;
+    int destination{-1};
+    int32_t numberOfConsumers{0};
+    uint64_t maxExchangeBufferSize{0};
+    uint64_t minExchangeOutputBatchBytes{0};
+    memory::MemoryPool* pool{nullptr};
+    folly::Executor* executor{nullptr};
+  };
+  ObservedContext observed;
+  int32_t numClientsCreated{0};
+  TestExchangeClient* clientFromFactory{nullptr};
+  std::vector<TestExchangeClient*> clientsInOperators;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext& context) {
+            ++numClientsCreated;
+            observed = {
+                .taskId = context.taskId,
+                .destination = context.destination,
+                .numberOfConsumers = context.numberOfConsumers,
+                .maxExchangeBufferSize = context.maxExchangeBufferSize,
+                .minExchangeOutputBatchBytes =
+                    context.minExchangeOutputBatchBytes,
+                .pool = context.pool,
+                .executor = context.executor,
+            };
+            auto client = std::make_shared<TestExchangeClient>();
+            clientFromFactory = client.get();
+            return client;
+          },
+          [&clientsInOperators](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientsInOperators.push_back(client.get());
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto task = Task::create(
+      "task-exchange-context",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      /*destination=*/2,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(3, 1);
+  EXPECT_EQ(numClientsCreated, 1);
+  EXPECT_THAT(
+      clientsInOperators,
+      ::testing::ElementsAre(
+          clientFromFactory, clientFromFactory, clientFromFactory));
+  EXPECT_EQ(observed.taskId, "task-exchange-context");
+  EXPECT_EQ(observed.destination, 2);
+  EXPECT_EQ(observed.numberOfConsumers, 3);
+  EXPECT_EQ(observed.maxExchangeBufferSize, 12'345'678);
+  EXPECT_EQ(observed.minExchangeOutputBatchBytes, 4'321);
+  EXPECT_NE(observed.pool, nullptr);
+  EXPECT_EQ(observed.executor, driverExecutor_.get());
+  task->requestAbort().wait();
+}
+
+TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
+  // Exceptions from close() or noMoreRemoteTasks() must not interrupt
+  // termination or strand waiters.
+  for (const bool throwOnClose : {true, false}) {
+    SCOPED_TRACE(
+        throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
+    const std::string transportKind{"throwing-exchange"};
+    auto queryRegistry = ExchangeTransportRegistry::create();
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+    queryRegistry->insert(
+        transportKind,
+        ExchangeTransportEntry::make<TestExchangeClient>(
+            [throwOnClose](const ExchangeClientContext&) {
+              auto fail = [] { throw std::runtime_error("transport failure"); };
+              TestExchangeClientCallbacks callbacks;
+              if (throwOnClose) {
+                callbacks.onClose = fail;
+              } else {
+                callbacks.onNoMoreRemoteTasks = fail;
+              }
+              return std::make_shared<TestExchangeClient>(std::move(callbacks));
+            },
+            [](int32_t operatorId,
+               DriverCtx* ctx,
+               const std::shared_ptr<const core::ExchangeNode>& node,
+               const std::shared_ptr<TestExchangeClient>&)
+                -> std::unique_ptr<Operator> {
+              return std::make_unique<TestExchangeOperator>(
+                  operatorId, ctx, node);
+            }));
+
+    auto plan = PlanBuilder()
+                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                    .planFragment();
+    const auto exchangeNodeId = plan.planNode->id();
+    auto task = Task::create(
+        "task-throwing-exchange-client",
+        std::move(plan),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+
+    task->start(1, 1);
+    // Leave a split queued so termination calls noMoreRemoteTasks().
+    task->addSplit(
+        exchangeNodeId,
+        exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
+    task->noMoreSplits(exchangeNodeId);
+
+    EXPECT_NO_THROW(task->requestAbort().wait());
+    EXPECT_EQ(task->state(), TaskState::kAborted);
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
+  // Aborting at either unlocked startup step must finish every planned driver
+  // and let start() return.
+  for (const std::string_view startupStep :
+       {"facebook::velox::exec::Task::initializePartitionOutput",
+        "facebook::velox::exec::Task::createAndStartDrivers"}) {
+    SCOPED_TRACE(startupStep);
+    auto task = Task::create(
+        "task-aborted-during-startup",
+        PlanBuilder().tableScan(ROW("c0", BIGINT())).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+
+    folly::Baton<> stepStarted;
+    folly::Baton<> continueStep;
+    Task* startingTask{nullptr};
+    SCOPED_TESTVALUE_SET(
+        std::string(startupStep), std::function<void(Task*)>([&](Task* task) {
+          startingTask = task;
+          stepStarted.post();
+          continueStep.wait();
+        }));
+
+    std::exception_ptr startError;
+    std::thread startThread([&] {
+      try {
+        task->start(4, 1);
+      } catch (...) {
+        startError = std::current_exception();
+      }
+    });
+    bool stepReleased{false};
+    SCOPE_EXIT {
+      if (!stepReleased) {
+        continueStep.post();
+      }
+      if (startThread.joinable()) {
+        startThread.join();
+      }
+    };
+
+    ASSERT_TRUE(stepStarted.try_wait_for(std::chrono::seconds(5)));
+    task->requestAbort().wait();
+    stepReleased = true;
+    continueStep.post();
+    startThread.join();
+
+    EXPECT_EQ(startingTask, task.get());
+    EXPECT_EQ(startError, nullptr);
+    EXPECT_EQ(task->numRunningDrivers(), 0);
+    ASSERT_GT(task->numTotalDrivers(), 0);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  }
+}
+
+DEBUG_ONLY_TEST_F(
+    TaskTest,
+    driverBuildFailureAfterEnqueueFinishesPlannedDrivers) {
+  // A driver build fails after other drivers were enqueued, optionally while
+  // another thread's error has not terminated the task yet. The finished count
+  // must reach the total once every driver has left.
+  for (const bool pendingError : {false, true}) {
+    SCOPED_TRACE(fmt::format("pendingError: {}", pendingError));
+    const std::string transportKind{"test-grouped-exchange"};
+    auto queryRegistry = ExchangeTransportRegistry::create();
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+    queryRegistry->insert(
+        transportKind,
+        ExchangeTransportEntry::make<TestExchangeClient>(
+            [](const ExchangeClientContext&) {
+              return std::make_shared<TestExchangeClient>();
+            },
+            [](int32_t operatorId,
+               DriverCtx* ctx,
+               const std::shared_ptr<const core::ExchangeNode>& node,
+               const std::shared_ptr<TestExchangeClient>&)
+                -> std::unique_ptr<Operator> {
+              return std::make_unique<TestExchangeOperator>(
+                  operatorId, ctx, node);
+            }));
+
+    // Grouped probe, ungrouped build. Split group 2 is planned but never seen,
+    // so the planned total (4) exceeds the one termination recomputes (3).
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId exchangeNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                    .capturePlanNodeId(exchangeNodeId)
+                    .hashJoin(
+                        {"a"},
+                        {"b"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({makeRowVector(
+                                {"b"}, {makeFlatVector<int64_t>({1})})})
+                            .planNode(),
+                        "",
+                        {"a"})
+                    .planFragment();
+    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+    plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+    plan.numSplitGroups = 3;
+    auto task = Task::create(
+        "task-driver-build-failure-after-enqueue",
+        std::move(plan),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    for (int32_t groupId = 0; groupId < 2; ++groupId) {
+      task->addSplit(
+          exchangeNodeId,
+          exec::Split(
+              std::make_shared<RemoteConnectorSplit>(
+                  "remote-task-" + std::to_string(groupId)),
+              groupId));
+    }
+
+    // Holds the other thread after it set its error and before it terminates
+    // the task.
+    const auto startThreadId = std::this_thread::get_id();
+    folly::Baton<> errorSet;
+    folly::Baton<> releaseError;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::setError::terminate",
+        std::function<void(Task*)>([&](Task*) {
+          if (std::this_thread::get_id() != startThreadId) {
+            errorSet.post();
+            releaseError.wait();
+          }
+        }));
+    std::thread errorThread;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createAndStartDrivers",
+        std::function<void(Task*)>([&](Task* startingTask) {
+          if (pendingError) {
+            errorThread = std::thread([startingTask] {
+              startingTask->setError(
+                  std::make_exception_ptr(
+                      std::runtime_error("Concurrent error")));
+            });
+            errorSet.wait();
+          }
+        }));
+    // Builds run in order: ungrouped, split group 0, split group 1.
+    std::atomic_int32_t numDriverBuilds{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createDriversLocked",
+        std::function<void(Task*)>([&](Task*) {
+          if (++numDriverBuilds == 3) {
+            VELOX_FAIL("Driver construction failed");
+          }
+        }));
+
+    VELOX_ASSERT_THROW(task->start(1, 2), "Driver construction failed");
+    releaseError.post();
+    if (errorThread.joinable()) {
+      errorThread.join();
+    }
+    // Completes once every driver has left its thread and been accounted.
+    task->requestAbort().wait();
+    EXPECT_EQ(numDriverBuilds, 3);
+    EXPECT_EQ(task->state(), TaskState::kFailed);
+    ASSERT_EQ(task->numTotalDrivers(), 3);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
+  // A grouped split received before driver-slot creation must wait and run
+  // afterward.
+  const std::string transportKind{"test-grouped-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  std::atomic_int32_t numOperatorsBuilt{0};
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [&numOperatorsBuilt](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            ++numOperatorsBuilt;
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+  plan.numSplitGroups = 1;
+  auto task = Task::create(
+      "task-grouped-split-during-startup",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::initializePartitionOutput",
+      std::function<void(Task*)>([&](Task* startingTask) {
+        startingTask->addSplit(
+            exchangeNodeId,
+            exec::Split(
+                std::make_shared<RemoteConnectorSplit>("remote-task"),
+                /*groupId=*/0));
+      }));
+
+  task->start(1, 1);
+  EXPECT_EQ(numOperatorsBuilt, 1);
+  EXPECT_EQ(task->numRunningDrivers(), 1);
+  task->requestAbort().wait();
+}
+
+TEST_F(TaskTest, errorsOnNullExchangeOperator) {
+  const std::string transportKind{"null-operator-transport"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t,
+             DriverCtx*,
+             const std::shared_ptr<const core::ExchangeNode>&,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> { return nullptr; }));
+
+  auto task = Task::create(
+      "task-null-exchange-operator",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_THROW(
+      task->start(1, 1), "Exchange transport built no operator for plan node");
+}
+
+TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
+  // Missing merge support must not fall back to another transport.
+  const std::string transportKind{"no-merge-transport"};
+  ExchangeTransportRegistry::global().insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }),
+      /*overwrite=*/true);
+  SCOPE_EXIT {
+    ExchangeTransportRegistry::global().erase(transportKind);
+  };
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
+          .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-without-merge",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "Exchange transport does not support merge exchange: no-merge-transport");
 }
 
 TEST_F(TaskTest, duplicatePlanNodeIds) {
@@ -1501,6 +2235,48 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // ignored.
     ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
+}
+
+TEST_F(TaskTest, executionEndsBeforeOutputIsConsumed) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({0, 1, 10})});
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder().values({data}).partitionedOutput({}, 1).planNode();
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  // Drive execution to completion without fetching the partitioned output.
+  while (cursor->moveNext()) {
+  }
+
+  // The cursor queue can close before the producing driver unregisters.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (task->taskStats().numCompletedDrivers == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  const auto produced = task->taskStats();
+  EXPECT_EQ(produced.numCompletedDrivers, produced.numTotalDrivers);
+  EXPECT_GT(produced.executionEndTimeMs, 0);
+  EXPECT_EQ(produced.endTimeMs, 0);
+  EXPECT_EQ(produced.terminationTimeMs, 0);
+  EXPECT_TRUE(task->isRunning());
+  EXPECT_TRUE(produced.outputBufferStats.has_value());
+  if (produced.outputBufferStats) {
+    EXPECT_GT(produced.outputBufferStats->bufferedBytes, 0);
+  }
+
+  // Delay the consumer after production, then release the destination as the
+  // exchange client does when it finishes consuming results.
+  std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  DefaultOutputBufferManager::getInstanceRef()->deleteResults(
+      task->taskId(), 0);
+  EXPECT_TRUE(waitForTaskCompletion(task.get()));
+  const auto consumed = task->taskStats();
+  EXPECT_EQ(consumed.executionEndTimeMs, produced.executionEndTimeMs);
+  EXPECT_GE(consumed.endTimeMs, produced.executionEndTimeMs + 20);
+  EXPECT_GE(consumed.terminationTimeMs, consumed.endTimeMs);
 }
 
 TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
@@ -2575,8 +3351,8 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
@@ -2720,8 +3496,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
 
 TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()

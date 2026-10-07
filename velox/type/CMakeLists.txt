@@ -43,6 +43,7 @@ velox_add_library(
   CastRule.h
   Conversions.h
   CppToType.h
+  DecimalArithmetic.h
   DecimalUtil.h
   FastDate.h
   Filter.h

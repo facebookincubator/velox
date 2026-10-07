@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -27,7 +28,9 @@
 #include <utility>
 #include <vector>
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
@@ -37,6 +40,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -59,8 +63,10 @@
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
@@ -68,6 +74,8 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -75,13 +83,32 @@ namespace facebook::nimble {
 
 using velox::dwio::common::TypeWithId;
 
+namespace {
+
+using FsstEncodingNodeIds = folly::F14FastSet<uint32_t>;
+
+} // namespace
+
 namespace detail {
 
 class WriterContext : public FieldWriterContext {
  public:
-  WriterContext(velox::memory::MemoryPool& memoryPool, WriterOptions options)
-      : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
-        options_{std::move(options)},
+  // Writer options normalized for the stored schema, plus resolved FSST stream
+  // node IDs owned by the context that consumes them.
+  struct Options {
+    WriterOptions writerOptions;
+    FsstEncodingNodeIds fsstEncodingNodeIds;
+  };
+
+  WriterContext(
+      velox::memory::MemoryPool& memoryPool,
+      Options options)
+      : FieldWriterContext{
+            memoryPool,
+            options.writerOptions.reclaimerFactory(),
+            options.writerOptions.vectorDecoderVisitor},
+        options_{std::move(options.writerOptions)},
+        fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         stripeStatsWriteEnabled_{featureGate()->enabled(
             FeatureGate::FeatureSet::kStripeStatsWrite,
@@ -99,6 +126,10 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  const FsstEncodingNodeIds& fsstEncodingNodeIds() const {
+    return fsstEncodingNodeIds_;
   }
 
   // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
@@ -252,6 +283,7 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
+  const FsstEncodingNodeIds fsstEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
@@ -284,12 +316,14 @@ std::string_view asView(const flatbuffers::FlatBufferBuilder& builder) {
 }
 
 const index::ClusterIndexConfig& clusterIndexConfig(
-    const WriterOptions& options) {
+    const index::IndexConfig& config) {
+  const auto* clusterConfig =
+      dynamic_cast<const index::ClusterIndexConfig*>(&config);
   NIMBLE_USER_CHECK_NOT_NULL(
-      options.clusterIndexConfig,
-      "Cluster index key column storage can only be omitted when cluster index is enabled");
-  return index::checkedIndexConfig<index::ClusterIndexConfig>(
-      *options.clusterIndexConfig);
+      clusterConfig,
+      "Cluster index configuration '{}' does not expose key columns.",
+      config.name);
+  return *clusterConfig;
 }
 
 bool omitClusterIndexKeyColumnStorage(const WriterOptions& options) {
@@ -313,10 +347,11 @@ std::vector<velox::column_index_t> storedInputColumnIndices(
   std::vector<velox::column_index_t> indices;
   indices.reserve(rowType->size());
 
-  const auto& indexOptions = clusterIndexConfig(options);
+  const auto& clusterConfig = clusterIndexConfig(
+      *velox::checkedNotNull(options.clusterIndexConfig.get()));
   std::unordered_set<std::string> keyColumns;
-  keyColumns.reserve(indexOptions.columns.size());
-  for (const auto& column : indexOptions.columns) {
+  keyColumns.reserve(clusterConfig.columns.size());
+  for (const auto& column : clusterConfig.columns) {
     NIMBLE_USER_CHECK(
         rowType->containsChild(column),
         "Cluster index key column '{}' not found in input schema: {}",
@@ -466,7 +501,7 @@ void normalizeChunkStatsOptions(WriterOptions& options) {
   options.chunkStatsVersion = ChunkStatsVersion::kV1;
 }
 
-WriterOptions storedWriterOptions(
+detail::WriterContext::Options prepareWriterContextOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
@@ -475,8 +510,57 @@ WriterOptions storedWriterOptions(
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
-  if (!omitClusterIndexKeyColumnStorage(options)) {
-    return options;
+
+  const bool omitsClusterIndexKeys = omitClusterIndexKeyColumnStorage(options);
+  FsstEncodingNodeIds fsstEncodingNodeIds;
+  if (!options.fsstEncodingSubfields.empty()) {
+    // Resolve against the schema used by field writers so node IDs remain
+    // correct when cluster-index key columns are omitted.
+    auto inputSchema = TypeWithId::create(inputType);
+    const auto storedSchema = omitsClusterIndexKeys
+        ? TypeWithId::create(storedType)
+        : std::move(inputSchema);
+
+    const index::ClusterIndexConfig* clusterConfig{nullptr};
+    if (options.clusterIndexConfig != nullptr) {
+      const auto& config = *options.clusterIndexConfig;
+      NIMBLE_USER_CHECK_EQ(
+          config.family,
+          index::IndexFamily::Cluster,
+          "Cluster index configuration must use the cluster family: {}",
+          config.name);
+      clusterConfig = &clusterIndexConfig(config);
+    }
+
+    fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
+    for (const auto& fieldPath : options.fsstEncodingSubfields) {
+      const auto subfield = parseValueStreamSubfield(fieldPath);
+      if (clusterConfig != nullptr) {
+        NIMBLE_USER_CHECK(
+            std::find(
+                clusterConfig->columns.begin(),
+                clusterConfig->columns.end(),
+                subfield.baseName()) == clusterConfig->columns.end(),
+            "FSST subfield '{}' cannot target cluster index key column '{}'.",
+            fieldPath,
+            subfield.baseName());
+      }
+      const auto& node = resolveValueStreamSubfield(*storedSchema, subfield);
+      NIMBLE_USER_CHECK(
+          node.type()->isVarchar(),
+          "FSST subfield '{}' must resolve to VARCHAR, got {}.",
+          fieldPath,
+          node.type()->toString());
+      NIMBLE_USER_CHECK(
+          fsstEncodingNodeIds.insert(node.id()).second,
+          "Duplicate FSST subfield configuration for schema node {}: '{}'.",
+          node.id(),
+          fieldPath);
+    }
+  }
+
+  if (!omitsClusterIndexKeys) {
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -498,7 +582,7 @@ WriterOptions storedWriterOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return options;
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -525,7 +609,7 @@ WriterOptions storedWriterOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return options;
+  return {std::move(options), std::move(fsstEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -619,15 +703,43 @@ class WriterStreamContext : public StreamContext {
     isNullStream_ = value;
   }
 
+  // A stream is a flat map in-map stream exactly when it has value stream
+  // offsets recorded against it: setInMapValueStreamOffsets() is the only
+  // thing that populates them, and it is called for nothing else. Deriving it
+  // rather than carrying a parallel bool removes the obligation to keep the
+  // two in sync.
+  //
+  // The offsets are never empty for an in-map stream. Every arm of
+  // visitValueStreamLeaves() yields at least one descriptor -- scalars and
+  // containers visit their own, Row and FlatMap recurse under a
+  // NIMBLE_CHECK_GT(childrenCount, 0) -- so a key always has at least one
+  // value stream to record.
   bool isInMapStream() const {
-    return isInMapStream_;
+    return !flatMapValueStreamOffsets_.empty();
   }
 
-  void setIsInMapStream(bool value) {
-    isInMapStream_ = value;
+  // Offsets of the value streams the reader consults to decide whether this
+  // in-map stream's key had data in a stripe. Empty for every other stream.
+  //
+  // Built with visitValueStreamLeaves(), the readers' own traversal, so the
+  // two cannot drift. That matters more than it looks: a walk that merely
+  // collects "every stream under this subtree" is a different question and
+  // answers it differently -- it would count a Row's nulls stream, and recurse
+  // past an Array's or Map's lengths, none of which the reader treats as
+  // evidence.
+  //
+  // Fixed once at schema configure time. The value subtree of a flat map key
+  // is static, because flat map keys are the only thing discovered
+  // dynamically and flat maps are never nested.
+  const std::vector<offset_size>& flatMapValueStreamOffsets() const {
+    return flatMapValueStreamOffsets_;
   }
 
-  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
+  // Marks this stream as an in-map stream and records its value streams in one
+  // step: with isInMapStream() derived from these, a stream must never be
+  // observable as one without the other.
+  void setInMapValueStreamOffsets(std::vector<offset_size> offsets) {
+    NIMBLE_DCHECK(!offsets.empty(), "An in-map stream has value streams");
     flatMapValueStreamOffsets_ = std::move(offsets);
   }
 
@@ -667,10 +779,6 @@ class WriterStreamContext : public StreamContext {
 
  private:
   bool isNullStream_{false};
-  bool isInMapStream_{false};
-  // Value stream descriptor offsets for this in-map stream's flat-map field.
-  // Empty for non in-map streams and flat-map values with no reader-visible
-  // value stream.
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
@@ -902,57 +1010,12 @@ void configureDictionary(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Shared dictionary value must resolve to an integer or string "
           "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
-}
-
-// Resolves [*] to the selected array element or map value type.
-const TypeBuilder& allSubscriptValueType(
-    const TypeBuilder& typeBuilder,
-    std::string_view subfield) {
-  switch (typeBuilder.kind()) {
-    case Kind::Array:
-      return typeBuilder.asArray().elements();
-    case Kind::ArrayWithOffsets:
-      return typeBuilder.asArrayWithOffsets().elements();
-    case Kind::Map:
-      return typeBuilder.asMap().values();
-    case Kind::SlidingWindowMap:
-      return typeBuilder.asSlidingWindowMap().values();
-    case Kind::Scalar:
-    case Kind::TimestampMicroNano:
-    case Kind::Row:
-    case Kind::FlatMap:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary value subfield '{}' cannot apply [*] to {}.",
-          subfield,
-          typeBuilder.kind());
-  }
-  NIMBLE_UNREACHABLE("Unknown schema kind: {}.", typeBuilder.kind());
-}
-
-const TypeBuilder& resolveFieldPath(
-    const TypeBuilder& root,
-    const std::string& fieldPath) {
-  if (fieldPath.empty()) {
-    return root;
-  }
-  const velox::common::Subfield subfield{fieldPath};
-  const auto& path = subfield.path();
-  const TypeBuilder* current = &root;
-  for (const auto& pathElement : path) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = &current->asRow().findChild(childName);
-  }
-  return *current;
 }
 
 void maybeAddFileDictionaryId(
@@ -967,56 +1030,6 @@ void maybeAddFileDictionaryId(
       "File shared dictionary ID {} is configured for multiple streams. "
       "Cross-stream domains are not supported yet.",
       config.dictionaryId);
-}
-
-// Resolves [*] to the selected array element or map value type.
-const TypeWithId& allSubscriptValueType(
-    const TypeWithId& type,
-    const std::string& fieldPath) {
-  switch (type.type()->kind()) {
-    case velox::TypeKind::ARRAY:
-      return *type.childAt(0);
-    case velox::TypeKind::MAP:
-      return *type.childAt(1);
-    case velox::TypeKind::BOOLEAN:
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-    case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
-    case velox::TypeKind::TIMESTAMP:
-    case velox::TypeKind::HUGEINT:
-    case velox::TypeKind::ROW:
-    case velox::TypeKind::UNKNOWN:
-    case velox::TypeKind::FUNCTION:
-    case velox::TypeKind::OPAQUE:
-    case velox::TypeKind::INVALID:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary path '{}' cannot apply [*] to {}.",
-          fieldPath,
-          type.type()->toString());
-  }
-  VELOX_UNREACHABLE();
-}
-
-const TypeWithId& resolveFieldPath(
-    const TypeWithId& root,
-    const std::string& fieldPath) {
-  const velox::common::Subfield subfield{fieldPath};
-  const TypeWithId* current = &root;
-  for (const auto& pathElement : subfield.path()) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = current->childByName(childName).get();
-  }
-  return *current;
 }
 
 const TypeWithId& resolveDictionaryValueType(
@@ -1142,6 +1155,39 @@ std::string_view encodeWithFallback(
   }
 }
 
+// Returns the layout to cache for a stream, generalizing Constant to
+// MainlyConstant and passing every other layout through unchanged.
+//
+// A stream that is constant in its first chunk is often not constant in the
+// next. Caching Constant verbatim makes every later chunk fail the replay --
+// ConstantEncoding rejects non-constant data -- and fall back to the full
+// selection cascade, which is what the cache exists to avoid. MainlyConstant
+// covers both shapes: while the data stays constant its encode() falls back to
+// ConstantEncoding and emits byte-identical output, and once uncommon values
+// appear it absorbs them without discarding the cached layout. Both child slots
+// are left absent so each sub-stream still runs its own selection.
+template <typename T>
+EncodingLayout cacheEncodingLayout(EncodingLayout captured) {
+  // MainlyConstant is not defined for bool streams (EncodingFactory rejects
+  // it), so a constant bool stream keeps its captured layout.
+  if constexpr (std::is_same_v<T, bool>) {
+    return captured;
+  } else {
+    if (captured.encodingType() != EncodingType::Constant) {
+      return captured;
+    }
+    std::vector<std::optional<const EncodingLayout>> children;
+    children.reserve(2);
+    children.emplace_back(std::nullopt);
+    children.emplace_back(std::nullopt);
+    return EncodingLayout{
+        EncodingType::MainlyConstant,
+        /*encodingConfig=*/{},
+        CompressionType::Uncompressed,
+        std::move(children)};
+  }
+}
+
 template <typename T>
 std::string_view encodeStreamTyped(
     detail::WriterContext& context,
@@ -1185,8 +1231,8 @@ std::string_view encodeStreamTyped(
   if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
-            EncodingLayoutCapture::capture(
-                encoded, context.options().buildEncodingOptions()));
+            cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
+                encoded, context.options().buildEncodingOptions())));
   }
   return encoded;
 }
@@ -1290,63 +1336,6 @@ void findNodeIds(
   }
 }
 
-void collectFlatMapValueStreamOffsets(
-    const TypeBuilder& type,
-    std::vector<offset_size>& offsets) {
-  switch (type.kind()) {
-    case Kind::Scalar:
-      offsets.push_back(type.asScalar().scalarDescriptor().offset());
-      return;
-    case Kind::TimestampMicroNano:
-      offsets.push_back(
-          type.asTimestampMicroNano().microsDescriptor().offset());
-      offsets.push_back(type.asTimestampMicroNano().nanosDescriptor().offset());
-      return;
-    case Kind::Array:
-      offsets.push_back(type.asArray().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asArray().elements(), offsets);
-      return;
-    case Kind::ArrayWithOffsets:
-      offsets.push_back(type.asArrayWithOffsets().offsetsDescriptor().offset());
-      offsets.push_back(type.asArrayWithOffsets().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asArrayWithOffsets().elements(), offsets);
-      return;
-    case Kind::Map:
-      offsets.push_back(type.asMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(type.asMap().values(), offsets);
-      return;
-    case Kind::SlidingWindowMap:
-      offsets.push_back(type.asSlidingWindowMap().offsetsDescriptor().offset());
-      offsets.push_back(type.asSlidingWindowMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().values(), offsets);
-      return;
-    case Kind::Row: {
-      const auto& row = type.asRow();
-      offsets.push_back(row.nullsDescriptor().offset());
-      for (size_t i = 0; i < row.childrenCount(); ++i) {
-        collectFlatMapValueStreamOffsets(row.childAt(i), offsets);
-      }
-      return;
-    }
-    case Kind::FlatMap: {
-      const auto& flatMap = type.asFlatMap();
-      offsets.push_back(flatMap.nullsDescriptor().offset());
-      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        offsets.push_back(flatMap.inMapDescriptorAt(i).offset());
-        collectFlatMapValueStreamOffsets(flatMap.childAt(i), offsets);
-      }
-      return;
-    }
-    default:
-      NIMBLE_UNREACHABLE("Unsupported type kind {}", type.kind());
-  }
-}
-
 FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodingsForFlatMap(
     const EncodingLayoutTree& encodingLayoutTree) {
   FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
@@ -1418,11 +1407,14 @@ DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
+  const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
     return configs;
   }
+  // TODO: Define targeted FSST/shared-dictionary coexistence, including
+  // writer-owned alphabet encoding, instead of rejecting exact overlaps.
 
   NIMBLE_USER_CHECK_EQ(
       type.type()->kind(),
@@ -1433,7 +1425,8 @@ DictionaryConfigs collectDictionaryConfigs(
   folly::F14FastSet<uint32_t> columnValueNodeIds;
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
-    const auto& fieldType = resolveFieldPath(type, columnDictionary.fieldPath);
+    const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     const auto& valueType =
         resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
     const auto valueNodeId = static_cast<uint32_t>(valueType.id());
@@ -1450,6 +1443,12 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
+    NIMBLE_USER_CHECK(
+        fsstEncodingNodeIds.find(valueNodeId) == fsstEncodingNodeIds.end(),
+        "Targeted FSST and shared dictionary column '{}' resolve to the same "
+        "value stream (schema node {}).",
+        columnDictionary.fieldPath,
+        valueNodeId);
     maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
@@ -1462,14 +1461,14 @@ DictionaryConfigs collectDictionaryConfigs(
 
   configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
   for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
-    const velox::common::Subfield subfield{flatMap.fieldPath};
+    const auto subfield = parseValueStreamSubfield(flatMap.fieldPath);
     NIMBLE_USER_CHECK_EQ(
         subfield.path().size(),
         1,
         "Shared dictionary flat-map path '{}' must be a top-level writer input "
         "column.",
         flatMap.fieldPath);
-    const auto& fieldType = resolveFieldPath(type, flatMap.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     NIMBLE_USER_CHECK_EQ(
         fieldType.type()->kind(),
         velox::TypeKind::MAP,
@@ -1483,8 +1482,30 @@ DictionaryConfigs collectDictionaryConfigs(
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     auto& flatMapKeys = configs.flatMaps[nodeId];
+    const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
+      if (!fsstEncodingNodeIds.empty()) {
+        const TypeWithId* configuredType = &mapValueType;
+        if (!flatMapKey.valueSubfield.empty()) {
+          const auto valueSubfield =
+              parseValueStreamSubfield(flatMapKey.valueSubfield);
+          configuredType =
+              &resolveValueStreamSubfield(mapValueType, valueSubfield);
+        }
+        const auto& valueType =
+            resolveDictionaryValueType(*configuredType, flatMap.fieldPath);
+        NIMBLE_USER_CHECK(
+            fsstEncodingNodeIds.find(valueType.id()) ==
+                fsstEncodingNodeIds.end(),
+            "Targeted FSST and shared dictionary flat-map column '{}', key "
+            "{}, value subfield '{}' resolve to the same value stream "
+            "(schema node {}).",
+            flatMap.fieldPath,
+            flatMapKey.key,
+            flatMapKey.valueSubfield,
+            valueType.id());
+      }
       maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
@@ -1501,6 +1522,10 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   }
   descriptor.setContext(std::make_unique<WriterStreamContext>());
   return *descriptor.context<WriterStreamContext>();
+}
+
+bool noChunking(const StreamData& streamData) {
+  return streamData.noChunking();
 }
 
 void initializeEncodingLayouts(
@@ -1527,7 +1552,11 @@ void configureFlatMapValueStreams(
   }
   for (const auto& valueDictionary : it->second) {
     configureDictionary(
-        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
+        valueDictionary.valueSubfield.empty()
+            ? fieldType
+            : resolveValueStreamSubfield(
+                  fieldType,
+                  parseValueStreamSubfield(valueDictionary.valueSubfield)),
         valueDictionary.dictionary,
         context.schemaBuilder());
   }
@@ -1666,6 +1695,22 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
+        if (context.fsstEncodingNodeIds().find(nodeId) !=
+            context.fsstEncodingNodeIds().end()) {
+          auto& writerStreamContext =
+              streamContext(type.asScalar().scalarDescriptor());
+          // Target only the FSST parent. Its blob, nested streams, and Trivial
+          // fallback use the writer's normal encoding-selection settings. A
+          // caller-provided encodingLayoutTree is applied later and takes
+          // precedence when it configures the same stream.
+          writerStreamContext.setEncoding(
+              EncodingLayout{
+                  EncodingType::Fsst,
+                  {},
+                  context.options().compressionOptions.compressionType,
+                  {std::nullopt},
+              });
+        }
       });
 }
 
@@ -1693,7 +1738,6 @@ void initializeEncodingLayouts(
       SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
       return;
     }
-
     switch (typeBuilder.kind()) {
       case Kind::Scalar: {
         NIMBLE_CHECK_EQ(
@@ -1823,6 +1867,10 @@ void initializeEncodingLayouts(
       case Kind::FlatMap: {
         NIMBLE_UNREACHABLE("Flatmap handled already");
       }
+      case Kind::HybridFlatMap: {
+        NIMBLE_UNSUPPORTED(
+            "Hybrid FlatMap is supported only by the serialized-value writer.");
+      }
     }
 #undef SET_STREAM_CONTEXT
   }
@@ -1836,10 +1884,13 @@ void configureAddedFlatMapField(
   auto& flatmapBuilder = flatmap.asFlatMap();
   auto& inMapContext = streamContext(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
-  inMapContext.setIsInMapStream(true);
   std::vector<offset_size> valueStreamOffsets;
-  collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
-  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
+  visitValueStreamLeaves(fieldType, [&](offset_size offset) {
+    valueStreamOffsets.push_back(offset);
+    // Collect every leaf: the visitor's true short-circuits the walk.
+    return false;
+  });
+  inMapContext.setInMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
@@ -1980,7 +2031,7 @@ Writer::Writer(
           })},
       context_{std::make_unique<detail::WriterContext>(
           *pool_,
-          storedWriterOptions(
+          prepareWriterContextOptions(
               type,
               storedDataType_,
               storedInputColumnIndices_,
@@ -2004,14 +2055,19 @@ Writer::Writer(
           {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
                &context_->schemaBuilder(),
                context_->options().featureReordering),
+           .metadataFlushThreshold =
+               context_->options().metadataFlushThreshold.value_or(
+                   kMetadataFlushThreshold),
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
                    kMetadataCompressionThreshold),
+           .streamChecksumsEnabled = context_->options().enableStreamChecksums,
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
            .enableChunkStats = context_->options().enableChunkStats,
            .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
+           .maxChunkStringStatSize = context_->options().maxChunkStringStatSize,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
            .stripeGroupEncodingLayoutReadFactors =
@@ -2390,12 +2446,18 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   bool clusterIndexKeyColumnStorageOmitted{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage;
   if (omitClusterIndexKeyColumnStorage(context_->options())) {
-    const auto& indexOptions = clusterIndexConfig(context_->options());
     clusterIndexKeyColumnStorageOmitted = true;
-    clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
+    const auto& config = *context_->options().clusterIndexConfig;
+    clusterIndexKeyColumnsWithOmittedStorage =
+        clusterIndexConfig(config).columns;
   }
 
-  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted) {
+  // Read back from the tablet writer rather than from options, so the recorded
+  // flag cannot drift from what was actually written.
+  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+
+  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
+      !hasStreamChecksums) {
     return;
   }
 
@@ -2403,7 +2465,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
       FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)}
+          std::move(clusterIndexKeyColumnsWithOmittedStorage),
+          hasStreamChecksums}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -2535,6 +2598,23 @@ bool Writer::finish() {
 void Writer::abort() {
   checkRunning();
   setState(State::kAborted);
+}
+
+// Placeholders for the suspend and resume API, whose implementation lands
+// with the write path. Both throw, which is why clang-tidy reads suspend()
+// as never returning.
+
+// @lint-ignore CLANGTIDY clang-diagnostic-missing-noreturn
+void Writer::suspend() {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer suspend is not implemented yet.");
+}
+
+std::unique_ptr<Writer> Writer::resume(
+    const velox::TypePtr& /* type */,
+    std::string_view /* path */,
+    velox::memory::MemoryPool& /* pool */,
+    const WriterOptions& /* options */) {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer resume is not implemented yet.");
 }
 
 void Writer::flush() {
@@ -2758,6 +2838,11 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
+  // A reclaim-triggered flush must remain on the reclaiming thread. Dispatching
+  // executor tasks could enter memory arbitration recursively.
+  if (velox::memory::underMemoryArbitration()) {
+    return 1;
+  }
   const auto minStreamsPerEncodingTask =
       std::max(1u, options.minStreamsPerEncodingTask);
   const auto maxByStreams =
@@ -2891,41 +2976,56 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add(
-            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
-              velox::common::testutil::TestValue::adjust(
-                  "facebook::nimble::Writer::parallelEncodeTask",
-                  const_cast<uint32_t*>(&taskId));
-              const auto startCpuNanos = velox::process::threadCpuNanos();
-              while (true) {
-                const auto fetchIndex =
-                    nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (fetchIndex >= streamCount) {
-                  break;
-                }
-                const auto streamIndex = orderedIndices[fetchIndex];
-                auto& [nodeId, streamData] = streams[streamIndex];
-                uint64_t streamSize{0};
-                processStream(
-                    *streamData,
-                    encodingScratchBufferPool,
-                    encodingBufferPool,
-                    streamSize,
-                    chunkSize);
-                auto* statsCollector = context_->getStatsCollector(nodeId);
-                if (statsCollector) {
-                  statsCollector->addPhysicalSize(streamSize);
-                }
-              }
-              encodingCpuNanos.fetch_add(
-                  velox::process::threadCpuNanos() - startCpuNanos,
-                  std::memory_order_relaxed);
-            });
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool]() {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto fetchIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (fetchIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = orderedIndices[fetchIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            uint64_t streamSize{0};
+            processStream(
+                *streamData,
+                encodingScratchBufferPool,
+                encodingBufferPool,
+                streamSize,
+                chunkSize);
+            auto* statsCollector = context_->getStatsCollector(nodeId);
+            if (statsCollector) {
+              statsCollector->addPhysicalSize(streamSize);
+            }
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
       barrier.waitAll();
     } else {
@@ -2982,6 +3082,72 @@ void Writer::encodeStream(
   streamData.reset();
 }
 
+std::vector<const StreamDescriptorBuilder*>
+Writer::collectAllTrueInMapStreams() {
+  std::vector<const StreamDescriptorBuilder*> candidates;
+  if (!context_->options().skipConstantFlatMapInMapStreams) {
+    return candidates;
+  }
+
+  // Runs before the encode loop because all-true is only knowable from the raw
+  // stream. Afterwards compact() has consumed it, and the encoded form only
+  // answers the question by decoding, which is what this avoids.
+  for (const auto& [_, stream] : context_->streams()) {
+    const auto& descriptor = stream->descriptor();
+    auto* streamContext = descriptor.context<WriterStreamContext>();
+    if (streamContext == nullptr || !streamContext->isInMapStream()) {
+      continue;
+    }
+    const auto offset = descriptor.offset();
+    // Only streams that are still whole. One already chunked mid-stripe has
+    // part of itself encoded, so the raw data left here is just the tail and
+    // says nothing about the stripe.
+    //
+    // Declining costs the space saving, never correctness, and it is hard to
+    // reach. An in-map stream is one byte per row, so it must pass
+    // minStreamChunkRawSize (512KiB, ~524k rows for this one key) AND do so
+    // while the flush policy reports memory pressure, since mid-stripe
+    // chunking only runs under shouldChunk(). A table wide enough to want flat
+    // maps fills a 256MB raw stripe long before one key's in-map reaches half
+    // a megabyte.
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    if (!encodedStreams_[offset].chunks.empty()) {
+      continue;
+    }
+    // In-map streams are ContentStreamData<bool> (FieldWriter.cpp), so data()
+    // is a plain view: no materialization, and none of the string value
+    // streams are touched.
+    if (isAllTrueBoolStream(stream->data())) {
+      candidates.push_back(&descriptor);
+    }
+  }
+  return candidates;
+}
+
+void Writer::suppressAllTrueInMapStreams(
+    const std::vector<const StreamDescriptorBuilder*>& candidates) {
+  // After the encode loop a value stream reached disk exactly when it has
+  // chunks. Nothing needs to be read from the streams themselves, so this
+  // costs no materialization and inspects no encoded bytes.
+  const auto reachedDisk = [this](offset_size offset) {
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    return !encodedStreams_[offset].chunks.empty();
+  };
+
+  for (const auto* descriptor : candidates) {
+    // Drop the all-true in-map stream only while a value stream proves the key
+    // was present. The offsets were recorded with the reader's own traversal,
+    // so the writer cannot count bytes the reader will not look at.
+    const auto* streamContext = descriptor->context<WriterStreamContext>();
+    const auto& valueOffsets = streamContext->flatMapValueStreamOffsets();
+    if (std::any_of(valueOffsets.begin(), valueOffsets.end(), reachedDisk)) {
+      encodedStreams_[descriptor->offset()].chunks.clear();
+    }
+  }
+}
+
 void Writer::processStream(
     StreamData& streamData,
     velox::BufferPool* encodingScratchBufferPool,
@@ -2989,7 +3155,7 @@ void Writer::processStream(
     uint64_t& streamSize,
     std::atomic_uint64_t& chunkSize) {
   const auto offset = streamData.descriptor().offset();
-  const auto* context = streamData.descriptor().context<WriterStreamContext>();
+  auto* context = streamData.descriptor().context<WriterStreamContext>();
   NIMBLE_CHECK(encodedStreams_[offset].chunks.empty());
   if ((context != nullptr) && context->isNullStream()) {
     // For null streams we promote the null values to be written as
@@ -3006,15 +3172,23 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are all-true (every row
-    // has the key) or all-false (no row has the key). The reader distinguishes
-    // these by checking value stream presence: all-true keys have value
-    // streams, all-false keys do not.
+    // When enabled, skip encoding constant in-map streams, since the reader
+    // recovers the in-map state from value stream presence.
+    //
+    // All-false is dropped here: the key really is absent from this stripe,
+    // which is exactly what the reader concludes from two missing streams.
+    //
+    // All-true is still encoded here. collectAllTrueInMapStreams() has
+    // already noted it, and suppressAllTrueInMapStreams() drops the chunks
+    // after the stripe is encoded, once it is known whether a value stream
+    // survived to prove the key was present.
     //
     // NOTE: readers that don't infer missing in-map streams require
     // skipConstantFlatMapInMapStreams to remain false.
     streamData.materialize();
-    if (!isConstantBoolStream(streamData.data())) {
+    const auto data = streamData.data();
+    const bool allTrue = isAllTrueBoolStream(data);
+    if (allTrue || !isConstantBoolStream(data)) {
       encodeStream(
           streamData,
           encodingScratchBufferPool,
@@ -3040,20 +3214,31 @@ bool Writer::encodeStreamChunk(
     uint64_t minChunkSize,
     uint64_t maxChunkSize,
     bool ensureFullChunks,
+    bool lastChunk,
     Stream& encodedStream,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool,
     uint64_t& streamBytes,
     std::atomic_uint64_t& chunkBytes,
     std::atomic_uint64_t& logicalBytes) {
+  const bool chunkingDisabled = noChunking(streamData);
+  if (chunkingDisabled && !lastChunk) {
+    return false;
+  }
+
   bool writtenChunk{false};
   logicalBytes += streamData.memoryUsed();
   auto& streamChunks = encodedStream.chunks;
+  // Protected streams reach this path only at stripe close. Raising the cap
+  // to the complete buffered size makes the chunker emit at most one chunk.
+  const auto streamMaxChunkSize = chunkingDisabled
+      ? std::max(maxChunkSize, streamData.memoryUsed())
+      : maxChunkSize;
   auto chunker = getStreamChunker(
       streamData,
       StreamChunkerOptions{
           .minChunkSize = minChunkSize,
-          .maxChunkSize = maxChunkSize,
+          .maxChunkSize = streamMaxChunkSize,
           .ensureFullChunks = ensureFullChunks,
           .isFirstChunk = streamChunks.empty()});
   uint64_t encodedChunkBytes{0};
@@ -3067,9 +3252,87 @@ bool Writer::encodeStreamChunk(
   chunkBytes += encodedChunkBytes;
   // Compact erases processed stream data to reclaim memory.
   chunker->compact();
+  if (chunkingDisabled) {
+    NIMBLE_CHECK_LE(
+        streamChunks.size(),
+        1,
+        "A stream with chunking disabled produced multiple chunks.");
+  }
   logicalBytes -= streamData.memoryUsed();
   return writtenChunk;
 }
+
+namespace {
+
+template <typename T>
+void populateTypedChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    uint32_t maxStringStatSize) {
+  const std::span<const T> values{
+      reinterpret_cast<const T*>(chunkView.data().data()),
+      chunkView.data().size() / sizeof(T)};
+  if (values.empty()) {
+    return;
+  }
+  if constexpr (std::is_floating_point_v<T>) {
+    if (std::any_of(values.begin(), values.end(), [](T value) {
+          return std::isnan(value);
+        })) {
+      return;
+    }
+  }
+  const auto [min, max] = std::minmax_element(values.begin(), values.end());
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      return;
+    }
+    chunk.minValue = std::string{*min};
+    chunk.maxValue = std::string{*max};
+  } else {
+    chunk.minValue = *min;
+    chunk.maxValue = *max;
+  }
+}
+
+void populateChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    const WriterOptions& options) {
+  if (!options.enableChunkStats ||
+      options.chunkStatsVersion != ChunkStatsVersion::kV2) {
+    return;
+  }
+#define POPULATE_CHUNK_BOUNDS(scalarKind, Type)            \
+  case ScalarKind::scalarKind:                             \
+    populateTypedChunkBounds<Type>(                        \
+        chunkView, chunk, options.maxChunkStringStatSize); \
+    return
+
+  switch (chunkView.descriptor().scalarKind()) {
+    POPULATE_CHUNK_BOUNDS(Bool, bool);
+    POPULATE_CHUNK_BOUNDS(Int8, int8_t);
+    POPULATE_CHUNK_BOUNDS(UInt8, uint8_t);
+    POPULATE_CHUNK_BOUNDS(Int16, int16_t);
+    POPULATE_CHUNK_BOUNDS(UInt16, uint16_t);
+    POPULATE_CHUNK_BOUNDS(Int32, int32_t);
+    POPULATE_CHUNK_BOUNDS(UInt32, uint32_t);
+    POPULATE_CHUNK_BOUNDS(Int64, int64_t);
+    POPULATE_CHUNK_BOUNDS(UInt64, uint64_t);
+    POPULATE_CHUNK_BOUNDS(Float, float);
+    POPULATE_CHUNK_BOUNDS(Double, double);
+    case ScalarKind::String:
+    case ScalarKind::Binary:
+      populateTypedChunkBounds<std::string_view>(
+          chunkView, chunk, options.maxChunkStringStatSize);
+      return;
+    case ScalarKind::Undefined:
+      return;
+  }
+#undef POPULATE_CHUNK_BOUNDS
+}
+
+} // namespace
 
 uint32_t Writer::encodeChunk(
     const StreamData& chunkView,
@@ -3090,6 +3353,7 @@ uint32_t Writer::encodeChunk(
   chunk.rowCount = chunkView.rowCount();
   // Per-chunk null count, precomputed by the chunker.
   chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
+  populateChunkBounds(chunkView, chunk, context_->options());
   ChunkedStreamWriter chunkWriter{
       *encodingBuffer_, context_->options().chunkCompression};
   for (auto& buffer : chunkWriter.encode(encoded)) {
@@ -3132,15 +3396,31 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool] {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
           const auto startCpuNanos = velox::process::threadCpuNanos();
           while (true) {
             const auto inputIndex =
@@ -3157,6 +3437,7 @@ bool Writer::writeChunks(
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
+                    lastChunk,
                     encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
@@ -3190,6 +3471,7 @@ bool Writer::writeChunks(
                 minChunkSize,
                 maxChunkSize,
                 ensureFullChunks,
+                lastChunk,
                 encodedStreams_[offset],
                 encodingScratchBufferPool,
                 encodingBufferPool,
@@ -3232,6 +3514,7 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
+    bool stopWhenPressureRelieved,
     FlushPolicy* flushPolicy) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
@@ -3239,10 +3522,10 @@ bool Writer::flushChunks(
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
     if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+        (stopWhenPressureRelieved && !shouldChunk(flushPolicy))) {
       return false;
     }
   }
@@ -3253,6 +3536,13 @@ bool Writer::writeStripe() {
   if (context_->rowsInStripe() == 0) {
     return false;
   }
+
+  // Which in-map streams are all-true has to be read now, while the raw
+  // streams still hold their bytes; encoding consumes them. Whether each key's
+  // value stream reaches disk is only settled once encoding finishes, so the
+  // candidates are collected here and judged after the loop.
+  ensureWriteStreams();
+  const auto allTrueInMapStreams = collectAllTrueInMapStreams();
 
   if (context_->options().enableChunking) {
     // Chunk all streams.
@@ -3275,6 +3565,8 @@ bool Writer::writeStripe() {
   uint64_t stripeSize{0};
   {
     LoggingScope scope{*context_->logger()};
+
+    suppressAllTrueInMapStreams(allTrueInMapStreams);
 
     size_t nonEmptyCount{0};
     for (auto i = 0; i < encodedStreams_.size(); ++i) {
@@ -3324,45 +3616,75 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
+  const auto& options = context_->options();
+  if (options.enableChunking) {
     const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
-    const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    // O(numStreams) plus an allocation, so it is called only from a branch
+    // that will act on the result.
+    const auto oversizedStreams = [&] {
+      const auto streamCount = streams.size();
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      std::vector<uint32_t> indices;
+      indices.reserve(streamCount);
+      for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (!noChunking(*streams[streamIndex].second) &&
+            streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          indices.push_back(streamIndex);
+        }
       }
+      return indices;
+    };
+
+    if (options.eagerChunking) {
+      // An oversized stream is capped on its own account, without waiting for
+      // the writer's total to come under pressure. See
+      // WriterOptions::eagerChunking. Stopping once pressure cleared would
+      // leave the streams after that point above the cap, so this walks all
+      // of them.
+      flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/false,
+          flushPolicy.get());
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
-      // Relieve memory pressure by chunking small streams.
-      // Sort streams for chunking based on raw memory usage.
-      // TODO(T240072104): Improve performance by bucketing the streams
-      // by size (by most significant bit) instead of sorting them.
-      // Only sort streams above minChunkSize.
-      streamIndices.resize(streams.size());
-      std::iota(streamIndices.begin(), streamIndices.end(), 0);
-      std::sort(
-          streamIndices.begin(),
-          streamIndices.end(),
-          [&](const uint32_t& a, const uint32_t& b) {
-            return streams[a].second->memoryUsed() >
-                streams[b].second->memoryUsed();
-          });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+    if (shouldChunk(flushPolicy.get())) {
+      // Soft chunking, bounded by maxChunkSize.
+      const bool continueChunking = flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/true,
+          flushPolicy.get());
+      // Hard chunking reaches below maxChunkSize: the escalation for when
+      // capping each stream was not enough.
+      if (continueChunking) {
+        // Sort streams for chunking based on raw memory usage.
+        // TODO(T240072104): Improve performance by bucketing the streams
+        // by size (by most significant bit) instead of sorting them.
+        // Only sort streams above minChunkSize.
+        std::vector<uint32_t> streamIndices;
+        streamIndices.reserve(streams.size());
+        for (uint32_t streamIndex = 0; streamIndex < streams.size();
+             ++streamIndex) {
+          if (!noChunking(*streams[streamIndex].second)) {
+            streamIndices.push_back(streamIndex);
+          }
+        }
+        std::sort(
+            streamIndices.begin(),
+            streamIndices.end(),
+            [&](const uint32_t& a, const uint32_t& b) {
+              return streams[a].second->memoryUsed() >
+                  streams[b].second->memoryUsed();
+            });
+        flushChunks(
+            streamIndices,
+            /*ensureFullChunks=*/false,
+            /*stopWhenPressureRelieved=*/true,
+            flushPolicy.get());
+      }
     }
   }
 

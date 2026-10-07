@@ -32,6 +32,7 @@
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/Timestamp.h"
@@ -208,6 +209,19 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
     auto planStats = toPlanStats(task->taskStats());
     auto it = planStats.find(plan->id());
     ASSERT_TRUE(it != planStats.end());
+    if (numPrefetchSplits > 0) {
+      const auto& customStats = it->second.customStats;
+      ASSERT_EQ(
+          customStats.count(
+              std::string(facebook::velox::exec::TableScan::kPreloadedSplits)),
+          1);
+      EXPECT_GT(
+          customStats
+              .at(std::string(
+                  facebook::velox::exec::TableScan::kPreloadedSplits))
+              .sum,
+          0);
+    }
     // TODO (mh): enable once we start to track gpu memory
     // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
   }
@@ -953,16 +967,6 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
       .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
       .assertResults({makeRowVector(
           {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{})})});
-
-  // Experimental hybrid reader must also support injected-only projections.
-  AssertQueryBuilder(plan)
-      .connectorSessionProperty(
-          kCudfIcebergConnectorId,
-          cudf_velox::connector::hive::CudfHiveConfig::
-              kUseExperimentalCudfReaderSession,
-          "true")
-      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
-      .assertResults({expected});
 }
 
 /// All-injected projection with positional deletes and a subfield filter,
@@ -1062,6 +1066,56 @@ TEST_F(CudfIcebergReadTest, allInjectedProjectionWithPositionalDeletes) {
   AssertQueryBuilder(mixedPlan)
       .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}, caPartition))
       .assertResults({emptyExpected});
+}
+
+/// Verifies that a `count(*)` with no projected columns counts the footer rows
+/// that survive positional deletes.
+TEST_F(CudfIcebergReadTest, countStarWithPositionalDeletes) {
+  auto data =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40, 50})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  // Positional delete removing file rows 0 and 2.
+  auto deleteFilePath = TempFilePath::create();
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto deleteVector = makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {
+          makeFlatVector<std::string>(
+              2, [&](vector_size_t) { return dataFile->getPath(); }),
+          makeFlatVector<int64_t>({0, 2}),
+      });
+  writeDeleteFile(
+      DeleteFileFormat::DWRF, deleteFilePath->getPath(), {deleteVector});
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(deleteFilePath->getPath()));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(ROW({}, {}))
+                  .dataColumns(data->rowType())
+                  .endTableScan()
+                  .singleAggregation({}, {"count(1)"})
+                  .planNode();
+
+  const auto countRows =
+      [&](const std::vector<IcebergDeleteFile>& deleteFiles) {
+        auto result =
+            AssertQueryBuilder(plan)
+                .splits(makeIcebergSplits(dataFile->getPath(), deleteFiles))
+                .copyResults(pool());
+        return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+      };
+
+  EXPECT_EQ(countRows({}), 5);
+  EXPECT_EQ(countRows({deleteFile}), 3);
 }
 
 /// A filter that does not reference an injected column is pushed with rebased
@@ -1198,64 +1252,55 @@ TEST_F(CudfIcebergReadTest, normalizeDecimalsWithInjectedColumn) {
       1,
       getFileSize(deletePath->getPath()));
 
-  for (const bool experimental : {false, true}) {
-    for (const bool projectPrice : {false, true}) {
-      auto outputType = projectPrice
-          ? tableType
-          : ROW({{"country", VARCHAR()}, {"id", BIGINT()}});
-      for (const bool deferred : {false, true}) {
-        // Decimal literals defer the filter when injected columns are present.
-        // IS NOT NULL needs no physical-width literal and remains pushed,
-        // exercising the prepended row index when positional deletes apply.
-        auto plan = PlanBuilder(pool())
-                        .startTableScan()
-                        .connectorId(kCudfIcebergConnectorId)
-                        .outputType(outputType)
-                        .dataColumns(tableType)
-                        .assignments(assignments)
-                        .subfieldFilter(
-                            deferred ? "price < CAST('0.00' AS DECIMAL(5, 2))"
-                                     : "price IS NOT NULL")
-                        .endTableScan()
-                        .planNode();
-        for (const bool withDeletes : {false, true}) {
-          SCOPED_TRACE(
-              fmt::format(
-                  "experimental={}, projectPrice={}, deferred={}, deletes={}",
-                  experimental,
-                  projectPrice,
-                  deferred,
-                  withDeletes));
-          std::vector<int64_t> ids =
-              deferred ? std::vector<int64_t>{2} : std::vector<int64_t>{1, 2};
-          std::vector<int64_t> prices = deferred
-              ? std::vector<int64_t>{-500}
-              : std::vector<int64_t>{100, -500};
-          if (!withDeletes) {
-            ids.push_back(4);
-            prices.push_back(-700);
-          }
-          std::vector<VectorPtr> columns{
-              makeFlatVector<std::string>(
-                  ids.size(), [](auto) { return "US"; }),
-              makeFlatVector<int64_t>(ids)};
-          if (projectPrice) {
-            columns.push_back(makeFlatVector<int64_t>(prices, DECIMAL(5, 2)));
-          }
-          auto expected = makeRowVector(outputType->names(), columns);
-          AssertQueryBuilder(plan)
-              .connectorSessionProperty(
-                  kCudfIcebergConnectorId,
-                  cudf_velox::connector::hive::CudfHiveConfig::
-                      kUseExperimentalCudfReaderSession,
-                  experimental ? "true" : "false")
-              .splits(makeIcebergSplits(
-                  dataFile->getPath(),
-                  withDeletes ? std::vector<IcebergDeleteFile>{deleteFile}
-                              : std::vector<IcebergDeleteFile>{},
-                  partitionKeys))
-              .assertResults({expected});
+  for (const bool projectPrice : {false, true}) {
+    auto outputType = projectPrice
+        ? tableType
+        : ROW({{"country", VARCHAR()}, {"id", BIGINT()}});
+    for (const bool deferred : {false, true}) {
+      // Decimal literals defer the filter when injected columns are present.
+      // IS NOT NULL needs no physical-width literal and remains pushed,
+      // exercising the prepended row index when positional deletes apply.
+      auto plan = PlanBuilder(pool())
+                      .startTableScan()
+                      .connectorId(kCudfIcebergConnectorId)
+                      .outputType(outputType)
+                      .dataColumns(tableType)
+                      .assignments(assignments)
+                      .subfieldFilter(
+                          deferred ? "price < CAST('0.00' AS DECIMAL(5, 2))"
+                                   : "price IS NOT NULL")
+                      .endTableScan()
+                      .planNode();
+      for (const bool withDeletes : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "projectPrice={}, deferred={}, deletes={}",
+                projectPrice,
+                deferred,
+                withDeletes));
+        std::vector<int64_t> ids =
+            deferred ? std::vector<int64_t>{2} : std::vector<int64_t>{1, 2};
+        std::vector<int64_t> prices = deferred
+            ? std::vector<int64_t>{-500}
+            : std::vector<int64_t>{100, -500};
+        if (!withDeletes) {
+          ids.push_back(4);
+          prices.push_back(-700);
         }
+        std::vector<VectorPtr> columns{
+            makeFlatVector<std::string>(ids.size(), [](auto) { return "US"; }),
+            makeFlatVector<int64_t>(ids)};
+        if (projectPrice) {
+          columns.push_back(makeFlatVector<int64_t>(prices, DECIMAL(5, 2)));
+        }
+        auto expected = makeRowVector(outputType->names(), columns);
+        AssertQueryBuilder(plan)
+            .splits(makeIcebergSplits(
+                dataFile->getPath(),
+                withDeletes ? std::vector<IcebergDeleteFile>{deleteFile}
+                            : std::vector<IcebergDeleteFile>{},
+                partitionKeys))
+            .assertResults({expected});
       }
     }
   }
@@ -1410,7 +1455,9 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
         .endTableScan()
         .planNode();
   };
-  const auto splits = makeIcebergSplits(dataFile->getPath(), {}, partitionKeys);
+  const auto makeSplits = [&] {
+    return makeIcebergSplits(dataFile->getPath(), {}, partitionKeys);
+  };
 
   // Expected rows after the physical predicate 'c1 > 20'.
   auto expected = makeRowVector(
@@ -1425,8 +1472,9 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
   // The partition value fails the filter, so the split holds no matching row
   // and none of its data pages are read.
   auto rejectedPlan = scan({"country = 'CA'", "c1 > 20"});
-  auto task =
-      AssertQueryBuilder(rejectedPlan).splits(splits).assertEmptyResults();
+  auto task = AssertQueryBuilder(rejectedPlan)
+                  .splits(makeSplits())
+                  .assertEmptyResults();
   auto planStats = toPlanStats(task->taskStats());
   auto it = planStats.find(rejectedPlan->id());
   ASSERT_TRUE(it != planStats.end());
@@ -1440,7 +1488,7 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
 
   // A column missing from the file is NULL for every row of the split.
   AssertQueryBuilder(scan({"added IS NULL", "c1 > 20"}))
-      .splits(splits)
+      .splits(makeSplits())
       .assertResults({expected});
 
   // A NULL that passes only because the filter admits NULLs passes for the
@@ -1468,7 +1516,7 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
           makeNullConstant(TypeKind::BIGINT, 5),
       });
   auto nullAllowedTask = AssertQueryBuilder(nullAllowedPlan)
-                             .splits(splits)
+                             .splits(makeSplits())
                              .assertResults({allRows});
   auto nullAllowedStats = toPlanStats(nullAllowedTask->taskStats());
   auto nullAllowedIt = nullAllowedStats.find(nullAllowedPlan->id());
@@ -1481,10 +1529,10 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
   // An IN-list folds as well, though it reaches the filter as a disjunction
   // over several references to the same column.
   AssertQueryBuilder(scan({"country IN ('CA', 'MX')", "c1 > 20"}))
-      .splits(splits)
+      .splits(makeSplits())
       .assertEmptyResults();
   AssertQueryBuilder(scan({"country IN ('US', 'MX')", "c1 > 20"}))
-      .splits(splits)
+      .splits(makeSplits())
       .assertResults({expected});
 }
 
@@ -1528,14 +1576,14 @@ TEST_F(CudfIcebergReadTest, rejectedSplitReadsNoDeleteFile) {
   // the metadata it validates, and a rejected split has to reach neither.
   const auto assertRejectedSplitSucceeds =
       [&](const IcebergDeleteFile& deleteFile, const std::string& error) {
-        const auto splits =
-            makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys);
         AssertQueryBuilder(scan("country = 'CA'"))
-            .splits(splits)
+            .splits(makeIcebergSplits(
+                dataFile->getPath(), {deleteFile}, partitionKeys))
             .assertEmptyResults();
         VELOX_ASSERT_THROW(
             AssertQueryBuilder(scan("country = 'US'"))
-                .splits(splits)
+                .splits(makeIcebergSplits(
+                    dataFile->getPath(), {deleteFile}, partitionKeys))
                 .copyResults(pool()),
             error);
       };
@@ -2835,17 +2883,9 @@ TEST_F(CudfIcebergReadTest, normalizeHiddenDecimalEqualityKey) {
                   .endTableScan()
                   .planNode();
   auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 4})});
-  for (const bool experimental : {false, true}) {
-    SCOPED_TRACE(experimental);
-    AssertQueryBuilder(plan)
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseExperimentalCudfReaderSession,
-            experimental ? "true" : "false")
-        .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
-        .assertResults({expected});
-  }
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+      .assertResults({expected});
 }
 
 /// Insert-delete-insert interleaving: data written after a delete (higher

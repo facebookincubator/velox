@@ -51,7 +51,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/BatchReader.h"
@@ -282,8 +281,10 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       : (uint64_t{1} << folly::Random::rand32(14, rng));
   options.maxStreamChunkRawSize = uint64_t{1}
       << (10 + folly::Random::rand32(12, rng));
-  options.enableChunkIndex =
-      options.enableChunking && folly::Random::oneIn(2, rng);
+  options.enableChunkStats =
+      options.enableChunking && !folly::Random::oneIn(4, rng);
+  options.chunkStatsVersion = ChunkStatsVersion::kV2;
+  options.chunkStatsMinAvgChunks = 0;
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
   options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
@@ -398,6 +399,9 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Nimble writer fuzzer does not support hybrid FlatMap.");
   }
   NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
 }
@@ -476,6 +480,113 @@ uint32_t decodedNullCount(
       return materializedNullCount<std::string_view>(encoding, pool);
     case DataType::Undefined:
       NIMBLE_UNREACHABLE("Nullable encoding has undefined data type.");
+  }
+  NIMBLE_UNREACHABLE("Unknown data type: {}.", encoding.dataType());
+}
+
+template <typename T>
+ChunkStatValue toChunkStatValue(T value) {
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    return std::string{value};
+  } else {
+    return value;
+  }
+}
+
+template <typename T>
+std::optional<std::pair<ChunkStatValue, ChunkStatValue>>
+materializedChunkBounds(
+    Encoding& encoding,
+    velox::memory::MemoryPool* pool,
+    uint32_t maxStringStatSize) {
+  const auto rowCount = encoding.rowCount();
+  Vector<T> values{pool, rowCount};
+  Vector<char> nonNulls{
+      pool, static_cast<uint32_t>(FixedBitArray::bufferSize(rowCount, 1))};
+  nonNulls.zero_out();
+
+  uint32_t numNonNulls{rowCount};
+  if (encoding.isNullable()) {
+    numNonNulls = encoding.materializeNullable(
+        rowCount, values.data(), [&]() { return nonNulls.data(); });
+  } else {
+    encoding.materialize(rowCount, values.data());
+  }
+  if (numNonNulls == 0) {
+    return std::nullopt;
+  }
+
+  std::optional<T> min;
+  std::optional<T> max;
+  for (uint32_t row = 0; row < rowCount; ++row) {
+    const bool isNonNull = !encoding.isNullable() || numNonNulls == rowCount ||
+        velox::bits::isBitSet(
+            reinterpret_cast<const uint8_t*>(nonNulls.data()), row);
+    if (!isNonNull) {
+      continue;
+    }
+    const auto value = values[row];
+    if constexpr (std::is_floating_point_v<T>) {
+      if (std::isnan(value)) {
+        return std::nullopt;
+      }
+    }
+    min = min.has_value() ? std::min(*min, value) : value;
+    max = max.has_value() ? std::max(*max, value) : value;
+  }
+  NIMBLE_CHECK(min.has_value());
+  NIMBLE_CHECK(max.has_value());
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      return std::nullopt;
+    }
+  }
+  return std::pair{
+      toChunkStatValue(*min),
+      toChunkStatValue(*max),
+  };
+}
+
+std::optional<std::pair<ChunkStatValue, ChunkStatValue>> decodedChunkBounds(
+    Encoding& encoding,
+    velox::memory::MemoryPool* pool,
+    uint32_t maxStringStatSize) {
+  switch (encoding.dataType()) {
+    case DataType::Bool:
+      return materializedChunkBounds<bool>(encoding, pool, maxStringStatSize);
+    case DataType::Int8:
+      return materializedChunkBounds<int8_t>(encoding, pool, maxStringStatSize);
+    case DataType::Uint8:
+      return materializedChunkBounds<uint8_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Int16:
+      return materializedChunkBounds<int16_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Uint16:
+      return materializedChunkBounds<uint16_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Int32:
+      return materializedChunkBounds<int32_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Uint32:
+      return materializedChunkBounds<uint32_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Int64:
+      return materializedChunkBounds<int64_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Uint64:
+      return materializedChunkBounds<uint64_t>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Float:
+      return materializedChunkBounds<float>(encoding, pool, maxStringStatSize);
+    case DataType::Double:
+      return materializedChunkBounds<double>(encoding, pool, maxStringStatSize);
+    case DataType::String:
+      return materializedChunkBounds<std::string_view>(
+          encoding, pool, maxStringStatSize);
+    case DataType::Undefined:
+      NIMBLE_UNREACHABLE(
+          "Chunk bounds have unsupported data type: {}.", encoding.dataType());
   }
   NIMBLE_UNREACHABLE("Unknown data type: {}.", encoding.dataType());
 }
@@ -592,6 +703,24 @@ void makeSymbolRich(
   }
 }
 
+// Rewrites string columns to representative capping JSON payloads. Generic
+// VectorFuzzer strings do not cover the numeric-key and array-cardinality
+// patterns that drive encoding behavior for these production JSON columns.
+void makeCappingJson(
+    velox::FlatVector<velox::StringView>* vector,
+    uint64_t rowOffset,
+    FuzzerGenerator& rng) {
+  for (velox::vector_size_t i = 0; i < vector->size(); ++i) {
+    if (vector->isNullAt(i)) {
+      continue;
+    }
+
+    const auto value = makeCappingJsonValue(
+        folly::Random::rand64(rng), rowOffset + static_cast<uint64_t>(i));
+    vector->set(i, velox::StringView(value));
+  }
+}
+
 // Collapses the non-null rows of a column to a single repeated value.
 // ConstantEncoding requires exactly one distinct value, which fuzzed data never
 // produces, so without this the encoding would report zero coverage on every
@@ -699,6 +828,7 @@ enum class ColumnShape {
   kDefault,
   kConstant,
   kNonDecreasing,
+  kCappingJson,
 };
 
 // Draws one shape per top-level column. Drawn once per iteration rather than
@@ -717,6 +847,10 @@ std::vector<ColumnShape> drawColumnShapes(
         isIntegerKind(schema->childAt(i)->kind()) &&
         folly::Random::oneIn(4, rng)) {
       shapes.push_back(ColumnShape::kNonDecreasing);
+    } else if (
+        schema->childAt(i)->kind() == velox::TypeKind::VARCHAR &&
+        folly::Random::oneIn(2, rng)) {
+      shapes.push_back(ColumnShape::kCappingJson);
     } else {
       shapes.push_back(ColumnShape::kDefault);
     }
@@ -736,6 +870,7 @@ void applyEncodingFriendlyShapes(
     const std::vector<ColumnShape>& shapes,
     std::vector<int64_t>& cursors,
     uint64_t totalRows,
+    uint64_t rowOffset,
     FuzzerGenerator& rng) {
   NIMBLE_CHECK_EQ(
       batch->childrenSize(),
@@ -754,6 +889,7 @@ void applyEncodingFriendlyShapes(
         shapes.at(childIndex) == ColumnShape::kConstant;
     const bool makeMonotonic =
         shapes.at(childIndex) == ColumnShape::kNonDecreasing;
+    const bool makeJson = shapes.at(childIndex) == ColumnShape::kCappingJson;
     auto& cursor = cursors.at(childIndex);
     switch (child->typeKind()) {
       case velox::TypeKind::BOOLEAN:
@@ -808,6 +944,15 @@ void applyEncodingFriendlyShapes(
         }
         break;
       case velox::TypeKind::VARCHAR:
+        if (collapseToConstant) {
+          makeConstant(child->asFlatVector<velox::StringView>());
+        } else if (makeJson) {
+          makeCappingJson(
+              child->asFlatVector<velox::StringView>(), rowOffset, rng);
+        } else {
+          makeSymbolRich(child->asFlatVector<velox::StringView>(), rng);
+        }
+        break;
       case velox::TypeKind::VARBINARY:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<velox::StringView>());
@@ -868,6 +1013,68 @@ void compareDecodedChunk(
 }
 
 } // namespace
+
+std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex) {
+  std::seed_seq seedSequence{
+      static_cast<uint32_t>(seed), static_cast<uint32_t>(seed >> 32)};
+  velox::fuzzer::FuzzerGenerator rng(seedSequence);
+
+  auto makeIntegerArray = [&](uint32_t size) {
+    std::string array{"["};
+    for (uint32_t i = 0; i < size; ++i) {
+      if (i != 0) {
+        array += ',';
+      }
+      array += std::to_string(folly::Random::rand32(1'000'000, rng));
+    }
+    array += ']';
+    return array;
+  };
+
+  struct Field {
+    std::string_view name;
+    std::string value;
+  };
+  std::vector<Field> fields;
+  fields.reserve(5);
+
+  // The capping payload always carries t1, but deliberately varies cardinality
+  // from empty through occasional long arrays. Numeric keys mirror the JSON
+  // paths used by capping readers, while presence and field order vary.
+  const auto t1Size = rowIndex % 64 == 0 ? 64 + folly::Random::rand32(65, rng)
+      : rowIndex % 17 == 0               ? 0
+                                         : 1 + folly::Random::rand32(8, rng);
+  fields.push_back({"t1", makeIntegerArray(t1Size)});
+  if (rowIndex % 3 != 0) {
+    fields.push_back({"795", makeIntegerArray(folly::Random::rand32(7, rng))});
+  }
+  if (rowIndex % 5 != 0) {
+    fields.push_back({"855", makeIntegerArray(folly::Random::rand32(7, rng))});
+  }
+
+  static constexpr auto kExtraKeys =
+      std::to_array<std::string_view>({"101", "235", "402", "921"});
+  constexpr auto kNumExtraKeys = static_cast<uint32_t>(kExtraKeys.size());
+  const auto numExtraKeys = folly::Random::rand32(kNumExtraKeys + 1, rng);
+  for (uint32_t i = 0; i < numExtraKeys; ++i) {
+    fields.push_back(
+        {kExtraKeys.at(i), makeIntegerArray(folly::Random::rand32(5, rng))});
+  }
+  std::shuffle(fields.begin(), fields.end(), rng);
+
+  std::string result{"{"};
+  for (size_t i = 0; i < fields.size(); ++i) {
+    if (i != 0) {
+      result += ',';
+    }
+    result += '"';
+    result += fields[i].name;
+    result += "\":";
+    result += fields[i].value;
+  }
+  result += '}';
+  return result;
+}
 
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
@@ -992,10 +1199,11 @@ std::string NimbleWriterFuzzer::writeFile(
   // flushAfterWrite=false leaves stripe boundaries to the flush policy; the
   // helper's default would cut a stripe after every batch and make every flush
   // regime identical.
-  const bool chunkStatsEnabled = writerOptions.enableChunkIndex;
+  const bool chunkStatsEnabled = writerOptions.enableChunkStats;
+  const auto maxChunkStringStatSize = writerOptions.maxChunkStringStatSize;
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
-  verifyChunkStatsMetadata(file, chunkStatsEnabled);
+  verifyChunkStatsMetadata(file, chunkStatsEnabled, maxChunkStringStatSize);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
   verifyColumnStatistics(file, schema, batches);
@@ -1005,13 +1213,8 @@ std::string NimbleWriterFuzzer::writeFile(
 
 void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     const std::string& file,
-    bool chunkStatsEnabled) {
-  struct PhysicalChunk {
-    uint32_t offset;
-    uint32_t size;
-    CompressionType compressionType;
-  };
-
+    bool chunkStatsEnabled,
+    uint32_t maxStringStatSize) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -1023,9 +1226,18 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   PhysicalStreamRoles roles;
   collectPhysicalStreamRoles(*nimbleSchema, roles);
 
+  const bool hasV1ChunkStats =
+      tablet->hasOptionalSection(std::string{kChunkStatsSection});
+  const bool hasV2ChunkStats =
+      tablet->hasOptionalSection(std::string{kChunkStatsV2Section});
+
   if (chunkStatsEnabled) {
-    ++chunkStatsCoverage_.numIndexedFiles;
+    NIMBLE_CHECK(!hasV1ChunkStats);
+    NIMBLE_CHECK(hasV2ChunkStats);
+    ++chunkStatsCoverage_.numV2IndexedFiles;
   } else {
+    NIMBLE_CHECK(!hasV1ChunkStats);
+    NIMBLE_CHECK(!hasV2ChunkStats);
     ++chunkStatsCoverage_.numUnindexedFiles;
   }
 
@@ -1036,7 +1248,13 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     if (!chunkStatsEnabled) {
       NIMBLE_CHECK_NULL(
           chunkStats,
-          "Chunk stats present in stripe {} but chunk index is disabled (seed {}).",
+          "Chunk stats present in stripe {} but chunk stats are disabled (seed {}).",
+          stripe,
+          options_.seed);
+    } else {
+      NIMBLE_CHECK_NOT_NULL(
+          chunkStats,
+          "Chunk stats are absent from stripe {} when enabled (seed {}).",
           stripe,
           options_.seed);
     }
@@ -1044,188 +1262,147 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       continue;
     }
     ++chunkStatsCoverage_.numStripes;
-
-    index::test::ChunkStatsTestHelper chunkHelper(chunkStats.get());
-    stripeGroups.insert(chunkHelper.firstStripe());
-    const uint32_t stripeOffset = stripe - chunkHelper.firstStripe();
-    NIMBLE_CHECK_LT(stripeOffset, chunkHelper.stripeCount());
+    stripeGroups.insert(chunkStats->firstStripe());
 
     const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
-    NIMBLE_CHECK_EQ(streamCount, chunkHelper.streamCount());
+    NIMBLE_CHECK_EQ(streamCount, chunkStats->numStreams());
     std::vector<uint32_t> streamIdentifiers(streamCount);
     std::iota(streamIdentifiers.begin(), streamIdentifiers.end(), 0);
     auto streams = tablet->load(stripeIdentifier, streamIdentifiers);
 
     for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-      auto streamStats = chunkHelper.streamStats(streamId);
-      NIMBLE_CHECK_EQ(
-          streamStats.chunkCounts.size(), chunkHelper.stripeCount());
-      NIMBLE_CHECK_EQ(
-          streamStats.chunkRows.size(), streamStats.chunkOffsets.size());
-      NIMBLE_CHECK_EQ(
-          streamStats.chunkRows.size(), streamStats.chunkNullCounts.size());
-      const uint32_t beginChunk =
-          stripeOffset == 0 ? 0 : streamStats.chunkCounts[stripeOffset - 1];
-      const uint32_t endChunk = streamStats.chunkCounts[stripeOffset];
-      NIMBLE_CHECK_LE(beginChunk, endChunk);
-      NIMBLE_CHECK_LE(endChunk, streamStats.chunkRows.size());
-      const uint32_t chunkCount = endChunk - beginChunk;
-
       auto& stream = streams[streamId];
       std::string_view rawStream;
       if (stream != nullptr) {
+        // @lint-ignore NULLSAFECLANG nullable-argument
         rawStream = stream->getStream();
       }
       NIMBLE_CHECK_EQ(
           rawStream.size(), tablet->streamSize(stripeIdentifier, streamId));
       NIMBLE_CHECK_LE(rawStream.size(), std::numeric_limits<uint32_t>::max());
 
-      std::vector<PhysicalChunk> physicalChunks;
-      uint32_t offset{0};
-      while (offset < rawStream.size()) {
-        NIMBLE_CHECK_LE(
-            kChunkHeaderSize,
-            rawStream.size() - offset,
-            "Truncated chunk header in stripe {}, stream {}.",
-            stripe,
-            streamId);
-        const char* cursor = rawStream.data() + offset;
-        const auto header = readChunkHeader(cursor);
-        const uint64_t size = uint64_t{kChunkHeaderSize} + header.length;
-        NIMBLE_CHECK_LE(
-            size,
-            rawStream.size() - offset,
-            "Chunk exceeds stripe {}, stream {} boundary.",
-            stripe,
-            streamId);
-        physicalChunks.push_back(
-            {offset, static_cast<uint32_t>(size), header.compressionType});
-        offset += size;
-      }
-      NIMBLE_CHECK_EQ(offset, rawStream.size());
-      NIMBLE_CHECK_EQ(
-          chunkCount,
-          physicalChunks.size(),
-          "Chunk count mismatch in stripe {}, stream {} (seed {}).",
-          stripe,
-          streamId,
-          options_.seed);
-
-      if (chunkCount == 0) {
-        NIMBLE_CHECK_NULL(stream);
+      auto streamIndex = chunkStats->createStreamIndex(
+          stripe, streamId, static_cast<uint32_t>(rawStream.size()));
+      NIMBLE_CHECK_EQ(streamIndex != nullptr, !rawStream.empty());
+      if (!streamIndex) {
         continue;
       }
       NIMBLE_CHECK_NOT_NULL(stream);
-
+      ++chunkStatsCoverage_.numV2IndexedStreams;
       if (roles.scalarStreams.contains(streamId)) {
         ++chunkStatsCoverage_.numScalarStreams;
       } else {
         ++chunkStatsCoverage_.numStructuralStreams;
       }
-      if (chunkCount > 1) {
-        ++chunkStatsCoverage_.numMultiChunkStreams;
-      }
-
-      auto streamIndex = chunkStats->createStreamIndex(
-          stripe, streamId, static_cast<uint32_t>(rawStream.size()));
-      NIMBLE_CHECK_EQ(streamIndex != nullptr, chunkCount > 1);
 
       InMemoryChunkedStream chunkedStream{*leafPool_, std::move(stream)};
       Buffer stringBuffer{*leafPool_};
       auto stringBufferFactory = [&stringBuffer](uint32_t size) -> void* {
         return stringBuffer.reserve(size);
       };
-      uint32_t previousRowBoundary{0};
-      for (uint32_t chunk = 0; chunk < chunkCount; ++chunk) {
-        const uint32_t metadataChunk = beginChunk + chunk;
-        const auto& physicalChunk = physicalChunks.at(chunk);
-        NIMBLE_CHECK_EQ(
-            streamStats.chunkOffsets[metadataChunk], physicalChunk.offset);
+      uint32_t offset{0};
+      uint32_t rowOffset{0};
+      uint32_t numChunks{0};
+      std::optional<uint32_t> previousChunkIndex;
+      while (chunkedStream.hasNext()) {
+        NIMBLE_CHECK_LE(
+            kChunkHeaderSize,
+            rawStream.size() - offset,
+            "Truncated chunk header in stripe {}, stream {} (seed {}).",
+            stripe,
+            streamId,
+            options_.seed);
+        const char* cursor = rawStream.data() + offset;
+        const auto header = readChunkHeader(cursor);
+        const uint64_t chunkSize = uint64_t{kChunkHeaderSize} + header.length;
+        NIMBLE_CHECK_LE(
+            chunkSize,
+            rawStream.size() - offset,
+            "Chunk exceeds stripe {}, stream {} boundary (seed {}).",
+            stripe,
+            streamId,
+            options_.seed);
 
-        const uint32_t nextOffset = chunk + 1 < chunkCount
-            ? streamStats.chunkOffsets[metadataChunk + 1]
-            : static_cast<uint32_t>(rawStream.size());
-        NIMBLE_CHECK_EQ(nextOffset - physicalChunk.offset, physicalChunk.size);
-
-        const uint32_t rowBoundary = streamStats.chunkRows[metadataChunk];
-        NIMBLE_CHECK_GT(rowBoundary, previousRowBoundary);
-        const uint32_t chunkRows = rowBoundary - previousRowBoundary;
-        NIMBLE_CHECK(chunkedStream.hasNext());
         auto encoding = EncodingFactory().create(
             *leafPool_, chunkedStream.nextChunk(), stringBufferFactory);
         NIMBLE_CHECK_NOT_NULL(encoding);
-        NIMBLE_CHECK_EQ(
-            encoding->rowCount(),
-            chunkRows,
-            "Chunk row count mismatch in stripe {}, stream {}, chunk {}.",
-            stripe,
-            streamId,
-            chunk);
-
-        const auto expectedNullCount = decodedNullCount(
+        const auto rowCount = encoding->rowCount();
+        NIMBLE_CHECK_GT(rowCount, 0);
+        const uint64_t nextRowOffset = uint64_t{rowOffset} + rowCount;
+        NIMBLE_CHECK_LE(nextRowOffset, std::numeric_limits<uint32_t>::max());
+        const auto nullCount = decodedNullCount(
             *encoding, roles.nullStreams.contains(streamId), leafPool_.get());
-        const auto indexedNullCount =
-            streamStats.chunkNullCounts[metadataChunk];
-        NIMBLE_CHECK_EQ(
-            indexedNullCount,
-            expectedNullCount,
-            "Chunk null count mismatch in stripe {}, stream {}, chunk {} (seed {}).",
-            stripe,
-            streamId,
-            chunk,
-            options_.seed);
-        NIMBLE_CHECK_EQ(indexedNullCount > 0, expectedNullCount > 0);
+        encoding->reset();
+        const auto bounds =
+            decodedChunkBounds(*encoding, leafPool_.get(), maxStringStatSize);
 
-        if (indexedNullCount == 0) {
+        const auto first = streamIndex->lookupChunk(rowOffset);
+        const auto last =
+            streamIndex->lookupChunk(static_cast<uint32_t>(nextRowOffset - 1));
+        NIMBLE_CHECK_EQ(first.chunkOffset, offset);
+        NIMBLE_CHECK_EQ(first.chunkSize, chunkSize);
+        NIMBLE_CHECK_EQ(first.rowOffset, rowOffset);
+        NIMBLE_CHECK_EQ(last.chunkIndex, first.chunkIndex);
+        NIMBLE_CHECK_EQ(last.chunkOffset, first.chunkOffset);
+        NIMBLE_CHECK_EQ(last.chunkSize, first.chunkSize);
+        NIMBLE_CHECK_EQ(last.rowOffset, first.rowOffset);
+        NIMBLE_CHECK_EQ(
+            streamIndex->chunkEndRow(first.chunkIndex), nextRowOffset);
+        if (previousChunkIndex.has_value()) {
+          NIMBLE_CHECK_EQ(first.chunkIndex, *previousChunkIndex + 1);
+        }
+
+        const auto indexedNullCount =
+            streamIndex->chunkNullCount(first.chunkIndex);
+        NIMBLE_CHECK(indexedNullCount.has_value());
+        NIMBLE_CHECK_EQ(*indexedNullCount, nullCount);
+        const auto indexedBounds = streamIndex->chunkBounds(first.chunkIndex);
+        const auto indexedMin = streamIndex->chunkMinValue(first.chunkIndex);
+        const auto indexedMax = streamIndex->chunkMaxValue(first.chunkIndex);
+        NIMBLE_CHECK_EQ(indexedBounds.has_value(), bounds.has_value());
+        NIMBLE_CHECK_EQ(indexedMin.has_value(), bounds.has_value());
+        NIMBLE_CHECK_EQ(indexedMax.has_value(), bounds.has_value());
+        if (indexedBounds.has_value()) {
+          NIMBLE_CHECK(indexedBounds->first == bounds->first);
+          NIMBLE_CHECK(indexedBounds->second == bounds->second);
+          NIMBLE_CHECK(*indexedMin == bounds->first);
+          NIMBLE_CHECK(*indexedMax == bounds->second);
+          ++chunkStatsCoverage_.numV2BoundedChunks;
+        }
+
+        if (nullCount == 0) {
           ++chunkStatsCoverage_.numZeroNullChunks;
-        } else if (indexedNullCount == chunkRows) {
+        } else if (nullCount == rowCount) {
           ++chunkStatsCoverage_.numFullyNullChunks;
         } else {
           ++chunkStatsCoverage_.numPartiallyNullChunks;
         }
-        if (physicalChunk.compressionType == CompressionType::Uncompressed) {
+        if (header.compressionType == CompressionType::Uncompressed) {
           ++chunkStatsCoverage_.numUncompressedChunks;
         } else {
           ++chunkStatsCoverage_.numCompressedChunks;
         }
-        if (chunk == 0) {
+        if (numChunks == 0) {
           ++chunkStatsCoverage_.numFirstChunks;
         }
-        if (chunk + 1 == chunkCount) {
+        const bool isFinalChunk = !chunkedStream.hasNext();
+        if (isFinalChunk) {
           ++chunkStatsCoverage_.numFinalChunks;
-        }
-        if (chunk > 0 && chunk + 1 < chunkCount) {
+        } else if (numChunks > 0) {
           ++chunkStatsCoverage_.numMiddleChunks;
         }
 
-        if (streamIndex) {
-          const auto first = streamIndex->lookupChunk(previousRowBoundary);
-          const auto last = streamIndex->lookupChunk(rowBoundary - 1);
-          NIMBLE_CHECK_EQ(first.chunkOffset, physicalChunk.offset);
-          NIMBLE_CHECK_EQ(first.chunkSize, physicalChunk.size);
-          NIMBLE_CHECK_EQ(first.rowOffset, previousRowBoundary);
-          NIMBLE_CHECK_EQ(last.chunkIndex, first.chunkIndex);
-          NIMBLE_CHECK_EQ(last.chunkOffset, first.chunkOffset);
-          const auto lookupNullCount =
-              streamIndex->chunkNullCount(first.chunkIndex);
-          NIMBLE_CHECK(
-              lookupNullCount.has_value(),
-              "Chunk {} of stripe {}, stream {} has no indexed null count.",
-              chunk,
-              stripe,
-              streamId);
-          NIMBLE_CHECK_EQ(*lookupNullCount, indexedNullCount);
-          if (chunk + 1 < chunkCount) {
-            const auto next = streamIndex->lookupChunk(rowBoundary);
-            NIMBLE_CHECK_NE(next.chunkIndex, first.chunkIndex);
-            NIMBLE_CHECK_EQ(next.chunkOffset, physicalChunks[chunk + 1].offset);
-          }
-        }
-        previousRowBoundary = rowBoundary;
+        previousChunkIndex = first.chunkIndex;
+        offset += chunkSize;
+        rowOffset = static_cast<uint32_t>(nextRowOffset);
+        ++numChunks;
       }
-      NIMBLE_CHECK(!chunkedStream.hasNext());
-      if (streamIndex) {
-        NIMBLE_CHECK_EQ(streamIndex->rowCount(), previousRowBoundary);
+      NIMBLE_CHECK_EQ(offset, rawStream.size());
+      NIMBLE_CHECK_EQ(streamIndex->rowCount(), rowOffset);
+      const auto [beginChunk, endChunk] = streamIndex->chunkRange();
+      NIMBLE_CHECK_EQ(endChunk - beginChunk, numChunks);
+      if (numChunks > 1) {
+        ++chunkStatsCoverage_.numMultiChunkStreams;
       }
     }
   }
@@ -1596,7 +1773,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
       continue;
     }
 
-    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    std::vector<TabletReader::StreamMetadata> locations(streamCount);
     tablet->streamLocations(stripeIdentifier, locations);
     const uint64_t stripeOffset = tablet->stripeOffset(stripe);
     const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()
@@ -2116,6 +2293,7 @@ void NimbleWriterFuzzer::run() {
           columnShapes,
           monotonicCursors,
           uint64_t{options_.batchSize} * options_.numBatches,
+          uint64_t{batch} * options_.batchSize,
           rng);
     }
     batches.push_back(std::move(vector));
@@ -2303,17 +2481,19 @@ void NimbleWriterFuzzer::logCoverage() const {
 
 void NimbleWriterFuzzer::logChunkStatsCoverage() const {
   LOG(WARNING) << fmt::format(
-      "Chunk-index coverage: files(indexed={},unindexed={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={}) chunks(first={},middle={},final={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
-      chunkStatsCoverage_.numIndexedFiles,
+      "Chunk-index coverage: files(v2={},unindexed={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={},v2Indexed={}) chunks(first={},middle={},final={},v2Bounded={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
+      chunkStatsCoverage_.numV2IndexedFiles,
       chunkStatsCoverage_.numUnindexedFiles,
       chunkStatsCoverage_.numStripeGroups,
       chunkStatsCoverage_.numStripes,
       chunkStatsCoverage_.numScalarStreams,
       chunkStatsCoverage_.numStructuralStreams,
       chunkStatsCoverage_.numMultiChunkStreams,
+      chunkStatsCoverage_.numV2IndexedStreams,
       chunkStatsCoverage_.numFirstChunks,
       chunkStatsCoverage_.numMiddleChunks,
       chunkStatsCoverage_.numFinalChunks,
+      chunkStatsCoverage_.numV2BoundedChunks,
       chunkStatsCoverage_.numZeroNullChunks,
       chunkStatsCoverage_.numPartiallyNullChunks,
       chunkStatsCoverage_.numFullyNullChunks,
@@ -2329,7 +2509,9 @@ std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()
       uncovered.push_back(name);
     }
   };
-  require(chunkStatsCoverage_.numIndexedFiles > 0, "indexed file");
+  require(chunkStatsCoverage_.numV2IndexedFiles > 0, "V2 indexed file");
+  require(chunkStatsCoverage_.numV2IndexedStreams > 0, "V2 indexed stream");
+  require(chunkStatsCoverage_.numV2BoundedChunks > 0, "V2 bounded chunk");
   require(chunkStatsCoverage_.numUnindexedFiles > 0, "unindexed file");
   // TabletWithIndexTest.multipleGroups deterministically covers multiple
   // stripe groups. WriterOptions does not expose the tablet metadata flush

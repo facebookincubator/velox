@@ -109,6 +109,10 @@ struct WriterOptions {
   /// skipping.
   float chunkStatsMinAvgChunks{2};
 
+  /// Maximum string or binary value length retained in per-chunk bounds.
+  uint32_t maxChunkStringStatSize{
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
+
   /// NOTE: !!! This is under experimentation and please do not turn on in
   /// production use case !!!
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
@@ -236,6 +240,18 @@ struct WriterOptions {
   /// encodings, based on history data.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
+  /// Velox subfield paths whose stored VARCHAR value streams prefer FSST.
+  /// Paths identify fields in the input schema and are resolved to the matching
+  /// stored data streams during construction; nested ROW fields use '.', while
+  /// ARRAY elements and MAP values use '[*]'. Targeting a cluster-index key is
+  /// rejected; non-key paths are resolved against the stored schema. A chunk
+  /// that misses FSST's compression target safely falls back to Trivial. FSST
+  /// and its fallback use the writer's normal encoding compression policy.
+  /// Targeting the same value stream with shared dictionary encoding is
+  /// rejected. Field names containing Velox subfield separators such as '.'
+  /// are not addressable as literal names through this interface.
+  std::vector<std::string> fsstEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
@@ -291,6 +307,13 @@ struct WriterOptions {
   /// compressed.
   std::optional<uint32_t> metadataCompressionThreshold{};
 
+  /// If present, overrides how much estimated stripe group metadata the tablet
+  /// writer accumulates before closing a stripe group. One index partition is
+  /// emitted per stripe group, so lowering this is the only way to produce a
+  /// multi-partition index without writing enough stripes to reach the 8MB
+  /// default.
+  std::optional<uint32_t> metadataFlushThreshold{};
+
   /// When flushing data streams into chunks, streams with raw data size smaller
   /// than this threshold will not be flushed.
   /// Note: this threshold is ignored when it is time to flush a stripe.
@@ -307,6 +330,18 @@ struct WriterOptions {
   /// When the number of schema nodes exceeds this threshold we use
   /// wideSchemaMaxStreamChunkRawSize in place of maxStreamChunkRawSize.
   size_t largeSchemaThreshold{500};
+
+  /// Chunks a stream once it exceeds maxStreamChunkRawSize, rather than only
+  /// when the writer is also under aggregate memory pressure. Off by default:
+  /// it changes chunk boundaries, and therefore stripe boundaries, for every
+  /// writer with chunking enabled.
+  ///
+  /// Without it, maxStreamChunkRawSize is only consulted once shouldChunk()
+  /// reports pressure on the writer's total footprint, so a single stream can
+  /// grow far past the cap. That is costly: a stream buffer grows by ~1.19x
+  /// and holds the old and new allocations across the move, so a regrow
+  /// transiently needs about twice the buffer.
+  bool eagerChunking{false};
 
   /// Number of streams to try chunking between memory pressure evaluations.
   /// Note: this is ignored when it is time to flush a stripe.
@@ -413,6 +448,13 @@ struct WriterOptions {
   bool ignoreTopLevelNulls{false};
 
   bool enableStreamDeduplication{true};
+
+  /// When true, records a checksum of each stream's on-disk bytes in the
+  /// stripe group, so a reader can verify an individual stream without reading
+  /// the whole file. Costs 4 bytes per stream per stripe in the footer, and
+  /// the checksums do not compress. The whole-file checksum in the postscript
+  /// is written either way.
+  bool enableStreamChecksums{false};
 
   /// When true, string fields use per-field buffers instead of a shared buffer.
   /// This enables incremental memory reclamation during chunking.

@@ -46,6 +46,9 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
+  /// Takes an InMemoryExchangeClient because this operator reads the client's
+  /// queue directly. ExchangeTransportRegistry ensures that the operator
+  /// receives the matching client type.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -85,8 +88,8 @@ class Exchange : public SourceOperator {
   // exchangeClient_.
   void getSplits(ContinueFuture* future);
 
-  // Fetches runtime stats from InMemoryExchangeClient and replaces these in
-  // this operator's stats.
+  // Fetches runtime stats from exchangeClient_ and replaces these in this
+  // operator's stats.
   void recordExchangeClientStats();
 
   void recordInputStats(uint64_t rawInputBytes);
@@ -101,8 +104,8 @@ class Exchange : public SourceOperator {
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to InMemoryExchangeClient.
+  // True if this operator is responsible for fetching splits from the Task
+  // and passing these to exchangeClient_.
   const bool processSplits_;
 
   const int driverId_;

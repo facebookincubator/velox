@@ -58,14 +58,16 @@ class EncodingViewTest : public ::testing::Test {
   void expectReads(
       const nimble::Vector<typename Encoding::cppDataType>& values,
       const std::vector<uint32_t>& positions,
-      nimble::Encoding::Options baseOptions = {}) {
+      nimble::Encoding::Options baseOptions = {},
+      nimble::CompressionType compressionType =
+          nimble::CompressionType::Uncompressed) {
     using T = typename Encoding::cppDataType;
     for (const auto useVarint : {false, true}) {
       SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
       auto options = baseOptions;
       options.useVarintRowCount = useVarint;
       auto serialized = nimble::test::Encoder<Encoding>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+          *buffer_, values, compressionType, options);
       auto view = nimble::createEncodingView(serialized, pool_.get(), options);
       ASSERT_NE(view, nullptr);
       for (const auto position : positions) {
@@ -85,6 +87,8 @@ class EncodingViewTest : public ::testing::Test {
       }
       expectIndexedRead(*view, values, {});
       expectIndexedRead(*view, values, positions);
+      expectSelectedRead(*view, values, {});
+      expectSelectedRead(*view, values, positions);
     }
   }
 
@@ -187,6 +191,33 @@ class EncodingViewTest : public ::testing::Test {
           fmt::format("positionIndex={}, position={}", i, positions[i]));
       EXPECT_EQ(actual[i], expected[positions[i]]);
     }
+  }
+
+  template <typename T>
+  void expectSelectedRead(
+      const nimble::EncodingView& view,
+      const nimble::Vector<T>& values,
+      const std::vector<uint32_t>& positions) {
+    SCOPED_TRACE(fmt::format("numPositions={}", positions.size()));
+    using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+    nimble::Vector<PhysicalType> actual{pool_.get(), positions.size()};
+    bool setNullCalled{false};
+    const auto numNonNulls = view.read(
+        std::span<const uint32_t>{positions.data(), positions.size()},
+        [&](uint32_t) { setNullCalled = true; },
+        actual.data());
+    EXPECT_EQ(numNonNulls, positions.size());
+    EXPECT_FALSE(setNullCalled);
+
+    const auto* expected = reinterpret_cast<const PhysicalType*>(values.data());
+    std::vector<PhysicalType> expectedValues;
+    expectedValues.reserve(positions.size());
+    for (const auto position : positions) {
+      expectedValues.push_back(expected[position]);
+    }
+    EXPECT_EQ(
+        std::vector<PhysicalType>(actual.begin(), actual.end()),
+        expectedValues);
   }
 
   nimble::Vector<int32_t> randomInt32(uint32_t seed) {

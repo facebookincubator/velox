@@ -18,6 +18,7 @@ velox_add_library(
   ConstantVector.cpp
   DecodedVector.cpp
   EncodedVectorCopy.cpp
+  FlatMapKeyIndex.cpp
   FlatMapVector.cpp
   FlatVector.cpp
   LazyVector.cpp
@@ -46,6 +47,7 @@ velox_add_library(
   DictionaryVector-inl.h
   DictionaryVector.h
   EncodedVectorCopy.h
+  FlatMapKeyIndex.h
   FlatMapVector.h
   FlatVector-inl.h
   FlatVector.h

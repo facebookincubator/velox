@@ -29,8 +29,10 @@
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
-#include "velox/dwio/nimble/index/ClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/ClusterIndexFactory.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
@@ -87,11 +89,30 @@ class ClusterIndexWriterTest : public testing::Test,
     return builder.build();
   }
 
-  static std::unique_ptr<ClusterIndexWriter> createWriter(
+  static std::shared_ptr<const IndexConfig> buildHierarchicalIndexConfig(
+      std::vector<std::string> columns,
+      std::vector<SortOrder> sortOrders,
+      bool enforceKeyOrder,
+      bool noDuplicateKey = false,
+      uint64_t maxRowsPerKeyChunk = 10'000,
+      CompressionType keyChunkCompressionType = CompressionType::Uncompressed) {
+    auto builder = ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
+                       .withKeyColumns(std::move(columns))
+                       .withSortOrders(std::move(sortOrders))
+                       .withEnforceKeyOrder(enforceKeyOrder)
+                       .withMaxRowsPerKeyChunk(maxRowsPerKeyChunk)
+                       .withKeyChunkCompressionType(keyChunkCompressionType);
+    if (noDuplicateKey) {
+      builder.withNoDuplicateKey(true);
+    }
+    return builder.build();
+  }
+
+  static std::unique_ptr<IndexWriter> createWriter(
       const std::shared_ptr<const IndexConfig>& config,
       const velox::TypePtr& type,
       velox::memory::MemoryPool* pool) {
-    return ClusterIndexWriter::create(*config, type, pool);
+    return clusterIndexFactory(config->name).createWriter(*config, type, pool);
   }
 
   void SetUp() override {
@@ -99,15 +120,6 @@ class ClusterIndexWriterTest : public testing::Test,
         {{std::string(kCol0), velox::VARCHAR()},
          {std::string(kCol1), velox::INTEGER()},
          {std::string(kCol2), velox::VARCHAR()}});
-  }
-
-  std::unique_ptr<velox::serializer::KeyEncoder> createKeyEncoder() const {
-    const auto keyType = velox::ROW({{std::string(kCol1), velox::INTEGER()}});
-    return velox::serializer::KeyEncoder::create(
-        {std::string(kCol1)},
-        keyType,
-        {velox::core::SortOrder{true, false}},
-        pool_.get());
   }
 
   static std::shared_ptr<const IndexConfig> indexConfig(
@@ -169,6 +181,20 @@ TEST_F(ClusterIndexWriterTest, createWithValidConfig) {
       EXPECT_NE(writer, nullptr);
     }
   }
+
+  auto hierarchicalConfig = buildHierarchicalIndexConfig(
+      {"col0"},
+      {SortOrder{.ascending = true}},
+      /*enforceKeyOrder=*/true,
+      /*noDuplicateKey=*/false,
+      /*maxRowsPerKeyChunk=*/10'000,
+      CompressionType::Uncompressed);
+  const auto hierarchicalWriter = createWriter(
+      hierarchicalConfig, velox::ROW({{"col0", velox::BIGINT()}}), pool_.get());
+  EXPECT_NE(
+      dynamic_cast<const HierarchicalClusterIndexWriter*>(
+          hierarchicalWriter.get()),
+      nullptr);
 }
 
 TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
@@ -199,7 +225,7 @@ TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
                       .build();
     NIMBLE_ASSERT_THROW(
         createWriter(config, type, pool_.get()),
-        "Index key stream only supports Prefix or Trivial encoding");
+        "Unsupported flat key encoding");
   }
 
   {
@@ -212,6 +238,36 @@ TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
     NIMBLE_ASSERT_THROW(
         createWriter(config, type, pool_.get()),
         "Index key chunk compression only supports Uncompressed, Zstd, or Lz4");
+  }
+
+  {
+    SCOPED_TRACE("hierarchical non-integral column");
+    auto config = buildHierarchicalIndexConfig(
+        {"col0"},
+        {SortOrder{.ascending = true}},
+        /*enforceKeyOrder=*/true,
+        /*noDuplicateKey=*/false,
+        /*maxRowsPerKeyChunk=*/10'000,
+        CompressionType::Uncompressed);
+    NIMBLE_ASSERT_USER_THROW(
+        createWriter(
+            config, velox::ROW({{"col0", velox::VARCHAR()}}), pool_.get()),
+        "Hierarchical key column must be integral");
+  }
+
+  {
+    SCOPED_TRACE("hierarchical without key order enforcement");
+    auto config = buildHierarchicalIndexConfig(
+        {"col0"},
+        {SortOrder{.ascending = true}},
+        /*enforceKeyOrder=*/false,
+        /*noDuplicateKey=*/false,
+        /*maxRowsPerKeyChunk=*/10'000,
+        CompressionType::Uncompressed);
+    NIMBLE_ASSERT_USER_THROW(
+        createWriter(
+            config, velox::ROW({{"col0", velox::BIGINT()}}), pool_.get()),
+        "Hierarchical key chunks require enforceKeyOrder=true");
   }
 }
 
@@ -288,13 +344,14 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     auto decoded = decodeKeyChunk(
         std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
             keyStreamData.data(), keyStreamData.size()),
-        *pool_,
-        decodeBuffer);
+        createFlatKeyReader,
+        decodeBuffer,
+        pool_.get());
     ASSERT_NE(decoded, nullptr);
-    ASSERT_NE(decoded->encoding, nullptr);
-    ASSERT_EQ(decoded->encoding->rowCount(), static_cast<uint32_t>(kNumRows));
+    ASSERT_NE(decoded->reader, nullptr);
+    ASSERT_EQ(decoded->reader->rowCount(), static_cast<uint32_t>(kNumRows));
     auto materialized =
-        decoded->encoding->materialize(0, static_cast<uint32_t>(kNumRows));
+        decoded->reader->materialize(0, static_cast<uint32_t>(kNumRows));
     if (compressionType == CompressionType::Uncompressed) {
       referenceKeys = std::move(materialized);
     } else {
@@ -831,12 +888,6 @@ class ClusterIndexWriterDataTest
          fuzzed->childAt(2)});
   }
 
-  // Creates a row vector containing only the key column for KeyEncoder.
-  velox::RowVectorPtr makeKeyInput(int32_t keyValue) {
-    return makeRowVector(
-        {std::string(kCol1)}, {makeFlatVector<int32_t>({keyValue})});
-  }
-
   std::unique_ptr<velox::VectorFuzzer> fuzzer_;
 };
 
@@ -856,13 +907,6 @@ TEST_P(ClusterIndexWriterDataTest, writeAndFinishStripeNonChunked) {
       return fmt::format("batches: [{}]", fmt::join(batchStrs, ", "));
     }
 
-    size_t totalRows() const {
-      size_t total = 0;
-      for (const auto& batch : batches) {
-        total += batch.size();
-      }
-      return total;
-    }
   } testCases[] = {
       // Single batch, single row
       {{{1}}},
@@ -1084,6 +1128,174 @@ class ClusterIndexWriterChunkTest
     : public ClusterIndexWriterTest,
       public ::testing::WithParamInterface<uint64_t> {};
 
+TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
+  const std::vector<std::string> keyColumns{
+      "boolKey", "tinyKey", "smallKey", "intKey", "bigKey"};
+  const std::vector<SortOrder> sortOrders{
+      SortOrder{.ascending = true},
+      SortOrder{.ascending = false},
+      SortOrder{.ascending = true},
+      SortOrder{.ascending = false},
+      SortOrder{.ascending = true},
+  };
+  const auto type = velox::ROW(
+      {{keyColumns[0], velox::BOOLEAN()},
+       {keyColumns[1], velox::TINYINT()},
+       {keyColumns[2], velox::SMALLINT()},
+       {keyColumns[3], velox::INTEGER()},
+       {keyColumns[4], velox::BIGINT()}});
+  auto config = buildHierarchicalIndexConfig(
+      keyColumns,
+      sortOrders,
+      /*enforceKeyOrder=*/true,
+      /*noDuplicateKey=*/false,
+      /*maxRowsPerKeyChunk=*/3,
+      CompressionType::Uncompressed);
+  auto writer = createWriter(config, type, pool_.get());
+  ASSERT_NE(writer, nullptr);
+
+  const auto firstBatch = makeRowVector(
+      keyColumns,
+      {makeFlatVector<bool>({false, false, false}),
+       makeFlatVector<int8_t>({5, 5, 5}),
+       makeFlatVector<int16_t>({-10, -10, -10}),
+       makeFlatVector<int32_t>({100, 100, 90}),
+       makeFlatVector<int64_t>({-1'000, -1'000, 0})});
+  const auto secondBatch = makeRowVector(
+      keyColumns,
+      {makeFlatVector<bool>({false, false, true}),
+       makeFlatVector<int8_t>({5, -1, 127}),
+       makeFlatVector<int16_t>({20, 0, std::numeric_limits<int16_t>::min()}),
+       makeFlatVector<int32_t>({500, 0, std::numeric_limits<int32_t>::max()}),
+       makeFlatVector<int64_t>({1, 0, std::numeric_limits<int64_t>::min()})});
+  writer->write(firstBatch);
+  writer->write(secondBatch);
+
+  std::string keyStreamData;
+  std::vector<std::string> metadata;
+  const auto writeData =
+      [&keyStreamData](const std::vector<std::string_view>& segments)
+      -> std::pair<uint64_t, uint32_t> {
+    const auto offset = keyStreamData.size();
+    for (const auto segment : segments) {
+      keyStreamData.append(segment);
+    }
+    return {
+        offset,
+        static_cast<uint32_t>(keyStreamData.size() - offset),
+    };
+  };
+  const auto createMetadata =
+      [&keyStreamData, &metadata](std::string_view data) -> MetadataSection {
+    metadata.emplace_back(data);
+    return MetadataSection{
+        static_cast<uint64_t>(keyStreamData.size()),
+        static_cast<uint32_t>(data.size()),
+        CompressionType::Uncompressed,
+        static_cast<uint32_t>(data.size()),
+    };
+  };
+  writer->flush(writeData, createMetadata);
+  const auto descriptor = writer->close(writeData, createMetadata);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_EQ(descriptor->name, kHierarchicalClusterIndexName);
+  ASSERT_EQ(metadata.size(), 2);
+
+  Section rootSection{MetadataBuffer(
+      MetadataBuffer::decompress(
+          toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
+          CompressionType::Uncompressed,
+          pool_.get()))};
+  auto file =
+      std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
+  velox::io::ReaderOptions ioOptions{pool_.get()};
+  ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  IndexLookup::Options indexOptions{.file = file, .ioOptions = &ioOptions};
+  const auto index =
+      clusterIndexFactory(descriptor->name)
+          .createReader(std::move(rootSection), pool_.get(), indexOptions);
+  EXPECT_NE(
+      dynamic_cast<const HierarchicalClusterIndex*>(index.get()), nullptr);
+
+  ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
+
+  auto flatKeyEncoder =
+      createNimbleIndexKeyEncoder(keyColumns, type, sortOrders, pool_.get());
+  std::vector<std::string> flatKeys;
+  for (const auto& batch : {firstBatch, secondBatch}) {
+    std::vector<std::string_view> encodedKeys;
+    auto encodedKeyBuffer = velox::AlignedBuffer::allocate<char>(
+        batch->estimateFlatSize(), pool_.get());
+    flatKeyEncoder->encode(batch, encodedKeys, [&](size_t bytes) -> void* {
+      velox::AlignedBuffer::reallocate<char>(&encodedKeyBuffer, bytes);
+      return encodedKeyBuffer->asMutable<void>();
+    });
+    for (const auto key : encodedKeys) {
+      flatKeys.emplace_back(key);
+    }
+  }
+  std::vector<std::string> hierarchicalKeys;
+  auto keyCursor =
+      index->keyCursor(RowRange{0, static_cast<uint32_t>(flatKeys.size())});
+  while (keyCursor->hasNext()) {
+    hierarchicalKeys.emplace_back(keyCursor->next());
+  }
+  EXPECT_EQ(hierarchicalKeys, flatKeys);
+
+  const auto keyType = velox::ROW(
+      {{keyColumns[0], velox::BOOLEAN()},
+       {keyColumns[1], velox::TINYINT()},
+       {keyColumns[2], velox::SMALLINT()},
+       {keyColumns[3], velox::INTEGER()},
+       {keyColumns[4], velox::BIGINT()}});
+  auto encoder = velox::serializer::KeyEncoder::create(
+      keyColumns,
+      keyType,
+      {velox::core::SortOrder{true, false},
+       velox::core::SortOrder{false, false},
+       velox::core::SortOrder{true, false},
+       velox::core::SortOrder{false, false},
+       velox::core::SortOrder{true, false}},
+      pool_.get());
+  const auto lookup = [&](bool boolKey,
+                          int8_t tinyKey,
+                          int16_t smallKey,
+                          int32_t intKey,
+                          int64_t bigKey) {
+    const auto key = makeRowVector(
+        keyColumns,
+        {makeFlatVector<bool>({boolKey}),
+         makeFlatVector<int8_t>({tinyKey}),
+         makeFlatVector<int16_t>({smallKey}),
+         makeFlatVector<int32_t>({intKey}),
+         makeFlatVector<int64_t>({bigKey})});
+    velox::serializer::IndexBounds bounds;
+    bounds.indexColumns = keyColumns;
+    bounds.set(
+        velox::serializer::IndexBound{key, true},
+        velox::serializer::IndexBound{key, true});
+    return index->lookup(
+        IndexLookup::LookupRequest::rangeScan(
+            encoder->encodeIndexBounds(bounds)));
+  };
+
+  {
+    const auto result = lookup(false, 5, -10, 100, -1'000);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0].startRow, 0);
+    EXPECT_EQ(result[0][0].endRow, 2);
+  }
+  {
+    const auto result = lookup(false, -1, 0, 0, 0);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0].startRow, 4);
+    EXPECT_EQ(result[0][0].endRow, 5);
+  }
+}
+
 TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   const uint64_t maxRowsPerKeyChunk = GetParam();
   constexpr uint32_t kNumRows = 100;
@@ -1135,11 +1347,10 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   auto createMetadataFn =
       [&partitionMetadata](std::string_view metadata) -> MetadataSection {
     partitionMetadata.emplace_back(metadata);
+    NIMBLE_CHECK_LE(metadata.size(), std::numeric_limits<uint32_t>::max());
+    const auto metadataSize = static_cast<uint32_t>(metadata.size());
     return MetadataSection(
-        0,
-        metadata.size(),
-        CompressionType::Uncompressed,
-        static_cast<uint32_t>(metadata.size()));
+        0, metadataSize, CompressionType::Uncompressed, metadataSize);
   };
   writer->flush(writeDataFn, createMetadataFn);
 
