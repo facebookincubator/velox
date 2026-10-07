@@ -92,6 +92,10 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
+  /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
+  /// are written as absent, matching the DWRF writer's default limit.
+  uint32_t vectorizedStatsStringLengthLimit{64};
+
   /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
   /// alias before passing the canonical chunk stats options to TabletWriter.
   bool enableChunkIndex{false};
