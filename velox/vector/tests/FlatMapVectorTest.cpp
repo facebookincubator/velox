@@ -443,6 +443,93 @@ TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
   assertEqualVectors(source, target);
 }
 
+TEST_F(FlatMapVectorTest, copyRangesKeepsKeysOutsideRanges) {
+  // Target key 4 has no in-map buffer, so it is in both rows.  The source
+  // lacks key 4, so copying source row 0 removes it from target row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({40, 41})},
+      std::vector<BufferPtr>{nullptr});
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{4, 41}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesKeepsSharedKeysOutsideRanges) {
+  // Key 1 has no in-map buffer in the target, so it is in both rows.  In the
+  // source it is only in row 1, so copying source row 0 removes it from target
+  // row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+  auto sourceInMap = AlignedBuffer::allocate<bool>(2, pool_.get(), false);
+  bits::setBit(sourceInMap->asMutable<uint64_t>(), 1);
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({100, 101})},
+      std::vector<BufferPtr>{sourceInMap});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesClearsTargetNulls) {
+  auto target = maker_.flatMapVectorNullable<int32_t, int32_t>({
+      std::nullopt,
+      {{{1, 11}}},
+  });
+  auto source = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 101}},
+  });
+  ASSERT_FALSE(source->mayHaveNulls());
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
 struct MockBufferViewReleaser {
   void addRef() {}
   void release() {}
