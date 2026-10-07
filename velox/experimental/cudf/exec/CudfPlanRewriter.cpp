@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -227,8 +228,8 @@ class Rewriter {
  public:
   explicit Rewriter(const CudfPlanRewriter::Config& config)
       : config_(config),
-        queryCtx_(
-            config.queryCtx ? config.queryCtx : core::QueryCtx::create()) {}
+        queryCtx_(config.queryCtx ? config.queryCtx : core::QueryCtx::create()),
+        pool_(queryCtx_->pool()->addLeafChild("cudf-plan-rewriter")) {}
 
   core::PlanNodePtr rewrite(const core::PlanNodePtr& root) {
     return rewriteNode(root, Mode::kCpu).node;
@@ -549,18 +550,24 @@ class Rewriter {
         !projectNode->projections().empty()) {
       return false;
     }
-    return canBeEvaluatedByCudf(projectNode->projections(), queryCtx_.get());
+    return std::all_of(
+        projectNode->projections().begin(),
+        projectNode->projections().end(),
+        [&](const auto& expression) {
+          return canExprRunOnGpu(expression, queryCtx_.get(), pool_.get());
+        });
   }
 
   bool canUseGpuFilter(
       const std::shared_ptr<const core::FilterNode>& filterNode) const {
     return filterNode &&
-        canBeEvaluatedByCudf({filterNode->filter()}, queryCtx_.get());
+        canExprRunOnGpu(filterNode->filter(), queryCtx_.get(), pool_.get());
   }
 
   bool canUseGpuAggregation(
       const std::shared_ptr<const core::AggregationNode>& aggNode) {
-    return aggNode && canBeEvaluatedByCudf(*aggNode, queryCtx_.get());
+    return aggNode &&
+        canBeEvaluatedByCudf(*aggNode, queryCtx_.get(), pool_.get());
   }
 
   bool canUseGpuHashJoin(
@@ -579,7 +586,7 @@ class Rewriter {
     }
 
     if (joinNode->filter() &&
-        !canBeEvaluatedByCudf({joinNode->filter()}, queryCtx_.get())) {
+        !canExprRunOnGpu(joinNode->filter(), queryCtx_.get(), pool_.get())) {
       return false;
     }
 
@@ -593,7 +600,8 @@ class Rewriter {
       return false;
     }
     return !joinNode->joinCondition() ||
-        canBeEvaluatedByCudf({joinNode->joinCondition()}, queryCtx_.get());
+        canExprRunOnGpu(
+            joinNode->joinCondition(), queryCtx_.get(), pool_.get());
   }
 
   static bool isGpuTableScan(
@@ -687,6 +695,7 @@ class Rewriter {
 
   const CudfPlanRewriter::Config& config_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
+  const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 } // namespace

@@ -371,7 +371,7 @@ VectorPtr newConstantImpl(
   }
   if constexpr (!std::is_same_v<T, ComplexType>) {
     return std::make_shared<ConstantVector<T>>(
-        options.pool, size, false, sourceBase->type(), source.valueAt<T>(0));
+        options.pool, size, false, sourceBase->type(), T(source.valueAt<T>(0)));
   } else {
     VectorPtr targetBase;
     BaseVector::CopyRange range = {source.index(0), 0, 1};

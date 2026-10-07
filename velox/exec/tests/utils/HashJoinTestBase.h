@@ -908,7 +908,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
     const vector_size_t vectorSize = 1'000;
     auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
       return makeRowVector(
-          {makeFlatVector<int32_t>(vectorSize, folly::identity),
+          {makeFlatIdentityVector<int32_t>(vectorSize),
            makeFlatVector<int64_t>(
                vectorSize, [](auto row) { return row % 23; }),
            makeFlatVector<int32_t>(
@@ -1035,6 +1035,10 @@ class HashJoinTestBase : public HiveConnectorTestBase {
         return core::JoinType::kLeftSemiFilter;
       case core::JoinType::kRightSemiProject:
         return core::JoinType::kLeftSemiProject;
+      case core::JoinType::kAnti:
+        return core::JoinType::kRightAnti;
+      case core::JoinType::kRightAnti:
+        return core::JoinType::kAnti;
       default:
         VELOX_FAIL(
             "Cannot flip join type: {}", core::JoinTypeName::toName(joinType));
@@ -1044,9 +1048,16 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   static core::PlanNodePtr flipJoinSides(const core::PlanNodePtr& plan) {
     auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
     VELOX_CHECK_NOT_NULL(joinNode);
+    const auto flippedJoinType = flipJoinType(joinNode->joinType());
+    // A null-aware anti join has no right anti equivalent, since kRightAnti has
+    // no null-aware form, so such a plan cannot be flipped.
+    VELOX_CHECK(
+        flippedJoinType != core::JoinType::kRightAnti ||
+            !joinNode->isNullAware(),
+        "Null-aware anti join has no right anti equivalent");
     return std::make_shared<core::HashJoinNode>(
         joinNode->id(),
-        flipJoinType(joinNode->joinType()),
+        flippedJoinType,
         joinNode->isNullAware(),
         joinNode->rightKeys(),
         joinNode->leftKeys(),

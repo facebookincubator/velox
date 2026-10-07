@@ -99,6 +99,8 @@ BlockingReason MixedUnion::isBlocked(ContinueFuture* future) {
     if (blockingReason != BlockingReason::kNotBlocked) {
       blockingFutures.push_back(std::move(sourceFuture));
     } else if (data) {
+      // Rows reach this operator through its sources rather than 'addInput'.
+      stats_.wlock()->addInputVector(data->estimateFlatSize(), data->size());
       pendingData_[i] = std::move(data);
     } else if (drained) {
       sourcesDrained_[i] = true;

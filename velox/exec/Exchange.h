@@ -17,10 +17,10 @@
 
 #include <random>
 
-#include "velox/exec/DefaultOutputBufferManager.h"
-#include "velox/exec/ExchangeClient.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/SerializedPage.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/RowSerializer.h"
 
@@ -46,11 +46,14 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
+  /// Takes an InMemoryExchangeClient because this operator reads the client's
+  /// queue directly. ExchangeTransportRegistry ensures that the operator
+  /// receives the matching client type.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-      std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient,
       std::string_view operatorType = OperatorType::kExchange);
 
   ~Exchange() override {
@@ -85,7 +88,7 @@ class Exchange : public SourceOperator {
   // exchangeClient_.
   void getSplits(ContinueFuture* future);
 
-  // Fetches runtime stats from ExchangeClient and replaces these in this
+  // Fetches runtime stats from exchangeClient_ and replaces these in this
   // operator's stats.
   void recordExchangeClientStats();
 
@@ -101,15 +104,15 @@ class Exchange : public SourceOperator {
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to ExchangeClient.
+  // True if this operator is responsible for fetching splits from the Task
+  // and passing these to exchangeClient_.
   const bool processSplits_;
 
   const int driverId_;
 
   bool noMoreSplits_ = false;
 
-  std::shared_ptr<ExchangeClient> exchangeClient_;
+  std::shared_ptr<InMemoryExchangeClient> exchangeClient_;
 
   // A future received from Task::getSplitOrFuture(). It will be complete when
   // there are more splits available or no-more-splits signal has arrived.

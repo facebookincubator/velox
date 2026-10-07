@@ -89,9 +89,9 @@ struct resolver<Map<K, V>> {
 
 template <typename... T>
 struct resolver<Row<T...>> {
-  using in_type = NullableRowView<T...>;
-  using null_free_in_type = NullFreeRowView<T...>;
-  using out_type = RowWriter<T...>;
+  using in_type = NullableRowView<FieldType<T>...>;
+  using null_free_in_type = NullFreeRowView<FieldType<T>...>;
+  using out_type = RowWriter<FieldType<T>...>;
 };
 
 template <typename V>

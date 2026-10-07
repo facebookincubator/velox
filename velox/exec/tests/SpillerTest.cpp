@@ -17,6 +17,7 @@
 #include "velox/exec/Spiller.h"
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <unordered_set>
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -48,22 +49,6 @@ enum class SpillerType {
   AGGREGATION_OUTPUT = 5,
   ROW_NUMBER_HASH_TABLE = 6,
   NUM_TYPES = 7,
-};
-
-// Class to write runtime stats in the tests to the stats container.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit TestRuntimeStatWriter(
-      std::unordered_map<std::string, RuntimeMetric>& stats)
-      : stats_{stats} {}
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
-  }
-
- private:
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
 };
 
 std::string typeName(SpillerType type) {
@@ -259,9 +244,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
              type_ == SpillerType::AGGREGATION_OUTPUT)
                 ? 0
                 : 2),
-        numPartitions_(hashBits_.numPartitions()),
-        statWriter_(std::make_unique<TestRuntimeStatWriter>(stats_)) {
-    setThreadLocalRunTimeStatWriter(statWriter_.get());
+        numPartitions_(hashBits_.numPartitions()) {
+    setThreadLocalRunTimeStatWriter(&statWriter_);
   }
 
   ~SpillerTest() {
@@ -623,7 +607,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     common::GetSpillDirectoryPathCB tempSpillDirCb = [&]() -> std::string_view {
       return tempDirPath_->getPath();
     };
-    stats_.clear();
+    statWriter_.clear();
     spillStats_ = folly::Synchronized<exec::SpillStats>();
     spillIoStats_ = IoStats();
 
@@ -753,7 +737,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             break;
           }
           ASSERT_TRUE(rowVector_->equalValueAt(
-              &stream->current(), indices[i], stream->currentIndex()));
+              stream->current().get(), indices[i], stream->currentIndex()));
           stream->pop();
         }
       } else {
@@ -778,7 +762,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             ASSERT_EQ(i, indices.size());
             break;
           }
-          sourceVectors[outputSize] = &stream->current();
+          sourceVectors[outputSize] = stream->current().get();
           bool isEndOfBatch = false;
           sourceIndices[outputSize] = stream->currentIndex(&isEndOfBatch);
           ++outputSize;
@@ -1236,8 +1220,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   const bool spillProbedFlag_;
   const HashBitRange hashBits_;
   const int32_t numPartitions_;
-  std::unordered_map<std::string, RuntimeMetric> stats_;
-  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  ConcurrentRuntimeStatWriter statWriter_;
   folly::Random::DefaultGenerator rng_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<TempDirectoryPath> tempDirPath_;
@@ -1608,7 +1591,7 @@ TEST_P(AggregationOutputOnly, basic) {
         auto* stream = merge->next();
         ASSERT_TRUE(stream != nullptr);
         ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(),
+            stream->current().get(),
             partitions_[0][numListedRows + i],
             stream->currentIndex()));
         stream->pop();
@@ -1724,7 +1707,9 @@ TEST_P(SortOutputOnly, basic) {
         auto* stream = merge->next();
         ASSERT_TRUE(stream != nullptr);
         ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(), partitions_[0][i], stream->currentIndex()));
+            stream->current().get(),
+            partitions_[0][i],
+            stream->currentIndex()));
         stream->pop();
       }
     }

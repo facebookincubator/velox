@@ -16,6 +16,7 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/LazyVector.h"
 
@@ -269,28 +270,56 @@ void DecodedVector::applyDictionaryWrapper(
       copyNulls(end(rows));
     }
   }
-  auto copiedNulls = copiedNulls_.data();
   auto currentIndices = indices_;
   if (indicesNotCopied()) {
     copiedIndices_.resize(size_);
     indices_ = copiedIndices_.data();
   }
+  auto copiedIndices = copiedIndices_.data();
 
-  applyToRows(rows, [&](vector_size_t row) {
-    if (!nulls_ || !bits::isBitNull(nulls_, row)) {
-      auto wrappedIndex = currentIndices[row];
-      if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
-        bits::setNull(copiedNulls, row);
-      } else {
-        copiedIndices_[row] = newIndices[wrappedIndex];
+  if (!nulls_ && !newNulls) {
+    // Fast path: no parent nulls and no new wrapper nulls, so every row is
+    // a plain index remap with no null checks.
+    applyToRows(rows, [&](vector_size_t row) {
+      copiedIndices[row] = newIndices[currentIndices[row]];
+    });
+  } else {
+    auto copiedNulls = copiedNulls_.data();
+    applyToRows(rows, [&](vector_size_t row) {
+      if (!nulls_ || !bits::isBitNull(nulls_, row)) {
+        auto wrappedIndex = currentIndices[row];
+        if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
+          bits::setNull(copiedNulls, row);
+        } else {
+          copiedIndices[row] = newIndices[wrappedIndex];
+        }
       }
-    }
-  });
+    });
+  }
+}
+
+bool DecodedVector::ownsNulls(const SelectivityVector* rows) {
+  const auto* bits = nulls(rows);
+  return bits != nullptr && !copiedNulls_.empty() &&
+      bits == copiedNulls_.data();
+}
+
+bool DecodedVector::ownsIndices() const {
+  // Before indices() has run there is no pointer yet, so answer for the one it
+  // would produce rather than for the absence of one.
+  return indices_ == nullptr ? wouldCopyIndices() : !indicesNotCopied();
+}
+
+bool DecodedVector::wouldCopyIndices() const {
+  if (isConstantMapping_) {
+    return size_ > zeroIndices().size() || constantIndex_ != 0;
+  }
+  return isIdentityMapping_ && size_ > consecutiveIndices().size();
 }
 
 void DecodedVector::fillInIndices() const {
   if (isConstantMapping_) {
-    if (size_ > zeroIndices().size() || constantIndex_ != 0) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::fill(copiedIndices_.begin(), copiedIndices_.end(), constantIndex_);
       indices_ = copiedIndices_.data();
@@ -300,7 +329,7 @@ void DecodedVector::fillInIndices() const {
     return;
   }
   if (isIdentityMapping_) {
-    if (size_ > consecutiveIndices().size()) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::iota(copiedIndices_.begin(), copiedIndices_.end(), 0);
       indices_ = &copiedIndices_[0];
@@ -324,6 +353,71 @@ void DecodedVector::makeIndicesMutable() {
   }
 }
 
+namespace {
+
+// For each row 'rows' selects (every row in [0, size) when 'rows' is null),
+// sets the row's bit in 'result' to the bit of 'sourceNulls' at the row's
+// index. Every other bit of 'result' keeps its value. With kKeepNulls, rows
+// already null in 'result' stay null.
+//
+// Works a word at a time so each output word is stored once. Indices are read
+// only for selected rows: a partial decode fills in only those, and a
+// dictionary leaves its indices undefined at its own null rows.
+template <bool kKeepNulls>
+void gatherNullsOfRows(
+    const uint64_t* sourceNulls,
+    const vector_size_t* indices,
+    const SelectivityVector* rows,
+    vector_size_t size,
+    uint64_t* result) {
+  const auto gatherWord = [&](int32_t wordIndex, uint64_t selected) {
+    if constexpr (kKeepNulls) {
+      selected &= result[wordIndex];
+    }
+    // No row selected: the word keeps its value.
+    if (selected == 0) {
+      return;
+    }
+    const auto* wordIndices = indices + wordIndex * 64;
+    if (selected == ~0ULL) {
+      // Every row selected: gather the whole word straight into place.
+      simd::gatherBits(
+          sourceNulls,
+          folly::Range<const vector_size_t*>(wordIndices, 64),
+          result + wordIndex);
+    } else {
+      // Some rows selected: visit only those, and keep the other bits.
+      uint64_t gathered = 0;
+      bits::forEachSetBit(&selected, 0, 64, [&](int32_t bit) {
+        gathered |=
+            static_cast<uint64_t>(bits::isBitSet(sourceNulls, wordIndices[bit]))
+            << bit;
+      });
+      result[wordIndex] = (result[wordIndex] & ~selected) | gathered;
+    }
+  };
+  // isAllSelected() decides, not the bits, as in applyToSelected(): a caller
+  // may clear bits in place and leave it reporting every row, and expects
+  // every row back (deselectRowsWithNulls does, across join keys).
+  const bool allSelected = rows == nullptr || rows->isAllSelected();
+  const auto selectedInWord = [&](int32_t wordIndex) {
+    return allSelected ? ~0ULL : rows->allBits()[wordIndex];
+  };
+  bits::forEachWord(
+      rows ? rows->begin() : 0,
+      rows ? rows->end() : size,
+      // A word at either end of the range: only rows inside it count.
+      [&](int32_t wordIndex, uint64_t mask) {
+        gatherWord(wordIndex, selectedInWord(wordIndex) & mask);
+      },
+      // A word wholly inside the range.
+      [&](int32_t wordIndex) {
+        gatherWord(wordIndex, selectedInWord(wordIndex));
+      });
+}
+
+} // namespace
+
 void DecodedVector::setFlatNulls(
     const BaseVector& vector,
     const SelectivityVector* rows) {
@@ -332,14 +426,15 @@ void DecodedVector::setFlatNulls(
       copyNulls(end(rows));
     }
     auto leafNulls = vector.rawNulls();
-    auto copiedNulls = &copiedNulls_[0];
-    applyToRows(rows, [&](vector_size_t row) {
-      if (!bits::isBitNull(nulls_, row) &&
-          (leafNulls && bits::isBitNull(leafNulls, indices_[row]))) {
-        bits::setNull(copiedNulls, row);
-      }
-    });
-    nulls_ = &copiedNulls_[0];
+    // When the leaf vector has no nulls, the loop below can never set a
+    // null, so the entire per-row pass is skipped.
+    if (leafNulls) {
+      // Rows the wrapper already nulls stay null, and their index is never
+      // read.
+      gatherNullsOfRows</*kKeepNulls=*/true>(
+          leafNulls, indices_, rows, size_, copiedNulls_.data());
+    }
+    nulls_ = copiedNulls_.data();
   } else {
     nulls_ = vector.rawNulls();
     mayHaveNulls_ = nulls_ != nullptr;
@@ -515,11 +610,8 @@ const uint64_t* DecodedVector::nulls(const SelectivityVector* rows) {
         // end but not greater.
         VELOX_CHECK_LE(rows->end(), size_);
       }
-      VELOX_DEBUG_ONLY const auto baseSize = baseVector_->size();
-      applyToRows(rows, [&](auto i) {
-        VELOX_DCHECK_LT(indices_[i], baseSize);
-        bits::setNull(rawCopiedNulls, i, bits::isBitNull(nulls_, indices_[i]));
-      });
+      gatherNullsOfRows</*kKeepNulls=*/false>(
+          nulls_, indices_, rows, size_, rawCopiedNulls);
       allNulls_ = copiedNulls_.data();
     }
   }

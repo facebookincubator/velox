@@ -120,6 +120,19 @@ TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
       "Aggregate function signature is not supported");
 }
 
+TEST_F(
+    AggregateFunctionRegistryTest,
+    signatureNotSupportedRecordsStableTemplate) {
+  try {
+    resolveResultType("aggregate_func", {BIGINT()});
+    FAIL() << "Expected exception";
+  } catch (const VeloxUserError& e) {
+    EXPECT_EQ(
+        e.messageTemplate(),
+        "Aggregate function signature is not supported: {}. Supported signatures: {}.");
+  }
+}
+
 TEST_F(AggregateFunctionRegistryTest, coercions) {
   // (bigint, double) -> bigint
   // (T, T) -> T
@@ -213,6 +226,49 @@ TEST_F(AggregateFunctionRegistryTest, windowFunction) {
 TEST_F(AggregateFunctionRegistryTest, duplicateRegistration) {
   EXPECT_FALSE(registerAggregateFunc("aggregate_func"));
   EXPECT_TRUE(registerAggregateFunc("aggregate_func", true));
+}
+
+TEST_F(AggregateFunctionRegistryTest, ignoreNullInputs) {
+  const auto factory = [](core::AggregationNode::Step,
+                          const std::vector<TypePtr>&,
+                          const TypePtr& resultType,
+                          const core::QueryConfig&) {
+    return std::make_unique<AggregateFunc>(resultType);
+  };
+  const auto signatures = AggregateFunc::signatures();
+
+  EXPECT_TRUE(registerAggregateFunction(
+                  "ignore_null_inputs",
+                  signatures,
+                  factory,
+                  {.ignoreNullInputs = true},
+                  /*registerCompanionFunctions=*/false,
+                  /*overwrite=*/false)
+                  .mainFunction);
+  EXPECT_TRUE(
+      getAggregateFunctionMetadata("Ignore_Null_Inputs").ignoreNullInputs);
+
+  EXPECT_FALSE(registerAggregateFunction(
+                   "ignore_null_inputs",
+                   signatures,
+                   factory,
+                   {.ignoreNullInputs = false},
+                   /*registerCompanionFunctions=*/false,
+                   /*overwrite=*/false)
+                   .mainFunction);
+  EXPECT_TRUE(
+      getAggregateFunctionMetadata("ignore_null_inputs").ignoreNullInputs);
+
+  EXPECT_TRUE(registerAggregateFunction(
+                  "ignore_null_inputs",
+                  signatures,
+                  factory,
+                  {.ignoreNullInputs = false},
+                  /*registerCompanionFunctions=*/false,
+                  /*overwrite=*/true)
+                  .mainFunction);
+  EXPECT_FALSE(
+      getAggregateFunctionMetadata("ignore_null_inputs").ignoreNullInputs);
 }
 
 TEST_F(AggregateFunctionRegistryTest, multipleNames) {

@@ -28,8 +28,10 @@
 #include "velox/experimental/torchwave/DescribePt.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphView.h"
+#include "velox/experimental/torchwave/Model.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 DEFINE_string(pt2, "", "Path to a .pt2 file (open source torch.export format)");
 DEFINE_string(
@@ -46,6 +48,12 @@ DEFINE_bool(
     false,
     "List model names found in the package and exit");
 DEFINE_bool(compile, false, "Compile the graph");
+DEFINE_bool(
+    full_load,
+    false,
+    "Run the full TorchWaveModel::load pipeline (graph prep + optimize + "
+    "partition + compile, with checkGraphProducers consistency checks) and "
+    "report any error");
 DEFINE_bool(optimize, false, "Optimize graph before printing");
 DEFINE_bool(value_meta, false, "Show value type and rank annotations");
 DEFINE_string(
@@ -57,6 +65,16 @@ DEFINE_string(
     "",
     "Comma-separated NodePrinter options: D<n>=maxDepth, L<n>=maxLength, "
     "S=shortNames, V=per-line values, NA=no attributes, VN=value names");
+DEFINE_bool(
+    enable_reuse,
+    true,
+    "With --optimize, run the in-place / clone-elision reuse pass so the "
+    "printed project nodes and function counts reflect it");
+DEFINE_bool(
+    contiguous_inputs,
+    false,
+    "With --optimize, assume model inputs, weights, and constants are "
+    "contiguous (WaveConfig::inputContiguous)");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
@@ -65,6 +83,13 @@ int main(int argc, char** argv) {
   if (!FLAGS_print_options.empty()) {
     torch::wave::NodePrinter::setDefaults(
         torch::wave::NodePrinter::parsePrintOptions(FLAGS_print_options));
+  }
+
+  // With --optimize, the printed project nodes and function counts reflect the
+  // reuse pass (clone elision) and the input-contiguity assumption.
+  if (FLAGS_optimize) {
+    torch::wave::WaveConfig::get().enableReuse = FLAGS_enable_reuse;
+    torch::wave::WaveConfig::get().inputContiguous = FLAGS_contiguous_inputs;
   }
 
   if (!FLAGS_describe_pt.empty()) {
@@ -87,6 +112,24 @@ int main(int argc, char** argv) {
   if (FLAGS_list_models) {
     for (const auto& name : allModelNames) {
       std::cout << name << "\n";
+    }
+    return 0;
+  }
+
+  if (FLAGS_full_load) {
+    for (const auto& modelName : allModelNames) {
+      if (!FLAGS_model_name.empty() &&
+          modelName.find(FLAGS_model_name) == std::string::npos) {
+        continue;
+      }
+      std::cout << "\n=== full_load: " << modelName << " ===\n";
+      try {
+        auto model =
+            torch::wave::TorchWaveModel::load(FLAGS_pt2, modelName, {});
+        std::cout << "full_load OK\n";
+      } catch (const std::exception& e) {
+        std::cout << "full_load FAILED: " << e.what() << "\n";
+      }
     }
     return 0;
   }

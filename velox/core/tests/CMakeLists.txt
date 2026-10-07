@@ -15,6 +15,7 @@
 add_executable(
   velox_core_test
   ConstantTypedExprTest.cpp
+  FixedPointPlanNodesTest.cpp
   PlanFragmentTest.cpp
   PlanNodeBuilderTest.cpp
   PlanNodeTest.cpp
@@ -23,6 +24,7 @@ add_executable(
   StringTest.cpp
   TypeAnalysisTest.cpp
   TypedExprSerdeTest.cpp
+  TypedExprToStringTest.cpp
 )
 
 add_test(velox_core_test velox_core_test)

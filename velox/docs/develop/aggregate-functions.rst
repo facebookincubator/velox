@@ -156,6 +156,9 @@ A simple aggregation function is implemented as a class as the following.
     // Optional. Default is true.
     static constexpr bool default_null_behavior_ = false;
 
+    // Optional. Default is true.
+    static constexpr bool is_reducing_ = false;
+
     // Optional.
     static bool toIntermediate(
         exec::out_type<Array<Generic<T1>>>& out,
@@ -176,6 +179,16 @@ A simple aggregation function is implemented as a class as the following.
       resultType_ = resultType;
     }
 
+    // Optional. Defined only when the aggregation function needs to access constant arguments.
+    // This method is called once after the aggregation function is created, before any data
+    // is processed. Non-constant inputs have null entries in constantInputs.
+    void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+      // Example: Extract a constant boolean flag from the second argument
+      if (constantInputs.size() >= 2 && constantInputs[1] != nullptr) {
+        ignoreNulls_ = constantInputs[1]->as<ConstantVector<bool>>()->valueAt(0);
+      }
+    }
+
     struct AccumulatorType { ... };
   };
 
@@ -193,9 +206,21 @@ aggregation function needs to get the result type or the raw input type of the
 aggregation function, these types can be defined as member variables in the
 aggregate class and initialized in the initialize() method.
 
+The author can also optionally define a `setConstantInputs()` method to access
+constant arguments at initialization time. This method is called once after the
+aggregation function is created, before any data is processed. The method receives
+a vector of constant input values, where non-constant inputs have null entries.
+This is useful for reading configuration flags or constant parameters that don't
+change during aggregation. For example, a function might use this to read a boolean
+flag that controls null handling behavior.
+
 The author can define an optional flag `default_null_behavior_` indicating
 whether the aggregation function has default-null behavior. This flag is true
-by default. Next, the class can have an optional method `toIntermediate()`
+by default. The optional `is_reducing_` flag indicates whether the accumulator
+state is expected to be smaller than its input. This flag is true by default.
+Set it to false for aggregates whose state generally grows with input
+cardinality, such as aggregates that collect input values into an array. Next,
+the class can have an optional method `toIntermediate()`
 that converts the aggregation function's raw input directly to its intermediate
 states. Finally, the author must define a struct named `AccumulatorType` in
 the aggregation function class. We explain each part in more details below.
@@ -452,13 +477,9 @@ null should be written to the final result vector.
 Limitations
 ^^^^^^^^^^^
 
-The simple aggregation function interface currently has two limitations.
-
-1. Optimizations on constant inputs is not supported. I.e., constant input
-   arguments are processed once per row in the same way as non-constant inputs.
-
-2. Aggregation pushdown to table scan is not supported yet. We're planning to
-   add this support.
+The simple aggregation function interface currently has one limitation:
+aggregation pushdown to table scan is not supported yet. We're planning to
+add this support.
 
 Vector Function Interface
 -------------------------

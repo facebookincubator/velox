@@ -107,6 +107,24 @@ class CompiledPlan {
       std::string_view later,
       std::string_view earlier) const;
 
+  /// Passes if every launch of 'later' runs at a strictly greater (node, step)
+  /// than every launch of 'earlier'. Unlike inLaterStep this crosses node
+  /// boundaries, which is where an op ends up when its producer is the last
+  /// thing its own node does.
+  ::testing::AssertionResult runsAfter(
+      std::string_view later,
+      std::string_view earlier) const;
+
+  /// Passes if the plan holds exactly 'howMany' launches of 'op' and every one
+  /// of them shares its step with a launch of 'anchor'. Launches in one step
+  /// run side by side; the same launches in consecutive steps are a chain. This
+  /// is what separates a concat whose operand copies fill its bands in parallel
+  /// from one that walks them through a running offset.
+  ::testing::AssertionResult sideBySideWith(
+      std::string_view op,
+      std::string_view anchor,
+      int32_t howMany) const;
+
   /// Returns a human-readable dump of the plan for failure messages.
   std::string describe() const;
 

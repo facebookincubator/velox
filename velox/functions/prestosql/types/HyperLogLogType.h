@@ -59,6 +59,10 @@ inline bool isHyperLogLogType(const TypePtr& type) {
   return HyperLogLogType::get() == type;
 }
 
+inline bool isHyperLogLogType(const Type& type) {
+  return HyperLogLogType::get().get() == &type;
+}
+
 inline std::shared_ptr<const HyperLogLogType> HYPERLOGLOG() {
   return HyperLogLogType::get();
 }

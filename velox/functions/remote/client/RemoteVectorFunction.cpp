@@ -30,6 +30,40 @@ std::string serializeType(const TypePtr& type) {
   return type::fbhive::HiveTypeSerializer::serialize(type);
 }
 
+// Maps compacted position -> original row number, for the selected rows only.
+BufferPtr compactedToOriginalIndices(
+    const SelectivityVector& rows,
+    memory::MemoryPool* pool) {
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(rows.countSelected(), pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  vector_size_t compactedPosition = 0;
+  rows.applyToSelected(
+      [&](vector_size_t row) { rawIndices[compactedPosition++] = row; });
+  return indices;
+}
+
+// Maps original row number -> compacted position, inverting
+// 'compactedToOriginal' so the remote result can be scattered back onto the
+// rows the caller selected. Unselected positions are never read, so they are
+// left pointing at the first compacted row.
+BufferPtr originalToCompactedIndices(
+    const BufferPtr& compactedToOriginal,
+    vector_size_t numCompacted,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::fill(rawIndices, rawIndices + size, 0);
+
+  const auto* rawCompactedToOriginal = compactedToOriginal->as<vector_size_t>();
+  for (vector_size_t compactedPosition = 0; compactedPosition < numCompacted;
+       ++compactedPosition) {
+    rawIndices[rawCompactedToOriginal[compactedPosition]] = compactedPosition;
+  }
+  return indices;
+}
+
 } // namespace
 
 RemoteVectorFunction::RemoteVectorFunction(
@@ -76,12 +110,24 @@ void RemoteVectorFunction::applyRemote(
     const TypePtr& outputType,
     exec::EvalCtx& context,
     VectorPtr& result) const {
+  const vector_size_t numSelected = rows.countSelected();
+  const bool shouldCompact =
+      !preserveEncoding_ && numSelected > 0 && numSelected < rows.end();
+
+  BufferPtr compactedToOriginal;
+  if (shouldCompact) {
+    compactedToOriginal = compactedToOriginalIndices(rows, context.pool());
+    for (auto& arg : args) {
+      arg = BaseVector::wrapInDictionary(
+          BufferPtr{}, compactedToOriginal, numSelected, arg);
+    }
+  }
   // Create type and row vector for serialization.
   auto remoteRowVector = std::make_shared<RowVector>(
       context.pool(),
       remoteInputType_,
       BufferPtr{},
-      rows.end(),
+      shouldCompact ? numSelected : rows.end(),
       std::move(args));
 
   // Create the thrift payload.
@@ -97,17 +143,12 @@ void RemoteVectorFunction::applyRemote(
   requestInputs->rowCount() = remoteRowVector->size();
   requestInputs->pageFormat() = serdeFormat_;
 
-  // TODO: serialize only active rows.
   if (preserveEncoding_) {
     requestInputs->payload_ref() = rowVectorToIOBufBatch(
-        remoteRowVector,
-        rows.end(),
-        *context.pool(),
-        serde_.get(),
-        serdeOptions_.get());
+        remoteRowVector, *context.pool(), serde_.get(), serdeOptions_.get());
   } else {
-    requestInputs->payload_ref() = rowVectorToIOBuf(
-        remoteRowVector, rows.end(), *context.pool(), serde_.get());
+    requestInputs->payload_ref() =
+        rowVectorToIOBuf(remoteRowVector, *context.pool(), serde_.get());
   }
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
@@ -130,6 +171,14 @@ void RemoteVectorFunction::applyRemote(
       *context.pool(),
       serde_.get());
   result = outputRowVector->childAt(0);
+  if (shouldCompact) {
+    result = BaseVector::wrapInDictionary(
+        BufferPtr{},
+        originalToCompactedIndices(
+            compactedToOriginal, numSelected, rows.end(), context.pool()),
+        rows.end(),
+        result);
+  }
 
   if (auto errorPayload = remoteResult.errorPayload()) {
     auto errorsRowVector = IOBufToRowVector(
@@ -139,6 +188,11 @@ void RemoteVectorFunction::applyRemote(
         errorsVector,
         "Remote function error payload should be convertible to flat vector.");
 
+    // Error rows are positions in the payload that was sent, so they need the
+    // same mapping back to original rows that the result does.
+    const auto* rawCompactedToOriginal =
+        shouldCompact ? compactedToOriginal->as<vector_size_t>() : nullptr;
+
     SelectivityVector selectedRows(errorsRowVector->size());
     selectedRows.applyToSelected([&](vector_size_t i) {
       if (errorsVector->isNullAt(i)) {
@@ -147,7 +201,9 @@ void RemoteVectorFunction::applyRemote(
       try {
         VELOX_USER_FAIL("{}", errorsVector->valueAt(i));
       } catch (const std::exception&) {
-        context.setError(i, std::current_exception());
+        context.setError(
+            rawCompactedToOriginal != nullptr ? rawCompactedToOriginal[i] : i,
+            std::current_exception());
       }
     });
   }

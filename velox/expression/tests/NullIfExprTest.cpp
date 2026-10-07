@@ -78,6 +78,19 @@ class NullIfExprTest : public testing::Test, public VectorTestBase {
         aField, bField, makeRowVector({"a", "b"}, {a, b}), commonType);
   }
 
+  // Evaluates 'expr' over 'input'.
+  VectorPtr evaluate(
+      const core::TypedExprPtr& typedExpr,
+      const RowVectorPtr& input) {
+    ExprSet exprSet({typedExpr}, execCtx_.get());
+    EvalCtx context(execCtx_.get(), &exprSet, input.get());
+
+    std::vector<VectorPtr> result(1);
+    SelectivityVector rows(input->size());
+    exprSet.eval(rows, context, result);
+    return result[0];
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -254,6 +267,39 @@ TEST_F(NullIfExprTest, nonDeterministicWithCast) {
   EXPECT_THAT(
       uniqueNonNullValues<int16_t>(result),
       testing::UnorderedElementsAre(0, 1, 2, 4, 5));
+}
+
+// COALESCE evaluates its later arguments only on the rows the earlier ones
+// left null, so a nested NULLIF sees a subset of the batch. It must write only
+// those rows: the rows COALESCE already resolved keep their values.
+TEST_F(NullIfExprTest, nestedInCoalesce) {
+  auto empty =
+      std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant(""));
+  auto field = [](const std::string& name) {
+    return std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), name);
+  };
+  auto coalesce = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::NullIfTypedExpr>(field("a"), empty, VARCHAR()),
+          std::make_shared<core::NullIfTypedExpr>(field("b"), empty, VARCHAR()),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant("zz"))},
+      "coalesce");
+
+  // Row 1 is the only row reaching the nested NULLIF, and it equals ''.
+  auto b = makeFlatVector<std::string>({"", "", ""});
+  auto input = makeRowVector(
+      {"a", "b"}, {makeFlatVector<std::string>({"keep", "", "keep2"}), b});
+  assertEqualVectors(
+      makeFlatVector<std::string>({"keep", "zz", "keep2"}),
+      evaluate(coalesce, input));
+
+  // The same, with that row before the batch's last row.
+  input = makeRowVector(
+      {"a", "b"}, {makeFlatVector<std::string>({"", "keep", "keep2"}), b});
+  assertEqualVectors(
+      makeFlatVector<std::string>({"zz", "keep", "keep2"}),
+      evaluate(coalesce, input));
 }
 
 } // namespace

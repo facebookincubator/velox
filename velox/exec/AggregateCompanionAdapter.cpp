@@ -55,6 +55,10 @@ bool AggregateCompanionFunctionBase::isFixedSize() const {
   return fn_->isFixedSize();
 }
 
+bool AggregateCompanionFunctionBase::isReducing() const {
+  return fn_->isReducing();
+}
+
 void AggregateCompanionFunctionBase::setAllocatorInternal(
     HashStringAllocator* allocator) {
   fn_->setAllocator(allocator);
@@ -122,6 +126,18 @@ void AggregateCompanionFunctionBase::extractAccumulators(
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+bool AggregateCompanionAdapter::PartialFunction::supportsToIntermediate()
+    const {
+  return fn_->supportsToIntermediate();
+}
+
+void AggregateCompanionAdapter::PartialFunction::toIntermediate(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    VectorPtr& result) const {
+  fn_->toIntermediate(rows, args, result);
 }
 
 void AggregateCompanionAdapter::PartialFunction::extractValues(

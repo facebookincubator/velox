@@ -21,6 +21,7 @@
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -33,16 +34,24 @@
 
 namespace facebook::velox::connector::hive {
 
-/// File-specific scan batch event with split metadata.
+/// File-specific scan batch event with split metadata. Non-owning fields are
+/// valid only for the duration of the scan batch callback.
 struct FileScanBatchEvent : public core::ScanBatchEvent {
   /// Table name from the connector table handle.
   std::string_view tableName;
+  /// Database / namespace name from the connector table handle.
+  std::string_view dbName;
   /// File path of the current split.
   std::string_view filePath;
   /// Non-owning pointer to the current split's partition keys.
   /// Null when partition keys are not available.
   const std::unordered_map<std::string, std::optional<std::string>>*
       partitionKeys{nullptr};
+  /// File format of the current split.
+  dwio::common::FileFormat fileFormat{dwio::common::FileFormat::UNKNOWN};
+  /// Bytes fetched from storage producing this batch, including any read
+  /// amplification from coalescing adjacent regions.
+  uint64_t storageReadBytes{0};
 };
 
 class FileConfig;
@@ -61,16 +70,16 @@ class FileDataSource : public DataSource {
   /// keys directly (e.g., "storageReadBytes"). Metadata IO stats use the
   /// kMetadataPrefix (e.g., "metadata.storageReadBytes").
   static constexpr std::string_view kMetadataPrefix{"metadata"};
-  static constexpr std::string_view kNumPrefetch{"numPrefetch"};
-  static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
-  static constexpr std::string_view kTotalScanTime{"totalScanTime"};
-  static constexpr std::string_view kOverreadBytes{"overreadBytes"};
-  static constexpr std::string_view kStorageReadBytes{"storageReadBytes"};
-  static constexpr std::string_view kNumLocalRead{"numLocalRead"};
-  static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
-  static constexpr std::string_view kNumRamRead{"numRamRead"};
-  static constexpr std::string_view kRamReadBytes{"ramReadBytes"};
-  static constexpr std::string_view kReadGapBytes{"readGapBytes"};
+  static constexpr std::string_view kNumPrefetch{io::kNumPrefetch};
+  static constexpr std::string_view kPrefetchBytes{io::kPrefetchBytes};
+  static constexpr std::string_view kTotalScanTime{io::kTotalScanTime};
+  static constexpr std::string_view kOverreadBytes{io::kOverreadBytes};
+  static constexpr std::string_view kStorageReadBytes{io::kStorageReadBytes};
+  static constexpr std::string_view kNumLocalRead{io::kNumLocalRead};
+  static constexpr std::string_view kLocalReadBytes{io::kLocalReadBytes};
+  static constexpr std::string_view kNumRamRead{io::kNumRamRead};
+  static constexpr std::string_view kRamReadBytes{io::kRamReadBytes};
+  static constexpr std::string_view kReadGapBytes{io::kReadGapBytes};
 
   FileDataSource(
       const RowTypePtr& outputType,
@@ -146,6 +155,10 @@ class FileDataSource : public DataSource {
   std::shared_ptr<io::IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStats> ioStats_;
 
+  // Cumulative dataIoStats_->read().sum() as of the last scan batch event, so
+  // each event reports only the bytes read since the previous one.
+  uint64_t lastEventStorageReadBytes_{0};
+
   /// Column handles for the split info columns keyed on their column names.
   std::unordered_map<std::string, FileColumnHandlePtr> infoColumns_;
   SpecialColumnNames specialColumns_{};
@@ -163,6 +176,13 @@ class FileDataSource : public DataSource {
     return metadataFilter_;
   }
 
+  /// The row type for the data source output, not including filter-only
+  /// columns. Subclasses may call this from createSplitReader() to obtain
+  /// the output schema when constructing a split reader.
+  const RowTypePtr& outputType() const {
+    return outputType_;
+  }
+
   // Actual type produced by the reader after extraction pushdown.  Differs
   // from readerOutputType_ when the reader handles extraction natively
   // (e.g., MapKeys -> ARRAY).  Null if no extraction pushdown is active.
@@ -173,7 +193,7 @@ class FileDataSource : public DataSource {
   // post-read using the extraction chains.
   folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
 
-  dwio::common::RuntimeStatistics runtimeStats_;
+  dwio::common::RuntimeStats runtimeStats_;
 
  private:
   // Configure extraction columns on the ScanSpec and build

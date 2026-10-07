@@ -21,6 +21,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/type/HugeInt.h"
 
 namespace facebook::velox {
 namespace {
@@ -746,7 +747,9 @@ folly::dynamic Variant::serialize() const {
       break;
     }
     case TypeKind::HUGEINT: {
-      objValue = value<TypeKind::HUGEINT>();
+      // folly::dynamic has no 128-bit integer type. Serializing as a number
+      // would narrow the value to int64_t and silently drop the upper 64 bits.
+      objValue = std::to_string(value<TypeKind::HUGEINT>());
       break;
     }
     case TypeKind::BOOLEAN: {
@@ -852,7 +855,7 @@ Variant Variant::create(const folly::dynamic& variantobj) {
     case TypeKind::BIGINT:
       return Variant::create<TypeKind::BIGINT>(obj.asInt());
     case TypeKind::HUGEINT:
-      return Variant::create<TypeKind::HUGEINT>(obj.asInt());
+      return Variant::create<TypeKind::HUGEINT>(HugeInt::parse(obj.asString()));
     case TypeKind::BOOLEAN: {
       return Variant(obj.asBool());
     }
@@ -1012,6 +1015,58 @@ uint64_t Variant::hash() const {
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
+}
+
+template <TypeKind KIND>
+uint64_t Variant::estimateValueSize() const {
+  if constexpr (is_string_kind(KIND)) {
+    return value<KIND>().size();
+  } else {
+    return sizeof(typename TypeTraits<KIND>::NativeType);
+  }
+}
+
+namespace {
+
+uint64_t estimateValuesSize(const std::vector<Variant>& values) {
+  uint64_t size{0};
+  for (const auto& value : values) {
+    size += value.estimateValueSize();
+  }
+  return size;
+}
+
+} // namespace
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::ARRAY>() const {
+  return estimateValuesSize(value<TypeKind::ARRAY>());
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::ROW>() const {
+  return estimateValuesSize(value<TypeKind::ROW>());
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::MAP>() const {
+  uint64_t size{0};
+  for (const auto& [key, mappedValue] : value<TypeKind::MAP>()) {
+    size += key.estimateValueSize() + mappedValue.estimateValueSize();
+  }
+  return size;
+}
+
+template <>
+uint64_t Variant::estimateValueSize<TypeKind::OPAQUE>() const {
+  return 0;
+}
+
+uint64_t Variant::estimateValueSize() const {
+  if (isNull()) {
+    return 0;
+  }
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(estimateValueSize, kind_);
 }
 
 namespace {

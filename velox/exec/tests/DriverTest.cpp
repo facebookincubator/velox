@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/OperationCancelled.h>
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <velox/exec/Driver.h>
@@ -491,8 +492,9 @@ TEST_F(DriverTest, cancel) {
   try {
     readResults(params, ResultOperation::kCancel, 1'000'000, &numRead);
     FAIL() << "Expected exception";
-  } catch (const VeloxRuntimeError& e) {
-    EXPECT_EQ("Cancelled", e.message());
+  } catch (const folly::OperationCancelled&) {
+    // A requested cancel now surfaces as cooperative cancellation, not a
+    // VeloxRuntimeError.
   }
   EXPECT_GE(numRead, 1'000'000);
   auto& executor = folly::QueuedImmediateExecutor::instance();

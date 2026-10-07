@@ -19,9 +19,12 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/testutil/TestValue.h"
+
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime_api.h>
@@ -83,7 +86,7 @@ vector_size_t checkedVectorSize(size_t rowCount) {
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Check for empty vector
   VELOX_CHECK_GT(tables.size(), 0);
@@ -101,17 +104,20 @@ std::unique_ptr<cudf::table> concatenateTables(
   return cudf::concatenate(tableViews, stream, mr);
 }
 
-std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
+std::unique_ptr<cudf::table> makeEmptyTable(
+    TypePtr const& inputType,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
   for (size_t i = 0; i < inputType->size(); ++i) {
     if (auto const& childType = inputType->childAt(i);
         childType->kind() == TypeKind::ROW) {
-      auto tbl = makeEmptyTable(childType);
+      auto tbl = makeEmptyTable(childType, stream, mr);
       auto structColumn = std::make_unique<cudf::column>(
           cudf::data_type(cudf::type_id::STRUCT),
           0,
           rmm::device_buffer(),
-          rmm::device_buffer(),
+          cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
           0,
           tbl->release());
       emptyColumns.push_back(std::move(structColumn));
@@ -127,14 +133,14 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
-    return makeEmptyTable(tableType);
+    return makeEmptyTable(tableType, stream, mr);
   }
 
-  auto inputStreams = std::vector<rmm::cuda_stream_view>();
+  auto inputStreams = std::vector<cuda::stream_ref>();
   auto tableViews = std::vector<cudf::table_view>();
 
   inputStreams.reserve(tables.size());
@@ -162,61 +168,63 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::table>> concatTables;
   // Check for empty vector
   if (tables.size() == 0) {
-    concatTables.push_back(makeEmptyTable(tableType));
+    concatTables.push_back(makeEmptyTable(tableType, stream, mr));
     return concatTables;
   }
 
-  auto inputStreams = std::vector<rmm::cuda_stream_view>();
-  auto tableViews = std::vector<cudf::table_view>();
-
-  inputStreams.reserve(tables.size());
-  tableViews.reserve(tables.size());
-
-  for (const auto& table : tables) {
-    VELOX_CHECK_NOT_NULL(table);
-    tableViews.push_back(table->getTableView());
-    inputStreams.push_back(table->stream());
-  }
-
-  cudf::detail::join_streams(inputStreams, stream);
-
   std::vector<std::unique_ptr<cudf::table>> outputTables;
   auto const maxRows = maxBatchRows();
-  size_t startpos = 0;
-  size_t runningRows = 0;
-  for (size_t i = 0; i < tableViews.size(); ++i) {
-    auto const numRows = static_cast<size_t>(tableViews[i].num_rows());
-    // If adding this table would exceed the limit, flush current batch
-    // [startpos, i).
-    if (runningRows > 0 && runningRows + numRows > maxRows) {
-      outputTables.push_back(
-          cudf::concatenate(
-              std::vector<cudf::table_view>(
-                  tableViews.begin() + startpos, tableViews.begin() + i),
-              stream,
-              mr));
-      startpos = i;
-      runningRows = 0;
+  size_t start = 0;
+  while (start < tables.size()) {
+    size_t end = start;
+    size_t runningRows = 0;
+    std::vector<cudf::table_view> tableViews;
+    tableViews.reserve(tables.size() - start);
+    while (end < tables.size()) {
+      VELOX_CHECK_NOT_NULL(tables[end]);
+      auto const tableView = tables[end]->getTableView();
+      auto const numRows = static_cast<size_t>(tableView.num_rows());
+      if (runningRows > 0 && runningRows + numRows > maxRows) {
+        break;
+      }
+      runningRows += numRows;
+      tableViews.push_back(tableView);
+      ++end;
     }
-    runningRows += numRows;
-  }
-  // Flush the final batch [startpos, end).
-  if (startpos < tableViews.size()) {
-    outputTables.push_back(
-        cudf::concatenate(
-            std::vector<cudf::table_view>(
-                tableViews.begin() + startpos, tableViews.end()),
-            stream,
-            mr));
-  }
-  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
 
-  // Input tables are deallocated here when 'tables' goes out of scope.
+    std::vector<CudfVectorPtr> batch;
+    std::vector<cuda::stream_ref> inputStreams;
+    batch.reserve(end - start);
+    inputStreams.reserve(end - start);
+    for (size_t i = start; i < end; ++i) {
+      batch.push_back(std::move(tables[i]));
+      inputStreams.push_back(batch.back()->stream());
+    }
+
+    cudf::detail::join_streams(inputStreams, stream);
+    outputTables.push_back(cudf::concatenate(tableViews, stream, mr));
+
+    // Rebind deallocation to the output stream where possible, then release
+    // this group's inputs. Each completed output replaces its source inputs,
+    // so peak memory is approximately the original input footprint plus the
+    // largest output batch instead of the full input and output footprints.
+    orderCudfVectorDeallocationsAfterStream(batch, inputStreams, stream);
+    batch.clear();
+
+    size_t retainedInputBatches =
+        std::count_if(tables.begin(), tables.end(), [](const auto& table) {
+          return table != nullptr;
+        });
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
+        &retainedInputBatches);
+    start = end;
+  }
   return outputTables;
 }
 
@@ -224,7 +232,7 @@ std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
     memory::MemoryPool* pool,
     std::vector<CudfVectorPtr>&& vectors,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_NOT_NULL(pool);
 
@@ -264,7 +272,7 @@ std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
             pool,
             tableType,
             checkedVectorSize(chunkRows),
-            makeEmptyTable(tableType),
+            makeEmptyTable(tableType, stream, mr),
             stream));
     remainingRows -= chunkRows;
   } while (remainingRows > 0);
@@ -274,8 +282,8 @@ std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
 
 void streamsWaitForStream(
     CudaEvent& event,
-    std::span<const rmm::cuda_stream_view> streams,
-    rmm::cuda_stream_view stream) {
+    std::span<const cuda::stream_ref> streams,
+    cuda::stream_ref stream) {
   event.recordFrom(stream);
   for (const auto& strm : streams) {
     event.waitOn(strm);
@@ -299,13 +307,13 @@ CudaEvent::CudaEvent(CudaEvent&& other) noexcept : event_(other.event_) {
   other.event_ = nullptr;
 }
 
-const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
-  CUDF_CUDA_TRY(cudaEventRecord(event_, stream.value()));
+const CudaEvent& CudaEvent::recordFrom(cuda::stream_ref stream) const {
+  CUDF_CUDA_TRY(cudaEventRecord(event_, stream.get()));
   return *this;
 }
 
-const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
-  CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
+const CudaEvent& CudaEvent::waitOn(cuda::stream_ref stream) const {
+  CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.get(), event_, 0));
   return *this;
 }
 
@@ -326,8 +334,8 @@ std::string stripFunctionPrefix(
 
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
-    std::span<const rmm::cuda_stream_view> inputStreams,
-    rmm::cuda_stream_view stream) {
+    std::span<const cuda::stream_ref> inputStreams,
+    cuda::stream_ref stream) {
   bool allRebound = true;
   for (const auto& vector : vectors) {
     VELOX_CHECK_NOT_NULL(vector);

@@ -19,9 +19,11 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
@@ -47,16 +49,20 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-int64_t readConstantIntegralValue(const velox::exec::ConstantExpr& expr) {
+int64_t readConstantIntegralValue(
+    const core::ConstantTypedExpr& expr,
+    memory::MemoryPool* pool) {
+  const auto vec =
+      expr.hasValueVector() ? expr.valueVector() : expr.toConstantVector(pool);
   switch (expr.type()->kind()) {
     case TypeKind::TINYINT:
-      return expr.value()->as<SimpleVector<int8_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int8_t>>()->valueAt(0);
     case TypeKind::SMALLINT:
-      return expr.value()->as<SimpleVector<int16_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int16_t>>()->valueAt(0);
     case TypeKind::INTEGER:
-      return expr.value()->as<SimpleVector<int32_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int32_t>>()->valueAt(0);
     case TypeKind::BIGINT:
-      return expr.value()->as<SimpleVector<int64_t>>()->valueAt(0);
+      return vec->as<SimpleVector<int64_t>>()->valueAt(0);
     default:
       VELOX_UNSUPPORTED(
           "Unsupported array access index type {}", expr.type()->toString());
@@ -78,7 +84,7 @@ cudf::data_type indexDataType() {
 
 std::unique_ptr<cudf::column> extractNullIndex(
     cudf::lists_column_view const& listsView,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto nullIndex = cudf::numeric_scalar<cudf::size_type>(0, false, stream, mr);
   auto nullIndices =
@@ -115,7 +121,7 @@ std::optional<int64_t> normalizeConstantIndex(
 
 std::unique_ptr<cudf::column> sanitizeBoolMask(
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Comparisons against null inputs produce nulls. Treat them as false before
   // combining masks or reducing them to decide whether to throw.
@@ -126,7 +132,7 @@ std::unique_ptr<cudf::column> sanitizeBoolMask(
 std::unique_ptr<cudf::column> combineBoolMasks(
     cudf::column_view lhs,
     cudf::column_view rhs,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // These are BOOL8 value columns, not validity bitmasks. cudf::bitmask_or
   // would combine null masks instead of row-wise boolean values.
@@ -142,7 +148,7 @@ std::unique_ptr<cudf::column> combineBoolMasks(
 std::unique_ptr<cudf::column> mergeBoolMasks(
     std::unique_ptr<cudf::column> lhs,
     std::unique_ptr<cudf::column> rhs,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (lhs == nullptr) {
     return rhs;
@@ -156,7 +162,7 @@ std::unique_ptr<cudf::column> mergeBoolMasks(
 
 bool maskHasTrue(
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (mask.is_empty()) {
     return false;
@@ -178,7 +184,7 @@ bool maskHasTrue(
 std::unique_ptr<cudf::column> applyNullMask(
     cudf::column_view col,
     cudf::column_view nullMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto nullScalar =
       cudf::make_default_constructed_scalar(col.type(), stream, mr);
@@ -189,7 +195,7 @@ std::unique_ptr<cudf::column> applyNullMask(
 std::unique_ptr<cudf::column> castSizes(
     cudf::column_view const& sizesView,
     cudf::data_type indexType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return indexType.id() == cudf::type_id::INT32
       ? std::make_unique<cudf::column>(sizesView, stream)
@@ -201,7 +207,7 @@ std::unique_ptr<cudf::column> outOfBoundsMask(
     cudf::column_view const& normalized,
     cudf::column_view const& sizes,
     const ArrayAccessPolicy& policy,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto zero = cudf::numeric_scalar<IndexType>(0, true, stream, mr);
   std::unique_ptr<cudf::column> lowerBound;
@@ -289,7 +295,7 @@ std::unique_ptr<cudf::column> normalizeAndValidateIndicesTyped(
     cudf::column_view const& rawIndexView,
     cudf::column_view const& sizesView,
     const ArrayAccessPolicy& policy,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto sizes = castSizes(sizesView, rawIndexView.type(), stream, mr);
   auto zero = cudf::numeric_scalar<IndexType>(0, true, stream, mr);
@@ -396,7 +402,7 @@ std::unique_ptr<cudf::column> normalizeAndValidateIndices(
     cudf::column_view const& rawIndexView,
     cudf::column_view const& sizesView,
     const ArrayAccessPolicy& policy,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   switch (rawIndexView.type().id()) {
     case cudf::type_id::INT8:
@@ -421,7 +427,7 @@ void validateConstantIndex(
     int64_t originalIndex,
     cudf::size_type normalizedIndex,
     cudf::column_view const& sizesView,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto indexScalar =
       cudf::numeric_scalar<cudf::size_type>(normalizedIndex, true, stream, mr);
@@ -445,7 +451,7 @@ void validateConstantIndex(
 std::unique_ptr<cudf::column> makeRepeatedArrayColumn(
     const velox::VectorPtr& arrayVector,
     cudf::size_type size,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // CudfFunction::eval receives columns only for non literal inputs. For a
   // constant array literal like subscript(array[1, 1, 0], groupid + 1), the
@@ -486,11 +492,10 @@ std::unique_ptr<cudf::column> makeRepeatedArrayColumn(
 class ArrayAccessFunction : public CudfFunction {
  public:
   ArrayAccessFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      ArrayAccessPolicy policy)
+      const core::TypedExprPtr& expr,
+      ArrayAccessPolicy policy,
+      memory::MemoryPool* pool)
       : policy_(policy) {
-    using velox::exec::ConstantExpr;
-
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "array access expects exactly 2 inputs");
 
@@ -499,8 +504,11 @@ class ArrayAccessFunction : public CudfFunction {
     // which arises in Q70's ROLLUP bitmask projection. Cache the Velox vector
     // so we can convert it to a cuDF lists column at eval time.
     if (auto constArrayExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
-      constantArrayVector_ = constArrayExpr->value();
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                expr->inputs()[0])) {
+      constantArrayVector_ = constArrayExpr->hasValueVector()
+          ? constArrayExpr->valueVector()
+          : constArrayExpr->toConstantVector(pool);
     }
 
     // Literal indices are not passed as input columns during evaluation. Cache
@@ -509,17 +517,21 @@ class ArrayAccessFunction : public CudfFunction {
     // null behavior returns null for them instead of calling the vector
     // function, so leave constantIndex_ empty and produce an all-null result.
     if (auto indexExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                expr->inputs()[1])) {
       indexIsLiteral_ = true;
-      if (!indexExpr->value()->isNullAt(0)) {
-        constantIndex_ = readConstantIntegralValue(*indexExpr);
+      const auto vec = indexExpr->hasValueVector()
+          ? indexExpr->valueVector()
+          : indexExpr->toConstantVector(pool);
+      if (!vec->isNullAt(0)) {
+        constantIndex_ = readConstantIntegralValue(*indexExpr, pool);
       }
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // Case 1: constant array, variable index.
     //
@@ -589,7 +601,7 @@ class ArrayAccessFunction : public CudfFunction {
   ColumnOrView extractLiteralIndex(
       cudf::lists_column_view const& listsView,
       cudf::column_view const& sizesView,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const {
     if (!constantIndex_.has_value()) {
       // A null literal index returns one null result per input array row.
@@ -632,9 +644,10 @@ class ArrayAccessFunction : public CudfFunction {
 } // namespace
 
 std::shared_ptr<CudfFunction> makeArrayAccessFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    ArrayAccessPolicy policy) {
-  return std::make_shared<ArrayAccessFunction>(expr, policy);
+    const core::TypedExprPtr& expr,
+    ArrayAccessPolicy policy,
+    memory::MemoryPool* pool) {
+  return std::make_shared<ArrayAccessFunction>(expr, policy, pool);
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -314,6 +314,6 @@ Decimal Special Forms
 
 .. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
 
-    Create ``decimal`` of requsted precision and scale from an unscaled bigint value ``x``.
+    Create ``decimal`` of requested precision and scale from an unscaled bigint value ``x``.
     By default, the value of ``nullOnOverflow`` is true, and null will be returned when ``x`` is too large for the result precision.
     Otherwise, exception will be thrown when ``x`` overflows.

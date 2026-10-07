@@ -463,7 +463,7 @@ auto materializeElement(const T& element) {
     return element.materialize();
   } else {
     using unwrapped_type = typename UnwrapCustomType<VeloxType>::type;
-    if constexpr (util::is_shared_ptr<unwrapped_type>::value) {
+    if constexpr (is_shared_ptr<unwrapped_type>::value) {
       return *element;
     } else {
       return element;
@@ -1034,7 +1034,7 @@ struct HasGeneric<Array<V>> {
 template <typename... T>
 struct HasGeneric<Row<T...>> {
   static constexpr bool value() {
-    return (HasGeneric<T>::value() || ...);
+    return (HasGeneric<FieldType<T>>::value() || ...);
   }
 };
 
@@ -1063,7 +1063,7 @@ struct AllGenericExceptTop<Map<K, V>> {
 template <typename... T>
 struct AllGenericExceptTop<Row<T...>> {
   static constexpr bool value() {
-    return (isGenericType<T>::value && ...);
+    return (isGenericType<FieldType<T>>::value && ...);
   }
 };
 

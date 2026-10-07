@@ -18,6 +18,7 @@
 
 #include <thrift/lib/cpp2/protocol/Serializer.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
@@ -35,7 +36,7 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -56,7 +57,10 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
-  EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
+  const auto metricName = std::string(ParquetRuntimeStats::kPageLoadTimeNs);
+  ASSERT_TRUE(
+      stats.columnMetrics.find(metricName) != stats.columnMetrics.end());
+  EXPECT_GT(stats.columnMetrics.at(metricName).sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, largePage) {
@@ -66,7 +70,7 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -88,7 +92,10 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
-  EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
+  const auto metricName = std::string(ParquetRuntimeStats::kPageLoadTimeNs);
+  ASSERT_TRUE(
+      stats.columnMetrics.find(metricName) != stats.columnMetrics.end());
+  EXPECT_GT(stats.columnMetrics.at(metricName).sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
@@ -102,7 +109,7 @@ TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
   // In the corrupted_page_header, the min_value length is set incorrectly on
   // purpose. This is to simulate the situation where the Parquet Page Header is
   // corrupted. And an error is expected to be thrown.
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -260,7 +267,7 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
       /*scale=*/2,
       /*typeLength=*/kParquetTypeLength);
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -274,6 +281,49 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   // The VELOX_CHECK_LE should fire because numParquetBytes (4*16=64) >
   // numVeloxBytes (4*8=32).
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
+}
+
+// Ensures the Snappy path validates the advertised uncompressed size against
+// the size embedded in the Snappy stream. A corrupt page whose declared
+// uncompressed_page_size is smaller than the embedded length must be rejected;
+// otherwise snappy::RawUncompress would write past the destination buffer. This
+// check must stay enabled in release builds, so the guard is a VELOX_CHECK
+// rather than a VELOX_DCHECK.
+TEST_F(ParquetPageReaderTest, snappyUncompressedSizeMismatch) {
+  constexpr int32_t kDeclaredUncompressedSize = 8;
+  // The page claims 10 values so that skip(1) reads and decompresses this page
+  // instead of skipping it.
+  constexpr int32_t kNumValues = 10;
+
+  // A minimal Snappy stream: a little-endian varint holding an uncompressed
+  // length of 300 (bytes 0xAC 0x02) followed by filler. GetUncompressedLength
+  // only parses the varint, so the filler content is irrelevant.
+  const std::string snappyData({'\xAC', '\x02', '\x00', '\x00'});
+  const auto kCompressedSize = static_cast<int32_t>(snappyData.size());
+
+  auto pageHeader = createDataPageV1Header(
+      kDeclaredUncompressedSize, kCompressedSize, kNumValues);
+  const std::string headerBytes = serializePageHeader(pageHeader);
+
+  std::string fullData = headerBytes + snappyData;
+
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      common::CompressionKind::CompressionKind_SNAPPY,
+      fullData.size(),
+      stats,
+      nullptr,
+      /*maxRepeat=*/0,
+      /*maxDefine=*/0);
+
+  // skip(1) triggers seekToPage() -> prepareDataPageV1() -> decompressData().
+  // The size check must fire before RawUncompress writes to the buffer.
+  VELOX_ASSERT_THROW(pageReader->skip(1), "300");
 }
 
 // Example test demonstrating proper FBThrift dictionary page creation.
@@ -323,7 +373,7 @@ TEST_F(ParquetPageReaderTest, corruptDefineLengthV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // Create PageReader with maxRepeat=0, maxDefine=1 (so defineLength is read)
   // and no compression (so page data is used directly).
   auto pageReader = std::make_unique<PageReader>(
@@ -365,7 +415,7 @@ TEST_F(ParquetPageReaderTest, corruptRepeatLengthV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // Create PageReader with maxRepeat=1 (so repeatLength is read), maxDefine=0,
   // and no compression (so page data is used directly).
   auto pageReader = std::make_unique<PageReader>(
@@ -382,6 +432,49 @@ TEST_F(ParquetPageReaderTest, corruptRepeatLengthV1) {
   // The bounds check should throw when repeatLength exceeds page size.
   VELOX_ASSERT_THROW(
       pageReader->skip(1), "Repetition level length 2147483632 exceeds");
+}
+
+// Test that the CompressionKind_NONE fast path in prepareDataPageV1 rejects a
+// page whose declared uncompressed_page_size exceeds the bytes actually read.
+// Without compression only compressed_page_size bytes are read, so downstream
+// reads that trust uncompressed_page_size would run past the buffer. The old
+// decompressData() path enforced this via SeekableInputStream::readFully.
+TEST_F(ParquetPageReaderTest, corruptUncompressedSizeNoneV1) {
+  // uncompressed_page_size (40) claims more data than compressed_page_size
+  // (20), which is impossible for an uncompressed page.
+  constexpr int32_t kUncompressedSize = 40;
+  constexpr int32_t kCompressedSize = 20;
+  auto pageHeader =
+      createDataPageV1Header(kUncompressedSize, kCompressedSize, 100);
+  const std::string headerBytes = serializePageHeader(pageHeader);
+
+  // Only compressed_page_size bytes of page data are present.
+  const std::string pageData(kCompressedSize, '\0');
+
+  // Combine header and page data.
+  std::string fullData = headerBytes + pageData;
+
+  // Create an input stream from the crafted data.
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
+  // No compression, so the page data is used directly.
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      common::CompressionKind::CompressionKind_NONE,
+      fullData.size(),
+      stats,
+      nullptr,
+      0,
+      0);
+
+  // Calling skip(1) triggers seekToPage() which calls prepareDataPageV1().
+  // The bounds check should throw before any downstream read past the buffer.
+  VELOX_ASSERT_THROW(
+      pageReader->skip(1),
+      "Uncompressed page size 40 exceeds compressed page size 20");
 }
 
 // Test that prepareDataPageV2 rejects pages where repetition + definition
@@ -407,7 +500,7 @@ TEST_F(ParquetPageReaderTest, corruptLevelLengthsV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // maxRepeat and maxDefine don't affect V2 validation since the lengths
   // are in the header, not the page data.
   auto pageReader = std::make_unique<PageReader>(
@@ -446,7 +539,7 @@ TEST_F(ParquetPageReaderTest, insufficientBytesForRepeatLengthV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // PageReader with maxRepeat > 0 would try to read repeatLength but page
   // is too small.
   auto pageReader = std::make_unique<PageReader>(
@@ -491,7 +584,7 @@ TEST_F(ParquetPageReaderTest, insufficientBytesForDefineLengthV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // PageReader with both maxRepeat > 0 and maxDefine > 0 would read
   // repeatLength (0), advance past it, then try to read defineLength but
   // there are insufficient bytes remaining.
@@ -534,7 +627,7 @@ TEST_F(ParquetPageReaderTest, corruptRepeatLengthOnlyV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   // maxRepeat and maxDefine don't affect V2 validation since the lengths
   // are in the header, not the page data.
   auto pageReader = std::make_unique<PageReader>(
@@ -577,7 +670,7 @@ TEST_F(ParquetPageReaderTest, corruptUncompressedSizeSmallerThanLevelsV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -622,7 +715,7 @@ TEST_F(ParquetPageReaderTest, corruptNegativeUncompressedSizeV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -658,7 +751,7 @@ TEST_F(ParquetPageReaderTest, corruptNegativeCompressedSizeV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -696,7 +789,7 @@ TEST_F(ParquetPageReaderTest, refillSpansMultipleStreamChunks) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size(), kBlockSize);
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,

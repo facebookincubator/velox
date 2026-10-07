@@ -54,12 +54,17 @@ void CudfIcebergDataSource::convertSplit(
   icebergSplit_ =
       checkedPointerCast<const velox_iceberg::HiveIcebergSplit>(split);
 
-  VELOX_CHECK(
-      icebergSplit_->start == 0,
-      "Sub-splits are not yet supported in CudfIcebergDataSource");
-
   // Convert `ConnectorSplit` to `CudfHiveConnectorSplit`
   CudfHiveDataSource::convertSplit(split);
+}
+
+void CudfIcebergDataSource::setFromDataSource(
+    std::unique_ptr<velox_connector::DataSource> source) {
+  auto* preparedSource =
+      checkedPointerCast<CudfIcebergDataSource>(source.get());
+
+  icebergSplit_ = std::move(preparedSource->icebergSplit_);
+  CudfHiveDataSource::setFromDataSource(std::move(source));
 }
 
 std::unique_ptr<CudfSplitReader>
@@ -77,8 +82,8 @@ CudfIcebergDataSource::createCudfSplitReader() {
       hiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_,
+      CudfHiveDataSource::getFilters());
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

@@ -31,7 +31,7 @@ void PagedInputStream::readBuffer(bool failOnEof) {
   int32_t length;
   if (!input_->Next(
           reinterpret_cast<const void**>(&inputBufferPtr_), &length)) {
-    DWIO_ENSURE(!failOnEof, getName(), ", read past EOF");
+    DWIO_ENSURE_FMT(!failOnEof, "{}, read past EOF", getName());
     state_ = State::END;
     inputBufferStart_ = nullptr;
     inputBufferPtr_ = nullptr;
@@ -179,8 +179,8 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
 
   // perform decompression
   if (state_ == State::START) {
-    DWIO_ENSURE_NOT_NULL(decompressor_.get(), "invalid stream state");
-    DWIO_ENSURE_NOT_NULL(input);
+    DWIO_ENSURE_NOT_NULL_FMT(decompressor_.get(), "invalid stream state");
+    DWIO_ENSURE_NOT_NULL_FMT(input, "");
     auto [decompressedLength, exact] =
         decompressor_->getDecompressedLength(input, remainingLength_);
     if (!data && exact && decompressedLength <= pendingSkip_) {
@@ -226,9 +226,9 @@ void PagedInputStream::BackUp(int32_t count) {
       return;
     }
   }
-  DWIO_ENSURE(
+  DWIO_ENSURE_FMT(
       outputBufferPtr_ != nullptr,
-      "Backup without previous Next in ",
+      "Backup without previous Next in {}",
       getName());
   if (state_ == State::ORIGINAL) {
     VELOX_CHECK(

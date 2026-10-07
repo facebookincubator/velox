@@ -51,7 +51,13 @@ jobs:
         os:
           - {runner: ubuntu-24.04-arm, platform: arm64}
           - {runner: ubuntu-24.04, platform: amd64}
-        target: [ci, pyvelox, ubuntu, fedora]
+        target: [ci, centos9-debug, pyvelox, ubuntu, fedora]
+        exclude:
+          # Only x86 jobs use this image, so don't take an arm runner to build
+          # nothing. ubuntu and fedora skip arm with an empty bake group
+          # instead; that works too but still allocates the runner.
+          - os: {runner: ubuntu-24.04-arm, platform: arm64}
+            target: centos9-debug
 
     steps:
       - name: Free Disk Space
@@ -131,7 +137,7 @@ jobs:
 
       - name: Upload Base Image
         if: ${{ github.event_name == 'pull_request' && matrix.target == 'ci' && matrix.os.platform == 'amd64' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: centos9.tar
           name: centos9-amd64
@@ -145,10 +151,12 @@ jobs:
           mkdir -p "$DIGEST_DIR"
           cd "$DIGEST_DIR" || exit 1
           # Add the target for any images that shouldn't be build as multi-platform
-          # into the skip list
-          echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora"];
+          # into the skip list.
+          # Strip only the trailing architecture rather than everything after the
+          # first dash, so names that contain a dash (centos9-debug) survive.
+          echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora", "centos9-debug"];
             . | to_entries[] | select(.value | has("image.name")) |
-            .key | split("-")[0] |
+            .key | sub("-(amd64|arm64)$"; "") |
             if . as $name | skip | index($name) != null then empty else . end' | \
             while read -r image_name; do
               touch "$image_name"
@@ -156,7 +164,7 @@ jobs:
           ls -la
 
       - name: Upload digest
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.target }}-${{ matrix.os.platform }}
           path: ${{ runner.temp }}/digests/*
@@ -177,7 +185,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
@@ -222,7 +230,7 @@ jobs:
 
       - name: Download Base Image
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: centos9-amd64
           path: /tmp

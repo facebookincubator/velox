@@ -18,6 +18,7 @@
 #include <filesystem>
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -33,7 +34,8 @@ void IcebergSplitReaderBenchmark::writeToFile(
   auto path = fileFolder_->getPath() + "/" + fileName_;
   auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
   auto sink = std::make_unique<WriteFileSink>(std::move(localWriteFile), path);
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.memoryPool = rootPool_.get();
   options.schema = batches[0]->type();
   dwrf::Writer dataFilewriter{std::move(sink), options};
@@ -51,7 +53,8 @@ void IcebergSplitReaderBenchmark::writeToPositionDeleteFile(
       std::make_unique<LocalWriteFile>(filePath, true, false);
   auto posDeletesink =
       std::make_unique<WriteFileSink>(std::move(localPosWriteFile), filePath);
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.memoryPool = rootPool_.get();
   options.schema = vectors[0]->type();
   dwrf::Writer posDeletewriter{std::move(posDeletesink), options};
@@ -233,7 +236,7 @@ int IcebergSplitReaderBenchmark::read(
     const RowTypePtr& rowType,
     uint32_t nextSize,
     std::unique_ptr<IcebergSplitReader> icebergSplitReader) {
-  runtimeStats_ = RuntimeStatistics();
+  runtimeStats_ = RuntimeStats();
   icebergSplitReader->resetFilterCaches();
   int resultSize = 0;
   auto result = BaseVector::create(rowType, 0, leafPool_.get());
@@ -280,8 +283,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
 
   core::TypedExprPtr remainingFilterExpr;
 
-  std::shared_ptr<HiveTableHandle> hiveTableHandle =
-      std::make_shared<HiveTableHandle>(
+  const std::shared_ptr<IcebergTableHandle> icebergTableHandle =
+      std::make_shared<IcebergTableHandle>(
           "kHiveConnectorId",
           "tableName",
           std::move(filters),
@@ -309,19 +312,14 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           std::unordered_map<std::string, std::string>());
 
   std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_ =
-      std::make_unique<connector::ConnectorQueryCtx>(
-          opPool.get(),
-          connectorPool.get(),
-          connectorSessionProperties_.get(),
-          nullptr,
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.IcebergSplitReader",
-          "task.IcebergSplitReader",
-          "planNodeId.IcebergSplitReader",
-          0,
-          "");
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(opPool.get())
+          .connectorPool(connectorPool.get())
+          .sessionProperties(connectorSessionProperties_.get())
+          .queryId("query.IcebergSplitReader")
+          .taskId("task.IcebergSplitReader")
+          .planNodeId("planNodeId.IcebergSplitReader")
+          .build();
 
   FileHandleFactory fileHandleFactory(
       std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
@@ -337,7 +335,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
     std::unique_ptr<IcebergSplitReader> icebergSplitReader =
         std::make_unique<IcebergSplitReader>(
             icebergSplit,
-            hiveTableHandle,
+            icebergTableHandle,
             nullptr,
             connectorQueryCtx_.get(),
             hiveConfig,

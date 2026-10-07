@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
@@ -28,6 +29,7 @@ using cudf_velox::test::rewriteToCudfPlan;
 class LimitTest : public HiveConnectorTestBase {
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

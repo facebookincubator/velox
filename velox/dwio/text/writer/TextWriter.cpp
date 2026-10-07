@@ -17,11 +17,66 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/common/encode/Base64.h"
 
+#include <folly/Conv.h>
+#include <cctype>
 #include <utility>
 
 namespace facebook::velox::text {
 
 using dwio::common::SerDeOptions;
+
+namespace {
+
+// Parses a Hive serde delimiter, which is either a raw character (its first
+// byte) or the decimal code of a single byte (e.g. "9" -> tab).
+uint8_t parseDelimiter(const std::string& delim) {
+  for (char const& ch : delim) {
+    if (!std::isdigit(ch)) {
+      return delim[0];
+    }
+  }
+  return stoi(delim);
+}
+
+// Builds SerDeOptions from a table's Hive serde parameters so the file is
+// written with the table's declared delimiters rather than the defaults. Absent
+// parameters fall back to the SerDeOptions defaults.
+SerDeOptions serdeOptionsFromParameters(
+    const std::map<std::string, std::string>& serdeParameters) {
+  auto find = [&](const std::string& key) -> const std::string* {
+    auto it = serdeParameters.find(key);
+    return it == serdeParameters.end() ? nullptr : &it->second;
+  };
+
+  const auto* field = find(SerDeOptions::kFieldDelim);
+  if (field == nullptr) {
+    field = find("serialization.format");
+  }
+  const auto* collection = find(SerDeOptions::kCollectionDelim);
+  const auto* mapKey = find(SerDeOptions::kMapKeyDelim);
+  const auto* escape = find(SerDeOptions::kEscapeChar);
+
+  // Treat an empty value as absent so parseDelimiter never sees "".
+  auto delimOr = [](const std::string* value, uint8_t defaultDelim) {
+    return (value != nullptr && !value->empty()) ? parseDelimiter(*value)
+                                                 : defaultDelim;
+  };
+  const uint8_t fieldDelim = delimOr(field, '\1');
+  const uint8_t collectionDelim = delimOr(collection, '\2');
+  const uint8_t mapKeyDelim = delimOr(mapKey, '\3');
+
+  if (escape == nullptr) {
+    return SerDeOptions(fieldDelim, collectionDelim, mapKeyDelim);
+  }
+  uint8_t escapeChar = '\\';
+  if (!escape->empty()) {
+    escapeChar = folly::tryTo<uint8_t>(*escape).value_or((*escape)[0]);
+  }
+  return SerDeOptions(
+      fieldDelim, collectionDelim, mapKeyDelim, escapeChar, true);
+}
+
+} // namespace
 
 template <typename T>
 std::optional<std::string> toTextStr(T val) {
@@ -375,7 +430,10 @@ std::unique_ptr<dwio::common::Writer> TextWriterFactory::createWriter(
   VELOX_CHECK_NOT_NULL(
       textOptions, "Text writer factory expected a Text WriterOptions object.");
   return std::make_unique<TextWriter>(
-      asRowType(options->schema), std::move(sink), textOptions);
+      asRowType(options->schema),
+      std::move(sink),
+      textOptions,
+      serdeOptionsFromParameters(options->serdeParameters));
 }
 
 std::unique_ptr<dwio::common::WriterOptions>

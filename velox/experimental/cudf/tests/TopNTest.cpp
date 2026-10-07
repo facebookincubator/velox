@@ -31,6 +31,7 @@ class TopNTest : public OperatorTestBase {
  public:
   void SetUp() override {
     OperatorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
   void TearDown() override {

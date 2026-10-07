@@ -339,7 +339,7 @@ TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
   registry.Register(
-      Type::getClassName(),
+      std::string{Type::getClassName()},
       static_cast<TypePtr (*)(const folly::dynamic&)>(Type::create));
 
   registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);
@@ -1767,6 +1767,53 @@ int64_t TimeMilliPrecisionType::valueToTime(
   }
 
   return adjustedTime;
+}
+
+int64_t TimeMicroPrecisionUtcType::valueToTime(
+    StringView timeStr,
+    bool requireSeconds) const {
+  auto componentsResult = util::parseTimeComponents(
+      timeStr.data(),
+      timeStr.size(),
+      requireSeconds,
+      TimePrecision::kMicroseconds);
+  if (componentsResult.hasError()) {
+    VELOX_USER_FAIL("{}", componentsResult.error().message());
+  }
+
+  const auto components = componentsResult.value();
+  VELOX_USER_CHECK(
+      components.hour >= 0 && components.hour < util::kHoursPerDay,
+      "Invalid hour value: {}",
+      components.hour);
+  VELOX_USER_CHECK(
+      components.minute >= 0 && components.minute < util::kMinsPerHour,
+      "Invalid minute value: {}",
+      components.minute);
+  VELOX_USER_CHECK(
+      components.second >= 0 && components.second < util::kSecsPerMinute,
+      "Invalid second value: {}",
+      components.second);
+  VELOX_DCHECK(components.fractionalPrecision == TimePrecision::kMicroseconds);
+  const int32_t micros = components.fractionalSecond;
+  VELOX_USER_CHECK(
+      micros >= 0 && micros < util::kMicrosPerSec,
+      "Invalid microsecond value: {}",
+      micros);
+
+  constexpr int64_t kMicrosPerDay = util::kMicrosPerSec * util::kSecsPerDay;
+  const int64_t result =
+      static_cast<int64_t>(components.hour) * util::kMicrosPerHour +
+      static_cast<int64_t>(components.minute) * util::kMicrosPerMinute +
+      static_cast<int64_t>(components.second) * util::kMicrosPerSec +
+      static_cast<int64_t>(micros);
+
+  VELOX_USER_CHECK(
+      result >= 0 && result < kMicrosPerDay,
+      "Time value {} is out of range [0, {})",
+      result,
+      kMicrosPerDay);
+  return result;
 }
 
 // static

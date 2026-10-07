@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <limits>
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/Compression.h"
@@ -90,7 +89,7 @@ class WriterContext : public CompressionBufferPool {
         ? std::addressof(
               handler_->getEncryptionProvider(stream.encodingKey().node()))
         : nullptr;
-    return newStream(compression_, holder, encrypter);
+    return newStream(compression_, holder, encrypter, stream.toString());
   }
 
   std::unique_ptr<DataBufferHolder> newDataBufferHolder(
@@ -106,8 +105,10 @@ class WriterContext : public CompressionBufferPool {
   std::unique_ptr<BufferedOutputStream> newStream(
       common::CompressionKind kind,
       DataBufferHolder& holder,
-      const dwio::common::encryption::Encrypter* encrypter = nullptr) {
-    return createCompressor(kind, *this, holder, *config_, encrypter);
+      const dwio::common::encryption::Encrypter* encrypter = nullptr,
+      const std::string& streamDebugInfo = "") {
+    return createCompressor(
+        kind, *this, holder, *config_, encrypter, streamDebugInfo);
   }
 
   template <typename T>
@@ -269,6 +270,20 @@ class WriterContext : public CompressionBufferPool {
     VELOX_CHECK_NOT_NULL(buffer);
     VELOX_CHECK_NULL(compressionBuffer_);
     compressionBuffer_ = std::move(buffer);
+  }
+
+  std::unique_ptr<dwio::common::DataBuffer<char>> getDecompressionBuffer(
+      uint64_t size) override {
+    VELOX_CHECK_NOT_NULL(decompressionBuffer_);
+    VELOX_CHECK_GE(decompressionBuffer_->size(), size);
+    return std::move(decompressionBuffer_);
+  }
+
+  void returnDecompressionBuffer(
+      std::unique_ptr<dwio::common::DataBuffer<char>> buffer) override {
+    VELOX_CHECK_NOT_NULL(buffer);
+    VELOX_CHECK_NULL(decompressionBuffer_);
+    decompressionBuffer_ = std::move(buffer);
   }
 
   void incrementNodeSize(uint32_t node, uint64_t size) {
@@ -661,6 +676,10 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<BufferedOutputStream>)>
       indexBuilderFactory_;
   std::unique_ptr<dwio::common::DataBuffer<char>> compressionBuffer_;
+  // Shared buffer holding decompressed bytes during write-side compression
+  // verification. Allocated only when the VERIFY_COMPRESSION writer option is
+  // set; null otherwise.
+  std::unique_ptr<dwio::common::DataBuffer<char>> decompressionBuffer_;
   // A pool of reusable DecodedVectors.
   std::vector<std::unique_ptr<velox::DecodedVector>> decodedVectorPool_;
   // Reusable SelectivityVector
@@ -693,9 +712,6 @@ class WriterContext : public CompressionBufferPool {
   friend class StringColumnWriterDirectEncodingIndexTest;
   // TODO: remove once writer code is consolidated
   friend class WriterEncodingIndexTest2;
-
-  VELOX_FRIEND_TEST(WriterContextTest, GetIntDictionaryEncoder);
-  VELOX_FRIEND_TEST(WriterContextTest, RemoveIntDictionaryEncoderForNode);
 };
 
 } // namespace facebook::velox::dwrf

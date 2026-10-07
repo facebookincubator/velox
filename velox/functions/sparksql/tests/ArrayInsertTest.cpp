@@ -246,7 +246,7 @@ TEST_F(ArrayInsertTest, nullInputs) {
   auto expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression("array_insert(c0, 1, 1, false)", {arrays}, expected);
 
-  // Null postition.
+  // Null position.
   arrays = makeArrayVectorFromJson<int64_t>({"[1, 1]"});
   expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression(

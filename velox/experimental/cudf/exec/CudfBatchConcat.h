@@ -23,6 +23,8 @@
 
 #include "velox/exec/Operator.h"
 
+#include <cstdint>
+#include <optional>
 #include <queue>
 
 namespace facebook::velox::cudf_velox {
@@ -40,8 +42,7 @@ class CudfBatchConcat : public CudfOperatorBase {
       std::shared_ptr<const CudfBatchConcatNode> planNode);
 
   bool needsInput() const override {
-    return !noMoreInput_ && outputQueue_.empty() &&
-        currentNumRows_ < targetRows_;
+    return !noMoreInput_ && outputQueue_.empty() && !targetReached();
   }
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -53,13 +54,38 @@ class CudfBatchConcat : public CudfOperatorBase {
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
+  void doClose() override;
 
  private:
-  exec::DriverCtx* const driverCtx_;
+  // Returns true if 'numRows' rows occupying 'numBytes' estimated GPU bytes
+  // meet the flush target: the byte target when set, the row target otherwise.
+  bool meetsTarget(size_t numRows, uint64_t numBytes) const;
+
+  bool targetReached() const {
+    return meetsTarget(currentNumRows_, currentBytes_);
+  }
+
+  // Returns the estimated GPU bytes of 'vector', or 0 when no byte target is
+  // set.
+  uint64_t estimateBytes(const CudfVector& vector) const;
+
+  // Input vectors awaiting concatenation.
   std::vector<CudfVectorPtr> buffer_;
+
+  // Concatenated vectors ready for downstream consumption.
   std::queue<CudfVectorPtr> outputQueue_;
+
+  // Rows held in buffer_.
   size_t currentNumRows_{0};
-  const size_t targetRows_{0};
+
+  // Estimated GPU bytes held in buffer_. Tracked only when targetBytes_ is set.
+  uint64_t currentBytes_{0};
+
+  // Byte target from batchSizeMinBytes. Unset for a zero-column output.
+  const std::optional<uint64_t> targetBytes_;
+
+  // Row target from batchSizeMinThreshold, used when targetBytes_ is unset.
+  const size_t targetRows_;
 };
 
 } // namespace facebook::velox::cudf_velox

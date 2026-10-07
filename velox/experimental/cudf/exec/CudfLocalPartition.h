@@ -40,6 +40,10 @@ class CudfLocalPartition : public CudfOperatorBase {
     return fmt::format("CudfLocalPartition({})", numPartitions_);
   }
 
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kInput;
+  }
+
   void recordOutputStats(RowVectorPtr& input);
 
   /// Always true but the caller will check isBlocked before adding input, hence

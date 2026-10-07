@@ -636,35 +636,37 @@ struct IPPrefixMaskLenFunction {
   }
 };
 
-void registerIPAddressFunctions(const std::string& prefix) {
+void registerIPAddressFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerIPAddressType();
   registerIPPrefixType();
   registerFunction<IPPrefixFunction, IPPrefix, IPAddress, int64_t>(
-      {prefix + "ip_prefix"});
+      {prefix + "ip_prefix"}, {}, true, defaultOwner);
   registerFunction<IPPrefixFunction, IPPrefix, Varchar, int64_t>(
-      {prefix + "ip_prefix"});
+      {prefix + "ip_prefix"}, {}, true, defaultOwner);
   registerFunction<IPSubnetMinFunction, IPAddress, IPPrefix>(
-      {prefix + "ip_subnet_min"});
+      {prefix + "ip_subnet_min"}, {}, true, defaultOwner);
   registerFunction<IPSubnetMaxFunction, IPAddress, IPPrefix>(
-      {prefix + "ip_subnet_max"});
+      {prefix + "ip_subnet_max"}, {}, true, defaultOwner);
   registerFunction<IPSubnetRangeFunction, Array<IPAddress>, IPPrefix>(
-      {prefix + "ip_subnet_range"});
+      {prefix + "ip_subnet_range"}, {}, true, defaultOwner);
   registerFunction<IPSubnetOfFunction, bool, IPPrefix, IPAddress>(
-      {prefix + "is_subnet_of"});
+      {prefix + "is_subnet_of"}, {}, true, defaultOwner);
   registerFunction<IPSubnetOfFunction, bool, IPPrefix, IPPrefix>(
-      {prefix + "is_subnet_of"});
+      {prefix + "is_subnet_of"}, {}, true, defaultOwner);
   registerFunction<IPPrefixCollapseFunction, Array<IPPrefix>, Array<IPPrefix>>(
-      {prefix + "ip_prefix_collapse"});
+      {prefix + "ip_prefix_collapse"}, {}, true, defaultOwner);
   registerFunction<IPPrefixSubnetsFunction, Array<IPPrefix>, IPPrefix, int64_t>(
-      {prefix + "ip_prefix_subnets"});
+      {prefix + "ip_prefix_subnets"}, {}, true, defaultOwner);
   registerFunction<IsPrivateIPFunction, bool, IPAddress>(
-      {prefix + "is_private_ip"});
+      {prefix + "is_private_ip"}, {}, true, defaultOwner);
   registerFunction<IPVersionFromIPAddressFunction, int64_t, IPAddress>(
-      {prefix + "ip_version"});
+      {prefix + "ip_version"}, {}, true, defaultOwner);
   registerFunction<IPVersionFromIPPrefixFunction, int64_t, IPPrefix>(
-      {prefix + "ip_version"});
+      {prefix + "ip_version"}, {}, true, defaultOwner);
   registerFunction<IPPrefixMaskLenFunction, int64_t, IPPrefix>(
-      {prefix + "ip_prefix_masklen"});
+      {prefix + "ip_prefix_masklen"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

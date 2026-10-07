@@ -16,9 +16,12 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <vector>
+
+#include <folly/Synchronized.h>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -67,9 +70,10 @@ namespace facebook::velox::exec::rpc {
 /// - Async RPC callbacks may run on any thread (transport executor pool).
 ///   All cross-thread coordination goes through RPCState, which is fully
 ///   mutex-protected (see RPCState.h for per-method annotations).
-/// - RPCRateLimiter tokens use RAII: destruction (including from cancelled
-///   futures) automatically decrements the pending count and notifies
-///   waiters.
+/// - RPCState owns each RAII admission lease until its response completes.
+///   Completion applies canonical shared overload feedback before releasing
+///   admission; the driver applies its local and aggregate feedback later when
+///   it consumes the ready response.
 ///
 class RPCOperator : public exec::Operator {
  public:
@@ -77,6 +81,16 @@ class RPCOperator : public exec::Operator {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::RPCNode> rpcNode);
+
+  /// Releases the retained input vectors. Driver::~Driver() is defaulted, so
+  /// an operator destroyed outside closeOperators() never runs close().
+  ~RPCOperator() override;
+
+  // Disable copy and move
+  RPCOperator(const RPCOperator&) = delete;
+  RPCOperator& operator=(const RPCOperator&) = delete;
+  RPCOperator(RPCOperator&&) = delete;
+  RPCOperator& operator=(RPCOperator&&) = delete;
 
   void initialize() override;
 
@@ -96,6 +110,15 @@ class RPCOperator : public exec::Operator {
 
   bool startDrain() override;
 
+  /// Decorates the base operator stats with the RPC counters that keep moving
+  /// while the driver is blocked on kWaitForRPC. Without them the operator
+  /// reports identical stats for the whole duration of a backend round trip.
+  ///
+  /// Called by Task::taskStats() from an arbitrary thread, concurrently with
+  /// the driver, so it reads only thread-safe state: an atomic counter and the
+  /// mutex-protected snapshots reached through liveStatsSources_.
+  exec::OperatorStats stats(bool clear) override;
+
   /// Runtime stat names.
   static inline const std::string kRpcRequestsDispatched{
       "rpcRequestsDispatched"};
@@ -107,6 +130,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionWindowFinal{
       "rpcCongestionWindowFinal"};
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
+  static inline const std::string kRpcCongestionOverloadShrinks{
+      "rpcCongestionOverloadShrinks"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -118,60 +143,236 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
-  // Process-global per-tier RPCRateLimiter observability (adaptive cap
-  // trajectory), snapshotted at close(). The rpcCongestion* stats above are the
-  // per-DRIVER window; these are the shared rate-limiter cap.
+  static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
+  // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
+  static inline const std::string kRpcRateLimiterHardLimit{
+      "rpcRateLimiterHardLimit"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
   static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
+  static inline const std::string kRpcRateLimiterLimitMilli{
+      "rpcRateLimiterLimitMilli"};
+  static inline const std::string kRpcRateLimiterMinLimitMilli{
+      "rpcRateLimiterMinLimitMilli"};
+  static inline const std::string kRpcRateLimiterServiceHorizonNanos{
+      "rpcRateLimiterServiceHorizonNanos"};
+
+  /// Live liveness stats, refreshed on every stats() call rather than only at
+  /// close(). Units dispatched but not yet completed.
+  static inline const std::string kRpcInFlight{"rpcInFlight"};
+  /// Monotonic count of completions signaled by the transport. Advances from
+  /// the RPC executor threads, so it moves even while the driver is blocked.
+  static inline const std::string kRpcCompletionsSignaled{
+      "rpcCompletionsSignaled"};
+  /// Monotonic count of retry attempts the function's transports have
+  /// scheduled. A retry is neither a dispatch nor a completion, so a request
+  /// climbing a doubling backoff schedule leaves both counters above frozen
+  /// for as long as the ladder runs. Advances from the transport executor
+  /// threads, so it moves even while the driver is blocked.
+  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
+
+  /// Null once close() has run.
+  const std::shared_ptr<RPCState>& testingState() const {
+    return state_;
+  }
 
  private:
-  /// Flush accumulated batch rows via function_->flushBatch().
-  /// Called when threshold is reached or at noMoreInput/drain time.
-  /// @param maxRows Maximum rows to flush. 0 means flush all.
-  void flushBatchRequests(int32_t maxRows = 0);
+  // How much of the accumulator a dispatch is willing to send.
+  enum class DispatchScope {
+    // Whole dispatch chunks only: a partial batch waits for more input. In
+    // dispatch-once mode (dispatchBatchSize_ == 0) nothing qualifies, since
+    // the accumulator buffers everything until the input closes.
+    kFullChunksOnly,
+    // Everything accumulated, including a final partial chunk. Used once the
+    // input is closed, where the remainder has to go out however small.
+    kEverything,
+  };
 
-  /// Build output RowVector from a ready batch (BATCH mode).
+  // Send accumulated rows while the per-driver window and the backend both
+  // allow it. The BATCH arm of drainPending(). Whatever admission refuses
+  // stays accumulated and goes out from isBlocked() as slots free, so a drain
+  // never exceeds either cap and never strands rows.
+  void dispatchBatchUnderAdmission(DispatchScope scope);
+
+  // Work this driver has taken in but not yet dispatched: buffered rows in
+  // PER_ROW, accumulated rows in BATCH. The two are mode-exclusive -- only the
+  // PER_ROW branch of addInput() sets the row buffer, only the BATCH branch
+  // accumulates -- so this asks the one question that matters per mode.
+  //
+  // The signal sites gate on it so end-of-input is never declared while
+  // admission still holds rows. In PER_ROW that guard cannot currently fire:
+  // the Driver only calls noMoreInput() when needsInput() is true, and a
+  // non-empty buffer already makes that false. It is kept so the invariant is
+  // local to this operator rather than resting on that Driver contract.
+  bool hasUndispatchedWork() const;
+
+  // Send whatever admission currently allows of that work.
+  void drainPending();
+
+  // Drains BATCH input at end-of-input. Sends what admission allows; once
+  // nothing is left, declares the input closed. If work remains and this
+  // driver has nothing in flight, it parks on backend admission.
+  std::optional<exec::BlockingReason> drainOrParkOnAdmission(
+      ContinueFuture* future);
+
+  // How many dispatch chunks the accumulator may hold before needsInput()
+  // stops taking more. One chunk would leave nothing staged when a slot
+  // frees, costing a round trip upstream at exactly the wrong moment.
+  static constexpr int64_t kBufferedChunks = 2;
+
+  // needsInput(): true when this driver already holds as much as it should
+  // buffer. Depth only -- intake must not swing on an instantaneous capacity
+  // reading, and bounding it is what keeps the accumulator from growing to
+  // the whole input against a busy backend.
+  bool inputBufferIsFull() const;
+
+  // Returns true if at least one accumulated row was admitted and flushed.
+  bool flushBatchRequests(int32_t maxRows = 0);
+
+  // Builds the output RowVector from a completed batch (BATCH mode).
   RowVectorPtr buildOutputFromReadyBatch(RPCState::ReadyBatch& readyBatch);
 
-  /// Common helper: build output vector from responses + input data lookup.
+  // Builds an output vector from RPC responses paired with the buffered
+  // input rows they came from. Shared by both streaming modes.
   RowVectorPtr buildOutputVector(
       const std::vector<RPCResponse>& responses,
       const std::vector<std::pair<int32_t, vector_size_t>>& locations);
 
-  /// Precompute output column projections from source type to output type.
-  /// Called once in initialize() to avoid repeated string lookups in
-  /// buildOutputVector().
+  // Precomputes output column projections from the source type to the output
+  // type. Called once in initialize() so buildOutputVector() does not repeat
+  // the name lookups per batch.
   void initOutputProjections();
+
+  // Binds the shared limiter after the function has resolved any
+  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  void initializeRateLimiter();
+
+  // Resolves an input whose selected rows all complete synchronously without a
+  // backend. The function's preparation result guarantees the futures are
+  // ready and lets these rows bypass admission and congestion accounting.
+  void resolveLocalOnlyInput(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& arguments,
+      std::vector<VectorPtr> flattenedColumns);
 
   // Increment the per-error-kind counter for a single response.
   void recordErrorKind(velox::rpc::RPCErrorKind kind);
 
+  // getOutput() decomposed, mirroring the isBlocked() split below. The two
+  // modes differ in how they claim and shape output, not in how they report
+  // finishing or feed the controllers -- those are shared, so a change to one
+  // mode cannot silently diverge from the other.
+  RowVectorPtr outputPerRow();
+  RowVectorPtr outputBatch();
+
+  // Nothing left to emit: settle the drain if one is in progress. Always
+  // returns nullptr, so callers can `return finishIfDrained();`.
+  RowVectorPtr finishIfDrained();
+
+  // Feeds one drained unit's verdict to both controllers -- the per-driver
+  // window and the shared admission cap. They must back off together: a
+  // rate-limit storm is low-latency, so the latency gradient alone is blind to
+  // it and only the error verdict makes the window shrink.
+  void recordCongestion(
+      AsyncRPCFunction::CongestionSignal signal,
+      const std::vector<int64_t>& roundTripTimesNs,
+      const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
+      bool sharedOverloadHandled);
+
+  // isBlocked() decomposed. Each returns the reason to hand the driver; the
+  // try* helpers return nullopt when the state reports finished, which the
+  // streaming and finishing paths treat differently.
+  exec::BlockingReason blockedInPerRow(ContinueFuture* future);
+  exec::BlockingReason blockedInBatch(ContinueFuture* future);
+  std::optional<exec::BlockingReason> tryClaimOrParkOnRow(
+      ContinueFuture* future);
+  std::optional<exec::BlockingReason> tryClaimOrParkOnBatch(
+      ContinueFuture* future,
+      bool isBackpressure);
+  // Parks if shared admission is full; otherwise returns kNotBlocked.
+  exec::BlockingReason parkOnAdmission(ContinueFuture* future);
+
+  // Hands 'waitFuture' to the driver and starts a block-wait measurement.
+  exec::BlockingReason
+  park(ContinueFuture* future, ContinueFuture waitFuture, bool isBackpressure);
+
+  // Closes the measurement started by the last park().
+  void endBlockWait();
+
+  // Takes a completed batch as this operator's claimed output, logging first
+  // if it carried an error.
+  void claimBatch(RPCState::ReadyBatch batch);
+
+  // True when this driver holds work that admission will not let it dispatch:
+  // buffered rows in PER_ROW, an unflushable chunk in BATCH. isBlocked() parks
+  // on it and needsInput() refuses more input because of it, so both modes
+  // read the same predicate rather than each spelling out its own.
+  bool hasUndispatchableWork() const;
+
   // PER_ROW admission control: dispatch buffered rows up to the
-  // available headroom = min(per-driver window headroom, process-global
+  // available headroom = min(per-driver window headroom, this backend's
   // rate-limiter headroom). Called from addInput()/getOutput()/isBlocked() so a
   // whole input vector is dripped at the sustainable rate instead of blasted.
-  void dispatchPendingRows();
+  void dispatchRowsUnderAdmission();
 
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
     return pendingCursor_ < pendingNumRows_;
   }
 
-  /// Record runtime stats into operator stats. Called from close().
+  // Records the RPC runtime stats into operator stats. Called from close().
   void recordRuntimeStats();
+
+  // Write the counters that must stay observable while the driver is blocked.
+  // Assigns rather than accumulates so repeated stats() sampling by the task
+  // stats collector cannot inflate them. 'includeGauges' is false on the
+  // close() path, where a point-in-time reading would be frozen into the task
+  // totals rather than superseded by the next sample.
+  void addLiveProgressStats(exec::OperatorStats& stats, bool includeGauges)
+      const;
+
+  // The objects addLiveProgressStats() reads. They are published here instead
+  // of being read from state_ / limiter_ / function_ directly because stats()
+  // runs on the task stats collector thread while the driver thread may be in
+  // initialize() (which sets limiter_ and function_) or close() (which drops
+  // state_ and function_), and racing on the pointers themselves is undefined
+  // behaviour. Holding the read lock across the sample also keeps close() from
+  // freeing RPCState or the function underneath an in-progress read. Off every
+  // hot path: written twice per operator, read once per stats sample.
+  struct LiveStatsSources {
+    std::shared_ptr<RPCState> state;
+    RPCRateLimiter* limiter{nullptr};
+    std::shared_ptr<AsyncRPCFunction> function;
+  };
+  folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
   std::shared_ptr<const core::RPCNode> rpcNode_;
   std::shared_ptr<RPCState> state_;
   std::shared_ptr<AsyncRPCFunction> function_;
+  bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Tier key for per-tier rate limiting (from function_->tierKey()).
-  std::string tierKey_;
+  // Operators with the same admission key share rate-limiter capacity.
+  std::string admissionKey_;
 
-  // Precomputed argument column indices for reading from input in addInput().
-  // Initialized in initialize() by looking up argumentColumns in source type.
-  std::vector<column_index_t> argumentColumnIndices_;
+  // Process-scoped controller for admissionKey_, resolved before the first
+  // dispatch; outlives this operator.
+  RPCRateLimiter* limiter_{nullptr};
+
+  // Precomputed per-argument sources, in call()->inputs() order. Built once in
+  // initialize() by walking the RPC call's argument expressions. A
+  // FieldAccessTypedExpr argument resolves to a source column index
+  // (isConstant=false); a ConstantTypedExpr argument materializes a
+  // single-element constant vector (isConstant=true), which addInput() wraps to
+  // the batch row count so the function receives the same arg list as a column.
+  struct ArgumentSource {
+    bool isConstant;
+    // Valid when !isConstant: index of the argument column in the source type.
+    column_index_t sourceChannel{0};
+    // Valid when isConstant: single-element constant vector for the literal.
+    VectorPtr constantValue{};
+  };
+  std::vector<ArgumentSource> argumentSources_;
 
   // Collected row locations for current batch (BATCH mode).
   // Passed to addPendingBatch() when the batch is flushed.
@@ -181,22 +382,29 @@ class RPCOperator : public exec::Operator {
   // Used to stamp rowIds onto responses at flush time.
   std::vector<int64_t> batchRowIds_;
 
-  int64_t numRequestsDispatched_{0};
+  // Written by the driver thread only, but read by stats() from the task
+  // stats collector thread, hence atomic. Relaxed ordering is enough: these
+  // are independent counters, not a handshake.
+  std::atomic<int64_t> numRequestsDispatched_{0};
   int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
   // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  // Rows that failed because something here broke -- an invariant tripped, or
+  // a response was returned with no outcome set -- rather than because the
+  // backend refused. Tracked apart from the backend error count.
+  int64_t numErrorsInternal_{0};
 
   // Global row ID counter for unique IDs across all input batches.
   int64_t globalRowIdCounter_{0};
 
   // PER_ROW admission-controlled dispatch buffer. addInput() stores the
   // input vector's args here (flattened, shared across its rows) and records
-  // the stored batch index; dispatchPendingRows() drips rows [pendingCursor_,
-  // pendingNumRows_) in headroom-sized chunks. Empty (pendingCursor_ ==
-  // pendingNumRows_ == 0) when nothing is pending.
+  // the stored batch index; dispatchRowsUnderAdmission() drips rows
+  // [pendingCursor_, pendingNumRows_) in headroom-sized chunks. Empty
+  // (pendingCursor_ == pendingNumRows_ == 0) when nothing is pending.
   std::vector<VectorPtr> pendingArgs_;
   int32_t pendingBatchIndex_{-1};
   vector_size_t pendingCursor_{0};
@@ -207,18 +415,25 @@ class RPCOperator : public exec::Operator {
   // > 0 = fire flushBatch() every N rows during addInput().
   int32_t dispatchBatchSize_{0};
 
+  // Max rows per output vector, from QueryConfig::preferredOutputBatchRows (set
+  // in initialize()). The kPerRow path drains at most this many ready rows per
+  // getOutput() call.
+  int32_t outputBatchRows_{1'024};
+
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
   std::vector<RPCState::ReadyRow> claimedRows_;
+  // Prevents a local-only claim from absorbing transport completions or
+  // feeding their synthetic zero RTT into congestion control.
+  bool claimedRowsAreLocalOnly_{false};
   std::optional<RPCState::ReadyBatch> claimedBatch_;
 
   // Whether we've detected the finish condition.
   bool finished_{false};
 
-  // Timeout for batch RPC calls (30 minutes).
-  // This is a ceiling — the operator returns as soon as results are ready.
-  // Batch LLM inference can take many minutes due to MetaGen queuing
-  // and GPU scheduling, so the timeout needs generous headroom.
+  // Ceiling for batch RPC calls; the operator returns as soon as results are
+  // ready. An offline batch job can take many minutes in backend queueing and
+  // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats.

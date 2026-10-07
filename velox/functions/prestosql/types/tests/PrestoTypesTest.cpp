@@ -464,5 +464,16 @@ TEST_F(PrestoTypesDecodedTest, rowManyFields) {
       "{field0=1, field1=1970-01-03, field2=0-3, field3=4, field4=1970-01-06, field5=0-6}");
 }
 
+// Test for UNKNOWN scalar type
+TEST_F(PrestoTypesDecodedTest, unknownScalar) {
+  auto unknownVector = makeAllNullFlatVector<UnknownValue>(3);
+  DecodedVector decoded(*unknownVector);
+
+  // UNKNOWN scalar values return "null"
+  EXPECT_EQ(PrestoTypes::valueToString(decoded, 0, UNKNOWN()), "null");
+  EXPECT_EQ(PrestoTypes::valueToString(decoded, 1, UNKNOWN()), "null");
+  EXPECT_EQ(PrestoTypes::valueToString(decoded, 2, UNKNOWN()), "null");
+}
+
 } // namespace
 } // namespace facebook::velox

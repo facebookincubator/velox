@@ -27,6 +27,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -576,6 +577,10 @@ class LocalFileIoUringTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    if (!IoUringReader::available()) {
+      GTEST_SKIP() << "io_uring is unavailable";
+    }
+
     ThreadLocalIoUringReader::testingClear();
 
     IoUringReader::Options options;
@@ -649,7 +654,48 @@ void expectPageContent(const char* data, size_t pageIndex) {
   VELOX_CHECK_EQ(std::memcmp(data, expected.data(), kPageSize), 0);
 }
 
-void runConcurrentPreadvTest(
+bool isIoUringUnavailableError(std::string_view errorMessage) {
+  constexpr std::string_view kQueueInitializationOutOfMemory =
+      "io_uring_queue_init failed: Cannot allocate memory";
+  constexpr std::string_view kFileRegistrationOutOfMemory =
+      "io_uring_register_files failed: Cannot allocate memory";
+  constexpr std::string_view kBatchReadsUnavailable =
+      "io_uring batch reads requested but io_uring is unavailable";
+  constexpr std::string_view kLocalReadFileUnavailable =
+      "LocalReadFile useIoUring requested but io_uring is unavailable";
+
+  return errorMessage.find(kQueueInitializationOutOfMemory) !=
+      std::string_view::npos ||
+      errorMessage.find(kFileRegistrationOutOfMemory) !=
+      std::string_view::npos ||
+      errorMessage.find(kBatchReadsUnavailable) != std::string_view::npos ||
+      errorMessage.find(kLocalReadFileUnavailable) != std::string_view::npos;
+}
+
+TEST(LocalFileIoUringErrorTest, recognizesUnavailableIoUringErrors) {
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring_queue_init failed: Cannot allocate memory"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring_register_files failed: Cannot allocate memory"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring batch reads requested but io_uring is unavailable"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "LocalReadFile useIoUring requested but io_uring is unavailable"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring_queue_init failed: Invalid argument"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring_register_files failed: Invalid argument"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring batch pread failed: Cannot allocate memory"));
+}
+
+enum class ConcurrentPreadvTestResult {
+  kPassed,
+  kIoUringUnavailable,
+  kFailed,
+};
+
+ConcurrentPreadvTestResult runConcurrentPreadvTest(
     const std::vector<ConcurrentFile>& files,
     size_t numReaders) {
   constexpr size_t kPageSize = memory::AllocationTraits::kPageSize;
@@ -808,8 +854,13 @@ void runConcurrentPreadvTest(
   }
   EXPECT_EQ(ioUringReaderStats().numReaders, 0);
   if (!errorMessage.empty()) {
-    FAIL() << "Concurrent preadv reader failed: " << errorMessage;
+    if (isIoUringUnavailableError(errorMessage)) {
+      return ConcurrentPreadvTestResult::kIoUringUnavailable;
+    }
+    ADD_FAILURE() << "Concurrent preadv reader failed: " << errorMessage;
+    return ConcurrentPreadvTestResult::kFailed;
   }
+  return ConcurrentPreadvTestResult::kPassed;
 }
 
 TEST_F(LocalFileIoUringTest, preadv) {
@@ -941,7 +992,14 @@ TEST_F(LocalFileIoUringTest, concurrentPreadv) {
       }
     }
 
-    runConcurrentPreadvTest(files, kNumReaders);
+    const auto result = runConcurrentPreadvTest(files, kNumReaders);
+    if (result == ConcurrentPreadvTestResult::kIoUringUnavailable) {
+      GTEST_SKIP()
+          << "io_uring became unavailable during concurrent reader setup";
+    }
+    if (result == ConcurrentPreadvTestResult::kFailed) {
+      return;
+    }
   }
 }
 

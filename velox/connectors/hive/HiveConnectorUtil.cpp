@@ -535,13 +535,14 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   uint8_t fieldDelim = '\1';
   uint8_t collectionDelim = '\2';
   uint8_t mapKeyDelim = '\3';
-  if (fieldIt != serdeParameters.end()) {
+  // Treat an empty value as absent so parseDelimiter never sees "".
+  if (fieldIt != serdeParameters.end() && !fieldIt->second.empty()) {
     fieldDelim = parseDelimiter(fieldIt->second);
   }
-  if (collectionIt != serdeParameters.end()) {
+  if (collectionIt != serdeParameters.end() && !collectionIt->second.empty()) {
     collectionDelim = parseDelimiter(collectionIt->second);
   }
-  if (mapKeyIt != serdeParameters.end()) {
+  if (mapKeyIt != serdeParameters.end() && !mapKeyIt->second.empty()) {
     mapKeyDelim = parseDelimiter(mapKeyIt->second);
   }
 
@@ -763,15 +764,11 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     bool negated,
     common::SubfieldFilters& filters,
     double& sampleRate) {
-  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
-  if (call == nullptr) {
-    return expr;
-  }
   common::Filter* oldFilter = nullptr;
   try {
     if (auto subfieldAndFilter =
             exec::ExprToSubfieldFilterParser::getInstance()
-                ->leafCallToSubfieldFilter(*call, evaluator, negated)) {
+                ->leafToSubfieldFilter(*expr, evaluator, negated)) {
       auto& [subfield, filter] = subfieldAndFilter.value();
       if (auto it = filters.find(subfield); it != filters.end()) {
         oldFilter = it->second.get();
@@ -786,6 +783,11 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     if (oldFilter) {
       LOG(WARNING) << "Merging with " << oldFilter->toString();
     }
+  }
+
+  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (call == nullptr) {
+    return expr;
   }
 
   if (isNotExpr(expr, call, evaluator)) {
@@ -878,6 +880,9 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     core::ExpressionEvaluator* evaluator,
     common::SubfieldFilters& filters,
     double& sampleRate) {
+  if (expr == nullptr) {
+    return nullptr;
+  }
   return extractFiltersFromRemainingFilter(
       expr, evaluator, /*negated=*/false, filters, sampleRate);
 }

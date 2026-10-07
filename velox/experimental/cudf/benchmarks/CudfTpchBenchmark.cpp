@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -54,7 +55,26 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
+DEFINE_uint64(
+    cudf_local_exchange_buffer_size,
+    1UL << 30,
+    "Maximum buffered bytes per local exchange before applying backpressure.");
+
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
+DEFINE_bool(
+    cudf_hive_use_buffered_input,
+    true,
+    "Use BufferedInputDataSource instead of KvikIO for cuDF Hive reads");
+
+DEFINE_bool(
+    cudf_hive_preload_column_chunks,
+    false,
+    "Load column chunks while preloading cuDF Hive splits");
+
+DEFINE_bool(
+    cudf_hive_serialize_io_requests,
+    false,
+    "Serialize I/O submissions to prevent interleaving between concurrent splits");
 
 DEFINE_bool(
     enable_gpu_plan_rewrite,
@@ -123,6 +143,15 @@ void CudfTpchBenchmark::initialize() {
     cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
                                     kAllowMismatchedCudfHiveSchemas] =
         std::to_string(true);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput] =
+            std::to_string(FLAGS_cudf_hive_use_buffered_input);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kPreloadColumnChunks] =
+            std::to_string(FLAGS_cudf_hive_preload_column_chunks);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kSerializeIoRequests] =
+            std::to_string(FLAGS_cudf_hive_serialize_io_requests);
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
@@ -136,9 +165,13 @@ void CudfTpchBenchmark::initialize() {
   }
 
   cudf_velox::registerCudf();
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
 
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
       std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+  queryConfigs_[core::QueryConfig::kMaxLocalExchangeBufferSize] =
+      std::to_string(FLAGS_cudf_local_exchange_buffer_size);
 }
 
 std::shared_ptr<config::ConfigBase>
@@ -153,6 +186,15 @@ CudfTpchBenchmark::makeConnectorProperties() {
   cfg->set(
       CudfHiveCfg::kMaxPassReadLimit,
       std::to_string(FLAGS_cudf_pass_read_limit));
+  cfg->set(
+      CudfHiveCfg::kUseBufferedInput,
+      std::to_string(FLAGS_cudf_hive_use_buffered_input));
+  cfg->set(
+      CudfHiveCfg::kPreloadColumnChunks,
+      std::to_string(FLAGS_cudf_hive_preload_column_chunks));
+  cfg->set(
+      CudfHiveCfg::kSerializeIoRequests,
+      std::to_string(FLAGS_cudf_hive_serialize_io_requests));
   cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
 
   return cfg;

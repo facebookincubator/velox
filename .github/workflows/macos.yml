@@ -15,7 +15,17 @@
 name: macOS Build
 
 on:
+  schedule:
+    # Nightly, so the release build keeps running without costing a macOS
+    # runner on every pull request.
+    - cron: 0 4 * * *
+
+  workflow_dispatch: {}
+
   push:
+    # Only main. A branch pushed to this repository and opened as a pull
+    # request otherwise triggers this workflow twice, once per event.
+    branches: [main]
     paths:
       - velox/**
       - '!velox/docs/**'
@@ -38,23 +48,46 @@ on:
       - scripts/setup-versions.sh
       - scripts/setup-helper-functions.sh
       - .github/workflows/macos.yml
+      - .github/workflows/selective-build-plan.yml
+      - .github/scripts/plan-selective-build.py
+      - .github/scripts/cmake-flags.sh
 
 permissions:
   contents: read
+  # selective-build-plan needs `pull-requests: read` (standing-approval
+  # check, changed-files API) and `actions: read` (locating the cached
+  # dependency-graph artifact). A reusable workflow cannot escalate past
+  # what its caller grants, so the caller has to grant the same.
+  pull-requests: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
+  # Runs on Linux runners, so planning costs no macOS runner time.
+  plan:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/selective-build-plan.yml
+
   macos-build:
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    needs: plan
+    # Anything other than an explicit 'targeted' builds everything, so a
+    # skipped or failed plan cannot quietly build nothing.
+    if: >-
+      always() && needs.plan.result != 'cancelled' &&
+      github.repository == 'facebookincubator/velox'
     name: macos-15-${{ matrix.type }}
     strategy:
       fail-fast: false
       matrix:
-        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM
-        type: [debug, release]
+        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM.
+        # Pull requests build debug only; release is covered by the nightly
+        # schedule and by pushes to main. macOS runners are the most expensive
+        # in the fleet, and a release failure that a debug build does not also
+        # catch is rare.
+        type: ${{ (github.event_name == 'pull_request' && fromJSON('["debug"]')) || fromJSON('["debug", "release"]') }}
     runs-on: macos-15
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -62,7 +95,7 @@ jobs:
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -100,10 +133,6 @@ jobs:
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
-          if (( majorVersion == 13 )); then
-            brew uninstall cmake
-            pipx install --force cmake==3.31
-          fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
       - name: Configure Build
@@ -115,13 +144,51 @@ jobs:
           # Shared per-profile flag lists live in
           # .github/scripts/cmake-flags.sh.
           BUILD_PROFILE=macos source .github/scripts/cmake-flags.sh
+          # Grouping is set here rather than in the shared profile so it
+          # stays a property of this job. Grouped names match the cached
+          # dependency graph; ungrouped ones do not, and the selective
+          # build below would drop those suites and skip them. macOS
+          # defaults it off so a local build keeps one binary per test
+          # source, which `ctest -R <TestName>` needs.
           cmake -B _build/$BUILD_TYPE -GNinja \
               "${CMAKE_FLAGS[@]}" \
+              -DVELOX_ENABLE_GROUPED_TESTS=ON \
               -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
       - name: Build
+        env:
+          # plan-selective-build.py validates this against TARGETS_ALLOWED.
+          PLAN_TARGETS: >-
+            ${{ needs.plan.outputs.mode == 'targeted' &&
+                needs.plan.outputs.cmake_targets || '' }}
         run: |
-          cmake --build _build/$BUILD_TYPE -j $NJOBS
+          if [[ -z "$PLAN_TARGETS" ]]; then
+            cmake --build "_build/$BUILD_TYPE" -j "$NJOBS"
+            ccache -s
+            exit 0
+          fi
+
+          # The graph is generated on Linux and names components macOS
+          # does not build. One unknown target aborts the build, so keep
+          # only what this configure defines.
+          ninja -C "_build/$BUILD_TYPE" -t targets all \
+            | sed -n 's/^\([A-Za-z0-9_+.-]*\): phony$/\1/p' \
+            | sort -u > available-targets.txt
+
+          read -ra plan_targets <<< "$PLAN_TARGETS"
+          matched=()
+          for target in "${plan_targets[@]}"; do
+            if grep -qxF "$target" available-targets.txt; then
+              matched+=("$target")
+            fi
+          done
+
+          echo "plan targets : $PLAN_TARGETS"
+          echo "building     : velox ${matched[*]}"
+
+          # velox is the compile check, so it is built every time.
+          cmake --build "_build/$BUILD_TYPE" -j "$NJOBS" \
+            --target velox "${matched[@]}"
           ccache -s
 
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4

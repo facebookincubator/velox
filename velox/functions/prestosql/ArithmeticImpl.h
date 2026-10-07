@@ -17,9 +17,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <type_traits>
 #include "folly/CPortability.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/FloatingPointUtil.h"
+
+// CppToType is only reached from abs()'s overflow message. It pulls in the
+// runtime type system, which nvcc cannot parse, so device translation units
+// build the message without the type name instead.
+#ifndef __CUDACC__
+#include "velox/type/CppToType.h"
+#endif
 
 namespace facebook::velox::functions {
 
@@ -33,7 +44,7 @@ namespace facebook::velox::functions {
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-FOLLY_ALWAYS_INLINE TNum
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum
 round(const TNum& number, const TDecimals& decimals = 0) {
   static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
 
@@ -92,7 +103,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
 
 // This is used by Velox for floating points plus.
 template <typename T>
-T plus(const T a, const T b)
+VELOX_GPU_COMPATIBLE T plus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -104,7 +115,7 @@ T plus(const T a, const T b)
 
 // This is used by Velox for floating points minus.
 template <typename T>
-T minus(const T a, const T b)
+VELOX_GPU_COMPATIBLE T minus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -116,7 +127,7 @@ T minus(const T a, const T b)
 
 // This is used by Velox for floating points multiply.
 template <typename T>
-T multiply(const T a, const T b)
+VELOX_GPU_COMPATIBLE T multiply(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -128,7 +139,7 @@ T multiply(const T a, const T b)
 
 // This is used by Velox for floating points divide.
 template <typename T>
-T divide(const T& a, const T& b)
+VELOX_GPU_COMPATIBLE T divide(const T& a, const T& b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("float-divide-by-zero")))
@@ -141,7 +152,7 @@ T divide(const T& a, const T& b)
 
 // This is used by Velox for floating points modulus.
 template <typename T>
-T modulus(const T a, const T b) {
+VELOX_GPU_COMPATIBLE T modulus(const T a, const T b) {
   if (b == 0) {
     // Match Presto semantics
     return std::numeric_limits<T>::quiet_NaN();
@@ -150,17 +161,21 @@ T modulus(const T a, const T b) {
 }
 
 template <typename T>
-T negate(const T& arg) {
+VELOX_GPU_COMPATIBLE T negate(const T& arg) {
   T results = std::negate<std::remove_cv_t<T>>()(arg);
   return results;
 }
 
 template <typename T>
-T abs(const T& arg) {
+VELOX_GPU_COMPATIBLE T abs(const T& arg) {
   if constexpr (std::is_integral_v<T>) {
     if (arg == std::numeric_limits<T>::min()) {
+#ifdef __CUDACC__
+      VELOX_USER_FAIL("Value {} is out of range for abs()", arg);
+#else
       VELOX_USER_FAIL(
           "Value {} is out of range for abs({})", arg, CppToType<T>::name);
+#endif
     }
   }
   T results = std::abs(arg);
@@ -168,27 +183,30 @@ T abs(const T& arg) {
 }
 
 template <typename T>
-T floor(const T& arg) {
+VELOX_GPU_COMPATIBLE T floor(const T& arg) {
   T results = std::floor(arg);
   return results;
 }
 
 template <typename T>
-T ceil(const T& arg) {
+VELOX_GPU_COMPATIBLE T ceil(const T& arg) {
   T results = std::ceil(arg);
   return results;
 }
 
-FOLLY_ALWAYS_INLINE double truncate(double number, int32_t decimals) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double truncate(
+    double number,
+    int32_t decimals) {
   const bool decNegative = (decimals < 0);
-  const auto log10Size = DoubleUtil::kPowersOfTen.size(); // 309
+  const auto log10Size = DoubleUtil::kNumPowersOfTen; // 309
   if (decNegative && decimals <= -log10Size) {
     return 0.0;
   }
 
   const uint64_t absDec = std::abs(decimals);
-  const double tmp = (absDec < log10Size) ? DoubleUtil::kPowersOfTen[absDec]
-                                          : std::pow(10.0, (double)absDec);
+  const double tmp = (absDec < log10Size)
+      ? DoubleUtil::powerOfTen(static_cast<int32_t>(absDec))
+      : std::pow(10.0, (double)absDec);
 
   const double valueMulTmp = number * tmp;
   if (!decNegative && !std::isfinite(valueMulTmp)) {

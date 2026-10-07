@@ -49,7 +49,9 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    Corresponds to sparks's operator ``+``.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
+    Corresponds to Spark's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -81,7 +83,8 @@ Mathematical Functions
 .. function:: checked_add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``+`` with ``failOnError`` as true.
 
 .. function:: checked_div(x, y) -> bigint
 
@@ -103,7 +106,8 @@ Mathematical Functions
 .. function:: checked_subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -370,6 +374,25 @@ Mathematical Functions
         SELECT rand(0);    -- 0.7604953758285915
         SELECT rand(NULL); -- 0.7604953758285915
 
+.. spark:function:: randn() -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0). ::
+
+        SELECT randn(); -- -1.1750280342265669
+
+.. spark:function:: randn(seed) -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0) using a seed formed by combining user-specified
+    ``seed`` and the configuration `spark.partition_id`. The framework is
+    responsible for deterministic partitioning of the data and assigning unique
+    `spark.partition_id` to each thread (in a deterministic way).
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
+
+        SELECT randn(0);    -- 1.6034991609278433
+        SELECT randn(NULL); -- 1.6034991609278433
+
 .. spark:function:: random() -> double
 
     An alias for ``rand()``.
@@ -426,6 +449,8 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
@@ -451,9 +476,10 @@ Mathematical Functions
 .. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
 
     Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
-    When ``x`` is the minimum value of an integral type, returns the same value
-    as ``x`` following the behavior when Spark ANSI mode is disabled, and throws
-    an exception when Spark ANSI mode is enabled.
+    For integral inputs, negating the minimum value returns the same value when
+    Spark ANSI mode is disabled and throws an overflow exception when Spark
+    ANSI mode is enabled. For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
 
 .. spark:function:: unhex(x) -> varbinary
 

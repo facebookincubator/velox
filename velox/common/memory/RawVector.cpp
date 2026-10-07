@@ -15,32 +15,32 @@
  */
 
 #include "velox/common/memory/RawVector.h"
-#include <folly/Preprocessor.h>
+
 #include <numeric>
 
 namespace facebook::velox {
 
 namespace {
-raw_vector<int32_t> iotaData;
 
-bool initializeIota() {
-  iotaData.resize(1'000'000);
-  iotaData.resize(iotaData.capacity());
-  std::iota(iotaData.begin(), iotaData.end(), 0);
-  return true;
-}
+const raw_vector<int32_t> kIotaData = [] {
+  raw_vector<int32_t> v;
+  v.resize(1'000'000);
+  v.resize(v.capacity());
+  std::iota(v.begin(), v.end(), 0);
+  return v;
+}();
+
 } // namespace
 
 const int32_t*
 iota(int32_t size, raw_vector<int32_t>& storage, int32_t offset) {
-  if (iotaData.size() < offset + size) {
+  if (kIotaData.size() < offset + size) {
     storage.resize(size);
     std::iota(storage.begin(), storage.end(), offset);
     return storage.data();
   }
-  return iotaData.data() + offset;
-}
 
-static bool FB_ANONYMOUS_VARIABLE(g_iotaConstants) = initializeIota();
+  return kIotaData.data() + offset;
+}
 
 } // namespace facebook::velox

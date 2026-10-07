@@ -22,6 +22,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
@@ -419,7 +420,7 @@ TEST_F(ApproxPercentileAggregateTest, nonFlatPercentileArray) {
       BaseVector::wrapInDictionary(
           nullptr, indices, 3, makeFlatVector<double>({0, 0.5, 1})));
   auto rows = makeRowVector({
-      makeFlatVector<int32_t>(10, folly::identity),
+      makeFlatIdentityVector<int32_t>(10),
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
@@ -428,6 +429,36 @@ TEST_F(ApproxPercentileAggregateTest, nonFlatPercentileArray) {
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test Partial + Final aggregation with dictionary-wrapped intermediate arrays.
+TEST_F(ApproxPercentileAggregateTest, dictionaryWrappedIntermediateArrays) {
+  auto partial =
+      PlanBuilder()
+          .values({makeRowVector({makeFlatVector<int32_t>({1, 5, 9})})})
+          .partialAggregation({}, {"spark_approx_percentile(c0, 0.5)"})
+          .planNode();
+  auto partialResult = AssertQueryBuilder(partial).copyResults(pool());
+  auto state = partialResult->childAt(0)->as<RowVector>();
+
+  auto indices = makeIndicesInReverse(state->size());
+  auto children = state->children();
+  using Idx = ApproxPercentileIntermediateTypeChildIndex;
+  children[static_cast<int>(Idx::kItems)] = wrapInDictionary(
+      indices, state->size(), children[static_cast<int>(Idx::kItems)]);
+  children[static_cast<int>(Idx::kLevels)] = wrapInDictionary(
+      indices, state->size(), children[static_cast<int>(Idx::kLevels)]);
+  auto wrappedIntermediate = makeRowVector({makeRowVector(children)});
+
+  auto mergeExtract =
+      PlanBuilder()
+          .values({wrappedIntermediate})
+          .singleAggregation(
+              {}, {"spark_approx_percentile_merge_extract_integer(c0)"})
+          .planNode();
+  auto expectedResult =
+      makeRowVector({makeFlatVector(std::vector<int32_t>{5})});
+  AssertQueryBuilder(mergeExtract).assertResults(expectedResult);
 }
 
 // Test when all input values are NULL.

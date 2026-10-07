@@ -73,8 +73,19 @@ SortBuffer::SortBuffer(
     sortedSpillColumnNames.emplace_back(input->nameOf(i));
   }
 
+  // NOTE: do not enable 'useListRowIndex' here. It makes RowContainer::newRow()
+  // eagerly push each row pointer into a pool-backed 'rowPointers_' vector,
+  // which grows by doubling reallocation during input accumulation. Under
+  // memory pressure (e.g. a large/skewed OrderBy), that reallocation goes
+  // through memory arbitration (growCapacity) and can OOM in addInput -- the
+  // sort cannot spill its way out because the index is not spillable. The
+  // listRowsFast speedup is not worth this failure mode; listRows() falls back
+  // to scanning when the index is absent.
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, /*useListRowIndex=*/true, pool_);
+      sortedColumnTypes,
+      nonSortedColumnTypes,
+      /*useListRowIndex=*/false,
+      pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -156,6 +167,7 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
   if (numOutputRows_ == numInputRows_) {
+    releaseRows();
     return nullptr;
   }
   VELOX_CHECK_GT(maxOutputRows, 0);
@@ -170,6 +182,12 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
     getOutputWithoutSpill();
   }
   return std::move(output_);
+}
+
+void SortBuffer::releaseRows() {
+  data_->clear();
+  sortedRows_.clear();
+  sortedRows_.shrink_to_fit();
 }
 
 bool SortBuffer::hasSpilled() const {
@@ -429,7 +447,7 @@ void SortBuffer::getOutputWithSpill() {
     SpillMergeStream* stream = spillMerger_->next();
     VELOX_CHECK_NOT_NULL(stream);
 
-    spillSources_[outputSize] = &stream->current();
+    spillSources_[outputSize] = stream->current().get();
     spillSourceRows_[outputSize] = stream->currentIndex(&isEndOfBatch);
     ++outputSize;
     if (FOLLY_UNLIKELY(isEndOfBatch)) {

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,7 +24,7 @@
 #include "velox/exec/BlockingReason.h"
 #include "velox/exec/DriverStats.h"
 #include "velox/exec/OperatorStats.h"
-#include "velox/exec/OutputBuffer.h"
+#include "velox/exec/OutputBufferStats.h"
 
 namespace facebook::velox::exec {
 
@@ -74,8 +75,8 @@ struct TaskStats {
   /// Epoch time (ms) when task starts to run
   uint64_t executionStartTimeMs{0};
 
-  /// Epoch time (ms) when last split is processed. For some tasks there might
-  /// be some additional time to send buffered results before the task finishes.
+  /// Epoch time (ms) when execution completes, before buffered results are
+  /// consumed. Set on termination if execution has not completed.
   uint64_t executionEndTimeMs{0};
 
   /// Epoch time (ms) when first split is fetched from the task by an operator.
@@ -115,7 +116,7 @@ struct TaskStats {
   bool outputBufferOverutilized{false};
 
   /// Output buffer stats if present.
-  std::optional<OutputBuffer::Stats> outputBufferStats;
+  std::optional<OutputBufferStats> outputBufferStats;
 
   /// The longest still running operator call in "op::call" format.
   std::string longestRunningOpCall;

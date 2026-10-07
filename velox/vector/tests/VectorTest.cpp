@@ -1350,9 +1350,7 @@ TEST_F(VectorTest, copyFromAllNulls) {
   };
 
   // Copy to BIGINT.
-  test([&]() {
-    return makeFlatVector<int64_t>(size, [](auto row) { return row; });
-  });
+  test([&]() { return makeFlatIdentityVector<int64_t>(size); });
 
   // Copy to BOOLEAN.
   test([&]() {
@@ -1407,9 +1405,7 @@ TEST_F(VectorTest, copyFromUnknown) {
   };
 
   // Copy to BIGINT.
-  test([&]() {
-    return makeFlatVector<int64_t>(size, [](auto row) { return row; });
-  });
+  test([&]() { return makeFlatIdentityVector<int64_t>(size); });
 
   // Copy to BOOLEAN.
   test([&]() {
@@ -1440,7 +1436,7 @@ TEST_F(VectorTest, copyFromUnknown) {
   // Copy to ROW.
   test([&]() {
     return makeRowVector({
-        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(size),
         makeFlatVector<double>(size, [](auto row) { return row * 0.1; }),
     });
   });
@@ -2179,8 +2175,7 @@ TEST_F(VectorTest, multipleDictionariesOverLazy) {
       pool(),
       INTEGER(),
       size,
-      std::make_unique<TestingLoader>(
-          makeFlatVector<int32_t>(size, [](auto row) { return row; })));
+      std::make_unique<TestingLoader>(makeFlatIdentityVector<int32_t>(size)));
 
   auto dict = BaseVector::wrapInDictionary(
       nullptr,
@@ -2199,7 +2194,7 @@ TEST_F(VectorTest, selectiveLoadingOfLazyDictionaryNested) {
   vector_size_t size = 10;
   auto indices =
       makeIndices(size, [&](auto row) { return (row % 2 == 0) ? row : 0; });
-  auto data = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto data = makeFlatIdentityVector<int32_t>(size);
 
   auto loader = std::make_unique<TestingLoader>(data);
   auto loaderPtr = loader.get();
@@ -2234,8 +2229,7 @@ TEST_F(VectorTest, nestedLazy) {
         pool(),
         INTEGER(),
         size,
-        std::make_unique<TestingLoader>(
-            makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+        std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   };
   auto lazy = makeLazy();
   auto dict = BaseVector::wrapInDictionary(
@@ -2276,8 +2270,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       pool(),
       INTEGER(),
       size,
-      std::make_unique<TestingLoader>(
-          makeFlatVector<int64_t>(size, [](auto row) { return row; })));
+      std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
   auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
@@ -3261,7 +3254,7 @@ TEST_F(VectorTest, containsNullAtStructs) {
 }
 
 TEST_F(VectorTest, mutableValues) {
-  auto vector = makeFlatVector<int64_t>(1'000, [](auto row) { return row; });
+  auto vector = makeFlatIdentityVector<int64_t>(1'000);
 
   auto* rawValues = vector->rawValues();
   vector->mutableValues();
@@ -4060,7 +4053,7 @@ TEST_F(VectorTest, ensureNullRowsEmpty) {
 }
 
 TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
-  auto iota = makeFlatVector<int64_t>(10, folly::identity);
+  auto iota = makeFlatIdentityVector<int64_t>(10);
   auto output = RowVector::pushDictionaryToRowVectorLeaves(iota);
   ASSERT_EQ(output, iota);
 
@@ -4149,6 +4142,25 @@ TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
     ASSERT_EQ(c0c0->encoding(), VectorEncoding::Simple::DICTIONARY);
     auto& c0c1 = c0->childAt(1);
     ASSERT_EQ(c0c1->encoding(), VectorEncoding::Simple::DICTIONARY);
+  }
+  {
+    SCOPED_TRACE("Struct with own nulls under null-free dictionary");
+    // A null-free dictionary (e.g. row selection during deletion) wraps a
+    // RowVector whose child struct carries its OWN nulls -- not wrapper nulls.
+    // The struct's nulls must be re-indexed through the dictionary so they
+    // align with the wrapped rows; otherwise they stay at the pre-dictionary
+    // row positions and the output is wrong.
+    input = wrapInDictionary(
+        makeIndicesInReverse(10),
+        makeRowVector({
+            makeRowVector({iota, iota}, nullEvery(4)),
+        }));
+    output = RowVector::pushDictionaryToRowVectorLeaves(input);
+    test::assertEqualVectors(input, output);
+    auto* c0 =
+        output->asChecked<RowVector>()->childAt(0)->asChecked<RowVector>();
+    ASSERT_EQ(c0->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+    ASSERT_EQ(c0->childAt(1)->encoding(), VectorEncoding::Simple::DICTIONARY);
   }
   {
     SCOPED_TRACE("Constant");
@@ -4317,6 +4329,41 @@ TEST_F(VectorTest, estimateFlatSize) {
   EXPECT_NE(originalSize, flatSize);
   // Test that the second call to prepareForReuse will not cause crash
   arrayVector->prepareForReuse();
+}
+
+TEST_F(VectorTest, unsafeSetPoolDoesNotTransferBuffersOrChildren) {
+  auto sourceRoot = memory::memoryManager()->addRootPool("source");
+  auto sourcePool = sourceRoot->addLeafChild("source leaf");
+  auto destinationRoot = memory::memoryManager()->addRootPool("destination");
+  auto destinationPool = destinationRoot->addLeafChild("destination leaf");
+
+  test::VectorMaker maker{sourcePool.get()};
+  auto child = maker.flatVector<int64_t>({1, 2});
+  auto vector = std::make_shared<RowVector>(
+      sourcePool.get(),
+      ROW({"c0"}, {BIGINT()}),
+      allocateNulls(2, sourcePool.get()),
+      2,
+      std::vector<VectorPtr>{child});
+
+  const auto nulls = vector->nulls();
+  const auto values = child->values();
+  vector->unsafeSetPool(destinationPool.get());
+
+  EXPECT_EQ(vector->pool(), destinationPool.get());
+  EXPECT_EQ(vector->nulls(), nulls);
+  EXPECT_EQ(vector->nulls()->pool(), sourcePool.get());
+  EXPECT_EQ(vector->childAt(0), child);
+  EXPECT_EQ(child->pool(), sourcePool.get());
+  EXPECT_EQ(child->values(), values);
+  EXPECT_EQ(child->values()->pool(), sourcePool.get());
+
+  // Holding a reference makes the existing nulls buffer non-unique, forcing
+  // appendNulls() to allocate a replacement from the reset pool.
+  vector->appendNulls(1);
+  EXPECT_EQ(vector->nulls()->pool(), destinationPool.get());
+  EXPECT_EQ(nulls->pool(), sourcePool.get());
+  EXPECT_EQ(child->pool(), sourcePool.get());
 }
 
 #pragma GCC diagnostic push

@@ -102,6 +102,16 @@ class SimpleAggregateAdapter : public Aggregate {
   struct accumulator_is_fixed_size<T, std::void_t<decltype(T::is_fixed_size_)>>
       : std::integral_constant<bool, T::is_fixed_size_> {};
 
+  // Assume most aggregate functions produce state that is smaller than their
+  // input. Functions whose state generally grows with input cardinality should
+  // overwrite `is_reducing_`.
+  template <typename T, typename = void>
+  struct aggregate_is_reducing : std::true_type {};
+
+  template <typename T>
+  struct aggregate_is_reducing<T, std::void_t<decltype(T::is_reducing_)>>
+      : std::integral_constant<bool, T::is_reducing_> {};
+
   // Assume most aggregate functions have default null behavior, i.e., ignoring
   // rows that have null values in raw input and intermediate results, and
   // returning null for groups of no input rows or only null rows.
@@ -213,6 +223,19 @@ class SimpleAggregateAdapter : public Aggregate {
           std::declval<const TypePtr&>(),
           std::declval<const core::QueryConfig&>()))>> : std::true_type {};
 
+  // Whether the function defines setConstantInputs(). AggregateInfo discovers
+  // constant arguments after the aggregate is constructed and calls
+  // Aggregate::setConstantInputs() once before processing input rows. The
+  // adapter forwards that hook to simple aggregates that opt in.
+  template <typename T, typename = void>
+  struct support_set_constant_inputs : std::false_type {};
+
+  template <typename T>
+  struct support_set_constant_inputs<
+      T,
+      std::void_t<decltype(std::declval<T&>().setConstantInputs(
+          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
+
   // Whether the accumulator requires aligned access. If it is defined,
   // SimpleAggregateAdapter::accumulatorAlignmentSize() returns
   // alignof(typename FUNC::AccumulatorType).
@@ -231,6 +254,9 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool accumulator_is_fixed_size_ =
       accumulator_is_fixed_size<typename FUNC::AccumulatorType>::value;
 
+  static constexpr bool aggregate_is_reducing_ =
+      aggregate_is_reducing<FUNC>::value;
+
   static constexpr bool accumulator_use_external_memory_ =
       accumulator_use_external_memory<typename FUNC::AccumulatorType>::value;
 
@@ -248,8 +274,15 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool accumulator_is_aligned_ =
       accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
 
+  static constexpr bool support_set_constant_inputs_ =
+      support_set_constant_inputs<FUNC>::value;
+
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
+  }
+
+  bool isReducing() const override {
+    return aggregate_is_reducing_;
   }
 
   bool accumulatorUsesExternalMemory() const override {
@@ -265,6 +298,15 @@ class SimpleAggregateAdapter : public Aggregate {
       return alignof(typename FUNC::AccumulatorType);
     }
     return Aggregate::accumulatorAlignmentSize();
+  }
+
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override {
+    if constexpr (support_set_constant_inputs_) {
+      fn_->setConstantInputs(constantInputs);
+    } else {
+      Aggregate::setConstantInputs(constantInputs);
+    }
   }
 
   // Add raw input to accumulators. If the simple aggregation function has

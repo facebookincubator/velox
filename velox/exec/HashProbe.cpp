@@ -33,6 +33,22 @@ namespace {
 
 // Batch size used when iterating the row container.
 constexpr int kBatchSize = 1024;
+
+template <typename T>
+int64_t applyBloomFilter(
+    const common::BigintValuesUsingBloomFilter& filter,
+    const DecodedVector& decoded,
+    SelectivityVector& rows) {
+  int64_t numAccepted = 0;
+  rows.applyToSelected([&](vector_size_t row) {
+    if (filter.testInt64(decoded.valueAt<T>(row))) {
+      ++numAccepted;
+    } else {
+      rows.setValid(row, false);
+    }
+  });
+  return numAccepted;
+}
 } // namespace
 
 // static
@@ -125,6 +141,8 @@ HashProbe::HashProbe(
               ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
@@ -136,9 +154,18 @@ HashProbe::HashProbe(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
+      bypassBloomFilterMinRows_{
+          driverCtx->queryConfig().bypassHashProbeBloomFilterMinRows()},
+      bypassBloomFilterMinPct_{
+          driverCtx->queryConfig().bypassHashProbeBloomFilterMinPct()},
+      bypassBloomFilter_{
+          bypassBloomFilterMinRows_ <= 0 || bypassBloomFilterMinPct_ <= 0},
       filterResult_(1),
       outputTableRowsCapacity_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
+  VELOX_USER_CHECK_GE(bypassBloomFilterMinRows_, 0);
+  VELOX_USER_CHECK_GE(bypassBloomFilterMinPct_, 0);
+  VELOX_USER_CHECK_LE(bypassBloomFilterMinPct_, 100);
 }
 
 void HashProbe::initialize() {
@@ -400,6 +427,19 @@ void HashProbe::pushdownDynamicFilters() {
           if (!hashProbeStringDynamicFilterPushdownEnabled) {
             return false;
           }
+          // A custom logical type may have a connector-specific physical
+          // representation that differs from its in-memory representation, so
+          // generic code here cannot assume the two are byte-equivalent. A
+          // pushed-down filter is evaluated by the scan against the physical
+          // bytes, so producing one from in-memory values could drop matching
+          // rows. Skip the filter and let the hash join do the matching; this
+          // costs an optimization, not correctness.
+          // TODO: Restore pushdown for VARCHAR/VARBINARY-backed custom types
+          // whose connector physical representation is known to match the
+          // in-memory one, rather than skipping every custom type.
+          if (customTypeExists(hasher.type()->name())) {
+            return false;
+          }
         }
         filter = hasher.getFilter(false);
         if (!filter) {
@@ -428,6 +468,74 @@ void HashProbe::pushdownDynamicFilters() {
       tableOutputProjections_.empty() && !filter_ && numFilters > 0 &&
       !table_->hashers()[0]->getBloomFilter() && !isRightJoin(joinType_)) {
     canReplaceWithDynamicFilter_ = true;
+  }
+}
+
+void HashProbe::applyBloomFilterForJoinProbe() {
+  // TODO: Add Bloom filter support for full joins.
+  if (bypassBloomFilter_ || nullAware_ || isSpillInput() ||
+      needToSpillInput() ||
+      !(isLeftJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+        isAntiJoin(joinType_))) {
+    return;
+  }
+
+  bool hasBloomFilter = false;
+  for (const auto& hasher : table_->hashers()) {
+    if (hasher->getBloomFilter()) {
+      hasBloomFilter = true;
+      break;
+    }
+  }
+  if (!hasBloomFilter) {
+    bypassBloomFilter_ = true;
+    return;
+  }
+
+  const int64_t numTested = activeRows_.countSelected();
+  int64_t numAccepted = numTested;
+  const bool isSampling = bloomFilterSampledRows_ < bypassBloomFilterMinRows_;
+  for (auto i = 0; i < hashers_.size(); ++i) {
+    const auto& filter = table_->hashers()[i]->getBloomFilter();
+    if (!filter) {
+      continue;
+    }
+    const auto* bloomFilter =
+        checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
+            filter.get());
+    const auto& decoded = hashers_[i]->decodedVector();
+    switch (hashers_[i]->typeKind()) {
+      case TypeKind::INTEGER:
+        numAccepted =
+            applyBloomFilter<int32_t>(*bloomFilter, decoded, activeRows_);
+        break;
+      case TypeKind::BIGINT:
+        numAccepted =
+            applyBloomFilter<int64_t>(*bloomFilter, decoded, activeRows_);
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+  activeRows_.updateBounds();
+
+  if (isSampling) {
+    bloomFilterSampledRows_ += numTested;
+    bloomFilterSampleAcceptedRows_ += numAccepted;
+    if (bloomFilterSampledRows_ >= bypassBloomFilterMinRows_) {
+      bypassBloomFilter_ = bloomFilterSampleAcceptedRows_ * 100 >=
+          bloomFilterSampledRows_ * bypassBloomFilterMinPct_;
+      if (bypassBloomFilter_) {
+        addRuntimeStat(std::string(kBloomFilterBypassed), RuntimeCounter(1));
+      }
+    }
+  }
+
+  if (numTested > 0) {
+    addRuntimeStat(
+        std::string(kBloomFilterTestedRows), RuntimeCounter(numTested));
+    addRuntimeStat(
+        std::string(kBloomFilterAcceptedRows), RuntimeCounter(numAccepted));
   }
 }
 
@@ -486,7 +594,7 @@ void HashProbe::asyncWaitForHashTable() {
        isCountingLeftSemiFilterJoin(joinType_) ||
        isRightSemiFilterJoin(joinType_) ||
        (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
-       isRightJoin(joinType_)) &&
+       isRightJoin(joinType_) || isRightAntiJoin(joinType_)) &&
       table_->hashMode() != BaseHashTable::HashMode::kHash && !isSpillInput() &&
       operatorCtx_->driverCtx()
           ->queryConfig()
@@ -553,8 +661,7 @@ std::vector<HashProbe*> HashProbe::findPeerOperators() {
   std::vector<HashProbe*> probeOps;
   probeOps.reserve(operators.size());
   for (auto* op : operators) {
-    auto* probeOp = dynamic_cast<HashProbe*>(op);
-    probeOps.push_back(probeOp);
+    probeOps.push_back(op->as<HashProbe>());
   }
   return probeOps;
 }
@@ -772,6 +879,9 @@ void HashProbe::addInput(RowVectorPtr input) {
         activeRows_.size() - activeRows_.countSelected();
   }
 
+  // Remove proven misses before probing the hash table.
+  applyBloomFilterForJoinProbe();
+
   table_->prepareForJoinProbe(*lookup_.get(), input_, activeRows_, false);
 
   if (joinIncludesMissesFromLeft(joinType_)) {
@@ -925,7 +1035,7 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
           outputTableRows);
 
     } else {
-      // Must be a right join or full join.
+      // Must be a right, full, or right anti join.
       numOut = table_->listNotProbedRows(
           lastProbeIterator_,
           buildSideOutputRowContainerId_,
@@ -994,7 +1104,8 @@ bool HashProbe::needLastProbe() const {
 bool HashProbe::skipProbeOnEmptyBuild() const {
   return isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
       isCountingLeftSemiFilterJoin(joinType_) || isRightJoin(joinType_) ||
-      isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_);
+      isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_) ||
+      isRightAntiJoin(joinType_);
 }
 
 bool HashProbe::canSpill() const {
@@ -1276,7 +1387,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          preferredOutputBatchBytes_);
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1320,9 +1431,10 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       table_->rows()->setProbedFlag(outputTableRows, numOut);
     }
 
-    // Right semi join only returns the build side output when the probe side
-    // is fully complete. Do not return anything here.
-    if (isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_)) {
+    // Right semi and right anti joins only return the build side output when
+    // the probe side is fully complete. Do not return anything here.
+    if (isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_) ||
+        isRightAntiJoin(joinType_)) {
       if (resultIter_->atEnd()) {
         input_ = nullptr;
       }
@@ -1868,7 +1980,7 @@ void HashProbe::noMoreInputInternal() {
   }
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
 
   // Reset flags about outputting build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
@@ -1884,12 +1996,10 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
+  if (!operatorCtx_->allPeersFinished(
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peerOperators)) {
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -1964,10 +2074,7 @@ void HashProbe::ensureOutputFits() {
   }
 
   const uint64_t bytesToReserve = static_cast<uint64_t>(
-      static_cast<double>(operatorCtx_->driverCtx()
-                              ->queryConfig()
-                              .preferredOutputBatchBytes()) *
-      1.2);
+      static_cast<double>(preferredOutputBatchBytes_) * 1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }
@@ -2288,14 +2395,15 @@ void HashProbe::spillOutput() {
       outputSpiller->spill(SpillPartitionId(0), output);
       continue;
     }
-    // NOTE: for right semi join types, we need to check if 'input_' has been
-    // cleared or not instead of checking on output. The right semi joins only
-    // producing the output after processing all the probe inputs.
+    // NOTE: for right semi and right anti join types, we need to check if
+    // 'input_' has been cleared or not instead of checking on output. These
+    // joins only produce the output after processing all the probe inputs.
     if (input_ == nullptr) {
       break;
     }
     VELOX_CHECK(
-        isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_));
+        isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_) ||
+        isRightAntiJoin(joinType_));
     VELOX_CHECK((output == nullptr) && (input_ != nullptr));
   }
   VELOX_CHECK_LE(outputSpiller->state().spilledPartitionIdSet().size(), 1);

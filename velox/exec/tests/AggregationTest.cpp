@@ -37,6 +37,7 @@
 #include "velox/exec/prefixsort/PrefixSortEncoder.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -607,6 +608,140 @@ TEST_F(AggregationTest, global) {
       "SELECT sum(15), sum(c1), sum(c2), sum(c4), sum(c5), "
       "min(15), min(c1), min(c2), min(c3), min(c4), min(c5), "
       "max(15), max(c1), max(c2), max(c3), max(c4), max(c5), sum(1) FROM tmp");
+}
+
+TEST_F(AggregationTest, combineGlobalPartial) {
+  core::PlanNodeId partialAggregationId;
+  auto makePlan = [&](std::initializer_list<VectorPtr> input,
+                      const std::vector<std::string>& aggregates) {
+    PlanBuilder builder;
+    builder.values({makeRowVector(input)}, /*parallelizable=*/true)
+        .partialAggregation({}, aggregates)
+        .capturePlanNodeId(partialAggregationId)
+        .localPartition({})
+        .finalAggregation();
+    return builder;
+  };
+
+  auto run = [&](const PlanBuilder& builder,
+                 std::initializer_list<Variant> expected) {
+    auto task = AssertQueryBuilder(builder.planNode())
+                    .maxDrivers(4)
+                    .assertResults(expected);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(partialAggregationId);
+    EXPECT_EQ(stats.numDrivers, 4);
+    return stats.outputRows;
+  };
+
+  {
+    SCOPED_TRACE("fixed-width state");
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatVector<int64_t>({1, 2, 3, 4})},
+                {"sum(c0)", "count(c0)"}),
+            {Variant(int64_t{40}), Variant(int64_t{16})}));
+  }
+
+  {
+    SCOPED_TRACE("fixed-width state over empty input");
+    EXPECT_EQ(
+        1,
+        run(makePlan({makeFlatVector<int64_t>({})}, {"sum(c0)", "count(c0)"}),
+            {Variant::null(TypeKind::BIGINT), Variant(int64_t{0})}));
+  }
+
+  {
+    SCOPED_TRACE("compacting variable-width state");
+    const auto value = std::string(1'024, 'a');
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100),
+                 makeConstant(value, 100)},
+                {"min(c1)", "sum(c0)"}),
+            {Variant(value), Variant(int64_t{19'800})}));
+  }
+
+  {
+    const auto maps = makeMapVector<int64_t, int64_t>(
+        100,
+        [](auto /*row*/) { return 1; },
+        [](auto row) { return row; },
+        [](auto row) { return row; });
+    for (const auto& [aggregate, expectedCardinality] :
+         std::vector<std::pair<std::string, int64_t>>{
+             {"array_agg(c0)", 400},
+             {"set_agg(c0)", 100},
+             {"map_agg(c0, c0)", 100},
+             {"multimap_agg(c0, c0)", 100},
+             {"map_union(c1)", 100},
+             {"map_union_sum(c1)", 100},
+         }) {
+      SCOPED_TRACE(aggregate);
+      EXPECT_EQ(
+          4,
+          run(makePlan(
+                  {makeFlatIdentityVector<int64_t>(100), maps}, {aggregate})
+                  .project({"cardinality(a0)"}),
+              {Variant(expectedCardinality)}));
+    }
+  }
+
+  {
+    SCOPED_TRACE("mixed reducing and non-reducing states");
+    EXPECT_EQ(
+        4,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100)},
+                {"sum(c0)", "array_agg(c0)"})
+                .project({"a0", "cardinality(a1)"}),
+            {Variant(int64_t{19'800}), Variant(int64_t{400})}));
+  }
+
+  {
+    SCOPED_TRACE("peer-specific intermediate metadata");
+    // Each driver sees a constant buckets argument, but the values differ
+    // across drivers. Combining partial states must preserve the global
+    // constant-argument validation and reject the query.
+    auto plan =
+        PlanBuilder()
+            .values({makeRowVector({
+                makeFlatVector<int64_t>({1, 2, 3, 4}),
+                makeConstant<int64_t>(1, 4),
+                makeConstant<int64_t>(31, 4),
+            })})
+            .localPartitionRoundRobinRow()
+            .partialAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
+            .localPartition({})
+            .finalAggregation()
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()),
+        "Buckets argument must be constant for all input rows");
+  }
+}
+
+DEBUG_ONLY_TEST_F(AggregationTest, combineGlobalPartialWithTaskAbort) {
+  // Aborting the task closes the drivers waiting for the last one to merge
+  // their states. The merge must not read a closed peer.
+  auto plan = PlanBuilder()
+                  .values(
+                      {makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})})},
+                      /*parallelizable=*/true)
+                  .partialAggregation({}, {"sum(c0)"})
+                  .localPartition({})
+                  .finalAggregation()
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      std::function<void(Operator*)>(
+          [](Operator* op) { op->operatorCtx()->task()->requestAbort(); }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()), "Aborted");
 }
 
 TEST_F(AggregationTest, manyGlobalAggregations) {
@@ -2717,6 +2852,37 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
+// Sorted aggregation where the input batch is split at a pre-grouped key
+// boundary. The grouping set processes only the rows up to the boundary and
+// defers the rest, so 'groups' has entries for those rows only. The sorted
+// aggregation must not look at the rest.
+TEST_F(AggregationTest, sortedAggregationWithPreGroupedKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 10, 20, 10, 20}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .aggregation(
+                      {"c0", "c1"},
+                      /*preGroupedKeys=*/{"c0"},
+                      {"array_agg(c2 ORDER BY c2)"},
+                      /*masks=*/{},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false)
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 10, 20, 10, 20}),
+      makeArrayVector<int64_t>({{1}, {2}, {3}, {4}, {5}, {6}}),
+  });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(AggregationTest, adaptiveOutputBatchRows) {
   int32_t defaultOutputBatchRows = 10;
   vector_size_t size = defaultOutputBatchRows * 5;
@@ -3839,6 +4005,18 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
 
   assertQuery(
       plan, "SELECT c0, sum(DISTINCT 1), count(c1) FROM tmp GROUP BY c0");
+
+  // All-constant distinct inputs together with an accumulator that uses
+  // external memory.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "cast(c0 as varchar) as name"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)", "arbitrary(name)"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3), arbitrary(CAST(c0 AS VARCHAR)) FROM tmp GROUP BY c0");
 
   // Global aggregation with constant distinct input.
   plan = PlanBuilder()
@@ -5231,5 +5409,130 @@ TEST_F(AggregationTest, barrierExecutionSpillEnabledAggregationUnsupported) {
               HiveConnectorTestBase::makeHiveConnectorSplit(file->getPath()))
           .copyResults(pool()),
       "Barrier drain is not supported for spilled hash aggregation");
+}
+
+// Regression test for the distinct-mode buffer: a partial distinct aggregation
+// stores the input batch in input_ whenever the batch produced new groups, and
+// emits those groups from the following getOutput(). Distinct output is
+// produced purely incrementally -- there is no final table scan when nothing
+// spilled -- so a batch whose input_ is overwritten before it is drained loses
+// its rows permanently. Every key is unique, so a correct run emits exactly one
+// row per input row.
+TEST_F(AggregationTest, distinctNoRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so a correct distinct aggregation emits
+  // exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .partialAggregation({"c0"}, {})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
+// Regression test for the abandoned-partial-aggregation buffer: once a partial
+// aggregation gives up (too little reduction at the memory ceiling), addInput()
+// stops aggregating and just parks the batch in input_ for getOutput() to pass
+// through via toIntermediate(). Capping both the partial and the extended
+// partial aggregation memory forces that state. Every key is unique, so the
+// aggregation is 1:1 both before and after it is abandoned, and a correct run
+// emits exactly one row per input row.
+TEST_F(
+    AggregationTest,
+    abandonedPartialAggNoRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so the aggregation is 1:1 both before and
+  // after it is abandoned and must emit exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(QueryConfig::kMaxPartialAggregationMemory, "4096")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
+          .copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
+// Regression test for duplicate keys with spilling merge enabled:
+// The first spill file contains 100 aggregate states. The next two files
+// each contain one state for key 100, pre-merge combines them into one stream
+// containing consecutive duplicate keys: [100, 100].
+TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
+  const std::vector<RowVectorPtr> inputs{
+      makeRowVector({
+          makeFlatVector<int64_t>(100, [](vector_size_t row) { return row; }),
+          makeFlatVector<int64_t>(
+              100, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+  };
+  createDuckDbTable(inputs);
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(spillDirectory->getPath())
+      .config(QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kAggregationSpillEnabled, true)
+      // Force a batch boundary at the transition from key 99 to key 100.
+      .config(QueryConfig::kMaxOutputBatchRows, "100")
+      .config(QueryConfig::kSpillNumPartitionBits, "0")
+      .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+      .maxDrivers(1)
+      .plan(
+          PlanBuilder()
+              .values(inputs)
+              .singleAggregation({"c0"}, {"sum(c1)"})
+              .planNode())
+      .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 }
 } // namespace facebook::velox::exec::test

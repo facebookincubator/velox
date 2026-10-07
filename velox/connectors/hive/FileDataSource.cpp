@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "velox/common/Casts.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
@@ -33,129 +34,29 @@ namespace facebook::velox::connector::hive {
 
 namespace {
 
-inline void addIoCounterMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert({key, RuntimeMetric(counter.count())});
-  }
-}
-
-inline void addIoCounterMetric(
-    uint64_t value,
-    const std::string& key,
-    RuntimeCounter::Unit unit,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (value > 0) {
-    res.insert({key, RuntimeMetric(value, unit)});
-  }
-}
-
-inline void addIoStatsMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    RuntimeCounter::Unit unit,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert(
-        {key,
-         RuntimeMetric(
-             saturateCast(counter.sum()),
-             counter.count(),
-             saturateCast(counter.min()),
-             saturateCast(counter.max()),
-             unit)});
-  }
-}
-
-inline void addIoLatencyMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert(
-        {key,
-         RuntimeMetric(
-             saturateCast(counter.sum() * 1'000),
-             counter.count(),
-             saturateCast(counter.min() * 1'000),
-             saturateCast(counter.max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-}
-
-void addIoStatsToRuntimeStats(
+void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
-    std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& res) {
-  auto key = [&](std::string_view name) {
-    return prefix.empty() ? std::string(name)
-                          : fmt::format("{}.{}", prefix, name);
-  };
-
-  addIoLatencyMetric(
-      ioStats.queryThreadIoLatencyUs(), key(Connector::kIoWaitWallNanos), res);
-  addIoLatencyMetric(
-      ioStats.storageReadLatencyUs(),
-      key(Connector::kStorageReadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.ssdCacheReadLatencyUs(),
-      key(Connector::kSsdCacheReadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.cacheWaitLatencyUs(), key(Connector::kCacheWaitWallNanos), res);
-  addIoLatencyMetric(
-      ioStats.coalescedSsdLoadLatencyUs(),
-      key(Connector::kCoalescedSsdLoadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.coalescedStorageLoadLatencyUs(),
-      key(Connector::kCoalescedStorageLoadWallNanos),
-      res);
-
-  addIoCounterMetric(
-      ioStats.prefetch(), key(FileDataSource::kNumPrefetch), res);
-  addIoStatsMetric(
-      ioStats.prefetch(),
-      key(FileDataSource::kPrefetchBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(
-      ioStats.totalScanTimeNs(),
-      key(FileDataSource::kTotalScanTime),
-      RuntimeCounter::Unit::kNanos,
-      res);
-  addIoCounterMetric(
-      ioStats.rawOverreadBytes(),
-      key(FileDataSource::kOverreadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-
-  addIoStatsMetric(
-      ioStats.read(),
-      key(FileDataSource::kStorageReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(
-      ioStats.ssdRead(), key(FileDataSource::kNumLocalRead), res);
-  addIoStatsMetric(
-      ioStats.ssdRead(),
-      key(FileDataSource::kLocalReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(ioStats.ramHit(), key(FileDataSource::kNumRamRead), res);
-  addIoStatsMetric(
-      ioStats.ramHit(),
-      key(FileDataSource::kRamReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoStatsMetric(
-      ioStats.readGap(),
-      key(FileDataSource::kReadGapBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
+  for (const auto& [operation, counters] : ioStats.operationStats()) {
+    // Capturing a structured binding is legal in C++20, but clang-15 predates
+    // P1091 and rejects it, and the OSS Ubuntu debug job builds with clang-15.
+    const auto& operationName = operation;
+    const auto add = [&](std::string_view counter, uint64_t value) {
+      if (value == 0) {
+        return;
+      }
+      res[fmt::format("storage.{}.{}", operationName, counter)] =
+          RuntimeMetric(value, RuntimeCounter::Unit::kNone);
+    };
+    add("requestCount", counters.requestCount);
+    add("localThrottleCount", counters.localThrottleCount);
+    add("globalThrottleCount", counters.globalThrottleCount);
+    add("resourceThrottleCount", counters.resourceThrottleCount);
+    add("retryCount", counters.retryCount);
+    // Cumulative across requests, so consumers must divide by requestCount to
+    // recover a per-request mean.
+    add("latencyInMs", counters.latencyInMs);
+  }
 }
 
 } // namespace
@@ -525,7 +426,24 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
-  readerOutputType_ = splitReader_->readerOutputType();
+
+  auto splitReaderOutputType = splitReader_->readerOutputType();
+  if (readerProducedType_ != nullptr &&
+      splitReaderOutputType->size() > readerProducedType_->size()) {
+    // The split reader appended columns, e.g. an unselected Iceberg
+    // equality-delete or lineage column. next() allocates the output from
+    // 'readerProducedType_', so it has to grow by the same columns.
+    auto names = readerProducedType_->names();
+    auto types = readerProducedType_->children();
+    for (auto i = readerProducedType_->size();
+         i < splitReaderOutputType->size();
+         ++i) {
+      names.push_back(splitReaderOutputType->nameOf(i));
+      types.push_back(splitReaderOutputType->childAt(i));
+    }
+    readerProducedType_ = ROW(std::move(names), std::move(types));
+  }
+  readerOutputType_ = std::move(splitReaderOutputType);
 }
 
 std::optional<RowVectorPtr> FileDataSource::next(
@@ -629,17 +547,29 @@ void FileDataSource::addDynamicFilter(
 }
 
 void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
+  // Bytes are read when the reader loads a stripe, which for small files is
+  // entirely inside addSplit() and for large ones is spread across next()
+  // calls. Reporting the delta since the previous event captures them either
+  // way; a window around a single next() would not.
+  const uint64_t totalStorageReadBytes = dataIoStats_->read().sum();
+  const uint64_t storageReadBytesDelta =
+      totalStorageReadBytes - lastEventStorageReadBytes_;
+  lastEventStorageReadBytes_ = totalStorageReadBytes;
   if (!scanBatchCallback_) {
     return;
   }
   FileScanBatchEvent fileEvent;
   fileEvent.numRows = event.numRows;
   fileEvent.wallTimeMicros = event.wallTimeMicros;
+  fileEvent.planNodeId = event.planNodeId;
+  fileEvent.storageReadBytes = storageReadBytesDelta;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();
+    fileEvent.dbName = tableHandle_->dbName();
   }
   if (split_) {
     fileEvent.filePath = split_->filePath;
+    fileEvent.fileFormat = split_->fileFormat;
     if (!split_->partitionKeys.empty()) {
       fileEvent.partitionKeys = &split_->partitionKeys;
     }
@@ -650,8 +580,8 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
-  addIoStatsToRuntimeStats(*dataIoStats_, "", res);
-  addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
+  io::addIoStatsToRuntimeStats(*dataIoStats_, "", res);
+  io::addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
       {{std::string(Connector::kTotalRemainingFilterTime),
         RuntimeMetric(
@@ -673,6 +603,8 @@ FileDataSource::getRuntimeStats() {
       res.emplace(key, value);
     }
   }
+
+  addOperationStatsToRuntimeStats(*dataIoStats_, res);
   return res;
 }
 

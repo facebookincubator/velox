@@ -115,6 +115,12 @@ class DataBufferHolder {
     return size_;
   }
 
+  /// Returns the maximum size of a single page buffer, i.e. the compression
+  /// block size.
+  uint64_t maxSize() const {
+    return maxSize_;
+  }
+
   /// Tries to resize the buffer. Returned buffer follows below rules
   /// - size() == capacity()
   /// - size() >= min buffer size + header size

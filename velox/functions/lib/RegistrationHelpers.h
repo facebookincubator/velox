@@ -21,79 +21,106 @@ namespace facebook::velox::functions {
 namespace {
 
 template <template <class> typename T>
-void registerBinaryIntegral(const std::vector<std::string>& aliases) {
-  registerFunction<T, int8_t, int8_t, int8_t>(aliases);
-  registerFunction<T, int16_t, int16_t, int16_t>(aliases);
-  registerFunction<T, int32_t, int32_t, int32_t>(aliases);
-  registerFunction<T, int64_t, int64_t, int64_t>(aliases);
+void registerBinaryIntegral(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, int8_t, int8_t, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int16_t, int16_t, int16_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int32_t, int32_t, int32_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int64_t, int64_t>(
+      aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T, typename TReturn>
 void registerBinaryIntegralWithTReturn(
-    const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, int8_t, int8_t>(aliases);
-  registerFunction<T, TReturn, int16_t, int16_t>(aliases);
-  registerFunction<T, TReturn, int32_t, int32_t>(aliases);
-  registerFunction<T, TReturn, int64_t, int64_t>(aliases);
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, TReturn, int8_t, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int16_t, int16_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int32_t, int32_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int64_t, int64_t>(
+      aliases, {}, true, defaultOwner);
 }
 
 template <template <class> typename T>
-void registerBinaryFloatingPoint(const std::vector<std::string>& aliases) {
-  registerFunction<T, double, double, double>(aliases);
-  registerFunction<T, float, float, float>(aliases);
+void registerBinaryFloatingPoint(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, double, double, double>(aliases, {}, true, defaultOwner);
+  registerFunction<T, float, float, float>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> typename T>
-void registerBinaryNumeric(const std::vector<std::string>& aliases) {
-  registerBinaryIntegral<T>(aliases);
-  registerBinaryFloatingPoint<T>(aliases);
+void registerBinaryNumeric(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerBinaryIntegral<T>(aliases, defaultOwner);
+  registerBinaryFloatingPoint<T>(aliases, defaultOwner);
 }
 
 template <template <class> class T, typename TReturn>
-void registerBinaryScalar(const std::vector<std::string>& aliases) {
-  registerBinaryIntegralWithTReturn<T, TReturn>(aliases);
-  registerFunction<T, TReturn, double, double>(aliases);
-  registerFunction<T, TReturn, float, float>(aliases);
-  registerFunction<T, TReturn, Varchar, Varchar>(aliases);
-  registerFunction<T, TReturn, Varbinary, Varbinary>(aliases);
-  registerFunction<T, TReturn, bool, bool>(aliases);
-  registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
-  registerFunction<T, TReturn, Date, Date>(aliases);
+void registerBinaryScalar(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerBinaryIntegralWithTReturn<T, TReturn>(aliases, defaultOwner);
+  registerFunction<T, TReturn, double, double>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, float, float>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Varchar, Varchar>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Varbinary, Varbinary>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, bool, bool>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Timestamp, Timestamp>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, Date, Date>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T>
-void registerUnaryIntegral(const std::vector<std::string>& aliases) {
-  registerFunction<T, int8_t, int8_t>(aliases);
-  registerFunction<T, int16_t, int16_t>(aliases);
-  registerFunction<T, int32_t, int32_t>(aliases);
-  registerFunction<T, int64_t, int64_t>(aliases);
+void registerUnaryIntegral(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, int8_t, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int16_t, int16_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int32_t, int32_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int64_t>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T, typename TReturn>
-void registerUnaryIntegralWithTReturn(const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, int8_t>(aliases);
-  registerFunction<T, TReturn, int16_t>(aliases);
-  registerFunction<T, TReturn, int32_t>(aliases);
-  registerFunction<T, TReturn, int64_t>(aliases);
+void registerUnaryIntegralWithTReturn(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, TReturn, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int16_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int32_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, int64_t>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T>
-void registerUnaryFloatingPoint(const std::vector<std::string>& aliases) {
-  registerFunction<T, double, double>(aliases);
-  registerFunction<T, float, float>(aliases);
+void registerUnaryFloatingPoint(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, double, double>(aliases, {}, true, defaultOwner);
+  registerFunction<T, float, float>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T, typename TReturn>
 void registerUnaryFloatingPointWithTReturn(
-    const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, double>(aliases);
-  registerFunction<T, TReturn, float>(aliases);
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerFunction<T, TReturn, double>(aliases, {}, true, defaultOwner);
+  registerFunction<T, TReturn, float>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T>
-void registerUnaryNumeric(const std::vector<std::string>& aliases) {
-  registerUnaryIntegral<T>(aliases);
-  registerUnaryFloatingPoint<T>(aliases);
+void registerUnaryNumeric(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner = {}) {
+  registerUnaryIntegral<T>(aliases, defaultOwner);
+  registerUnaryFloatingPoint<T>(aliases, defaultOwner);
 }
 
 } // namespace

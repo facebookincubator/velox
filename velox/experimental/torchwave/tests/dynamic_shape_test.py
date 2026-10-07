@@ -17,10 +17,16 @@ from torch import nn, Tensor
 
 
 class DynamicShapeTestPreproc(nn.Module):
-    """Tests data-dependent dynamic shapes: arange from sum, ones from length values.
+    """Tests _local_scalar_dense (Tensor.item()) feeding a dynamic size.
+
+    r = arange(item(sum(lengths))) has a data-dependent length whose end is a
+    runtime scalar produced by _local_scalar_dense; r2 = r * 2 + 1 then consumes
+    that arange in a fused elementwise expression, so the arange's dynamic dims
+    drive the expr size. This exercises item() producing a scalar (fused like
+    aten.item), not a zero-dim tensor.
 
     Inputs: lengths (20 int64 values between 1 and 4)
-    Outputs: s (scalar sum), r (arange(s)), o (ones shaped by lengths[2] x lengths[3])
+    Outputs: s (scalar sum), r (arange(s.item())), r2 (r * 2 + 1)
     """
 
     def forward(
@@ -28,6 +34,6 @@ class DynamicShapeTestPreproc(nn.Module):
         lengths: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
         s = torch.sum(lengths)
-        r = torch.arange(s.item())
-        o = torch.ones(size=[int(lengths[2].item()), int(lengths[3].item())])
-        return s, r, o
+        r = torch.arange(s.item(), dtype=torch.long)
+        r2 = r * 2 + 1
+        return s, r, r2

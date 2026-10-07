@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -24,6 +25,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/Time.h"
 
 namespace facebook::velox::exec::test {
 
@@ -43,7 +45,10 @@ class ToCudfSelectionTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
   }
 
   void TearDown() override {
@@ -88,6 +93,30 @@ class ToCudfSelectionTest : public OperatorTestBase {
     return false;
   }
 
+  bool wasCudfFilterProjectUsed(const std::shared_ptr<exec::Task>& task) {
+    auto stats = task->taskStats();
+    for (const auto& pipelineStats : stats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == "CudfFilterProject") {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool wasDefaultFilterProjectUsed(const std::shared_ptr<exec::Task>& task) {
+    auto stats = task->taskStats();
+    for (const auto& pipelineStats : stats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == OperatorType::kFilterProject) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -98,6 +127,284 @@ class ToCudfSelectionTest : public OperatorTestBase {
            DOUBLE(),
            VARCHAR()})};
 };
+
+TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
+  auto input = makeRowVector(
+      {"amount", "event_date"},
+      {makeFlatVector<int64_t>({1, 2, -1, 13}),
+       makeFlatVector<int32_t>(
+           {DATE()->toDays("2020-01-31"),
+            DATE()->toDays("2020-02-29"),
+            DATE()->toDays("2020-03-01"),
+            DATE()->toDays("2020-12-31")},
+           DATE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_add('month', amount, event_date) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
+  auto input = makeRowVector(
+      {"unit", "amount", "event_date"},
+      {makeFlatVector<std::string>({"day", "week", "month", "year"}),
+       makeFlatVector<int64_t>({1, 2, -1, 13}),
+       makeFlatVector<int32_t>(
+           {DATE()->toDays("2020-01-31"),
+            DATE()->toDays("2020-02-29"),
+            DATE()->toDays("2020-03-01"),
+            DATE()->toDays("2020-12-31")},
+           DATE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_add(unit, amount, event_date) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
+  auto input = makeRowVector(
+      {"amount", "event_ts"},
+      {makeFlatVector<int64_t>({1, 2, -1, 13}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1675209600, 0),
+            Timestamp(1677628800, 0),
+            Timestamp(1680307200, 0),
+            Timestamp(1703980800, 0)},
+           TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_add('day', amount, event_ts) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('hour', event_ts) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig(
+          std::unordered_map<std::string, std::string>{
+              {"cudf.enabled", "true"},
+              {QueryConfig::kSessionTimezone, "Asia/Kolkata"},
+              {QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  AssertQueryBuilder(rewriteToCudfPlan(plan, 32, queryCtx))
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project(
+                      {"date_trunc('second', event_ts) AS second",
+                       "date_trunc('minute', event_ts) AS minute"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig(
+          std::unordered_map<std::string, std::string>{
+              {"cudf.enabled", "true"},
+              {QueryConfig::kSessionTimezone, "Asia/Kolkata"},
+              {QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  AssertQueryBuilder(rewriteToCudfPlan(plan, 32, queryCtx))
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(
+    ToCudfSelectionTest,
+    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('hour', event_ts) = "
+                            "TIMESTAMP '2026-01-02 00:00:00' AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> cudfTask;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(cudfTask);
+  ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
+
+  std::shared_ptr<Task> fallbackTask;
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig(
+          std::unordered_map<std::string, std::string>{
+              {"cudf.enabled", "true"},
+              {QueryConfig::kSessionTimezone, "Asia/Kolkata"},
+              {QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  AssertQueryBuilder(rewriteToCudfPlan(plan, 32, queryCtx))
+      .queryCtx(queryCtx)
+      .countResults(fallbackTask);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
+  auto input = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {DATE()->toDays("2026-01-02"), DATE()->toDays("2026-01-03")},
+          DATE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('day', event_date) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig(
+          std::unordered_map<std::string, std::string>{
+              {"cudf.enabled", "true"},
+              {QueryConfig::kSessionTimezone, "Asia/Kolkata"},
+              {QueryConfig::kAdjustTimestampToTimezone, "true"}}));
+  AssertQueryBuilder(rewriteToCudfPlan(plan, 32, queryCtx))
+      .queryCtx(queryCtx)
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '-', '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceEmptySearchFallsBack) {
+  // The empty-search semantics differ from cudf::strings::replace, so the empty
+  // constant search is declined and evaluated on CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '', 'x') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceColumnSearchFallsBack) {
+  // A column-valued search does not match the constant-argument signature and
+  // falls back to CPU.
+  auto input = makeRowVector(
+      {"s", "search"},
+      {makeFlatVector<std::string>({"a-b-c", "abc", "x-y"}),
+       makeFlatVector<std::string>({"-", "b", "y"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, search, '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
+  // A null constant search is offloaded (not declined), so ReplaceFunction's
+  // all-null branch runs on the GPU rather than the call being folded to a null
+  // constant upstream. Guards that the hand-written null path is actually live.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, CAST(NULL AS VARCHAR), 'x') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
+      .config("cudf.enabled", true)
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
 
 // Test supported aggregation should use CUDF
 TEST_F(ToCudfSelectionTest, supportedAggregationUsesCudf) {

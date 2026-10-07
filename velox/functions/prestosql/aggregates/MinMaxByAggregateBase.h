@@ -1049,6 +1049,8 @@ std::unique_ptr<exec::Aggregate> createNArg(
       return std::make_unique<NAggregate<W, float>>(resultType);
     case TypeKind::DOUBLE:
       return std::make_unique<NAggregate<W, double>>(resultType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return std::make_unique<NAggregate<W, StringView>>(resultType);
     case TypeKind::TIMESTAMP:
@@ -1156,6 +1158,7 @@ std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
       "real",
       "double",
       "varchar",
+      "varbinary",
       "date",
       "timestamp"};
 

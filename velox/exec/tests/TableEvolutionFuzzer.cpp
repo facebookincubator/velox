@@ -15,18 +15,33 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/config/Config.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <set>
 
 #include <re2/re2.h>
 
@@ -48,12 +63,81 @@ DEFINE_bool(
     "up after failures. Therefore, results are not compared when this is "
     "enabled. Note that this option only works in debug builds.");
 
+DEFINE_int64(
+    input_file_max_bytes,
+    0,
+    "When reading an existing file, cap every scan to this many bytes from the "
+    "start of it. Zero reads the whole file. Both plans and the sample read get "
+    "the same range, so the comparison is unaffected.\n"
+    "This bounds work only as far as split granularity allows: a format that "
+    "takes a whole stripe whenever its start falls inside the range still reads "
+    "that entire stripe, so on a file with few large stripes it may reduce "
+    "nothing. Measured on one 588MB production Nimble file it did not.");
+
+DEFINE_int32(
+    input_file_query_shapes,
+    4,
+    "Number of query shapes run per call when reading an existing file. Kept "
+    "well below the count used for generated files: there is no expensive "
+    "write to amortize here, and a caller loops until its own deadline, so "
+    "this is the granularity at which that deadline can be honoured. Each "
+    "shape scans the whole file twice, which on a production file is not "
+    "cheap.");
+
+DEFINE_int32(
+    input_file_sample_rows,
+    100'000,
+    "When running query shapes against an existing file, the number of rows "
+    "read from it to generate subfield filters from. Only the values matter -- "
+    "the reference row set the generator narrows is discarded -- so a bounded "
+    "prefix keeps a large production file from being read whole.");
+
 DEFINE_int32(
     aggregation_pushdown_frequency,
     5,
     "Controls the frequency of aggregation pushdown. The aggregation pushdown "
     "is enabled with probability 1/N where N is this value. For example, "
     "N=5 means 20% chance, N=2 means 50% chance.");
+
+DEFINE_int32(
+    table_evolution_coverage_interval_sec,
+    3600,
+    "Minimum interval between cumulative coverage snapshots emitted while an "
+    "iteration is running. Zero disables periodic snapshots.");
+
+DEFINE_int32(
+    batches_per_file,
+    8,
+    "Number of independently-fuzzed batches written per file (one writer "
+    "write() call each). A fixed count is sufficient: chunk and stripe flush "
+    "randomness already varies the physical layout across files.");
+
+DEFINE_bool(
+    adaptive_batch_sizing,
+    true,
+    "When true, each written batch is sized adaptively to about "
+    "--batch_target_bytes raw bytes (the per-batch row count is derived from "
+    "the schema's per-row cost, clamped to [--min_adaptive_vector_size, "
+    "--max_adaptive_vector_size]). When false, batches use a fixed row count.");
+
+DEFINE_int64(
+    batch_target_bytes,
+    facebook::velox::exec::test::TableEvolutionFuzzer::kTargetBatchBytes,
+    "Target raw size in bytes for each written batch. The per-batch row count "
+    "is derived from this target so batch bytes stay schema-independent across "
+    "narrow and wide/nested schemas. Only used when --adaptive_batch_sizing.");
+
+DEFINE_int32(
+    min_adaptive_vector_size,
+    facebook::velox::exec::test::TableEvolutionFuzzer::kMinAdaptiveVectorSize,
+    "Lower bound on the adaptive per-batch row count "
+    "(used when --adaptive_batch_sizing).");
+
+DEFINE_int32(
+    max_adaptive_vector_size,
+    facebook::velox::exec::test::TableEvolutionFuzzer::kMaxAdaptiveVectorSize,
+    "Upper bound on the adaptive per-batch row count "
+    "(used when --adaptive_batch_sizing).");
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -69,13 +153,246 @@ std::ostream& operator<<(
 
 namespace {
 
-constexpr int kVectorSize = 101;
+int64_t runtimeStatSum(const OperatorStats& op, std::string_view key) {
+  auto it = op.runtimeStats.find(std::string(key));
+  return it != op.runtimeStats.end() ? it->second.sum : 0;
+}
 
-VectorFuzzer::Options makeVectorFuzzerOptions() {
+int64_t runtimeStatCount(const OperatorStats& op, std::string_view key) {
+  auto it = op.runtimeStats.find(std::string(key));
+  return it != op.runtimeStats.end() ? it->second.count : 0;
+}
+
+TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
+    const std::shared_ptr<exec::Task>& task) {
+  TableEvolutionFuzzer::ScanPlanCoverage result;
+  result.numQueries = 1;
+  bool remainingFilterEvaluated{false};
+  auto taskStats = task->taskStats();
+  for (const auto& pipeline : taskStats.pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "TableScan") {
+        result.numSplits += op.numSplits;
+        result.rawInputPositions += op.rawInputPositions;
+        result.rawInputBytes += op.rawInputBytes;
+        result.outputPositions += op.outputPositions;
+        result.outputBytes += op.outputBytes;
+
+        result.skippedSplits += runtimeStatSum(op, "skippedSplits");
+        result.skippedSplitBytes += runtimeStatSum(op, "skippedSplitBytes");
+        result.skippedStrides += runtimeStatSum(op, "skippedStrides");
+        result.processedStrides += runtimeStatSum(op, "processedStrides");
+        result.chunkSkippedRows +=
+            runtimeStatSum(op, dwio::common::kChunkSkippedRows);
+        result.processedRows +=
+            runtimeStatSum(op, dwio::common::kProcessedRows);
+
+        result.numStripeLoads += runtimeStatSum(op, "numStripeLoads");
+        result.numIndexFilterConversions +=
+            runtimeStatSum(op, "numIndexFilterConversions");
+        result.totalRemainingFilterCpuNanos +=
+            runtimeStatSum(op, "totalRemainingFilterCpuNanos");
+        result.totalRemainingFilterWallNanos +=
+            runtimeStatSum(op, "totalRemainingFilterWallNanos");
+        remainingFilterEvaluated = remainingFilterEvaluated ||
+            runtimeStatCount(op, "totalRemainingFilterCpuNanos") > 0 ||
+            runtimeStatCount(op, "totalRemainingFilterWallNanos") > 0;
+
+        result.storageReadBytes += runtimeStatSum(op, "storageReadBytes");
+        result.ramReadBytes += runtimeStatSum(op, "ramReadBytes");
+        result.metadataStorageReadBytes +=
+            runtimeStatSum(op, "metadata.storageReadBytes");
+        result.prefetchBytes += runtimeStatSum(op, "prefetchBytes");
+        result.overreadBytes += runtimeStatSum(op, "overreadBytes");
+      }
+
+      // These stats belong to the operator active when the reader or LazyVector
+      // records them, which can be a scan, aggregation, or intervening project.
+      result.numValuesLoadedToValueHook +=
+          runtimeStatSum(op, "loadedToValueHook");
+      result.dataSourceLazyInputBytes +=
+          runtimeStatSum(op, "dataSourceLazyInputBytes");
+      result.dataSourceLazyCpuNanos +=
+          runtimeStatSum(op, "dataSourceLazyCpuNanos");
+      result.dataSourceLazyWallNanos +=
+          runtimeStatSum(op, "dataSourceLazyWallNanos");
+      result.numStringDictionaryEncodingPreserved += runtimeStatSum(
+          op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
+      result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
+          op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
+    }
+  }
+  result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
+  result.numQueriesWithRemainingFilterEvaluation = remainingFilterEvaluated;
+  result.numQueriesWithLazyIo = result.dataSourceLazyInputBytes > 0 ||
+      result.dataSourceLazyCpuNanos > 0 || result.dataSourceLazyWallNanos > 0;
+  result.numQueriesWithChunkSkipping = result.chunkSkippedRows > 0;
+  if (result.numQueriesWithChunkSkipping > 0) {
+    result.processedRowsWithChunkSkipping = result.processedRows;
+  }
+  return result;
+}
+
+void addScanStats(
+    const TableEvolutionFuzzer::ScanPlanCoverage& stats,
+    TableEvolutionFuzzer::ScanPlanCoverage& coverage) {
+  coverage.numQueries += stats.numQueries;
+  coverage.numSplits += stats.numSplits;
+  coverage.rawInputPositions += stats.rawInputPositions;
+  coverage.rawInputBytes += stats.rawInputBytes;
+  coverage.outputPositions += stats.outputPositions;
+  coverage.outputBytes += stats.outputBytes;
+
+  coverage.skippedSplits += stats.skippedSplits;
+  coverage.skippedSplitBytes += stats.skippedSplitBytes;
+  coverage.skippedStrides += stats.skippedStrides;
+  coverage.processedStrides += stats.processedStrides;
+  coverage.chunkSkippedRows += stats.chunkSkippedRows;
+  coverage.processedRows += stats.processedRows;
+  coverage.numQueriesWithChunkSkipping += stats.numQueriesWithChunkSkipping;
+  coverage.processedRowsWithChunkSkipping +=
+      stats.processedRowsWithChunkSkipping;
+
+  coverage.numStripeLoads += stats.numStripeLoads;
+  coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
+  coverage.numStringDictionaryEncodingPreserved +=
+      stats.numStringDictionaryEncodingPreserved;
+  coverage.numStringDictionaryEncodingAbandoned +=
+      stats.numStringDictionaryEncodingAbandoned;
+  coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
+  coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
+  coverage.numQueriesWithRemainingFilterEvaluation +=
+      stats.numQueriesWithRemainingFilterEvaluation;
+  coverage.totalRemainingFilterCpuNanos += stats.totalRemainingFilterCpuNanos;
+  coverage.totalRemainingFilterWallNanos += stats.totalRemainingFilterWallNanos;
+  coverage.numQueriesWithLazyIo += stats.numQueriesWithLazyIo;
+  coverage.dataSourceLazyInputBytes += stats.dataSourceLazyInputBytes;
+  coverage.dataSourceLazyCpuNanos += stats.dataSourceLazyCpuNanos;
+  coverage.dataSourceLazyWallNanos += stats.dataSourceLazyWallNanos;
+
+  coverage.storageReadBytes += stats.storageReadBytes;
+  coverage.ramReadBytes += stats.ramReadBytes;
+  coverage.metadataStorageReadBytes += stats.metadataStorageReadBytes;
+  coverage.prefetchBytes += stats.prefetchBytes;
+  coverage.overreadBytes += stats.overreadBytes;
+}
+
+void logScanStats(
+    std::string_view label,
+    const TableEvolutionFuzzer::ScanPlanCoverage& stats) {
+  VLOG(1) << "ScanCoverage[" << label
+          << "] volume: numSplits=" << stats.numSplits
+          << " rawInputPos=" << stats.rawInputPositions
+          << " rawInputBytes=" << stats.rawInputBytes
+          << " outputPos=" << stats.outputPositions
+          << " outputBytes=" << stats.outputBytes;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] pruning: skippedSplits=" << stats.skippedSplits
+          << " skippedSplitBytes=" << stats.skippedSplitBytes
+          << " skippedStrides=" << stats.skippedStrides
+          << " processedStrides=" << stats.processedStrides
+          << " chunkSkippedRows=" << stats.chunkSkippedRows
+          << " processedRows=" << stats.processedRows;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] nimble: stripeLoads=" << stats.numStripeLoads
+          << " indexFilterConv=" << stats.numIndexFilterConversions
+          << " dictionaryEncodingPreserved="
+          << stats.numStringDictionaryEncodingPreserved
+          << " dictionaryEncodingAbandoned="
+          << stats.numStringDictionaryEncodingAbandoned;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
+          << " valueHookValues=" << stats.numValuesLoadedToValueHook
+          << " remainingFilterQueries="
+          << stats.numQueriesWithRemainingFilterEvaluation
+          << " remainingFilterCpuNs=" << stats.totalRemainingFilterCpuNanos
+          << " remainingFilterWallNs=" << stats.totalRemainingFilterWallNanos;
+  VLOG(1) << "ScanCoverage[" << label << "] operatorScopedLazyIO: inputBytes="
+          << stats.dataSourceLazyInputBytes
+          << " cpuNs=" << stats.dataSourceLazyCpuNanos
+          << " wallNs=" << stats.dataSourceLazyWallNanos;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] ioSource: storageBytes=" << stats.storageReadBytes
+          << " ramBytes=" << stats.ramReadBytes
+          << " metadataStorageBytes=" << stats.metadataStorageReadBytes
+          << " prefetchBytes=" << stats.prefetchBytes
+          << " overreadBytes=" << stats.overreadBytes;
+}
+
+std::vector<TableEvolutionFuzzer::InputFile> extractInputFiles(
+    const std::vector<Split>& splits) {
+  std::vector<TableEvolutionFuzzer::InputFile> files;
+  files.reserve(splits.size());
+  for (const auto& split : splits) {
+    auto fileSplit =
+        std::dynamic_pointer_cast<connector::hive::FileConnectorSplit>(
+            split.connectorSplit);
+    VELOX_CHECK_NOT_NULL(fileSplit);
+    files.push_back({fileSplit->filePath, fileSplit->fileFormat});
+  }
+  return files;
+}
+
+// Default vector size for the fuzzer; the actual per-batch row count is chosen
+// adaptively per setup to hit a byte target (see computeAdaptiveVectorSize).
+constexpr int kDefaultVectorSize = 101;
+
+// Number of rows in the probe batch used to estimate per-row raw size. The
+// per-batch byte target and clamp bounds live on TableEvolutionFuzzer
+// (kTargetBatchBytes / kMinAdaptiveVectorSize / kMaxAdaptiveVectorSize) so the
+// adaptive sizing can be unit tested.
+constexpr int kProbeRows = 64;
+
+// Number of distinct query shapes run against each written set of files. The
+// (now expensive) write happens once per run(); this many shapes amortize it.
+constexpr int kQueryShapesPerFile = 20;
+
+using DataBatchMutator =
+    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>;
+
+void prepareDataBatch(
+    const RowVectorPtr& data,
+    const DataBatchMutator& dataBatchMutator,
+    uint64_t seed,
+    uint64_t rowOffset) {
+  for (auto& child : data->children()) {
+    BaseVector::flattenVector(child);
+  }
+  if (dataBatchMutator) {
+    dataBatchMutator(data, seed, rowOffset);
+  }
+}
+
+VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
   VectorFuzzer::Options options;
-  options.vectorSize = kVectorSize;
+  options.vectorSize = kDefaultVectorSize;
   options.allowSlice = false;
+  options.nullRatio = nullRatio;
+  options.containerHasNulls = nullRatio > 0;
+  // Table scans expose timestamps at millisecond precision by default. Keep
+  // generated source rows at that precision so the Values oracle represents
+  // the logical values that all configured file formats can round-trip.
+  options.timestampPrecision = fuzzer::FuzzerTimestampPrecision::kMilliSeconds;
   return options;
+}
+
+// Estimates the per-row raw byte cost of 'schema' by fuzzing a small probe
+// batch, then returns the adaptive per-batch row count for that cost (see
+// TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow).
+int computeAdaptiveVectorSize(
+    VectorFuzzer& vectorFuzzer,
+    const RowTypePtr& schema,
+    const DataBatchMutator& dataBatchMutator,
+    uint64_t seed) {
+  auto probe = vectorFuzzer.fuzzRow(schema, kProbeRows, false);
+  // Measure the same representation that is written. Format-specific
+  // mutations can substantially change value sizes (e.g. short VARCHARs to
+  // capping JSON), so measuring the unmodified probe would overshoot the byte
+  // target for every generated batch.
+  prepareDataBatch(probe, dataBatchMutator, seed, /*rowOffset=*/0);
+  const uint64_t probeRawSize = probe->estimateFlatSize();
+  return TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
+      static_cast<double>(probeRawSize) / kProbeRows, FLAGS_batch_target_bytes);
 }
 
 template <typename T>
@@ -144,10 +461,206 @@ bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
 
 } // namespace
 
+void TableEvolutionFuzzer::CoverageAccumulator::add(
+    const QueryCoverage& query) {
+  ++numQueriesAttempted;
+  if (query.countConfigCoverage) {
+    configs.numFlatmapEligible += query.flatmapEligible;
+    configs.numFlatmapEligibleColumns += query.numFlatmapEligibleColumns;
+    for (const auto& type : query.flatmapEligibleKeyTypes) {
+      ++configs.flatmapEligibleByKeyType[type];
+    }
+    for (const auto& type : query.flatmapEligibleValueTypes) {
+      ++configs.flatmapEligibleByValueType[type];
+    }
+    configs.numBucketed += query.bucketed;
+    configs.numBucketSelected += query.bucketSelected;
+    for (const auto& type : query.bucketColumnTypes) {
+      ++configs.bucketColumnsByType[type];
+    }
+    if (query.bucketed) {
+      ++configs.bucketedByColumnCount[query.numBucketColumns];
+      auto bucketColumnTypes = query.bucketColumnTypes;
+      std::sort(bucketColumnTypes.begin(), bucketColumnTypes.end());
+      ++configs.bucketColumnTypeSignaturesByCount[query.numBucketColumns]
+                                                 [folly::join(
+                                                     "+", bucketColumnTypes)];
+    }
+    if (query.bucketSelected) {
+      ++configs.bucketSelectedByBucketCount[query.bucketCount];
+    }
+  }
+
+  const auto addRequested = [](const std::vector<std::string>& dimensions,
+                               auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numRequested;
+    }
+  };
+  const auto addExecuted = [](const std::vector<std::string>& dimensions,
+                              auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numExecuted;
+    }
+  };
+  const auto addVerified = [](const std::vector<std::string>& dimensions,
+                              auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numVerified;
+    }
+  };
+
+  auto& filterCoverage = queryShapes.filters;
+  const bool filterRequested =
+      query.hasSubfieldFilters || query.hasRemainingFilter;
+  if (filterRequested) {
+    ++filterCoverage.numRequested;
+    filterCoverage.numSubfieldRequested += query.hasSubfieldFilters;
+    filterCoverage.numRemainingRequested += query.hasRemainingFilter;
+    filterCoverage.numSubfieldAndRemainingRequested +=
+        query.hasSubfieldFilters && query.hasRemainingFilter;
+    filterCoverage.numSubfieldFilters += query.numSubfieldFilters;
+    filterCoverage.numNullAcceptingSubfieldOnNullableInput +=
+        !query.nullAcceptingSubfieldFilterTypes.empty();
+    addRequested(query.filterTypes, filterCoverage.byType);
+    addRequested(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+    addRequested(query.remainingFilterTypes, filterCoverage.remainingByType);
+    addRequested(query.filterKinds, filterCoverage.byKind);
+  }
+  if (query.hasFilterOnlyColumns) {
+    ++filterCoverage.numFilterOnly;
+    filterCoverage.numFilterOnlyColumns += query.numFilterOnlyColumns;
+  }
+
+  auto& aggregationCoverage = queryShapes.aggregations;
+  if (query.aggregationRequested) {
+    ++aggregationCoverage.numRequested;
+    addRequested(query.groupingKeyTypes, aggregationCoverage.groupingKeyTypes);
+    addRequested(query.aggregateTypes, aggregationCoverage.aggregateTypes);
+    addRequested(query.aggregationFunctions, aggregationCoverage.functions);
+  }
+
+  auto& flatmapCoverage = queryShapes.flatmapAsStruct;
+  if (!query.flatmapAsStructKeyTypes.empty()) {
+    ++flatmapCoverage.numSelected;
+    flatmapCoverage.numColumns +=
+        static_cast<int64_t>(query.flatmapAsStructKeyTypes.size());
+    for (const auto& type : query.flatmapAsStructKeyTypes) {
+      ++flatmapCoverage.columnsByKeyType[type];
+    }
+    for (const auto& type : query.flatmapAsStructValueTypes) {
+      ++flatmapCoverage.columnsByValueType[type];
+    }
+  }
+
+  for (const auto& type : query.projectedTypes) {
+    ++queryShapes.projectedByType[type];
+  }
+
+  if (!query.executionSucceeded) {
+    ++numExecutionFailures;
+    if (query.failurePhase.empty()) {
+      ++failuresByPhase["execution"];
+    } else {
+      ++failuresByPhase[query.failurePhase];
+    }
+    return;
+  }
+
+  ++numQueriesCompleted;
+  numOriginalVerificationsPassed += query.originalVerificationPassed;
+  if (query.verificationPassed) {
+    ++numVerificationsPassed;
+  } else {
+    ++numVerificationsFailed;
+    if (query.failurePhase.empty()) {
+      ++failuresByPhase["verification"];
+    } else {
+      ++failuresByPhase[query.failurePhase];
+    }
+  }
+
+  if (filterRequested) {
+    ++filterCoverage.numExecuted;
+    addExecuted(query.filterTypes, filterCoverage.byType);
+    addExecuted(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+    addExecuted(query.remainingFilterTypes, filterCoverage.remainingByType);
+    addExecuted(query.filterKinds, filterCoverage.byKind);
+    if (query.verificationPassed) {
+      ++filterCoverage.numVerified;
+      addVerified(query.filterTypes, filterCoverage.byType);
+      addVerified(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+      addVerified(query.remainingFilterTypes, filterCoverage.remainingByType);
+      addVerified(query.filterKinds, filterCoverage.byKind);
+    }
+    const bool remainingFilterEvaluated = query.hasRemainingFilter &&
+        query.pushdown.numQueriesWithRemainingFilterEvaluation > 0;
+    const bool activated = query.hasSubfieldFilters || remainingFilterEvaluated;
+    const bool splitPruned = query.pushdown.skippedSplits > 0;
+    const bool stridePruned = query.pushdown.skippedStrides > 0;
+    const bool rowsReduced =
+        !query.aggregationRequested && query.rowsReducedByPushdown > 0;
+    filterCoverage.numRemainingFilterEvaluated += remainingFilterEvaluated;
+    filterCoverage.numActivated += activated;
+    filterCoverage.numEffective +=
+        activated && (splitPruned || stridePruned || rowsReduced);
+    filterCoverage.numQueriesWithSplitPruning += splitPruned;
+    filterCoverage.numQueriesWithStridePruning += stridePruned;
+    filterCoverage.numQueriesWithRowReduction += rowsReduced;
+    filterCoverage.numRowsReduced +=
+        rowsReduced ? query.rowsReducedByPushdown : 0;
+  }
+
+  if (query.aggregationRequested) {
+    ++aggregationCoverage.numExecuted;
+    addExecuted(query.groupingKeyTypes, aggregationCoverage.groupingKeyTypes);
+    addExecuted(query.aggregateTypes, aggregationCoverage.aggregateTypes);
+    addExecuted(query.aggregationFunctions, aggregationCoverage.functions);
+    const auto pushdownValues = query.pushdown.numValuesLoadedToValueHook;
+    const auto referenceValues = query.reference.numValuesLoadedToValueHook;
+    const bool pushdownActivated = pushdownValues > 0;
+    const bool referenceActivated = referenceValues > 0;
+    aggregationCoverage.numPushdownPlanActivated += pushdownActivated;
+    aggregationCoverage.numReferencePlanActivated += referenceActivated;
+    aggregationCoverage.numDifferentiallyVerified +=
+        pushdownActivated && !referenceActivated && query.verificationPassed;
+    aggregationCoverage.numPushdownValuesLoaded += pushdownValues;
+    aggregationCoverage.numReferenceValuesLoaded += referenceValues;
+  }
+
+  if (!query.flatmapAsStructKeyTypes.empty()) {
+    ++flatmapCoverage.numExecuted;
+    flatmapCoverage.numVerified += query.verificationPassed;
+  }
+
+  addScanStats(query.pushdown, pushdown);
+  addScanStats(query.reference, reference);
+}
+
+int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
+    double bytesPerRow,
+    int64_t targetBatchBytes) {
+  const double safeBytesPerRow = std::max(1.0, bytesPerRow);
+  // Clamp as double before narrowing: a large --batch_target_bytes over a tiny
+  // per-row cost can exceed INT_MAX, and casting that to int before clamping
+  // would be undefined behavior. The clamp bounds are well within int range.
+  const double rows = static_cast<double>(targetBatchBytes) / safeBytesPerRow;
+  return static_cast<int>(std::clamp<double>(
+      rows,
+      static_cast<double>(FLAGS_min_adaptive_vector_size),
+      static_cast<double>(FLAGS_max_adaptive_vector_size)));
+}
+
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
-    : config_(config), vectorFuzzer_(makeVectorFuzzerOptions(), config.pool) {
+    : config_(config),
+      vectorFuzzer_(makeVectorFuzzerOptions(config.nullRatio), config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
   VELOX_CHECK_GT(config_.evolutionCount, 0);
+  VELOX_CHECK_GT(FLAGS_batches_per_file, 0);
+  VELOX_CHECK_GT(FLAGS_batch_target_bytes, 0);
+  VELOX_CHECK_GT(FLAGS_min_adaptive_vector_size, 0);
+  VELOX_CHECK_GE(
+      FLAGS_max_adaptive_vector_size, FLAGS_min_adaptive_vector_size);
 }
 
 const std::string& TableEvolutionFuzzer::connectorId() {
@@ -200,83 +713,33 @@ void generateAggregatesForColumns(
     return;
   }
 
-  int numAggregates = std::min(
+  const int numAggregates = std::min(
       static_cast<int>(availableColumns.size()),
       std::min(
           static_cast<int>(5),
           static_cast<int>(
               folly::Random::rand32(1, availableColumns.size() + 1, rng))));
 
-  std::unordered_set<int> selectedIndices;
+  // Partial Fisher-Yates over a copy: draws numAggregates distinct columns in
+  // one pass. The previous rejection loop could spin for a while on the last
+  // pick, when only one of the available columns was still unselected.
+  std::vector<int> shuffled = availableColumns;
   for (int i = 0; i < numAggregates; ++i) {
-    if (folly::Random::oneIn(2, rng)) {
-      int randomIdx;
-      do {
-        randomIdx = folly::Random::rand32(availableColumns.size(), rng);
-      } while (selectedIndices.count(randomIdx) > 0);
-      selectedIndices.insert(randomIdx);
-
-      int colIdx = availableColumns[randomIdx];
-      std::string aggFunc = supportedAggFuncs[folly::Random::rand32(
-          supportedAggFuncs.size(), rng)];
-      aggregates.push_back(
-          fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
-    }
+    const int pick = i +
+        static_cast<int>(folly::Random::rand32(
+            static_cast<uint32_t>(shuffled.size() - i), rng));
+    std::swap(shuffled[i], shuffled[pick]);
+    const auto& aggFunc = supportedAggFuncs[folly::Random::rand32(
+        static_cast<uint32_t>(supportedAggFuncs.size()), rng)];
+    aggregates.push_back(
+        fmt::format(
+            "{}({})",
+            aggFunc,
+            TableEvolutionFuzzer::quoteIdentifier(
+                schema->nameOf(shuffled[i]))));
   }
 }
 
-std::vector<std::vector<RowVectorPtr>> runTaskCursors(
-    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
-    folly::Executor& executor) {
-  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
-  for (int i = 0; i < cursors.size(); ++i) {
-    auto [promise, future] =
-        folly::makePromiseContract<std::vector<RowVectorPtr>>();
-    futures.push_back(std::move(future));
-    auto cursorPtr = cursors[i];
-    auto task = cursorPtr->task();
-    executor.add([cursorPtr, task, promise = std::move(promise)]() mutable {
-      std::vector<RowVectorPtr> results;
-      try {
-        while (cursorPtr->moveNext()) {
-          auto& result = cursorPtr->current();
-          result->loadedVector();
-          results.push_back(std::move(result));
-        }
-        promise.setValue(std::move(results));
-      } catch (VeloxRuntimeError& e) {
-        if (FLAGS_enable_oom_injection_write_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
-          promise.setValue(std::move(results));
-        } else if (
-            FLAGS_enable_oom_injection_read_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
-          promise.setValue(std::move(results));
-        } else {
-          LOG(ERROR) << e.what();
-          promise.setException(e);
-        }
-      } catch (const std::exception& e) {
-        LOG(ERROR) << e.what();
-        promise.setException(e);
-      }
-    });
-  }
-  std::vector<std::vector<RowVectorPtr>> results;
-  results.reserve(futures.size());
-  for (auto& future : futures) {
-    results.push_back(std::move(future).get());
-  }
-  return results;
-}
 // `tableBucketCount' is the bucket count of current table setup when reading.
 // `partitionBucketCount' is the bucket count when the partition was written.
 // `tableBucketCount' must be a multiple of `partitionBucketCount'.
@@ -446,13 +909,92 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
 }
 
 // Generate random aggregation configuration for pushdown testing.
+} // namespace
+
+std::vector<std::vector<RowVectorPtr>> TableEvolutionFuzzer::runTaskCursors(
+    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+    folly::Executor& executor) {
+  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
+  for (int i = 0; i < cursors.size(); ++i) {
+    auto [taskPromise, future] =
+        folly::makePromiseContract<std::vector<RowVectorPtr>>();
+    futures.push_back(std::move(future));
+    auto cursorPtr = cursors[i];
+    auto task = cursorPtr->task();
+    executor.add([cursorPtr, task, promise = std::move(taskPromise)]() mutable {
+      std::vector<RowVectorPtr> results;
+      folly::exception_wrapper error;
+      try {
+        while (cursorPtr->moveNext()) {
+          auto& result = cursorPtr->current();
+          result->loadedVector();
+          results.push_back(std::move(result));
+        }
+      } catch (VeloxRuntimeError& e) {
+        if (FLAGS_enable_oom_injection_write_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
+        } else if (
+            FLAGS_enable_oom_injection_read_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
+        } else {
+          LOG(ERROR) << e.what();
+          error = folly::exception_wrapper{std::current_exception()};
+        }
+      } catch (const std::exception& e) {
+        LOG(ERROR) << e.what();
+        error = folly::exception_wrapper{std::current_exception()};
+      }
+      // The caller wakes up when the promise is fulfilled and may then free
+      // the pools this task's plan references, so the task must not be
+      // destroyed here.
+      cursorPtr.reset();
+      task.reset();
+      if (error) {
+        promise.setException(std::move(error));
+      } else {
+        promise.setValue(std::move(results));
+      }
+    });
+  }
+  auto outcomes = folly::collectAll(std::move(futures)).get();
+  std::vector<std::vector<RowVectorPtr>> results;
+  results.reserve(outcomes.size());
+  for (auto& outcome : outcomes) {
+    results.push_back(std::move(outcome).value());
+  }
+  return results;
+}
+
+std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
+  std::string quoted;
+  quoted.reserve(name.size() + 2);
+  quoted.push_back('"');
+  for (const char character : name) {
+    if (character == '"') {
+      quoted.push_back('"');
+    }
+    quoted.push_back(character);
+  }
+  quoted.push_back('"');
+  return quoted;
+}
+
 // Only generates aggregations that are eligible for pushdown:
 // - Supported aggregate functions: min, max, bool_and, bool_or
 // - Each column can only be used by at most one aggregate
 // - Grouping keys are optional (can be empty for global aggregation)
 // - Columns with filters (subfield or remaining) are excluded to enable
 // pushdown
-std::optional<AggregationConfig> generateAggregationConfig(
+std::optional<AggregationConfig>
+TableEvolutionFuzzer::generateAggregationConfig(
     const RowTypePtr& schema,
     FuzzerGenerator& rng,
     const std::unordered_set<std::string>& filteredColumns) {
@@ -473,6 +1015,8 @@ std::optional<AggregationConfig> generateAggregationConfig(
   for (int i = 0; i < numGroupingKeys && i < schema->size(); ++i) {
     int colIdx = folly::Random::rand32(schema->size(), rng);
     if (usedColumnIndices.count(colIdx) == 0) {
+      // Raw, not quoted: PlanBuilder::aggregation resolves grouping keys with a
+      // direct field lookup rather than by parsing them as expressions.
       groupingKeys.push_back(schema->nameOf(colIdx));
       usedColumnIndices.insert(colIdx);
     }
@@ -540,8 +1084,6 @@ std::optional<AggregationConfig> generateAggregationConfig(
       .groupingKeys = std::move(groupingKeys),
       .aggregates = std::move(aggregates)};
 }
-
-} // namespace
 
 VectorPtr TableEvolutionFuzzer::liftToType(
     const VectorPtr& input,
@@ -646,6 +1188,333 @@ VectorPtr TableEvolutionFuzzer::liftToType(
   }
 }
 
+namespace {
+// Returns true when 'name' occurs in 'expr' as a complete identifier token
+// rather than as a substring of a longer identifier. Aggregate expressions look
+// like "func(name)" and column names are plain identifiers, so this avoids
+// false positives such as column "name_4" matching aggregate "min(name_42)".
+// Mirrors the word-boundary check in applyRemainingFilters.
+bool containsIdentifier(const std::string& expr, const std::string& name) {
+  const auto isIdentChar = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  size_t pos = 0;
+  while ((pos = expr.find(name, pos)) != std::string::npos) {
+    const bool boundedLeft = pos == 0 || !isIdentChar(expr[pos - 1]);
+    const size_t end = pos + name.size();
+    const bool boundedRight = end >= expr.size() || !isIdentChar(expr[end]);
+    if (boundedLeft && boundedRight) {
+      return true;
+    }
+    pos += name.size();
+  }
+  return false;
+}
+
+std::vector<std::string> typeKindsForColumns(
+    const RowTypePtr& schema,
+    const std::unordered_set<std::string>& columnNames) {
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    if (columnNames.count(schema->nameOf(i)) > 0) {
+      typeKinds.emplace(schema->childAt(i)->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+void collectScalarTypeKinds(
+    const TypePtr& type,
+    std::set<std::string>& typeKinds) {
+  if (type->isArray()) {
+    collectScalarTypeKinds(type->asArray().elementType(), typeKinds);
+    return;
+  }
+  if (type->isMap()) {
+    collectScalarTypeKinds(type->asMap().keyType(), typeKinds);
+    collectScalarTypeKinds(type->asMap().valueType(), typeKinds);
+    return;
+  }
+  if (type->isRow()) {
+    for (const auto& child : type->asRow().children()) {
+      collectScalarTypeKinds(child, typeKinds);
+    }
+    return;
+  }
+  typeKinds.emplace(type->kindName());
+}
+
+std::vector<std::string> scalarTypeKindsForColumns(
+    const RowTypePtr& schema,
+    const std::vector<std::string>& columnNames) {
+  const std::unordered_set<std::string> selectedColumns(
+      columnNames.begin(), columnNames.end());
+  const bool readAllColumns = columnNames.empty();
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    if (readAllColumns || selectedColumns.count(schema->nameOf(i)) > 0) {
+      collectScalarTypeKinds(schema->childAt(i), typeKinds);
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> filterKindNames(
+    const common::SubfieldFilters& filters,
+    bool hasRemainingFilter) {
+  std::set<std::string> filterKinds;
+  for (const auto& entry : filters) {
+    filterKinds.emplace(entry.second->kindName());
+  }
+  if (hasRemainingFilter) {
+    filterKinds.emplace("RemainingExpression");
+  }
+  return {filterKinds.begin(), filterKinds.end()};
+}
+
+bool containsNull(const VectorPtr& vector) {
+  if (!vector->mayHaveNulls()) {
+    return false;
+  }
+  for (vector_size_t row = 0; row < vector->size(); ++row) {
+    if (vector->isNullAt(row)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string> nullAcceptingSubfieldFilterTypeKinds(
+    const RowTypePtr& schema,
+    const RowVectorPtr& data,
+    const common::SubfieldFilters& filters) {
+  std::set<std::string> typeKinds;
+  for (const auto& [subfield, filter] : filters) {
+    if (!filter->testNull()) {
+      continue;
+    }
+    const auto values =
+        dwio::common::getChildBySubfield(data.get(), subfield, schema);
+    if (containsNull(values)) {
+      typeKinds.emplace(values->type()->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> aggregateFunctionNames(
+    const AggregationConfig& aggregationConfig) {
+  std::set<std::string> functions;
+  for (const auto& aggregate : aggregationConfig.aggregates) {
+    const auto openParenthesis = aggregate.find('(');
+    VELOX_CHECK_NE(
+        openParenthesis,
+        std::string::npos,
+        "Aggregate expression has no function call: {}",
+        aggregate);
+    functions.emplace(aggregate.substr(0, openParenthesis));
+  }
+  return {functions.begin(), functions.end()};
+}
+
+std::vector<std::string> aggregateInputTypeKinds(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& columnName = schema->nameOf(i);
+    if (std::any_of(
+            aggregationConfig.aggregates.begin(),
+            aggregationConfig.aggregates.end(),
+            [&](const auto& aggregate) {
+              return containsIdentifier(aggregate, columnName);
+            })) {
+      typeKinds.emplace(schema->childAt(i)->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> groupingKeyTypeKinds(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  const std::unordered_set<std::string> groupingKeys(
+      aggregationConfig.groupingKeys.begin(),
+      aggregationConfig.groupingKeys.end());
+  return typeKindsForColumns(schema, groupingKeys);
+}
+
+std::vector<std::string> aggregationBlockingProjectExpressions(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::vector<std::string> expressions;
+  expressions.reserve(schema->size());
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    const bool isAggregateInput = std::any_of(
+        aggregationConfig.aggregates.begin(),
+        aggregationConfig.aggregates.end(),
+        [&](const auto& aggregate) {
+          return containsIdentifier(aggregate, name);
+        });
+    if (isAggregateInput) {
+      expressions.push_back(
+          fmt::format(
+              "if({0} is null, cast(null as {1}), {0}) as {0}",
+              name,
+              schema->childAt(i)->toString()));
+    } else {
+      expressions.push_back(name);
+    }
+  }
+  return expressions;
+}
+
+void addTypeEvolution(
+    const TypePtr& previous,
+    const TypePtr& current,
+    std::string_view position,
+    TableEvolutionFuzzer::ConfigCoverage& coverage) {
+  if (previous->kind() != current->kind()) {
+    ++coverage.numTypeTransitions;
+    ++coverage.schemaEvolutionByType[fmt::format(
+        "{}->{}", previous->kindName(), current->kindName())];
+    ++coverage.schemaEvolutionByPosition[std::string(position)];
+    return;
+  }
+
+  if (previous->isArray()) {
+    addTypeEvolution(
+        previous->asArray().elementType(),
+        current->asArray().elementType(),
+        "arrayElement",
+        coverage);
+    return;
+  }
+  if (previous->isMap()) {
+    addTypeEvolution(
+        previous->asMap().keyType(),
+        current->asMap().keyType(),
+        "mapKey",
+        coverage);
+    addTypeEvolution(
+        previous->asMap().valueType(),
+        current->asMap().valueType(),
+        "mapValue",
+        coverage);
+    return;
+  }
+  if (previous->isRow()) {
+    const auto& previousRow = previous->asRow();
+    const auto& currentRow = current->asRow();
+    const auto commonSize = std::min(previousRow.size(), currentRow.size());
+    for (uint32_t i = 0; i < commonSize; ++i) {
+      addTypeEvolution(
+          previousRow.childAt(i), currentRow.childAt(i), "rowField", coverage);
+    }
+    for (uint32_t i = commonSize; i < currentRow.size(); ++i) {
+      ++coverage.numAddedFields;
+      ++coverage.schemaEvolutionByType[fmt::format(
+          "ADDED->{}", currentRow.childAt(i)->kindName())];
+      ++coverage.schemaEvolutionByPosition["rowField"];
+    }
+  }
+}
+
+} // namespace
+
+void TableEvolutionFuzzer::CoverageAccumulator::addSchemaEvolution(
+    const RowTypePtr& previous,
+    const RowTypePtr& current) {
+  addTypeEvolution(previous, current, "topLevel", configs);
+}
+
+bool TableEvolutionFuzzer::isColumnUsedByAggregation(
+    const std::string& columnName,
+    const AggregationConfig& aggregationConfig) {
+  for (const auto& groupingKey : aggregationConfig.groupingKeys) {
+    if (groupingKey == columnName) {
+      return true;
+    }
+  }
+  for (const auto& aggregate : aggregationConfig.aggregates) {
+    if (containsIdentifier(aggregate, columnName)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+folly::F14FastSet<std::string> TableEvolutionFuzzer::selectFilterOnlyColumns(
+    const RowTypePtr& schema,
+    const std::unordered_set<std::string>& filteredColumns,
+    const std::vector<column_index_t>& bucketColumnIndices,
+    const std::vector<RowTypePtr>& perEvolutionSchemas,
+    const std::optional<AggregationConfig>& aggregationConfig,
+    FuzzerGenerator& rng) {
+  folly::F14FastSet<std::string> bucketColumnNames;
+  for (const auto bucketColumnIndex : bucketColumnIndices) {
+    bucketColumnNames.insert(schema->nameOf(bucketColumnIndex));
+  }
+  folly::F14FastSet<std::string> droppedColumns;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    if (filteredColumns.count(name) == 0) {
+      continue;
+    }
+    // Skip map columns: a filtered map column is read in flatmap-as-struct mode
+    // (buildFlatmapAsStructSchema swaps its type to a struct in the output
+    // schema) and its filter is a map key/value subfield filter. Dropping it
+    // filter-only makes the two oracle plans read it through divergent paths --
+    // the pushdown plan pushes the subfield filter onto the struct-read column,
+    // while the FilterNode plan realizes the filter as a node and then projects
+    // the column away -- so their results can disagree.
+    if (schema->childAt(i)->isMap()) {
+      continue;
+    }
+    if (bucketColumnNames.count(name) > 0) {
+      continue;
+    }
+    // Columns evolve positionally; index 'i' in the final schema corresponds to
+    // index 'i' in every earlier setup that has that position. Skip columns
+    // whose type differs across setups: the selective reader applies coercion
+    // for evolved columns differently when a column is filter-only versus also
+    // projected, which would make the pushdown-vs-FilterNode oracle diverge.
+    bool typeStableAcrossSetups = true;
+    for (const auto& evolutionSchema : perEvolutionSchemas) {
+      if (i >= evolutionSchema->size() ||
+          !evolutionSchema->childAt(i)->equivalent(*schema->childAt(i))) {
+        typeStableAcrossSetups = false;
+        break;
+      }
+    }
+    if (!typeStableAcrossSetups) {
+      continue;
+    }
+    if (aggregationConfig.has_value() &&
+        isColumnUsedByAggregation(name, *aggregationConfig)) {
+      continue;
+    }
+    if (folly::Random::oneIn(2, rng)) {
+      droppedColumns.insert(name);
+    }
+  }
+  return droppedColumns;
+}
+
+std::vector<std::string> TableEvolutionFuzzer::projectedColumnNames(
+    const RowTypePtr& schema,
+    const folly::F14FastSet<std::string>& droppedColumns) {
+  std::vector<std::string> outputColumnNames;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    if (droppedColumns.count(name) == 0) {
+      outputColumnNames.push_back(name);
+    }
+  }
+  return outputColumnNames;
+}
+
 void TableEvolutionFuzzer::run() {
   ScopedOOMInjector oomInjectorWritePath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -660,6 +1529,12 @@ void TableEvolutionFuzzer::run() {
   fuzzer::ExpressionFuzzer::FuzzedExpressionData generatedRemainingFilters;
   std::vector<std::string> additionalColumnNames;
   std::vector<TypePtr> additionalColumnTypes;
+  additionalColumnNames.reserve(config_.additionalColumns.size());
+  additionalColumnTypes.reserve(config_.additionalColumns.size());
+  for (const auto& [name, type] : config_.additionalColumns) {
+    additionalColumnNames.push_back(name);
+    additionalColumnTypes.push_back(type);
+  }
 
   if (shouldGenerateRemainingFilters) {
     // Generate remaining filters and extract new columns
@@ -707,7 +1582,8 @@ void TableEvolutionFuzzer::run() {
   auto tableOutputRootDir = TempDirectoryPath::create();
   std::vector<std::shared_ptr<TaskCursor>> writeTasks(
       2 * config_.evolutionCount - 1);
-  RowVectorPtr finalExpectedData;
+  std::vector<RowVectorPtr> finalExpectedBatches;
+  std::vector<RowVectorPtr> originalBatches;
 
   folly::F14FastMap<int, folly::F14FastSet<std::string>> globalMapColumnKeys;
   std::vector<int> globallyConsistentColumnIndexVector;
@@ -717,14 +1593,233 @@ void TableEvolutionFuzzer::run() {
       bucketColumnIndices,
       tableOutputRootDir->getPath(),
       writeTasks,
-      finalExpectedData,
+      finalExpectedBatches,
+      originalBatches,
       globalMapColumnKeys,
       globallyConsistentColumnIndexVector);
 
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
 
-  // Step 4: Create scan splits from write results
+  if (config_.generatedFilesValidator) {
+    auto [actualSplits, expectedSplits] = createScanSplitsFromWriteResults(
+        writeResults,
+        testSetups,
+        bucketColumnIndices,
+        /*selectedBucket=*/std::nullopt);
+    auto generatedFiles = extractInputFiles(actualSplits);
+    auto expectedFiles = extractInputFiles(expectedSplits);
+    generatedFiles.insert(
+        generatedFiles.end(), expectedFiles.begin(), expectedFiles.end());
+    std::sort(
+        generatedFiles.begin(),
+        generatedFiles.end(),
+        [](const auto& lhs, const auto& rhs) {
+          if (lhs.path != rhs.path) {
+            return lhs.path < rhs.path;
+          }
+          return lhs.format < rhs.format;
+        });
+    generatedFiles.erase(
+        std::unique(
+            generatedFiles.begin(),
+            generatedFiles.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.path == rhs.path && lhs.format == rhs.format;
+            }),
+        generatedFiles.end());
+    config_.generatedFilesValidator(generatedFiles);
+  }
+
+  // Merge the final setup's batches into one vector, once, just before the
+  // query-shape loop that uses it to generate subfield filters over every row.
+  const RowVectorPtr finalExpectedData =
+      fuzzer::mergeRowVectors(finalExpectedBatches, config_.pool);
+
+  // Step 4: Amortize the expensive write by running many query shapes over the
+  // same files. Each shape independently draws a fresh query (subfield filters,
+  // remaining-filter application, dropped filter-only columns, aggregation
+  // config, flatmap-as-struct read schema) and rebuilds the scan splits from
+  // the existing write results (no rewrite), then compares the pushdown plan
+  // against the FilterNode reference plan over the SAME files.
+  for (int shape = 0; shape < kQueryShapesPerFile; ++shape) {
+    VLOG(1) << "Running query shape " << shape;
+    runQueryShape(
+        writeResults,
+        testSetups,
+        bucketColumnIndices,
+        finalExpectedData,
+        originalBatches,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector,
+        /*countConfigCoverage=*/shape == 0,
+        shouldGenerateRemainingFilters,
+        generatedRemainingFilters,
+        columnNameMapping,
+        *executor);
+  }
+}
+
+RowTypePtr TableEvolutionFuzzer::readInputFileSchema(
+    const InputFile& inputFile) const {
+  dwio::common::ReaderOptions readerOptions(config_.pool);
+  readerOptions.setFileFormat(inputFile.format);
+  auto uniqueReadFile = filesystems::getFileSystem(inputFile.path, nullptr)
+                            ->openFileForRead(inputFile.path);
+  std::shared_ptr<ReadFile> readFile{std::move(uniqueReadFile)};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      readFile, readerOptions.memoryPool());
+  auto readerFactory = dwio::common::getReaderFactory(inputFile.format);
+  VELOX_CHECK_NOT_NULL(
+      readerFactory,
+      "No reader factory registered for the format of {}",
+      inputFile.path);
+  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  VELOX_CHECK_NOT_NULL(reader, "Could not open {}", inputFile.path);
+  return reader->rowType();
+}
+
+std::pair<std::vector<Split>, std::vector<Split>>
+TableEvolutionFuzzer::makeInputFileSplits(const InputFile& inputFile) const {
+  auto makeSplit = [&] { return Split(makeInputFileSplit(inputFile)); };
+  std::vector<Split> actualSplits;
+  std::vector<Split> expectedSplits;
+  actualSplits.push_back(makeSplit());
+  expectedSplits.push_back(makeSplit());
+  return {std::move(actualSplits), std::move(expectedSplits)};
+}
+
+std::shared_ptr<connector::hive::HiveConnectorSplit>
+TableEvolutionFuzzer::makeInputFileSplit(const InputFile& inputFile) const {
+  const uint64_t length = FLAGS_input_file_max_bytes > 0
+      ? static_cast<uint64_t>(FLAGS_input_file_max_bytes)
+      : std::numeric_limits<uint64_t>::max();
+  return std::make_shared<connector::hive::HiveConnectorSplit>(
+      connectorId(), inputFile.path, inputFile.format, /*start=*/0, length);
+}
+
+RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
+    const InputFile& inputFile,
+    const RowTypePtr& schema,
+    int32_t maxRows) const {
+  CursorParameters params;
+  params.serialExecution = true;
+  params.planNode = PlanBuilder().tableScan(schema).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  // Same range the plan scans use, so the values the filters are built from
+  // come from the rows those scans will actually see.
+  cursor->task()->addSplit("0", Split(makeInputFileSplit(inputFile)));
+  cursor->task()->noMoreSplits("0");
+
+  std::vector<RowVectorPtr> batches;
+  int32_t rows = 0;
+  while (rows < maxRows && cursor->moveNext()) {
+    auto batch = cursor->current();
+    rows += batch->size();
+    // Copy: the cursor reuses its output vector across calls.
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(
+            BaseVector::copy(*batch, config_.pool)));
+  }
+  // Unconditional: stopping at maxRows leaves the task running, and cancelling
+  // one that already reached the end of its splits is a no-op.
+  cursor->task()->requestCancel().wait();
+
+  if (batches.empty()) {
+    return nullptr;
+  }
+  return fuzzer::mergeRowVectors(batches, config_.pool);
+}
+
+bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
+  inputFile_ = &inputFile;
+  SCOPE_EXIT {
+    inputFile_ = nullptr;
+  };
+
+  const auto schema = readInputFileSchema(inputFile);
+  // A sampled warehouse file can hold no columns, or no rows, and neither is a
+  // fuzzer finding: there is no query shape to build and nothing for the two
+  // plans to disagree about. Report it as skipped so the caller stops rather
+  // than failing the sample or re-reading the same empty file until its
+  // deadline.
+  if (schema->size() == 0) {
+    LOG(WARNING) << "Skipping input file with no columns: " << inputFile.path;
+    return false;
+  }
+  LOG(INFO) << "Input file " << inputFile.path << " schema "
+            << schema->toString();
+
+  const RowVectorPtr finalExpectedData =
+      readInputFileSample(inputFile, schema, FLAGS_input_file_sample_rows);
+  if (finalExpectedData == nullptr) {
+    LOG(WARNING) << "Skipping input file with no rows: " << inputFile.path;
+    return false;
+  }
+
+  // One setup, matching the file: no evolution, no bucketing. Both plans then
+  // read the same splits and the comparison isolates the plan difference.
+  std::vector<Setup> testSetups{
+      Setup{schema, /*log2BucketCount=*/0, inputFile.format}};
+  const std::vector<column_index_t> bucketColumnIndices;
+
+  // Flatmap-as-struct reading needs the key sets the writer observed, which
+  // are only collected while writing. Left empty, so map columns are read as
+  // maps.
+  const folly::F14FastMap<int, folly::F14FastSet<std::string>>
+      globalMapColumnKeys;
+  const std::vector<int> globallyConsistentColumnIndexVector;
+
+  const fuzzer::ExpressionFuzzer::FuzzedExpressionData noRemainingFilters;
+  const std::unordered_map<std::string, std::string> noColumnNameMapping;
+  const std::vector<std::vector<RowVectorPtr>> noWriteResults;
+
+  auto executor = folly::getGlobalCPUExecutor();
+  for (int shape = 0; shape < FLAGS_input_file_query_shapes; ++shape) {
+    VLOG(1) << "Running query shape " << shape;
+    runQueryShape(
+        noWriteResults,
+        testSetups,
+        bucketColumnIndices,
+        finalExpectedData,
+        /*originalBatches=*/{},
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector,
+        /*countConfigCoverage=*/shape == 0,
+        /*shouldGenerateRemainingFilters=*/false,
+        noRemainingFilters,
+        noColumnNameMapping,
+        *executor);
+  }
+  return true;
+}
+
+void TableEvolutionFuzzer::runQueryShape(
+    const std::vector<std::vector<RowVectorPtr>>& writeResults,
+    const std::vector<Setup>& testSetups,
+    const std::vector<column_index_t>& bucketColumnIndices,
+    const RowVectorPtr& finalExpectedData,
+    const std::vector<RowVectorPtr>& originalBatches,
+    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+        globalMapColumnKeys,
+    const std::vector<int>& globallyConsistentColumnIndexVector,
+    bool countConfigCoverage,
+    bool shouldGenerateRemainingFilters,
+    const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
+        generatedRemainingFilters,
+    const std::unordered_map<std::string, std::string>& columnNameMapping,
+    folly::Executor& executor) {
+  readSessionProperties_ = config_.extraReadSessionProperties
+      ? config_.extraReadSessionProperties(rng_)
+      : std::pair<
+            std::unordered_map<std::string, std::string>,
+            std::unordered_map<std::string, std::string>>{};
+
+  // Rebuild the scan splits per shape: makeScanTask moves them, and a fresh
+  // bucket selection lets shapes exercise different buckets. This only
+  // reconstructs Split objects from the existing write results; it does not
+  // rewrite any files.
   std::optional<int32_t> selectedBucket;
   if (!bucketColumnIndices.empty()) {
     selectedBucket =
@@ -732,12 +1827,14 @@ void TableEvolutionFuzzer::run() {
     VLOG(1) << "selectedBucket=" << *selectedBucket;
   }
 
-  auto [actualSplits, expectedSplits] = createScanSplitsFromWriteResults(
-      writeResults,
-      testSetups,
-      bucketColumnIndices,
-      selectedBucket,
-      finalExpectedData);
+  // There are no write results to rebuild from when running against a file
+  // that was not written here; both plans read that one file.
+  auto [actualSplits, expectedSplits] = inputFile_ != nullptr
+      ? makeInputFileSplits(*inputFile_)
+      : createScanSplitsFromWriteResults(
+            writeResults, testSetups, bucketColumnIndices, selectedBucket);
+  const auto pushdownFiles = extractInputFiles(actualSplits);
+  const auto referenceFiles = extractInputFiles(expectedSplits);
 
   // Step 5: Setup scan tasks with filters and optional aggregation pushdown
   auto rowType = testSetups.back().schema;
@@ -774,13 +1871,15 @@ void TableEvolutionFuzzer::run() {
 
   // Collect all filtered columns (both subfield and remaining filters)
   std::unordered_set<std::string> allFilteredColumns = subfieldFilteredFields;
+  std::unordered_set<std::string> remainingFilteredFields;
 
   // Extract columns from remaining filter if present
   if (!pushdownConfig.remainingFilter.empty()) {
     for (const auto& name : rowType->names()) {
       // Check if the column name appears in the remaining filter
-      if (pushdownConfig.remainingFilter.find(name) != std::string::npos) {
+      if (containsIdentifier(pushdownConfig.remainingFilter, name)) {
         allFilteredColumns.insert(name);
+        remainingFilteredFields.insert(name);
       }
     }
   }
@@ -802,12 +1901,42 @@ void TableEvolutionFuzzer::run() {
     }
   }
 
-  // Decide the flatmap-as-struct read schema once and share it across both scan
+  // Read a random subset of the filtered columns filter-only (drop them from
+  // the scan output while still filtering on them) to exercise the selective
+  // reader's filter-only column path.
+  std::vector<RowTypePtr> perEvolutionSchemas;
+  perEvolutionSchemas.reserve(testSetups.size());
+  for (const auto& setup : testSetups) {
+    perEvolutionSchemas.emplace_back(setup.schema);
+  }
+  const folly::F14FastSet<std::string> droppedColumns = selectFilterOnlyColumns(
+      rowType,
+      allFilteredColumns,
+      bucketColumnIndices,
+      perEvolutionSchemas,
+      aggConfig,
+      rng_);
+  if (!droppedColumns.empty()) {
+    VLOG(1) << "Dropping filter-only columns from scan output: ["
+            << folly::join(", ", droppedColumns) << "]";
+  }
+  const std::vector<std::string> outputColumnNames =
+      projectedColumnNames(rowType, droppedColumns);
+
+  // Decide the flatmap-as-struct read schema once and share it across both
   // plans. buildFlatmapAsStructSchema draws an rng coin per compatible map
-  // column; computing it separately per plan would make the two plans disagree
-  // on a column's read mode (MAP vs struct).
-  RowTypePtr fullOutSchema = buildFlatmapAsStructSchema(
+  // column; computing it separately per plan could make the pushdown and
+  // FilterNode plans disagree on a column's read mode (MAP vs struct).
+  const bool flatmapEligible = std::any_of(
+      globallyConsistentColumnIndexVector.begin(),
+      globallyConsistentColumnIndexVector.end(),
+      [&](int columnIndex) {
+        const auto keys = globalMapColumnKeys.find(columnIndex);
+        return keys != globalMapColumnKeys.end() && !keys->second.empty();
+      });
+  auto flatMapSelection = buildFlatmapAsStructSchema(
       rowType, globalMapColumnKeys, globallyConsistentColumnIndexVector);
+  const auto& fullOutSchema = flatMapSelection.outputSchema;
 
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   // actual: TableScan -> Aggregation (allows pushdown)
@@ -818,7 +1947,9 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       false,
       false, // insertProjectToBlockPushdown
-      fullOutSchema);
+      fullOutSchema,
+      outputColumnNames,
+      readSessionProperties_.first);
 
   // expected: TableScan -> Project -> Aggregation (blocks pushdown)
   // Insert a Project node to prevent aggregation pushdown
@@ -829,7 +1960,25 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       true,
       true, // insertProjectToBlockPushdown
-      fullOutSchema);
+      fullOutSchema,
+      outputColumnNames,
+      readSessionProperties_.second);
+
+  const bool originalOracleAvailable = inputFile_ == nullptr &&
+      !FLAGS_enable_oom_injection_write_path &&
+      !FLAGS_enable_oom_injection_read_path;
+  if (originalOracleAvailable) {
+    scanTasks.emplace_back(makeValuesTask(
+        selectRowsForBucket(
+            originalBatches,
+            bucketColumnIndices,
+            selectedBucket,
+            testSetups.back().bucketCount()),
+        rowType,
+        pushdownConfig,
+        flatMapSelection,
+        outputColumnNames));
+  }
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -838,14 +1987,202 @@ void TableEvolutionFuzzer::run() {
     oomInjectorReadPath.enable();
   }
 
-  // Step 6: Execute scan tasks and verify results
-  auto scanResults = runTaskCursors(scanTasks, *executor);
-
-  // Skip result verification when OOM injection is enabled
-  if (!FLAGS_enable_oom_injection_write_path &&
-      !FLAGS_enable_oom_injection_read_path) {
-    checkResultsEqual(scanResults[0], scanResults[1]);
+  std::vector<std::string> flatmapEligibleKeyTypes;
+  std::vector<std::string> flatmapEligibleValueTypes;
+  std::vector<std::string> flatmapAsStructKeyTypes;
+  std::vector<std::string> flatmapAsStructValueTypes;
+  for (uint32_t i = 0; i < rowType->size(); ++i) {
+    if (!rowType->childAt(i)->isMap()) {
+      continue;
+    }
+    const auto& mapType = rowType->childAt(i)->asMap();
+    const auto columnIndex = static_cast<int>(i);
+    const auto keys = globalMapColumnKeys.find(columnIndex);
+    const bool columnEligible =
+        std::find(
+            globallyConsistentColumnIndexVector.begin(),
+            globallyConsistentColumnIndexVector.end(),
+            columnIndex) != globallyConsistentColumnIndexVector.end() &&
+        keys != globalMapColumnKeys.end() && !keys->second.empty();
+    if (columnEligible) {
+      flatmapEligibleKeyTypes.emplace_back(mapType.keyType()->kindName());
+      flatmapEligibleValueTypes.emplace_back(mapType.valueType()->kindName());
+    }
+    if (fullOutSchema->childAt(i)->isRow()) {
+      flatmapAsStructKeyTypes.emplace_back(mapType.keyType()->kindName());
+      flatmapAsStructValueTypes.emplace_back(mapType.valueType()->kindName());
+    }
   }
+
+  std::vector<std::string> bucketColumnTypes;
+  bucketColumnTypes.reserve(bucketColumnIndices.size());
+  for (const auto columnIndex : bucketColumnIndices) {
+    bucketColumnTypes.emplace_back(rowType->childAt(columnIndex)->kindName());
+  }
+
+  VLOG(1) << "ScanCoverage[context]:"
+          << " subfieldFilters=" << pushdownConfig.subfieldFiltersMap.size()
+          << " remainingFilter=" << !pushdownConfig.remainingFilter.empty()
+          << " aggFunctions="
+          << (aggConfig ? folly::join(",", aggConfig->aggregates) : "none")
+          << " groupKeys="
+          << (aggConfig ? folly::join(",", aggConfig->groupingKeys) : "none")
+          << " filterOnlyCols=" << droppedColumns.size() << " bucket="
+          << (selectedBucket ? std::to_string(*selectedBucket) : "none");
+
+  // Step 6: Execute scan tasks and verify results
+  const bool collectCoverage = !FLAGS_enable_oom_injection_write_path &&
+      !FLAGS_enable_oom_injection_read_path;
+  auto filterTypes = typeKindsForColumns(rowType, allFilteredColumns);
+  auto subfieldFilterTypes =
+      typeKindsForColumns(rowType, subfieldFilteredFields);
+  auto remainingFilterTypes =
+      typeKindsForColumns(rowType, remainingFilteredFields);
+  auto filterKinds = filterKindNames(
+      pushdownConfig.subfieldFiltersMap,
+      !pushdownConfig.remainingFilter.empty());
+  auto nullAcceptingSubfieldFilterTypes = nullAcceptingSubfieldFilterTypeKinds(
+      rowType, finalExpectedData, pushdownConfig.subfieldFiltersMap);
+  auto groupingKeyTypes = aggConfig.has_value()
+      ? groupingKeyTypeKinds(rowType, *aggConfig)
+      : std::vector<std::string>{};
+  auto aggregateTypes = aggConfig.has_value()
+      ? aggregateInputTypeKinds(rowType, *aggConfig)
+      : std::vector<std::string>{};
+  auto aggregationFunctions = aggConfig.has_value()
+      ? aggregateFunctionNames(*aggConfig)
+      : std::vector<std::string>{};
+  auto projectedTypes = scalarTypeKindsForColumns(rowType, outputColumnNames);
+  const auto numFlatmapEligibleColumns =
+      static_cast<int64_t>(flatmapEligibleKeyTypes.size());
+  QueryCoverage queryCoverage{
+      .pushdownFiles = pushdownFiles,
+      .referenceFiles = referenceFiles,
+      .pushdown = {},
+      .reference = {},
+      .hasSubfieldFilters = !pushdownConfig.subfieldFiltersMap.empty(),
+      .hasRemainingFilter = !pushdownConfig.remainingFilter.empty(),
+      .hasFilterOnlyColumns = !droppedColumns.empty(),
+      .aggregationRequested = aggConfig.has_value(),
+      .filterTypes = std::move(filterTypes),
+      .subfieldFilterTypes = std::move(subfieldFilterTypes),
+      .remainingFilterTypes = std::move(remainingFilterTypes),
+      .filterKinds = std::move(filterKinds),
+      .nullAcceptingSubfieldFilterTypes =
+          std::move(nullAcceptingSubfieldFilterTypes),
+      .groupingKeyTypes = std::move(groupingKeyTypes),
+      .aggregateTypes = std::move(aggregateTypes),
+      .aggregationFunctions = std::move(aggregationFunctions),
+      .projectedTypes = std::move(projectedTypes),
+      .flatmapAsStructKeyTypes = std::move(flatmapAsStructKeyTypes),
+      .flatmapAsStructValueTypes = std::move(flatmapAsStructValueTypes),
+      .flatmapEligibleKeyTypes = std::move(flatmapEligibleKeyTypes),
+      .flatmapEligibleValueTypes = std::move(flatmapEligibleValueTypes),
+      .bucketColumnTypes = std::move(bucketColumnTypes),
+      .flatmapEligible = flatmapEligible,
+      .countConfigCoverage = countConfigCoverage,
+      .bucketed = !bucketColumnIndices.empty(),
+      .bucketSelected = selectedBucket.has_value(),
+      .numFlatmapEligibleColumns = numFlatmapEligibleColumns,
+      .numBucketColumns = static_cast<int64_t>(bucketColumnIndices.size()),
+      .bucketCount = testSetups.back().bucketCount(),
+      .numSubfieldFilters =
+          static_cast<int64_t>(pushdownConfig.subfieldFiltersMap.size()),
+      .numFilterOnlyColumns = static_cast<int64_t>(droppedColumns.size()),
+      .rowsReducedByPushdown = 0,
+      .originalVerificationPassed = false,
+      .failurePhase = {},
+      .executionSucceeded = false,
+      .verificationPassed = false,
+  };
+
+  auto notifyCoverageObserver = [&] {
+    if (config_.queryCoverageObserver) {
+      try {
+        config_.queryCoverageObserver(queryCoverage);
+      } catch (const std::exception& observerError) {
+        LOG(ERROR) << "Query coverage observer failed: "
+                   << observerError.what();
+      } catch (...) {
+        LOG(ERROR) << "Query coverage observer failed with an unknown error";
+      }
+    }
+  };
+
+  auto recordCoverage = [&] {
+    coverageStats_.add(queryCoverage);
+    notifyCoverageObserver();
+    maybeLogCoverageSummary();
+  };
+
+  auto recordCoverageAndRethrow = [&](std::exception_ptr error) -> void {
+    coverageStats_.add(queryCoverage);
+    notifyCoverageObserver();
+    maybeLogCoverageSummary();
+    std::rethrow_exception(error);
+  };
+
+  std::vector<std::vector<RowVectorPtr>> scanResults;
+  try {
+    scanResults = runTaskCursors(scanTasks, executor);
+  } catch (...) {
+    if (collectCoverage) {
+      queryCoverage.failurePhase = "scanExecution";
+      recordCoverageAndRethrow(std::current_exception());
+    }
+    throw;
+  }
+
+  if (!collectCoverage) {
+    return;
+  }
+
+  auto pushdownStats = extractScanStats(scanTasks[0]->task());
+  auto referenceStats = extractScanStats(scanTasks[1]->task());
+  queryCoverage.pushdown = pushdownStats;
+  queryCoverage.reference = referenceStats;
+  queryCoverage.executionSucceeded = true;
+  logScanStats("pushdown", pushdownStats);
+  logScanStats("reference", referenceStats);
+
+  const double pushdownVsReferenceOutputRatio =
+      referenceStats.outputPositions > 0
+      ? static_cast<double>(pushdownStats.outputPositions) /
+          static_cast<double>(referenceStats.outputPositions)
+      : 1.0;
+  const uint64_t rowsReducedByPushdown =
+      referenceStats.outputPositions > pushdownStats.outputPositions
+      ? referenceStats.outputPositions - pushdownStats.outputPositions
+      : 0;
+  VLOG(1) << "ScanCoverage[derived]:"
+          << " pushdownVsReferenceOutputRatio="
+          << pushdownVsReferenceOutputRatio
+          << " rowsReducedByPushdown=" << rowsReducedByPushdown;
+  queryCoverage.rowsReducedByPushdown = rowsReducedByPushdown;
+  try {
+    checkResultsEqual(scanResults[0], scanResults[1]);
+  } catch (...) {
+    for (const auto& [key, value] : readSessionProperties_.first) {
+      LOG(ERROR) << "Pushdown scan property: " << key << "=" << value;
+    }
+    for (const auto& [key, value] : readSessionProperties_.second) {
+      LOG(ERROR) << "Reference scan property: " << key << "=" << value;
+    }
+    queryCoverage.failurePhase = "pushdownVsReferenceVerification";
+    recordCoverageAndRethrow(std::current_exception());
+  }
+
+  if (originalOracleAvailable) {
+    try {
+      checkResultsEqual(scanResults[2], scanResults[0]);
+      queryCoverage.originalVerificationPassed = true;
+    } catch (...) {
+      queryCoverage.failurePhase = "originalVerification";
+      recordCoverageAndRethrow(std::current_exception());
+    }
+  }
+  queryCoverage.verificationPassed = true;
+  recordCoverage();
 }
 
 int TableEvolutionFuzzer::Setup::bucketCount() const {
@@ -856,8 +2193,10 @@ std::string TableEvolutionFuzzer::makeNewName() {
   return fmt::format("name_{}", ++sequenceNumber_);
 }
 
-TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
-  // All types that can be written to file directly.
+TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth, bool allowTimestamp) {
+  // All types that can be written to file directly. TIMESTAMP has no widening
+  // target, so evolveType() and liftToType() leave it alone through their
+  // default arms; it is excluded from map keys by hasUnsupportedMapKey().
   static const std::vector<TypePtr> scalarTypes = {
       BOOLEAN(),
       TINYINT(),
@@ -868,18 +2207,44 @@ TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
       DOUBLE(),
       VARCHAR(),
       VARBINARY(),
+      TIMESTAMP(),
   };
-  return vectorFuzzer_.randType(scalarTypes, maxDepth);
+  // Same set without TIMESTAMP, for bucket columns. Bucketing a timestamp
+  // breaks the bucket-conversion invariant asserted in
+  // HiveSplitReader::bucketConversionRows(): a row read from the file for
+  // bucket B must hash to a partition congruent to B modulo the original
+  // bucket count. Whatever the writer hashed a timestamp to does not agree
+  // with what HivePartitionFunction computes at read time, so those rows land
+  // in the wrong bucket. Excluded at every nesting depth, not just the top
+  // level, because a bucket column may be a row/array/map.
+  static const std::vector<TypePtr> nonTimestampScalarTypes = {
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+  };
+  return vectorFuzzer_.randType(
+      allowTimestamp ? scalarTypes : nonTimestampScalarTypes, maxDepth);
 }
 
 RowTypePtr TableEvolutionFuzzer::makeInitialSchema(
+    const std::vector<column_index_t>& bucketColumnIndices,
     const std::vector<std::string>& additionalColumnNames,
     const std::vector<TypePtr>& additionalColumnTypes) {
+  const folly::F14FastSet<column_index_t> bucketColumns(
+      bucketColumnIndices.begin(), bucketColumnIndices.end());
   std::vector<std::string> names(config_.columnCount);
   std::vector<TypePtr> types(config_.columnCount);
   for (int i = 0; i < config_.columnCount; ++i) {
     names[i] = makeNewName();
-    types[i] = makeNewType(3);
+    // Bucket columns are never evolved (evolveRowType skips them), so keeping
+    // TIMESTAMP out here is enough to keep it out of bucketing entirely.
+    types[i] = makeNewType(3, /*allowTimestamp=*/bucketColumns.count(i) == 0);
   }
 
   // Add additional columns from generateRemainingFilters
@@ -978,11 +2343,12 @@ std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
   std::vector<Setup> setups(config_.evolutionCount);
   for (int i = 0; i < config_.evolutionCount; ++i) {
     if (i == 0) {
-      setups[i].schema =
-          makeInitialSchema(additionalColumnNames, additionalColumnTypes);
+      setups[i].schema = makeInitialSchema(
+          bucketColumnIndices, additionalColumnNames, additionalColumnTypes);
     } else {
       setups[i].schema = evolveRowType(
           *setups[i - 1].schema, bucketColumnIndices, columnNameMapping);
+      coverageStats_.addSchemaEvolution(setups[i - 1].schema, setups[i].schema);
     }
     if (!bucketColumnIndices.empty()) {
       if (i == 0) {
@@ -1003,7 +2369,7 @@ std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
 
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const Setup& setup,
-    const RowVectorPtr& data,
+    const std::vector<RowVectorPtr>& dataBatches,
     const std::string& outputDir,
     const std::vector<column_index_t>& bucketColumnIndices,
     FuzzerGenerator& rng,
@@ -1011,7 +2377,10 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
     std::vector<int>& globallyCompatibleFlatmapColumns,
     const std::unordered_map<std::string, std::string>& extraSerdeParams) {
-  auto builder = PlanBuilder().values({data});
+  // Emit each batch as its own Values output, so the writer sees multiple
+  // write() calls per file. This drives multiple stripes per file and multiple
+  // chunks per stripe when chunking is enabled.
+  auto builder = PlanBuilder().values(dataBatches);
 
   // Create serdeParameters using proper dwrf::Config for flatmap configuration
   std::unordered_map<std::string, std::string> serdeParameters;
@@ -1022,8 +2391,27 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
 
     for (int i = 0; i < setup.schema->size(); ++i) {
       if (setup.schema->childAt(i)->isMap()) {
-        // Check if this specific map column has any empty elements
-        if (hasEmptyElement(data, i)) {
+        // Check if this specific map column has any empty elements in any
+        // batch. A column is flatmap-compatible only if every batch is free of
+        // empty maps.
+        // TODO: Coverage gap, not a correctness bug. A present-key/null-value
+        // entry (e.g. {k: null}) is NOT excluded here -- it still contributes
+        // key k -- yet under flatmap-as-struct read it collapses to the same
+        // null child as an absent key. That collapse is symmetric across both
+        // compared plans (both read flatmap-as-struct), so it does not diverge
+        // the oracle; it only leaves the present-null-vs-absent case
+        // unexercised. Empty/null maps are excluded for a different, real
+        // reason: an all-empty/all-null column collects zero keys, and
+        // buildFlatmapAsStructSchema would then build a zero-field struct that
+        // the flatmap-as-struct reader rejects.
+        bool anyEmptyElement = false;
+        for (const auto& batch : dataBatches) {
+          if (hasEmptyElement(batch, i)) {
+            anyEmptyElement = true;
+            break;
+          }
+        }
+        if (anyEmptyElement) {
           removeFromVector(globallyCompatibleFlatmapColumns, i);
           continue;
         }
@@ -1035,64 +2423,68 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
             VLOG(1) << "Write column " << setup.schema->nameOf(i)
                     << " as flatmap";
 
-            // Extract actual keys from the map data and collect directly into
-            // global set
-            SelectivityVector allRows(data->childAt(i)->size());
-            DecodedVector decodedMap(*data->childAt(i), allRows);
-            auto* mapVector = decodedMap.base()->asChecked<MapVector>();
-            if (mapVector->size() > 0) {
+            // Collect keys directly into the global set
+            auto& uniqueKeys = globalMapColumnKeys[static_cast<int>(i)];
+
+            // Extract actual keys from every batch's map data and collect
+            // directly into the global set.
+            for (const auto& batch : dataBatches) {
+              SelectivityVector allRows(batch->childAt(i)->size());
+              DecodedVector decodedMap(*batch->childAt(i), allRows);
+              auto* mapVector = decodedMap.base()->asChecked<MapVector>();
+              if (mapVector->size() == 0) {
+                continue;
+              }
               auto keys = mapVector->mapKeys();
+              if (!keys) {
+                continue;
+              }
 
-              if (keys) {
-                // Collect keys directly into the global set
-                auto& uniqueKeys = globalMapColumnKeys[static_cast<int>(i)];
+              // Iterate through the decoded rows, not the raw mapVector
+              // indices
+              for (vector_size_t row = 0; row < batch->childAt(i)->size();
+                   ++row) {
+                auto decodedIndex = decodedMap.index(row);
+                if (!decodedMap.isNullAt(row) &&
+                    !mapVector->isNullAt(decodedIndex)) {
+                  // Get the map entry for this decoded row
+                  auto mapOffset = mapVector->offsetAt(decodedIndex);
+                  auto mapSize = mapVector->sizeAt(decodedIndex);
 
-                // Iterate through the decoded rows, not the raw mapVector
-                // indices
-                for (vector_size_t row = 0; row < data->childAt(i)->size();
-                     ++row) {
-                  auto decodedIndex = decodedMap.index(row);
-                  if (!decodedMap.isNullAt(row) &&
-                      !mapVector->isNullAt(decodedIndex)) {
-                    // Get the map entry for this decoded row
-                    auto mapOffset = mapVector->offsetAt(decodedIndex);
-                    auto mapSize = mapVector->sizeAt(decodedIndex);
-
-                    // Process all keys in this map entry
-                    for (vector_size_t keyIdx = 0; keyIdx < mapSize; ++keyIdx) {
-                      auto keyPosition = mapOffset + keyIdx;
-                      if (!keys->isNullAt(keyPosition)) {
-                        std::string keyStr;
-                        if (keys->type()->isVarchar() ||
-                            keys->type()->isVarbinary()) {
-                          auto* keyVector = keys->asFlatVector<StringView>();
-                          auto keyView = keyVector->valueAt(keyPosition);
-                          keyStr = std::string(keyView);
-                        } else if (keys->type()->isInteger()) {
-                          auto* keyVector = keys->asFlatVector<int32_t>();
-                          auto keyVal = keyVector->valueAt(keyPosition);
-                          keyStr = std::to_string(keyVal);
-                        } else if (keys->type()->isBigint()) {
-                          auto* keyVector = keys->asFlatVector<int64_t>();
-                          auto keyVal = keyVector->valueAt(keyPosition);
-                          keyStr = std::to_string(keyVal);
-                        } else if (keys->type()->isSmallint()) {
-                          auto* keyVector = keys->asFlatVector<int16_t>();
-                          auto keyVal = keyVector->valueAt(keyPosition);
-                          keyStr = std::to_string(keyVal);
-                        } else if (keys->type()->isTinyint()) {
-                          auto* keyVector = keys->asFlatVector<int8_t>();
-                          auto keyVal = keyVector->valueAt(keyPosition);
-                          keyStr = std::to_string(keyVal);
-                        } else {
-                          // This should not be reached since
-                          // hasUnsupportedMapKey filters out unsupported types
-                          VELOX_UNREACHABLE(
-                              "Unsupported map key type: {}",
-                              keys->type()->toString());
-                        }
-                        uniqueKeys.insert(keyStr);
+                  // Process all keys in this map entry
+                  for (vector_size_t keyIdx = 0; keyIdx < mapSize; ++keyIdx) {
+                    auto keyPosition = mapOffset + keyIdx;
+                    if (!keys->isNullAt(keyPosition)) {
+                      std::string keyStr;
+                      if (keys->type()->isVarchar() ||
+                          keys->type()->isVarbinary()) {
+                        auto* keyVector = keys->asFlatVector<StringView>();
+                        auto keyView = keyVector->valueAt(keyPosition);
+                        keyStr = std::string(keyView);
+                      } else if (keys->type()->isInteger()) {
+                        auto* keyVector = keys->asFlatVector<int32_t>();
+                        auto keyVal = keyVector->valueAt(keyPosition);
+                        keyStr = std::to_string(keyVal);
+                      } else if (keys->type()->isBigint()) {
+                        auto* keyVector = keys->asFlatVector<int64_t>();
+                        auto keyVal = keyVector->valueAt(keyPosition);
+                        keyStr = std::to_string(keyVal);
+                      } else if (keys->type()->isSmallint()) {
+                        auto* keyVector = keys->asFlatVector<int16_t>();
+                        auto keyVal = keyVector->valueAt(keyPosition);
+                        keyStr = std::to_string(keyVal);
+                      } else if (keys->type()->isTinyint()) {
+                        auto* keyVector = keys->asFlatVector<int8_t>();
+                        auto keyVal = keyVector->valueAt(keyPosition);
+                        keyStr = std::to_string(keyVal);
+                      } else {
+                        // This should not be reached since
+                        // hasUnsupportedMapKey filters out unsupported types
+                        VELOX_UNREACHABLE(
+                            "Unsupported map key type: {}",
+                            keys->type()->toString());
                       }
+                      uniqueKeys.insert(keyStr);
                     }
                   }
                 }
@@ -1170,6 +2562,17 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
   CursorParameters params;
   params.serialExecution = true;
   params.planNode = builder.planNode();
+  // A bucketed write opens one writer per bucket, and generated setups can
+  // reach 2^8 buckets -- past the Hive connector's default 128 open-writer cap.
+  // Raise the cap so high-bucket-count setups exercise bucket conversion
+  // instead of failing with "Exceeded open writer limit".
+  params.queryCtx = core::QueryCtx::create(
+      /*executor=*/nullptr,
+      core::QueryConfig{{}},
+      {{std::string(PlanBuilder::kHiveDefaultConnectorId),
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {"max_partitions_per_writers", "1024"}})}});
   return TaskCursor::create(params);
 }
 
@@ -1192,13 +2595,14 @@ VectorPtr TableEvolutionFuzzer::liftToPrimitiveType(
       std::vector<BufferPtr>({}));
 }
 
-RowTypePtr TableEvolutionFuzzer::buildFlatmapAsStructSchema(
+TableEvolutionFuzzer::FlatMapAsStructSelection
+TableEvolutionFuzzer::buildFlatmapAsStructSchema(
     const RowTypePtr& tableSchema,
     const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
         globalMapColumnKeys,
     const std::vector<int>& globallyCompatibleFlatmapColumns) {
   if (globallyCompatibleFlatmapColumns.empty()) {
-    return tableSchema;
+    return {.outputSchema = tableSchema, .keysByColumn = {}};
   }
 
   VLOG(1) << "Setting up struct reading for "
@@ -1207,6 +2611,7 @@ RowTypePtr TableEvolutionFuzzer::buildFlatmapAsStructSchema(
 
   auto names = tableSchema->names();
   auto types = tableSchema->children();
+  std::map<int, std::vector<std::string>> keysByColumn;
 
   // Filter globalMapColumnKeys to only include globally compatible columns
   std::unordered_map<int, folly::F14FastSet<std::string>> filteredMapColumnKeys;
@@ -1234,10 +2639,172 @@ RowTypePtr TableEvolutionFuzzer::buildFlatmapAsStructSchema(
 
     // Replace the map type with struct type in the schema
     types[mapColumnIndex] = finalStructSchema;
+    keysByColumn.emplace(mapColumnIndex, std::move(keys));
   }
 
   // Build new schema using struct reading for flatmap columns
-  return ROW(names, types);
+  return {
+      .outputSchema = ROW(std::move(names), std::move(types)),
+      .keysByColumn = std::move(keysByColumn),
+  };
+}
+
+std::vector<RowVectorPtr> TableEvolutionFuzzer::selectRowsForBucket(
+    const std::vector<RowVectorPtr>& input,
+    const std::vector<column_index_t>& bucketColumnIndices,
+    std::optional<int32_t> selectedBucket,
+    int32_t bucketCount) const {
+  if (!selectedBucket.has_value()) {
+    return input;
+  }
+
+  connector::hive::HivePartitionFunction partitionFunction(
+      bucketCount, bucketColumnIndices);
+  std::vector<RowVectorPtr> selectedBatches;
+  selectedBatches.reserve(input.size());
+  for (const auto& batch : input) {
+    std::vector<uint32_t> partitions;
+    partitionFunction.partition(*batch, partitions);
+
+    std::vector<vector_size_t> selectedRows;
+    selectedRows.reserve(batch->size());
+    for (vector_size_t row = 0; row < batch->size(); ++row) {
+      if (partitions[row] == *selectedBucket) {
+        selectedRows.push_back(row);
+      }
+    }
+    if (selectedRows.empty()) {
+      continue;
+    }
+
+    auto indices = AlignedBuffer::allocate<vector_size_t>(
+        selectedRows.size(), config_.pool);
+    std::copy(
+        selectedRows.begin(),
+        selectedRows.end(),
+        indices->asMutable<vector_size_t>());
+    std::vector<VectorPtr> children;
+    children.reserve(batch->childrenSize());
+    for (const auto& child : batch->children()) {
+      children.push_back(
+          BaseVector::wrapInDictionary(
+              nullptr, indices, selectedRows.size(), child));
+    }
+    selectedBatches.push_back(
+        std::make_shared<RowVector>(
+            config_.pool,
+            batch->type(),
+            nullptr,
+            selectedRows.size(),
+            std::move(children)));
+  }
+  if (selectedBatches.empty() && !input.empty()) {
+    selectedBatches.push_back(
+        RowVector::createEmpty(input.front()->type(), config_.pool));
+  }
+  return selectedBatches;
+}
+
+std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
+    const std::vector<RowVectorPtr>& input,
+    const RowTypePtr& tableSchema,
+    const PushdownConfig& pushdownConfig,
+    const FlatMapAsStructSelection& flatMapSelection,
+    const std::vector<std::string>& outputColumnNames) {
+  PlanBuilder builder(config_.pool);
+  if (input.empty()) {
+    builder.values(RowVector::createEmpty(tableSchema, config_.pool));
+  } else {
+    builder.values(input);
+  }
+  for (const auto& [subfield, filter] : pushdownConfig.subfieldFiltersMap) {
+    auto filterExpression = core::test::filterToExpr(
+        subfield, filter.get(), tableSchema, config_.pool);
+    builder.addNode([filterExpression](
+                        const core::PlanNodeId& id, core::PlanNodePtr source) {
+      return std::make_shared<core::FilterNode>(
+          id, filterExpression, std::move(source));
+    });
+  }
+  builder.optionalFilter(pushdownConfig.remainingFilter);
+
+  if (!flatMapSelection.keysByColumn.empty()) {
+    std::vector<core::ExprPtr> projections;
+    projections.reserve(tableSchema->size());
+    for (int i = 0; i < tableSchema->size(); ++i) {
+      const auto& name = tableSchema->nameOf(i);
+      const auto keys = flatMapSelection.keysByColumn.find(i);
+      if (keys == flatMapSelection.keysByColumn.end()) {
+        projections.push_back(
+            std::make_shared<core::FieldAccessExpr>(name, name));
+        continue;
+      }
+
+      const auto& mapType = tableSchema->childAt(i)->asMap();
+      std::vector<core::ExprPtr> fields;
+      fields.reserve(keys->second.size());
+      for (const auto& key : keys->second) {
+        fields.push_back(
+            std::make_shared<core::CallExpr>(
+                "element_at",
+                std::vector<core::ExprPtr>{
+                    std::make_shared<core::FieldAccessExpr>(name, std::nullopt),
+                    std::make_shared<core::ConstantExpr>(
+                        mapType.keyType(),
+                        connector::hive::PartitionValue::fromString(
+                            key,
+                            *mapType.keyType(),
+                            connector::hive::PartitionValue::TimestampMode::
+                                kUtc,
+                            connector::hive::PartitionValue::DateMode::
+                                kIsoString),
+                        std::nullopt)},
+                std::nullopt));
+      }
+      projections.push_back(
+          std::make_shared<core::CastExpr>(
+              flatMapSelection.outputSchema->childAt(i),
+              std::make_shared<core::CallExpr>(
+                  "row_constructor", std::move(fields), std::nullopt),
+              false,
+              name));
+    }
+    builder.projectExpressions(projections);
+  }
+
+  std::unordered_set<std::string> outputColumnNameSet(
+      outputColumnNames.begin(), outputColumnNames.end());
+  std::vector<std::string> projectedNames;
+  std::vector<TypePtr> projectedTypes;
+  for (int i = 0; i < flatMapSelection.outputSchema->size(); ++i) {
+    const auto& name = flatMapSelection.outputSchema->nameOf(i);
+    if (outputColumnNames.empty() || outputColumnNameSet.count(name) > 0) {
+      projectedNames.push_back(name);
+      projectedTypes.push_back(flatMapSelection.outputSchema->childAt(i));
+    }
+  }
+  const auto projectedSchema =
+      ROW(std::move(projectedNames), std::move(projectedTypes));
+  const bool isPruned =
+      projectedSchema->size() < flatMapSelection.outputSchema->size();
+  if (isPruned || pushdownConfig.aggregationConfig.has_value()) {
+    if (pushdownConfig.aggregationConfig.has_value()) {
+      builder.project(aggregationBlockingProjectExpressions(
+          projectedSchema, *pushdownConfig.aggregationConfig));
+    } else {
+      builder.project(projectedSchema->names());
+    }
+  }
+  if (pushdownConfig.aggregationConfig.has_value()) {
+    builder.singleAggregation(
+        pushdownConfig.aggregationConfig->groupingKeys,
+        pushdownConfig.aggregationConfig->aggregates);
+  }
+
+  CursorParameters params;
+  params.serialExecution = true;
+  params.planNode = builder.planNode();
+  return TaskCursor::create(params);
 }
 
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
@@ -1246,25 +2813,94 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const PushdownConfig& pushdownConfig,
     bool useFiltersAsNode,
     bool insertProjectToBlockPushdown,
-    const RowTypePtr& fullOutSchema) {
+    const RowTypePtr& fullOutSchema,
+    const std::vector<std::string>& outputColumnNames,
+    const std::unordered_map<std::string, std::string>& readSessionProperties) {
+  // 'insertProjectToBlockPushdown' only takes effect on the reference plan,
+  // where the Project below is what blocks aggregation pushdown; it is
+  // meaningless (and never applied) on the pushdown plan. Enforce the pairing
+  // so a caller that sets it without 'useFiltersAsNode' fails loudly instead of
+  // silently skipping the intended Project.
+  VELOX_CHECK(
+      !insertProjectToBlockPushdown || useFiltersAsNode,
+      "insertProjectToBlockPushdown requires useFiltersAsNode");
+  // Build the projected output schema by keeping only the columns named in
+  // 'outputColumnNames', preserving the order of 'fullOutSchema'. An empty
+  // 'outputColumnNames' means no pruning, i.e. project the full schema.
+  std::unordered_set<std::string> outputColumnNameSet(
+      outputColumnNames.begin(), outputColumnNames.end());
+  std::vector<std::string> projectedNames;
+  std::vector<TypePtr> projectedTypes;
+  for (uint32_t i = 0; i < fullOutSchema->size(); ++i) {
+    const auto& name = fullOutSchema->nameOf(i);
+    if (outputColumnNames.empty() || outputColumnNameSet.count(name) > 0) {
+      projectedNames.push_back(name);
+      projectedTypes.push_back(fullOutSchema->childAt(i));
+    }
+  }
+  RowTypePtr projectedSchema =
+      ROW(std::move(projectedNames), std::move(projectedTypes));
+  const bool isPruned = projectedSchema->size() < fullOutSchema->size();
+
   CursorParameters params;
   params.serialExecution = true;
 
-  auto builder = PlanBuilder()
-                     .filtersAsNode(useFiltersAsNode)
-                     .tableScanWithPushDown(
-                         fullOutSchema,
-                         /*pushdownConfig=*/pushdownConfig,
-                         tableSchema,
-                         {});
-
-  if (insertProjectToBlockPushdown &&
-      pushdownConfig.aggregationConfig.has_value()) {
-    std::vector<std::string> projectExprs;
-    for (const auto& name : fullOutSchema->names()) {
-      projectExprs.push_back(name);
+  PlanBuilder builder;
+  builder.filtersAsNode(useFiltersAsNode);
+  if (!useFiltersAsNode && isPruned) {
+    // Pushdown path with pruning: output only the projected columns while
+    // still reading every column so the dropped columns can be used for
+    // pushed-down filters. The assignments map covers all columns of the full
+    // output schema; the extra columns (not in 'projectedSchema') are read
+    // for filters but not output, exercising the filter-only-column path.
+    connector::ColumnHandleMap assignments;
+    for (uint32_t i = 0; i < fullOutSchema->size(); ++i) {
+      const auto& name = fullOutSchema->nameOf(i);
+      const auto& type = fullOutSchema->childAt(i);
+      assignments.emplace(
+          name,
+          std::make_shared<connector::hive::HiveColumnHandle>(
+              name,
+              connector::hive::FileColumnHandle::ColumnType::kRegular,
+              type,
+              type));
     }
-    builder.project(projectExprs);
+    builder.tableScanWithPushDown(
+        projectedSchema,
+        /*pushdownConfig=*/pushdownConfig,
+        tableSchema, // Original schema as dataColumns
+        assignments);
+  } else {
+    builder.tableScanWithPushDown(
+        fullOutSchema, // Use struct schema for flatmap reading
+        /*pushdownConfig=*/pushdownConfig,
+        tableSchema, // Original schema as dataColumns
+        {});
+  }
+
+  // Reference path: when filters are realized as a FilterNode, the filtered
+  // columns must be output by the scan so the FilterNode can reference them.
+  // Add a Project to drop filter-only columns. Materialize aggregate inputs in
+  // the reference plan so ValueHook activation remains specific to pushdown.
+  if (useFiltersAsNode &&
+      (isPruned ||
+       (insertProjectToBlockPushdown &&
+        pushdownConfig.aggregationConfig.has_value()))) {
+    if (insertProjectToBlockPushdown &&
+        pushdownConfig.aggregationConfig.has_value()) {
+      builder.project(aggregationBlockingProjectExpressions(
+          projectedSchema, *pushdownConfig.aggregationConfig));
+    } else {
+      // Reachable only when pruned, since the branch above takes every
+      // aggregation case, so the pruned schema is the one to project.
+      const auto& projectedNames = projectedSchema->names();
+      std::vector<std::string> projections;
+      projections.reserve(projectedNames.size());
+      for (const auto& name : projectedNames) {
+        projections.push_back(quoteIdentifier(name));
+      }
+      builder.project(projections);
+    }
   }
 
   // Add aggregation if enabled in pushdown config
@@ -1275,6 +2911,13 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
   }
 
   params.planNode = builder.planNode();
+
+  if (!readSessionProperties.empty()) {
+    params.queryCtx = core::QueryCtx::create();
+    params.queryCtx->setConnectorSessionOverridesUnsafe(
+        connectorId(),
+        std::unordered_map<std::string, std::string>(readSessionProperties));
+  }
 
   auto cursor = TaskCursor::create(params);
   for (auto& split : splits) {
@@ -1302,8 +2945,7 @@ TableEvolutionFuzzer::createScanSplitsFromWriteResults(
     const std::vector<std::vector<RowVectorPtr>>& writeResults,
     const std::vector<Setup>& testSetups,
     const std::vector<column_index_t>& bucketColumnIndices,
-    std::optional<int32_t> selectedBucket,
-    const RowVectorPtr& finalExpectedData) {
+    std::optional<int32_t> selectedBucket) {
   std::vector<Split> actualSplits, expectedSplits;
 
   for (int i = 0; i < config_.evolutionCount; ++i) {
@@ -1340,7 +2982,8 @@ void TableEvolutionFuzzer::createWriteTasks(
     const std::vector<column_index_t>& bucketColumnIndices,
     const std::string& tableOutputRootDirPath,
     std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
-    RowVectorPtr& finalExpectedData,
+    std::vector<RowVectorPtr>& finalExpectedBatches,
+    std::vector<RowVectorPtr>& originalBatches,
     folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
     std::vector<int>& globallyConsistentColumnIndexVector) {
   // Initialize globallyConsistentColumnIndexVector with all map column indices
@@ -1356,10 +2999,30 @@ void TableEvolutionFuzzer::createWriteTasks(
 
   // Generate data and create write tasks in a single loop
   for (int i = 0; i < config_.evolutionCount; ++i) {
-    // Generate fresh data for each evolution step independently
-    auto data = vectorFuzzer_.fuzzRow(testSetups[i].schema, kVectorSize, false);
-    for (auto& child : data->children()) {
-      BaseVector::flattenVector(child);
+    // Write several independently fuzzed batches per file (one writer write()
+    // call each) to drive multiple stripes per file and multiple chunks per
+    // stripe. A fixed count suffices: chunk and stripe flush randomness already
+    // varies the physical layout across files.
+    const int numBatches = FLAGS_batches_per_file;
+    // Size each batch to a byte target so file/stripe sizes are stable across
+    // wildly different schema widths, unless adaptive sizing is disabled via
+    // --adaptive_batch_sizing, in which case use a fixed per-batch row count.
+    const int vectorSize = FLAGS_adaptive_batch_sizing
+        ? computeAdaptiveVectorSize(
+              vectorFuzzer_,
+              testSetups[i].schema,
+              config_.dataBatchMutator,
+              currentSeed_)
+        : kDefaultVectorSize;
+    std::vector<RowVectorPtr> dataBatches;
+    dataBatches.reserve(numBatches);
+    uint64_t rowOffset = 0;
+    for (int batch = 0; batch < numBatches; ++batch) {
+      auto data =
+          vectorFuzzer_.fuzzRow(testSetups[i].schema, vectorSize, false);
+      prepareDataBatch(data, config_.dataBatchMutator, currentSeed_, rowOffset);
+      rowOffset += data->size();
+      dataBatches.push_back(std::move(data));
     }
 
     auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
@@ -1368,7 +3031,7 @@ void TableEvolutionFuzzer::createWriteTasks(
     // Pass globally consistent columns to restrict flatmap usage
     writeTasks[2 * i] = makeWriteTask(
         testSetups[i],
-        data,
+        dataBatches,
         actualDir,
         bucketColumnIndices,
         rng_,
@@ -1380,17 +3043,32 @@ void TableEvolutionFuzzer::createWriteTasks(
             : std::unordered_map<std::string, std::string>{});
 
     if (i == config_.evolutionCount - 1) {
-      finalExpectedData = std::move(data);
+      // The final setup has no separate expected file; its actual file is the
+      // oracle. Keep its batches for subfield-filter generation; the caller
+      // merges them into one vector just before use.
+      originalBatches.insert(
+          originalBatches.end(), dataBatches.begin(), dataBatches.end());
+      finalExpectedBatches = std::move(dataBatches);
       continue;
     }
     auto expectedDir = fmt::format("{}/expected_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(expectedDir));
-    auto expectedData = std::static_pointer_cast<RowVector>(
-        liftToType(data, testSetups.back().schema));
+
+    // Write the same batches lifted to the final schema, so the expected file
+    // holds the identical logical rows as the actual file and the oracle holds.
+    std::vector<RowVectorPtr> expectedBatches;
+    expectedBatches.reserve(dataBatches.size());
+    for (const auto& data : dataBatches) {
+      expectedBatches.push_back(
+          std::static_pointer_cast<RowVector>(
+              liftToType(data, testSetups.back().schema)));
+    }
+    originalBatches.insert(
+        originalBatches.end(), expectedBatches.begin(), expectedBatches.end());
 
     writeTasks[2 * i + 1] = makeWriteTask(
         testSetups.back(),
-        expectedData,
+        expectedBatches,
         expectedDir,
         bucketColumnIndices,
         rng_,
@@ -1507,6 +3185,215 @@ void TableEvolutionFuzzer::applyRemainingFilters(
   } else if (filterStrings.size() > 1) {
     pushownConfig.remainingFilter =
         "(" + folly::join(") AND (", filterStrings) + ")";
+  }
+}
+
+void TableEvolutionFuzzer::logCoverageProgress() const {
+  const auto& stats = coverageStats_;
+  LOG(WARNING) << fmt::format(
+      "queries: attempted={} completed={} failed={}\n"
+      "verification: passed={} failed={} originalPassed={}",
+      stats.numQueriesAttempted,
+      stats.numQueriesCompleted,
+      stats.numExecutionFailures,
+      stats.numVerificationsPassed,
+      stats.numVerificationsFailed,
+      stats.numOriginalVerificationsPassed);
+}
+
+void TableEvolutionFuzzer::logCoverageSummary() const {
+  const auto& stats = coverageStats_;
+  const auto formatCounts = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [name, count] : counts) {
+      entries.push_back(fmt::format("{}={}", name, count));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
+  };
+  const auto formatDimensionsByLine = [](const auto& dimensions) {
+    std::vector<std::string> entries;
+    entries.reserve(dimensions.size());
+    for (const auto& [name, coverage] : dimensions) {
+      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatTypeDimensionsByCategory =
+      [](const auto& dimensions, const std::string_view indentation) {
+        std::vector<std::string> complexTypeEntries;
+        std::vector<std::string> scalarTypeEntries;
+        complexTypeEntries.reserve(dimensions.size());
+        scalarTypeEntries.reserve(dimensions.size());
+        const auto entryIndentation = fmt::format("{}  ", indentation);
+        for (const auto& [name, coverage] : dimensions) {
+          const bool isComplexType =
+              name == "ARRAY" || name == "MAP" || name == "ROW";
+          auto& entries =
+              isComplexType ? complexTypeEntries : scalarTypeEntries;
+          entries.push_back(
+              fmt::format(
+                  "{}{}={}", entryIndentation, name, coverage.numExecuted));
+        }
+        const auto formatCategory = [&](const std::string_view name,
+                                        const auto& entries) {
+          return fmt::format(
+              "{}{}:\n{}",
+              indentation,
+              name,
+              entries.empty() ? fmt::format("{}none", entryIndentation)
+                              : folly::join("\n", entries));
+        };
+        return fmt::format(
+            "{}\n{}",
+            formatCategory("complexTypes", complexTypeEntries),
+            formatCategory("scalarTypes", scalarTypeEntries));
+      };
+  const auto formatExecutedDimensionsByLine = [](const auto& dimensions) {
+    std::vector<std::string> entries;
+    entries.reserve(dimensions.size());
+    for (const auto& [name, coverage] : dimensions) {
+      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatCountsByLine = [](const auto& counts,
+                                     const std::string_view indentation) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [name, count] : counts) {
+      entries.push_back(fmt::format("{}{}={}", indentation, name, count));
+    }
+    return entries.empty() ? fmt::format("{}none", indentation)
+                           : folly::join("\n", entries);
+  };
+  const auto formatTypeSignatures = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [signature, count] : counts) {
+      entries.push_back(fmt::format("({})x{}", signature, count));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
+  };
+  const auto formatBucketCounts = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [numBuckets, numSetups] : counts) {
+      entries.push_back(fmt::format("{} buckets x {}", numBuckets, numSetups));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(", ", entries);
+  };
+  const auto formatBucketColumnsByCount = [&] {
+    std::vector<std::string> entries;
+    entries.reserve(stats.configs.bucketedByColumnCount.size());
+    for (const auto& [numColumns, numQueries] :
+         stats.configs.bucketedByColumnCount) {
+      entries.push_back(
+          fmt::format(
+              "      {}:\n"
+              "        total: {}\n"
+              "        typeSignatures: {}",
+              numColumns,
+              numQueries,
+              formatTypeSignatures(
+                  stats.configs.bucketColumnTypeSignaturesByCount.at(
+                      numColumns))));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatChunkSkipping = [](const ScanPlanCoverage& coverage) {
+    const auto numQueries = coverage.numQueriesWithChunkSkipping;
+    const double averageSkippedRows = numQueries == 0
+        ? 0.0
+        : static_cast<double>(coverage.chunkSkippedRows) / numQueries;
+    const double averageProcessedRows = numQueries == 0
+        ? 0.0
+        : static_cast<double>(coverage.processedRowsWithChunkSkipping) /
+            numQueries;
+    return fmt::format(
+        "queriesWithChunkSkippedRows={} avgChunkSkippedRows={:.1f} avgProcessedRows={:.1f}",
+        numQueries,
+        averageSkippedRows,
+        averageProcessedRows);
+  };
+  const auto& filters = stats.queryShapes.filters;
+  const auto& aggregations = stats.queryShapes.aggregations;
+  logCoverageProgress();
+  if (config_.fileFormatCoverageLogger) {
+    config_.fileFormatCoverageLogger();
+  }
+  LOG(WARNING) << fmt::format(
+      "\nChunkStatsFilterCoverage:\n"
+      "  pushdown: {}\n"
+      "  reference: {}",
+      formatChunkSkipping(stats.pushdown),
+      formatChunkSkipping(stats.reference));
+  LOG(WARNING) << fmt::format(
+      "\nQueryShapeCoverage:\n"
+      "  filters:\n"
+      "    queries={}\n"
+      "    targetTypes:\n"
+      "      allFilters:\n{}\n"
+      "      subfieldFilters:\n{}\n"
+      "      remainingExpressions:\n{}\n"
+      "    predicateKinds:\n{}\n"
+      "  aggregations: queries={} pushdownActivated={} referenceActivated={} differentiallyVerified={} pushdownValues={} referenceValues={}\n"
+      "    groupingKeyTypes:\n{}\n"
+      "    aggregateTypes:\n{}\n"
+      "    functions:\n{}\n"
+      "  projectedByType:\n{}",
+      filters.numExecuted,
+      formatTypeDimensionsByCategory(filters.byType, "        "),
+      formatTypeDimensionsByCategory(filters.subfieldByType, "        "),
+      formatTypeDimensionsByCategory(filters.remainingByType, "        "),
+      formatDimensionsByLine(filters.byKind),
+      aggregations.numExecuted,
+      aggregations.numPushdownPlanActivated,
+      aggregations.numReferencePlanActivated,
+      aggregations.numDifferentiallyVerified,
+      aggregations.numPushdownValuesLoaded,
+      aggregations.numReferenceValuesLoaded,
+      formatExecutedDimensionsByLine(aggregations.groupingKeyTypes),
+      formatExecutedDimensionsByLine(aggregations.aggregateTypes),
+      formatExecutedDimensionsByLine(aggregations.functions),
+      formatCountsByLine(stats.queryShapes.projectedByType, "    "));
+  LOG(WARNING) << fmt::format(
+      "\nTableEvolutionCoverage:\n"
+      "  bucket:\n"
+      "    bucketedSetups: {}\n"
+      "    selectedSetups: {}\n"
+      "    columnsByType: {}\n"
+      "    bucketedByColumnCount:\n{}\n"
+      "    setupsByBucketCount: {}\n"
+      "  schemaEvolution:\n"
+      "    transitions: {}\n"
+      "    addedFields: {}\n"
+      "    byType:\n{}\n"
+      "    byPosition: {}",
+      stats.configs.numBucketed,
+      stats.configs.numBucketSelected,
+      formatCounts(stats.configs.bucketColumnsByType),
+      formatBucketColumnsByCount(),
+      formatBucketCounts(stats.configs.bucketSelectedByBucketCount),
+      stats.configs.numTypeTransitions,
+      stats.configs.numAddedFields,
+      formatCountsByLine(stats.configs.schemaEvolutionByType, "      "),
+      formatCounts(stats.configs.schemaEvolutionByPosition));
+}
+
+void TableEvolutionFuzzer::maybeLogCoverageSummary() {
+  if (FLAGS_table_evolution_coverage_interval_sec <= 0) {
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lastCoverageLogTime_ >=
+      std::chrono::seconds(FLAGS_table_evolution_coverage_interval_sec)) {
+    logCoverageSummary();
+    lastCoverageLogTime_ = now;
   }
 }
 

@@ -203,6 +203,25 @@ struct Tensor {
       status = kInited;
     }
   }
+
+  /// Ensures sizes[] hold this tensor's own-dims magic dividers, used by gather
+  /// device functions (__index_select, __repeat) that decompose a linear index
+  /// by this tensor's own dims. Unlike init(), it never takes the rank-1
+  /// contiguous fast path, so sizes[] is always populated. Grid-wide idempotent
+  /// via the status CAS, so it is safe for every thread to call. Callers must
+  /// keep such a tensor out of the broadcast init<true>() path, since both
+  /// share 'status' and would otherwise race for a single init.
+  __device__ void ensureIndexCalculator() {
+    synchronized([&]() {
+      contiguous = isContiguous();
+      initIndexCalculator();
+      uint32_t n = 1;
+      for (int i = 0; i < rank; ++i) {
+        n *= dims[i];
+      }
+      numEl = n;
+    });
+  }
 #endif
 };
 
@@ -226,7 +245,11 @@ struct DebugInfo {
   int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
-  int64_t extra[2] = {};
+  /// Site-defined values printed after the line number, most sites using only
+  /// the first two. A bad index is worth reporting with the bound it violated
+  /// and the operand shapes it came from: which of the two is wrong is not
+  /// decidable from the index alone.
+  int64_t extra[6] = {};
   char message[20] = {};
 };
 

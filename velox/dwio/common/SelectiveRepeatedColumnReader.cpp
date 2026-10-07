@@ -75,6 +75,13 @@ void prepareResult(
   // makeOffsetsAndSizes.  Child vectors are handled in child column readers.
 }
 
+// Returns true for the integer key types supported by createBigintValues() and
+// makeCopyRanges().
+bool isIntegralType(const TypePtr& type) {
+  return type->isTinyint() || type->isSmallint() || type->isInteger() ||
+      type->isBigint();
+}
+
 } // namespace
 
 void SelectiveRepeatedColumnReader::ensureAllLengthsBuffer(vector_size_t size) {
@@ -462,6 +469,10 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
     scanSpec_->getOrCreateChild(ScanSpec::kMapKeysFieldName);
     scanSpec_->getOrCreateChild(ScanSpec::kMapValuesFieldName);
   }
+  VELOX_CHECK_GE(
+      scanSpec_->children().size(),
+      2,
+      "Map column reader requires key and value scan spec children");
   scanSpec_->children()[0]->setProjectOut(true);
   scanSpec_->children()[1]->setProjectOut(true);
 }
@@ -574,6 +585,7 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
   mapScanSpec_.addMapKeyFieldRecursively(*requestedType_->childAt(0));
   mapScanSpec_.addMapValueFieldRecursively(*requestedType_->childAt(1));
   column_index_t maxChannel = 0;
+  std::vector<int64_t> projectedKeys;
   for (auto& childSpec : scanSpec_->children()) {
     auto field = folly::tryTo<int64_t>(childSpec->fieldName());
     VELOX_CHECK(
@@ -582,8 +594,18 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
         childSpec->fieldName());
     keyToIndex_[*field] = childSpec->channel();
     maxChannel = std::max(maxChannel, childSpec->channel());
+    projectedKeys.push_back(*field);
   }
   copyRanges_.resize(maxChannel + 1);
+
+  // Filter the key sub-reader to the projected keys so the element reader skips
+  // decoding unprojected values (otherwise the whole map is decoded per row).
+  if (isIntegralType(requestedType_->childAt(0)) && !projectedKeys.empty()) {
+    mapScanSpec_.childByName(ScanSpec::kMapKeysFieldName)
+        ->setFilter(
+            velox::common::createBigintValues(
+                projectedKeys, /*nullAllowed=*/false));
+  }
 }
 
 void SelectiveMapAsStructColumnReader::getValues(

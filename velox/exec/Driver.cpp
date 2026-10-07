@@ -782,6 +782,18 @@ StopReason Driver::runInternal(
                 break;
               }
             }
+          } else {
+            // Transitive back-pressure. 'nextOp' is full
+            // (needsInput()==false) and already confirmed kNotBlocked above, so
+            // nothing upstream can flow past it. Stop the upstream production
+            // walk instead of filling/advancing operators above this
+            // bottleneck: reading ahead strands an unloaded scan LazyVector in
+            // an intermediate operator while the source reader advances,
+            // tripping the "Loading LazyVector after the enclosing reader has
+            // moved" check on a later load. 'nextOp' drains at its own
+            // already-visited position; the outer loop re-descends to make
+            // progress.
+            break;
           }
         } else {
           // A sink (last) operator, after getting unblocked, gets

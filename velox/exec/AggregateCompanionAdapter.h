@@ -36,6 +36,8 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isFixedSize() const override final;
 
+  bool isReducing() const override final;
+
   void destroy(folly::Range<char**> groups) override final;
 
   void initializeNewGroups(
@@ -98,6 +100,13 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    bool supportsToIntermediate() const override;
+
+    void toIntermediate(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        VectorPtr& result) const override;
 
     void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
         override;

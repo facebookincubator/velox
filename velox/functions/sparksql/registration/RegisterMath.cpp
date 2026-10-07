@@ -104,6 +104,11 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "rand", prefix + "random"});
   registerFunction<RandFunction, double, Constant<int64_t>>(
       {prefix + "rand", prefix + "random"});
+  registerFunction<RandnFunction, double>({prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int32_t>>(
+      {prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int64_t>>(
+      {prefix + "randn"});
   registerFunction<SignFunction, double, double>({prefix + "sign"});
 
   // Operators.
@@ -123,6 +128,32 @@ void registerMathFunctions(const std::string& prefix) {
       UnaryMinusFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalDayTime, IntervalDayTime>(
+      {prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalYearMonth, IntervalYearMonth>(
+      {prefix + "unaryminus"});
+  // Spark ANSI intervals always use exact arithmetic. Register both names to
+  // support legacy plans and plans that route failOnError through checked_*.
+  registerFunction<
+      CheckedAddFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "add", prefix + "checked_add"});
+  registerFunction<
+      CheckedAddFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "add", prefix + "checked_add"});
+  registerFunction<
+      CheckedSubtractFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "subtract", prefix + "checked_subtract"});
+  registerFunction<
+      CheckedSubtractFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "subtract", prefix + "checked_subtract"});
 
   registerDecimalAdd(prefix);
   registerDecimalSubtract(prefix);

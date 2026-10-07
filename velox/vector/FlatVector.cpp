@@ -253,12 +253,12 @@ void FlatVector<StringView>::copy(
   // Source can be of Unknown type, in that case it should have null values.
   if (source->typeKind() == TypeKind::UNKNOWN) {
     if (source->isConstantEncoding()) {
-      DCHECK(source->isNullAt(0));
+      VELOX_DCHECK(source->isNullAt(0));
       rows.applyToSelected([&](vector_size_t row) { setNull(row, true); });
     } else {
       rows.applyToSelected([&](vector_size_t row) {
-        auto sourceRow = toSourceRow ? toSourceRow[row] : row;
-        DCHECK(source->isNullAt(sourceRow));
+        [[maybe_unused]] auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+        VELOX_DCHECK(source->isNullAt(sourceRow));
         setNull(row, true);
       });
     }

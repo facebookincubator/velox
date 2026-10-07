@@ -32,7 +32,9 @@ class HyperLogLogInputGenerator : public AbstractInputGenerator {
       const size_t seed,
       const double nullRatio,
       memory::MemoryPool* pool,
-      int32_t minNumValues = 1);
+      int32_t minNumValues = 1,
+      std::vector<TypePtr> baseTypes =
+          {BIGINT(), VARCHAR(), DOUBLE(), UNKNOWN()});
 
   variant generate() override;
 

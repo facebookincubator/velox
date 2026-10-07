@@ -25,6 +25,7 @@
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -45,7 +46,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats,
+      std::shared_ptr<dwio::common::SplitStats> splitStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -54,7 +55,7 @@ class DwrfUnit : public LoadUnit {
       : stripeReaderBase_{readerBase},
         memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStats_{std::move(columnReaderStats)},
+        splitStats_{std::move(splitStats)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{std::move(projectedNodes)},
@@ -103,8 +104,7 @@ class DwrfUnit : public LoadUnit {
   // ColumnReader::next(), where DwrfRowReader is guaranteed to be alive.
   const StrideIndexProvider& strideIndexProvider_;
 
-  const std::shared_ptr<dwio::common::ColumnReaderStatistics>
-      columnReaderStats_;
+  const std::shared_ptr<dwio::common::SplitStats> splitStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -170,7 +170,7 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
       stripeIndex_,
-      columnReaderStats_.get());
+      splitStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -186,7 +186,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        *columnReaderStats_,
+        *splitStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -269,11 +269,11 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
-      columnReaderStats_(
-          std::make_shared<dwio::common::ColumnReaderStatistics>()),
+      splitStats_(
+          std::make_shared<dwio::common::SplitStats>(
+              dwio::common::FileFormat::DWRF)),
       currentUnit_{nullptr} {
-  columnReaderStats_->initColumnStatsCollection(
-      *getReader().schemaWithId(), options_);
+  splitStats_->initColumnStatsCollection(*getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -335,9 +335,8 @@ DwrfRowReader::DwrfRowReader(
     makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
   }
 
-  // Configure reader options before calling 'getUnitLoader()'.
-  // Construction is single-threaded, and the unit loader is created only
-  // after 'columnReaderOptions_' has been initialized.
+  // Keep this before 'getUnitLoader()': it copies 'columnReaderOptions_' into
+  // every DwrfUnit, which then uses the copy to build its column readers.
   columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
       readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
@@ -365,7 +364,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_unique<DwrfUnit>(
             /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
-            columnReaderStats_,
+            splitStats_,
             stripe,
             columnSelector_,
             projectedNodes_,
@@ -867,12 +866,32 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   return estimatedRowSize_;
 }
 
+namespace {
+// Returns true when every top-level field of the file's physical schema is a
+// Hive placeholder name (_col0, _col1, ...). Such files were written by old
+// Hive with no real column names in the footer, so they must be mapped to the
+// requested (table) schema by position rather than by name. An empty schema
+// returns false (nothing to map positionally).
+bool isAllHivePlaceholderNames(const std::shared_ptr<const RowType>& schema) {
+  if (schema == nullptr || schema->size() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < schema->size(); ++i) {
+    if (schema->nameOf(i).rfind("_col", 0) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  const auto mappingMode = readerBase_->readerOptions().columnMappingMode();
   VELOX_CHECK_NE(
-      readerBase_->readerOptions().columnMappingMode(),
+      mappingMode,
       dwio::common::ColumnMappingMode::kParquetFieldId,
       "Parquet field ID column mapping is not supported by DWRF.");
 
@@ -882,12 +901,17 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  const auto columnMappingMode =
-      readerBase_->readerOptions().columnMappingMode();
+  //
+  // Even in name-based mapping, a file must be mapped by position when its
+  // physical schema is made entirely of Hive placeholder names (_col0, _col1,
+  // ...) written by old Hive with no real field names, so name-based matching
+  // would find nothing.
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
-    if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
-    } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
+    } else if (
+        mappingMode != dwio::common::ColumnMappingMode::kName ||
+        isAllHivePlaceholderNames(readerBase_->schema())) {
       updateColumnNamesFromTableSchema();
     }
   }
@@ -1215,8 +1239,10 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
-    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
+  if (memoryBytes <
+      footerLength + readerBase.readerOptions().footerSpeculativeIoSize()) {
+    memoryBytes =
+        footerLength + readerBase.readerOptions().footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.
@@ -1267,6 +1293,16 @@ std::unique_ptr<DwrfReader> DwrfReader::create(
     return nullptr;
   }
   return std::make_unique<DwrfReader>(options, std::move(input));
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<DwrfOptions>();
+  options->setMaxCoalesceDistance(
+      Config::maxCoalesceDistance(connectorConfig, session));
+  return options;
 }
 
 void registerDwrfReaderFactory() {

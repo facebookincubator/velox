@@ -101,6 +101,11 @@ class GroupingSet {
   /// again for a new processing cycle.
   void resetGlobalAggregation();
 
+  /// Merges the global accumulator rows from 'others' into this grouping set.
+  /// All grouping sets must contain the same global partial aggregates and
+  /// cannot contain distinct or sorted aggregates.
+  void mergeGlobalAggregations(const std::vector<GroupingSet*>& others);
+
   /// Returns true if 'this' should start producing partial
   /// aggregation results. Checks the memory consumption against
   /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
@@ -117,6 +122,10 @@ class GroupingSet {
   /// Returns the number of raw input rows received.
   uint64_t numInputRows() const {
     return numInputRows_;
+  }
+
+  uint64_t numToIntermediateFastPathCalls() const {
+    return numToIntermediateFastPathCalls_;
   }
 
   /// Returns the number of global grouping sets.
@@ -375,12 +384,13 @@ class GroupingSet {
 
   uint64_t numInputRows_ = 0;
 
+  uint64_t numToIntermediateFastPathCalls_ = 0;
+
   // Column for groupId for a GROUPING SET.
   std::optional<column_index_t> groupIdChannel_;
 
-  // Boolean indicating whether accumulators for a global aggregation (i.e.
-  // aggregation with no grouping keys) have been initialized.
-  bool globalAggregationInitialized_{false};
+  // Points to the accumulator row for global aggregation after initialization.
+  char* globalAggregationRow_{nullptr};
 
   std::vector<bool> mayPushdown_;
 

@@ -41,6 +41,10 @@ class FunctionBenchmarkBase {
         {{core::QueryConfig::kAdjustTimestampToTimezone, value}});
   }
 
+  void setQueryConfig(const std::string& key, const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({{key, value}});
+  }
+
   exec::ExprSet compileExpressions(
       const std::vector<std::string>& texts,
       const TypePtr& rowType) {

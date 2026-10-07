@@ -38,8 +38,6 @@ constexpr std::string_view kGcsScheme{"gs://"};
 
 } // namespace
 
-std::string getErrorStringFromGcsError(const google::cloud::StatusCode& error);
-
 inline bool isGcsFile(const std::string_view filename) {
   return (filename.substr(0, kGcsScheme.size()) == kGcsScheme);
 }

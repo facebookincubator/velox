@@ -17,13 +17,36 @@
 #include "velox/common/memory/MmapAllocator.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
+
+#include <cerrno>
+
+#include <folly/String.h>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::memory {
+uint64_t MmapAllocator::systemPageSize() {
+  static const uint64_t pageSize = [] {
+    const long value{::sysconf(_SC_PAGESIZE)};
+    VELOX_CHECK_GT(
+        value,
+        0,
+        "Failed to determine the system page size: {}",
+        folly::errnoStr(errno));
+    return static_cast<uint64_t>(value);
+  }();
+  return pageSize;
+}
+
+bool MmapAllocator::isPageSizeSupported() {
+  return systemPageSize() == AllocationTraits::kPageSize;
+}
+
 MmapAllocator::MmapAllocator(const Options& options)
     : MemoryAllocator(options.largestSizeClass),
       kind_(MemoryAllocator::Kind::kMmap),
@@ -39,6 +62,24 @@ MmapAllocator::MmapAllocator(const Options& options)
               AllocationTraits::numPages(
                   options.capacity - mallocReservedBytes_),
               64 * sizeClassSizes_.back())) {
+  // MmapAllocator tracks memory at AllocationTraits::kPageSize granularity
+  // and calls madvise() on individual pages, which requires the address and
+  // length to line up with the OS's actual page size. NVIDIA's documented
+  // recommended default page size for Grace / Grace-Hopper systems is 64KB,
+  // not 4KB (see
+  // https://docs.nvidia.com/dccpu/grace-perf-tuning-guide/os-settings.html),
+  // and on such systems madvise() silently fails with EINVAL on sub-64KB
+  // regions instead of throwing, which corrupts this allocator's internal
+  // page-count accounting rather than surfacing a clear error. This isn't
+  // Velox-specific: jemalloc has the identical >4KB-page limitation (see
+  // https://github.com/arangodb/arangodb/issues/22177). Fail fast here
+  // instead of silently corrupting state.
+  VELOX_CHECK(
+      isPageSizeSupported(),
+      "MmapAllocator requires the system page size to match AllocationTraits::kPageSize ({} bytes); system page size is {} bytes. Use MemoryAllocator::Kind::kMalloc on this system instead.",
+      AllocationTraits::kPageSize,
+      systemPageSize());
+
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
   }
@@ -67,32 +108,42 @@ MmapAllocator::~MmapAllocator() {
 bool MmapAllocator::allocateNonContiguousWithoutRetry(
     const SizeMix& sizeMix,
     Allocation& out) {
+  return allocateNonContiguousWithCapacity(sizeMix, out, capacity_);
+}
+
+bool MmapAllocator::allocateNonContiguousWithCapacity(
+    const SizeMix& sizeMix,
+    Allocation& out,
+    MachinePageCount admissionCapacity) {
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   const MachinePageCount numFreed = freeNonContiguousInternal(out);
-  if (numFreed != 0) {
-    numAllocated_.fetch_sub(numFreed);
-  }
   if (sizeMix.totalPages == 0) {
+    numAllocated_.fetch_sub(numFreed);
     return true;
   }
 
-  if (numAllocated_ + sizeMix.totalPages > capacity_ ||
+  // Keep the replaced allocation counted until reserving its replacement so
+  // that concurrent allocations cannot take the transiently free capacity.
+  const int64_t newPages = sizeMix.totalPages - numFreed;
+  if ((newPages > 0 && numAllocated_.load() + newPages > admissionCapacity) ||
       testingHasInjectedFailure(InjectedFailure::kCap)) {
     const std::string errorMsg = fmt::format(
         "Exceeded memory allocator limit when allocating {} pages with "
         "capacity of {} pages",
         sizeMix.totalPages,
-        capacity_);
+        admissionCapacity);
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
+    numAllocated_.fetch_sub(numFreed);
     return false;
   }
-  if (numAllocated_.fetch_add(sizeMix.totalPages) + sizeMix.totalPages >
-      capacity_) {
+  const auto numAllocated = numAllocated_.fetch_add(newPages) + newPages;
+  if (newPages > 0 && numAllocated > admissionCapacity) {
     const std::string errorMsg = fmt::format(
         "Exceeding memory allocator limit when allocating {} pages with "
         "capacity of {} pages",
         sizeMix.totalPages,
-        capacity_);
+        admissionCapacity);
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
     numAllocated_.fetch_sub(sizeMix.totalPages);
@@ -132,11 +183,10 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
       return false;
     }
   }
-  if (newMapsNeeded == 0) {
-    return true;
-  }
-  if (ensureEnoughMappedPages(newMapsNeeded)) {
-    markAllMapped(out);
+  if (ensureEnoughMappedPages(newMapsNeeded, admissionCapacity)) {
+    if (newMapsNeeded > 0) {
+      markAllMapped(out);
+    }
     return true;
   }
 
@@ -151,25 +201,42 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
   return false;
 }
 
-bool MmapAllocator::ensureEnoughMappedPages(int32_t newMappedNeeded) {
+bool MmapAllocator::ensureEnoughMappedPages(
+    int32_t newMappedNeeded,
+    MachinePageCount admissionCapacity) {
+  // Concurrent speculative reservations can transiently push numAllocated_
+  // above capacity_, so clamp the bound to keep numMapped_ within capacity_.
+  const auto currentEffectiveCapacity = [&]() {
+    return std::min<MachinePageCount>(
+        capacity_, std::max(admissionCapacity, numAllocated_.load()));
+  };
+  if (newMappedNeeded == 0 &&
+      (admissionCapacity == capacity_ ||
+       numMapped_.load() <= currentEffectiveCapacity())) {
+    return true;
+  }
   if (testingHasInjectedFailure(InjectedFailure::kMadvise)) {
-    return false;
+    return newMappedNeeded == 0;
   }
   std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
   const auto totalMaps =
       numMapped_.fetch_add(newMappedNeeded) + newMappedNeeded;
-  if (totalMaps <= capacity_) {
+  const auto effectiveCapacity = currentEffectiveCapacity();
+  if (totalMaps <= effectiveCapacity) {
     // We are not at capacity. No need to advise away.
     return true;
   }
   // We need to advise away a number of pages or we fail the alloc.
-  const auto target = totalMaps - capacity_;
+  const auto target = totalMaps - effectiveCapacity;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::memory::MmapAllocator::ensureEnoughMappedPages", this);
   const auto numAdvised = adviseAway(target);
-  if (numAdvised >= target) {
-    numMapped_.fetch_sub(numAdvised);
+  numMapped_.fetch_sub(numAdvised);
+  if (newMappedNeeded == 0 || numAdvised >= target ||
+      numMapped_.load() <= currentEffectiveCapacity()) {
     return true;
   }
-  numMapped_.fetch_sub(numAdvised + newMappedNeeded);
+  numMapped_.fetch_sub(newMappedNeeded);
   return false;
 }
 
@@ -220,9 +287,21 @@ bool MmapAllocator::allocateContiguousWithoutRetry(
     Allocation* collateral,
     ContiguousAllocation& allocation,
     MachinePageCount maxPages) {
+  return allocateContiguousWithCapacity(
+      numPages, collateral, allocation, maxPages, capacity_);
+}
+
+bool MmapAllocator::allocateContiguousWithCapacity(
+    MachinePageCount numPages,
+    Allocation* collateral,
+    ContiguousAllocation& allocation,
+    MachinePageCount maxPages,
+    MachinePageCount admissionCapacity) {
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   bool result;
   stats_.recordAllocate(AllocationTraits::pageBytes(numPages), 1, [&]() {
-    result = allocateContiguousImpl(numPages, collateral, allocation, maxPages);
+    result = allocateContiguousImpl(
+        numPages, collateral, allocation, maxPages, admissionCapacity);
   });
   return result;
 }
@@ -231,7 +310,8 @@ bool MmapAllocator::allocateContiguousImpl(
     MachinePageCount numPages,
     Allocation* collateral,
     ContiguousAllocation& allocation,
-    MachinePageCount maxPages) {
+    MachinePageCount maxPages,
+    MachinePageCount admissionCapacity) {
   if (maxPages == 0) {
     maxPages = numPages;
   } else {
@@ -294,11 +374,13 @@ bool MmapAllocator::allocateContiguousImpl(
 
   numExternalMapped_ += numPages - numCollateralUnmap;
   auto numAllocated = numAllocated_.fetch_add(newPages) + newPages;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::memory::MmapAllocator::allocateContiguousImpl", this);
   // Check if went over the limit. But a net decrease always succeeds even if
   // ending up over the limit because some other thread might be transiently
   // over the limit.
   if (newPages > 0 &&
-      (numAllocated > capacity_ ||
+      (numAllocated > admissionCapacity ||
        testingHasInjectedFailure(InjectedFailure::kCap))) {
     const std::string errorMsg = fmt::format(
         "Exceeded memory allocator limit when allocating {} new pages for "
@@ -306,7 +388,7 @@ bool MmapAllocator::allocateContiguousImpl(
         " {} pages, the allocated pages is {}",
         newPages,
         numPages,
-        capacity_,
+        admissionCapacity,
         numAllocated_);
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
@@ -317,7 +399,7 @@ bool MmapAllocator::allocateContiguousImpl(
   // unmapped.
   const int64_t numToMap = numPages - numCollateralUnmap;
   if (numToMap > 0) {
-    if (!ensureEnoughMappedPages(numToMap)) {
+    if (!ensureEnoughMappedPages(numToMap, admissionCapacity)) {
       const std::string errorMsg = fmt::format(
           "Could not advise away enough for {} pages for total allocation "
           "of {} pages",
@@ -405,8 +487,16 @@ void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
 bool MmapAllocator::growContiguousWithoutRetry(
     MachinePageCount increment,
     ContiguousAllocation& allocation) {
+  return growContiguousWithCapacity(increment, allocation, capacity_);
+}
+
+bool MmapAllocator::growContiguousWithCapacity(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation,
+    MachinePageCount admissionCapacity) {
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   auto numAllocated = numAllocated_.fetch_add(increment) + increment;
-  if (numAllocated > capacity_ ||
+  if (numAllocated > admissionCapacity ||
       testingHasInjectedFailure(InjectedFailure::kCap)) {
     const std::string errorMsg = fmt::format(
         "Exceeded memory allocator limit when allocating {} new pages for "
@@ -414,7 +504,7 @@ bool MmapAllocator::growContiguousWithoutRetry(
         " {} pages, the allocated pages is {}",
         increment,
         allocation.numPages(),
-        capacity_,
+        admissionCapacity,
         numAllocated_);
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000) << errorMsg;
     setAllocatorFailureMessage(errorMsg);
@@ -424,7 +514,7 @@ bool MmapAllocator::growContiguousWithoutRetry(
 
   // Check if need to advise away
   if (testingHasInjectedFailure(InjectedFailure::kMmap) ||
-      !ensureEnoughMappedPages(increment)) {
+      !ensureEnoughMappedPages(increment, admissionCapacity)) {
     const std::string errorMsg = fmt::format(
         "Could not advise away enough for {} pages for growing allocation "
         "of {} pages",

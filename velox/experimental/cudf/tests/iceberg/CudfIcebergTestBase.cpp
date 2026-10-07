@@ -78,13 +78,16 @@ CudfIcebergTestBase::makeIcebergSplits(
   splits.reserve(splitCount);
 
   for (uint32_t i = 0; i < splitCount; ++i) {
+    const uint64_t start = i * splitSize;
+    const uint64_t length =
+        (i == splitCount - 1) ? (fileSize - start) : splitSize;
     splits.emplace_back(
         std::make_shared<HiveIcebergSplit>(
             kCudfIcebergConnectorId,
             dataFilePath,
             dwio::common::FileFormat::PARQUET,
-            i * splitSize,
-            splitSize,
+            start,
+            length,
             partitionKeys,
             std::nullopt,
             std::unordered_map<std::string, std::string>{},
@@ -127,8 +130,10 @@ void CudfIcebergTestBase::writeDeleteFile(
   } else {
     auto childPool =
         rootPool_->addAggregateChild("CudfIcebergTestBase.DwrfWriter");
-    velox::dwrf::WriterOptions options;
-    options.config = std::make_shared<facebook::velox::dwrf::Config>();
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<facebook::velox::dwrf::DwrfWriterOptions>(
+            std::make_shared<facebook::velox::dwrf::Config>());
     options.schema = schema;
     options.memoryPool = childPool.get();
     writer = std::make_unique<velox::dwrf::Writer>(std::move(sink), options);

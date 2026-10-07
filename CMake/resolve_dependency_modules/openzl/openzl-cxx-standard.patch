@@ -1,0 +1,17 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -67,7 +67,13 @@
+ # ---- Compiler Settings ----
+ set(CMAKE_C_STANDARD 11)
+ set(CMAKE_C_STANDARD_REQUIRED ON)
+-set(CMAKE_CXX_STANDARD 17)
++# Honor an externally provided C++ standard so the C++ bindings compile at the
++# consumer's standard (Velox is C++20). OpenZL's poly:: types select between
++# std:: and internal polyfills by standard, so the bindings must be built at
++# the same standard the consumer uses to avoid mismatched mangled symbols.
++if(NOT DEFINED CMAKE_CXX_STANDARD)
++  set(CMAKE_CXX_STANDARD 17)
++endif()
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+ # ---- Platform Checks ----

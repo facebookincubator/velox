@@ -30,12 +30,22 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
-  ExchangeClient.cpp
+  InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
+  ExchangeSink.cpp
   ExchangeSource.cpp
+  ExchangeTransportRegistry.cpp
+  FileExchangeFormat.cpp
+  FileExchangeSink.cpp
+  FileExchangeSource.cpp
+  MaterializedOutputBuffer.cpp
+  MaterializedOutputBufferManager.cpp
+  MaterializedPartitionedOutput.cpp
   SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
+  FixedPointLoop.cpp
+  FixedPointOperators.cpp
   GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
@@ -73,9 +83,11 @@ velox_add_library(
   OrderBy.cpp
   OutputBuffer.cpp
   DefaultOutputBufferManager.cpp
+  OutputTransportRegistry.cpp
   ParallelProject.cpp
   PartitionFunction.cpp
   PartitionedOutput.cpp
+  PersistentState.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
@@ -131,10 +143,19 @@ velox_add_library(
   EnforceSingleRow.h
   Exchange.h
   ExchangeClient.h
+  InMemoryExchangeClient.h
+  ExchangeFactory.h
   ExchangeQueue.h
+  ExchangeSink.h
   ExchangeSource.h
+  ExchangeTransportRegistry.h
   Expand.h
+  FileExchangeFormat.h
+  FileExchangeSink.h
+  FileExchangeSource.h
   FilterProject.h
+  FixedPointLoop.h
+  FixedPointOperators.h
   GroupId.h
   GroupingSet.h
   HashAggregation.h
@@ -154,6 +175,9 @@ velox_add_library(
   LocalPlanner.h
   MarkDistinct.h
   MarkSorted.h
+  MaterializedOutputBuffer.h
+  MaterializedOutputBufferManager.h
+  MaterializedPartitionedOutput.h
   MemoryReclaimer.h
   Merge.h
   MergeJoin.h
@@ -172,10 +196,15 @@ velox_add_library(
   OperatorUtils.h
   OrderBy.h
   OutputBuffer.h
+  OutputBufferStats.h
+  OutputBufferManager.h
   DefaultOutputBufferManager.h
+  OutputTransportRegistry.h
   ParallelProject.h
   PartitionFunction.h
   PartitionedOutput.h
+  PartitionedOutputFactory.h
+  PersistentState.h
   PlanNodeStats.h
   PrefixSort.h
   ProbeOperatorState.h
@@ -250,7 +279,7 @@ endif()
 
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
-velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
+velox_link_libraries(velox_cursor velox_core velox_exception velox_expression Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

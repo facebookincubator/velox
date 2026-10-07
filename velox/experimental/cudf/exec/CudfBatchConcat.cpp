@@ -24,6 +24,32 @@
 #include <utility>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+// Returns the byte target, or nullopt when unset or the output has no columns.
+// Zero-column vectors own no GPU buffers to measure.
+std::optional<uint64_t> getTargetBytes(const RowTypePtr& outputType) {
+  if (outputType->size() == 0) {
+    return std::nullopt;
+  }
+  const auto targetBytes = CudfConfig::getInstance().batchSizeMinBytes;
+  if (targetBytes.has_value()) {
+    VELOX_CHECK_GT(
+        targetBytes.value(),
+        0,
+        "cuDF BatchConcat minimum byte target must be positive");
+  }
+  return targetBytes;
+}
+
+size_t getTargetRows() {
+  const auto targetRows = CudfConfig::getInstance().batchSizeMinThreshold;
+  VELOX_CHECK_GT(
+      targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+  return targetRows;
+}
+
+} // namespace
 
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
@@ -49,8 +75,19 @@ CudfBatchConcat::CudfBatchConcat(
           NvtxMethodFlag::kAll,
           std::nullopt,
           planNode),
-      driverCtx_(driverCtx),
-      targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
+      targetBytes_(getTargetBytes(outputType_)),
+      targetRows_(getTargetRows()) {}
+
+bool CudfBatchConcat::meetsTarget(size_t numRows, uint64_t numBytes) const {
+  if (targetBytes_.has_value()) {
+    return numBytes >= targetBytes_.value();
+  }
+  return numRows >= targetRows_;
+}
+
+uint64_t CudfBatchConcat::estimateBytes(const CudfVector& vector) const {
+  return targetBytes_.has_value() ? vector.estimateFlatSize() : 0;
+}
 
 void CudfBatchConcat::doAddInput(RowVectorPtr input) {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
@@ -60,8 +97,8 @@ void CudfBatchConcat::doAddInput(RowVectorPtr input) {
     return;
   }
 
-  // Push input cudf table to buffer
   currentNumRows_ += cudfVector->size();
+  currentBytes_ += estimateBytes(*cudfVector);
   buffer_.push_back(std::move(cudfVector));
 }
 
@@ -73,8 +110,20 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
     return output;
   }
 
-  // Merge tables if there are enough rows
-  if (!buffer_.empty() && (currentNumRows_ >= targetRows_ || noMoreInput_)) {
+  // Merge tables once the target is reached.
+  if (!buffer_.empty() && (targetReached() || noMoreInput_)) {
+    // Concatenating a single column-bearing input only materializes a copy of
+    // the same table. Pass it through unchanged. Zero-column inputs still need
+    // the batching helper below to preserve their row count and enforce the
+    // maximum batch-size threshold.
+    if (buffer_.size() == 1 && outputType_->size() > 0) {
+      auto output = std::move(buffer_.front());
+      buffer_.clear();
+      currentNumRows_ = 0;
+      currentBytes_ = 0;
+      return output;
+    }
+
     // Use stream from existing buffer vectors
     const auto outputStream = buffer_[0]->stream();
     auto outputVectors = getConcatenatedCudfVectorsBatched(
@@ -85,19 +134,24 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
         get_output_mr());
 
     currentNumRows_ = 0;
+    currentBytes_ = 0;
     VELOX_CHECK_GT(outputVectors.size(), 0);
 
     for (auto it = outputVectors.begin(); it + 1 != outputVectors.end(); ++it) {
       outputQueue_.push(std::move(*it));
     }
 
-    // If last table is a smaller batch and we still expect more input and keep
-    // it in buffer.
+    // Keep the below-target tail of a split buffered while more input can
+    // arrive. A lone output is emitted even if it now measures below the
+    // target: concatenation merges null masks and string offsets, so byte
+    // estimates shrink, and re-buffering would concatenate the rows twice.
     auto& last = outputVectors.back();
-    auto rowCount = last->size();
-
-    if (!noMoreInput_ && rowCount < targetRows_) {
-      currentNumRows_ = rowCount;
+    const auto lastRows = static_cast<size_t>(last->size());
+    const auto lastBytes = estimateBytes(*last);
+    if (!noMoreInput_ && outputVectors.size() > 1 &&
+        !meetsTarget(lastRows, lastBytes)) {
+      currentNumRows_ = lastRows;
+      currentBytes_ = lastBytes;
       buffer_.push_back(std::move(last));
     } else {
       outputQueue_.push(std::move(last));
@@ -112,6 +166,16 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
   }
 
   return nullptr;
+}
+
+void CudfBatchConcat::doClose() {
+  buffer_.clear();
+  while (!outputQueue_.empty()) {
+    outputQueue_.pop();
+  }
+  currentNumRows_ = 0;
+  currentBytes_ = 0;
+  Operator::close();
 }
 
 bool CudfBatchConcat::isFinished() {

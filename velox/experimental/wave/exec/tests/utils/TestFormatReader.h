@@ -103,7 +103,7 @@ class TestFormatParams : public wave::FormatParams {
  public:
   TestFormatParams(
       memory::MemoryPool& pool,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const test::Stripe* stripe)
       : FormatParams(pool, stats), stripe_(stripe) {}
 

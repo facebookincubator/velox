@@ -1,0 +1,306 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <chrono>
+#include <memory>
+#include <string>
+#include <thread>
+#include <type_traits>
+
+#include <folly/ScopeGuard.h>
+#include <folly/synchronization/Baton.h>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "velox/common/memory/Memory.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputTransportRegistry.h"
+
+namespace facebook::velox::exec {
+namespace {
+
+using ::testing::Key;
+using ::testing::SizeIs;
+using ::testing::UnorderedElementsAre;
+
+// Keep entries immutable because tasks may share them.
+static_assert(!std::is_copy_assignable_v<OutputTransportEntry>);
+static_assert(!std::is_move_assignable_v<OutputTransportEntry>);
+
+class MockOutputBufferManager : public OutputBufferManager {
+ public:
+  int initCount{0};
+  int updateBuffersCount{0};
+  int updateDriversCount{0};
+  int removeCount{0};
+  int statsCount{0};
+
+  void initializeTask(
+      std::shared_ptr<Task> /*task*/,
+      core::PartitionedOutputNode::Kind /*kind*/,
+      int /*numDestinations*/,
+      int /*numDrivers*/,
+      const std::string& /*transportOptions*/) override {
+    ++initCount;
+  }
+
+  bool updateOutputBuffers(
+      const std::string& /*taskId*/,
+      int /*numDestinations*/,
+      bool /*noMoreBuffers*/) override {
+    ++updateBuffersCount;
+    return true;
+  }
+
+  bool updateNumDrivers(const std::string& /*taskId*/, uint32_t /*num*/)
+      override {
+    ++updateDriversCount;
+    return true;
+  }
+
+  void removeTask(const std::string& /*taskId*/) override {
+    ++removeCount;
+  }
+
+  std::optional<OutputBufferStats> stats(
+      const std::string& /*taskId*/) override {
+    ++statsCount;
+    return std::nullopt;
+  }
+
+  std::optional<double> getUtilization(const std::string& /*taskId*/) override {
+    return 0.0;
+  }
+
+  std::optional<bool> isOverutilized(const std::string& /*taskId*/) override {
+    return false;
+  }
+
+  std::string toString(const std::string& /*taskId*/) override {
+    return "mock";
+  }
+};
+
+class BlockingDestructionOutputBufferManager : public MockOutputBufferManager {
+ public:
+  BlockingDestructionOutputBufferManager(
+      folly::Baton<>& destructionStarted,
+      folly::Baton<>& continueDestruction)
+      : destructionStarted_{destructionStarted},
+        continueDestruction_{continueDestruction} {}
+
+  BlockingDestructionOutputBufferManager(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager(
+      BlockingDestructionOutputBufferManager&&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      BlockingDestructionOutputBufferManager&&) = delete;
+
+  ~BlockingDestructionOutputBufferManager() override {
+    destructionStarted_.post();
+    continueDestruction_.wait();
+  }
+
+ private:
+  folly::Baton<>& destructionStarted_;
+  folly::Baton<>& continueDestruction_;
+};
+
+std::shared_ptr<OutputTransportEntry> makeEntry(
+    std::shared_ptr<MockOutputBufferManager> manager) {
+  return OutputTransportEntry::make<MockOutputBufferManager>(
+      std::move(manager),
+      [](int32_t,
+         DriverCtx*,
+         const std::shared_ptr<const core::PartitionedOutputNode>&,
+         bool,
+         const std::shared_ptr<MockOutputBufferManager>&)
+          -> std::unique_ptr<Operator> { return nullptr; });
+}
+
+TEST(OutputTransportRegistryTest, registryOperations) {
+  OutputTransportRegistry::unregisterAll();
+
+  const int32_t numManagers = 5;
+  for (int32_t i = 0; i < numManagers; i++) {
+    auto manager = std::make_shared<MockOutputBufferManager>();
+    OutputTransportRegistry::global().insert(
+        fmt::format("manager-{}", i), makeEntry(std::move(manager)));
+  }
+
+  for (int32_t i = 0; i < numManagers; i++) {
+    EXPECT_NE(
+        OutputTransportRegistry::tryGet(fmt::format("manager-{}", i)), nullptr);
+  }
+  EXPECT_EQ(OutputTransportRegistry::tryGet("nonexistent"), nullptr);
+
+  // Account for the built-in in-memory transport.
+  auto all = OutputTransportRegistry::getAll();
+  EXPECT_THAT(all, SizeIs(numManagers + 1));
+
+  OutputTransportRegistry::unregisterAll();
+  EXPECT_THAT(
+      OutputTransportRegistry::getAll(),
+      UnorderedElementsAre(Key(std::string(core::TransportKind::kInMemory))));
+}
+
+TEST(OutputTransportRegistryTest, defaultTransportResolves) {
+  // The built-in entry resolves to the default manager singleton.
+  auto instance = DefaultOutputBufferManager::getInstanceRef();
+
+  auto defaultEntry = OutputTransportRegistry::tryGet(
+      std::string(core::TransportKind::kInMemory));
+  ASSERT_NE(defaultEntry, nullptr);
+  EXPECT_EQ(defaultEntry->manager, instance);
+}
+
+TEST(OutputTransportRegistryTest, defaultTransportSurvivesReset) {
+  OutputTransportRegistry::unregisterAll();
+
+  folly::Baton<> destructionStarted;
+  folly::Baton<> continueDestruction;
+  auto manager = std::make_shared<BlockingDestructionOutputBufferManager>(
+      destructionStarted, continueDestruction);
+  OutputTransportRegistry::global().insert("blocking", makeEntry(manager));
+  manager.reset();
+
+  std::thread reset([] { OutputTransportRegistry::unregisterAll(); });
+  bool destructionReleased{false};
+  SCOPE_EXIT {
+    if (!destructionReleased) {
+      continueDestruction.post();
+    }
+    reset.join();
+  };
+  ASSERT_TRUE(destructionStarted.try_wait_for(std::chrono::seconds(5)));
+  auto defaultEntry = OutputTransportRegistry::tryGet(
+      std::string(core::TransportKind::kInMemory));
+  destructionReleased = true;
+  continueDestruction.post();
+
+  EXPECT_NE(defaultEntry, nullptr);
+}
+
+class OutputTransportRegistryFixture : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  void SetUp() override {
+    OutputTransportRegistry::unregisterAll();
+  }
+
+  void TearDown() override {
+    OutputTransportRegistry::unregisterAll();
+  }
+
+  std::shared_ptr<core::QueryCtx> queryCtxWithRegistry(
+      std::shared_ptr<OutputTransportRegistry::Registry> registry) {
+    auto queryCtx = core::QueryCtx::create();
+    queryCtx->setRegistry(
+        OutputTransportRegistry::kRegistryKey, std::move(registry));
+    return queryCtx;
+  }
+};
+
+TEST_F(OutputTransportRegistryFixture, queryScopedResolution) {
+  auto globalManager = std::make_shared<MockOutputBufferManager>();
+  OutputTransportRegistry::global().insert("shared", makeEntry(globalManager));
+  OutputTransportRegistry::global().insert(
+      "global-only", makeEntry(globalManager));
+
+  EXPECT_EQ(
+      OutputTransportRegistry::tryGet(*core::QueryCtx::create(), "shared")
+          ->manager,
+      globalManager);
+
+  auto queryManager = std::make_shared<MockOutputBufferManager>();
+  auto queryRegistry =
+      OutputTransportRegistry::create(&OutputTransportRegistry::global());
+  queryRegistry->insert("shared", makeEntry(queryManager));
+  auto queryCtx = queryCtxWithRegistry(queryRegistry);
+
+  EXPECT_EQ(
+      OutputTransportRegistry::tryGet(*queryCtx, "shared")->manager,
+      queryManager);
+  EXPECT_EQ(
+      OutputTransportRegistry::tryGet(*queryCtx, "global-only")->manager,
+      globalManager);
+  EXPECT_EQ(OutputTransportRegistry::tryGet("shared")->manager, globalManager);
+}
+
+TEST_F(OutputTransportRegistryFixture, queryScopedUnregisterAll) {
+  auto globalManager = std::make_shared<MockOutputBufferManager>();
+  OutputTransportRegistry::global().insert("obm", makeEntry(globalManager));
+
+  auto queryRegistry =
+      OutputTransportRegistry::create(&OutputTransportRegistry::global());
+  queryRegistry->insert(
+      "obm", makeEntry(std::make_shared<MockOutputBufferManager>()));
+  auto queryCtx = queryCtxWithRegistry(queryRegistry);
+
+  OutputTransportRegistry::unregisterAll(*queryCtx);
+
+  EXPECT_EQ(
+      OutputTransportRegistry::tryGet(*queryCtx, "obm")->manager,
+      globalManager);
+  EXPECT_EQ(OutputTransportRegistry::tryGet("obm")->manager, globalManager);
+}
+
+TEST_F(OutputTransportRegistryFixture, queryScopedGetAll) {
+  auto globalManager = std::make_shared<MockOutputBufferManager>();
+  OutputTransportRegistry::global().insert(
+      "global-only", makeEntry(globalManager));
+  OutputTransportRegistry::global().insert("shared", makeEntry(globalManager));
+
+  auto queryRegistry =
+      OutputTransportRegistry::create(&OutputTransportRegistry::global());
+  queryRegistry->insert(
+      "query-only", makeEntry(std::make_shared<MockOutputBufferManager>()));
+  queryRegistry->insert(
+      "shared", makeEntry(std::make_shared<MockOutputBufferManager>()));
+  auto queryCtx = queryCtxWithRegistry(queryRegistry);
+
+  const std::string inMemory{core::TransportKind::kInMemory};
+  EXPECT_THAT(
+      OutputTransportRegistry::getAll(*queryCtx),
+      UnorderedElementsAre(
+          Key("global-only"), Key("query-only"), Key("shared"), Key(inMemory)));
+  EXPECT_THAT(
+      OutputTransportRegistry::getAll(),
+      UnorderedElementsAre(Key("global-only"), Key("shared"), Key(inMemory)));
+}
+
+TEST_F(OutputTransportRegistryFixture, isolatedQueryHasNoDefault) {
+  // An isolated registry does not inherit the built-in transport.
+  auto queryCtx =
+      queryCtxWithRegistry(OutputTransportRegistry::create(nullptr));
+
+  EXPECT_EQ(
+      OutputTransportRegistry::tryGet(
+          *queryCtx, std::string(core::TransportKind::kInMemory)),
+      nullptr);
+}
+
+} // namespace
+} // namespace facebook::velox::exec

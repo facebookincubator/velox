@@ -18,12 +18,19 @@
 
 #include <numeric>
 
+#include <folly/container/F14Set.h>
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitInfo.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergDeletionVectorSink.h"
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
+#include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -41,6 +48,33 @@ void registerIcebergInternalFunctions(const std::string& prefix) {
   });
 }
 
+// Returns 'baseConfig' with the per-query session credentials named by the
+// connector's "hive.session-credential-keys" config folded in, or 'baseConfig'
+// unchanged when there is nothing to merge. The write path (createHiveFileSink)
+// builds the file sink from the build-time HiveConfig and never reads
+// ConnectorQueryCtx::sessionProperties(), so any per-query credential delivered
+// there must be copied into that config for a credential-aware FileSystem to
+// pick it up and authorize the write as the caller. Mirrors the read path
+// (IcebergSplitReader::prepareSplit) via the shared 'sessionCredentials'.
+std::shared_ptr<const HiveConfig> withSessionCredentials(
+    const std::shared_ptr<const HiveConfig>& baseConfig,
+    const ConnectorQueryCtx* connectorQueryCtx) {
+  const auto* sessionProperties = connectorQueryCtx != nullptr
+      ? connectorQueryCtx->sessionProperties()
+      : nullptr;
+  const auto credentials =
+      sessionCredentials(baseConfig->config().get(), sessionProperties);
+  if (credentials.empty()) {
+    return baseConfig;
+  }
+  auto merged = baseConfig->config()->rawConfigsCopy();
+  for (const auto& [key, value] : credentials) {
+    merged[key] = value;
+  }
+  return std::make_shared<const HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(merged)));
+}
+
 } // namespace
 
 IcebergConnector::IcebergConnector(
@@ -52,11 +86,51 @@ IcebergConnector::IcebergConnector(
   registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
 }
 
+void IcebergConnector::validateChangelogSubfieldFilters(
+    const common::SubfieldFilters& filters) {
+  // Only the three constant changelog columns support subfield filter pushdown
+  // (evaluated at split-skipping time before any I/O).  rowdata filters cannot
+  // be pushed down because the row reader uses dataScanSpec (base-table column
+  // names) and has no awareness of changelog-space column names.  Any other
+  // root name would reach makeScanSpec with an unknown field and crash with a
+  // confusing "Field not found" error.  Predicates on rowdata columns must be
+  // expressed as a remainingFilter (post-scan Filter operator).
+  static const folly::F14FastSet<std::string_view> kPushdownAllowed{
+      kChangelogColOperation,
+      kChangelogColOrdinal,
+      kChangelogColSnapshotId,
+  };
+  for (const auto& [subfield, filter] : filters) {
+    const auto& path = subfield.path();
+    if (path.empty()) {
+      continue;
+    }
+    const auto* root = path[0]->as<common::Subfield::NestedField>();
+    if (root == nullptr) {
+      continue;
+    }
+    VELOX_USER_CHECK(
+        kPushdownAllowed.contains(root->name()),
+        "Subfield filter pushdown on '{}' is not supported for changelog "
+        "queries. Only filters on operation, ordinal, and snapshotid are "
+        "supported. Predicates on rowdata columns must be expressed as a "
+        "remainingFilter. Unsupported filter: {}",
+        root->name(),
+        subfield.toString());
+  }
+}
+
 std::unique_ptr<DataSource> IcebergConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  auto* icebergHandle =
+      dynamic_cast<const IcebergTableHandle*>(tableHandle.get());
+  if (icebergHandle && icebergHandle->isChangelogQuery()) {
+    validateChangelogSubfieldFilters(icebergHandle->subfieldFilters());
+  }
+
   return std::make_unique<IcebergDataSource>(
       outputType,
       tableHandle,
@@ -75,6 +149,9 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
   auto icebergInsertHandle = checkedPointerCast<const IcebergInsertTableHandle>(
       connectorInsertTableHandle);
 
+  const auto mergedHiveConfig =
+      withSessionCredentials(hiveConfig_, connectorQueryCtx);
+
   switch (icebergInsertHandle->writeKind()) {
     case IcebergInsertTableHandle::WriteKind::kData:
       return std::make_unique<IcebergDataSink>(
@@ -82,7 +159,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
           icebergInsertHandle,
           connectorQueryCtx,
           commitStrategy,
-          hiveConfig_,
+          mergedHiveConfig,
           icebergConfig_);
     case IcebergInsertTableHandle::WriteKind::kDeletionVector:
       return std::make_unique<IcebergDeletionVectorSink>(
@@ -90,7 +167,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
           icebergInsertHandle,
           connectorQueryCtx,
           commitStrategy,
-          hiveConfig_);
+          mergedHiveConfig);
     case IcebergInsertTableHandle::WriteKind::kMerge: {
       // The IcebergMergeProcessor (Layer 1) emits the convention:
       //   [target cols 0..N-1, operation TINYINT @N, row_id ROW @N+1,
@@ -107,7 +184,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
           icebergInsertHandle,
           connectorQueryCtx,
           commitStrategy,
-          hiveConfig_,
+          mergedHiveConfig,
           icebergConfig_,
           std::move(targetColumnChannels),
           operationChannel,
@@ -132,7 +209,9 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
 }
 
 void IcebergConnector::registerSerDe() {
+  IcebergColumnHandle::registerSerDe();
   IcebergFileNameGenerator::registerSerDe();
+  IcebergTableHandle::registerSerDe();
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

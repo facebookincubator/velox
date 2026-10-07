@@ -1116,6 +1116,13 @@ std::unique_ptr<Filter> createBigintValues(
 std::unique_ptr<Filter> createHugeintValues(
     const std::vector<int128_t>& values,
     bool nullAllowed) {
+  if (values.empty()) {
+    if (nullAllowed) {
+      return std::make_unique<IsNull>();
+    }
+    return std::make_unique<AlwaysFalse>();
+  }
+
   int128_t min = *std::min_element(values.begin(), values.end());
   int128_t max = *std::max_element(values.begin(), values.end());
 
@@ -1902,6 +1909,34 @@ std::unique_ptr<Filter> TimestampRange::mergeWith(const Filter* other) const {
   }
 }
 
+std::unique_ptr<Filter> HugeintRange::mergeWith(const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return this->clone(false);
+    case FilterKind::kHugeintRange: {
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+      const auto* otherRange = static_cast<const HugeintRange*>(other);
+
+      const auto lower = std::max(lower_, otherRange->lower_);
+      const auto upper = std::min(upper_, otherRange->upper_);
+
+      if (lower <= upper) {
+        return std::make_unique<HugeintRange>(lower, upper, bothNullAllowed);
+      }
+
+      return nullOrFalse(bothNullAllowed);
+    }
+    case FilterKind::kHugeintValuesUsingHashTable:
+      return other->mergeWith(this);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
     const Filter* other) const {
   switch (other->kind()) {
@@ -1928,25 +1963,25 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         return other->mergeWith(this);
       }
       assert(this->lower() <= otherNegatedRange->lower());
-      if (this->upper() < std::numeric_limits<int64_t>::max() &&
+      if (!nonNegated_->upperUnbounded() &&
           this->upper() + 1 < otherNegatedRange->lower()) {
         std::vector<std::unique_ptr<common::BigintRange>> outRanges;
         int64_t smallLower = this->lower();
         int64_t smallUpper = this->upper();
         int64_t bigLower = otherNegatedRange->lower();
         int64_t bigUpper = otherNegatedRange->upper();
-        if (smallLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   std::numeric_limits<int64_t>::min(), smallLower - 1, false));
         }
-        if (smallUpper < std::numeric_limits<int64_t>::max() &&
-            bigLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->upperUnbounded() &&
+            !otherNegatedRange->nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   smallUpper + 1, bigLower - 1, false));
         }
-        if (bigUpper < std::numeric_limits<int64_t>::max()) {
+        if (!otherNegatedRange->nonNegated_->upperUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   bigUpper + 1, std::numeric_limits<int64_t>::max(), false));
@@ -2091,6 +2126,32 @@ std::unique_ptr<Filter> BigintValuesUsingHashTable::mergeWith(
   }
 
   return createBigintValues(valuesToKeep, bothNullAllowed);
+}
+
+std::unique_ptr<Filter> HugeintValuesUsingHashTable::mergeWith(
+    const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return this->clone(false);
+    case FilterKind::kHugeintRange:
+    case FilterKind::kHugeintValuesUsingHashTable: {
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+      std::vector<int128_t> valuesToKeep;
+      valuesToKeep.reserve(values_.size());
+      for (const auto value : values_) {
+        if (other->testInt128(value)) {
+          valuesToKeep.push_back(value);
+        }
+      }
+      return createHugeintValues(valuesToKeep, bothNullAllowed);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 
 std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(

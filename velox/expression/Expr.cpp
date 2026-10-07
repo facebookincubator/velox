@@ -19,6 +19,8 @@
 #include <cmath>
 
 #include <folly/GLog.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
@@ -32,6 +34,7 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"
+#include "velox/expression/ExpressionExceptionProperties.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/PeeledEncoding.h"
@@ -746,6 +749,36 @@ std::string onException(VeloxException::Type /*exceptionType*/, void* arg) {
   }
   return fmt::format("Owner: {}. Expression: {}", owner, expr->toString());
 }
+
+// Returns typed expression error context: the owner (if any), the function
+// name, and the expression.
+std::shared_ptr<const ExceptionContextProperties> makeExprExceptionProperties(
+    const Expr* expr) {
+  if (expr == nullptr) {
+    return nullptr;
+  }
+  auto properties = std::make_shared<ExpressionExceptionProperties>();
+  properties->owner = expr->vectorFunctionMetadata().owner;
+  properties->functionName = expr->name();
+  properties->expression = expr->toString();
+  return properties;
+}
+
+// Structured counterpart to onTopLevelException (arg is an
+// ExprExceptionContext).
+std::shared_ptr<const ExceptionContextProperties> onTopLevelExceptionProperties(
+    VeloxException::Type /*exceptionType*/,
+    void* arg) {
+  return makeExprExceptionProperties(
+      static_cast<ExprExceptionContext*>(arg)->expr());
+}
+
+// Structured counterpart to onException (arg is an Expr).
+std::shared_ptr<const ExceptionContextProperties> onExceptionProperties(
+    VeloxException::Type /*exceptionType*/,
+    void* arg) {
+  return makeExprExceptionProperties(static_cast<Expr*>(arg));
+}
 } // namespace
 
 void Expr::evalFlatNoNulls(
@@ -777,7 +810,9 @@ void Expr::evalFlatNoNullsImpl(
   ExceptionContextSetter exceptionContext(
       {.messageFunc = parentExprSet ? onTopLevelException : onException,
        .arg = parentExprSet ? (void*)&exprExceptionContext : this,
-       .isEssential = parentExprSet != nullptr});
+       .isEssential = parentExprSet != nullptr,
+       .propertiesFunc = parentExprSet ? onTopLevelExceptionProperties
+                                       : onExceptionProperties});
   auto releaseInputsGuard =
       folly::makeGuard([&]() { releaseInputValues(context); });
   if (!rows.hasSelections()) {
@@ -832,7 +867,9 @@ void Expr::eval(
   ExceptionContextSetter exceptionContext(
       {.messageFunc = parentExprSet ? onTopLevelException : onException,
        .arg = parentExprSet ? (void*)&exprExceptionContext : this,
-       .isEssential = parentExprSet != nullptr});
+       .isEssential = parentExprSet != nullptr,
+       .propertiesFunc = parentExprSet ? onTopLevelExceptionProperties
+                                       : onExceptionProperties});
 
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);
@@ -2159,8 +2196,8 @@ exec::ExprStats adjustStats(const exec::Expr& expr) {
 
 void addStats(
     const exec::Expr& expr,
-    std::unordered_map<std::string, exec::ExprStats>& stats,
-    std::unordered_set<const exec::Expr*>& uniqueExprs,
+    folly::F14FastMap<std::string, exec::ExprStats>& stats,
+    folly::F14FastSet<const exec::Expr*>& uniqueExprs,
     bool excludeSpecialForm) {
   if (!uniqueExprs.insert(&expr).second) {
     // Common sub-expression. Skip to avoid double counting.
@@ -2185,10 +2222,13 @@ std::string makeUuid() {
 }
 } // namespace
 
-std::unordered_map<std::string, exec::ExprStats> ExprSet::stats(
+folly::F14FastMap<std::string, exec::ExprStats> ExprSet::stats(
     bool excludeSpecialForm) const {
-  std::unordered_map<std::string, exec::ExprStats> stats;
-  std::unordered_set<const exec::Expr*> uniqueExprs;
+  folly::F14FastMap<std::string, exec::ExprStats> stats;
+  folly::F14FastSet<const exec::Expr*> uniqueExprs;
+  const auto exprCount = exprs().size();
+  stats.reserve(exprCount);
+  uniqueExprs.reserve(exprCount);
   for (const auto& expr : exprs()) {
     addStats(*expr, stats, uniqueExprs, excludeSpecialForm);
   }

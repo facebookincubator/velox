@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -255,7 +256,91 @@ TEST_F(PlanNodeSerdeTest, exchange) {
                         serdeKind)
                     .planNode();
     testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .exchange(
+                   ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
+    testSerde(plan);
   }
+}
+
+TEST_F(PlanNodeSerdeTest, exchangeTransportKindDefaultsWhenMissing) {
+  // Plans serialized before ExchangeNode carried a transport have no
+  // 'transportKind' field; deserialization must default it to in-memory.
+  auto plan = PlanBuilder()
+                  .exchange(
+                      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                      "Presto",
+                      std::string{core::TransportKind::kUcx})
+                  .planNode();
+
+  auto serialized = plan->serialize();
+  ASSERT_EQ(serialized.count("transportKind"), 1);
+  serialized.erase("transportKind");
+
+  const auto copy =
+      velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+  const auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(copy);
+  ASSERT_NE(exchangeNode, nullptr);
+  ASSERT_EQ(
+      exchangeNode->transportKind(),
+      std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(PlanNodeSerdeTest, mergeExchangeTransportKindDefaultsWhenMissing) {
+  auto plan = PlanBuilder()
+                  .mergeExchange(
+                      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                      {"a DESC", "b NULLS FIRST"},
+                      "Presto",
+                      std::string{core::TransportKind::kUcx})
+                  .planNode();
+
+  auto serialized = plan->serialize();
+  ASSERT_EQ(serialized.count("transportKind"), 1);
+  serialized.erase("transportKind");
+
+  const auto copy =
+      velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+  const auto mergeExchangeNode =
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(copy);
+  ASSERT_NE(mergeExchangeNode, nullptr);
+  ASSERT_EQ(
+      mergeExchangeNode->transportKind(),
+      std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(PlanNodeSerdeTest, exchangeTransportKindDefaultsInLegacyConstructor) {
+  // The pre-existing constructor, kept for source compatibility with callers
+  // built before ExchangeNode carried a transport, must keep defaulting to
+  // in-memory.
+  const core::ExchangeNode node(
+      "exchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(
+    PlanNodeSerdeTest,
+    mergeExchangeTransportKindDefaultsInLegacyConstructor) {
+  const std::vector<core::FieldAccessTypedExprPtr> sortingKeys = {
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")};
+  const std::vector<core::SortOrder> sortingOrders = {
+      core::SortOrder(true, true)};
+
+  const core::MergeExchangeNode node(
+      "mergeExchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      sortingKeys,
+      sortingOrders,
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
 }
 
 TEST_F(PlanNodeSerdeTest, filter) {
@@ -339,6 +424,16 @@ TEST_F(PlanNodeSerdeTest, mergeExchange) {
                         {"a DESC", "b NULLS FIRST"},
                         serdeKind)
                     .planNode();
+    testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .mergeExchange(
+                   ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                   {"a DESC", "b NULLS FIRST"},
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
     testSerde(plan);
   }
 }
@@ -460,6 +555,16 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
                .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"}, serdeKind)
                .planNode();
     testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .values({data_})
+               .partitionedOutputBroadcast(
+                   /*outputLayout=*/{},
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
+    testSerde(plan);
   }
 }
 
@@ -567,6 +672,20 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
              .planNode();
 
   testSerde(plan);
+
+  // Right anti join projects build-side columns only.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"u1", "u2"},
+                 core::JoinType::kRightAnti)
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, topN) {
@@ -608,6 +727,19 @@ TEST_F(PlanNodeSerdeTest, unnest) {
   plan = PlanBuilder()
              .values({data})
              .unnest({"c0"}, {"c1"}, "ordinal", "emptyUnnestValue")
+             .planNode();
+  testSerde(plan);
+
+  // A std::nullopt unnest name (pruned column) must round-trip through serde:
+  // prune the array element and the map value, keep the map key.
+  plan = PlanBuilder()
+             .values({data})
+             .unnest(
+                 {"c0"},
+                 {"c1", "c2"},
+                 std::vector<std::optional<std::string>>{
+                     std::nullopt, "c2_k", std::nullopt},
+                 "ordinal")
              .planNode();
   testSerde(plan);
 }
@@ -752,6 +884,17 @@ TEST_F(PlanNodeSerdeTest, write) {
              .values(data_)
              .tableWrite("targetDirectory")
              .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, writeWithNotNullColumns) {
+  auto plan = PlanBuilder(pool_.get())
+                  .values(data_)
+                  .startTableWriter()
+                  .outputDirectoryPath("targetDirectory")
+                  .notNullColumns({"c0", "c2"})
+                  .endTableWriter()
+                  .planNode();
   testSerde(plan);
 }
 
@@ -1103,6 +1246,73 @@ TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
   testSerde(plan);
 }
 
+// stopWhenDeltaEmpty lives on the config rather than in a plan, so nothing
+// else round-trips it; dropping it would silently turn a converging loop into
+// one bounded only by maxIterations.
+TEST_F(PlanNodeSerdeTest, fixedPointWhenDeltaEmpty) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"key", "val"},
+              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("vals", schema)
+                  .project({"key", "val + 1 AS val"})
+                  .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {core::VectorState("vals", schema).initial(seed)},
+                      {body},
+                      core::ConvergenceConfig::whenDeltaEmpty(100),
+                      "vals")
+                  .planNode();
+  testSerde(plan);
+}
+
+// Shape (5): a convergence criterion that is itself a shuffling sequence --
+// the only serde case where convergenceConfig carries more than one plan.
+// Every other fixed point test round-trips a single convergence plan.
+TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto shuffleType = ROW({"partial"}, BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"key", "val"},
+              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("vals", schema)
+                  .project({"key", "val + 1 AS val"})
+                  .planNode();
+  // Each worker reduces its shard, then every worker sums the peers' partials
+  // and emits the same verdict.
+  auto partial = PlanBuilder(idGenerator)
+                     .stateSource("vals", schema)
+                     .singleAggregation({}, {"sum(val)"})
+                     .project({"a0 AS partial"})
+                     .partitionedOutput({}, 2)
+                     .planNode();
+  auto verdict = PlanBuilder(idGenerator)
+                     .exchange(shuffleType, "Presto")
+                     .singleAggregation({}, {"sum(partial)"})
+                     .project({"a0 >= 16 AS converged"})
+                     .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::VectorState("vals", schema).initial(seed)},
+              {body},
+              core::ConvergenceConfig::converging({partial, verdict}, 100),
+              "vals")
+          .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   // Shape (3): people within 3 degrees in the social graph, modeled as
   // hash-table reuse -- a HashTable state (the graph) built once and probed via
@@ -1161,7 +1371,7 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   ASSERT_NE(fixedPoint, nullptr);
   EXPECT_EQ(fixedPoint->outputStateEntry(), "reach");
   ASSERT_EQ(fixedPoint->stateDeclarations().size(), 2);
-  ASSERT_NE(fixedPoint->convergenceConfig().plan, nullptr);
+  ASSERT_EQ(fixedPoint->convergenceConfig().plans.size(), 1);
 
   const auto& hashTableState =
       dynamic_cast<const core::HashTableStateDeclaration&>(
@@ -1218,6 +1428,63 @@ TEST_F(PlanNodeSerdeTest, fixedPointDistributed) {
                       "frontier")
                   .planNode();
   testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, rpcNode) {
+  auto source = PlanBuilder()
+                    .values({makeRowVector(
+                        {"prompt", "model"},
+                        {makeFlatVector<StringView>({"hello"}),
+                         makeFlatVector<StringView>({"llama"})})})
+                    .planNode();
+  const auto outputType =
+      ROW({"prompt", "model", "response"}, {VARCHAR(), VARCHAR(), VARCHAR()});
+
+  // PER_ROW, single column argument.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-1",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "test_function",
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  VARCHAR(), "prompt")),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kPerRow,
+          0));
+
+  // BATCH with a dispatch batch size, two column arguments.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-2",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "batch_function",
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "model")),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kBatch,
+          50));
+
+  // Mixed column and constant arguments.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-3",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "test_function",
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::ConstantTypedExpr>(
+                  makeConstant("llama3", 1))),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kPerRow,
+          0));
 }
 
 } // namespace facebook::velox::exec::test

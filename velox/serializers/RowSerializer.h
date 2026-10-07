@@ -147,7 +147,7 @@ class RowSerializer : public IterativeVectorSerializer {
       // Compress the buffer if satisfied condition.
       const auto toCompress = toIOBuf(buffers_);
       const auto compressedBuffer = codec_->compress(toCompress.get());
-      const int32_t compressedSize = compressedBuffer->length();
+      const int32_t compressedSize = compressedBuffer->computeChainDataLength();
       stats_.compressionInputBytes += size;
       stats_.compressedBytes += compressedSize;
       if (compressedSize > options_.minCompressionRatio * size) {

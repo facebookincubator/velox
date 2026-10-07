@@ -26,6 +26,7 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::velox::common {
 
@@ -829,6 +830,14 @@ class BigintRange final : public Filter {
     return isSingleValue_;
   }
 
+  bool lowerUnbounded() const {
+    return lower_ == std::numeric_limits<int64_t>::min();
+  }
+
+  bool upperUnbounded() const {
+    return upper_ == std::numeric_limits<int64_t>::max();
+  }
+
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   std::string toString() const override {
@@ -978,6 +987,8 @@ class HugeintRange final : public Filter {
         upper_,
         nullAllowed_ ? "with nulls" : "no nulls");
   }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
 
@@ -1200,6 +1211,8 @@ class HugeintValuesUsingHashTable final : public Filter {
   }
 
   bool testInt128(const int128_t& value) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
 
@@ -2505,6 +2518,21 @@ static inline bool applyFilter(TFilter& filter, std::string_view value) {
 template <typename TFilter>
 static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testStringView(value);
+}
+
+namespace detail {
+template <TypeKind kind, typename TFilter>
+bool applyFilterToVariant(TFilter& filter, const Variant& value) {
+  return applyFilter(filter, value.value<kind>());
+}
+} // namespace detail
+
+/// 'value' must not be null.
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, const Variant& value) {
+  VELOX_USER_CHECK(!value.isNull(), "Filter cannot be applied to a null value");
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      detail::applyFilterToVariant, value.kind(), filter, value);
 }
 
 /// Create a hash or bitmap based IN filter depending on value distribution.

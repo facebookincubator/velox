@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
 
@@ -106,20 +107,17 @@ void IcebergTestBase::recreateConnectorQueryCtx(
   auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(), opPool_.get());
 
-  connectorQueryCtx_ = std::make_unique<ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      nullptr,
-      common::PrefixSortConfig(),
-      std::move(expressionEvaluator),
-      nullptr,
-      "query.IcebergTest",
-      "task.IcebergTest",
-      "planNodeId.IcebergTest",
-      0,
-      sessionTimezone,
-      adjustTimestampToTimezone);
+  connectorQueryCtx_ = ConnectorQueryCtx::Builder()
+                           .operatorPool(opPool_.get())
+                           .connectorPool(connectorPool_.get())
+                           .sessionProperties(connectorSessionProperties_.get())
+                           .expressionEvaluator(std::move(expressionEvaluator))
+                           .queryId("query.IcebergTest")
+                           .taskId("task.IcebergTest")
+                           .planNodeId("planNodeId.IcebergTest")
+                           .sessionTimezone(sessionTimezone)
+                           .adjustTimestampToTimezone(adjustTimestampToTimezone)
+                           .build();
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(
@@ -333,7 +331,9 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
         partitionKeys,
     uint32_t splitCount,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    int64_t dataSequenceNumber) {
+    int64_t dataSequenceNumber,
+    const std::unordered_map<int32_t, std::optional<std::string>>&
+        identityPartitionKeys) {
   VELOX_CHECK_GT(splitCount, 0);
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
   const auto fileSize = getFileSize(dataFilePath);
@@ -350,6 +350,7 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
                             .deleteFiles(deleteFiles)
                             .infoColumns(infoColumns)
                             .dataSequenceNumber(dataSequenceNumber)
+                            .identityPartitionKeys(identityPartitionKeys)
                             .build());
   }
 
@@ -366,6 +367,177 @@ IcebergTestBase::makeIcebergSplitWithInfoColumns(
       dataFilePath, deleteFiles, {}, 1, infoColumns, dataSequenceNumber);
   VELOX_CHECK_EQ(splits.size(), 1);
   return splits.front();
+}
+
+std::shared_ptr<common::testutil::TempFilePath> IcebergTestBase::writeDataFile(
+    const std::vector<RowVectorPtr>& data) {
+  auto file = common::testutil::TempFilePath::create();
+  writeToFile(file->getPath(), data);
+  return file;
+}
+
+std::shared_ptr<common::testutil::TempFilePath>
+IcebergTestBase::writeDwrfFileWithFieldIds(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<int32_t>& icebergFieldIds) {
+  VELOX_CHECK(!data.empty());
+  const uint32_t numCols = data[0]->type()->size();
+  VELOX_CHECK_EQ(icebergFieldIds.size(), numCols);
+
+  // Build schemaAttributes: DWRF pre-order node 0 is the root struct (no
+  // iceberg.id); nodes 1..numCols are the top-level columns.
+  std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      attrs;
+  for (uint32_t i = 0; i < numCols; ++i) {
+    attrs[i + 1] = {{"iceberg.id", std::to_string(icebergFieldIds[i])}};
+  }
+
+  auto file = common::testutil::TempFilePath::create();
+  auto fs = filesystems::getFileSystem(file->getPath(), {});
+  auto writeFile = fs->openFileForWrite(
+      file->getPath(),
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), file->getPath());
+  dwio::common::WriterOptions writerOptions;
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+  dwrfOptions->schemaAttributes = std::move(attrs);
+  writerOptions.formatSpecificOptions = dwrfOptions;
+  writerOptions.schema = data[0]->type();
+  auto childPool =
+      rootPool_->addAggregateChild("writeDwrfFileWithFieldIds.writer");
+  writerOptions.memoryPool = childPool.get();
+  dwrf::Writer writer{std::move(sink), writerOptions};
+  for (const auto& batch : data) {
+    writer.write(batch);
+  }
+  writer.close();
+  return file;
+}
+
+#ifdef VELOX_ENABLE_PARQUET
+std::shared_ptr<common::testutil::TempFilePath>
+IcebergTestBase::writeParquetFile(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<int32_t>& icebergFieldIds) {
+  VELOX_CHECK(!data.empty());
+  auto file = common::testutil::TempFilePath::create();
+  auto writeFile =
+      std::make_unique<LocalWriteFile>(file->getPath(), true, false);
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), file->getPath());
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  parquet::ParquetWriterOptions parquetOptions;
+  if (!icebergFieldIds.empty()) {
+    VELOX_CHECK_EQ(icebergFieldIds.size(), data[0]->type()->size());
+    parquetOptions.parquetFieldIds.reserve(icebergFieldIds.size());
+    for (int32_t id : icebergFieldIds) {
+      parquetOptions.parquetFieldIds.push_back(parquet::ParquetFieldId{id, {}});
+    }
+  }
+  writerOptions.formatSpecificOptions =
+      std::make_shared<parquet::ParquetWriterOptions>(
+          std::move(parquetOptions));
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, asRowType(data[0]->type()));
+  for (const auto& batch : data) {
+    writer->write(batch);
+  }
+  writer->close();
+  return file;
+}
+#endif // VELOX_ENABLE_PARQUET
+
+core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
+    const RowTypePtr& outputType,
+    const RowTypePtr& dataColumns,
+    const std::vector<int32_t>& dataColumnFieldIds,
+    const std::vector<std::string>& subfieldFilters,
+    const std::string& remainingFilter) {
+  VELOX_CHECK_NOT_NULL(dataColumns);
+
+  // Build IcebergColumnHandle assignments for each output-projected column.
+  // The Iceberg field ID is taken from dataColumnFieldIds when available,
+  // otherwise it defaults to the 1-based ordinal position in dataColumns.
+  connector::ColumnHandleMap assignments;
+  assignments.reserve(outputType->size());
+  for (uint32_t i = 0; i < outputType->size(); ++i) {
+    const auto& name = outputType->nameOf(i);
+    const auto& type = outputType->childAt(i);
+    auto tableIdx = dataColumns->getChildIdxIfExists(name);
+    VELOX_CHECK(
+        tableIdx.has_value(),
+        "Output column '{}' not found in dataColumns.",
+        name);
+    const int32_t fieldId = !dataColumnFieldIds.empty()
+        ? dataColumnFieldIds[*tableIdx]
+        : static_cast<int32_t>(*tableIdx + 1);
+    assignments.emplace(
+        name,
+        std::make_shared<IcebergColumnHandle>(
+            name,
+            FileColumnHandle::ColumnType::kRegular,
+            type,
+            parquet::ParquetFieldId{fieldId, {}}));
+  }
+
+  // Build filter-only IcebergColumnHandles for columns referenced by pushed-
+  // down filters but absent from the output projection. These are needed so
+  // buildIcebergHandleByName() can resolve their Iceberg field IDs and
+  // configureEqualityDeleteColumns() can promote them to projected columns
+  // when they also serve as equality-delete keys.
+  std::vector<HiveColumnHandlePtr> filterHandles;
+  if (!subfieldFilters.empty() || !remainingFilter.empty()) {
+    for (uint32_t i = 0; i < dataColumns->size(); ++i) {
+      const auto& name = dataColumns->nameOf(i);
+      if (assignments.count(name)) {
+        continue; // Already in the output projection.
+      }
+      // Include this column as a filter handle if any subfield filter names it.
+      bool usedInFilter = std::any_of(
+          subfieldFilters.begin(),
+          subfieldFilters.end(),
+          [&name](const std::string& f) {
+            return f.find(name) != std::string::npos;
+          });
+      // Also include it if it appears in the remainingFilter expression.
+      if (!usedInFilter && !remainingFilter.empty()) {
+        usedInFilter = remainingFilter.find(name) != std::string::npos;
+      }
+      if (!usedInFilter) {
+        continue;
+      }
+      const auto& type = dataColumns->childAt(i);
+      const int32_t fieldId = !dataColumnFieldIds.empty()
+          ? dataColumnFieldIds[i]
+          : static_cast<int32_t>(i + 1);
+      filterHandles.push_back(
+          std::make_shared<IcebergColumnHandle>(
+              name,
+              FileColumnHandle::ColumnType::kRegular,
+              type,
+              parquet::ParquetFieldId{fieldId, {}}));
+    }
+  }
+
+  return exec::test::PlanBuilder()
+      .startTableScan(kIcebergConnectorId)
+      .outputType(outputType)
+      .dataColumns(dataColumns)
+      .subfieldFilters(subfieldFilters)
+      .remainingFilter(remainingFilter)
+      .dataColumnFieldIds(dataColumnFieldIds)
+      .filterColumnHandles(std::move(filterHandles))
+      .assignments(assignments)
+      .endTableScan()
+      .planNode();
+}
+
+core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
+    const RowTypePtr& rowType) {
+  return makeIcebergTableScanPlan(rowType, rowType);
 }
 
 ColumnHandleMap IcebergTestBase::makeColumnHandles(
@@ -389,6 +561,122 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
   }
 
   return assignments;
+}
+
+RowTypePtr IcebergTestBase::makeChangelogOutputType(
+    const RowTypePtr& dataType) {
+  return ROW(
+      {std::string(kChangelogColOperation),
+       std::string(kChangelogColOrdinal),
+       std::string(kChangelogColSnapshotId),
+       std::string(kChangelogColRowdata)},
+      {VARCHAR(), BIGINT(), BIGINT(), dataType});
+}
+
+ColumnHandleMap IcebergTestBase::makeChangelogColumnHandles(
+    const RowTypePtr& dataType) {
+  ColumnHandleMap handles;
+  handles[std::string(kChangelogColOperation)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColOperation),
+          IcebergColumnHandle::ColumnType::kRegular,
+          VARCHAR(),
+          parquet::ParquetFieldId{1, {}});
+  handles[std::string(kChangelogColOrdinal)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColOrdinal),
+          IcebergColumnHandle::ColumnType::kRegular,
+          BIGINT(),
+          parquet::ParquetFieldId{2, {}});
+  handles[std::string(kChangelogColSnapshotId)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColSnapshotId),
+          IcebergColumnHandle::ColumnType::kRegular,
+          BIGINT(),
+          parquet::ParquetFieldId{3, {}});
+  handles[std::string(kChangelogColRowdata)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColRowdata),
+          IcebergColumnHandle::ColumnType::kRegular,
+          dataType,
+          parquet::ParquetFieldId{4, {}});
+  return handles;
+}
+
+std::unordered_map<std::string, IcebergColumnHandlePtr>
+IcebergTestBase::makeDataColumnHandles(const RowTypePtr& dataType) {
+  std::unordered_map<std::string, IcebergColumnHandlePtr> handles;
+  int32_t fieldId = 1;
+  for (size_t i = 0; i < dataType->size(); ++i) {
+    const auto& name = dataType->nameOf(i);
+    const auto& type = dataType->childAt(i);
+    handles[name] = std::make_shared<IcebergColumnHandle>(
+        name,
+        IcebergColumnHandle::ColumnType::kRegular,
+        type,
+        parquet::ParquetFieldId{fieldId++, {}});
+  }
+  return handles;
+}
+
+std::shared_ptr<IcebergTableHandle> IcebergTestBase::makeChangelogTableHandle(
+    const RowTypePtr& dataType,
+    common::SubfieldFilters subfieldFilters) {
+  return std::make_shared<IcebergTableHandle>(
+      kIcebergConnectorId,
+      "test_table",
+      std::move(subfieldFilters),
+      nullptr,
+      dataType,
+      std::vector<std::string>{},
+      std::unordered_map<std::string, std::string>{},
+      std::vector<IcebergColumnHandlePtr>{},
+      1.0,
+      "",
+      std::vector<int32_t>{},
+      /*isChangelogQuery=*/true,
+      makeDataColumnHandles(dataType));
+}
+
+std::vector<RowVectorPtr> IcebergTestBase::makeTestBatches() {
+  constexpr int32_t kNumBatches = 2;
+  constexpr int32_t kRowsPerBatch = 100;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    auto idVector = makeFlatVector<int64_t>(kRowsPerBatch, [batch](auto row) {
+      return static_cast<int64_t>(batch * kRowsPerBatch + row);
+    });
+    auto nameVector =
+        makeFlatVector<std::string>(kRowsPerBatch, [batch](auto row) {
+          return "name_" + std::to_string(batch * kRowsPerBatch + row);
+        });
+    batches.push_back(makeRowVector({"id", "name"}, {idVector, nameVector}));
+  }
+  return batches;
+}
+
+std::string IcebergTestBase::getOnlyDataFilePath(const std::string& directory) {
+  auto files = listFiles(directory);
+  VELOX_CHECK_EQ(files.size(), 1, "Expected exactly one file in {}", directory);
+  return files.front();
+}
+
+std::shared_ptr<HiveIcebergSplit> IcebergTestBase::makeChangelogSplit(
+    const std::string& filePath,
+    ChangelogOperation operation,
+    int64_t ordinal,
+    int64_t snapshotId) {
+  const auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  return std::dynamic_pointer_cast<HiveIcebergSplit>(
+      IcebergSplitBuilder(filePath)
+          .connectorId(kIcebergConnectorId)
+          .fileFormat(fileFormat_)
+          .start(0)
+          .length(file->size())
+          .changelogSplitInfo(
+              ChangelogSplitInfo{operation, ordinal, snapshotId})
+          .build());
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
