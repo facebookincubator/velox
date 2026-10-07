@@ -181,11 +181,11 @@ class EncodingSelectionPolicyBase {
 
   virtual ~EncodingSelectionPolicyBase() = default;
 
-  /// Reports whether configured candidates or replayed layouts contain ALP or
-  /// ALPRD. Callers use logical floating-point types for nested selection when
-  /// this is true. Defaults to false to preserve physical selection and
-  /// layouts.
-  virtual bool hasAlpOrAlprdCandidates() const {
+  /// Reports whether configured candidates or replayed layouts contain an
+  /// AlpLike encoding (ALP or ALP_RD). Callers use logical floating-point types
+  /// for nested selection when this is true. Defaults to false to preserve
+  /// physical selection and layouts.
+  virtual bool hasAlpLikeCandidates() const {
     return false;
   }
 
@@ -265,8 +265,7 @@ std::string_view EncodingSelection<T>::encodeNested(
   auto statistics = Statistics<NestedT>::create(values);
   EncodingSelectionResult selectionResult{};
   const bool selectWithLogicalType{
-      isFloatingPointType<LogicalT>() &&
-      nestedPolicy->hasAlpOrAlprdCandidates()};
+      isFloatingPointType<LogicalT>() && nestedPolicy->hasAlpLikeCandidates()};
   if (selectWithLogicalType) {
     nestedPolicy = selectionPolicy_->template create<LogicalT>(
         encodingType(), nestedEncodingIdentifier);

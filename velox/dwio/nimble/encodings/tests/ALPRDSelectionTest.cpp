@@ -449,7 +449,7 @@ TYPED_TEST(ALPRDSelectionTest, preservesChildPolicyScoring) {
   auto childPolicy =
       std::make_unique<ManualEncodingSelectionPolicy<PhysicalType>>(
           factors, std::nullopt, std::nullopt);
-  EXPECT_FALSE(childPolicy->hasAlpOrAlprdCandidates());
+  EXPECT_FALSE(childPolicy->hasAlpLikeCandidates());
   const auto selected = childPolicy->select(values, statistics, this->options_);
   ASSERT_EQ(selected.encodingType, EncodingType::FixedBitWidth);
   EXPECT_EQ(selected.estimatedSize, kFixedBitWidthSize);

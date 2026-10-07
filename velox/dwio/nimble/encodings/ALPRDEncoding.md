@@ -46,10 +46,10 @@ that relied on this option must add ALP to their nested candidate configuration.
 The option retains its existing floating-point normalization and policy-free
 estimation behavior.
 
-The policy hook `hasAlpOrAlprdCandidates()` reports whether
-configured candidates or replayed layouts include ALP or ALP_RD. This includes
-nested candidate overrides and replay fallback policies for unspecified value
-encodings. A specified value layout is inspected directly. Missing auxiliary
+`AlpLike` denotes ALP and ALP_RD. The policy hook `hasAlpLikeCandidates()` reports
+whether configured candidates or replayed layouts include either encoding. This
+includes nested candidate overrides and replay fallback policies for unspecified
+value encodings. A specified value layout is inspected directly. Missing auxiliary
 layouts, such as null flags or dictionary indices, do not trigger a fallback
 capability query. Callers use logical floating-point types for nested encoding
 selection when the hook returns

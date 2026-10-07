@@ -40,12 +40,12 @@ using EncodingSelectionPolicyCreator =
 
 namespace detail {
 
-/// Checks whether the candidates contain ALP or ALPRD.
-bool hasAlpOrAlprdCandidate(
+/// Checks whether the candidates contain an AlpLike encoding (ALP or ALP_RD).
+bool hasAlpLikeCandidate(
     const std::vector<std::pair<EncodingType, float>>& candidates);
 
-/// Checks whether a layout tree contains ALP or ALPRD.
-bool hasAlpOrAlprdEncoding(const EncodingLayout& layout);
+/// Checks whether a layout tree contains an AlpLike encoding (ALP or ALP_RD).
+bool hasAlpLikeEncoding(const EncodingLayout& layout);
 
 /// Checks whether a value child that can select ALP or ALPRD lacks a layout.
 /// Auxiliary streams such as null flags and dictionary indices are excluded.
@@ -237,10 +237,10 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
-  bool hasAlpOrAlprdCandidates() const override {
-    return detail::hasAlpOrAlprdCandidate(candidateEncodingReadFactors_) ||
+  bool hasAlpLikeCandidates() const override {
+    return detail::hasAlpLikeCandidate(candidateEncodingReadFactors_) ||
         (nestedEncodingReadFactorsOverride_ &&
-         detail::hasAlpOrAlprdCandidate(*nestedEncodingReadFactorsOverride_));
+         detail::hasAlpLikeCandidate(*nestedEncodingReadFactorsOverride_));
   }
 
   /// Returns the configured candidates for this selection node.
@@ -551,12 +551,12 @@ class ReplayedEncodingSelectionPolicy
     };
   }
 
-  bool hasAlpOrAlprdCandidates() const override {
+  bool hasAlpLikeCandidates() const override {
     // Only an unspecified value encoding needs the fallback's capabilities.
-    return detail::hasAlpOrAlprdEncoding(encodingLayout_) ||
+    return detail::hasAlpLikeEncoding(encodingLayout_) ||
         (detail::hasUnspecifiedValueEncoding(encodingLayout_) &&
          encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
-             ->hasAlpOrAlprdCandidates());
+             ->hasAlpLikeCandidates());
   }
 
  protected:
