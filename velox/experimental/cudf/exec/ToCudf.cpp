@@ -168,10 +168,14 @@ bool CompileState::compile(bool allowCpuFallback) {
       // operator's GPU replacement so the whole pipeline stays on CPU.
       const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
       if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
+        // CudfFromVelox converts the batches of the CPU operator before
+        // 'oper', so it takes that operator's output type. 'planNode'
+        // describes what 'oper' produces, and for a join build its input is
+        // another source.
         replaceOp.push_back(
             std::make_unique<CudfFromVelox>(
                 id,
-                planNode->outputType(),
+                prevPlanNode->outputType(),
                 ctx,
                 planNode->id() + "-from-velox"));
       } else {

@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
@@ -188,8 +189,11 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
 
-  return std::make_shared<CudfVector>(
+  RowVectorPtr output = std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput", &output);
+  return output;
 }
 
 void CudfFromVelox::doClose() {
