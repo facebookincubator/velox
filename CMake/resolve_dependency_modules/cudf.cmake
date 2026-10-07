@@ -40,12 +40,12 @@ set(
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit e7c6c8c from 2026-09-30 (main branch)
+# kvikio commit 4114a21 from 2026-10-07 (main branch)
 set(VELOX_kvikio_VERSION 26.12)
-set(VELOX_kvikio_COMMIT e7c6c8c4e24dff2cd641407f2dc18f16c2a7b212)
+set(VELOX_kvikio_COMMIT 4114a218184956f4bb652f2028980269d709a7cd)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  0d17856f1645e9dd9ebffe1aeae5db81f4acb9e0e28626d04bc9cbe2642e587c
+  161e986cc0e253c32cdc196c18bc2cdeeae51347b672aee7616a572691b6998a
 )
 set(
   VELOX_kvikio_SOURCE_URL
