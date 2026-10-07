@@ -348,10 +348,8 @@ TEST_F(ArraySortTest, lambda) {
       tiedData,
       makeNullableArrayVector<std::string>({{"bb", "aa", "dd", "c"}}));
   testArraySort(
-      "(x, y) -> "
-      "if(lessthan(array(length(x)), array(length(y))), 10, "
-      "if(greaterthan(array(length(x)), array(length(y))), -10, 0))",
-      true,
+      "x -> ARRAY[length(x)]",
+      false,
       tiedData,
       makeNullableArrayVector<std::string>({{"bb", "aa", "dd", "c"}}));
 
@@ -370,15 +368,13 @@ TEST_F(ArraySortTest, lambda) {
   auto nestedNullData =
       makeNullableArrayVector<int32_t>({{1, std::nullopt, 2}});
   testArraySort(
-      "(x, y) -> if(lessthan(array(x), array(y)), -1, "
-      "if(greaterthan(array(x), array(y)), 1, 0))",
+      "x -> ARRAY[x]",
       true,
       nestedNullData,
       makeNullableArrayVector<int32_t>({{std::nullopt, 1, 2}}));
   testArraySort(
-      "(x, y) -> if(lessthan(array(x), array(y)), 1, "
-      "if(greaterthan(array(x), array(y)), -1, 0))",
-      true,
+      "x -> ARRAY[x]",
+      false,
       nestedNullData,
       makeNullableArrayVector<int32_t>({{2, 1, std::nullopt}}));
 
@@ -541,6 +537,10 @@ TEST_F(ArraySortTest, identityComparatorPreservesSignedZeroOrder) {
 
   {
     SCOPED_TRACE("array");
+    const std::string arrayComparator =
+        "(x, y) -> "
+        "if(lessthan(element_at(x, 1), element_at(y, 1)), -10, "
+        "if(greaterthan(element_at(x, 1), element_at(y, 1)), 10, 0))";
     using InnerArray = std::vector<std::optional<double>>;
     using OuterArray = std::vector<std::optional<InnerArray>>;
     auto input = makeNullableNestedArrayVector<double>({OuterArray{
@@ -550,7 +550,8 @@ TEST_F(ArraySortTest, identityComparatorPreservesSignedZeroOrder) {
         InnerArray{-0.0},
     }});
     auto result = evaluate(
-        fmt::format("array_sort(c0, {})", comparator), makeRowVector({input}));
+        fmt::format("array_sort(c0, {})", arrayComparator),
+        makeRowVector({input}));
 
     auto* arrays = result->as<ArrayVector>();
     DecodedVector decodedElements(*arrays->elements());
@@ -569,7 +570,11 @@ TEST_F(ArraySortTest, identityComparatorPreservesSignedZeroOrder) {
 
   {
     SCOPED_TRACE("row");
-    auto rowType = ROW({INTEGER(), DOUBLE()});
+    const std::string rowComparator =
+        "(x, y) -> "
+        "if(lessthan(x.value, y.value), -10, "
+        "if(greaterthan(x.value, y.value), 10, 0))";
+    auto rowType = ROW({"key", "value"}, {INTEGER(), DOUBLE()});
     auto input = makeArrayOfRowVector(
         rowType,
         {{
@@ -579,7 +584,8 @@ TEST_F(ArraySortTest, identityComparatorPreservesSignedZeroOrder) {
             variant::row({1, -0.0}),
         }});
     auto result = evaluate(
-        fmt::format("array_sort(c0, {})", comparator), makeRowVector({input}));
+        fmt::format("array_sort(c0, {})", rowComparator),
+        makeRowVector({input}));
 
     auto* arrays = result->as<ArrayVector>();
     DecodedVector decodedElements(*arrays->elements());
@@ -600,8 +606,8 @@ TEST_F(ArraySortTest, comparatorEncodings) {
   auto input =
       makeNullableArrayVector<int32_t>({{3, 1, 2}, {1, std::nullopt, 2}});
   const std::string comparator =
-      "(x, y) -> if(lessthan(array(x), array(y)), -10, "
-      "if(greaterthan(array(x), array(y)), 10, 0))";
+      "(x, y) -> if(lessthan(coalesce(x, -1000), coalesce(y, -1000)), -10, "
+      "if(greaterthan(coalesce(x, -1000), coalesce(y, -1000)), 10, 0))";
 
   auto dictionaryInput = wrapInDictionary(makeIndices({1, 0, 1}), input);
   auto result = evaluate(
@@ -672,8 +678,10 @@ TEST_F(ArraySortTest, unsupportedLambda) {
   VELOX_ASSERT_THROW(
       evaluate(
           "array_sort(c0, (a, b) -> "
-          "if(lessthan(a + rand(), b + rand()), -1, "
-          "if(greaterthan(a + rand(), b + rand()), 1, 0)))",
+          "if(lessthan(a + cast(rand() as integer), "
+          "b + cast(rand() as integer)), -1, "
+          "if(greaterthan(a + cast(rand() as integer), "
+          "b + cast(rand() as integer)), 1, 0)))",
           data),
       "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
 

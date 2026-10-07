@@ -230,10 +230,14 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       "y.f + cardinality(filter(captured_array, x -> x > captured)), 1, 0))",
       std::nullopt);
   testMatcher(
-      "if(x.f + cardinality(filter(captured_array, z -> z > random())) < "
-      "y.f + cardinality(filter(captured_array, z -> z > random())), -1, "
-      "if(x.f + cardinality(filter(captured_array, z -> z > random())) > "
-      "y.f + cardinality(filter(captured_array, z -> z > random())), 1, 0))",
+      "if(x.f + cardinality(filter(captured_array, "
+      "z -> z > cast(random() as bigint))) < "
+      "y.f + cardinality(filter(captured_array, "
+      "z -> z > cast(random() as bigint))), -1, "
+      "if(x.f + cardinality(filter(captured_array, "
+      "z -> z > cast(random() as bigint))) > "
+      "y.f + cardinality(filter(captured_array, "
+      "z -> z > cast(random() as bigint))), 1, 0))",
       std::nullopt);
   testMatcher("if(x.f > (y.f + 5), 1, if(x.f < y.f, -1, 0))", std::nullopt);
   testMatcher("x.f + y.f", std::nullopt);
