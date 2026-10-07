@@ -3268,9 +3268,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    auto src = cudf_velox::veloxToCudfDataType(srcType);
-    auto dst = cudf_velox::veloxToCudfDataType(dstType);
-    return cudf::is_supported_cast(src, dst);
+    auto src = cudf_velox::tryVeloxToCudfDataType(srcType);
+    auto dst = cudf_velox::tryVeloxToCudfDataType(dstType);
+    return src && dst && cudf::is_supported_cast(*src, *dst);
   }
 
   auto& registry = getCudfFunctionRegistry();

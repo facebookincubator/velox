@@ -202,6 +202,25 @@ TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
       makeFlatVector<int64_t>({1}, TIME_MICRO_UTC()));
 }
 
+TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<int64_t>({0, 3'661'000, std::nullopt}, TIME())});
+  auto plan =
+      PlanBuilder().values({input}).project({"cast(c0 as varchar)"}).planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector({makeNullableFlatVector<std::string>(
+      {"00:00:00.000", "01:01:01.000", std::nullopt})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+  EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+  EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+}
+
 TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
   auto input = makeRowVector(
       {"k", "m"},
