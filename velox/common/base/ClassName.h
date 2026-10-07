@@ -15,7 +15,10 @@
  */
 
 #pragma once
-#define VELOX_DEFINE_CLASS_NAME(name)          \
-  static const char* getClassName() noexcept { \
-    return #name;                              \
+
+#include <string_view>
+
+#define VELOX_DEFINE_CLASS_NAME(name)                         \
+  static constexpr std::string_view getClassName() noexcept { \
+    return #name;                                             \
   }
