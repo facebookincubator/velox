@@ -196,13 +196,16 @@ struct FixedPointOptions {
 /// TODO: Cancellation does not reach the loop.  Task::requestCancel(),
 /// requestAbort() and requestPause() move the owning task to a terminal state
 /// and resolve its completion future, but the loop keeps creating sub-tasks
-/// until it converges or exhausts maxIterations.  Nothing crashes -- the loop
-/// holds a reference to its owner for its whole run -- but the work continues
-/// after the coordinator believes the query is dead, the state pools stay
-/// unreclaimable while it does, and peers of a partially cancelled shuffling
-/// fixed point lose the producer they barrier on each iteration.  Wiring this
-/// up requires the loop to retain handles to the sub-tasks it is running;
-/// today they are local to the phase that creates them.
+/// until it converges or exhausts maxIterations.  A top-level loop holds a
+/// reference to its owner for its whole run, so nothing crashes, but the work
+/// continues after the coordinator believes the query is dead, the state pools
+/// stay unreclaimable while it does, and peers of a partially cancelled
+/// shuffling fixed point lose the producer they barrier on each iteration.  A
+/// nested loop is worse off: when its enclosing loop fails, that loop aborts
+/// the nested loop's task and unwinds, while the nested loop can still deliver
+/// output to the enclosing loop or read its state.  Wiring this up requires the
+/// loop to retain handles to the sub-tasks it is running; today they are local
+/// to the phase that creates them.
 ///
 /// TODO: taskStats() on the owning task reports no drivers and no operator
 /// stats, because all the work happens in sub-tasks whose stats are discarded

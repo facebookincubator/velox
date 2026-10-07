@@ -14,12 +14,16 @@
  * limitations under the License.
  */
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/synchronization/Baton.h>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <thread>
 #include <tuple>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
@@ -1955,6 +1959,162 @@ TEST_F(FixedPointTest, loopFailureReachesTheTask) {
   // The state is half-written, so a retried next() must not re-seed it and
   // rebuild hash tables on top of a half-finished run.
   VELOX_ASSERT_THROW(task->next(), "cannot resume");
+}
+
+// A driver the test holds on its thread while another driver fails. Shared
+// with the injection callback, which can outlive the test body when the loop
+// stops the owning task too early.
+struct HeldDriver {
+  folly::Baton<> onThread;
+  folly::Baton<> done;
+  std::atomic_bool ownerStoppedFirst{false};
+};
+
+// Waits up to five seconds for 'baton' to be posted.
+void waitFor(folly::Baton<>& baton) {
+  if (!baton.try_wait_for(std::chrono::seconds(5))) {
+    ADD_FAILURE() << "Timed out waiting for a held driver";
+  }
+}
+
+// Holds the calling driver on its thread until 'owner' stops running or a
+// second passes, and records whether 'owner' stopped first.
+void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
+  held.onThread.post();
+  owner.taskCompletionFuture().wait(std::chrono::seconds(1));
+  held.ownerStoppedFirst = !owner.isRunning();
+  held.done.post();
+}
+
+// A failed sub-task resolves its completion future while its other drivers can
+// still be on thread, feeding a consumer that writes into the loop's buffers.
+// The loop must wait for those drivers before it fails the owning task. Driver
+// 0 of the initial plan fails once driver 1 is on thread, and driver 1 records
+// whether the owning task stopped while it was there.
+DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto seed = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})});
+  auto initialPlan = PlanBuilder(idGenerator)
+                         .values({seed}, /*parallelizable=*/true)
+                         .planNode();
+  PlanBuilder bodyBuilder(idGenerator);
+  bodyBuilder.stateSource("vals", schema).project({"key", "val + 1 AS val"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "vals", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{bodyBuilder.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"vals");
+
+  auto task =
+      makeTask(node, exec::Task::ExecutionMode::kParallel, "stop-initial");
+  auto held = std::make_shared<HeldDriver>();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([task, held](Operator* op) {
+        if (op->operatorType() != "Values") {
+          return;
+        }
+        if (op->operatorCtx()->driverCtx()->driverId == 0) {
+          waitFor(held->onThread);
+          // Lets the loop start waiting on the sub-task before it fails.
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          VELOX_FAIL("Injected initial-plan failure");
+        }
+        holdUntilStopped(*task, *held);
+        VELOX_FAIL("Injected failure of the held driver");
+      }));
+  task->start(/*maxDrivers=*/2);
+  task->taskCompletionFuture().wait();
+  waitFor(held->done);
+
+  ASSERT_TRUE(held->done.ready());
+  EXPECT_FALSE(held->ownerStoppedFirst);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(task->error()), "Injected initial-plan failure");
+}
+
+// The same contract for a body chain: the producer plan fails while the
+// consumer plan's driver is on thread with the batch the producer sent first.
+DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
+  auto schema = ROW({"id", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto batch = makeRowVector(
+      {"id", "val"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})});
+  auto initialPlan = PlanBuilder(idGenerator).values({batch, batch}).planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("frontier", schema)
+                      .partitionedOutput({}, 1)
+                      .planNode();
+  auto consumer = PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .project({"id", "val"})
+                      .planNode();
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "frontier", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{producer, consumer},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"frontier");
+
+  // Eager flush sends the producer's first batch before it reads the second.
+  auto queryCtx = core::QueryCtx::create(
+      cpuExecutor_.get(),
+      core::QueryConfig{
+          {{core::QueryConfig::kPartitionedOutputEagerFlush, "true"}}});
+  auto task = exec::Task::create(
+      fmt::format("local://fixedpoint-stop-body-{}", queryCtx->queryId()),
+      core::PlanFragment{node},
+      /*destination=*/0,
+      queryCtx,
+      exec::Task::ExecutionMode::kParallel,
+      exec::Consumer{},
+      /*memoryArbitrationPriority=*/0,
+      /*spillDiskOpts=*/std::nullopt,
+      /*onError=*/nullptr,
+      &localOptions());
+  task->addSplit(
+      node->id(),
+      exec::Split(
+          std::make_shared<exec::RemoteConnectorSplit>(task->taskId())));
+  task->noMoreSplits(node->id());
+
+  auto held = std::make_shared<HeldDriver>();
+  auto numProducerBatches = std::make_shared<std::atomic_int>(0);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>(
+          [task, held, numProducerBatches](Operator* op) {
+            if (op->operatorType() == "FixedPointStateSource" &&
+                ++*numProducerBatches == 2) {
+              waitFor(held->onThread);
+              VELOX_FAIL("Injected producer failure");
+            }
+            if (op->operatorType() == "Exchange") {
+              holdUntilStopped(*task, *held);
+              VELOX_FAIL("Injected failure of the held consumer");
+            }
+          }));
+  task->start(/*maxDrivers=*/1);
+  task->taskCompletionFuture().wait();
+  waitFor(held->done);
+
+  ASSERT_TRUE(held->done.ready());
+  EXPECT_FALSE(held->ownerStoppedFirst);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(task->error()), "Injected producer failure");
 }
 
 // A split addressed to a node that reads none is a coordinator bug.  The driver
