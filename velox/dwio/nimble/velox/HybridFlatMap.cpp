@@ -187,4 +187,34 @@ HybridFlatMap HybridFlatMap::extractAttribute(
   return hybridMap;
 }
 
+namespace detail {
+
+void checkHybridFlatMapGroupKeys(
+    uint32_t groupId,
+    const std::vector<std::string>& groupKeys) {
+  const bool isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
+  NIMBLE_CHECK(
+      isDefaultGroup || !groupKeys.empty(),
+      "Hybrid FlatMap group must contain at least one key: {}.",
+      groupId);
+  for (size_t i = 0; i < groupKeys.size(); ++i) {
+    NIMBLE_CHECK(!groupKeys[i].empty(), "Hybrid FlatMap key cannot be empty.");
+    if (isDefaultGroup || i == 0) {
+      continue;
+    }
+    NIMBLE_CHECK_NE(
+        groupKeys[i - 1],
+        groupKeys[i],
+        "Duplicate Hybrid FlatMap key: '{}'.",
+        groupKeys[i]);
+    NIMBLE_CHECK_LT(
+        groupKeys[i - 1],
+        groupKeys[i],
+        "Hybrid FlatMap group keys must be sorted: {}.",
+        groupId);
+  }
+}
+
+} // namespace detail
+
 } // namespace facebook::nimble

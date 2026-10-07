@@ -87,6 +87,13 @@ FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(
       distinctKeys,
       std::vector<VectorPtr>(distinctKeys->size()),
       std::vector<BufferPtr>{});
+  // `result` may be a regular MAP vector, such as the caller's initial empty
+  // result, so check that it is a FLAT_MAP before casting. If it is, it is a
+  // previous batch still in use; when it has the same keys, reuse its key index
+  // rather than building another one.
+  if (result->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    flatMap->shareKeyIndex(*result->asUnchecked<FlatMapVector>());
+  }
   result = flatMap;
   return flatMap.get();
 }

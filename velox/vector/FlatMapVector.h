@@ -16,9 +16,11 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <folly/synchronization/DelayedInit.h>
+
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatMapKeyIndex.h"
 
 namespace facebook::velox {
 
@@ -71,10 +73,12 @@ namespace facebook::velox {
 ///   3: {0, 0, 0, 1}
 ///
 /// To allow mapping a key to the correct index in the map values vector (its
-/// "channel"), a hash map is maintained inside the object. To enable generic
-/// key types, projecting a key can be done by using a vector of abitrary type
-/// (see "getKeyChannel()" below), but fast-paths for common key types are
-/// provided (INTEGER/BIGINT/VARCHAR).
+/// "channel"), a hash index over the distinct keys is built on the first key
+/// lookup, and shared by vectors derived from this one that keep the same
+/// distinct keys (such as slices). To enable generic key types, projecting a
+/// key can be done by using a vector of abitrary type (see "getKeyChannel()"
+/// below), but fast-paths for common key types are provided
+/// (INTEGER/BIGINT/VARCHAR).
 ///
 class FlatMapVector : public BaseVector {
  public:
@@ -103,6 +107,10 @@ class FlatMapVector : public BaseVector {
   /// Overwrites the existing distinct keys vector, resizing map values and
   /// clearing in-map buffers.
   void setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys = false);
+
+  /// Reuses the key index of `other` if both vectors have the same distinct
+  /// keys vector. Otherwise does nothing.
+  void shareKeyIndex(const FlatMapVector& other);
 
   TypePtr keyType() const {
     return type()->asMap().keyType();
@@ -273,6 +281,9 @@ class FlatMapVector : public BaseVector {
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override;
 
+  /// Returns true if `this` and `other` use the same key index.
+  bool testingSharesKeyIndex(const FlatMapVector& other) const;
+
   /// Returns true if the map is null, or either one of the key or value of its
   /// entries are null.
   bool containsNullAt(vector_size_t index) const override;
@@ -343,6 +354,14 @@ class FlatMapVector : public BaseVector {
  private:
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 
+  // Returns the index over distinct keys, building it on first use.
+  const detail::FlatMapKeyIndex& keyIndex() const;
+
+  // Gives this vector its own key index before its distinct keys change. A
+  // shared index is copied if built. If not, it is replaced with a new one,
+  // since it would otherwise be built from whichever vector looks up first.
+  void ensureWritableKeyIndex();
+
   /// Compares a map in this Vector with a map in a MapVector.
   std::optional<int32_t> compareToMap(
       const MapVector* other,
@@ -385,14 +404,10 @@ class FlatMapVector : public BaseVector {
   // null value.
   std::vector<BufferPtr> inMaps_;
 
-  // Hash table that enables flat map keys to find the channel (the index on
-  // mapValues_ and inMaps_ for that key).
-  //
-  // To avoid having to template this class and supporting arbitrarily nested
-  // keys, the hash table key is the hash of the flat map key. This means that
-  // hash collisions need to be manually handled by comparing the actual key
-  // values, and hence a multimap is needed.
-  std::unordered_multimap<uint64_t, column_index_t> keyToChannel_;
+  // Maps keys to their channel (the index on mapValues_ and inMaps_ for that
+  // key). Shared with other vectors over the same distinctKeys_, so it is
+  // never modified in place while shared.
+  std::shared_ptr<folly::DelayedInit<detail::FlatMapKeyIndex>> keyIndex_;
 
   // Whether the distinct keys vector stores sorted keys.
   bool sortedKeys_;
