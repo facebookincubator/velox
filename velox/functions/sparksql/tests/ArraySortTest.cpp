@@ -93,7 +93,7 @@ class ArraySortTest : public SparkFunctionBaseTest {
     });
     auto result = evaluate("array_sort(c0)", makeRowVector({input}));
 
-    auto* arrays = result->as<ArrayVector>();
+    auto* arrays = result->template as<ArrayVector>();
     DecodedVector decodedElements(*arrays->elements());
     const std::vector<std::optional<bool>> expectedSigns{
         true,
@@ -455,11 +455,14 @@ TEST_F(ArraySortTest, comparatorNullKeyErrorIsRowIsolated) {
       {"bbb", std::nullopt, "a"},
       {"dddd", "bb", "c"},
   });
-  auto expected = makeNullableArrayVector<std::string>({
-      {"a", "cc", "bbb"},
-      std::nullopt,
-      {"c", "bb", "dddd"},
-  });
+  using NullableStringArray =
+      std::optional<std::vector<std::optional<std::string>>>;
+  auto expected =
+      makeNullableArrayVector<std::string>(std::vector<NullableStringArray>{
+          {{"a", "cc", "bbb"}},
+          std::nullopt,
+          {{"c", "bb", "dddd"}},
+      });
 
   auto result = evaluate(
       "try(array_sort(c0, (x, y) -> "
