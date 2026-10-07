@@ -35,6 +35,7 @@ add_library(
   CudfOrderBy.cpp
   CudfPlanRewriter.cpp
   CudfReduce.cpp
+  CudfScanUtils.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
   CudfWindow.cpp

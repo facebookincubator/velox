@@ -23,15 +23,18 @@
 #include "velox/experimental/cudf/exec/CudfGroupId.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::cudf_velox {
@@ -75,6 +78,16 @@ std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
 
   if (auto topN = std::dynamic_pointer_cast<const CudfTopNNode>(node)) {
     return std::make_unique<CudfTopN>(id, ctx, topN);
+  }
+
+  if (auto topNRowNumber =
+          std::dynamic_pointer_cast<const CudfTopNRowNumberNode>(node)) {
+    return std::make_unique<CudfTopNRowNumber>(id, ctx, topNRowNumber);
+  }
+
+  if (auto localMerge =
+          std::dynamic_pointer_cast<const CudfLocalMergeNode>(node)) {
+    return std::make_unique<CudfLocalMerge>(id, ctx, localMerge);
   }
 
   if (auto limit = std::dynamic_pointer_cast<const CudfLimitNode>(node)) {
@@ -147,6 +160,15 @@ std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
     return topN->preferredDriverCount();
   }
 
+  if (auto topNRowNumber =
+          std::dynamic_pointer_cast<const CudfTopNRowNumberNode>(node)) {
+    return topNRowNumber->preferredDriverCount();
+  }
+
+  if (std::dynamic_pointer_cast<const CudfLocalMergeNode>(node)) {
+    return 1;
+  }
+
   if (auto limit = std::dynamic_pointer_cast<const CudfLimitNode>(node)) {
     return limit->preferredDriverCount();
   }
@@ -178,6 +200,45 @@ std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
     return window->preferredDriverCount();
   }
 
+  return std::nullopt;
+}
+
+exec::OperatorSupplier CudfPlanNodeTranslator::toOperatorSupplier(
+    const core::PlanNodePtr& node) {
+  auto localMerge = std::dynamic_pointer_cast<const CudfLocalMergeNode>(node);
+  if (!localMerge) {
+    return nullptr;
+  }
+  return [localMerge](int32_t id, exec::DriverCtx* ctx) {
+    auto source = ctx->task->addLocalMergeSource(
+        ctx->splitGroupId,
+        localMerge->id(),
+        localMerge->outputType(),
+        ctx->queryConfig().localMergeSourceQueueSize());
+    auto consumer =
+        [source](RowVectorPtr input, bool drained, ContinueFuture* future) {
+          VELOX_CHECK(!drained);
+          return source->enqueue(std::move(input), future);
+        };
+    auto started = [source](ContinueFuture* future) {
+      return source->started(future);
+    };
+    return std::make_unique<exec::CallbackSink>(
+        id,
+        ctx,
+        std::move(consumer),
+        std::move(started),
+        localMerge->id(),
+        core::PlanNode::Boundary::kInput);
+  };
+}
+
+std::optional<bool> CudfPlanNodeTranslator::requiresNewPipeline(
+    const core::PlanNodePtr& node,
+    uint32_t /*sourceIndex*/) {
+  if (std::dynamic_pointer_cast<const CudfLocalMergeNode>(node)) {
+    return true;
+  }
   return std::nullopt;
 }
 

@@ -15,18 +15,17 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
+#include "velox/experimental/cudf/exec/CudfScanUtils.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 
 namespace facebook::velox::cudf_velox {
@@ -160,6 +159,37 @@ std::shared_ptr<const CudfLimitNode> makeLimitNode(
       node->count(),
       node->isPartial(),
       preferredDriverCount);
+}
+
+std::shared_ptr<const CudfTopNRowNumberNode> makeTopNRowNumberNode(
+    const std::shared_ptr<const core::TopNRowNumberNode>& node,
+    core::PlanNodePtr source,
+    int preferredDriverCount) {
+  VELOX_CHECK_EQ(
+      node->rankFunction(),
+      core::TopNRowNumberNode::RankFunction::kRowNumber,
+      "CudfTopNRowNumber only supports row_number");
+  return std::make_shared<CudfTopNRowNumberNode>(
+      node->id(),
+      std::move(source),
+      node->outputType(),
+      node->partitionKeys(),
+      node->sortingKeys(),
+      node->sortingOrders(),
+      node->limit(),
+      node->generateRowNumber(),
+      preferredDriverCount);
+}
+
+std::shared_ptr<const CudfLocalMergeNode> makeLocalMergeNode(
+    const std::shared_ptr<const core::LocalMergeNode>& node,
+    std::vector<core::PlanNodePtr> sources) {
+  return std::make_shared<CudfLocalMergeNode>(
+      node->id(),
+      std::move(sources),
+      node->outputType(),
+      node->sortingKeys(),
+      node->sortingOrders());
 }
 
 std::shared_ptr<const CudfAssignUniqueIdNode> makeAssignUniqueIdNode(
@@ -298,6 +328,22 @@ class Rewriter {
       return rewriteUnaryNode(topN, makeTopNNode);
     }
 
+    if (auto topNRowNumber =
+            std::dynamic_pointer_cast<const core::TopNRowNumberNode>(node)) {
+      if (topNRowNumber->rankFunction() ==
+          core::TopNRowNumberNode::RankFunction::kRowNumber) {
+        return rewriteUnaryNode(topNRowNumber, makeTopNRowNumberNode);
+      }
+    }
+
+    if (auto localMerge =
+            std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
+      return {
+          makeLocalMergeNode(
+              localMerge, rewriteChildren(localMerge->sources(), Mode::kGpu)),
+          Mode::kGpu};
+    }
+
     if (auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {
       return rewriteUnaryNode(limit, makeLimitNode);
     }
@@ -330,7 +376,7 @@ class Rewriter {
 
     if (auto scan =
             std::dynamic_pointer_cast<const core::TableScanNode>(node)) {
-      if (isGpuTableScan(scan)) {
+      if (isGpuTableScan(*scan)) {
         return {scan, Mode::kGpu};
       }
     }
@@ -452,9 +498,8 @@ class Rewriter {
   RewriteResult rewriteLocalPartition(
       const std::shared_ptr<const core::LocalPartitionNode>& node,
       Mode requestedMode) {
-    const bool allowGpu = requestedMode == Mode::kGpu &&
-        (node->type() == core::LocalPartitionNode::Type::kGather ||
-         isHashPartition(node));
+    const bool allowGpu =
+        requestedMode == Mode::kGpu && CudfLocalPartition::shouldReplace(node);
     const Mode childMode = allowGpu ? Mode::kGpu : Mode::kCpu;
     auto newSources = rewriteChildren(node->sources(), childMode);
     auto builder = core::LocalPartitionNode::Builder(*node);
@@ -492,6 +537,26 @@ class Rewriter {
       } else if (
           auto cloned =
               cloneWithNewSource<core::TopNNode>(node, newSources[0])) {
+        rebuilt = cloned;
+      } else if (
+          auto cloned = cloneWithNewSource<core::TopNRowNumberNode>(
+              node, newSources[0])) {
+        rebuilt = cloned;
+      } else if (
+          auto cloned = cloneWithNewSource<core::PartitionedOutputNode>(
+              node, newSources[0])) {
+        rebuilt = cloned;
+      } else if (
+          auto cloned =
+              cloneWithNewSource<core::RowNumberNode>(node, newSources[0])) {
+        rebuilt = cloned;
+      } else if (
+          auto cloned =
+              cloneWithNewSource<core::UnnestNode>(node, newSources[0])) {
+        rebuilt = cloned;
+      } else if (
+          auto cloned =
+              cloneWithNewSource<core::ExpandNode>(node, newSources[0])) {
         rebuilt = cloned;
       } else if (
           auto cloned = cloneWithNewSource<core::EnforceSingleRowNode>(
@@ -602,31 +667,6 @@ class Rewriter {
     return !joinNode->joinCondition() ||
         canExprRunOnGpu(
             joinNode->joinCondition(), queryCtx_.get(), pool_.get());
-  }
-
-  static bool isGpuTableScan(
-      const std::shared_ptr<const core::TableScanNode>& tableScan) {
-    if (!tableScan) {
-      return false;
-    }
-    const auto connectorId = tableScan->tableHandle()->connectorId();
-    auto connector =
-        facebook::velox::connector::ConnectorRegistry::tryGet(connectorId);
-    if (!connector) {
-      return false;
-    }
-    return dynamic_cast<facebook::velox::cudf_velox::connector::hive::
-                            CudfHiveConnector*>(connector.get()) != nullptr;
-  }
-
-  static bool isHashPartition(
-      const std::shared_ptr<const core::LocalPartitionNode>& node) {
-    if (!node || node->type() != core::LocalPartitionNode::Type::kRepartition) {
-      return false;
-    }
-    const auto& spec = node->partitionFunctionSpec();
-    return dynamic_cast<const exec::HashPartitionFunctionSpec*>(&spec) !=
-        nullptr;
   }
 
   static std::shared_ptr<const core::AggregationNode> cloneAggregationNode(
@@ -759,6 +799,17 @@ core::PlanNodePtr CudfPlanRewriter::translateForAdapter(
   if (auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
     VELOX_CHECK_EQ(topN->sources().size(), 1);
     return makeTopNNode(topN, topN->sources()[0], gpuDriverCount);
+  }
+
+  if (auto topNRowNumber =
+          std::dynamic_pointer_cast<const core::TopNRowNumberNode>(node)) {
+    return makeTopNRowNumberNode(
+        topNRowNumber, topNRowNumber->sources()[0], gpuDriverCount);
+  }
+
+  if (auto localMerge =
+          std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
+    return makeLocalMergeNode(localMerge, localMerge->sources());
   }
 
   if (auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {

@@ -126,8 +126,10 @@ bool mustStartNewPipeline(const core::PlanNodePtr& planNode, int sourceId) {
     return true;
   }
 
-  // Non-first sources always run in their own pipeline.
-  return sourceId != 0;
+  // Custom nodes may require a separate pipeline even for their first source.
+  // Otherwise, only non-first sources start a new pipeline.
+  return Operator::requiresNewPipeline(planNode, sourceId)
+      .value_or(sourceId != 0);
 }
 
 // Creates the customized local partition operator for table writer scaling.

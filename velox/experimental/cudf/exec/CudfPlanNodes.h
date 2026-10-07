@@ -451,6 +451,124 @@ class CudfTopNNode : public CudfUnaryPlanNode {
   const bool isPartial_;
 };
 
+/// Physical row_number top-N. Rank and dense_rank are deliberately not part
+/// of this node's contract.
+class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
+ public:
+  CudfTopNRowNumberNode(
+      const core::PlanNodeId& id,
+      core::PlanNodePtr source,
+      RowTypePtr outputType,
+      std::vector<core::FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<core::SortOrder> sortingOrders,
+      int32_t limit,
+      bool generateRowNumber,
+      int preferredDriverCount = 4)
+      : CudfUnaryPlanNode(
+            id,
+            std::move(source),
+            std::move(outputType),
+            preferredDriverCount),
+        partitionKeys_(std::move(partitionKeys)),
+        sortingKeys_(std::move(sortingKeys)),
+        sortingOrders_(std::move(sortingOrders)),
+        limit_(limit),
+        generateRowNumber_(generateRowNumber) {
+    VELOX_CHECK_GT(limit_, 0);
+    VELOX_CHECK(!sortingKeys_.empty());
+    VELOX_CHECK_EQ(sortingKeys_.size(), sortingOrders_.size());
+  }
+
+  std::string_view name() const override {
+    return "CudfTopNRowNumber";
+  }
+
+  const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<core::SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  int32_t limit() const {
+    return limit_;
+  }
+
+  bool generateRowNumber() const {
+    return generateRowNumber_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    stream << "limit=" << limit_ << ", rowNumber=" << generateRowNumber_
+           << ", preferredDrivers=" << preferredDriverCount_;
+  }
+
+  const std::vector<core::FieldAccessTypedExprPtr> partitionKeys_;
+  const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
+  const std::vector<core::SortOrder> sortingOrders_;
+  const int32_t limit_;
+  const bool generateRowNumber_;
+};
+
+class CudfLocalMergeNode : public core::PlanNode {
+ public:
+  CudfLocalMergeNode(
+      const core::PlanNodeId& id,
+      std::vector<core::PlanNodePtr> sources,
+      RowTypePtr outputType,
+      std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<core::SortOrder> sortingOrders)
+      : PlanNode(id),
+        sources_(std::move(sources)),
+        outputType_(std::move(outputType)),
+        sortingKeys_(std::move(sortingKeys)),
+        sortingOrders_(std::move(sortingOrders)) {
+    VELOX_CHECK(!sources_.empty());
+    VELOX_CHECK_EQ(sortingKeys_.size(), sortingOrders_.size());
+  }
+
+  std::string_view name() const override {
+    return "CudfLocalMerge";
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  bool requiresSingleThread() const override {
+    return true;
+  }
+
+  const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<core::SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    stream << "sources=" << sources_.size();
+  }
+
+  const std::vector<core::PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+  const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
+  const std::vector<core::SortOrder> sortingOrders_;
+};
+
 class CudfLimitNode : public CudfUnaryPlanNode {
  public:
   CudfLimitNode(

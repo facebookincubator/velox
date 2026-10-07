@@ -175,6 +175,15 @@ class Operator : public BaseRuntimeStatWriter {
         const core::PlanNodePtr& /* node */) {
       return std::nullopt;
     }
+
+    /// Whether a source of a custom node must run in a separate pipeline.
+    /// Returns std::nullopt for nodes not handled by this translator. By
+    /// default, only non-first sources start separate pipelines.
+    virtual std::optional<bool> requiresNewPipeline(
+        const core::PlanNodePtr& /* node */,
+        uint32_t /* sourceIndex */) {
+      return std::nullopt;
+    }
   };
 
   /// The name for background cpu time metric if operator has background cpu
@@ -522,6 +531,11 @@ class Operator : public BaseRuntimeStatWriter {
   /// Calls `maxDrivers` on all the registered PlanNodeTranslators and returns
   /// the first one that is not std::nullopt or std::nullopt otherwise.
   static std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& planNode);
+
+  /// Returns the first pipeline-boundary decision supplied by a translator.
+  static std::optional<bool> requiresNewPipeline(
+      const core::PlanNodePtr& planNode,
+      uint32_t sourceIndex);
 
   /// The scoped objects to mark an operator is under non-reclaimable execution
   /// section or not. This prevents the memory arbitrator from reclaiming memory

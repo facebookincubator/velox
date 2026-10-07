@@ -13,28 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
+#include "velox/experimental/cudf/exec/CudfScanUtils.h"
+
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::velox::cudf_velox {
 
-/// Translates cuDF plan nodes to cuDF operators. Used by LocalPlanner
-class CudfPlanNodeTranslator : public exec::Operator::PlanNodeTranslator {
- public:
-  std::unique_ptr<exec::Operator> toOperator(
-      exec::DriverCtx* ctx,
-      int32_t id,
-      const core::PlanNodePtr& node) override;
-
-  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override;
-
-  exec::OperatorSupplier toOperatorSupplier(
-      const core::PlanNodePtr& node) override;
-
-  std::optional<bool> requiresNewPipeline(
-      const core::PlanNodePtr& node,
-      uint32_t sourceIndex) override;
-};
+bool isGpuTableScan(const core::TableScanNode& node) {
+  auto scanConnector = ::facebook::velox::connector::ConnectorRegistry::tryGet(
+      node.tableHandle()->connectorId());
+  return dynamic_cast<const connector::hive::CudfHiveConnector*>(
+             scanConnector.get()) != nullptr ||
+      dynamic_cast<const connector::hive::iceberg::CudfIcebergConnector*>(
+          scanConnector.get()) != nullptr;
+}
 
 } // namespace facebook::velox::cudf_velox

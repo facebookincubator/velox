@@ -15,26 +15,12 @@
  */
 #pragma once
 
-#include "velox/exec/Operator.h"
+#include "velox/core/PlanNode.h"
 
 namespace facebook::velox::cudf_velox {
 
-/// Translates cuDF plan nodes to cuDF operators. Used by LocalPlanner
-class CudfPlanNodeTranslator : public exec::Operator::PlanNodeTranslator {
- public:
-  std::unique_ptr<exec::Operator> toOperator(
-      exec::DriverCtx* ctx,
-      int32_t id,
-      const core::PlanNodePtr& node) override;
-
-  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override;
-
-  exec::OperatorSupplier toOperatorSupplier(
-      const core::PlanNodePtr& node) override;
-
-  std::optional<bool> requiresNewPipeline(
-      const core::PlanNodePtr& node,
-      uint32_t sourceIndex) override;
-};
+/// Whether the scan's connector produces CudfVectors. Shared by physical
+/// planning and the transitional driver adapters.
+bool isGpuTableScan(const core::TableScanNode& node);
 
 } // namespace facebook::velox::cudf_velox

@@ -256,6 +256,18 @@ std::optional<uint32_t> Operator::maxDrivers(
   return std::nullopt;
 }
 
+std::optional<bool> Operator::requiresNewPipeline(
+    const core::PlanNodePtr& planNode,
+    uint32_t sourceIndex) {
+  for (auto& translator : translators()) {
+    if (auto decision =
+            translator->requiresNewPipeline(planNode, sourceIndex)) {
+      return decision;
+    }
+  }
+  return std::nullopt;
+}
+
 const std::string& OperatorCtx::taskId() const {
   return driverCtx_->task->taskId();
 }

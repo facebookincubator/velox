@@ -15,14 +15,13 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
+#include "velox/experimental/cudf/exec/CudfScanUtils.h"
 #include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -34,7 +33,6 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -338,13 +336,7 @@ struct CudfLocalPartitionAdapter {
       return false;
     }
 
-    const auto connector =
-        facebook::velox::connector::ConnectorRegistry::tryGet(
-            scanNode->tableHandle()->connectorId());
-    return dynamic_cast<connector::hive::CudfHiveConnector*>(connector.get()) !=
-        nullptr ||
-        dynamic_cast<connector::hive::iceberg::CudfIcebergConnector*>(
-            connector.get()) != nullptr;
+    return isGpuTableScan(*scanNode);
   }
 
   std::shared_ptr<const core::PlanNode> findPlanNode(
