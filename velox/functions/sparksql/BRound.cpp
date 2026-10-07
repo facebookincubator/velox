@@ -32,22 +32,6 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-FOLLY_ALWAYS_INLINE int128_t divideHalfEven(int128_t value, int128_t divisor) {
-  const int128_t quotient = value / divisor;
-  const int128_t remainder = value % divisor;
-  if (remainder == 0) {
-    return quotient;
-  }
-
-  const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
-  const int128_t half = divisor / 2;
-  if (absoluteRemainder > half ||
-      (absoluteRemainder == half && quotient % 2 != 0)) {
-    return quotient + (value < 0 ? -1 : 1);
-  }
-  return quotient;
-}
-
 template <typename T>
 FOLLY_ALWAYS_INLINE T wrapToSigned(int128_t value) {
   static_assert(std::is_integral_v<T> && std::is_signed_v<T>);
@@ -73,8 +57,9 @@ broundIntegral(T value, int32_t scale, bool ansiEnabled, T& result) {
   }
 
   const int128_t divisor = DecimalUtil::kPowersOfTen[roundingDigitCount];
-  const int128_t rounded =
-      divideHalfEven(static_cast<int128_t>(value), divisor) * divisor;
+  const int128_t rounded = DecimalUtil::divideWithRoundHalfEven(
+                               static_cast<int128_t>(value), divisor) *
+      divisor;
   if (ansiEnabled &&
       (rounded < std::numeric_limits<T>::min() ||
        rounded > std::numeric_limits<T>::max())) {

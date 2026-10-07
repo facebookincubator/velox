@@ -71,6 +71,59 @@ class BRoundTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
+  void testFloatingPointEncodings() {
+    const auto positiveScaleInput = makeNullableFlatVector<T>({
+        static_cast<T>(1.25),
+        static_cast<T>(1.75),
+        static_cast<T>(-1.25),
+        static_cast<T>(-1.75),
+        std::nullopt,
+    });
+    const auto positiveScaleExpected = makeNullableFlatVector<T>({
+        static_cast<T>(1.2),
+        static_cast<T>(1.8),
+        static_cast<T>(-1.2),
+        static_cast<T>(-1.8),
+        std::nullopt,
+    });
+    const auto positiveScaleRow = makeRowVector({positiveScaleInput});
+    testEncodings(
+        makeTypedExpr(
+            "bround(c0, cast(1 as integer))", positiveScaleRow->rowType()),
+        {positiveScaleInput},
+        positiveScaleExpected);
+
+    const auto negativeScaleInput = makeNullableFlatVector<T>({
+        static_cast<T>(144),
+        static_cast<T>(145),
+        static_cast<T>(146),
+        static_cast<T>(154),
+        static_cast<T>(155),
+        static_cast<T>(156),
+        static_cast<T>(-145),
+        static_cast<T>(-155),
+        std::nullopt,
+    });
+    const auto negativeScaleExpected = makeNullableFlatVector<T>({
+        static_cast<T>(140),
+        static_cast<T>(140),
+        static_cast<T>(150),
+        static_cast<T>(150),
+        static_cast<T>(160),
+        static_cast<T>(160),
+        static_cast<T>(-140),
+        static_cast<T>(-160),
+        std::nullopt,
+    });
+    const auto negativeScaleRow = makeRowVector({negativeScaleInput});
+    testEncodings(
+        makeTypedExpr(
+            "bround(c0, cast(-1 as integer))", negativeScaleRow->rowType()),
+        {negativeScaleInput},
+        negativeScaleExpected);
+  }
+
+  template <typename T>
   void testIntegralOverflow() {
     const auto maximum = std::numeric_limits<T>::max();
     const auto minimum = std::numeric_limits<T>::min();
@@ -147,6 +200,11 @@ TEST_F(BRoundTest, floatingPointNeighbors) {
   EXPECT_EQ(bround<double>(std::nextafter(0.5, 1.0), 0), 1.0);
   EXPECT_EQ(bround<double>(std::nextafter(-0.5, -1.0), 0), -1.0);
   EXPECT_EQ(bround<double>(std::nextafter(-0.5, 0.0), 0), 0.0);
+}
+
+TEST_F(BRoundTest, floatingPointEncodings) {
+  testFloatingPointEncodings<float>();
+  testFloatingPointEncodings<double>();
 }
 
 TEST_F(BRoundTest, floatingPointExtremePositiveScales) {

@@ -281,8 +281,8 @@ Decimal Special Forms
 
     Result precision and scale use the same Spark rules as ``decimal_round``.
     Values that do not fit the resolved result precision raise an overflow
-    error. Inputs return zero when an extreme negative scale exceeds the
-    meaningful decimal digit range.
+    error. When rounding would discard more than 38 decimal digits, the result
+    is zero.
 
     ::
 
@@ -292,11 +292,17 @@ Decimal Special Forms
 
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
-    Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
-    ``scale`` is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
-    When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
-    The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
-    After rounding we may need one more digit in the integral part.
+    Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode.
+    Values exactly halfway between two results round away from zero. ``scale``
+    defaults to 0 and must be a constant INTEGER in the range from ``INT_MIN``
+    to ``INT_MAX``.
+
+    The input precision, input scale, and requested scale determine the result
+    precision and scale. Rounding may require one additional integral digit.
+    Values that do not fit the resolved result precision raise an overflow
+    error. When rounding would discard more than 38 decimal digits, the result
+    is zero. At exactly 38 discarded digits, magnitudes at or above the HALF_UP
+    threshold can round to a magnitude of ``10^38`` and overflow.
 
     ::
 

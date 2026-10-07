@@ -41,15 +41,11 @@ class DecimalRoundOps {
 
   /// Precomputed scale factors shared by all rounding policies.
   struct ScaleFactors {
-    int32_t scale;
-    uint8_t inputPrecision;
-    uint8_t inputScale;
-    uint8_t resultPrecision;
-    uint8_t resultScale;
     std::optional<int128_t> divideFactor;
     std::optional<int128_t> multiplyFactor;
     int128_t overflowBound;
     bool roundsToZero;
+    bool mayOverflow;
   };
 
   static int32_t clampScale(int32_t scale) {
@@ -61,25 +57,24 @@ class DecimalRoundOps {
       int32_t scale,
       uint8_t inputPrecision,
       uint8_t inputScale,
-      uint8_t resultPrecision,
-      uint8_t resultScale);
+      uint8_t resultPrecision);
 
-  static std::optional<int32_t> extractConstantScaleArg(
+  static int32_t extractConstantScaleArg(
       const exec::ExprPtr& expr,
-      std::string_view funcName,
-      bool allowNull);
+      std::string_view funcName);
 
   template <template <typename, typename> class Policy>
   static std::shared_ptr<exec::VectorFunction> createFunction(
       const TypePtr& inputType,
       int32_t scale,
       const TypePtr& resultType) {
-    const auto [inputPrecision, inputScale] =
-        getDecimalPrecisionScale(*inputType);
-    const auto [resultPrecision, resultScale] =
-        getDecimalPrecisionScale(*resultType);
+    const auto inputPrecisionScale = getDecimalPrecisionScale(*inputType);
+    const auto resultPrecisionScale = getDecimalPrecisionScale(*resultType);
     const auto factors = computeFactors(
-        scale, inputPrecision, inputScale, resultPrecision, resultScale);
+        scale,
+        inputPrecisionScale.first,
+        inputPrecisionScale.second,
+        resultPrecisionScale.first);
     return dispatchTypes(
         inputType,
         resultType,
@@ -164,7 +159,7 @@ class DecimalRoundFunction : public exec::VectorFunction {
   }
 
   bool supportsFlatNoNullsFastPath() const override {
-    return !Policy::canOverflow;
+    return !policy_.mayOverflow();
   }
 
  private:
@@ -173,37 +168,71 @@ class DecimalRoundFunction : public exec::VectorFunction {
 
 namespace {
 
-// Half-up rounding (Spark's ROUND_HALF_UP). Never overflows because
-// the result type is guaranteed to accommodate the rounded value.
+FOLLY_ALWAYS_INLINE bool overflowsAfterMultiplication(
+    int128_t value,
+    int128_t multiplier,
+    int128_t overflowBound) {
+  VELOX_DCHECK_GT(multiplier, 0);
+  VELOX_DCHECK_GT(overflowBound, 0);
+  const int128_t maxMagnitude = (overflowBound - 1) / multiplier;
+  return value > maxMagnitude || value < -maxMagnitude;
+}
+
+template <typename TResult, typename TInput, typename Divide>
+std::optional<TResult> applyRoundingPolicy(
+    const TInput& input,
+    const DecimalRoundOps::ScaleFactors& factors,
+    Divide divide) {
+  if (factors.roundsToZero) {
+    return TResult{0};
+  }
+
+  int128_t rounded = input;
+  if (factors.divideFactor.has_value()) {
+    rounded = divide(rounded, factors.divideFactor.value());
+  }
+
+  if (factors.multiplyFactor.has_value()) {
+    const int128_t multiplier = factors.multiplyFactor.value();
+    if (overflowsAfterMultiplication(
+            rounded, multiplier, factors.overflowBound)) {
+      return std::nullopt;
+    }
+    rounded *= multiplier;
+  }
+  if (rounded >= factors.overflowBound || rounded <= -factors.overflowBound) {
+    return std::nullopt;
+  }
+  return static_cast<TResult>(rounded);
+}
+
+// Half-up rounding (Spark's ROUND_HALF_UP).
 template <typename TResult, typename TInput>
 struct RoundHalfUpPolicy {
-  static constexpr bool canOverflow = false;
-  static constexpr bool reportOverflow = false;
+  static constexpr bool canOverflow = true;
+  static constexpr bool reportOverflow = true;
 
   explicit RoundHalfUpPolicy(const DecimalRoundOps::ScaleFactors& factors)
       : factors_(factors) {}
 
   std::optional<TResult> applyOne(const TInput& input) const {
-    if (factors_.scale >= 0) {
-      TResult rescaledValue;
-      const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
-          input,
-          factors_.inputPrecision,
-          factors_.inputScale,
-          factors_.resultPrecision,
-          factors_.resultScale,
-          rescaledValue);
-      VELOX_DCHECK(status.ok());
-      return rescaledValue;
-    }
-    // When scale < 0, divideFactor is always set (scale < inputScale holds).
-    // multiplyFactor is always set when scale < 0. Use value_or(1) as a
-    // defensive default matching the no-op identity.
-    TResult rescaledValue;
-    DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
-        rescaledValue, input, factors_.divideFactor.value_or(1), false, 0, 0);
-    rescaledValue *= factors_.multiplyFactor.value_or(1);
-    return rescaledValue;
+    return applyRoundingPolicy<TResult>(
+        input, factors_, [](int128_t value, int128_t divisor) {
+          int128_t rounded;
+          DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+              rounded, value, divisor, false, 0, 0);
+          return rounded;
+        });
+  }
+
+  bool mayOverflow() const {
+    return !factors_.roundsToZero && factors_.mayOverflow;
+  }
+
+  static Status overflowStatus() {
+    return threadSkipErrorDetails()
+        ? Status::UserError()
+        : Status::UserError("Decimal overflow in round.");
   }
 
  private:
@@ -220,37 +249,14 @@ struct RoundHalfEvenPolicy {
       : factors_(factors) {}
 
   std::optional<TResult> applyOne(const TInput& input) const {
-    if (factors_.roundsToZero) {
-      return TResult{0};
-    }
+    return applyRoundingPolicy<TResult>(
+        input, factors_, [](int128_t value, int128_t divisor) {
+          return DecimalUtil::divideWithRoundHalfEven(value, divisor);
+        });
+  }
 
-    int128_t rounded = input;
-    if (factors_.divideFactor.has_value()) {
-      const int128_t divisor = factors_.divideFactor.value();
-      const int128_t quotient = rounded / divisor;
-      const int128_t remainder = rounded % divisor;
-      const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
-      const int128_t half = divisor / 2;
-      rounded = quotient;
-      if (absoluteRemainder > half ||
-          (absoluteRemainder == half && quotient % 2 != 0)) {
-        rounded += input < 0 ? -1 : 1;
-      }
-    }
-
-    if (factors_.multiplyFactor.has_value()) {
-      const int128_t multiplier = factors_.multiplyFactor.value();
-      const int128_t maxAbs = factors_.overflowBound / multiplier;
-      if (rounded >= maxAbs || rounded <= -maxAbs) {
-        return std::nullopt;
-      }
-      rounded *= multiplier;
-    }
-    if (rounded >= factors_.overflowBound ||
-        rounded <= -factors_.overflowBound) {
-      return std::nullopt;
-    }
-    return static_cast<TResult>(rounded);
+  bool mayOverflow() const {
+    return !factors_.roundsToZero && factors_.mayOverflow;
   }
 
   static Status overflowStatus() {
@@ -290,8 +296,8 @@ struct DirectionalRoundPolicy {
     int128_t rounded = quotient + adjustment(remainder);
     if (factors_.multiplyFactor.has_value()) {
       const int128_t multiplier = factors_.multiplyFactor.value();
-      const int128_t maxAbs = factors_.overflowBound / multiplier;
-      if (rounded >= maxAbs || rounded <= -maxAbs) {
+      if (overflowsAfterMultiplication(
+              rounded, multiplier, factors_.overflowBound)) {
         return std::nullopt;
       }
       rounded *= multiplier;
@@ -301,6 +307,10 @@ struct DirectionalRoundPolicy {
       return std::nullopt;
     }
     return static_cast<TResult>(rounded);
+  }
+
+  bool mayOverflow() const {
+    return factors_.mayOverflow;
   }
 
  private:
@@ -359,38 +369,48 @@ DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
     int32_t scale,
     uint8_t inputPrecision,
     uint8_t inputScale,
-    uint8_t resultPrecision,
-    uint8_t resultScale) {
+    uint8_t resultPrecision) {
   ScaleFactors factors{};
-  factors.scale = clampScale(scale);
-  factors.inputPrecision = inputPrecision;
-  factors.inputScale = inputScale;
-  factors.resultPrecision = resultPrecision;
-  factors.resultScale = resultScale;
   factors.overflowBound = DecimalUtil::kPowersOfTen[resultPrecision];
   factors.roundsToZero =
       static_cast<int64_t>(inputScale) - static_cast<int64_t>(scale) >
       LongDecimalType::kMaxPrecision;
 
-  if (factors.scale < static_cast<int32_t>(inputScale)) {
-    const int32_t divDigits = static_cast<int32_t>(inputScale) - factors.scale;
+  const int32_t clampedScale = clampScale(scale);
+  if (clampedScale < static_cast<int32_t>(inputScale)) {
+    const int32_t divDigits = static_cast<int32_t>(inputScale) - clampedScale;
     VELOX_DCHECK_GT(divDigits, 0);
     const int32_t cappedDivDigits = std::min(
         divDigits, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
     factors.divideFactor = DecimalUtil::kPowersOfTen[cappedDivDigits];
-    if (factors.scale < 0) {
+    if (clampedScale < 0) {
       VELOX_DCHECK_LE(
-          -factors.scale, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-      factors.multiplyFactor = DecimalUtil::kPowersOfTen[-factors.scale];
+          -clampedScale, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
+      factors.multiplyFactor = DecimalUtil::kPowersOfTen[-clampedScale];
     }
   }
+
+  int128_t maxRoundedMagnitude = DecimalUtil::kPowersOfTen[inputPrecision] - 1;
+  if (factors.divideFactor.has_value()) {
+    const int128_t divisor = factors.divideFactor.value();
+    const int128_t remainder = maxRoundedMagnitude % divisor;
+    maxRoundedMagnitude /= divisor;
+    if (remainder != 0) {
+      ++maxRoundedMagnitude;
+    }
+  }
+  factors.mayOverflow = factors.multiplyFactor.has_value()
+      ? overflowsAfterMultiplication(
+            maxRoundedMagnitude,
+            factors.multiplyFactor.value(),
+            factors.overflowBound)
+      : maxRoundedMagnitude >= factors.overflowBound;
   return factors;
 }
 
-std::optional<int32_t> DecimalRoundOps::extractConstantScaleArg(
+int32_t DecimalRoundOps::extractConstantScaleArg(
     const exec::ExprPtr& expr,
-    std::string_view funcName,
-    bool allowNull) {
+    std::string_view funcName) {
   VELOX_USER_CHECK_EQ(
       expr->type()->kind(),
       TypeKind::INTEGER,
@@ -407,11 +427,10 @@ std::optional<int32_t> DecimalRoundOps::extractConstantScaleArg(
       "ConstantExpr must hold a constant-encoded vector.");
   auto* constantVector =
       constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
-  if (constantVector->isNullAt(0)) {
-    VELOX_USER_CHECK(
-        allowNull, "The second argument of {} must not be NULL.", funcName);
-    return std::nullopt;
-  }
+  VELOX_USER_CHECK(
+      !constantVector->isNullAt(0),
+      "The second argument of {} must not be NULL.",
+      funcName);
   return constantVector->valueAt(0);
 }
 
@@ -465,33 +484,8 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
       functionName_);
 
   int32_t scale = 0;
-  std::shared_ptr<exec::ConstantExpr> scaleExpression;
   if (args.size() > 1) {
-    const auto extractedScale = DecimalRoundOps::extractConstantScaleArg(
-        args[1], functionName_, mode_ == RoundMode::kHalfEven);
-    if (!extractedScale.has_value()) {
-      scaleExpression = std::dynamic_pointer_cast<exec::ConstantExpr>(args[1]);
-    } else {
-      scale = extractedScale.value();
-    }
-  }
-
-  if (mode_ == RoundMode::kHalfEven) {
-    const auto [inputPrecision, inputScale] =
-        getDecimalPrecisionScale(*args[0]->type());
-    const auto [resultPrecision, resultScale] =
-        getResultPrecisionScale(inputPrecision, inputScale, scale);
-    const auto expectedType = DECIMAL(resultPrecision, resultScale);
-    VELOX_USER_CHECK(
-        type->equivalent(*expectedType),
-        "Invalid result type for {}: expected {}, got {}.",
-        functionName_,
-        expectedType->toString(),
-        type->toString());
-  }
-  if (scaleExpression) {
-    return std::make_shared<exec::ConstantExpr>(BaseVector::createNullConstant(
-        type, 1, scaleExpression->value()->pool()));
+    scale = DecimalRoundOps::extractConstantScaleArg(args[1], functionName_);
   }
 
   auto func = mode_ == RoundMode::kHalfUp
@@ -541,8 +535,7 @@ class DecimalCeilFloorCallToSpecialForm
         funcName_);
 
     const int32_t scale =
-        DecimalRoundOps::extractConstantScaleArg(args[1], funcName_, false)
-            .value();
+        DecimalRoundOps::extractConstantScaleArg(args[1], funcName_);
 
     auto func = ceiling_ ? DecimalRoundOps::createFunction<CeilPolicy>(
                                args[0]->type(), scale, type)
