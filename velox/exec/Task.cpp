@@ -2578,6 +2578,27 @@ bool Task::allPeersFinished(
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
     std::vector<std::shared_ptr<Driver>>& peers) {
+  return allPeersFinishedImpl(
+      planNodeId, caller, future, promises, peers, false);
+}
+
+bool Task::allPeersFinishedAndRetire(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller,
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Driver>>& peers) {
+  return allPeersFinishedImpl(
+      planNodeId, caller, future, promises, peers, true);
+}
+
+bool Task::allPeersFinishedImpl(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller,
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Driver>>& peers,
+    bool retireCaller) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (exception_) {
     VELOX_FAIL(
@@ -2585,11 +2606,33 @@ bool Task::allPeersFinished(
         errorMessageImpl(exception_));
   }
   const auto splitGroupId = caller->driverCtx()->splitGroupId;
-  auto& barriers = splitGroupStates_[splitGroupId].barriers;
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  auto& barriers = splitGroupState.barriers;
   auto& state = barriers[planNodeId];
+  const auto pipelineId = caller->driverCtx()->pipelineId;
+  auto& numRetired =
+      splitGroupState.retiredBarrierPeers[planNodeId][pipelineId];
+  const auto numPipelineDrivers = numDrivers(pipelineId);
 
-  const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
-  if (++state.numRequested == numPeers) {
+  if (state.numPeers == 0) {
+    VELOX_CHECK_LE(numRetired, numPipelineDrivers);
+    state.numPeers = numPipelineDrivers - numRetired;
+    VELOX_CHECK_GT(state.numPeers, 0);
+    state.pipelineId = pipelineId;
+  } else {
+    VELOX_CHECK(state.pipelineId.has_value());
+    VELOX_CHECK_EQ(state.pipelineId.value(), pipelineId);
+  }
+  VELOX_CHECK_LT(state.numRequested, state.numPeers);
+  const bool allFinished = ++state.numRequested == state.numPeers;
+  if (retireCaller) {
+    // The caller participates in this round, so compute this round's completion
+    // first. Record its retirement before erasing this round so that the next
+    // round observes the reduced peer count.
+    VELOX_CHECK_LT(numRetired, numPipelineDrivers);
+    ++numRetired;
+  }
+  if (allFinished) {
     peers = std::move(state.drivers);
     promises = std::move(state.allPeersFinishedPromises);
     barriers.erase(planNodeId);
@@ -2613,6 +2656,25 @@ bool Task::allPeersFinished(
     *future = state.allPeersFinishedPromises.back().getSemiFuture();
   }
   return false;
+}
+
+void Task::retirePeerFromBarriers(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  const auto splitGroupId = caller->driverCtx()->splitGroupId;
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  const auto pipelineId = caller->driverCtx()->pipelineId;
+  const auto barrierIt = splitGroupState.barriers.find(planNodeId);
+  VELOX_CHECK(
+      barrierIt == splitGroupState.barriers.end() ||
+          !barrierIt->second.pipelineId.has_value() ||
+          barrierIt->second.pipelineId.value() != pipelineId,
+      "Cannot retire a peer while its pipeline barrier is active");
+  auto& numRetired =
+      splitGroupState.retiredBarrierPeers[planNodeId][pipelineId];
+  VELOX_CHECK_LT(numRetired, numDrivers(pipelineId));
+  ++numRetired;
 }
 
 void Task::addHashJoinBridgesLocked(
