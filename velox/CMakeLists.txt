@@ -77,12 +77,12 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   if(${VELOX_ENABLE_CUDF})
     add_subdirectory(experimental/cudf)
     # Build the experimental ucx-exchange library when VELOX_ENABLE_UCX_EXCHANGE
-    # is on. The option is declared while resolving the cudf dependency, which
-    # also fetches ucxx, and defaults to whether a system UCX was found. When
-    # the library is built, experimental/cudf registers the UCX output and
-    # exchange transports and compiles with VELOX_ENABLE_UCX_EXCHANGE; otherwise
-    # that registration is compiled out and no plan can select the UCX
-    # transport.
+    # is on. The option is declared, off by default, in
+    # CMake/resolve_dependency_modules/cudf.cmake, which fetches ucxx only when
+    # the option is on. When the library is built, experimental/cudf registers
+    # the UCX output and exchange transports and compiles with
+    # VELOX_ENABLE_UCX_EXCHANGE; otherwise that registration is compiled out and
+    # no plan can select the UCX transport.
     if(VELOX_ENABLE_UCX_EXCHANGE)
       add_subdirectory(experimental/ucx-exchange)
     endif()
