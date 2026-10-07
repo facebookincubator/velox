@@ -36,6 +36,7 @@
 #include <cuda/stream>
 
 #include <memory>
+#include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
 
@@ -171,16 +172,20 @@ class CudfHashJoinProbe : public CudfOperatorBase {
  private:
   void waitForBuildReady(cuda::stream_ref stream);
 
-  /// Records a stream that read hashObject_ tables, scalars_, tree_, or
-  /// filterEvaluator_. Probe inputs use round-robin pool streams; when the
-  /// stream changes, the previous one is join_streams'd into the new one so
-  /// a later syncGetOutputStreams() wait covers every read since the last
-  /// sync, not only the newest stream.
-  void recordGetOutputStream(cuda::stream_ref stream);
+  /// Registers a stream that is about to read hashObject_, rightMatchedFlags_,
+  /// scalars_, tree_, or filterEvaluator_. Must be called before submitting
+  /// those reads so that creating the stream's completion event cannot fail
+  /// once work is in flight.
+  void registerReadStream(cuda::stream_ref stream);
 
-  /// Host-syncs the chained getOutput streams (if any) and clears the
-  /// tracker so a later isFinished() poll does not sync again.
-  void syncGetOutputStreams();
+  /// Records the stream's completion event after this operator's last read on
+  /// it has been submitted. Re-recording on a reused stream is sufficient
+  /// because stream ordering makes the latest recording cover earlier batches.
+  void recordReadCompletion(cuda::stream_ref stream) noexcept;
+
+  /// Host-waits for every registered stream's reads, then clears the tracker
+  /// so later isFinished()/doClose() calls do not wait again.
+  void waitForReadCompletion();
 
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
@@ -264,13 +269,19 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// host-synchronized all-false init state with no pending GPU work.
   std::optional<cuda::stream_ref> lastProbeStream_;
 
-  /// Head of the getOutput stream chain: hashObject_ tables, scalars_,
-  /// tree_, and filterEvaluator_ are read on this stream (or on earlier
-  /// pool streams joined into it). Set on every doGetOutput() call, unlike
-  /// lastProbeStream_ above, which is right/full-join-only. Synced in
-  /// doClose() and isFinished() before releasing that state. rightMatchedFlags_
-  /// is released by the destructor, not here.
-  std::optional<cuda::stream_ref> lastGetOutputStream_;
+  struct ReadStream {
+    cuda::stream_ref stream;
+    std::unique_ptr<CudaEvent> completion;
+    /// Registered but not yet recorded. Only stays true if recording failed,
+    /// in which case cleanup falls back to synchronizing the whole stream.
+    bool pending{false};
+  };
+
+  /// One reusable completion event per stream this probe instance has read
+  /// shared or operator-owned state on. Streams are tracked independently so
+  /// probe batches on different pool streams can overlap; they only converge
+  /// in waitForReadCompletion().
+  std::unordered_map<cudaStream_t, ReadStream> readStreams_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 

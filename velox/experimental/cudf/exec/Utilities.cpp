@@ -317,6 +317,11 @@ const CudaEvent& CudaEvent::waitOn(cuda::stream_ref stream) const {
   return *this;
 }
 
+const CudaEvent& CudaEvent::synchronize() const {
+  CUDF_CUDA_TRY(cudaEventSynchronize(event_));
+  return *this;
+}
+
 std::string getBaseFunctionName(const std::string& fullName) {
   auto pos = fullName.rfind('.');
   return pos == std::string::npos ? fullName : fullName.substr(pos + 1);

@@ -179,6 +179,16 @@ class CudaEvent {
    */
   const CudaEvent& waitOn(cuda::stream_ref stream) const;
 
+  /**
+   * @brief Blocks the host thread until the most recent recordFrom() has
+   * completed.
+   *
+   * Returns immediately if the event has never been recorded.
+   *
+   * @return Reference to this CudaEvent for method chaining
+   */
+  const CudaEvent& synchronize() const;
+
  private:
   cudaEvent_t event_{};
 };
