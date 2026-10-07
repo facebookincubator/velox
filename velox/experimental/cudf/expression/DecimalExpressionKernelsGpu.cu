@@ -160,6 +160,7 @@ __device__ OutT decimalDivideImpl(
     __int128_t numerator,
     __int128_t denom,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     int32_t& localStatus) {
   bool negative = false;
   unsigned __int128 const uNum = absToUnsigned(numerator, negative);
@@ -201,6 +202,13 @@ __device__ OutT decimalDivideImpl(
     markError(localStatus, DecimalBinaryOpStatus::kOverflow);
     return OutT{0};
   }
+  // The output precision bounds the result before the store narrows it to
+  // OutT, and before the host narrows a DECIMAL128 working column to the
+  // DECIMAL64 output type.
+  if (result <= -precisionBound || result >= precisionBound) {
+    markError(localStatus, DecimalBinaryOpStatus::kOverflow);
+    return OutT{0};
+  }
 
   return static_cast<OutT>(result);
 }
@@ -211,6 +219,7 @@ struct DivideFunctor {
   cudf::column_device_view rhs;
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
@@ -227,6 +236,7 @@ struct DivideFunctor {
         lhs.element<InT>(idx),
         rhs.element<InT>(idx),
         rescaleFactor,
+        precisionBound,
         localStatus);
   }
 };
@@ -237,6 +247,7 @@ struct DivideLhsScalarFunctor {
   cudf::column_device_view rhs;
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
@@ -248,7 +259,11 @@ struct DivideLhsScalarFunctor {
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
-        lhsValue, rhs.element<InColT>(idx), rescaleFactor, localStatus);
+        lhsValue,
+        rhs.element<InColT>(idx),
+        rescaleFactor,
+        precisionBound,
+        localStatus);
   }
 };
 
@@ -258,6 +273,7 @@ struct DivideRhsScalarFunctor {
   __int128_t rhsValue;
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
@@ -269,7 +285,11 @@ struct DivideRhsScalarFunctor {
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
-        lhs.element<InColT>(idx), rhsValue, rescaleFactor, localStatus);
+        lhs.element<InColT>(idx),
+        rhsValue,
+        rescaleFactor,
+        precisionBound,
+        localStatus);
   }
 };
 
@@ -330,6 +350,7 @@ struct divideColumnColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
@@ -342,7 +363,12 @@ struct divideColumnColumnKernel {
         lhs.size(),
         [&]() {
           return DivideFunctor<InT, OutT>{
-              *lhsDev, *rhsDev, *outDev, rescaleFactor, out.null_mask()};
+              *lhsDev,
+              *rhsDev,
+              *outDev,
+              rescaleFactor,
+              precisionBound,
+              out.null_mask()};
         },
         stream));
   }
@@ -360,6 +386,7 @@ struct divideColumnScalarKernel {
   __int128_t rhsValue;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
@@ -371,7 +398,12 @@ struct divideColumnScalarKernel {
         lhs.size(),
         [&]() {
           return DivideRhsScalarFunctor<InT, OutT>{
-              *lhsDev, rhsValue, *outDev, rescaleFactor, out.null_mask()};
+              *lhsDev,
+              rhsValue,
+              *outDev,
+              rescaleFactor,
+              precisionBound,
+              out.null_mask()};
         },
         stream));
   }
@@ -389,6 +421,7 @@ struct divideScalarColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
+  __int128_t precisionBound;
   cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
@@ -400,7 +433,12 @@ struct divideScalarColumnKernel {
         rhs.size(),
         [&]() {
           return DivideLhsScalarFunctor<InT, OutT>{
-              lhsValue, *rhsDev, *outDev, rescaleFactor, out.null_mask()};
+              lhsValue,
+              *rhsDev,
+              *outDev,
+              rescaleFactor,
+              precisionBound,
+              out.null_mask()};
         },
         stream));
   }
@@ -420,11 +458,13 @@ DecimalBinaryOpStatus decimalDivideColumnColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideColumnColumnKernel{lhs, rhs, out, rescaleFactor, stream});
+      divideColumnColumnKernel{
+          lhs, rhs, out, rescaleFactor, precisionBound, stream});
 }
 
 DecimalBinaryOpStatus decimalDivideColumnScalar(
@@ -434,11 +474,13 @@ DecimalBinaryOpStatus decimalDivideColumnScalar(
     __int128_t rhsValue,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideColumnScalarKernel{lhs, rhsValue, out, rescaleFactor, stream});
+      divideColumnScalarKernel{
+          lhs, rhsValue, out, rescaleFactor, precisionBound, stream});
 }
 
 DecimalBinaryOpStatus decimalDivideScalarColumn(
@@ -448,11 +490,13 @@ DecimalBinaryOpStatus decimalDivideScalarColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
+    __int128_t precisionBound,
     cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideScalarColumnKernel{lhsValue, rhs, out, rescaleFactor, stream});
+      divideScalarColumnKernel{
+          lhsValue, rhs, out, rescaleFactor, precisionBound, stream});
 }
 
 __int128_t getDecimalScalarValue(

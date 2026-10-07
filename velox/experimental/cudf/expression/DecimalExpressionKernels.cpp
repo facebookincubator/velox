@@ -94,6 +94,14 @@ void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   }
 }
 
+__int128_t decimalDividePrecisionBound(int32_t outputPrecision) {
+  VELOX_CHECK(
+      outputPrecision >= 1 && outputPrecision <= LongDecimalType::kMaxPrecision,
+      "Invalid output precision for decimal divide: {}",
+      outputPrecision);
+  return DecimalUtil::kPowersOfTen[outputPrecision];
+}
+
 } // namespace
 
 template <typename Lhs, typename Rhs>
@@ -142,6 +150,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
@@ -180,6 +189,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           rhs,
           out->mutable_view(),
           rescaleFactor,
+          decimalDividePrecisionBound(outputPrecision),
           stream),
       cudf::binary_operator::DIV);
 
@@ -190,6 +200,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
@@ -231,6 +242,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           rhsValue,
           out->mutable_view(),
           DecimalUtil::kPowersOfTen[aRescale],
+          decimalDividePrecisionBound(outputPrecision),
           stream),
       cudf::binary_operator::DIV);
 
@@ -241,6 +253,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
@@ -283,6 +296,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           rhs,
           out->mutable_view(),
           rescaleFactor,
+          decimalDividePrecisionBound(outputPrecision),
           stream),
       cudf::binary_operator::DIV);
 
