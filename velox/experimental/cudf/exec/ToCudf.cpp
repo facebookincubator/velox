@@ -94,58 +94,62 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Cached operator properties including adapter pointer.
   struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
+    // True if every column of the operator's input row type(s) maps to a cuDF
+    // type. GPU operators convert whole RowVectors at the CudfFromVelox
+    // boundary, so a non-convertible input column (e.g. MAP) keeps the operator
+    // on CPU even when its adapter supports GPU execution.
+    bool inputCudfConvertible = true;
+    // Same as above, for the operator's output row type (CudfToVelox boundary).
+    bool outputCudfConvertible = true;
   };
 
-  auto getOperatorProperties = [&registry, this, ctx](
-                                   const exec::Operator* op) {
-    OperatorProperties props;
-    auto adapter = registry.findAdapter(op);
-    props.adapter = adapter;
-    if (adapter) {
-      auto planNode = resolveOperatorPlanNode(op);
-      if (planNode) {
-        static_cast<OperatorAdapter::Properties&>(props) =
-            adapter->properties(op, planNode, ctx);
-      }
-    }
-    if (isAnyOf<CudfOperator>(op)) {
-      // CudfOperator is always fully GPU compatible
-      // (runs on GPU, accepts GPU input, produces GPU output).
-      props.canRunOnGPU = true;
-      props.acceptsGpuInput = true;
-      props.producesGpuOutput = true;
-    }
-    // Adapters gate on operation/expression support but not on column
-    // types, and passthrough adapters (OrderBy, TopN, Limit, AssignUniqueId,
-    // local merge/exchange, ...) do not check types at all. A GPU operator
-    // exchanges whole RowVectors across
-    // the CudfFromVelox/CudfToVelox boundary, converting every column -
-    // including passthrough columns it never inspects. Keep the operator on
-    // CPU when any input or output column type is not cuDF-convertible
-    // (e.g. MAP), rather than aborting at runtime in cudf::from_arrow.
-    if (props.canRunOnGPU or props.acceptsGpuInput or props.producesGpuOutput) {
-      if (auto planNode = resolveOperatorPlanNode(op)) {
-        auto allConvertible = [](const RowTypePtr& rowType) {
-          for (const auto& child : rowType->children()) {
-            if (not isCudfSupportedType(child)) {
-              return false;
-            }
+  auto getOperatorProperties =
+      [&registry, this, ctx](const exec::Operator* op) {
+        OperatorProperties props;
+        auto adapter = registry.findAdapter(op);
+        props.adapter = adapter;
+        if (adapter) {
+          auto planNode = resolveOperatorPlanNode(op);
+          if (planNode) {
+            static_cast<OperatorAdapter::Properties&>(props) =
+                adapter->properties(op, planNode, ctx);
           }
-          return true;
-        };
-        bool convertible = allConvertible(planNode->outputType());
-        for (const auto& source : planNode->sources()) {
-          convertible = convertible and allConvertible(source->outputType());
         }
-        if (not convertible) {
-          props.canRunOnGPU = false;
-          props.acceptsGpuInput = false;
-          props.producesGpuOutput = false;
+        if (isAnyOf<CudfOperator>(op)) {
+          // CudfOperator is always fully GPU compatible
+          // (runs on GPU, accepts GPU input, produces GPU output).
+          props.canRunOnGPU = true;
+          props.acceptsGpuInput = true;
+          props.producesGpuOutput = true;
         }
-      }
-    }
-    return props;
-  };
+        // Adapters gate on operation/expression support, not on column types,
+        // and passthrough adapters (OrderBy, TopN, Limit, AssignUniqueId, local
+        // merge/exchange, ...) do not check types at all. A GPU operator
+        // converts whole RowVectors across the CudfFromVelox/CudfToVelox
+        // boundary, so a column cuDF cannot represent (e.g. MAP) must keep the
+        // operator on CPU. Record input/output convertibility here but leave
+        // the adapter's GPU capability flags untouched; the replacement loop
+        // combines the two, which keeps the two signals distinct and lets it
+        // report why an operator that could run on GPU was kept on CPU.
+        if (auto planNode = resolveOperatorPlanNode(op)) {
+          auto allConvertible = [](const RowTypePtr& rowType) {
+            for (const auto& child : rowType->children()) {
+              if (not isCudfSupportedType(child)) {
+                return false;
+              }
+            }
+            return true;
+          };
+          props.outputCudfConvertible = allConvertible(planNode->outputType());
+          bool inputConvertible = true;
+          for (const auto& source : planNode->sources()) {
+            inputConvertible =
+                inputConvertible and allConvertible(source->outputType());
+          }
+          props.inputCudfConvertible = inputConvertible;
+        }
+        return props;
+      };
 
   // caching operator properties
   std::vector<OperatorProperties> opProps(operators.size());
@@ -154,6 +158,18 @@ bool CompileState::compile(bool allowCpuFallback) {
       operators.end(),
       opProps.begin(),
       getOperatorProperties);
+
+  // An operator participates on the GPU only when its adapter supports it AND
+  // the row types crossing the GPU boundary are cuDF-convertible. These fold
+  // both conditions together so neighbor decisions below stay consistent.
+  auto producesGpuOutputAt = [&opProps](int32_t index) {
+    return opProps[index].producesGpuOutput and
+        opProps[index].outputCudfConvertible;
+  };
+  auto acceptsGpuInputAt = [&opProps](int32_t index) {
+    return opProps[index].acceptsGpuInput and
+        opProps[index].inputCudfConvertible;
+  };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -167,9 +183,9 @@ bool CompileState::compile(bool allowCpuFallback) {
         opProps[operatorIndex]; // cached operator properties
 
     const bool previousOperatorIsNotGpu =
-        operatorIndex > 0 and !opProps[operatorIndex - 1].producesGpuOutput;
+        operatorIndex > 0 and !producesGpuOutputAt(operatorIndex - 1);
     const bool nextOperatorIsNotGpu = (operatorIndex < operators.size() - 1) and
-        !opProps[operatorIndex + 1].acceptsGpuInput;
+        !acceptsGpuInputAt(operatorIndex + 1);
     const bool isLastOperatorOfTask =
         driverFactory_.outputDriver and operatorIndex == operators.size() - 1;
 
@@ -177,7 +193,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto planNode = resolveOperatorPlanNode(oper);
 
-    if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
+    if (previousOperatorIsNotGpu and acceptsGpuInputAt(operatorIndex) and
+        planNode) {
       replaceOp.push_back(
           std::make_unique<CudfFromVelox>(
               id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
@@ -202,7 +219,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU &&
+          thisOpProps.inputCudfConvertible && thisOpProps.outputCudfConvertible;
       if (canUseGpuPath) {
         // canRunOnGPU() controls whether createReplacements() is called;
         // keepOperator() determines whether returned operators replace or
@@ -237,7 +255,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       }
     }
 
-    if (thisOpProps.producesGpuOutput and
+    if (producesGpuOutputAt(operatorIndex) and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
           std::make_unique<CudfToVelox>(
@@ -257,6 +275,10 @@ bool CompileState::compile(bool allowCpuFallback) {
                 << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
                 << ", producesGpuOutput[" << operatorIndex
                 << "] = " << thisOpProps.producesGpuOutput
+                << ", inputCudfConvertible = "
+                << thisOpProps.inputCudfConvertible
+                << ", outputCudfConvertible = "
+                << thisOpProps.outputCudfConvertible
                 << ", planNode = " << bool(planNode);
     }
     if (isPureCpuOperator) {
@@ -266,6 +288,12 @@ bool CompileState::compile(bool allowCpuFallback) {
       LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
       LOG(WARNING) << "Replacement Failed PlanNode: "
                    << (planNode ? planNode->toString(true, false) : "null");
+      if (not(thisOpProps.inputCudfConvertible and
+              thisOpProps.outputCudfConvertible)) {
+        LOG(WARNING) << "Reason: "
+                     << (thisOpProps.inputCudfConvertible ? "output" : "input")
+                     << " row type has a column not convertible to cuDF";
+      }
     }
     if (!allowCpuFallback) {
       // condition is if GPU replacement success or if CPU operators itself is
