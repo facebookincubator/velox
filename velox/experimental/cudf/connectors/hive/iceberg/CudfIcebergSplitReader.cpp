@@ -86,6 +86,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
     std::unordered_set<std::string> partitionColumnNames,
+    std::unordered_map<std::string, int32_t> sourceFieldIds,
     std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
     const RowTypePtr& outputType,
     const std::vector<std::string>& readColumnNames,
@@ -112,6 +113,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           subfieldFilterAst),
       icebergSplit_(std::move(icebergSplit)),
       partitionColumnNames_(std::move(partitionColumnNames)),
+      sourceFieldIds_(std::move(sourceFieldIds)),
       hiveConfig_(hiveConfig),
       subfieldFilters_(subfieldFilters) {
   VELOX_CHECK_NOT_NULL(subfieldFilters_);
@@ -814,11 +816,20 @@ void CudfIcebergSplitReader::adaptColumns() {
       injectedNames.insert(fieldName);
     } else if (not fileColumnNames_.contains(fieldName)) {
       // Hive-migrated partition columns are absent from data files and take
-      // the split's partition value. Any other missing column was added after
-      // the file was written and reads as NULL, even if a transformed
+      // the split's partition value. The file's identity partition value is
+      // keyed by source field ID and applies even if the current spec no
+      // longer partitions by this column. Any other missing column was added
+      // after the file was written and reads as NULL, even if a transformed
       // partition field shares its name.
       auto partitionValue = std::optional<std::string>{};
-      if (partitionColumnNames_.contains(fieldName)) {
+      const auto& identityKeys = icebergSplit_->identityPartitionKeys;
+      const auto fieldIdIter = sourceFieldIds_.find(fieldName);
+      const auto identityIter = fieldIdIter == sourceFieldIds_.end()
+          ? identityKeys.end()
+          : identityKeys.find(fieldIdIter->second);
+      if (identityIter != identityKeys.end()) {
+        partitionValue = identityIter->second;
+      } else if (partitionColumnNames_.contains(fieldName)) {
         if (const auto partitionIter =
                 icebergSplit_->partitionKeys.find(fieldName);
             partitionIter != icebergSplit_->partitionKeys.end()) {

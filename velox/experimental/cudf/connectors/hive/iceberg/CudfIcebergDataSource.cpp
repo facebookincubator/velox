@@ -21,6 +21,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -47,19 +48,23 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           connectorQueryCtx,
           cudfHiveConfig),
       hiveConfig_(hiveConfig) {
-  const auto addPartitionColumn =
-      [this](const velox_hive::FileColumnHandle& handle) {
-        if (handle.columnType() ==
-            velox_hive::FileColumnHandle::ColumnType::kPartitionKey) {
-          partitionColumnNames_.insert(handle.name());
-        }
-      };
+  const auto recordColumn = [this](const velox_hive::FileColumnHandle& handle) {
+    if (handle.columnType() ==
+        velox_hive::FileColumnHandle::ColumnType::kPartitionKey) {
+      partitionColumnNames_.insert(handle.name());
+    }
+    if (const auto* icebergHandle =
+            dynamic_cast<const velox_iceberg::IcebergColumnHandle*>(&handle)) {
+      sourceFieldIds_.emplace(
+          icebergHandle->name(), icebergHandle->field().fieldId);
+    }
+  };
   for (const auto& [_, handle] : columnHandles) {
-    addPartitionColumn(
+    recordColumn(
         *checkedPointerCast<const velox_hive::FileColumnHandle>(handle));
   }
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
-    addPartitionColumn(*handle);
+    recordColumn(*handle);
   }
 }
 
@@ -88,6 +93,7 @@ CudfIcebergDataSource::createCudfSplitReader() {
       split_,
       icebergSplit_,
       partitionColumnNames_,
+      sourceFieldIds_,
       tableHandle_,
       outputType_,
       readColumnNames_,

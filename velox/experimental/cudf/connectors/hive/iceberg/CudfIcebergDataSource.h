@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -77,6 +78,9 @@ class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
 
   // Output and filter-only columns whose handles are `kPartitionKey`.
   std::unordered_set<std::string> partitionColumnNames_;
+
+  // Iceberg source field IDs of output and filter-only columns, by name.
+  std::unordered_map<std::string, int32_t> sourceFieldIds_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

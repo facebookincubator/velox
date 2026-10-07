@@ -25,6 +25,7 @@
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -841,6 +842,64 @@ TEST_F(CudfIcebergReadTest, schemaEvolutionTransformedPartitionNameCollision) {
       .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
       .assertResults({makeRowVector(
           {"shard"}, {makeNullConstant(TypeKind::BIGINT, oldData->size())})});
+}
+
+/// Old Hive-migrated files still obtain identity values from their own
+/// partition spec after the current spec stops partitioning by that column.
+TEST_F(CudfIcebergReadTest, partitionEvolutionPreservesMigratedIdentityColumn) {
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto tableType = ROW({{"c0", BIGINT()}, {"country", VARCHAR()}});
+  // Both current-schema handles are regular after dropping the partition
+  // field. The old file's country value is still supplied by its identity
+  // partition metadata, keyed by source field ID 2.
+  const auto countryHandle = std::make_shared<IcebergColumnHandle>(
+      "country",
+      HiveColumnHandle::ColumnType::kRegular,
+      VARCHAR(),
+      dwio::common::ParquetFieldId{.fieldId = 2, .children = {}});
+  ::facebook::velox::connector::ColumnHandleMap fileAssignments;
+  fileAssignments["c0"] = std::make_shared<IcebergColumnHandle>(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      dwio::common::ParquetFieldId{.fieldId = 1, .children = {}});
+  auto fullAssignments = fileAssignments;
+  fullAssignments["country"] = countryHandle;
+
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys = {{"country", "US"}};
+  for (bool filterOnly : {false, true}) {
+    SCOPED_TRACE(filterOnly ? "filter-only" : "projected");
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .connectorId(kCudfIcebergConnectorId)
+            .outputType(filterOnly ? asRowType(data->type()) : tableType)
+            .dataColumns(tableType)
+            .assignments(filterOnly ? fileAssignments : fullAssignments)
+            .filterColumnHandles({countryHandle})
+            .subfieldFilters(
+                filterOnly ? std::vector<std::string>{"country = 'US'"}
+                           : std::vector<std::string>{})
+            .endTableScan()
+            .planNode();
+    auto splits = makeIcebergSplits(dataFile->getPath(), {}, partitionKeys);
+    for (const auto& split : splits) {
+      auto icebergSplit = std::dynamic_pointer_cast<HiveIcebergSplit>(split);
+      ASSERT_NE(icebergSplit, nullptr);
+      icebergSplit->identityPartitionKeys = {{2, "US"}};
+    }
+    auto expected = filterOnly
+        ? data
+        : makeRowVector(
+              tableType->names(),
+              {data->childAt(0),
+               makeFlatVector<std::string>({"US", "US", "US"})});
+    AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+  }
 }
 
 /// A nonempty data file in a NULL partition must return one NULL partition

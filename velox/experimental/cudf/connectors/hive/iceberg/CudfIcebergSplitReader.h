@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -54,6 +55,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       std::shared_ptr<CudfHiveConnectorSplit> split,
       std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
       std::unordered_set<std::string> partitionColumnNames,
+      std::unordered_map<std::string, int32_t> sourceFieldIds,
       std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
       const RowTypePtr& outputType,
       const std::vector<std::string>& readColumnNames,
@@ -156,9 +158,13 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   //    Synthesized from split metadata (e.g. $file_size). Recorded for
   //    post-read injection as a constant.
   //
-  // 2. Partition columns (Hive-migrated tables) indicated by `kPartitionKey`:
-  //    Value comes from the split's `partitionKeys`, not the data file.
-  //    Recorded for post-read injection as a constant.
+  // 2. Partition columns (Hive-migrated tables):
+  //    Value comes from the split's metadata, not the data file. Recorded
+  //    for post-read injection as a constant.
+  //    a. `identityPartitionKeys`, keyed by the column's source field ID.
+  //       Checked first and applies to regular columns too, since the file's
+  //       own partition spec may differ from the current one.
+  //    b. `partitionKeys`, keyed by name, for `kPartitionKey` columns only.
   //
   // 3. Columns missing from the file (schema evolution):
   //    Other columns absent from `fileColumnNames_`. Recorded for post-read
@@ -167,8 +173,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // 4. Columns present in the file:
   //    Left in `readColumnNames_` for the parquet reader.
   //
-  // A regular column sharing a partition
-  // field's name falls into (3-4). Only (2) reads `partitionKeys`.
+  // A regular column sharing a transformed partition field's name falls into
+  // (3-4), unless its source field ID has an identity value (2a). Only (2)
+  // reads partition values: (2a) by field ID and (2b) by name.
   //
   // Injected names (1-3) are removed from `readColumnNames_`. `outputIndex` is
   // the column's position in the pre-strip `readColumnNames_` layout (output,
@@ -228,6 +235,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   // Output and filter-only columns whose handles are `kPartitionKey`.
   const std::unordered_set<std::string> partitionColumnNames_;
+
+  // Iceberg source field IDs of output and filter-only columns, by name.
+  const std::unordered_map<std::string, int32_t> sourceFieldIds_;
 
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
