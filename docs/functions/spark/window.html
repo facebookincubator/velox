@@ -45,14 +45,14 @@
 More details about window functions can be found at <a class="reference internal" href="../../develop/window.html"><span class="doc">Window functions</span></a>.</p>
 <section id="value-functions">
 <h2>Value functions<a class="headerlink" href="#value-functions" title="Link to this heading">¶</a></h2>
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span></dt>
-<dd></dd></dl>
-
-<p>Returns the value at the specified offset from the beginning of the window. Offsets start at 1.
+<dl class="spark function">
+<dt class="sig sig-object spark" id="nth_value">
+<span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#nth_value" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the value at the specified offset from the beginning of the window. Offsets start at 1.
 The offset should be a positive int literal. If the offset is greater than the number of values
 in the window, null is returned. It is an error for the offset to be zero or negative.</p>
+</dd></dl>
+
 </section>
 <section id="rank-functions">
 <h2>Rank functions<a class="headerlink" href="#rank-functions" title="Link to this heading">¶</a></h2>
@@ -95,7 +95,10 @@ in the window, null is returned. It is an error for the offset to be zero or neg
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Window functions</a><ul>
-<li><a class="reference internal" href="#value-functions">Value functions</a></li>
+<li><a class="reference internal" href="#value-functions">Value functions</a><ul>
+<li><a class="reference internal" href="#nth_value"><code class="docutils literal notranslate"><span class="pre">nth_value()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#rank-functions">Rank functions</a><ul>
 <li><a class="reference internal" href="#dense_rank"><code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code></a></li>
 <li><a class="reference internal" href="#ntile"><code class="docutils literal notranslate"><span class="pre">ntile()</span></code></a></li>

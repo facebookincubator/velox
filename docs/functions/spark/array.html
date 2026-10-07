@@ -308,6 +308,17 @@ If the rewritten function returns NULL, the corresponding element will be placed
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="arrays_zip">
+<span class="sig-name descname"><span class="pre">arrays_zip</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(U)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">..)</span> <span class="pre">-&gt;</span> <span class="pre">array(row(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#arrays_zip" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the merge of the given arrays, element-wise into a single array of rows.
+The M-th element of the N-th argument will be the N-th field of the M-th output element.
+If the arguments have an uneven length, missing values are filled with <code class="docutils literal notranslate"><span class="pre">NULL</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">arrays_zip</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">'1b'</span><span class="p">,</span> <span class="n">null</span><span class="p">,</span> <span class="s1">'3b'</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">ROW</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'1b'</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">null</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="n">null</span><span class="p">,</span> <span class="s1">'3b'</span><span class="p">)]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="concat">
 <span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arrayN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#concat" title="Link to this definition">¶</a></dt>
 <dd><p>Concatenates the arrays <code class="docutils literal notranslate"><span class="pre">array1</span></code>, <code class="docutils literal notranslate"><span class="pre">array2</span></code>, …, <code class="docutils literal notranslate"><span class="pre">arrayN</span></code>. All parameters have the same type.
@@ -536,6 +547,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_repeat"><code class="docutils literal notranslate"><span class="pre">array_repeat()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
 <li><a class="reference internal" href="#array_union"><code class="docutils literal notranslate"><span class="pre">array_union()</span></code></a></li>
+<li><a class="reference internal" href="#arrays_zip"><code class="docutils literal notranslate"><span class="pre">arrays_zip()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
 <li><a class="reference internal" href="#flatten"><code class="docutils literal notranslate"><span class="pre">flatten()</span></code></a></li>
