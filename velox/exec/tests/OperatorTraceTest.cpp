@@ -375,6 +375,8 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       {"metagen_key", secret},
       {"model_api_key", secret},
       {"crypto_auth_tokens_metagen", secret},
+      {"fbid_dcat", secret},
+      {"everstore_dcat", secret},
       {core::QueryConfig::kSpillEnabled, "true"},
       {core::QueryConfig::kSpillNumPartitionBits, "17"},
   };
@@ -431,6 +433,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
               "model_api_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "crypto_auth_tokens_metagen", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "fbid_dcat", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "everstore_dcat", std::string(kRedactedConfigValue)},
           // Non-credential entries stay verbatim; replay reparses these as a
           // bool and an integer, which a placeholder would fail.
           std::pair<const std::string, std::string>{

@@ -173,10 +173,14 @@ bool isCredentialConfigKey(std::string_view key) {
   // FbEmbedding.cpp and velox/exec/rpc/facebook/MetaGenBatchRPCClient.cpp. The
   // Python list cannot be imported here and those C++ call sites live under
   // facebook/, which this open-sourced file must not depend on.
-  static constexpr std::array<std::string_view, 3> kCredentialConfigKeys{
+  // `fbid_dcat` and `everstore_dcat` are the delegated CATs client_lib.py
+  // mints.
+  static constexpr std::array<std::string_view, 5> kCredentialConfigKeys{
       "crypto_auth_tokens_metagen",
       "metagen_key",
       "model_api_key",
+      "fbid_dcat",
+      "everstore_dcat",
   };
   return std::find(
              kCredentialConfigKeys.begin(), kCredentialConfigKeys.end(), key) !=
