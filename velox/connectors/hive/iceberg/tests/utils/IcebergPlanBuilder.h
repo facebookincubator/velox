@@ -15,10 +15,6 @@
  */
 #pragma once
 
-#include <unordered_set>
-
-#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -60,19 +56,7 @@ class IcebergTableScanBuilder
   connector::ColumnHandlePtr buildConnectorColumnHandle(
       const std::string& name,
       const TypePtr& type,
-      uint32_t /*outputIndex*/) override {
-    int32_t fieldId = -1;
-    if (!dataColumnFieldIds_.empty() && dataColumns_ != nullptr) {
-      if (auto idx = dataColumns_->getChildIdxIfExists(name)) {
-        fieldId = dataColumnFieldIds_[*idx];
-      }
-    }
-    return std::make_shared<IcebergColumnHandle>(
-        name,
-        FileColumnHandle::ColumnType::kRegular,
-        type,
-        parquet::ParquetFieldId{fieldId, {}});
-  }
+      uint32_t outputIndex) override;
 
   /// Overrides the base factory to construct an IcebergTableHandle.
   ///
@@ -84,86 +68,7 @@ class IcebergTableScanBuilder
   /// precedence and are never replaced.
   connector::ConnectorTableHandlePtr buildConnectorTableHandle(
       common::SubfieldFilters subfieldFilters,
-      const core::TypedExprPtr& remainingFilter) override {
-    // Collect names of all columns referenced by pushed-down filters.
-    std::unordered_set<std::string> filterColNames;
-    for (const auto& [subfield, _] : subfieldFilters) {
-      filterColNames.insert(subfield.baseName());
-    }
-    if (remainingFilter) {
-      collectFieldNames(remainingFilter, filterColNames);
-    }
-
-    // Auto-build filter-only handles for columns not already covered.
-    if (!filterColNames.empty() && dataColumns_ != nullptr) {
-      std::unordered_set<std::string> covered;
-      for (const auto& h : filterColumnHandles_) {
-        covered.insert(h->name());
-      }
-      for (uint32_t i = 0; i < dataColumns_->size(); ++i) {
-        const auto& colName = dataColumns_->nameOf(i);
-        if (!filterColNames.count(colName)) {
-          continue;
-        }
-        if (assignments_.count(colName) || covered.count(colName)) {
-          continue;
-        }
-        int32_t fieldId = -1;
-        if (!dataColumnFieldIds_.empty()) {
-          fieldId = dataColumnFieldIds_[i];
-        }
-        filterColumnHandles_.push_back(
-            std::make_shared<IcebergColumnHandle>(
-                colName,
-                FileColumnHandle::ColumnType::kRegular,
-                dataColumns_->childAt(i),
-                parquet::ParquetFieldId{fieldId, {}}));
-      }
-    }
-
-    // Downcast every filterColumnHandle to IcebergColumnHandle.
-    std::vector<IcebergColumnHandlePtr> icebergFilterHandles;
-    icebergFilterHandles.reserve(filterColumnHandles_.size());
-    for (const auto& h : filterColumnHandles_) {
-      auto iceberg = std::dynamic_pointer_cast<const IcebergColumnHandle>(h);
-      VELOX_CHECK_NOT_NULL(
-          iceberg,
-          "IcebergTableScanBuilder: filterColumnHandle '{}' is not an "
-          "IcebergColumnHandle",
-          h->name());
-      icebergFilterHandles.push_back(std::move(iceberg));
-    }
-
-    return std::make_shared<const IcebergTableHandle>(
-        connectorId_,
-        tableName_,
-        std::move(subfieldFilters),
-        remainingFilter,
-        dataColumns_,
-        indexColumns_,
-        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        std::move(icebergFilterHandles),
-        sampleRate_,
-        /*dbName=*/"",
-        dataColumnFieldIds_);
-  }
-
- private:
-  /// Recursively collects all field-access (input column) names from 'expr'.
-  static void collectFieldNames(
-      const core::TypedExprPtr& expr,
-      std::unordered_set<std::string>& out) {
-    if (!expr) {
-      return;
-    }
-    if (auto* fa =
-            dynamic_cast<const core::FieldAccessTypedExpr*>(expr.get())) {
-      out.insert(fa->name());
-    }
-    for (const auto& input : expr->inputs()) {
-      collectFieldNames(input, out);
-    }
-  }
+      const core::TypedExprPtr& remainingFilter) override;
 };
 
 /// A PlanBuilder subclass whose startTableScan() returns an
@@ -175,17 +80,13 @@ class IcebergPlanBuilder : public exec::test::PlanBuilder {
  public:
   using PlanBuilder::PlanBuilder;
 
+  /// Starts a scan whose table and column handles are Iceberg handles.
   IcebergTableScanBuilder& startTableScan(
-      std::string connectorId = kIcebergConnectorId) override {
-    icebergTableScanBuilder_ = std::make_shared<IcebergTableScanBuilder>(*this);
-    icebergTableScanBuilder_->connectorId(std::move(connectorId));
-    // Keep the base tableScanBuilder_ in sync so endTableScan() delegates
-    // through the right object.
-    tableScanBuilder_ = icebergTableScanBuilder_;
-    return *icebergTableScanBuilder_;
-  }
+      std::string connectorId = kIcebergConnectorId) override;
 
  private:
+  // Typed alias of the base tableScanBuilder_, which points to the same
+  // object, so that startTableScan() can return the Iceberg builder.
   std::shared_ptr<IcebergTableScanBuilder> icebergTableScanBuilder_;
 };
 
