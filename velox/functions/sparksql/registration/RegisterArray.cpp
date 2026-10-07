@@ -27,6 +27,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/ArrayUnion.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
@@ -39,10 +40,14 @@ void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
+  // Spark returns -0.0 as 0.0 and every NaN as the canonical NaN in the
+  // results of array set operations.
   VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_intersect, prefix + "array_intersect");
+      udf_array_distinct_normalize_floating_point, prefix + "array_distinct");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_except_normalize_floating_point, prefix + "array_except");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_intersect_normalize_floating_point, prefix + "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");
@@ -163,28 +168,6 @@ inline void registerArrayPrependFunctions(const std::string& prefix) {
 }
 
 template <typename T>
-inline void registerArrayUnionFunction(const std::string& prefix) {
-  registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
-      {prefix + "array_union"});
-}
-
-inline void registerArrayUnionFunctions(const std::string& prefix) {
-  registerArrayUnionFunction<int8_t>(prefix);
-  registerArrayUnionFunction<int16_t>(prefix);
-  registerArrayUnionFunction<int32_t>(prefix);
-  registerArrayUnionFunction<int64_t>(prefix);
-  registerArrayUnionFunction<int128_t>(prefix);
-  registerArrayUnionFunction<float>(prefix);
-  registerArrayUnionFunction<double>(prefix);
-  registerArrayUnionFunction<bool>(prefix);
-  registerArrayUnionFunction<Timestamp>(prefix);
-  registerArrayUnionFunction<Date>(prefix);
-  registerArrayUnionFunction<Varbinary>(prefix);
-  registerArrayUnionFunction<Varchar>(prefix);
-  registerArrayUnionFunction<Generic<T1>>(prefix);
-}
-
-template <typename T>
 inline void registerArrayCompactFunction(const std::string& prefix) {
   registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
       {prefix + "array_compact"});
@@ -267,7 +250,8 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
-  registerArrayUnionFunctions(prefix);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_union", arrayUnionSignatures(), makeArrayUnion);
   registerArrayCompactFunctions(prefix);
 }
 

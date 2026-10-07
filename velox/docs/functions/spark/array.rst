@@ -49,6 +49,13 @@ Array Functions
         SELECT array_distinct(ARRAY [1, 2, 1]); -- [1, 2]
         SELECT array_distinct(ARRAY [1, NULL, NULL]); -- [1, NULL]
 
+    -0.0 and 0.0 are treated as equal, and so are all NaNs. Floating-point
+    values in the result, including nested ones, are returned in canonical
+    form: -0.0 as 0.0 and every NaN as the canonical NaN. ::
+
+        SELECT array_distinct(ARRAY [-0.0, 0.0]); -- [0.0]
+        SELECT array_distinct(ARRAY [double('NaN'), 1.0, double('NaN')]); -- [NaN, 1.0]
+
 .. spark:function:: array_except(array(E) x, array(E) y) -> array(E)
 
     Returns an array of the elements in array ``x`` but not in array ``y``, without duplicates. ::
@@ -58,6 +65,11 @@ Array Functions
         SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 1, 2]); -- []
         SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 3, 4]); -- [2]
         SELECT array_except(ARRAY [1, NULL, NULL], ARRAY [1, 1, NULL]); -- []
+        SELECT array_except(ARRAY [-0.0, 1.0], ARRAY [2.0]); -- [0.0, 1.0]
+        SELECT array_except(ARRAY [1.0, double('NaN')], ARRAY [double('NaN')]); -- [1.0]
+
+    Floating-point values in the result are returned in canonical form, as in
+    :spark:func:`array_distinct`.
 
 .. spark:function:: array_insert(array(E), pos, E, legacyNegativeIndex) -> array(E)
 
@@ -85,6 +97,11 @@ Array Functions
     Returns an array of the elements in the intersection of array1 and array2, without duplicates. ::
 
         SELECT array_intersect(array(1, 2, 3), array(1, 3, 5)); -- [1,3]
+        SELECT array_intersect(array(-0.0), array(0.0)); -- [0.0]
+        SELECT array_intersect(array(1.0, double('NaN')), array(double('NaN'))); -- [NaN]
+
+    Floating-point values in the result are returned in canonical form, as in
+    :spark:func:`array_distinct`.
 
 .. spark:function:: array_join(x, delimiter[, nullReplacement]) -> varchar
 
@@ -210,6 +227,13 @@ Array Functions
         SELECT array_union(array(1, 2, 3), array(1, 3, 5, null)); -- [1, 2, 3, 5, null]
         SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
         SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
+
+    -0.0 and 0.0 are treated as equal, and so are all NaNs. Floating-point
+    values in the result, including nested ones, are returned in canonical
+    form: -0.0 as 0.0 and every NaN as the canonical NaN. ::
+
+        SELECT array_union(array(-0.0), array(0.0)); -- [0.0]
+        SELECT array_union(array(array(-0.0)), array(array(0.0))); -- [[0.0]]
 
 .. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
