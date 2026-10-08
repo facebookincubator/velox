@@ -63,26 +63,35 @@ set(
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
+# Probe for a system UCX install, to pick the default for
+# VELOX_ENABLE_UCX_EXCHANGE below. velox_ucx_exchange runs its own
+# find_package(ucx REQUIRED); this probe only decides the default and fails the
+# configure before cuDF is fetched when the option is on without UCX.
+find_library(UCX_LIBRARY NAMES ucp)
+find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
+if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+  set(UCX_FOUND TRUE)
+else()
+  set(UCX_FOUND FALSE)
+endif()
+
 # Whether to build the experimental UCX GPU exchange transport
 # (velox/experimental/ucx-exchange) and the cuDF-side registration that selects
-# it. Off by default because no CI job builds it, so a dependency bump that
-# breaks it would otherwise break the default cuDF build on every host with a
-# system UCX. Requires a system UCX install. Declared here, next to the ucxx
-# fetch it controls, rather than with the other options. This file only runs
-# for a bundled cuDF, so the option exists only then; cache variables are
-# global, so every subdirectory sees it.
+# it. Defaults, on the first configure of a build directory, to whether a system
+# UCX was found; the value is cached after that, so a UCX installed later needs
+# -DVELOX_ENABLE_UCX_EXCHANGE=ON, and -DVELOX_ENABLE_UCX_EXCHANGE=OFF builds
+# without it on a host that has UCX. Declared here, next to the ucxx fetch it
+# controls, rather than with the other options. This file only runs for a
+# bundled cuDF, so the option exists only then; cache variables are global, so
+# every subdirectory sees it.
 option(
   VELOX_ENABLE_UCX_EXCHANGE
   "Build the experimental UCX GPU exchange transport. Requires a system UCX install."
-  OFF
+  ${UCX_FOUND}
 )
 
 if(VELOX_ENABLE_UCX_EXCHANGE)
-  # velox_ucx_exchange runs its own find_package(ucx REQUIRED); this probe fails
-  # the configure before cuDF is fetched and built.
-  find_library(UCX_LIBRARY NAMES ucp)
-  find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
-  if(NOT UCX_LIBRARY OR NOT UCX_INCLUDE_DIR)
+  if(NOT UCX_FOUND)
     message(
       FATAL_ERROR
       "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need libucp and ucp/api/ucp.h)."
@@ -102,6 +111,12 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
 else()
+  if(UCX_FOUND)
+    message(
+      STATUS
+      "UCX found, but VELOX_ENABLE_UCX_EXCHANGE is OFF -- pass -DVELOX_ENABLE_UCX_EXCHANGE=ON to build the UCX exchange"
+    )
+  endif()
   message(STATUS "UCX exchange disabled -- ucxx will not be fetched")
 endif()
 
