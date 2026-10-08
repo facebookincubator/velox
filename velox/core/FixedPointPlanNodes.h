@@ -329,6 +329,12 @@ struct ConvergenceConfig {
 /// into it (appending or replacing per its declaration) and emits its final
 /// contents as the node's output; every other state entry is seeded once and
 /// read-only thereafter.
+///
+/// A coordinator may run the body, convergence and trailing plans with several
+/// drivers per worker (exec::FixedPointOptions::iterationMaxDrivers).  Those
+/// plans then follow ordinary multi-driver semantics: an aggregation that must
+/// see all of a worker's rows needs a local exchange in front of it.  The last
+/// convergence plan always runs with one driver.
 class FixedPointNode : public PlanNode {
  public:
   FixedPointNode(
