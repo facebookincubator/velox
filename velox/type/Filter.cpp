@@ -2195,9 +2195,14 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
       for (const auto& range : otherMultiRange->ranges()) {
         auto min = std::max(min_, range->lower());
         auto max = std::min(max_, range->upper());
-        for (auto i = min; i <= max; ++i) {
-          if (bitmask_[i - min_] && range->testInt64(i)) {
-            valuesToKeep.push_back(i);
+        if (min <= max) {
+          for (auto i = min;; ++i) {
+            if (bitmask_[i - min_] && range->testInt64(i)) {
+              valuesToKeep.push_back(i);
+            }
+            if (i == max) {
+              break;
+            }
           }
         }
       }
@@ -2222,9 +2227,14 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
   bool bothNullAllowed = nullAllowed_ && other->testNull();
 
   std::vector<int64_t> valuesToKeep;
-  for (auto i = min; i <= max; ++i) {
-    if (bitmask_[i - min_] && other->testInt64(i)) {
-      valuesToKeep.push_back(i);
+  if (min <= max) {
+    for (auto i = min;; ++i) {
+      if (bitmask_[i - min_] && other->testInt64(i)) {
+        valuesToKeep.push_back(i);
+      }
+      if (i == max) {
+        break;
+      }
     }
   }
   return createBigintValues(valuesToKeep, bothNullAllowed);
@@ -2397,6 +2407,10 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       return clone(false);
     case FilterKind::kBigintRange: {
       auto* filter = other->as<BigintRange>();
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+      if (filter->lower() > filter->upper()) {
+        return nullOrFalse(bothNullAllowed);
+      }
       // If the hash table or bitmask generated is not small enough to fit in
       // cache, we would rather not merging it.
       int64_t range;
@@ -2406,12 +2420,15 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       }
       std::vector<int64_t> values;
       values.reserve(range + 1);
-      for (int64_t i = filter->lower(); i <= filter->upper(); ++i) {
+      for (int64_t i = filter->lower();; ++i) {
         if (testInt64(i)) {
           values.push_back(i);
         }
+        if (i == filter->upper()) {
+          break;
+        }
       }
-      return createBigintValues(values, nullAllowed_ && other->testNull());
+      return createBigintValues(values, bothNullAllowed);
     }
     case FilterKind::kBigintValuesUsingHashTable: {
       auto* filter = other->as<BigintValuesUsingHashTable>();
@@ -2429,9 +2446,12 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       auto* filter = other->as<BigintValuesUsingBitmask>();
       std::vector<int64_t> values;
       values.reserve(filter->max() - filter->min() + 1);
-      for (int64_t i = filter->min(); i <= filter->max(); ++i) {
+      for (int64_t i = filter->min();; ++i) {
         if (filter->testInt64(i) && testInt64(i)) {
           values.push_back(i);
+        }
+        if (i == filter->max()) {
+          break;
         }
       }
       return createBigintValues(values, nullAllowed_ && other->testNull());
