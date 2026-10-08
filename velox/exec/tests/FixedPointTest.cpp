@@ -679,6 +679,51 @@ TEST_F(FixedPointTest, recursiveCteHashTableReuse) {
   expectBothModes(node, expected);
 }
 
+// A NULL build key matches nothing, as in a hash join.  The NULL row's key slot
+// holds 0, so storing it would let a probe key of 0 match.
+TEST_F(FixedPointTest, hashTableStateDropsNullKeys) {
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto probeSchema = ROW({"key", "tag"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupKeys = makeFlatVector<int64_t>({0, 1});
+  lookupKeys->setNull(0, true);
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values({makeRowVector(
+                            {"key", "payload"},
+                            {lookupKeys, makeFlatVector<int64_t>({99, 10})})})
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"key", "tag"},
+                           {makeFlatVector<int64_t>({0, 1}),
+                            makeFlatVector<int64_t>({-1, -1})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"key", "tag", "payload"}, BIGINT()))
+      .project({"key", "payload AS tag"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  const std::vector<std::pair<int64_t, int64_t>> expected{{1, 10}};
+  expectBothModes(node, expected);
+}
+
 // Strict mode inheritance: a serial fixed point runs every sub-task on the
 // calling thread, so it cannot drive a shuffling body (PartitionedOutput /
 // Exchange require parallel mode).  The constructor rejects that combination.
