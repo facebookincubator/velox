@@ -15,6 +15,8 @@
  */
 #include "velox/exec/FixedPointLoop.h"
 
+#include <folly/ScopeGuard.h>
+
 #include <mutex>
 
 #include "velox/core/PlanFragment.h"
@@ -43,6 +45,29 @@ RowVectorPtr copyRowVector(
       BaseVector::create<RowVector>(source->type(), source->size(), pool);
   target->copy(source.get(), 0, 0, source->size());
   return target;
+}
+
+// Aborts 'tasks' and waits until none of their drivers is on a thread. A failed
+// task resolves its completion future while drivers that are on thread keep
+// running, and those drivers can still call a consumer that writes into the
+// caller's frame.  A task that runs a nested fixed point has no drivers, so
+// this returns at once for it while its loop keeps running; see the
+// cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
+// a failure to abort instead of throwing.
+void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+  std::vector<ContinueFuture> futures;
+  futures.reserve(tasks.size());
+  for (const auto& task : tasks) {
+    try {
+      futures.push_back(task->requestAbort());
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to abort fixed-point sub-task " << task->taskId()
+                 << ": " << e.what();
+    }
+  }
+  for (auto& future : futures) {
+    std::move(future).wait();
+  }
 }
 
 // Returns the id of the first ExchangeNode found in the plan, if any.
@@ -631,6 +656,9 @@ void FixedPointLoop::runTrailingPlan() {
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
       &trailingOptions);
+  SCOPE_FAIL {
+    abortAndWait({task});
+  };
   task->start(/*maxDrivers=*/1);
   if (node_->requiresSplits()) {
     task->noMoreSplits(node_->id());
@@ -692,6 +720,9 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
       &subOptions);
+  SCOPE_FAIL {
+    abortAndWait({task});
+  };
   task->start(maxDrivers);
   feedInitSplits(*task, plan);
   auto future = task->taskCompletionFuture();
@@ -798,6 +829,10 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
   // plan) -- so a peer can address it knowing only this worker's task id.
   std::vector<std::shared_ptr<exec::Task>> tasks;
   tasks.reserve(plans.size());
+  // Also covers a throw while later tasks are still being created or wired.
+  SCOPE_FAIL {
+    abortAndWait(tasks);
+  };
   // A plan may itself contain a FixedPointNode, whose sub-task becomes a nested
   // FixedPointLoop.  It cannot address peers by task id, so hand it the
   // worker addresses extended by the (iteration, plan) this loop is running --
