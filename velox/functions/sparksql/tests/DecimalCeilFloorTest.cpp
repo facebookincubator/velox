@@ -68,12 +68,28 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
         DECIMAL(resultPrecision, resultScale), std::move(inputs), name);
   }
 
+  core::CallTypedExprPtr
+  createTryCall(const TypePtr& inputType, int32_t scale, Mode mode) {
+    auto call = createCall(inputType, scale, mode);
+    return std::make_shared<const core::CallTypedExpr>(
+        call->type(), std::vector<core::TypedExprPtr>{call}, "try");
+  }
+
   void testCall(
       const VectorPtr& input,
       int32_t scale,
       Mode mode,
       const VectorPtr& expected) {
     auto expr = createCall(input->type(), scale, mode);
+    testEncodings(expr, {input}, expected);
+  }
+
+  void testTryCall(
+      const VectorPtr& input,
+      int32_t scale,
+      Mode mode,
+      const VectorPtr& expected) {
+    auto expr = createTryCall(input->type(), scale, mode);
     testEncodings(expr, {input}, expected);
   }
 };
@@ -276,41 +292,37 @@ TEST_F(DecimalCeilFloorTest, nullPropagation) {
 }
 
 TEST_F(DecimalCeilFloorTest, precisionOverflow) {
-  // ceil(9.9999, -1) should produce 10 -> Decimal(2, 0); large input may
-  // overflow when widened. Build a 38-precision input and request a tiny
-  // scale to provoke the overflow-to-NULL path.
-  // Construct value just below 10^38 with scale 0; multiplying by 10 to round
-  // away to a wider precision overflows the 38-digit cap and must yield NULL.
-  const int128_t huge = DecimalUtil::kLongDecimalMax; // 10^38 - 1
-  testCall(
-      makeFlatVector<int128_t>({huge, huge, huge}, DECIMAL(38, 0)),
+  const int128_t huge = DecimalUtil::kLongDecimalMax;
+  const auto type = DECIMAL(38, 0);
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          createCall(type, -1, Mode::kCeil),
+          makeRowVector({makeFlatVector<int128_t>({huge}, type)})),
+      "Decimal overflow in ceil.");
+  VELOX_ASSERT_THROW(
+      evaluate(
+          createCall(type, -1, Mode::kFloor),
+          makeRowVector({makeFlatVector<int128_t>({-huge}, type)})),
+      "Decimal overflow in floor.");
+
+  const int128_t ceilNegHuge =
+      -(DecimalUtil::kPowersOfTen[37] - 1) * static_cast<int128_t>(10);
+  testTryCall(
+      makeFlatVector<int128_t>({huge, 0, -huge}, type),
       -1,
       Mode::kCeil,
       makeNullableFlatVector<int128_t>(
-          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
+          {std::nullopt, static_cast<int128_t>(0), ceilNegHuge}, type));
 
-  // floor with negative values should also overflow to NULL.
-  testCall(
-      makeFlatVector<int128_t>({-huge, -huge, -huge}, DECIMAL(38, 0)),
+  const int128_t floorPositiveHuge =
+      (DecimalUtil::kPowersOfTen[37] - 1) * static_cast<int128_t>(10);
+  testTryCall(
+      makeFlatVector<int128_t>({-huge, 0, huge}, type),
       -1,
       Mode::kFloor,
       makeNullableFlatVector<int128_t>(
-          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
-
-  // Mixed: some overflow, some don't.
-  // ceil(huge, -1) overflows (quotient+1 = 10^37 which == maxAbs).
-  // ceil(0, -1) = 0 (no overflow).
-  // ceil(-huge, -1) does NOT overflow: quotient = -(10^37-1), remainder < 0,
-  // so no +1 adjustment → result = -(10^37-1)*10 = valid 38-digit number.
-  const int128_t ceilNegHuge =
-      -(DecimalUtil::kPowersOfTen[37] - 1) * static_cast<int128_t>(10);
-  testCall(
-      makeFlatVector<int128_t>({huge, 0, -huge}, DECIMAL(38, 0)),
-      -1,
-      Mode::kCeil,
-      makeNullableFlatVector<int128_t>(
-          {std::nullopt, static_cast<int128_t>(0), ceilNegHuge},
-          DECIMAL(38, 0)));
+          {std::nullopt, static_cast<int128_t>(0), floorPositiveHuge}, type));
 }
 
 TEST_F(DecimalCeilFloorTest, scaleClampBoundaries) {
@@ -356,11 +368,7 @@ TEST_F(DecimalCeilFloorTest, negativeScaleRemainderZero) {
 }
 
 TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
-  // DECIMAL(38, 0), scale=-38. Result DECIMAL(38, 0).
-  // Any value not exactly a multiple of 10^38 should:
-  //   ceil → 10^38 for positive (overflow → NULL), 0 for negative
-  //   floor → 0 for positive, -10^38 for negative (overflow → NULL)
-  testCall(
+  testTryCall(
       makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
       -38,
       Mode::kCeil,
@@ -368,7 +376,7 @@ TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
           {std::nullopt, static_cast<int128_t>(0), static_cast<int128_t>(0)},
           DECIMAL(38, 0)));
 
-  testCall(
+  testTryCall(
       makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
       -38,
       Mode::kFloor,
@@ -404,6 +412,24 @@ TEST_F(DecimalCeilFloorTest, nonConstantScaleError) {
   VELOX_ASSERT_THROW(
       evaluate(callExpr, makeRowVector({input, scaleCol})),
       "The second argument of decimal_ceil must be a constant expression.");
+}
+
+TEST_F(DecimalCeilFloorTest, mismatchedResultScale) {
+  const auto inputType = DECIMAL(3, 2);
+  const auto input = makeFlatVector<int64_t>({123, -123, 0}, inputType);
+  for (const auto name : {kCeilDecimal, kFloorDecimal}) {
+    auto expression = std::make_shared<const core::CallTypedExpr>(
+        DECIMAL(3, 1),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
+            std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(0)),
+        },
+        name);
+
+    VELOX_ASSERT_THROW(
+        evaluate(expression, makeRowVector({input})),
+        "Result scale must match the resolved scale for function:");
+  }
 }
 
 } // namespace

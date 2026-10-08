@@ -332,6 +332,38 @@ TEST(DecimalTest, valueInPrecisionRange) {
           DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
 }
 
+TEST(DecimalTest, divideWithRoundUpLargeRemainder) {
+  const int128_t divisor = DecimalUtil::kPowersOfTen[38];
+  const int128_t half = divisor / 2;
+  int128_t result;
+
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 0);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, divisor - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 0);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -divisor + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+}
+
 TEST(DecimalTest, computeAverage) {
   auto validateSameValues = [](int128_t value, int64_t maxCount) {
     SCOPED_TRACE(fmt::format("value={} maxCount={}", value, maxCount));

@@ -150,7 +150,9 @@ struct DecimalArithmetic {
         unsignedDividendRescaled, R(powerOfTen(aRescale)), "Decimal");
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
-    if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
+    const B remainderAsDivisorType = static_cast<B>(remainder);
+    if (!noRoundUp &&
+        remainderAsDivisorType >= unsignedDivisor - remainderAsDivisorType) {
       ++quotient;
     }
     r = quotient * resultSign;

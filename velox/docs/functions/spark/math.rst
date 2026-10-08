@@ -139,7 +139,7 @@ Mathematical Functions
     When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
     rounds up to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    precision throw an error.
 
     **Result type rules:**
 
@@ -185,7 +185,7 @@ Mathematical Functions
     When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
     rounds down to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    precision throw an error.
 
     **Result type rules:**
 
