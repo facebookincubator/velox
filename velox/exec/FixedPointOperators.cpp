@@ -15,8 +15,6 @@
  */
 #include "velox/exec/FixedPointOperators.h"
 
-#include <numeric>
-
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/HashTable.h"
@@ -149,15 +147,18 @@ class StateSourceOperator : public exec::SourceOperator {
   size_t current_{0};
 };
 
-// Creates hashers over the probe key columns of 'node', which lead the probe
-// input as they lead the table (keys first on both sides).  Each operator owns
-// its own: a hasher keeps per-batch decoding state, so drivers cannot share the
-// table's.
+// Creates hashers over the probe key columns of 'node', found by name.  Each
+// operator owns its own: a hasher keeps per-batch decoding state, so drivers
+// cannot share the table's.
 std::vector<std::unique_ptr<VectorHasher>> createProbeHashers(
     const core::StateHashJoinNode& node) {
-  std::vector<column_index_t> keyChannels(node.probeKeys().size());
-  std::iota(keyChannels.begin(), keyChannels.end(), 0);
-  return createVectorHashers(node.sources()[0]->outputType(), keyChannels);
+  const auto& probeType = node.sources()[0]->outputType();
+  std::vector<column_index_t> keyChannels;
+  keyChannels.reserve(node.probeKeys().size());
+  for (const auto& key : node.probeKeys()) {
+    keyChannels.push_back(probeType->getChildIdx(key));
+  }
+  return createVectorHashers(probeType, keyChannels);
 }
 
 // Inner-joins the probe input against a HashTable persistent state entry built

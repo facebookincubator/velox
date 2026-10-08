@@ -2211,6 +2211,49 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
   }
 }
 
+// A StateHashJoin finds its probe keys by name.  Here the key is the second
+// probe column, after a column of the same type that must not be joined on.
+TEST_F(FixedPointTest, stateHashJoinFindsProbeKeyByName) {
+  auto probeSchema = ROW({"tag", "key"}, BIGINT());
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values({makeRowVector(
+                            {"key", "payload"},
+                            {makeFlatVector<int64_t>({0, 1, 2}),
+                             makeFlatVector<int64_t>({0, 10, 20})})})
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"tag", "key"},
+                           {makeFlatVector<int64_t>({-1, -1}),
+                            makeFlatVector<int64_t>({1, 2})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"tag", "key", "payload"}, BIGINT()))
+      .project({"payload AS tag", "key"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  expectBothModes(node, {{10, 1}, {20, 2}});
+}
+
 // The contract a coordinator depends on: the owning task reaches a terminal
 // state when the loop is done, in both modes.  Nothing else moves a fixed point
 // off kRunning -- it has no drivers -- so without this taskCompletionFuture()

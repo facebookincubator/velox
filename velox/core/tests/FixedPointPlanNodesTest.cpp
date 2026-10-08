@@ -267,8 +267,8 @@ TEST_F(FixedPointPlanNodesTest, validation) {
           "n"),
       "output arity must equal probe columns plus hash table payload columns");
 
-  // A StateHashJoin's leading probe key column types must match the hash
-  // table's build key types (keys-first on both sides).
+  // A StateHashJoin's probe key types must match the hash table's build key
+  // types.
   auto varcharProbe = ROW("k", VARCHAR());
   auto badKeyTypeJoin = std::make_shared<StateHashJoinNode>(
       "j",
@@ -288,7 +288,37 @@ TEST_F(FixedPointPlanNodesTest, validation) {
           ConvergenceConfig{
               .maxIterations = 5, .errorWhenMaxIterationReached = false},
           "probe"),
-      "probe key column type at channel 0 must match the hash table build key");
+      "probe key type must match the hash table build key type: k");
+
+  // Probe keys are resolved by name, so a probe key that is not the leading
+  // probe column is accepted, and a missing one is rejected.
+  auto trailingKeyProbe = ROW({{"p", VARCHAR()}, {"k", BIGINT()}});
+  auto makeTrailingKeyNode = [&](const std::string& probeKey) {
+    auto join = std::make_shared<StateHashJoinNode>(
+        "j",
+        "h",
+        std::vector<std::string>{probeKey},
+        ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}}),
+        std::make_shared<StateSourceNode>(
+            "s", "probe", trailingKeyProbe, /*delta=*/true));
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>("probe", trailingKeyProbe),
+            std::make_shared<VectorStateDeclaration>(
+                "out",
+                ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}})),
+            std::make_shared<HashTableStateDeclaration>(
+                "h", htSchema, std::vector<std::string>{"k"})},
+        std::vector<PlanNodePtr>{join},
+        ConvergenceConfig{
+            .maxIterations = 5, .errorWhenMaxIterationReached = false},
+        "out");
+  };
+  EXPECT_NO_THROW(makeTrailingKeyNode("k"));
+  VELOX_ASSERT_USER_THROW(
+      makeTrailingKeyNode("missing"),
+      "probe key is not a probe input column: missing");
 
   // A null body plan is rejected with a clean error rather than crashing.
   VELOX_ASSERT_USER_THROW(

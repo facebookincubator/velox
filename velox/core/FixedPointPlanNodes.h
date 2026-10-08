@@ -510,8 +510,8 @@ using StateSourceNodePtr = std::shared_ptr<const StateSourceNode>;
 /// Inner-joins the input (probe) against a HashTable persistent state entry
 /// that is built once and reused across iterations (hash-table reuse). Output
 /// rows are the probe input columns followed by the hash table's dependent
-/// (payload) columns.  The probe input's join key columns must occupy the same
-/// channels as the build key columns (keys-first on both sides).
+/// (payload) columns.  Probe key i names the probe input column matched against
+/// the table's build key i; the table lists its key columns first.
 ///
 /// Only inner join is supported: probe rows with no match are dropped (this is
 /// what gives VLP / recursive CTE its empty-frontier termination).  Supporting
