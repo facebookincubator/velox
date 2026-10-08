@@ -1204,6 +1204,46 @@ TEST_F(TableScanTest, decimalSubfieldFilter) {
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
 }
 
+TEST_F(TableScanTest, mixedCaseDecimalFilterUsesSplitPhysicalType) {
+  auto fileVector = makeRowVector(
+      {"Price", "Value"},
+      {makeFlatVector<int64_t>({100, -500, -700}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeCompactDecimalParquet(filePath, fileVector);
+  createDuckDbTable({fileVector});
+
+  auto rowType = ROW({{"price", DECIMAL(18, 2)}, {"value", BIGINT()}});
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "price",
+                         std::make_unique<common::BigintRange>(
+                             -500, -500, /*nullAllowed=*/false))
+                     .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(filters), nullptr))
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          facebook::velox::connector::hive::HiveConfig::
+              kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .splits(makeCudfHiveConnectorSplits({filePath}))
+      .assertResults(
+          "SELECT Price, Value FROM tmp "
+          "WHERE Price = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
 TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   // Both file schemas fit the table's wider logical precision.
   auto rowType = ROW({{"c0", DECIMAL(18, 2)}, {"c1", BIGINT()}});
@@ -1249,22 +1289,13 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   const auto expected =
       "SELECT c0, c1 FROM tmp "
       "WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))";
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-
-    for (const auto& paths :
-         {std::vector{decimal32Path, decimal64Path},
-          std::vector{decimal64Path, decimal32Path}}) {
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .maxDrivers(1)
-          .splits(makeCudfHiveConnectorSplits(paths))
-          .assertResults(expected);
-    }
+  for (const auto& paths :
+       {std::vector{decimal32Path, decimal64Path},
+        std::vector{decimal64Path, decimal32Path}}) {
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(1)
+        .splits(makeCudfHiveConnectorSplits(paths))
+        .assertResults(expected);
   }
 }
 
@@ -1301,18 +1332,39 @@ TEST_F(TableScanTest, decimalFilterUsesSplitScale) {
                   .endTableScan()
                   .planNode();
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    assertQuery(
-        plan,
-        {filePath},
-        "SELECT * FROM tmp WHERE c0 = CAST('300000.0000' AS DECIMAL(12, 4))");
-  }
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT * FROM tmp WHERE c0 = CAST('300000.0000' AS DECIMAL(12, 4))");
+}
+
+TEST_F(TableScanTest, decimalFilterRejectsFileScaleAboveTableScale) {
+  auto fileVector =
+      makeRowVector({makeFlatVector<int64_t>({12399}, DECIMAL(7, 4))});
+  auto filePath = TempFilePath::create();
+  writeCompactDecimalParquet(filePath, fileVector);
+
+  auto rowType = ROW({{"c0", DECIMAL(5, 2)}});
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "c0",
+                         std::make_unique<common::BigintRange>(
+                             123, 123, /*nullAllowed=*/false))
+                     .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(filters), nullptr))
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      assertQuery(plan, {filePath}, "SELECT CAST(1.23 AS DECIMAL(5, 2))"),
+      "Parquet decimal scale of 'c0' exceeds the table scale");
 }
 
 TEST_F(TableScanTest, decimalFilterUsesRawIntegerStorage) {
@@ -1345,18 +1397,41 @@ TEST_F(TableScanTest, decimalFilterUsesRawIntegerStorage) {
                   .endTableScan()
                   .planNode();
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    assertQuery(
-        plan,
-        {filePath},
-        "SELECT * FROM tmp WHERE c0 = CAST(123 AS DECIMAL(10, 0))");
-  }
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT * FROM tmp WHERE c0 = CAST(123 AS DECIMAL(10, 0))");
+}
+
+TEST_F(TableScanTest, decimalFilterUsesAnnotatedIntegerStorage) {
+  auto fileVector =
+      makeRowVector({makeFlatVector<int8_t>({-100, 0, 100}, TINYINT())});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {fileVector});
+  createDuckDbTable({fileVector});
+
+  auto rowType = ROW({{"c0", DECIMAL(10, 0)}});
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "c0",
+                         std::make_unique<common::BigintRange>(
+                             -100, -100, /*nullAllowed=*/false))
+                     .build();
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(filters), nullptr))
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT CAST(c0 AS DECIMAL(10, 0)) FROM tmp WHERE c0 = -100");
 }
 
 TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
@@ -1387,60 +1462,48 @@ TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
           {makeFlatVector<int64_t>({100, -500, 200}, DECIMAL(5, 2)),
            makeFlatVector<int64_t>({7, 8, 9})}));
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-
-    for (const bool nullAllowed : {false, true}) {
-      auto check = [&](std::unique_ptr<common::Filter> filter,
-                       bool matchesNonNull) {
-        SCOPED_TRACE(filter->toString());
-        common::SubfieldFilters filters;
-        filters.emplace(common::Subfield("c0"), std::move(filter));
-        auto tableHandle = makeTableHandle(
-            "parquet_table", rowType, std::move(filters), nullptr);
-        auto plan = PlanBuilder()
-                        .startTableScan()
-                        .outputType(outputType)
-                        .tableHandle(tableHandle)
-                        .assignments(
-                            facebook::velox::exec::test::HiveConnectorTestBase::
-                                allRegularColumns(outputType))
-                        .endTableScan()
-                        .planNode();
-        std::vector<int64_t> expectedIds;
-        if (nullAllowed) {
-          expectedIds = {1, 4, 5, 6};
-        }
-        if (matchesNonNull) {
-          expectedIds.insert(expectedIds.end(), {2, 8});
-        }
-        auto expected =
-            makeRowVector({"c1"}, {makeFlatVector<int64_t>(expectedIds)});
-        AssertQueryBuilder(plan)
-            .maxDrivers(1)
-            .splits(makeCudfHiveConnectorSplits(
-                {mixedPath, allNullPath, nonNullPath}))
-            .assertResults(expected);
-      };
-      check(
-          std::make_unique<common::BigintRange>(-500, -500, nullAllowed), true);
-      // These bounds fit the logical decimal, but no DECIMAL32 value matches.
-      check(
-          std::make_unique<common::BigintRange>(
-              3'000'000'000, 4'000'000'000, nullAllowed),
-          false);
-      check(
-          common::createBigintValues({-500, 3'000'000'000}, nullAllowed), true);
-      check(
-          common::createBigintValues(
-              {3'000'000'000, 3'000'000'002}, nullAllowed),
-          false);
-    }
+  for (const bool nullAllowed : {false, true}) {
+    auto check = [&](std::unique_ptr<common::Filter> filter,
+                     bool matchesNonNull) {
+      SCOPED_TRACE(filter->toString());
+      common::SubfieldFilters filters;
+      filters.emplace(common::Subfield("c0"), std::move(filter));
+      auto tableHandle = makeTableHandle(
+          "parquet_table", rowType, std::move(filters), nullptr);
+      auto plan = PlanBuilder()
+                      .startTableScan()
+                      .outputType(outputType)
+                      .tableHandle(tableHandle)
+                      .assignments(
+                          facebook::velox::exec::test::HiveConnectorTestBase::
+                              allRegularColumns(outputType))
+                      .endTableScan()
+                      .planNode();
+      std::vector<int64_t> expectedIds;
+      if (nullAllowed) {
+        expectedIds = {1, 4, 5, 6};
+      }
+      if (matchesNonNull) {
+        expectedIds.insert(expectedIds.end(), {2, 8});
+      }
+      auto expected =
+          makeRowVector({"c1"}, {makeFlatVector<int64_t>(expectedIds)});
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .splits(makeCudfHiveConnectorSplits(
+              {mixedPath, allNullPath, nonNullPath}))
+          .assertResults(expected);
+    };
+    check(std::make_unique<common::BigintRange>(-500, -500, nullAllowed), true);
+    // These bounds fit the logical decimal, but no DECIMAL32 value matches.
+    check(
+        std::make_unique<common::BigintRange>(
+            3'000'000'000, 4'000'000'000, nullAllowed),
+        false);
+    check(common::createBigintValues({-500, 3'000'000'000}, nullAllowed), true);
+    check(
+        common::createBigintValues({3'000'000'000, 3'000'000'002}, nullAllowed),
+        false);
   }
 }
 

@@ -30,11 +30,13 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 #include <cudf/stream_compaction.hpp>
 
@@ -48,15 +50,43 @@ using namespace facebook::velox::connector::hive;
 
 namespace {
 
+std::optional<cudf::type_id> parquetIntegerType(
+    const cudf::io::parquet::SchemaElement& schema) {
+  using LogicalType = cudf::io::parquet::LogicalType;
+
+  if (schema.logical_type.has_value() &&
+      schema.logical_type->type == LogicalType::INTEGER) {
+    const auto isSigned = schema.logical_type->is_signed();
+    switch (schema.logical_type->bit_width()) {
+      case 8:
+        return isSigned ? cudf::type_id::INT8 : cudf::type_id::UINT8;
+      case 16:
+        return isSigned ? cudf::type_id::INT16 : cudf::type_id::UINT16;
+      case 32:
+        return isSigned ? cudf::type_id::INT32 : cudf::type_id::UINT32;
+      case 64:
+        return isSigned ? cudf::type_id::INT64 : cudf::type_id::UINT64;
+      default:
+        VELOX_FAIL(
+            "Invalid Parquet integer bit width: {}",
+            schema.logical_type->bit_width());
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<SubfieldFilterDecimalType> parquetDecimalType(
     const cudf::io::parquet::SchemaElement& schema) {
   using ParquetType = cudf::io::parquet::Type;
 
-  const bool hasLogicalDecimal = schema.logical_type.has_value() &&
+  const bool isLogicalDecimal = schema.logical_type.has_value() &&
       schema.logical_type->type == cudf::io::parquet::LogicalType::DECIMAL;
-  const bool hasConvertedDecimal =
+  const bool isConvertedDecimal =
       schema.converted_type == cudf::io::parquet::ConvertedType::DECIMAL;
-  if (!hasLogicalDecimal && !hasConvertedDecimal) {
+  if (!isLogicalDecimal && !isConvertedDecimal) {
+    if (const auto integerType = parquetIntegerType(schema)) {
+      return SubfieldFilterDecimalType{*integerType, 0, /*isDecimal=*/false};
+    }
     switch (schema.type) {
       case ParquetType::INT32:
         return SubfieldFilterDecimalType{
@@ -69,7 +99,7 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
     }
   }
   const auto scale =
-      hasLogicalDecimal ? schema.logical_type->scale() : schema.decimal_scale;
+      isLogicalDecimal ? schema.logical_type->scale() : schema.decimal_scale;
   auto decimalType = [&]() -> cudf::type_id {
     switch (schema.type) {
       case ParquetType::INT32:
@@ -125,7 +155,8 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
 
 SubfieldFilterDecimalTypes parquetDecimalTypes(
     std::span<const cudf::io::parquet::SchemaElement> metadataSchema,
-    const RowTypePtr& readerSchema) {
+    const RowTypePtr& readerSchema,
+    bool fileColumnNamesReadAsLowerCase) {
   VELOX_CHECK(
       !metadataSchema.empty(), "Cannot build a filter from an empty schema");
 
@@ -136,13 +167,24 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
         metadataSchema.size(),
         "Parquet schema child index out of range");
     const auto& child = metadataSchema[childIndex];
-    if (!readerSchema->containsChild(child.name)) {
+    const auto name = fileColumnNamesReadAsLowerCase
+        ? functions::stringImpl::utf8StrToLowerCopy(child.name)
+        : child.name;
+    if (!readerSchema->containsChild(name)) {
       continue;
     }
-    const auto& logicalType = readerSchema->findChild(child.name);
+    const auto& logicalType = readerSchema->findChild(name);
     if (logicalType->isDecimal()) {
       if (auto decimalType = parquetDecimalType(child)) {
-        decimalTypes.emplace(child.name, *decimalType);
+        if (decimalType->isDecimal) {
+          const auto [_, tableScale] = getDecimalPrecisionScale(*logicalType);
+          VELOX_CHECK_LE(
+              decimalType->scale,
+              tableScale,
+              "Parquet decimal scale of '{}' exceeds the table scale",
+              name);
+        }
+        decimalTypes.emplace(name, *decimalType);
       }
     }
   }
@@ -367,14 +409,20 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   if (hasDecimalSubfieldFilter_) {
     const auto readerFilterType = getTableRowType();
+    const HiveConfig hiveConfig(cudfHiveConfig_->config());
+    const auto fileColumnNamesReadAsLowerCase =
+        hiveConfig.isFileColumnNamesReadAsLowerCase(
+            connectorQueryCtx_->sessionProperties());
     cudfSplitReader_->setPushdownFilterBuilder(
-        [this,
-         readerFilterType](const cudf::io::parquet::FileMetaData& metadata)
+        [this, readerFilterType, fileColumnNamesReadAsLowerCase](
+            const cudf::io::parquet::FileMetaData& metadata)
             -> cudf::ast::expression const* {
           pushdownFilterTree_ = cudf::ast::tree{};
           pushdownFilterScalars_.clear();
-          const auto decimalTypes =
-              parquetDecimalTypes(metadata.schema, readerFilterType);
+          const auto decimalTypes = parquetDecimalTypes(
+              metadata.schema,
+              readerFilterType,
+              fileColumnNamesReadAsLowerCase);
           return &createAstFromSubfieldFilters(
               subfieldFilters_,
               pushdownFilterTree_,
@@ -441,6 +489,8 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
 
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
   VELOX_CHECK_NOT_NULL(cudfSplitReader_);
+  // The builder captured 'source', which is freed after this call.
+  cudfSplitReader_->setPushdownFilterBuilder(nullptr);
 
   // 'source' owns the query context the reader was prepared with and is
   // freed right after this call.

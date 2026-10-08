@@ -829,6 +829,26 @@ TEST_F(SubfieldFilterAstTest, decimalRawIntegerStorage) {
       cudf::type_id::INT32,
       0,
       /*isDecimal=*/false);
+
+  const auto narrowVector =
+      makeRowVector({makeFlatVector<int64_t>({-100, 0, 100}, DECIMAL(10, 0))});
+  for (const auto type :
+       {cudf::type_id::INT8,
+        cudf::type_id::INT16,
+        cudf::type_id::UINT8,
+        cudf::type_id::UINT16,
+        cudf::type_id::UINT32,
+        cudf::type_id::UINT64}) {
+    const auto value =
+        type == cudf::type_id::INT8 || type == cudf::type_id::INT16 ? -100
+                                                                    : 100;
+    assertPhysicalFilter(
+        narrowVector,
+        common::BigintRange(value, value, false),
+        type,
+        0,
+        /*isDecimal=*/false);
+  }
 }
 
 TEST_F(SubfieldFilterAstTest, decimalPhysicalWidths) {
@@ -851,6 +871,24 @@ TEST_F(SubfieldFilterAstTest, decimalPhysicalWidths) {
     EXPECT_EQ(scalar->type().id(), cudf::type_id::DECIMAL64);
   }
   testFilterExecution(rowType, "c0", filter, vector, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, decimal128RescaledLiteralsPreservePrecision) {
+  constexpr int64_t kValue = 100'000'000'000'000'000;
+  const auto vector = makeRowVector(
+      {makeFlatVector<int64_t>({kValue, kValue + 1}, DECIMAL(18, 0))});
+  auto check = [&](const common::Filter& filter) {
+    assertPhysicalFilter(
+        vector, filter, cudf::type_id::DECIMAL128, /*fileScale=*/2);
+  };
+
+  check(common::BigintRange(kValue, kValue, false));
+  check(
+      common::BigintValuesUsingHashTable(
+          kValue, kValue + 1, {kValue, kValue + 1}, false));
+  check(
+      common::BigintValuesUsingBitmask(
+          kValue, kValue + 1, {kValue, kValue + 1}, false));
 }
 
 TEST_F(SubfieldFilterAstTest, decimal32FiltersPreserveNulls) {

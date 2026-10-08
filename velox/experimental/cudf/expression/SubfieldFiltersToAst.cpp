@@ -41,8 +41,14 @@ std::optional<SubfieldFilterDecimalType> subfieldDecimalType(
   if (const auto it = decimalTypes->find(fieldName);
       it != decimalTypes->end()) {
     VELOX_CHECK(
-        it->second.type == cudf::type_id::INT32 ||
+        it->second.type == cudf::type_id::INT8 ||
+            it->second.type == cudf::type_id::INT16 ||
+            it->second.type == cudf::type_id::INT32 ||
             it->second.type == cudf::type_id::INT64 ||
+            it->second.type == cudf::type_id::UINT8 ||
+            it->second.type == cudf::type_id::UINT16 ||
+            it->second.type == cudf::type_id::UINT32 ||
+            it->second.type == cudf::type_id::UINT64 ||
             it->second.type == cudf::type_id::DECIMAL32 ||
             it->second.type == cudf::type_id::DECIMAL64 ||
             it->second.type == cudf::type_id::DECIMAL128,
@@ -117,16 +123,15 @@ std::pair<int128_t, int128_t> getInt128BoundsForType(
         min = -fileMax.floor;
         max = fileMax.floor;
       }
-      if (decimalType->type == cudf::type_id::INT32 ||
-          decimalType->type == cudf::type_id::DECIMAL32) {
-        min = std::max<int128_t>(min, std::numeric_limits<int32_t>::min());
-        max = std::min<int128_t>(max, std::numeric_limits<int32_t>::max());
-      } else if (
-          decimalType->type == cudf::type_id::INT64 ||
-          decimalType->type == cudf::type_id::DECIMAL64) {
-        min = std::max<int128_t>(min, std::numeric_limits<int64_t>::min());
-        max = std::min<int128_t>(max, std::numeric_limits<int64_t>::max());
-      }
+      cudf::type_dispatcher<cudf::dispatch_storage_type>(
+          cudf::data_type{decimalType->type}, [&]<typename T>() {
+            if constexpr (std::is_integral_v<T>) {
+              min = std::max<int128_t>(min, std::numeric_limits<T>::min());
+              max = std::min<int128_t>(max, std::numeric_limits<T>::max());
+            } else {
+              VELOX_UNREACHABLE();
+            }
+          });
     }
     return {min, max};
   }
@@ -143,25 +148,24 @@ bool decimalValueIsRepresentable(
   return value >= min && value <= max;
 }
 
-const cudf::ast::expression& buildEqualityExpr(
-    cudf::ast::tree& tree,
-    const cudf::ast::expression& columnRef,
-    const cudf::ast::expression& literal,
-    bool isDecimal) {
-  using Op = cudf::ast::ast_operator;
-  using Operation = cudf::ast::operation;
-
-  if (!isDecimal) {
-    return tree.push(Operation{Op::EQUAL, columnRef, literal});
+template <TypeKind Kind>
+cudf::ast::literal makeRescaledIntegerLiteral(
+    int128_t value,
+    const TypePtr& columnType,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<SubfieldFilterDecimalType> decimalType) {
+  if (columnType->isDecimal()) {
+    return makeScalarAndLiteral<TypeKind::HUGEINT>(
+        columnType,
+        variant(value),
+        scalars,
+        decimalType ? std::optional{decimalType->type} : std::nullopt,
+        decimalType ? std::optional{decimalType->scale} : std::nullopt);
   }
 
-  // cuDF's Parquet Bloom-filter path cannot probe fixed-point literals. Keep
-  // the equivalent row and statistics predicate while avoiding that optional
-  // optimization.
-  auto const& lower =
-      tree.push(Operation{Op::GREATER_EQUAL, columnRef, literal});
-  auto const& upper = tree.push(Operation{Op::LESS_EQUAL, columnRef, literal});
-  return tree.push(Operation{Op::NULL_LOGICAL_AND, lower, upper});
+  using NativeT = typename TypeTraits<Kind>::NativeType;
+  return makeScalarAndLiteral<Kind>(
+      columnType, variant(static_cast<NativeT>(value)), scalars);
 }
 
 template <
@@ -287,14 +291,9 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
         rescaledUpper.overflow || rescaledUpper.floor >= maxBound;
 
     auto addLiteral = [&](int128_t value) -> const cudf::ast::expression& {
-      variant veloxVariant = static_cast<NativeT>(value);
-      const auto& literal = makeScalarAndLiteral<Kind>(
-          columnTypePtr,
-          veloxVariant,
-          scalars,
-          decimalType ? std::optional{decimalType->type} : std::nullopt,
-          decimalType ? std::optional{decimalType->scale} : std::nullopt);
-      return tree.push(literal);
+      return tree.push(
+          makeRescaledIntegerLiteral<Kind>(
+              value, columnTypePtr, scalars, decimalType));
     };
 
     if (lower == upper) {
@@ -303,12 +302,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
         return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
       }
       auto const& literal = addLiteral(rescaledLower.floor);
-      return buildEqualityExpr(
-          tree,
-          columnRef,
-          literal,
-          columnTypePtr->isDecimal() &&
-              (!decimalType || decimalType->isDecimal));
+      return tree.push(Operation{Op::EQUAL, columnRef, literal});
     }
 
     // Range comparison: column >= lower AND column <= upper.
@@ -382,8 +376,11 @@ const cudf::ast::expression& buildValuesListExpr(
 
   std::vector<const cudf::ast::expression*> exprVec;
   for (const auto& value : values) {
-    auto convertedValue = value;
-    if constexpr (!std::is_same_v<ValueT, StringView>) {
+    const cudf::ast::expression* literal;
+    if constexpr (std::is_same_v<ValueT, StringView>) {
+      literal = &tree.push(
+          makeScalarAndLiteral<Kind>(columnTypePtr, variant(value), scalars));
+    } else {
       const auto rescaled = rescaleDecimal(
           static_cast<int128_t>(value), columnTypePtr, decimalType);
       if (!rescaled.exact || rescaled.overflow ||
@@ -391,32 +388,23 @@ const cudf::ast::expression& buildValuesListExpr(
               rescaled.floor, columnTypePtr, decimalType)) {
         continue;
       }
-      convertedValue = static_cast<ValueT>(rescaled.floor);
+      literal = &tree.push(
+          makeRescaledIntegerLiteral<Kind>(
+              rescaled.floor, columnTypePtr, scalars, decimalType));
     }
-    variant veloxVariant = static_cast<ValueT>(convertedValue);
-    auto const& literal = tree.push(
-        makeScalarAndLiteral<Kind>(
-            columnTypePtr,
-            veloxVariant,
-            scalars,
-            decimalType ? std::optional{decimalType->type} : std::nullopt,
-            decimalType ? std::optional{decimalType->scale} : std::nullopt));
     if (isNegated) {
       auto const& notEqualExpr =
-          tree.push(Operation{Op::NOT_EQUAL, columnRef, literal});
+          tree.push(Operation{Op::NOT_EQUAL, columnRef, *literal});
       exprVec.push_back(&notEqualExpr);
     } else {
-      exprVec.push_back(&buildEqualityExpr(
-          tree,
-          columnRef,
-          literal,
-          columnTypePtr->isDecimal() &&
-              (!decimalType || decimalType->isDecimal)));
+      exprVec.push_back(&tree.push(Operation{Op::EQUAL, columnRef, *literal}));
     }
   }
 
   if (exprVec.empty()) {
-    return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
+    // No value is representable: IN matches nothing, NOT IN every non-null row.
+    return tree.push(
+        Operation{isNegated ? Op::EQUAL : Op::NOT_EQUAL, columnRef, columnRef});
   }
 
   const cudf::ast::expression* result = exprVec[0];
@@ -496,20 +484,11 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
         continue;
       }
 
-      variant veloxVariant = static_cast<NativeT>(rescaled.floor);
-      const auto& literal = makeScalarAndLiteral<Kind>(
-          columnTypePtr,
-          veloxVariant,
-          scalars,
-          decimalType ? std::optional{decimalType->type} : std::nullopt,
-          decimalType ? std::optional{decimalType->scale} : std::nullopt);
+      const auto& literal = makeRescaledIntegerLiteral<Kind>(
+          rescaled.floor, columnTypePtr, scalars, decimalType);
       auto const& cudfLiteral = tree.push(literal);
-      exprVec.push_back(&buildEqualityExpr(
-          tree,
-          columnRef,
-          cudfLiteral,
-          columnTypePtr->isDecimal() &&
-              (!decimalType || decimalType->isDecimal)));
+      exprVec.push_back(
+          &tree.push(Operation{Op::EQUAL, columnRef, cudfLiteral}));
     }
 
     if (exprVec.empty()) {

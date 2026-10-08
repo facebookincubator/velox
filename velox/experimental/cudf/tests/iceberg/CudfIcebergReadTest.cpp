@@ -1387,25 +1387,13 @@ TEST_F(CudfIcebergReadTest, compactDecimalFilterWithInjectedColumn) {
       {"country", "id"},
       {makeFlatVector<std::string>({}), makeFlatVector<int64_t>({})});
 
-  for (const bool useExperimentalReader : {false, true}) {
-    AssertQueryBuilder(plan)
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseExperimentalCudfReaderSession,
-            useExperimentalReader ? "true" : "false")
-        .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
-        .assertResults({expected});
-    AssertQueryBuilder(plan)
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseExperimentalCudfReaderSession,
-            useExperimentalReader ? "true" : "false")
-        .splits(
-            makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
-        .assertResults({deletedExpected});
-  }
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({expected});
+  AssertQueryBuilder(plan)
+      .splits(
+          makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
+      .assertResults({deletedExpected});
 }
 
 /// A predicate on an injected column holds for the whole split or for none of

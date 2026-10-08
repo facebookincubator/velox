@@ -32,6 +32,8 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/traits.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <optional>
 
@@ -44,14 +46,6 @@ cudf::ast::literal makeLiteralFromScalar(
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       switch (scalar.type().id()) {
-        case cudf::type_id::INT32: {
-          using CudfScalarType = cudf::numeric_scalar<int32_t>;
-          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
-        }
-        case cudf::type_id::INT64: {
-          using CudfScalarType = cudf::numeric_scalar<int64_t>;
-          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
-        }
         case cudf::type_id::DECIMAL32: {
           using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal32>;
           return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
@@ -65,9 +59,18 @@ cudf::ast::literal makeLiteralFromScalar(
           return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
         }
         default:
-          VELOX_UNREACHABLE(
+          VELOX_CHECK(
+              cudf::is_integral(scalar.type()),
               "Invalid cuDF decimal scalar type: {}",
               static_cast<int32_t>(scalar.type().id()));
+          return cudf::type_dispatcher<cudf::dispatch_storage_type>(
+              scalar.type(), [&]<typename U>() -> cudf::ast::literal {
+                if constexpr (std::is_integral_v<U>) {
+                  return cudf::ast::literal{
+                      *static_cast<cudf::numeric_scalar<U>*>(&scalar)};
+                }
+                VELOX_UNREACHABLE();
+              });
       }
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
@@ -182,14 +185,6 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       std::unique_ptr<cudf::scalar> scalar;
       const auto targetType = toType.value_or(defaultType);
       switch (targetType) {
-        case cudf::type_id::INT32:
-          scalar = std::make_unique<cudf::numeric_scalar<int32_t>>(
-              static_cast<int32_t>(value), !isNull, stream, mr);
-          break;
-        case cudf::type_id::INT64:
-          scalar = std::make_unique<cudf::numeric_scalar<int64_t>>(
-              static_cast<int64_t>(value), !isNull, stream, mr);
-          break;
         case cudf::type_id::DECIMAL32:
           scalar =
               std::make_unique<cudf::fixed_point_scalar<numeric::decimal32>>(
@@ -206,9 +201,19 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
                   static_cast<int128_t>(value), cudfScale, !isNull, stream, mr);
           break;
         default:
-          VELOX_UNREACHABLE(
+          VELOX_CHECK(
+              cudf::is_integral(cudf::data_type{targetType}),
               "Invalid target cuDF decimal type: {}",
               static_cast<int32_t>(targetType));
+          scalar = cudf::type_dispatcher<cudf::dispatch_storage_type>(
+              cudf::data_type{targetType},
+              [&]<typename U>() -> std::unique_ptr<cudf::scalar> {
+                if constexpr (std::is_integral_v<U>) {
+                  return std::make_unique<cudf::numeric_scalar<U>>(
+                      static_cast<U>(value), !isNull, stream, mr);
+                }
+                VELOX_UNREACHABLE();
+              });
       }
       stream.sync();
       return scalar;
