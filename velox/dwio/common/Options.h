@@ -587,6 +587,14 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
+  bool nimbleDictionaryAwareReads() const {
+    return nimbleDictionaryAwareReads_;
+  }
+
+  void setNimbleDictionaryAwareReads(bool value) {
+    nimbleDictionaryAwareReads_ = value;
+  }
+
   bool lazyColumnIo() const {
     return lazyColumnIo_;
   }
@@ -685,6 +693,8 @@ class RowReaderOptions {
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
+  // Enables dictionary-aware reads for Nimble dictionary-encoded columns.
+  bool nimbleDictionaryAwareReads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
@@ -989,6 +999,17 @@ class ReaderOptions : public io::ReaderOptions {
     preloadIndex_ = value;
   }
 
+  /// Whether to verify each stream read against the per-stream checksum the
+  /// file records. Currently only supported by the Nimble index projector path.
+  /// Default false.
+  bool verifyStreamChecksums() const {
+    return verifyStreamChecksums_;
+  }
+
+  void setVerifyStreamChecksums(bool value) {
+    verifyStreamChecksums_ = value;
+  }
+
   /// Whether to load and initialize the chunk stats during file open.
   /// When true, the chunk stats section is preloaded and the structured
   /// ChunkStats object is created. Default true.
@@ -1061,6 +1082,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
+  bool verifyStreamChecksums_{false};
   bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};

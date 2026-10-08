@@ -23,6 +23,18 @@ These functions support TIMESTAMP and DATE input types.
         SELECT add_months('2015-01-30', -2); -- '2014-11-30'
         SELECT add_months('2015-03-31', -1); -- '2015-02-28'
 
+.. spark:function:: convert_timezone([sourceTz, ]targetTz, sourceTs) -> timestamp_utc
+
+    Converts ``sourceTs`` from the ``sourceTz`` time zone to ``targetTz``. If
+    ``sourceTz`` is omitted, the session time zone is used as the source time
+    zone. ::
+
+        SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', TIMESTAMP_NTZ '2021-12-06 00:00:00'); -- 2021-12-05 15:00:00
+
+    Under session timezone ``America/Los_Angeles``: ::
+
+        SELECT convert_timezone('Europe/Brussels', TIMESTAMP_NTZ '2021-12-05 15:00:00'); -- 2021-12-06 00:00:00
+
 .. spark:function:: date_add(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` after ``start_date``. According to the inputs,
@@ -114,6 +126,10 @@ These functions support TIMESTAMP and DATE input types.
         SELECT dayname('2023-08-20'); -- 'Sun'
         SELECT dayname('2023-08-21'); -- 'Mon'
         SELECT dayname('1582-10-15'); -- 'Fri'
+
+.. spark:function:: day(date) -> integer
+
+    This is an alias for :spark:func:`dayofmonth`.
 
 .. spark:function:: dayofmonth(date) -> integer
 
@@ -235,8 +251,7 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the timestamp adjusted to the GMT time zone.
     When ``spark.ansi_enabled`` is true, invalid (non-NULL) inputs throw an
-    error; otherwise the function returns NULL. NULL inputs always return
-    NULL regardless of ANSI mode. ::
+    error; otherwise the function returns NULL. ::
 
         SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
         SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET'); -- 2014-12-28 05:30:45.887
@@ -245,6 +260,22 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_timestamp(null, 7, 22, 15, 30, 0); -- NULL
         SELECT make_timestamp(2014, 12, 28, 6, 30, 60.000001); -- NULL (ANSI OFF) / ERROR (ANSI ON)
         SELECT make_timestamp(2014, 13, 28, 6, 30, 45.887); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
+.. spark:function:: make_timestamp_ntz(year, month, day, hour, minute, second) -> timestamp_utc
+
+    *(ANSI compliant)*
+
+    Create timestamp from ``year``, ``month``, ``day``, ``hour``, ``minute`` and ``second`` fields.
+    The result is not subject to the session timezone.
+    See :spark:func:`make_timestamp` for argument semantics.
+    When ``spark.ansi_enabled`` is true, invalid (non-NULL) inputs throw an
+    error; otherwise the function returns NULL. ::
+
+        SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT make_timestamp_ntz(2019, 6, 30, 23, 59, 60); -- 2019-07-01 00:00:00
+        SELECT make_timestamp_ntz(null, 7, 22, 15, 30, 0); -- NULL
+        SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 60.000001); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT make_timestamp_ntz(2014, 13, 28, 6, 30, 45.887); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 .. spark:function:: make_ym_interval([years[, months]]) -> interval year to month
 
@@ -470,6 +501,22 @@ These functions support TIMESTAMP and DATE input types.
         SELECT trunc('2015-10-27', ''); -- NULL
         SELECT trunc('2015-10-27', 'day'); -- NULL
 
+.. spark:function:: try_make_timestamp(year, month, day, hour, minute, second[, timezone]) -> timestamp
+
+    Same semantics as :spark:func:`make_timestamp`, but always returns NULL on
+    invalid input regardless of ANSI mode. ::
+
+        SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT try_make_timestamp(2014, 13, 28, 6, 30, 45.887); -- NULL
+
+.. spark:function:: try_make_timestamp_ntz(year, month, day, hour, minute, second) -> timestamp_utc
+
+    Same semantics as :spark:func:`make_timestamp_ntz`, but always returns NULL on
+    invalid input regardless of ANSI mode. ::
+
+        SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT try_make_timestamp_ntz(2014, 13, 28, 6, 30, 45.887); -- NULL
+
 .. spark:function:: unix_date(date) -> integer
 
     Returns the number of days since 1970-01-01. ::
@@ -509,22 +556,30 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp('2024-10-01'); -- 1727740800
         SELECT unix_timestamp('-2025-02-18'); -- -126065894400
 
-.. spark:function:: unix_timestamp(string) -> bigint
+.. spark:function:: unix_timestamp(string) -> bigint (ANSI compliant)
    :noindex:
 
     Returns the UNIX timestamp of time specified by ``string``. Assumes the
-    format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
-    ``format``.
+    format ``yyyy-MM-dd HH:mm:ss``. When ``spark.ansi_enabled`` is true, a
+    ``string`` that does not match the format throws an error; otherwise it
+    returns NULL. ::
 
-.. spark:function:: unix_timestamp(string, format) -> bigint
+        SELECT unix_timestamp('invalid'); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
+.. spark:function:: unix_timestamp(string, format) -> bigint (ANSI compliant)
    :noindex:
 
     Returns the UNIX timestamp of time specified by ``string`` using the
     format described in the ``format`` string. The format follows Spark's
     `Datetime patterns for formatting and parsing
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
-    Returns null if ``string`` does not match ``format`` or if ``format``
-    is invalid.
+    An invalid ``format`` returns NULL when the legacy formatter is enabled;
+    otherwise it throws an error, regardless of ANSI mode. When
+    ``spark.ansi_enabled`` is true, a ``string`` that does not match a valid
+    ``format`` throws an error; otherwise it returns NULL. ::
+
+        SELECT unix_timestamp('invalid', 'yyyy-MM-dd'); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT unix_timestamp('2024-10-01', 'invalid-format'); -- ERROR (non-legacy formatter)
 
 .. spark:function:: unix_timestamp(timestamp) -> bigint
 
@@ -534,13 +589,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp(CAST(1739933174 AS TIMESTAMP)); -- 1739933174
         SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
-.. function:: week_of_year(x) -> integer
-   :noindex:
+.. spark:function:: week_of_year(x) -> integer
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
 
-.. function:: weekday(date) -> integer
+.. spark:function:: weekday(date) -> integer
 
     Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday). ::
 

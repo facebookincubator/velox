@@ -41,7 +41,7 @@ class ConnectorQueryCtx;
 } // namespace facebook::velox::connector
 
 namespace facebook::velox::dwio::common {
-struct RuntimeStatistics;
+struct RuntimeStats;
 } // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::memory {
@@ -108,11 +108,11 @@ class FileSplitReader {
 
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete
-  /// files or log files, and add column adapatations for metadata columns. It
+  /// files or log files, and add column adaptations for metadata columns. It
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats,
+      dwio::common::RuntimeStats& runtimeStats,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
@@ -125,13 +125,23 @@ class FileSplitReader {
 
   int64_t estimatedRowSize() const;
 
-  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const;
 
   bool allPrefetchIssued() const;
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
-  const RowTypePtr& readerOutputType() const {
+  /// Returns the schema passed to the underlying row reader.
+  ///
+  /// For most split readers this returns the same type as readerOutputType_.
+  /// IcebergChangelogSplitReader overrides this to return the *changelog*
+  /// schema (operation/ordinal/snapshotid/rowdata) so FileDataSource allocates
+  /// output vectors with the correct shape, while readerOutputType_ holds the
+  /// base-table schema passed to the row reader.  Code inside
+  /// FileSplitReader::next() and its base-class helpers must read
+  /// readerOutputType_ directly; do NOT replace those reads with this getter
+  /// without accounting for the override.
+  virtual const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
   }
 
@@ -165,7 +175,7 @@ class FileSplitReader {
   // Check if the filters pass on the column statistics.  When delta update is
   // present, the corresonding filter should be disabled before calling this
   // function.
-  bool filterOnStats(dwio::common::RuntimeStatistics& runtimeStats) const;
+  bool filterOnStats(dwio::common::RuntimeStats& runtimeStats) const;
 
   /// Check if the fileSplit_ is empty. The split is considered empty when
   ///   1) The data file is missing but the user chooses to ignore it
@@ -173,7 +183,7 @@ class FileSplitReader {
   ///   3) The data in the file does not pass the filters. The test is based on
   ///      the file metadata and partition key values
   /// This function needs to be called after baseReader_ is created.
-  bool checkIfSplitIsEmpty(dwio::common::RuntimeStatistics& runtimeStats);
+  bool checkIfSplitIsEmpty(dwio::common::RuntimeStats& runtimeStats);
 
   /// Create the dwio::common::RowReader object baseRowReader_, which owns the
   /// ColumnReaders that will be used to read the data
@@ -211,7 +221,7 @@ class FileSplitReader {
       RowTypePtr rowType);
 
  private:
-  /// Different table formats may have different meatadata columns.
+  /// Different table formats may have different metadata columns.
   /// This function will be used to update the scanSpec for these columns.
   virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
@@ -237,6 +247,11 @@ class FileSplitReader {
 
   std::shared_ptr<const FileConnectorSplit> fileSplit_;
   const ConnectorQueryCtx* connectorQueryCtx_;
+  /// Schema passed to the underlying row reader. Always read this member
+  /// directly inside FileSplitReader and its subclasses rather than calling
+  /// readerOutputType(), because IcebergChangelogSplitReader overrides the
+  /// getter to return the *changelog* schema while this member always holds the
+  /// type that was actually passed to the row reader.
   RowTypePtr readerOutputType_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;

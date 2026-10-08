@@ -105,7 +105,7 @@ SelectiveListColumnReader::SelectiveListColumnReader(
   auto childParams = DwrfParams(
       stripe,
       params.streamLabels(),
-      params.runtimeStatistics(),
+      params.splitStats(),
       flatMapContextFromEncodingKey(encodingKey));
   child_ = SelectiveDwrfReader::build(
       columnReaderOptions,
@@ -137,7 +137,7 @@ void makeMapChildrenReaders(
     DwrfParams keyParams(
         stripe,
         params.streamLabels(),
-        params.runtimeStatistics(),
+        params.splitStats(),
         flatMapContextFromEncodingKey(encodingKey));
     keyReader = SelectiveDwrfReader::build(
         columnReaderOptions,
@@ -150,7 +150,7 @@ void makeMapChildrenReaders(
     DwrfParams elementParams = DwrfParams(
         stripe,
         params.streamLabels(),
-        params.runtimeStatistics(),
+        params.splitStats(),
         flatMapContextFromEncodingKey(encodingKey));
     elementReader = SelectiveDwrfReader::build(
         columnReaderOptions,

@@ -30,6 +30,8 @@ namespace facebook::velox::encoding {
 constexpr static int kBinaryBlockByteSize = 3;
 // Size of an encoded block in bytes (4 bytes = 24 bits)
 constexpr static int kEncodedBlockByteSize = 4;
+// Padding character used in encoding.
+constexpr static char kPadding = '=';
 
 // Character sets for Base64 and Base64 URL encoding
 constexpr const Base64::Charset kBase64Charset = {
@@ -258,6 +260,21 @@ std::string Base64::encode(const char* input, size_t inputSize) {
 }
 
 namespace {
+
+// Checks if the input Base64 string is padded.
+bool isPadded(const char* input, size_t inputSize) {
+  return inputSize > 0 && input[inputSize - 1] == kPadding;
+}
+
+// Counts the number of padding characters in encoded input.
+size_t numPadding(const char* input, size_t inputSize) {
+  size_t numPadding{0};
+  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
+    ++numPadding;
+    --inputSize;
+  }
+  return numPadding;
+}
 
 // This is a quick and simple iterator implementation for an IOBuf so that the
 // template that uses iterators can work on IOBuf chains. It only implements

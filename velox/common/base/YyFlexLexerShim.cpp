@@ -14,15 +14,9 @@
  * limitations under the License.
  */
 #include <FlexLexer.h>
+#include <folly/lang/Assume.h>
 
 #include "velox/common/base/Exceptions.h"
-
-#ifdef _MSC_VER
-// These methods are unreachable stubs that always throw via VELOX_FAIL. MSVC
-// does not treat VELOX_FAIL as [[noreturn]] in this context and emits C4716
-// ("must return a value"), which is promoted to an error under /WX.
-#pragma warning(disable : 4716)
-#endif
 
 // Provide a dedicated translation unit for yyFlexLexer so the linker has a
 // single, always-linked home for its vtable and typeinfo. Some builds,
@@ -37,6 +31,7 @@ yyFlexLexer::~yyFlexLexer() {}
 
 int yyFlexLexer::yylex() {
   VELOX_FAIL("Bad call to yyFlexLexer::yylex()");
+  folly::assume_unreachable();
 }
 
 void yyFlexLexer::yy_switch_to_buffer(yy_buffer_state*) {
@@ -44,9 +39,11 @@ void yyFlexLexer::yy_switch_to_buffer(yy_buffer_state*) {
 }
 yy_buffer_state* yyFlexLexer::yy_create_buffer(std::istream* s, int size) {
   VELOX_FAIL("Bad call to yyFlexLexer::yy_create_buffer()");
+  folly::assume_unreachable();
 }
 yy_buffer_state* yyFlexLexer::yy_create_buffer(std::istream& s, int size) {
   VELOX_FAIL("Bad call to yyFlexLexer::yy_create_buffer()");
+  folly::assume_unreachable();
 }
 void yyFlexLexer::yy_delete_buffer(yy_buffer_state* b) {
   VELOX_FAIL("Bad call to yyFlexLexer::yy_delete_buffer()");
@@ -71,9 +68,11 @@ void yyFlexLexer::switch_streams(std::istream* new_in, std::ostream* new_out) {
 }
 int yyFlexLexer::yywrap() {
   VELOX_FAIL("Bad call to yyFlexLexer::yywrap()");
+  folly::assume_unreachable();
 }
 int yyFlexLexer::LexerInput(char* buf, int max_size) {
   VELOX_FAIL("Bad call to yyFlexLexer::LexerInput()");
+  folly::assume_unreachable();
 }
 void yyFlexLexer::LexerOutput(const char* buf, int size) {
   VELOX_FAIL("Bad call to yyFlexLexer::LexerOutput()");

@@ -32,6 +32,7 @@ velox_add_library(
   AdmissionController.cpp
   BitUtil.cpp
   BloomFilter.cpp
+  ConcurrentRuntimeStatWriter.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
@@ -53,12 +54,12 @@ velox_add_library(
   ClassName.h
   CoalesceIo.h
   ConcurrentCounter.h
+  ConcurrentRuntimeStatWriter.h
   CountBits.h
   Counters.h
   Crc.h
   Doubles.h
   Fs.h
-  GTestMacros.h
   IOUtils.h
   IndexedPriorityQueue.h
   IoCounter.h
@@ -83,7 +84,6 @@ velox_add_library(
   SuccinctPrinter.h
   TreeOfLosers.h
   XxHashInline.h
-  windows/BuiltinUtil.h
 )
 
 velox_link_libraries(
@@ -130,8 +130,3 @@ velox_add_library(velox_async_source INTERFACE HEADERS AsyncSource.h)
 velox_add_library(velox_lazy_cpu_thread_pool_executor INTERFACE HEADERS LazyCPUThreadPoolExecutor.h)
 
 velox_add_library(velox_exception_helper INTERFACE HEADERS ExceptionHelper.h)
-
-# Add Windows-specific glog defines
-if(WIN32)
-  velox_compile_definitions(velox_status PRIVATE GLOG_USE_GLOG_EXPORT)
-endif()

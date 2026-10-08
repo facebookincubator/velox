@@ -673,7 +673,7 @@ TEST_F(MinMaxTest, failOnUnorderableType) {
   }
 }
 
-TEST_F(MinMaxTest, TimestampWithTimezone) {
+TEST_F(MinMaxTest, timestampWithTimezone) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(
           {pack(-1, 2),

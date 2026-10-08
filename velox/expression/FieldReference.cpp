@@ -65,6 +65,32 @@ const RowVector* loadRowVector(
 
 } // namespace
 
+int32_t FieldReference::resolveAndValidateIndex(
+    const RowType& rowType,
+    bool validateChildType) {
+  if (index_ == -1) {
+    index_ = rowType.getChildIdx(field_);
+  }
+  VELOX_CHECK_GE(index_, 0);
+  const auto index = static_cast<uint32_t>(index_);
+  VELOX_CHECK_LT(index, rowType.size());
+  if (!isOrdinalReference_) {
+    // Name lookup returns the first match, so validate that the cached index
+    // still maps to the referenced field name.
+    VELOX_CHECK_EQ(field_, rowType.nameOf(index));
+  }
+  if (validateChildType) {
+    const auto& childType = rowType.childAt(index);
+    VELOX_CHECK(
+        type_->equivalent(*childType),
+        "Type mismatch for field reference at index {}: expected {}, got {}",
+        index,
+        type_->toString(),
+        childType->toString());
+  }
+  return index_;
+}
+
 void FieldReference::apply(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -115,9 +141,9 @@ void FieldReference::apply(
     }
   }
   if (index_ == -1) {
-    auto rowType = dynamic_cast<const RowType*>(row->type().get());
-    VELOX_CHECK(rowType);
-    index_ = rowType->getChildIdx(field_);
+    auto* rowType = dynamic_cast<const RowType*>(row->type().get());
+    VELOX_CHECK_NOT_NULL(rowType);
+    resolveAndValidateIndex(*rowType, /*validateChildType=*/false);
   }
   VectorPtr child =
       inputs_.empty() ? context.getField(index_) : row->childAt(index_);
@@ -178,12 +204,8 @@ void FieldReference::evalSpecialFormSimplified(
     row = input->as<RowVector>();
     VELOX_CHECK(row);
   }
-  auto index = row->type()->asRow().getChildIdx(field_);
-  if (index_ == -1) {
-    index_ = index;
-  } else {
-    VELOX_CHECK_EQ(index_, index);
-  }
+  const auto index = static_cast<uint32_t>(resolveAndValidateIndex(
+      row->type()->asRow(), /*validateChildType=*/true));
 
   LocalSelectivityVector nonNullRowsHolder(*context.execCtx());
   const SelectivityVector* nonNullRows = &rows;
@@ -197,7 +219,7 @@ void FieldReference::evalSpecialFormSimplified(
     }
   }
 
-  auto& child = row->childAt(index_);
+  auto& child = row->childAt(index);
   context.ensureWritable(rows, type_, result);
   result->copy(child.get(), *nonNullRows, nullptr);
   if (row->mayHaveNulls()) {

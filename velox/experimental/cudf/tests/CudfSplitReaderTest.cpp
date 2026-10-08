@@ -34,7 +34,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
   using CudfSplitReader::CudfSplitReader;
 
   cudf::ast::expression const* logicalFilter() const {
-    return subfieldFilter();
+    return subfieldFilterAst();
   }
 
   cudf::ast::expression const* splitFilter() const {
@@ -47,7 +47,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
  protected:
   void prepareSplitInternal(
-      dwio::common::RuntimeStatistics& /*runtimeStats*/) override {
+      dwio::common::RuntimeStats& /*runtimeStats*/) override {
     fileMetaDatas();
     // Metadata caching must not rebuild the filter during one preparation.
     fileMetaDatas();
@@ -66,19 +66,15 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
 
   auto properties = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
-  ::facebook::velox::connector::ConnectorQueryCtx connectorQueryCtx(
-      pool_.get(),
-      pool_.get(),
-      properties.get(),
-      nullptr,
-      common::PrefixSortConfig{},
-      nullptr,
-      nullptr,
-      "query.CudfSplitReaderTest",
-      "task.CudfSplitReaderTest",
-      "plan.CudfSplitReaderTest",
-      0,
-      "");
+  auto connectorQueryCtx =
+      ::facebook::velox::connector::ConnectorQueryCtx::Builder()
+          .operatorPool(pool_.get())
+          .connectorPool(pool_.get())
+          .sessionProperties(properties.get())
+          .queryId("query.CudfSplitReaderTest")
+          .taskId("task.CudfSplitReaderTest")
+          .planNodeId("plan.CudfSplitReaderTest")
+          .build();
   FileHandleFactory fileHandleFactory(
       std::make_unique<FileHandleCache>(1000),
       std::make_unique<FileHandleGenerator>());
@@ -99,11 +95,10 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
       {"c0"},
       &fileHandleFactory,
       ioExecutor_.get(),
-      &connectorQueryCtx,
+      connectorQueryCtx.get(),
       std::make_shared<CudfHiveConfig>(properties),
       std::make_shared<io::IoStatistics>(),
       std::make_shared<IoStats>(),
-      false,
       &logicalFilter);
 
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
@@ -125,7 +120,7 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  dwio::common::RuntimeStatistics runtimeStats;
+  dwio::common::RuntimeStats runtimeStats;
   reader.prepareSplit(runtimeStats);
   EXPECT_EQ(builderCalls, 1);
   ASSERT_EQ(schemaSizes.size(), 1);

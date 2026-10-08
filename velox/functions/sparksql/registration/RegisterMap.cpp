@@ -16,16 +16,14 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner = {});
 
 void registerSparkMapFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_allow_duplicates, prefix + "map_from_arrays");
   registerMapFromEntriesFunction(
       prefix + "map_from_entries", /*throwForNull=*/false);
   // Spark and Presto share map_filter and transform_values: the lambda
@@ -45,9 +43,10 @@ namespace sparksql {
 void registerMapFunctions(const std::string& prefix) {
   registerSparkMapFunctions(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_from_arrays, prefix + "map_from_arrays");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
-  registerSize(prefix + "size");
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

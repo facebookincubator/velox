@@ -107,7 +107,7 @@ TEST_F(StringWriterTest, copyFromCString) {
   ASSERT_EQ(vector->valueAt(0), "1 2 3 4 5 "_sv);
 }
 
-TEST_F(StringWriterTest, CheckSizeLimit) {
+TEST_F(StringWriterTest, checkSizeLimit) {
   auto vector = makeFlatVector<StringView>(4);
   auto writer = exec::StringWriter(vector.get(), 0);
 

@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <limits>
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/Compression.h"
@@ -713,9 +712,6 @@ class WriterContext : public CompressionBufferPool {
   friend class StringColumnWriterDirectEncodingIndexTest;
   // TODO: remove once writer code is consolidated
   friend class WriterEncodingIndexTest2;
-
-  VELOX_FRIEND_TEST(WriterContextTest, GetIntDictionaryEncoder);
-  VELOX_FRIEND_TEST(WriterContextTest, RemoveIntDictionaryEncoderForNode);
 };
 
 } // namespace facebook::velox::dwrf

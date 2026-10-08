@@ -20,182 +20,284 @@
 
 namespace facebook::velox::functions {
 
-extern void registerMathematicalFunctions(const std::string& prefix);
-extern void registerMathematicalOperators(const std::string& prefix);
-extern void registerProbabilityTrigonometryFunctions(const std::string& prefix);
-extern void registerArrayFunctions(const std::string& prefix);
-extern void registerBitwiseFunctions(const std::string& prefix);
-extern void registerCheckedArithmeticFunctions(const std::string& prefix);
-extern void registerComparisonFunctions(const std::string& prefix);
-extern void registerDateTimeFunctions(const std::string& prefix);
-extern void registerGeneralFunctions(const std::string& prefix);
-extern void registerHyperLogFunctions(const std::string& prefix);
-extern void registerKHyperLogLogFunctions(const std::string& prefix);
-extern void registerTDigestFunctions(const std::string& prefix);
-extern void registerQDigestFunctions(const std::string& prefix);
-extern void registerSetDigestFunctions(const std::string& prefix);
-extern void registerSfmSketchFunctions(const std::string& prefix);
-extern void registerEnumFunctions(const std::string& prefix);
-extern void registerIntegerFunctions(const std::string& prefix);
-extern void registerFloatingPointFunctions(const std::string& prefix);
-extern void registerJsonFunctions(const std::string& prefix);
-extern void registerMapFunctions(const std::string& prefix);
-extern void registerStringFunctions(const std::string& prefix);
-extern void registerBinaryFunctions(const std::string& prefix);
-extern void registerURLFunctions(const std::string& prefix);
-extern void registerDataSizeFunctions(const std::string& prefix);
+extern void registerMathematicalFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerMathematicalOperators(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerProbabilityTrigonometryFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerArrayFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerBitwiseFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerCheckedArithmeticFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerComparisonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerDateTimeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerGeneralFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerHyperLogFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerKHyperLogLogFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerTDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerQDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerSetDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerSfmSketchFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerEnumFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerIntegerFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerFloatingPointFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerJsonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerMapFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerStringFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerBinaryFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerURLFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerDataSizeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
 extern void registerMapAllowingDuplicates(
     const std::string& name,
-    const std::string& prefix);
-extern void registerBingTileFunctions(const std::string& prefix);
+    const std::string& prefix,
+    std::string_view defaultOwner);
+extern void registerBingTileFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
 #ifdef VELOX_ENABLE_GEO
-extern void registerGeometryFunctions(const std::string& prefix);
+extern void registerGeometryFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
 extern void registerSphericalGeographyFunctions();
 #endif
 #ifdef VELOX_ENABLE_GEO
-extern void registerS2Functions(const std::string& prefix);
+extern void registerS2Functions(
+    const std::string& prefix,
+    std::string_view defaultOwner);
 #endif
-extern void registerInternalArrayFunctions();
+extern void registerInternalArrayFunctions(std::string_view defaultOwner);
 
 namespace prestosql {
-void registerArithmeticFunctions(const std::string& prefix) {
-  functions::registerMathematicalOperators(prefix);
-  functions::registerMathematicalFunctions(prefix);
-  functions::registerProbabilityTrigonometryFunctions(prefix);
+void registerArithmeticFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerMathematicalOperators(prefix, defaultOwner);
+  functions::registerMathematicalFunctions(prefix, defaultOwner);
+  functions::registerProbabilityTrigonometryFunctions(prefix, defaultOwner);
 }
 
-void registerCheckedArithmeticFunctions(const std::string& prefix) {
-  functions::registerCheckedArithmeticFunctions(prefix);
+void registerCheckedArithmeticFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerCheckedArithmeticFunctions(prefix, defaultOwner);
 }
 
-void registerComparisonFunctions(const std::string& prefix) {
-  functions::registerComparisonFunctions(prefix);
+void registerComparisonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerComparisonFunctions(prefix, defaultOwner);
 }
 
-void registerArrayFunctions(const std::string& prefix) {
-  functions::registerArrayFunctions(prefix);
+void registerArrayFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerArrayFunctions(prefix, defaultOwner);
 }
 
-void registerMapFunctions(const std::string& prefix) {
-  functions::registerMapFunctions(prefix);
+void registerMapFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerMapFunctions(prefix, defaultOwner);
 }
 
-void registerJsonFunctions(const std::string& prefix) {
-  functions::registerJsonFunctions(prefix);
+void registerJsonFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerJsonFunctions(prefix, defaultOwner);
 }
 
-void registerHyperLogFunctions(const std::string& prefix) {
-  functions::registerHyperLogFunctions(prefix);
+void registerHyperLogFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerHyperLogFunctions(prefix, defaultOwner);
 }
 
-void registerTDigestFunctions(const std::string& prefix) {
-  functions::registerTDigestFunctions(prefix);
+void registerTDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerTDigestFunctions(prefix, defaultOwner);
 }
 
-void registerQDigestFunctions(const std::string& prefix) {
-  functions::registerQDigestFunctions(prefix);
+void registerQDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerQDigestFunctions(prefix, defaultOwner);
 }
 
-void registerSfmSketchFunctions(const std::string& prefix) {
-  functions::registerSfmSketchFunctions(prefix);
+void registerSfmSketchFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerSfmSketchFunctions(prefix, defaultOwner);
 }
 
-void registerEnumFunctions(const std::string& prefix) {
-  functions::registerEnumFunctions(prefix);
+void registerEnumFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerEnumFunctions(prefix, defaultOwner);
 }
 
-void registerIntegerFunctions(const std::string& prefix) {
-  functions::registerIntegerFunctions(prefix);
+void registerIntegerFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerIntegerFunctions(prefix, defaultOwner);
 }
 
-void registerFloatingPointFunctions(const std::string& prefix) {
-  functions::registerFloatingPointFunctions(prefix);
+void registerFloatingPointFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerFloatingPointFunctions(prefix, defaultOwner);
 }
 
-void registerBingTileFunctions(const std::string& prefix) {
-  functions::registerBingTileFunctions(prefix);
+void registerBingTileFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerBingTileFunctions(prefix, defaultOwner);
 }
 
 #ifdef VELOX_ENABLE_GEO
-void registerGeometryFunctions(const std::string& prefix) {
-  functions::registerGeometryFunctions(prefix);
+void registerGeometryFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerGeometryFunctions(prefix, defaultOwner);
 }
 
 void registerSphericalGeographyFunctions() {
   functions::registerSphericalGeographyFunctions();
 }
 
-void registerS2Functions(const std::string& prefix) {
-  functions::registerS2Functions(prefix);
+void registerS2Functions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerS2Functions(prefix, defaultOwner);
 }
 #endif
 
-void registerGeneralFunctions(const std::string& prefix) {
-  functions::registerGeneralFunctions(prefix);
+void registerGeneralFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerGeneralFunctions(prefix, defaultOwner);
 }
 
-void registerDateTimeFunctions(const std::string& prefix) {
-  functions::registerDateTimeFunctions(prefix);
+void registerDateTimeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerDateTimeFunctions(prefix, defaultOwner);
 }
 
-void registerURLFunctions(const std::string& prefix) {
-  functions::registerURLFunctions(prefix);
+void registerURLFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerURLFunctions(prefix, defaultOwner);
 }
 
-void registerStringFunctions(const std::string& prefix) {
-  functions::registerStringFunctions(prefix);
+void registerStringFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerStringFunctions(prefix, defaultOwner);
 }
 
-void registerBinaryFunctions(const std::string& prefix) {
-  functions::registerBinaryFunctions(prefix);
+void registerBinaryFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerBinaryFunctions(prefix, defaultOwner);
 }
 
-void registerBitwiseFunctions(const std::string& prefix) {
-  functions::registerBitwiseFunctions(prefix);
+void registerBitwiseFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerBitwiseFunctions(prefix, defaultOwner);
 }
 
-void registerAllScalarFunctions(const std::string& prefix) {
+void registerAllScalarFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerP4HyperLogLogType();
-  registerArithmeticFunctions(prefix);
-  registerCheckedArithmeticFunctions(prefix);
-  registerComparisonFunctions(prefix);
-  registerMapFunctions(prefix);
-  registerArrayFunctions(prefix);
-  registerJsonFunctions(prefix);
-  registerHyperLogFunctions(prefix);
-  registerKHyperLogLogFunctions(prefix);
-  registerTDigestFunctions(prefix);
-  registerQDigestFunctions(prefix);
-  registerSfmSketchFunctions(prefix);
-  registerSetDigestFunctions(prefix);
-  registerEnumFunctions(prefix);
-  registerIntegerFunctions(prefix);
-  registerFloatingPointFunctions(prefix);
-  registerBingTileFunctions(prefix);
+  registerArithmeticFunctions(prefix, defaultOwner);
+  registerCheckedArithmeticFunctions(prefix, defaultOwner);
+  registerComparisonFunctions(prefix, defaultOwner);
+  registerMapFunctions(prefix, defaultOwner);
+  registerArrayFunctions(prefix, defaultOwner);
+  registerJsonFunctions(prefix, defaultOwner);
+  registerHyperLogFunctions(prefix, defaultOwner);
+  registerKHyperLogLogFunctions(prefix, defaultOwner);
+  registerTDigestFunctions(prefix, defaultOwner);
+  registerQDigestFunctions(prefix, defaultOwner);
+  registerSfmSketchFunctions(prefix, defaultOwner);
+  registerSetDigestFunctions(prefix, defaultOwner);
+  registerEnumFunctions(prefix, defaultOwner);
+  registerIntegerFunctions(prefix, defaultOwner);
+  registerFloatingPointFunctions(prefix, defaultOwner);
+  registerBingTileFunctions(prefix, defaultOwner);
 #ifdef VELOX_ENABLE_GEO
-  registerGeometryFunctions(prefix);
+  registerGeometryFunctions(prefix, defaultOwner);
   registerSphericalGeographyFunctions();
-  registerS2Functions(prefix);
+  registerS2Functions(prefix, defaultOwner);
 #endif
-  registerGeneralFunctions(prefix);
-  registerDateTimeFunctions(prefix);
-  registerURLFunctions(prefix);
-  registerStringFunctions(prefix);
-  registerBinaryFunctions(prefix);
-  registerBitwiseFunctions(prefix);
-  registerUuidFunctions(prefix);
-  registerIPAddressFunctions(prefix);
-  registerDataSizeFunctions(prefix);
+  registerGeneralFunctions(prefix, defaultOwner);
+  registerDateTimeFunctions(prefix, defaultOwner);
+  registerURLFunctions(prefix, defaultOwner);
+  registerStringFunctions(prefix, defaultOwner);
+  registerBinaryFunctions(prefix, defaultOwner);
+  registerBitwiseFunctions(prefix, defaultOwner);
+  registerUuidFunctions(prefix, defaultOwner);
+  registerIPAddressFunctions(prefix, defaultOwner);
+  registerDataSizeFunctions(prefix, defaultOwner);
 }
 
 void registerMapAllowingDuplicates(
     const std::string& name,
-    const std::string& prefix) {
-  functions::registerMapAllowingDuplicates(name, prefix);
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  functions::registerMapAllowingDuplicates(name, prefix, defaultOwner);
 }
 
-void registerInternalFunctions() {
-  functions::registerInternalArrayFunctions();
+void registerInternalFunctions(std::string_view defaultOwner) {
+  functions::registerInternalArrayFunctions(defaultOwner);
 }
 } // namespace prestosql
 

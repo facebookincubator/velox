@@ -20,24 +20,13 @@
 
 #include <folly/CPortability.h>
 
-// Provide __builtin_popcount* on MSVC (not compiler builtins)
-#if defined(_MSC_VER)
-#include <folly/portability/Builtins.h>
-#endif
-
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <span>
 #include <string>
-
-#ifndef _MSC_VER
-namespace facebook::velox {
-using int128_t = __int128_t;
-using uint128_t = __uint128_t;
-}
-#endif
 
 #ifdef __BMI2__
 #include <x86intrin.h>
@@ -162,7 +151,7 @@ constexpr inline uint64_t nwords(uint64_t bits) {
 }
 
 inline int32_t getAndClearLastSetBit(uint16_t& bits) {
-  int32_t trailingZeros = __builtin_ctz(bits);
+  int32_t trailingZeros = std::countr_zero(bits);
   // erase last non-zero bit
   bits &= bits - 1;
   return trailingZeros;
@@ -297,7 +286,7 @@ void forBatches(
     uint64_t active = bits[index] & mask;
     int32_t first = 0;
     while (active) {
-      int32_t skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+      int32_t skip = (std::countr_zero(active) / kWidth) * kWidth;
       active >>= skip;
       first += skip;
       auto selected = active & unitMask;
@@ -373,11 +362,9 @@ inline int32_t countBits(const uint64_t* bits, int32_t begin, int32_t end) {
       begin,
       end,
       [&count, bits](int32_t idx, uint64_t mask) {
-        count += __builtin_popcountll(bits[idx] & mask);
+        count += std::popcount(bits[idx] & mask);
       },
-      [&count, bits](int32_t idx) {
-        count += __builtin_popcountll(bits[idx]);
-      });
+      [&count, bits](int32_t idx) { count += std::popcount(bits[idx]); });
   return count;
 }
 
@@ -420,7 +407,7 @@ inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
       [bits, &found](int32_t idx, uint64_t mask) {
         uint64_t word = bits[idx] & mask;
         if (word) {
-          found = idx * 64 + __builtin_ctzll(word);
+          found = idx * 64 + std::countr_zero(word);
           return false;
         }
         return true;
@@ -428,7 +415,7 @@ inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
       [bits, &found](int32_t idx) {
         uint64_t word = bits[idx];
         if (word) {
-          found = idx * 64 + __builtin_ctzll(word);
+          found = idx * 64 + std::countr_zero(word);
           return false;
         }
         return true;
@@ -462,7 +449,7 @@ void forEachBit(
           return;
         }
         while (word) {
-          func(idx * 64 + __builtin_ctzll(word));
+          func(idx * 64 + std::countr_zero(word));
           word &= word - 1;
         }
       },
@@ -476,44 +463,7 @@ void forEachBit(
           }
         } else {
           while (word) {
-            func(idx * 64 + __builtin_ctzll(word));
-            word &= word - 1;
-          }
-        }
-      });
-}
-
-template <typename Callable, typename CallableBatch64>
-void forEachBit(
-    const uint64_t* bits,
-    int32_t begin,
-    int32_t end,
-    bool isSet,
-    Callable func,
-    CallableBatch64 batchFunc) {
-  static constexpr uint64_t kAllSet = -1ULL;
-  forEachWord(
-      begin,
-      end,
-      [isSet, bits, func](int32_t idx, uint64_t mask) {
-        auto word = (isSet ? bits[idx] : ~bits[idx]) & mask;
-        if (!word) {
-          return;
-        }
-        while (word) {
-          func(idx * 64 + __builtin_ctzll(word));
-          word &= word - 1;
-        }
-      },
-      [isSet, bits, func, batchFunc](int32_t idx) {
-        auto word = (isSet ? bits[idx] : ~bits[idx]);
-        if (kAllSet == word) {
-          const size_t start = idx * 64;
-          const size_t end = (idx + 1) * 64;
-          batchFunc(start, end);
-        } else {
-          while (word) {
-            func(idx * 64 + __builtin_ctzll(word));
+            func(idx * 64 + std::countr_zero(word));
             word &= word - 1;
           }
         }
@@ -525,16 +475,6 @@ template <typename Callable>
 inline void
 forEachSetBit(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
   forEachBit(bits, begin, end, true, func);
-}
-
-template <typename Callable, typename CallableBatch64>
-inline void forEachSetBit(
-    const uint64_t* bits,
-    int32_t begin,
-    int32_t end,
-    Callable func,
-    CallableBatch64 batchFunc) {
-  forEachBit(bits, begin, end, true, func, batchFunc);
 }
 
 /// Invokes a function for each unset bit.
@@ -574,7 +514,7 @@ bool testBits(
           return true;
         }
         while (word) {
-          if (!func(idx * 64 + __builtin_ctzll(word))) {
+          if (!func(idx * 64 + std::countr_zero(word))) {
             return false;
           }
           word &= word - 1;
@@ -587,7 +527,7 @@ bool testBits(
           return true;
         }
         while (word) {
-          if (!func(idx * 64 + __builtin_ctzll(word))) {
+          if (!func(idx * 64 + std::countr_zero(word))) {
             return false;
           }
           word &= word - 1;
@@ -622,7 +562,7 @@ inline int32_t findLastBit(
       [bits, &found, value](int32_t idx, uint64_t mask) {
         uint64_t word = (value ? bits[idx] : ~bits[idx]) & mask;
         if (word) {
-          found = idx * 64 + 63 - __builtin_clzll(word);
+          found = idx * 64 + static_cast<int32_t>(std::bit_width(word)) - 1;
           return false;
         }
         return true;
@@ -630,7 +570,7 @@ inline int32_t findLastBit(
       [bits, &found, value](int32_t idx) {
         uint64_t word = value ? bits[idx] : ~bits[idx];
         if (word) {
-          found = idx * 64 + 63 - __builtin_clzll(word);
+          found = idx * 64 + static_cast<int32_t>(std::bit_width(word)) - 1;
           return false;
         }
         return true;
@@ -795,36 +735,19 @@ inline int32_t countLeadingZeros(T word) {
 #ifdef _MSC_VER
   static_assert(std::is_same_v<T, uint64_t>);
 #else
-  static_assert(
-      std::is_same_v<T, uint64_t> ||
-      std::is_same_v<T, facebook::velox::uint128_t>);
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
 #endif
-  /// Built-in Function: int __builtin_clz (unsigned int x) returns the number
-  /// of leading 0-bits in x, starting at the most significant bit position. If
-  /// x is 0, the result is undefined.
-  if (word == 0) {
-    return sizeof(T) * 8;
-  }
-  if constexpr (std::is_same_v<T, uint64_t>) {
-    return __builtin_clzll(word);
-  } else {
-    uint64_t hi = static_cast<uint64_t>(word >> 64);
-    uint64_t lo = static_cast<uint64_t>(word);
-    return (hi == 0) ? 64 + __builtin_clzll(lo) : __builtin_clzll(hi);
-  }
+  return std::countl_zero(word);
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
-  if (size == 0) {
+  // std::bit_ceil is undefined behavior for 0 or for inputs whose result
+  // would not fit in uint64_t (size > 2^63); return 0 for both, matching
+  // this function's historical behavior.
+  if (size == 0 || size > (uint64_t{1} << 63)) {
     return 0;
   }
-  uint32_t bits = 63 - countLeadingZeros(size);
-  uint64_t lower = 1ULL << bits;
-  // Size is a power of 2.
-  if (lower == size) {
-    return size;
-  }
-  return 2 * lower;
+  return std::bit_ceil(size);
 }
 
 constexpr bool isPowerOfTwo(uint64_t size) {
@@ -891,7 +814,7 @@ inline T loadBits(const uint64_t* source, uint64_t bitOffset, uint8_t numBits) {
     return word >> bit;
   }
   uint8_t lastByte = reinterpret_cast<const uint8_t*>(address)[sizeof(T)];
-  T lastBits = static_cast<T>(lastByte) << (kBitSize - bit);
+  uint64_t lastBits = static_cast<T>(lastByte) << (kBitSize - bit);
   return (word >> bit) | lastBits;
 }
 
@@ -906,7 +829,8 @@ storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
   constexpr int32_t kBitSize = 8 * sizeof(T);
   auto rawAddress = reinterpret_cast<char*>(target) + (offset / 8);
   auto bitOffset = offset & 7;
-  uint64_t mask = (numBits == 64 ? ~0ULL : ((1ULL << numBits) - 1)) << bitOffset;
+  uint64_t mask = (numBits == 64 ? ~0ULL : ((1ULL << numBits) - 1))
+      << bitOffset;
   T current;
   std::memcpy(&current, rawAddress, sizeof(T));
   current = (current & ~mask) | (mask & (word << bitOffset));
@@ -1049,10 +973,9 @@ inline void padToAlignment(
   }
 }
 
+#ifndef _MSC_VER
 /// Returns value with the order of the bytes reversed; for example, 0xaabb
 /// becomes 0xbbaa. Byte here always means exactly 8 bits.
-
-#ifndef _MSC_VER
 inline __int128_t builtin_bswap128(__int128_t value) {
 #if defined __has_builtin
 #if __has_builtin(__builtin_bswap128)
@@ -1092,7 +1015,7 @@ void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
 /// Returns the number of bits required to store the value.
 /// For a value of 0, returns 1.
 inline int bitsRequired(uint64_t value) noexcept {
-  return 64 - __builtin_clzll(value | 1);
+  return static_cast<int>(std::bit_width(value | 1));
 }
 
 /// Packs bools into bitmap. bitmap must point to a region large enough.

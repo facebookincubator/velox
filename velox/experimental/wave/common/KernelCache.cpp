@@ -65,6 +65,14 @@ class FutureCompiledModule : public CompiledModule {
     return module_->info(kernelIdx);
   }
 
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override {
+    ensureReady();
+    return module_->occupancy(kernelIdx, numThreads, dynamicSharedBytes);
+  }
+
  private:
   void ensureReady() {
     std::lock_guard<std::mutex> l(mutex_);
@@ -110,6 +118,13 @@ class AsyncCompiledKernel : public CompiledKernel {
 
   KernelInfo info(int32_t kernelIdx) override {
     return (*ptr_)->info(kernelIdx);
+  }
+
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override {
+    return (*ptr_)->occupancy(kernelIdx, numThreads, dynamicSharedBytes);
   }
 
  private:

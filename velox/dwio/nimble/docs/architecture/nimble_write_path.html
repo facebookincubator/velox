@@ -1,0 +1,1456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nimble Write Path: Velox → Nimble → File</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: #f8f8f5;
+    color: #333;
+    padding: 40px;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #888; margin-bottom: 36px; font-size: 15px; }
+  h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; padding-bottom: 6px; border-bottom: 2px solid #ddd; }
+  code { background: #e8e8e0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+
+  .legend {
+    display: flex; gap: 24px; margin-bottom: 32px; padding: 10px 16px;
+    background: #fff; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 14px; height: 14px; border-radius: 3px; border: 2px solid; }
+
+  .bg-blue { background: #dbeafe; border-color: #93c5fd; }
+  .bg-green { background: #dcfce7; border-color: #86efac; }
+  .bg-orange { background: #fef3c7; border-color: #fcd34d; }
+  .bg-purple { background: #ede9fe; border-color: #c4b5fd; }
+  .bg-rose { background: #ffe4e6; border-color: #fda4af; }
+  .bg-teal { background: #ccfbf1; border-color: #5eead4; }
+  .bg-slate { background: #e2e8f0; border-color: #94a3b8; }
+  .col-blue { color: #2563eb; }
+  .col-green { color: #16a34a; }
+  .col-orange { color: #d97706; }
+  .col-purple { color: #7c3aed; }
+  .col-rose { color: #e11d48; }
+  .col-teal { color: #0d9488; }
+  .col-slate { color: #475569; }
+
+
+  .section { margin-bottom: 48px; }
+  .layer-label {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 10px; border-radius: 4px; display: inline-block; margin-bottom: 4px;
+  }
+  .layer-desc { font-size: 12px; color: #888; margin-bottom: 10px; }
+
+  .arrow-down { text-align: center; color: #aaa; font-size: 22px; line-height: 1; margin: 8px 0 4px; }
+  .arrow-label { font-size: 11px; color: #999; text-align: center; margin-bottom: 8px; }
+
+  .callout {
+    background: #fff; border: 1px solid #ddd; border-left: 4px solid #2563eb;
+    border-radius: 6px; padding: 14px 18px; margin-top: 12px; font-size: 14px;
+  }
+  .callout strong { color: #1e40af; }
+  .callout ul { margin: 6px 0 0 20px; }
+  .callout li { margin-bottom: 3px; }
+
+  .not-stream {
+    background: #fef2f2; border: 2px dashed #fca5a5; border-radius: 6px;
+    padding: 8px 12px; font-size: 12px; color: #991b1b; margin-top: 6px; font-weight: 600;
+  }
+
+  .enc-tree {
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    font-size: 12px; line-height: 1.7; color: #5b21b6;
+    background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 6px;
+    padding: 10px 14px;
+  }
+  .enc-tree .enc-label { font-weight: 700; color: #7c3aed; }
+  .enc-tree .enc-dim { color: #a78bfa; }
+  .enc-tree .enc-leaf { color: #6d28d9; font-weight: 600; }
+
+  .sbox {
+    border: 2px solid #86efac; border-radius: 5px; padding: 4px 8px;
+    background: #dcfce7; text-align: center; min-width: 90px;
+  }
+  .sbox .sid { font-weight: 700; color: #16a34a; font-size: 12px; }
+  .sbox .stype { font-size: 10px; color: #888; }
+  .sbox .srow { font-size: 10px; color: #d97706; }
+
+  .cbox {
+    border: 2px solid #fcd34d; border-radius: 4px; padding: 3px 8px;
+    background: #fef3c7; font-size: 10px; font-weight: 600; color: #92400e;
+    height: 22px; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<h1>Nimble Write Path: Velox → Nimble → File</h1>
+<p class="subtitle">End-to-end write path from Velox HiveDataSink to Nimble physical file output.</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot bg-blue"></div> <strong class="col-blue">Column</strong> — schema node</div>
+  <div class="legend-item"><div class="legend-dot bg-green"></div> <strong class="col-green">Stream</strong> — one StreamData object (data+nulls bundled)</div>
+  <div class="legend-item"><div class="legend-dot bg-orange"></div> <strong class="col-orange">Chunk</strong> — ~20MB partition of one stream</div>
+  <div class="legend-item"><div class="legend-dot bg-purple"></div> <strong class="col-purple">Encoding</strong> — recursive tree inside one chunk</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 0: Write Path Flowchart -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>0. Write Path — Velox → Nimble File</h2>
+
+  <!-- Top part: in-memory only, no file writes -->
+  <div style="max-width: 480px;">
+
+    <!-- HiveDataSink -->
+    <div style="border-left: 4px solid #e11d48; padding-left: 12px; margin-bottom: 2px;">
+      <div style="font-size: 11px; font-weight: 700; color: #e11d48; letter-spacing: 0.05em;">HIVE CONNECTOR</div>
+    </div>
+    <div style="background: #fff; border: 2px solid #fda4af; border-radius: 6px; padding: 10px 16px; text-align: center;">
+      <div style="font-weight: 700; font-size: 14px; color: #1e293b;">HiveDataSink::appendData(RowVectorPtr)</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <div style="background: #fff; border: 2px solid #fda4af; border-radius: 6px; padding: 8px 16px; text-align: center;">
+      <div style="font-weight: 600; font-size: 13px; color: #1e293b;">FileDataSink::write(index, input)</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <div style="text-align: center; padding: 2px 0;">
+      <span style="font-size: 10px; color: #94a3b8; background: #f1f5f9; padding: 2px 8px; border-radius: 3px;">writers_[index]→write(dataInput)</span>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <!-- NimbleWriterAdapter -->
+    <div style="border-left: 4px solid #0d9488; padding-left: 12px; margin-bottom: 2px;">
+      <div style="font-size: 11px; font-weight: 700; color: #0d9488; letter-spacing: 0.05em;">NIMBLE ADAPTER</div>
+    </div>
+    <div style="background: #fff; border: 2px solid #5eead4; border-radius: 6px; padding: 8px 16px; text-align: center;">
+      <div style="font-weight: 600; font-size: 13px; color: #1e293b;">NimbleWriterAdapter::write(VectorPtr)</div>
+      <div style="font-size: 10px; color: #999; font-family: monospace;">fb_velox/dwio/nimble/writer/NimbleWriter.cpp</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <div style="text-align: center; padding: 2px 0;">
+      <span style="font-size: 10px; color: #94a3b8; background: #f1f5f9; padding: 2px 8px; border-radius: 3px;">writer_.write(data)</span>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <!-- Writer -->
+    <div style="border-left: 4px solid #2563eb; padding-left: 12px; margin-bottom: 2px;">
+      <div style="font-size: 11px; font-weight: 700; color: #2563eb; letter-spacing: 0.05em;">VELOX WRITER</div>
+    </div>
+    <div style="background: #fff; border: 2px solid #93c5fd; border-radius: 6px; padding: 10px 16px; text-align: center;">
+      <div style="font-weight: 700; font-size: 14px; color: #1e293b;">Nimble::Writer::write(VectorPtr)</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <!-- FieldWriter -->
+    <div style="background: #fff; border: 2px solid #86efac; border-radius: 6px; padding: 8px 16px; text-align: center;">
+      <div style="font-weight: 600; font-size: 13px; color: #1e293b;">rootWriter_→write(input, OrderedRanges)</div>
+      <div style="font-size: 10px; color: #16a34a;">FieldWriter tree: Velox vectors → StreamData buffers</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <div style="background: #fff; border: 2px solid #93c5fd; border-radius: 6px; padding: 8px 16px; text-align: center;">
+      <div style="font-weight: 600; font-size: 13px; color: #1e293b;">addIndexKey(input)</div>
+      <div style="font-size: 10px; color: #999;">cluster / hash / sorted index writers</div>
+    </div>
+
+    <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+
+    <!-- evaluateFlushPolicy -->
+    <div style="background: #fffbeb; border: 2px solid #fcd34d; border-radius: 6px; padding: 10px 16px; text-align: center;">
+      <div style="font-weight: 700; font-size: 14px; color: #92400e;">evaluateFlushPolicy()</div>
+      <div style="font-size: 10px; color: #999;">default: StripeRawSizeFlushPolicy @ 256MB</div>
+    </div>
+  </div>
+
+  <!-- Bottom part: flush to file — flowchart + file layout side by side -->
+  <div style="display: flex; gap: 48px; align-items: flex-start; margin-top: 0;">
+
+    <!-- LEFT: fork branches -->
+    <div style="flex: 0 0 480px;">
+
+      <!-- Fork: chunk vs flush -->
+      <div style="display: flex; justify-content: center; gap: 0; padding: 0;">
+        <div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">┌──────────────────</div>
+        <div style="color: #ccc; font-size: 14px;">┴</div>
+        <div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">──────────────────┐</div>
+      </div>
+
+      <div style="display: flex; gap: 12px;">
+        <!-- Left branch: chunking (encode only) -->
+        <div style="flex: 1;">
+          <div style="text-align: center; font-size: 10px; color: #d97706; font-weight: 600; margin-bottom: 4px;">shouldChunk() = true</div>
+          <div style="background: #fff; border: 2px solid #fcd34d; border-radius: 6px; padding: 6px 10px; text-align: center; margin-bottom: 4px;">
+            <div style="font-weight: 600; font-size: 12px; color: #1e293b;">flushChunks()</div>
+            <div style="font-size: 10px; color: #999;">soft → hard chunking</div>
+          </div>
+          <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+          <div style="border-left: 4px solid #7c3aed; padding-left: 8px; margin-bottom: 2px;">
+            <div style="font-size: 10px; font-weight: 700; color: #7c3aed; letter-spacing: 0.05em;">ENCODING</div>
+          </div>
+          <div style="background: #fff; border: 2px solid #c4b5fd; border-radius: 6px; padding: 6px 10px; text-align: center; margin-bottom: 4px;">
+            <div style="font-weight: 600; font-size: 12px; color: #1e293b;">writeStreams() / writeChunks(lastChunk)</div>
+          </div>
+          <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+          <div style="background: #fff; border: 2px solid #c4b5fd; border-radius: 6px; padding: 6px 10px; text-align: center;">
+            <div style="font-weight: 600; font-size: 11px; color: #1e293b;">encodeStreamData()</div>
+            <div style="font-size: 10px; color: #7c3aed;">EncodingSelectionPolicy → EncodingFactory::encode()</div>
+          </div>
+          <div style="text-align: center; font-size: 10px; color: #999; margin-top: 6px; font-style: italic;">no disk write</div>
+        </div>
+
+        <!-- Right branch: writeStripe (encode + tablet) -->
+        <div style="flex: 1;">
+          <div style="text-align: center; font-size: 10px; color: #d97706; font-weight: 600; margin-bottom: 4px;">shouldFlush() = true</div>
+          <div style="background: #fff; border: 2px solid #fcd34d; border-radius: 6px; padding: 6px 10px; text-align: center; margin-bottom: 4px;">
+            <div style="font-weight: 600; font-size: 12px; color: #1e293b;">writeStripe()</div>
+          </div>
+          <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+          <div style="text-align: left; padding-left: 0; color: #c4b5fd; font-size: 13px;">←────── same encoding</div>
+          <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+          <div style="border-left: 4px solid #475569; padding-left: 8px; margin-bottom: 2px;">
+            <div style="font-size: 10px; font-weight: 700; color: #475569; letter-spacing: 0.05em;">TABLET WRITER</div>
+          </div>
+          <div style="background: #fff; border: 2px solid #94a3b8; border-radius: 6px; padding: 6px 10px; text-align: center; margin-bottom: 4px;">
+            <div style="font-weight: 600; font-size: 12px; color: #1e293b;">TabletWriter::writeStripe(rowCount, streams)</div>
+          </div>
+          <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+          <div style="background: #fff; border: 2px solid #94a3b8; border-radius: 6px; padding: 6px 10px; text-align: center;">
+            <div style="font-weight: 700; font-size: 12px; color: #1e293b;">TabletWriter::close()</div>
+            <div style="font-size: 10px; color: #999;">Footer → Postscript → Magic</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT: File Layout with arrows -->
+    <div style="flex: 0 0 200px; padding-top: 6px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; text-align: center; margin-bottom: 6px; letter-spacing: 0.05em;">FILE LAYOUT</div>
+
+      <!-- writeStripe() writes stripes -->
+      <div style="display: flex; align-items: center; gap: 0; margin-bottom: 0;">
+        <div style="flex: 0 0 50px; text-align: right; font-size: 10px; color: #475569; padding-right: 4px;">
+          writeStripe<br>──→
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 0; font-family: monospace; font-size: 11px; text-align: center; border: 2px solid #94a3b8; border-radius: 6px 6px 0 0; overflow: hidden;">
+          <div style="background: #e0f2fe; padding: 2px 8px; font-size: 9px; font-weight: 700; color: #0369a1; border-bottom: 1px solid #7dd3fc;">StripeGroup 0</div>
+          <div style="padding: 10px 8px; background: #fff; border-bottom: 1px solid #ddd; font-weight: 600;">Stripe 0</div>
+          <div style="padding: 10px 8px; background: #fff; border-bottom: 2px solid #7dd3fc; font-weight: 600;">Stripe 1</div>
+          <div style="background: #e0f2fe; padding: 2px 8px; font-size: 9px; font-weight: 700; color: #0369a1; border-bottom: 1px solid #7dd3fc;">StripeGroup 1</div>
+          <div style="padding: 10px 8px; background: #fff; border-bottom: 1px solid #ddd; font-weight: 600;">Stripe 2</div>
+          <div style="padding: 10px 8px; background: #fff; font-weight: 600;">Stripe 3</div>
+        </div>
+      </div>
+
+      <!-- close() writes metadata -->
+      <div style="display: flex; align-items: center; gap: 0;">
+        <div style="flex: 0 0 50px; text-align: right; font-size: 10px; color: #475569; padding-right: 4px;">
+          close()<br>──→
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 0; font-family: monospace; font-size: 11px; text-align: center; border: 2px solid #94a3b8; border-top: 0; border-radius: 0 0 6px 6px; overflow: hidden;">
+          <div style="padding: 5px 8px; background: #e0f2fe; border-top: 2px solid #94a3b8; border-bottom: 1px solid #94a3b8; font-weight: 600; color: #0369a1;">StripeGroup Meta</div>
+          <div style="padding: 5px 8px; background: #fef3c7; border-bottom: 1px solid #94a3b8; font-weight: 600; color: #92400e;">Optional Sections</div>
+          <div style="padding: 5px 8px; background: #dcfce7; border-bottom: 1px solid #94a3b8; font-weight: 700; color: #16a34a;">Footer</div>
+          <div style="padding: 4px 8px; background: #ede9fe; font-weight: 700; color: #7c3aed;">Postscript + Magic</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 1: Column → Stream mapping -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>1. Column → Stream Mapping</h2>
+
+  <p style="margin-bottom: 16px; color: #555;">
+    Each schema node creates <strong>one</strong> StreamData object in <code>FieldWriterContext::streams_[]</code>.
+    Data and nulls are <strong>bundled inside</strong> the same object — NOT separate streams.
+  </p>
+
+  <table style="border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; font-size: 14px;">
+    <thead>
+      <tr style="background: #f0f0ec;">
+        <th style="padding: 8px 14px; text-align: left; border-bottom: 2px solid #ddd; color: #2563eb;">Column type</th>
+        <th style="padding: 8px 14px; text-align: center; border-bottom: 2px solid #ddd; color: #16a34a;"># streams</th>
+        <th style="padding: 8px 14px; text-align: left; border-bottom: 2px solid #ddd; color: #16a34a;">StreamData class</th>
+        <th style="padding: 8px 14px; text-align: left; border-bottom: 2px solid #ddd; color: #888;">What's inside</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>BOOL</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullableContentStreamData&lt;bool&gt;</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">data_ + nonNulls_ bundled</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>INT32</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullableContentStreamData&lt;int32&gt;</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">data_ + nonNulls_ bundled</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>DOUBLE</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullableContentStreamData&lt;double&gt;</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">data_ + nonNulls_ bundled</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>STRING</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullableContentStringStreamData</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">buffer_ + lengths_ + nonNulls_ all bundled</td>
+      </tr>
+      <tr style="background: #f9fafb;">
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>ROW / STRUCT</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1 + children</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullsStreamData</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">just nonNulls_ (children create their own streams)</td>
+      </tr>
+      <tr style="background: #f9fafb;">
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee;"><strong>ARRAY&lt;T&gt;</strong></td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; text-align: center; font-weight: 700; color: #16a34a;">1 + child</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">NullableContentStreamData&lt;uint32&gt;</td>
+        <td style="padding: 6px 14px; border-bottom: 1px solid #eee; color: #888; font-size: 13px;">lengths (1 per row) + child has SUM(lengths) rows</td>
+      </tr>
+      <tr style="background: #f9fafb;">
+        <td style="padding: 6px 14px;">
+          <strong>MAP&lt;K, V&gt;</strong>
+        </td>
+        <td style="padding: 6px 14px; text-align: center; font-weight: 700; color: #16a34a;">1 + key + val</td>
+        <td style="padding: 6px 14px; font-family: monospace; font-size: 12px;">NullableContentStreamData&lt;uint32&gt;</td>
+        <td style="padding: 6px 14px; color: #888; font-size: 13px;">lengths (1 per row) + key/val children have SUM(lengths) rows</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Data Pipeline: 1000-row batch example -->
+  <div style="margin-top: 28px;">
+    <div style="font-size: 15px; font-weight: 700; color: #333; margin-bottom: 12px;">Data Pipeline (1000-row batch)</div>
+
+    <!-- All 3 layers in a single 13-column grid for vertical alignment -->
+    <div style="display: grid; grid-template-columns: repeat(13, 1fr); gap: 3px; overflow-x: auto;">
+
+      <!-- ROW 1: RowVector columns (spanning for complex types) -->
+      <div style="grid-column: 1; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">row<br>nulls</div>
+      <div style="grid-column: 2; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">a<br>INT32</div>
+      <div style="grid-column: 3; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">b<br>DOUBLE</div>
+      <div style="grid-column: 4; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">c<br>STRING</div>
+      <div style="grid-column: 5 / 8; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">d: MAP&lt;STRING, INT&gt;</div>
+      <div style="grid-column: 8 / 10; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">e: ARRAY&lt;INT&gt;</div>
+      <div style="grid-column: 10 / 14; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 13px; color: #1d4ed8; font-weight: 600;">f: STRUCT{x:INT, y:DOUBLE, z:STRING}</div>
+
+      <!-- ROW 2: arrows -->
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+
+      <!-- ROW 3: FieldWriter boxes (nested hierarchy, all inside RowFieldWriter root) -->
+      <div style="grid-column: 1 / 14; background: #fff; border: 2px dashed #93c5fd; border-radius: 6px; padding: 8px 4px 6px; display: grid; grid-template-columns: repeat(13, 1fr); gap: 3px;">
+        <!-- RowFieldWriter label spanning all -->
+        <div style="grid-column: 1 / 14; font-size: 13px; font-weight: 700; color: #2563eb; padding: 0 8px 4px;">RowFieldWriter (root)</div>
+        <!-- col 1: empty (root nulls produced by RowFieldWriter itself) -->
+        <div></div>
+        <!-- Scalars: cols 2-4 -->
+        <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 5px 3px; text-align: center; font-size: 11px; color: #16a34a; font-weight: 600;">SimpleFieldWriter<br>&lt;int32&gt;</div>
+        <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 5px 3px; text-align: center; font-size: 11px; color: #16a34a; font-weight: 600;">SimpleFieldWriter<br>&lt;double&gt;</div>
+        <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 5px 3px; text-align: center; font-size: 11px; color: #16a34a; font-weight: 600;">StringFieldWriter</div>
+        <!-- MapFieldWriter: spans 3 cols with nested children -->
+        <div style="grid-column: span 3; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 4px; padding: 6px 4px 8px;">
+          <div style="text-align: center; font-size: 13px; color: #2563eb; font-weight: 700; margin-bottom: 4px;">MapFieldWriter</div>
+          <div style="text-align: center; font-size: 11px; color: #999; margin-bottom: 4px;">lengthsStream_</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3px;">
+            <div></div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">key_ = StringFieldWriter</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">value_ = SimpleFieldWriter&lt;int32&gt;</div>
+          </div>
+        </div>
+        <!-- ArrayFieldWriter: spans 2 cols with nested child -->
+        <div style="grid-column: span 2; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 4px; padding: 6px 4px 8px;">
+          <div style="text-align: center; font-size: 13px; color: #2563eb; font-weight: 700; margin-bottom: 4px;">ArrayFieldWriter</div>
+          <div style="text-align: center; font-size: 11px; color: #999; margin-bottom: 4px;">lengthsStream_</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px;">
+            <div></div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">elements_ = SimpleFieldWriter&lt;int32&gt;</div>
+          </div>
+        </div>
+        <!-- RowFieldWriter (nested struct f): spans 4 cols with nested children -->
+        <div style="grid-column: span 4; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 4px; padding: 6px 4px 8px;">
+          <div style="text-align: center; font-size: 13px; color: #2563eb; font-weight: 700; margin-bottom: 4px;">RowFieldWriter (nested struct f)</div>
+          <div style="text-align: center; font-size: 11px; color: #999; margin-bottom: 4px;">nullsStream_</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 3px;">
+            <div></div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">SimpleFieldWriter&lt;int32&gt; x</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">SimpleFieldWriter&lt;double&gt; y</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 3px; padding: 3px; text-align: center; font-size: 10px; color: #16a34a; font-weight: 600;">StringFieldWriter z</div>
+          </div>
+        </div>
+      </div><!-- end RowFieldWriter wrapper -->
+
+      <!-- ROW 4: arrows -->
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+      <div style="text-align: center; color: #aaa; font-size: 16px;">↓</div>
+
+      <!-- ROW 5: StreamData boxes -->
+      <div class="sbox" style="min-width: 0;"><div class="sid">[0] row nulls</div><div class="stype">NullsStreamData<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[1] a INT32</div><div class="stype">NullableContent&lt;i32&gt;<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[2] b DOUBLE</div><div class="stype">NullableContent&lt;dbl&gt;<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[3] c STRING</div><div class="stype">NullableContentString<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[4] d.lengths</div><div class="stype">NullableContent&lt;u32&gt;<br>1000</div><div class="srow">1 per row</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[5] d.key</div><div class="stype">NullableContentString<br>~4000</div><div class="srow">SUM(lengths)</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[6] d.val</div><div class="stype">NullableContent&lt;i32&gt;<br>~4000</div><div class="srow">SUM(lengths)</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[7] e.lengths</div><div class="stype">NullableContent&lt;u32&gt;<br>1000</div><div class="srow">1 per row</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[8] e.elem</div><div class="stype">NullableContent&lt;i32&gt;<br>~3000</div><div class="srow">SUM(lengths)</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[9] f nulls</div><div class="stype">NullsStreamData<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[10] f.x</div><div class="stype">NullableContent&lt;i32&gt;<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[11] f.y</div><div class="stype">NullableContent&lt;dbl&gt;<br>1000</div></div>
+      <div class="sbox" style="min-width: 0;"><div class="sid">[12] f.z</div><div class="stype">NullableContentString<br>1000</div></div>
+    </div>
+    <div style="margin-top: 8px; font-size: 12px; color: #999;">MAP/ARRAY children: SUM(parent lengths) rows | struct/row: nulls only | chunk boundaries independent per stream</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 1.1: StreamData internals -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>1.1 StreamData Internals — What Each Stream Actually Stores</h2>
+
+  <div style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;">
+
+    <!-- Left: the flow diagram -->
+    <div style="flex: 1; min-width: 400px;">
+      <div style="background: #fff; border: 2px solid #93c5fd; border-radius: 6px; padding: 12px 16px; text-align: center; margin-bottom: 2px;">
+        <div style="font-weight: 700; font-size: 13px; color: #1d4ed8;">Velox RowVector [10,000 rows]</div>
+      </div>
+
+      <div style="display: flex; gap: 0; margin-top: 0;">
+        <!-- Column 0: int64 -->
+        <div style="flex: 1; padding: 0 4px;">
+          <div style="text-align: center; color: #ccc; font-size: 14px; padding: 2px 0;">│</div>
+          <div style="background: #fff; border: 2px solid #86efac; border-radius: 6px; padding: 10px; margin-bottom: 0;">
+            <div style="font-size: 11px; font-weight: 700; color: #16a34a; margin-bottom: 6px;">column 0 (int64)</div>
+            <div style="font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 6px;">NullableContentStreamData&lt;int64_t&gt;</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 6px 8px; font-family: monospace; font-size: 9px; line-height: 1.8;">
+              <span style="color: #2563eb; font-weight: 600;">data_:</span> Vector&lt;int64_t&gt;<br>
+              <span style="color: #999;">[non-null values appended]</span><br>
+              <span style="color: #2563eb; font-weight: 600;">nonNulls_:</span> Vector&lt;bool&gt;<br>
+              <span style="color: #999;">[null bitmap appended]</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 1: double -->
+        <div style="flex: 1; padding: 0 4px;">
+          <div style="text-align: center; color: #ccc; font-size: 14px; padding: 2px 0;">│</div>
+          <div style="background: #fff; border: 2px solid #86efac; border-radius: 6px; padding: 10px; margin-bottom: 0;">
+            <div style="font-size: 11px; font-weight: 700; color: #16a34a; margin-bottom: 6px;">column 1 (double)</div>
+            <div style="font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 6px;">NullableContentStreamData&lt;double&gt;</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 6px 8px; font-family: monospace; font-size: 9px; line-height: 1.8;">
+              <span style="color: #2563eb; font-weight: 600;">data_:</span> Vector&lt;double&gt;<br>
+              <span style="color: #999;">[non-null values appended]</span><br>
+              <span style="color: #2563eb; font-weight: 600;">nonNulls_:</span> Vector&lt;bool&gt;<br>
+              <span style="color: #999;">[null bitmap appended]</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 2: string -->
+        <div style="flex: 1.2; padding: 0 4px;">
+          <div style="text-align: center; color: #ccc; font-size: 14px; padding: 2px 0;">│</div>
+          <div style="background: #fff; border: 2px solid #86efac; border-radius: 6px; padding: 10px; margin-bottom: 0;">
+            <div style="font-size: 11px; font-weight: 700; color: #16a34a; margin-bottom: 6px;">column 2 (string)</div>
+            <div style="font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 6px;">NullableContentStringStreamData</div>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; padding: 6px 8px; font-family: monospace; font-size: 9px; line-height: 1.8;">
+              <span style="color: #2563eb; font-weight: 600;">buffer_:</span> Vector&lt;char&gt;<br>
+              <span style="color: #999;">[string bytes concatenated]</span><br>
+              <span style="color: #2563eb; font-weight: 600;">lengths_:</span> Vector&lt;size_t&gt;<br>
+              <span style="color: #999;">[per-string lengths]</span><br>
+              <span style="color: #2563eb; font-weight: 600;">nonNulls_:</span> Vector&lt;bool&gt;<br>
+              <span style="color: #999;">[null bitmap appended]</span>
+            </div>
+            <div style="margin-top: 6px; font-size: 9px; color: #999; font-style: italic;">
+              materialize() builds string_view[] from buffer_ + lengths_ before encoding
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: notes -->
+    <div style="flex: 0 0 280px;">
+      <div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; padding: 10px 14px; font-size: 10px; color: #854d0e; margin-bottom: 12px;">
+        <strong>Append-only buffers</strong><br>
+        Each write() call appends to the existing vectors. No per-write allocation — just vector growth.
+      </div>
+      <div style="background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; padding: 10px 14px; font-size: 10px; color: #1e40af; margin-bottom: 12px;">
+        <strong>Dictionary vectors are flattened</strong><br>
+        If the input is a Velox DictionaryVector, the FieldWriter uses DecodedVector to flatten it before appending raw values. No dictionary indices are preserved.
+      </div>
+      <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 10px 14px; font-size: 10px; color: #166534;">
+        <strong>String storage</strong><br>
+        Strings are stored as <code>buffer_</code> (all chars concatenated) + <code>lengths_</code> (per-string). Before encoding, <code>materialize()</code> builds <code>string_view[]</code> pointing into <code>buffer_</code> — O(n), no copies.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: Full pipeline -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>2. Full Pipeline — All Types</h2>
+  <p style="margin-bottom: 12px; color: #666;">
+    Schema: <code>struct row { a: BOOL, b: INT32, c: DOUBLE, d: STRING, e: MAP&lt;STRING, INT&gt;, f: ARRAY&lt;INT&gt;, g: STRUCT { x: INT, y: DOUBLE, z: STRING } }</code>
+  </p>
+
+  <!-- LAYER 1: COLUMNS -->
+  <div>
+    <span class="layer-label bg-blue col-blue">Layer 1 — Schema nodes (15 total)</span>
+  </div>
+  <div style="display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; font-size: 12px;">
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">row<br><span style="font-size: 10px; font-weight: 400;">STRUCT</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">a<br><span style="font-size: 10px; font-weight: 400;">BOOL</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">b<br><span style="font-size: 10px; font-weight: 400;">INT32</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">c<br><span style="font-size: 10px; font-weight: 400;">DOUBLE</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">d<br><span style="font-size: 10px; font-weight: 400;">STRING</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">e<br><span style="font-size: 10px; font-weight: 400;">MAP</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">e.key<br><span style="font-size: 10px; font-weight: 400;">STRING</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">e.val<br><span style="font-size: 10px; font-weight: 400;">INT</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">f<br><span style="font-size: 10px; font-weight: 400;">ARRAY</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">f.elem<br><span style="font-size: 10px; font-weight: 400;">INT</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #dbeafe; font-weight: 700; color: #1d4ed8; text-align: center;">g<br><span style="font-size: 10px; font-weight: 400;">STRUCT</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">g.x<br><span style="font-size: 10px; font-weight: 400;">INT</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">g.y<br><span style="font-size: 10px; font-weight: 400;">DOUBLE</span></div>
+    <div style="border: 2px solid #93c5fd; border-radius: 5px; padding: 4px 10px; background: #eff6ff; font-weight: 600; color: #3b82f6; text-align: center; border-style: dashed;">g.z<br><span style="font-size: 10px; font-weight: 400;">STRING</span></div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+  <div class="arrow-label">each schema node → one StreamData entry (1:1). 15 nodes but root "row" counts too → 14 streams (row has no separate stream? no, it does: NullsStreamData)</div>
+
+  <!-- LAYER 2: STREAMS — 14 entries -->
+  <div>
+    <span class="layer-label bg-green col-green">Layer 2 — Streams</span>
+    <span class="layer-desc"><code>FieldWriterContext::streams_[]</code> — 14 entries</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 3px; margin: 8px 0; font-size: 11px;">
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[0] nulls</div>
+      <div class="sbox" style="width: 8px; min-width: 8px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullsStreamData · 0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[1] a BOOL</div>
+      <div class="sbox" style="width: 8px; min-width: 8px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;bool&gt; · 0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[2] b INT32</div>
+      <div class="sbox" style="width: 160px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;i32&gt; · 25MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[3] c DOUBLE</div>
+      <div class="sbox" style="width: 320px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;dbl&gt; · 50MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[4] d STRING</div>
+      <div class="sbox" style="width: 500px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContentString · 80MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[5] e lengths</div>
+      <div class="sbox" style="width: 16px; min-width: 16px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;u32&gt; · 2.5MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[6] e.key</div>
+      <div class="sbox" style="width: 300px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContentString · SUM(lengths) strings</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[7] e.val</div>
+      <div class="sbox" style="width: 160px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;i32&gt; · SUM(lengths) ints</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[8] f lengths</div>
+      <div class="sbox" style="width: 16px; min-width: 16px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;u32&gt; · 2.5MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[9] f.elem</div>
+      <div class="sbox" style="width: 160px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;i32&gt; · SUM(lengths) ints</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[10] g</div>
+      <div class="sbox" style="width: 8px; min-width: 8px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullsStreamData · 0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[11] g.x INT</div>
+      <div class="sbox" style="width: 160px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;i32&gt; · 25MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[12] g.y DOUBLE</div>
+      <div class="sbox" style="width: 320px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContent&lt;dbl&gt; · 50MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[13] g.z STRING</div>
+      <div class="sbox" style="width: 500px; padding: 4px 0;"></div>
+      <span style="color: #888; font-size: 9px;">NullableContentString · 80MB</span>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+  <div class="arrow-label">each stream chunked independently by raw byte size (~20MB max)</div>
+
+  <!-- LAYER 3: CHUNKS -->
+  <div>
+    <span class="layer-label bg-orange col-orange">Layer 3 — Chunks</span>
+    <span class="layer-desc">Chunker slices data+nulls together at the same row boundary within each stream. Boundaries don't align across streams.</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 3px; margin: 8px 0; font-size: 11px;">
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[0] nulls</div>
+      <div style="display: flex; gap: 2px; width: 8px;"><div class="cbox" style="flex: 1; font-size: 7px;">C0</div></div>
+      <span style="color: #999; font-size: 10px;">0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[1] a BOOL</div>
+      <div style="display: flex; gap: 2px; width: 8px;"><div class="cbox" style="flex: 1; font-size: 7px;">C0</div></div>
+      <span style="color: #999; font-size: 10px;">0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[2] b INT32</div>
+      <div style="display: flex; gap: 2px; width: 160px;"><div class="cbox" style="flex: 4; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 5MB</div></div>
+      <span style="color: #999; font-size: 10px;">25MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[3] c DOUBLE</div>
+      <div style="display: flex; gap: 2px; width: 320px;"><div class="cbox" style="flex: 2; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 2; text-align: center;">C1 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C2 10MB</div></div>
+      <span style="color: #999; font-size: 10px;">50MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[4] d STRING</div>
+      <div style="display: flex; gap: 2px; width: 500px;"><div class="cbox" style="flex: 1; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C2 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C3 20MB</div></div>
+      <span style="color: #999; font-size: 10px;">80MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[5] e lengths</div>
+      <div style="display: flex; gap: 2px; width: 16px;"><div class="cbox" style="flex: 1; font-size: 7px;">C0</div></div>
+      <span style="color: #999; font-size: 10px;">2.5MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[6] e.key</div>
+      <div style="display: flex; gap: 2px; width: 300px;"><div class="cbox" style="flex: 2; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 2; text-align: center;">C1 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C2 8MB</div></div>
+      <span style="color: #999; font-size: 10px;">SUM(lengths) strings</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[7] e.val</div>
+      <div style="display: flex; gap: 2px; width: 160px;"><div class="cbox" style="flex: 4; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 5MB</div></div>
+      <span style="color: #999; font-size: 10px;">SUM(lengths) ints</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[8] f lengths</div>
+      <div style="display: flex; gap: 2px; width: 16px;"><div class="cbox" style="flex: 1; font-size: 7px;">C0</div></div>
+      <span style="color: #999; font-size: 10px;">2.5MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[9] f.elem</div>
+      <div style="display: flex; gap: 2px; width: 160px;"><div class="cbox" style="flex: 4; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 5MB</div></div>
+      <span style="color: #999; font-size: 10px;">SUM(lengths) ints</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[10] g</div>
+      <div style="display: flex; gap: 2px; width: 8px;"><div class="cbox" style="flex: 1; font-size: 7px;">C0</div></div>
+      <span style="color: #999; font-size: 10px;">0.6MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[11] g.x</div>
+      <div style="display: flex; gap: 2px; width: 160px;"><div class="cbox" style="flex: 4; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 5MB</div></div>
+      <span style="color: #999; font-size: 10px;">25MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[12] g.y</div>
+      <div style="display: flex; gap: 2px; width: 320px;"><div class="cbox" style="flex: 2; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 2; text-align: center;">C1 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C2 10MB</div></div>
+      <span style="color: #999; font-size: 10px;">50MB</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <div style="width: 100px; text-align: right; color: #16a34a; font-weight: 600; font-family: monospace; font-size: 10px;">[13] g.z</div>
+      <div style="display: flex; gap: 2px; width: 500px;"><div class="cbox" style="flex: 1; text-align: center;">C0 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C1 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C2 20MB</div><div class="cbox" style="flex: 1; text-align: center;">C3 20MB</div></div>
+      <span style="color: #999; font-size: 10px;">80MB</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Encoding examples -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>3. Encode Path (Chunking)</h2>
+  <!-- ROW 1: [2] INT32 -->
+  <div style="display: flex; gap: 0; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #e5e7eb;">
+    <!-- Layout -->
+    <div style="flex: 0 0 520px; padding-right: 24px; border-right: 1px solid #e5e7eb;">
+      <div style="font-size: 11px; font-weight: 600; color: #92400e; margin-bottom: 6px;">[2] INT32 layout</div>
+      <div style="border: 2px solid #c4b5fd; border-radius: 6px; overflow: hidden;">
+        <div style="background: #ede9fe; padding: 5px 12px; font-weight: 700; color: #7c3aed; font-size: 12px; border-bottom: 1px solid #c4b5fd;">NullableEncoding <span style="font-weight: 400; font-size: 9px; color: #a78bfa;">prefix: [1B type][1B dataType][rowCount]</span></div>
+        <div style="padding: 4px 12px 4px 28px; background: #f5f3ff; border-bottom: 1px solid #e9e5f5; font-size: 11px;"><span style="color: #a78bfa;">nulls →</span> <span style="color: #6d28d9; font-weight: 600;">SparseBool</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+        <div style="padding: 4px 12px 4px 28px; background: #f5f3ff; font-size: 11px;"><span style="color: #a78bfa;">data →</span> <span style="color: #6d28d9; font-weight: 600;">FixedBitWidth</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+      </div>
+      <!-- On-disk chunk structure -->
+      <div style="margin-top: 12px; border: 2px solid #94a3b8; border-radius: 6px; overflow: hidden; font-family: monospace;">
+        <div style="display: flex; background: #e2e8f0; border-bottom: 2px solid #94a3b8;">
+          <div style="padding: 5px 8px; font-size: 9px; color: #475569; font-weight: 700; border-right: 1px solid #94a3b8;">Chunk Header</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569; border-right: 1px solid #cbd5e1;">4B size</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569;">1B Uncompressed</div>
+        </div>
+        <div style="border-bottom: 2px solid #c4b5fd;">
+          <div style="display: flex; background: #ede9fe; border-bottom: 1px solid #c4b5fd;">
+            <div style="padding: 5px 8px; font-size: 9px; color: #7c3aed; font-weight: 700; border-right: 1px solid #c4b5fd;">Prefix</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B = <strong>5</strong> (Nullable)</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B Int32</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed;">varint rows</div>
+          </div>
+          <div style="margin: 6px 6px 6px 16px; border: 1px solid #fcd34d; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #fef3c7; border-bottom: 1px solid #fcd34d;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #92400e; font-weight: 700; border-right: 1px solid #fcd34d;">nulls</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #92400e;">1B=<strong>6</strong>(SparseBool) | 1B Bool | rows | sparseVal | nested indices</div>
+            </div>
+          </div>
+          <div style="margin: 0 6px 6px 16px; border: 1px solid #93c5fd; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #dbeafe; border-bottom: 1px solid #93c5fd;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #1d4ed8; font-weight: 700; border-right: 1px solid #93c5fd;">data</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #1d4ed8;">1B=<strong>3</strong>(FBW) | 1B Int32 | rows | compr | 4B baseline | 1B bitWidth | packed bits</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 4px; font-size: 8px; color: #999;">Self-describing: byte 0 = EncodingType enum, byte 1 = DataType. No external metadata.</div>
+    </div>
+    <!-- Flowchart -->
+    <div style="flex: 1; padding-left: 24px;">
+      <div style="font-size: 12px; font-weight: 700; color: #92400e; margin-bottom: 8px;">▸ [2] b INT32, Chunk 0</div>
+        <div style="background: #fff; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 600; font-size: 12px; color: #1e293b;">encodeStreamData(chunk view)</div>
+        </div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #ede9fe; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 700; font-size: 13px; color: #7c3aed;">NullableEncoding::encodeNullable()</div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">┌────────────</div><div style="color: #ccc; font-size: 14px;">┴</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">────────────┐</div></div>
+        <div style="display: flex; gap: 8px;">
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">encodeNested&lt;bool&gt;(nulls)</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">SparseBool::encode()</div></div>
+            <div style="color: #ccc; font-size: 12px; padding: 2px 0;">│</div>
+            <div style="background: #fef3c7; border: 2px solid #fcd34d; border-radius: 5px; padding: 5px 8px;"><div style="font-weight: 600; font-size: 10px; color: #92400e;">CompressionEncoder</div><div style="font-size: 9px; color: #b45309;">MetaInternal(Zstrong)(nulls)</div></div>
+          </div>
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">encodeNested&lt;int32&gt;(data)</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">FixedBitWidth::encode()</div></div>
+            <div style="color: #ccc; font-size: 12px; padding: 2px 0;">│</div>
+            <div style="background: #fef3c7; border: 2px solid #fcd34d; border-radius: 5px; padding: 5px 8px;"><div style="font-weight: 600; font-size: 10px; color: #92400e;">CompressionEncoder</div><div style="font-size: 9px; color: #b45309;">MetaInternal(Zstrong)(data)</div></div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">└────────────</div><div style="color: #ccc; font-size: 14px;">┬</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">────────────┘</div></div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #fff; border: 2px solid #94a3b8; border-radius: 6px; padding: 6px 14px; text-align: center;"><div style="font-weight: 600; font-size: 11px; color: #1e293b;">ChunkedStreamWriter::encode(blob)</div><div style="font-size: 9px; color: #999;">prepend 5B header: [4B size][1B Uncompressed]</div></div>
+    </div>
+  </div>
+
+  <!-- ROW 2: [4] STRING Dictionary -->
+  <div style="display: flex; gap: 0; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #e5e7eb;">
+    <!-- Layout -->
+    <div style="flex: 0 0 520px; padding-right: 24px; border-right: 1px solid #e5e7eb;">
+      <div style="font-size: 11px; font-weight: 600; color: #92400e; margin-bottom: 6px;">[4] STRING Dictionary layout</div>
+      <div style="border: 2px solid #c4b5fd; border-radius: 6px; overflow: hidden;">
+        <div style="background: #ede9fe; padding: 5px 12px; font-weight: 700; color: #7c3aed; font-size: 12px; border-bottom: 1px solid #c4b5fd;">NullableEncoding <span style="font-weight: 400; font-size: 9px; color: #a78bfa;">prefix: [1B type][1B dataType][rowCount]</span></div>
+        <div style="padding: 4px 12px 4px 28px; background: #f5f3ff; border-bottom: 1px solid #e9e5f5; font-size: 11px;"><span style="color: #a78bfa;">nulls →</span> <span style="color: #6d28d9; font-weight: 600;">SparseBool</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+        <div style="padding: 0; background: #f5f3ff;">
+          <div style="padding: 4px 12px 3px 28px; font-size: 11px;"><span style="color: #a78bfa;">data →</span> <span style="color: #7c3aed; font-weight: 700;">Dictionary</span></div>
+          <div style="margin: 0 12px 6px 44px; border: 1px solid #ddd6fe; border-radius: 4px; overflow: hidden;">
+            <div style="padding: 3px 10px; background: #faf5ff; border-bottom: 1px solid #ede9fe; font-size: 10px;"><span style="color: #a78bfa;">alphabet →</span> <span style="color: #7c3aed; font-weight: 700;">Trivial</span></div>
+            <div style="padding: 3px 10px 3px 28px; background: #faf5ff; border-bottom: 1px solid #ede9fe; font-size: 10px;"><span style="color: #a78bfa;">lengths →</span> <span style="color: #6d28d9; font-weight: 600;">FBW</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+            <div style="padding: 3px 10px 3px 28px; background: #faf5ff; border-bottom: 1px solid #ede9fe; font-size: 10px;"><span style="color: #a78bfa;">chars →</span> <span style="color: #6d28d9; font-weight: 600;">raw bytes</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+            <div style="padding: 3px 10px; background: #faf5ff; font-size: 10px;"><span style="color: #a78bfa;">indices →</span> <span style="color: #6d28d9; font-weight: 600;">FBW</span> <span style="color:#a78bfa">(9b)</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- On-disk chunk structure: Dictionary -->
+      <div style="margin-top: 12px; border: 2px solid #94a3b8; border-radius: 6px; overflow: hidden; font-family: monospace;">
+        <div style="display: flex; background: #e2e8f0; border-bottom: 2px solid #94a3b8;">
+          <div style="padding: 5px 8px; font-size: 9px; color: #475569; font-weight: 700; border-right: 1px solid #94a3b8;">Chunk Header</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569; border-right: 1px solid #cbd5e1;">4B size</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569;">1B Uncompressed</div>
+        </div>
+        <div style="border-bottom: 2px solid #c4b5fd;">
+          <div style="display: flex; background: #ede9fe; border-bottom: 1px solid #c4b5fd;">
+            <div style="padding: 5px 8px; font-size: 9px; color: #7c3aed; font-weight: 700; border-right: 1px solid #c4b5fd;">Prefix</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B = <strong>5</strong> (Nullable)</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B String</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed;">varint rows</div>
+          </div>
+          <div style="margin: 6px 6px 6px 16px; border: 1px solid #fcd34d; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #fef3c7;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #92400e; font-weight: 700; border-right: 1px solid #fcd34d;">nulls</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #92400e;">1B=<strong>6</strong>(SparseBool) | 1B Bool | rows | sparseVal | nested indices</div>
+            </div>
+          </div>
+          <div style="margin: 0 6px 6px 16px; border: 1px solid #93c5fd; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #dbeafe; border-bottom: 1px solid #93c5fd;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #1d4ed8; font-weight: 700; border-right: 1px solid #93c5fd;">data</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #1d4ed8;">1B=<strong>2</strong>(Dictionary) | 1B String | rows</div>
+            </div>
+            <div style="margin: 4px 4px 4px 12px; border: 1px solid #ddd6fe; border-radius: 3px; overflow: hidden;">
+              <div style="display: flex; background: #faf5ff; border-bottom: 1px solid #ede9fe;">
+                <div style="padding: 2px 5px; font-size: 7px; color: #7c3aed; font-weight: 600; border-right: 1px solid #ddd6fe;">alphabet</div>
+                <div style="padding: 2px 4px; font-size: 6px; color: #7c3aed;">1B=<strong>0</strong>(Trivial) | lengths(FBW) | chars(raw+Zstrong)</div>
+              </div>
+              <div style="display: flex; background: #faf5ff;">
+                <div style="padding: 2px 5px; font-size: 7px; color: #7c3aed; font-weight: 600; border-right: 1px solid #ddd6fe;">indices</div>
+                <div style="padding: 2px 4px; font-size: 6px; color: #7c3aed;">1B=<strong>3</strong>(FBW) | 1B UInt32 | rows | compr | baseline | bitWidth | packed</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 4px; font-size: 8px; color: #999;">Self-describing: byte 0 = EncodingType enum. Recursive nesting — Dictionary contains Trivial + FBW inside.</div>
+    </div>
+    <!-- Flowchart -->
+    <div style="flex: 1; padding-left: 24px;">
+      <div style="font-size: 12px; font-weight: 700; color: #92400e; margin-bottom: 8px;">▸ [4] d STRING, Chunk 0 (500 unique) — Dictionary</div>
+        <div style="background: #fff; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 600; font-size: 12px; color: #1e293b;">encodeStreamData(chunk view)</div>
+        </div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #ede9fe; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 700; font-size: 13px; color: #7c3aed;">NullableEncoding::encodeNullable()</div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">┌──────────────</div><div style="color: #ccc; font-size: 14px;">┴</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">──────────────┐</div></div>
+        <div style="display: flex; gap: 8px;">
+          <div style="flex: 2; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">nulls</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">SparseBool</div></div>
+            <div style="color: #ccc; font-size: 12px; padding: 2px 0;">│</div>
+            <div style="background: #fef3c7; border: 2px solid #fcd34d; border-radius: 5px; padding: 5px 8px;"><div style="font-size: 9px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div></div>
+          </div>
+          <div style="flex: 5; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">data</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">Dictionary::encode()</div></div>
+            <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 12px;">┌──────────</div><div style="color: #ccc; font-size: 12px;">┴</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 12px;">──────────┐</div></div>
+            <div style="display: flex; gap: 6px;">
+              <div style="flex: 3; text-align: center;">
+                <div style="font-size: 9px; color: #a78bfa; font-weight: 600; margin-bottom: 2px;">alphabet</div>
+                <div style="background: #f5f3ff; border: 2px solid #ddd6fe; border-radius: 4px; padding: 4px 6px;"><div style="font-weight: 600; font-size: 10px; color: #6d28d9;">Trivial</div></div>
+                <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 2px; color: #ddd; font-size: 11px;">┌────</div><div style="color: #ddd; font-size: 11px;">┴</div><div style="flex: 1; text-align: left; padding-left: 2px; color: #ddd; font-size: 11px;">────┐</div></div>
+                <div style="display: flex; gap: 4px;">
+                  <div style="flex: 1; text-align: center;">
+                    <div style="font-size: 8px; color: #a78bfa; margin-bottom: 2px;">lengths</div>
+                    <div style="background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 3px; padding: 3px 4px; font-size: 9px; color: #6d28d9; font-weight: 600;">FBW</div>
+                    <div style="color: #ddd; font-size: 10px; padding: 1px 0;">│</div>
+                    <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 2px 4px; font-size: 8px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div>
+                  </div>
+                  <div style="flex: 1; text-align: center;">
+                    <div style="font-size: 8px; color: #a78bfa; margin-bottom: 2px;">chars</div>
+                    <div style="background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 3px; padding: 3px 4px; font-size: 9px; color: #6d28d9; font-weight: 600;">raw bytes</div>
+                    <div style="color: #ddd; font-size: 10px; padding: 1px 0;">│</div>
+                    <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 2px 4px; font-size: 8px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div>
+                  </div>
+                </div>
+              </div>
+              <div style="flex: 2; text-align: center;">
+                <div style="font-size: 9px; color: #a78bfa; font-weight: 600; margin-bottom: 2px;">indices</div>
+                <div style="background: #faf5ff; border: 2px solid #ddd6fe; border-radius: 4px; padding: 4px 6px; font-size: 10px; color: #6d28d9; font-weight: 600;">FBW <span style="color: #a78bfa; font-size: 9px;">(9b)</span></div>
+                <div style="color: #ddd; font-size: 10px; padding: 1px 0;">│</div>
+                <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 2px 4px; font-size: 8px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">└──────────────</div><div style="color: #ccc; font-size: 14px;">┬</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">──────────────┘</div></div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #fff; border: 2px solid #94a3b8; border-radius: 6px; padding: 6px 14px; text-align: center;"><div style="font-weight: 600; font-size: 11px; color: #1e293b;">ChunkedStreamWriter::encode(blob)</div><div style="font-size: 9px; color: #999;">prepend 5B header: [4B size][1B Uncompressed]</div></div>
+    </div>
+  </div>
+
+  <!-- ROW 3: [4] STRING Trivial -->
+  <div style="display: flex; gap: 0; padding-bottom: 20px; margin-bottom: 16px;">
+    <!-- Layout -->
+    <div style="flex: 0 0 520px; padding-right: 24px; border-right: 1px solid #e5e7eb;">
+      <div style="font-size: 11px; font-weight: 600; color: #92400e; margin-bottom: 6px;">[4] STRING Trivial layout <span style="color: #7c3aed;">— different encoding!</span></div>
+      <div style="border: 2px solid #c4b5fd; border-radius: 6px; overflow: hidden;">
+        <div style="background: #ede9fe; padding: 5px 12px; font-weight: 700; color: #7c3aed; font-size: 12px; border-bottom: 1px solid #c4b5fd;">NullableEncoding <span style="font-weight: 400; font-size: 9px; color: #a78bfa;">prefix: [1B type][1B dataType][rowCount]</span></div>
+        <div style="padding: 4px 12px 4px 28px; background: #f5f3ff; border-bottom: 1px solid #e9e5f5; font-size: 11px;"><span style="color: #a78bfa;">nulls →</span> <span style="color: #6d28d9; font-weight: 600;">SparseBool</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+        <div style="padding: 0; background: #f5f3ff;">
+          <div style="padding: 4px 12px 3px 28px; font-size: 11px;"><span style="color: #a78bfa;">data →</span> <span style="color: #7c3aed; font-weight: 700;">Trivial</span></div>
+          <div style="margin: 0 12px 6px 44px; border: 1px solid #ddd6fe; border-radius: 4px; overflow: hidden;">
+            <div style="padding: 3px 10px; background: #faf5ff; border-bottom: 1px solid #ede9fe; font-size: 10px;"><span style="color: #a78bfa;">lengths →</span> <span style="color: #6d28d9; font-weight: 600;">FBW</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+            <div style="padding: 3px 10px; background: #faf5ff; font-size: 10px;"><span style="color: #a78bfa;">chars →</span> <span style="color: #6d28d9; font-weight: 600;">raw bytes</span> <span style="color: #fbbf24;">→ MetaInternal(Zstrong)</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- On-disk chunk structure: Trivial -->
+      <div style="margin-top: 12px; border: 2px solid #94a3b8; border-radius: 6px; overflow: hidden; font-family: monospace;">
+        <div style="display: flex; background: #e2e8f0; border-bottom: 2px solid #94a3b8;">
+          <div style="padding: 5px 8px; font-size: 9px; color: #475569; font-weight: 700; border-right: 1px solid #94a3b8;">Chunk Header</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569; border-right: 1px solid #cbd5e1;">4B size</div>
+          <div style="padding: 5px 6px; font-size: 8px; color: #475569;">1B Uncompressed</div>
+        </div>
+        <div style="border-bottom: 2px solid #c4b5fd;">
+          <div style="display: flex; background: #ede9fe; border-bottom: 1px solid #c4b5fd;">
+            <div style="padding: 5px 8px; font-size: 9px; color: #7c3aed; font-weight: 700; border-right: 1px solid #c4b5fd;">Prefix</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B = <strong>5</strong> (Nullable)</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed; border-right: 1px solid #ddd6fe;">1B String</div>
+            <div style="padding: 5px 6px; font-size: 8px; color: #7c3aed;">varint rows</div>
+          </div>
+          <div style="margin: 6px 6px 6px 16px; border: 1px solid #fcd34d; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #fef3c7;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #92400e; font-weight: 700; border-right: 1px solid #fcd34d;">nulls</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #92400e;">1B=<strong>6</strong>(SparseBool) | 1B Bool | rows | sparseVal | nested indices</div>
+            </div>
+          </div>
+          <div style="margin: 0 6px 6px 16px; border: 1px solid #93c5fd; border-radius: 4px; overflow: hidden;">
+            <div style="display: flex; background: #dbeafe; border-bottom: 1px solid #93c5fd;">
+              <div style="padding: 3px 6px; font-size: 8px; color: #1d4ed8; font-weight: 700; border-right: 1px solid #93c5fd;">data</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #1d4ed8;">1B=<strong>0</strong>(Trivial) | 1B String | rows</div>
+            </div>
+            <div style="display: flex; background: #eff6ff;">
+              <div style="padding: 3px 5px; font-size: 7px; color: #1d4ed8; border-right: 1px solid #bfdbfe;">lengths: FBW(bitWidth) + packed</div>
+              <div style="padding: 3px 5px; font-size: 7px; color: #1d4ed8; flex: 1;">chars: raw bytes (possibly compressed with Zstrong)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 4px; font-size: 8px; color: #999;">Same Nullable wrapper, but data uses Trivial (type=0) instead of Dictionary — chosen per chunk based on data characteristics.</div>
+    </div>
+    <!-- Flowchart -->
+    <div style="flex: 1; padding-left: 24px;">
+      <div style="font-size: 12px; font-weight: 700; color: #92400e; margin-bottom: 8px;">▸ [4] d STRING, Chunk 1 (all unique) — Trivial <span style="color: #7c3aed; font-size: 11px;">different encoding!</span></div>
+        <div style="background: #fff; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 600; font-size: 12px; color: #1e293b;">encodeStreamData(chunk view)</div>
+        </div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #ede9fe; border: 2px solid #c4b5fd; border-radius: 6px; padding: 8px 14px; text-align: center;">
+          <div style="font-weight: 700; font-size: 13px; color: #7c3aed;">NullableEncoding::encodeNullable()</div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">┌────────────</div><div style="color: #ccc; font-size: 14px;">┴</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">────────────┐</div></div>
+        <div style="display: flex; gap: 8px;">
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">nulls</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">SparseBool</div></div>
+            <div style="color: #ccc; font-size: 12px; padding: 2px 0;">│</div>
+            <div style="background: #fef3c7; border: 2px solid #fcd34d; border-radius: 5px; padding: 5px 8px;"><div style="font-size: 9px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div></div>
+          </div>
+          <div style="flex: 2; text-align: center;">
+            <div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-bottom: 3px;">data</div>
+            <div style="background: #f5f3ff; border: 2px solid #c4b5fd; border-radius: 5px; padding: 6px 8px;"><div style="font-weight: 600; font-size: 11px; color: #6d28d9;">Trivial::encode()</div></div>
+            <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 2px; color: #ddd; font-size: 11px;">┌────</div><div style="color: #ddd; font-size: 11px;">┴</div><div style="flex: 1; text-align: left; padding-left: 2px; color: #ddd; font-size: 11px;">────┐</div></div>
+            <div style="display: flex; gap: 4px;">
+              <div style="flex: 1; text-align: center;">
+                <div style="font-size: 8px; color: #a78bfa; margin-bottom: 2px;">lengths</div>
+                <div style="background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 3px; padding: 3px 4px; font-size: 9px; color: #6d28d9; font-weight: 600;">FBW</div>
+                <div style="color: #ddd; font-size: 10px; padding: 1px 0;">│</div>
+                <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 2px 4px; font-size: 8px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div>
+              </div>
+              <div style="flex: 1; text-align: center;">
+                <div style="font-size: 8px; color: #a78bfa; margin-bottom: 2px;">chars</div>
+                <div style="background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 3px; padding: 3px 4px; font-size: 9px; color: #6d28d9; font-weight: 600;">raw bytes</div>
+                <div style="color: #ddd; font-size: 10px; padding: 1px 0;">│</div>
+                <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 2px 4px; font-size: 8px; color: #92400e; font-weight: 600;">MetaInternal(Zstrong)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: center;"><div style="flex: 1; text-align: right; padding-right: 4px; color: #ccc; font-size: 14px;">└────────────</div><div style="color: #ccc; font-size: 14px;">┬</div><div style="flex: 1; text-align: left; padding-left: 4px; color: #ccc; font-size: 14px;">────────────┘</div></div>
+        <div style="text-align: center; color: #ccc; font-size: 14px; line-height: 1.2; padding: 2px 0;">│</div>
+        <div style="background: #fff; border: 2px solid #94a3b8; border-radius: 6px; padding: 6px 14px; text-align: center;"><div style="font-weight: 600; font-size: 11px; color: #1e293b;">ChunkedStreamWriter::encode(blob)</div><div style="font-size: 9px; color: #999;">prepend 5B header: [4B size][1B Uncompressed]</div></div>
+    </div>
+  </div>
+
+  <!-- Shared callout -->
+  <div style="margin-top: 16px; padding: 8px 12px; background: #fefce8; border: 1px solid #fcd34d; border-radius: 6px; font-size: 10px; color: #854d0e;">
+    <strong>compressionAcceptRatio</strong> (default 0.98): each leaf encoding compresses independently via CompressionEncoder.
+    If compressed &gt; 98% of original → falls back to uncompressed for that payload.
+    Nested sub-encodings (alphabet, indices) are inside the chunk blob — NOT separate streams.
+  </div>
+
+  <div style="margin-top: 20px; padding: 16px; background: #f0fdf4; border: 2px solid #86efac; border-radius: 8px; font-size: 14px;">
+    <div style="font-family: monospace; font-size: 14px; line-height: 2;">
+      <strong class="col-blue">Schema node</strong>
+      → <strong class="col-green">Stream</strong> (1 StreamData, data+nulls bundled)
+      → <strong class="col-orange">Chunks</strong> (~20MB slices)
+      → <strong class="col-purple">Encoding tree</strong> (recursive, per chunk)
+    </div>
+    <div style="margin-top: 8px; color: #555;">
+      Leaf columns: <strong>1 node = 1 stream = N chunks</strong>. Chunking is per column.<br>
+      MAP/ARRAY: lengths is its own stream; children are separate streams with different row counts (SUM of lengths).<br>
+      STRUCT: nulls-only stream; children are separate streams with same row count as parent.
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Write Data Flow (Phases 1-3) -->
+<!-- ============================================================ -->
+<div class="section">
+  <h2>4. Write Data Flow (3 columns: A INT64, B INT64, C STRING)</h2>
+
+  <!-- Phase 1 -->
+  <div style="margin-bottom: 24px;">
+    <div style="border-left: 4px solid #16a34a; padding-left: 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 700; color: #16a34a;">Phase 1: write() calls — RowVector → StreamData buffers</div>
+    </div>
+
+    <div style="background: #fff; border: 2px solid #86efac; border-radius: 6px; padding: 14px; margin-bottom: 12px;">
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">TableWriter feeds RowVectors
+─────────────────────────────
+
+RowVector 1 ── <strong style="color: #2563eb;">Writer::write()</strong>
+RowVector 2 ──     │
+RowVector 3 ──     ├─ <strong style="color: #d97706;">RowFieldWriter::write()</strong>
+   ...      ──     │       │
+RowVector N ──     │       ├─ FieldWriter A ──append── StreamData A (<strong style="color: #16a34a;">Vector&lt;int64&gt;</strong>)
+                   │       ├─ FieldWriter B ──append── StreamData B (<strong style="color: #16a34a;">Vector&lt;int64&gt;</strong>)
+                   │       └─ FieldWriter C ──append── StreamData C (<strong style="color: #16a34a;">Vector&lt;string_view&gt;</strong>)
+                   │
+                   │   <span style="color: #999;">(original RowVector can be freed now)</span>
+                   │
+                   └─ <strong style="color: #d97706;">evaluateFlushPolicy()</strong></pre>
+    </div>
+
+    <div style="display: flex; gap: 16px;">
+      <div style="flex: 1; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; color: #333;">
+        <div style="font-weight: 700; color: #16a34a; margin-bottom: 4px;">Phase 1.0 — Initial Writes</div>
+        StreamData A (raw): &nbsp;&nbsp;10MB<br>
+        StreamData B (raw): &nbsp;&nbsp;&nbsp;3MB<br>
+        StreamData C (raw): &nbsp;&nbsp;&nbsp;1MB<br>
+        encodedStreams_[A-C]: &nbsp;0MB<br>
+        ────────────────────────────<br>
+        memoryUsed = 14MB &nbsp;&nbsp;&nbsp; stripeEncodedSize = 0MB
+      </div>
+      <div style="flex: 1; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; color: #333;">
+        <div style="font-weight: 700; color: #16a34a; margin-bottom: 4px;">Phase 1.1 — More write() Calls</div>
+        stream[1] col A: &nbsp;120MB (data_: 120MB, nonNulls_: ~0.1MB)<br>
+        stream[2] col B: &nbsp;&nbsp;90MB (data_: 90MB, no nulls)<br>
+        stream[3] col C: &nbsp;&nbsp;10MB (buffer_: 8MB, lengths_: 1.5MB)<br>
+        ────────────────────────────<br>
+        memoryUsed = 220MB &nbsp;&nbsp; stripeEncodedSize = 0MB<br>
+        <span style="color: #999;">(each stream is one StreamData object — data+nulls bundled inside)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2a -->
+  <div style="margin-bottom: 24px;">
+    <div style="border-left: 4px solid #d97706; padding-left: 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 700; color: #d97706;">Phase 2a: Soft Chunking — evaluateFlushPolicy() called after every write()</div>
+    </div>
+
+    <div style="background: #fff; border: 2px solid #fcd34d; border-radius: 6px; padding: 14px;">
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;"><strong style="color: #d97706;">evaluateFlushPolicy()</strong>
+│
+├─ shouldChunk?  220MB + 0MB = 220MB ≥ 200MB?  → <strong style="color: #dc2626;">YES</strong>
+│
+├─ SOFT CHUNKING: pick streams ≥ 20MB
+│     A: 120MB ≥ 20MB → <strong style="color: #16a34a;">YES</strong>
+│     B:  90MB ≥ 20MB → <strong style="color: #16a34a;">YES</strong>
+│     C:  10MB &lt; 20MB → <span style="color: #999;">SKIP  ← too small, untouched!</span>
+│
+│  Chunk A (120MB raw, ensureFullChunks=true):</pre>
+      <!-- Visual: A chunking result (1MB = 4px) -->
+      <div style="margin: 12px 0 12px 24px;">
+        <div style="font-size: 11px; color: #92400e; font-weight: 600; margin-bottom: 6px;">Stream A: 120MB raw → 6 encoded chunks (~30MB total)</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          <div style="font-size: 10px; color: #16a34a; font-weight: 600; width: 36px; text-align: right;">raw:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+          </div>
+        </div>
+        <div style="text-align: left; padding-left: 44px; color: #aaa; font-size: 14px; margin: 2px 0;">↓ encode each</div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="font-size: 10px; color: #7c3aed; font-weight: 600; width: 36px; text-align: right;">enc:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+          </div>
+          <div style="font-size: 10px; color: #999;">= 30MB</div>
+        </div>
+      </div>
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">
+│
+│  After chunking A, re-check shouldChunk?
+│     memoryUsed = 0 (A) + 90 (B) + 10 (C) = 100MB
+│     stripeEncodedSize = 30MB
+│     100 + 30 = 130MB &gt; 100MB (low watermark) → <strong style="color: #dc2626;">CONTINUE chunking</strong>
+│
+│  Chunk B (90MB raw, ensureFullChunks=true):</pre>
+      <!-- Visual: B chunking result (1MB = 4px) -->
+      <div style="margin: 12px 0 12px 24px;">
+        <div style="font-size: 11px; color: #92400e; font-weight: 600; margin-bottom: 6px;">Stream B: 90MB raw → 4 encoded chunks (~20MB) + 10MB leftover stays raw</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          <div style="font-size: 10px; color: #16a34a; font-weight: 600; width: 36px; text-align: right;">raw:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div class="sbox" style="width: 80px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 9px;">20MB</div></div>
+            <div style="width: 40px; border: 2px dashed #86efac; border-radius: 5px; padding: 0; background: #dcfce7; height: 22px; display: flex; align-items: center; justify-content: center;">
+              <div style="font-weight: 700; color: #16a34a; font-size: 7px;">10MB</div>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="font-size: 10px; color: #7c3aed; font-weight: 600; width: 36px; text-align: right;">enc:</div>
+          <div style="display: flex; gap: 2px; align-items: center;">
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div class="cbox" style="width: 20px;">5MB</div>
+            <div style="width: 40px; border: 2px dashed #86efac; border-radius: 5px; padding: 0; background: #dcfce7; height: 22px; display: flex; align-items: center; justify-content: center;">
+              <div style="font-weight: 700; color: #16a34a; font-size: 7px;">10MB raw</div>
+            </div>
+          </div>
+          <div style="font-size: 10px; color: #999;">= 20MB + 10MB raw</div>
+        </div>
+      </div>
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">
+│
+│  After chunking B, re-check shouldChunk?
+│     memoryUsed = 0 (A) + 10 (B leftover) + 10 (C) = 20MB
+│     stripeEncodedSize = 30 (A) + 20 (B) = 50MB
+│     20 + 50 = 70MB &lt; 100MB (low watermark) → <strong style="color: #16a34a;">STOP chunking</strong>
+│
+│  C is NEVER chunked — global pressure relieved before we got to it
+│
+├─ shouldFlush?
+│     Estimated: 50 + 20/3.7 ≈ 55MB &lt; 100MB target → <strong style="color: #16a34a;">NO</strong>
+│     → <strong style="color: #16a34a;">KEEP WRITING</strong></pre>
+
+      <!-- Visual: memory state after Phase 2a (1MB = 4px) -->
+      <div style="margin-top: 12px; font-size: 10px; font-weight: 600; color: #92400e; margin-bottom: 4px;">IN MEMORY: 20MB raw + 50MB encoded = 70MB total</div>
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">A:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="cbox" style="width: 20px; font-size: 7px;">c1</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c2</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c3</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c4</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c5</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c6</div>
+          </div>
+          <div style="font-size: 8px; color: #999;">30MB enc</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">B:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="sbox" style="width: 40px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center; border-style: dashed;"><div class="sid" style="font-size: 7px;">10MB</div></div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c1</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c2</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c3</div>
+            <div class="cbox" style="width: 20px; font-size: 7px;">c4</div>
+          </div>
+          <div style="font-size: 8px; color: #999;">10MB raw + 20MB enc</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">C:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="sbox" style="width: 40px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center;"><div class="sid" style="font-size: 7px;">10MB</div></div>
+          </div>
+          <div style="font-size: 8px; color: #999;">10MB raw</div>
+        </div>
+        <div style="display: flex; gap: 12px; margin-top: 6px; font-size: 9px;">
+          <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background: #dcfce7; border: 1px solid #86efac; border-radius: 2px;"></div> raw</div>
+          <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 2px;"></div> encoded</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2b -->
+  <div style="margin-bottom: 24px;">
+    <div style="border-left: 4px solid #d97706; padding-left: 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 700; color: #d97706;">Phase 2b: Hard Chunking — soft chunking not enough</div>
+    </div>
+
+    <div style="background: #fff; border: 2px solid #fcd34d; border-radius: 6px; padding: 14px;">
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">... more write() calls → 207MB total → shouldChunk = <strong style="color: #dc2626;">YES</strong>
+
+Soft chunking runs first:
+  A: 80MB → 4 × 20MB → encode → freed
+  B: 60MB → 3 × 20MB → encode → freed
+  C: 17MB &lt; 20MB → <span style="color: #999;">SKIP (too small for soft)</span>
+
+Re-check: 17MB raw + 85MB encoded = 102MB &gt; 100MB → <strong style="color: #dc2626;">still above!</strong></pre>
+
+      <!-- Visual: state after soft chunking, before hard chunking (1MB = 4px) -->
+      <div style="margin: 8px 0 8px 0; font-size: 10px; font-weight: 600; color: #92400e; margin-bottom: 4px;">After soft chunking: 17MB raw + 85MB encoded = 102MB</div>
+      <div style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">A:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="cbox" style="width: 20px; font-size: 6px;">c1</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c2</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c3</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c4</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c5</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c6</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c7</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c8</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c9</div>
+            <div class="cbox" style="width: 20px; font-size: 5px;">c10</div>
+          </div>
+          <div style="font-size: 8px; color: #999;">0MB raw + 50MB enc (10 chunks)</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">B:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="cbox" style="width: 20px; font-size: 6px;">c1</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c2</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c3</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c4</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c5</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c6</div>
+            <div class="cbox" style="width: 20px; font-size: 6px;">c7</div>
+          </div>
+          <div style="font-size: 8px; color: #999;">0MB raw + 35MB enc (7 chunks)</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">C:</div>
+          <div style="display: flex; gap: 2px;">
+            <div class="sbox" style="width: 68px; min-width: 0; padding: 0; height: 22px; display: flex; align-items: center; justify-content: center; border-style: dashed;"><div class="sid" style="font-size: 7px;">17MB raw</div></div>
+          </div>
+          <div style="font-size: 8px; color: #dc2626; font-weight: 600;">← only stream with raw data!</div>
+        </div>
+      </div>
+
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">╔══════════════════════════════════════════════════════╗
+║  <strong style="color: #dc2626;">HARD CHUNKING</strong>: chunk ALL streams, ensureFullChunks=false  ║
+║  C is 17MB — only stream left with raw data                ║
+║  17MB &lt; 20MB but allowed because ensureFullChunks=false    ║
+╚══════════════════════════════════════════════════════╝</pre>
+
+      <!-- Visual: C hard chunking -->
+      <div style="margin: 12px 0 8px 24px; max-width: 520px;">
+        <div style="font-size: 11px; color: #dc2626; font-weight: 600; margin-bottom: 6px;">Stream C: 17MB raw → hard chunk (undersized allowed)</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          <div style="font-size: 10px; color: #16a34a; font-weight: 600; width: 36px; text-align: right;">raw:</div>
+          <div style="display: flex; gap: 2px; flex: 1;">
+            <div class="sbox" style="flex: 17; min-width: 0; padding: 0 2px; height: 22px; display: flex; align-items: center; justify-content: center; border-style: dashed;"><div class="sid" style="font-size: 9px;">17MB (&lt;20MB!)</div></div>
+            <div style="flex: 3;"></div>
+          </div>
+        </div>
+        <div style="text-align: center; color: #aaa; font-size: 14px; margin: 2px 0;">↓ encode (undersized allowed)</div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="font-size: 10px; color: #7c3aed; font-weight: 600; width: 36px; text-align: right;">enc:</div>
+          <div style="display: flex; gap: 2px; flex: 1;">
+            <div class="cbox" style="flex: 4; min-width: 0;">~4MB</div>
+            <div style="flex: 16;"></div>
+          </div>
+        </div>
+      </div>
+
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;">
+Re-check: 0 + 89 = 89MB &lt; 100MB → <strong style="color: #16a34a;">STOP</strong>
+shouldFlush? 89MB &lt; 100MB → <strong style="color: #16a34a;">NO → KEEP WRITING</strong></pre>
+
+      <!-- Visual: memory after Phase 2b -->
+      <div style="margin-top: 12px; font-size: 10px; font-weight: 600; color: #92400e; margin-bottom: 4px;">IN MEMORY: 0MB raw + 89MB encoded</div>
+      <div style="max-width: 560px;">
+        <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">A:</div>
+          <div style="display: flex; gap: 1px; width: 300px;">
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c1</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c2</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c3</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c4</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c5</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c6</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c7</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c8</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c9</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 5px;">c10</div>
+          </div>
+          <div style="font-size: 8px; color: #999;">50MB (10 chunks)</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 3px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">B:</div>
+          <div style="display: flex; gap: 1px; width: 300px;">
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c1</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c2</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c3</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c4</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c5</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c6</div>
+            <div class="cbox" style="flex: 5; min-width: 0; font-size: 6px;">c7</div>
+            <div style="flex: 15;"></div>
+          </div>
+          <div style="font-size: 8px; color: #999;">35MB (7 chunks)</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <div style="width: 20px; text-align: right; font-size: 9px; color: #333; font-weight: 600;">C:</div>
+          <div style="display: flex; gap: 1px; width: 300px;">
+            <div class="cbox" style="flex: 4; min-width: 0; font-size: 6px;">c1</div>
+            <div style="flex: 46;"></div>
+          </div>
+          <div style="font-size: 8px; color: #999;">4MB (1 chunk)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2c -->
+  <div style="margin-bottom: 24px;">
+    <div style="border-left: 4px solid #d97706; padding-left: 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 700; color: #d97706;">Phase 2c: Final writes trigger stripe flush</div>
+    </div>
+
+    <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 8px 12px; font-family: monospace; font-size: 10px; color: #333; margin-bottom: 12px;">
+      ... more write() calls ...<br>
+      StreamData A (raw): &nbsp;&nbsp;25MB &nbsp;(new since last chunk)<br>
+      StreamData B (raw): &nbsp;&nbsp;15MB<br>
+      StreamData C (raw): &nbsp;&nbsp;&nbsp;3MB<br>
+      encodedStreams_[A]: &nbsp;50MB &nbsp;(10 chunks)<br>
+      encodedStreams_[B]: &nbsp;35MB &nbsp;(7 chunks)<br>
+      encodedStreams_[C]: &nbsp;&nbsp;4MB &nbsp;(1 chunk)<br>
+      ────────────────────────────<br>
+      memoryUsed = 43MB &nbsp;&nbsp;&nbsp;&nbsp; stripeEncodedSize = 89MB
+    </div>
+
+    <div style="background: #fff; border: 2px solid #fcd34d; border-radius: 6px; padding: 14px;">
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;"><strong style="color: #d97706;">evaluateFlushPolicy()</strong>
+│
+├─ shouldChunk?  43 + 89 = 132MB &lt; 200MB → <strong style="color: #16a34a;">NO</strong>
+│
+├─ shouldFlush?
+│     Estimated: 89 + 43/3.7 ≈ 100.6MB ≥ 100MB → <strong style="color: #dc2626;">YES!</strong>
+│
+└─→ <strong style="color: #dc2626;">writeStripe()!</strong></pre>
+    </div>
+  </div>
+
+  <!-- Phase 3 -->
+  <div>
+    <div style="border-left: 4px solid #dc2626; padding-left: 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 700; color: #dc2626;">Phase 3: writeStripe() — flush everything to disk</div>
+    </div>
+
+    <div style="background: #fff; border: 2px solid #fda4af; border-radius: 6px; padding: 14px;">
+      <pre style="font-family: monospace; font-size: 11px; line-height: 1.7; color: #555; margin: 0; white-space: pre; overflow-x: auto; background: none; border: none; padding: 0;"><strong style="color: #dc2626;">writeStripe()</strong>
+│
+├─ 1. <strong>Encode ALL remaining raw data</strong> (lastChunk=true, minChunkSize=0)
+│
+│     A: 25MB raw → [view1: 20MB] [view2: 5MB]
+│        → encodeChunk(20MB) → ~5MB encoded
+│        → encodeChunk(5MB)  → ~1.3MB encoded  <span style="color: #999;">← allowed because minChunkSize=0</span>
+│     B: 15MB raw → [view1: 15MB]
+│        → encodeChunk(15MB) → ~3.8MB encoded
+│     C: 3MB raw → [view1: 3MB]
+│        → encodeChunk(3MB)  → ~0.8MB encoded
+│
+├─ 2. <strong>Final chunk inventory:</strong>
+│
+│     encodedStreams_[A].chunks: [c1..c10 from chunking rounds] + [c11, c12]
+│                                 = <strong style="color: #7c3aed;">12 chunks total</strong>
+│     encodedStreams_[B].chunks: [c1..c7 from chunking rounds] + [c8]
+│                                 = <strong style="color: #7c3aed;">8 chunks total</strong>
+│     encodedStreams_[C].chunks: [c1 from hard chunking] + [c2]
+│                                 = <strong style="color: #7c3aed;">2 chunks total</strong>
+│
+├─ 3. Compact encodedStreams_ (remove empty slots), pass to TabletWriter
+│
+├─ 4. <strong>TabletWriter::writeStripe()</strong> writes to disk:
+│
+│     for (stream : streams) {
+│         writeStreamWithChecksum(stream);  <span style="color: #999;">// all chunks contiguously</span>
+│     }
+│
+└─ 5. Reset everything (clear all StreamData + encodedStreams_), start next stripe</pre>
+
+      <!-- On disk -->
+      <div style="margin-top: 12px; background: #f1f5f9; border: 1px solid #94a3b8; border-radius: 4px; padding: 8px 12px;">
+        <div style="font-size: 10px; font-weight: 700; color: #475569; margin-bottom: 4px;">ON DISK (one stripe)</div>
+        <div style="display: flex; gap: 2px; font-family: monospace; font-size: 10px;">
+          <div style="flex: 3; background: #dbeafe; border: 1px solid #93c5fd; border-radius: 3px; padding: 8px; text-align: center; color: #1d4ed8; font-weight: 600;">A-c1 A-c2 .. A-c12<br><span style="font-size: 9px; font-weight: 400;">◄── Stream A ──►</span></div>
+          <div style="flex: 2; background: #dcfce7; border: 1px solid #86efac; border-radius: 3px; padding: 8px; text-align: center; color: #16a34a; font-weight: 600;">B-c1 B-c2 .. B-c8<br><span style="font-size: 9px; font-weight: 400;">◄── Stream B ──►</span></div>
+          <div style="flex: 1; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 3px; padding: 8px; text-align: center; color: #92400e; font-weight: 600;">C-c1 C-c2<br><span style="font-size: 9px; font-weight: 400;">◄─ C ─►</span></div>
+        </div>
+        <div style="text-align: center; font-size: 9px; color: #999; margin-top: 4px;">◄──────────────────────────── ONE STRIPE ────────────────────────────►</div>
+      </div>
+
+      <!-- Chunk Index -->
+      <div style="margin-top: 8px; background: #ede9fe; border: 1px solid #c4b5fd; border-radius: 4px; padding: 8px 12px; font-family: monospace; font-size: 10px; color: #7c3aed;">
+        <strong>CHUNK INDEX (metadata):</strong><br>
+        Stream A: 12 chunks │ chunkRows, chunkOffsets, chunkMins, chunkMaxs<br>
+        Stream B: &nbsp;8 chunks │ chunkRows, chunkOffsets, chunkMins, chunkMaxs<br>
+        Stream C: &nbsp;2 chunks │ chunkRows, chunkOffsets, chunkMins, chunkMaxs<br>
+        → Reader can skip individual chunks via min/max stats (filter pushdown)
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

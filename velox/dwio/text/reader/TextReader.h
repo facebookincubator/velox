@@ -108,8 +108,7 @@ class TextRowReader : public dwio::common::RowReader {
 
   int64_t nextReadSize(uint64_t size) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override;
 
   void resetFilterCaches() override;
 

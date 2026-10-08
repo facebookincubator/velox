@@ -444,7 +444,7 @@ TEST_F(BufferedInputTest, readSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSorting) {
+TEST_F(BufferedInputTest, vreadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -482,7 +482,7 @@ TEST_F(BufferedInputTest, VreadSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSortingWithLabels) {
+TEST_F(BufferedInputTest, vreadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {
@@ -857,7 +857,7 @@ class AdjustedReadPctAccessor : public BufferedInput {
 // exclude the whole current (not-yet-read) stripe -- not just the last
 // reference -- so a fully-read column scores ~100% (and is eligible for
 // prefetch) instead of roughly half.
-TEST(BufferedInputAdjustedReadPctTest, ExcludesWholeCurrentStripe) {
+TEST(BufferedInputAdjustedReadPctTest, excludesWholeCurrentStripe) {
   cache::ScanTracker tracker(
       "test", /*unregisterer=*/nullptr, /*loadQuantum=*/1 << 20);
   const cache::TrackingId id(1);

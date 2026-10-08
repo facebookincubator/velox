@@ -22,6 +22,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -498,10 +499,10 @@ TEST_P(MultiFragmentTest, distributedTableScan) {
 // When the tasks correspond to a MergeExchange are aborted, we expect
 // gracefully exiting of the task itself, and all relevant resources are cleaned
 // up. What happens is that the tasks are aborted; however, the MergeExchange
-// operator's ExchangeClient's are never closed, so the Driver threads are stuck
-// in a tight request loop. This test ensures that after the Tasks have
-// successfully aborted, we're only left with the correct amount of references
-// to the Merge task.
+// operator's InMemoryExchangeClient's are never closed, so the Driver threads
+// are stuck in a tight request loop. This test ensures that after the Tasks
+// have successfully aborted, we're only left with the correct amount of
+// references to the Merge task.
 TEST_P(MultiFragmentTest, abortMergeExchange) {
   setupSources(20, 1000);
 
@@ -2018,7 +2019,7 @@ class SlowOperatorTranslator : public Operator::PlanNodeTranslator {
 };
 
 TEST_P(MultiFragmentTest, exchangeDestruction) {
-  // This unit test tests the proper destruction of ExchangeClient upon
+  // This unit test tests the proper destruction of InMemoryExchangeClient upon
   // task destruction.
   Operator::registerOperator(std::make_unique<SlowOperatorTranslator>());
 
@@ -2143,14 +2144,15 @@ class TestCustomExchange : public exec::Exchange {
       int32_t operatorId,
       DriverCtx* ctx,
       const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
-      std::shared_ptr<ExchangeClient> exchangeClient)
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient)
       : exec::Exchange(
             operatorId,
             ctx,
             std::make_shared<core::ExchangeNode>(
                 customExchangeNode->id(),
                 customExchangeNode->outputType(),
-                customExchangeNode->serdeKind()),
+                customExchangeNode->serdeKind(),
+                std::string{core::TransportKind::kInMemory}),
             std::move(exchangeClient)) {}
 
   RowVectorPtr getOutput() override {
@@ -2165,7 +2167,7 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
       exec::DriverCtx* ctx,
       int32_t id,
       const core::PlanNodePtr& node,
-      std::shared_ptr<ExchangeClient> exchangeClient) override {
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient) override {
     if (auto customExchangeNode =
             std::dynamic_pointer_cast<const TestCustomExchangeNode>(node)) {
       return std::make_unique<TestCustomExchange>(
@@ -2178,58 +2180,73 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
 TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   setupSources(5, 100);
   Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
-  auto leafTaskId = makeTaskId("leaf", 0);
-  core::PlanNodeId partitionNodeId;
-  auto leafPlan =
-      PlanBuilder()
-          .values(vectors_)
-          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
-          .capturePlanNodeId(partitionNodeId)
-          .planNode();
-  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  leafTask->start(1);
+  // Custom leaf nodes name no transport, so they use the built-in in-memory
+  // client even with an isolated query registry.
+  for (const bool isolatedTransportRegistry : {false, true}) {
+    SCOPED_TRACE(
+        isolatedTransportRegistry ? "isolated transport registry"
+                                  : "global transport registry");
+    auto leafTaskId =
+        makeTaskId(isolatedTransportRegistry ? "isolated-leaf" : "leaf", 0);
+    core::PlanNodeId partitionNodeId;
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(1);
 
-  CursorParameters params;
-  params.queryConfigs.emplace(
-      core::QueryConfig::kShuffleCompressionKind,
-      common::compressionKindToString(GetParam().compressionKind));
-  core::PlanNodeId testNodeId;
-  params.maxDrivers = 1;
-  params.planNode =
-      PlanBuilder()
-          .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */) {
-            return std::make_shared<TestCustomExchangeNode>(
-                id, leafPlan->outputType(), GetParam().serdeKind);
-          })
-          .capturePlanNodeId(testNodeId)
-          .planNode();
+    CursorParameters params;
+    if (isolatedTransportRegistry) {
+      params.queryCtx = core::QueryCtx::create(executor_.get());
+      params.queryCtx->setRegistry(
+          ExchangeTransportRegistry::kRegistryKey,
+          ExchangeTransportRegistry::create(/*parent=*/nullptr));
+    }
+    params.queryConfigs.emplace(
+        core::QueryConfig::kShuffleCompressionKind,
+        common::compressionKindToString(GetParam().compressionKind));
+    core::PlanNodeId testNodeId;
+    params.maxDrivers = 1;
+    params.planNode =
+        PlanBuilder()
+            .addNode(
+                [&leafPlan](std::string id, core::PlanNodePtr /* input */) {
+                  return std::make_shared<TestCustomExchangeNode>(
+                      id, leafPlan->outputType(), GetParam().serdeKind);
+                })
+            .capturePlanNodeId(testNodeId)
+            .planNode();
 
-  auto cursor = TaskCursor::create(params);
-  auto task = cursor->task();
-  addRemoteSplits(task, {leafTaskId});
-  while (cursor->moveNext()) {
+    auto cursor = TaskCursor::create(params);
+    auto task = cursor->task();
+    addRemoteSplits(task, {leafTaskId});
+    while (cursor->moveNext()) {
+    }
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+        << leafTask->taskId();
+    ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+
+    EXPECT_NE(
+        toPlanStats(task->taskStats())
+            .at(testNodeId)
+            .customStats.count("testCustomExchangeStat"),
+        0);
+
+    auto planStats = toPlanStats(leafTask->taskStats());
+    const auto serdeKindRuntimsStats =
+        planStats.at(partitionNodeId)
+            .customStats.at(std::string(Operator::kShuffleSerdeKind));
+    ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+    ASSERT_EQ(
+        serdeKindRuntimsStats.min,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+    ASSERT_EQ(
+        serdeKindRuntimsStats.max,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   }
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
-      << leafTask->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
-
-  EXPECT_NE(
-      toPlanStats(task->taskStats())
-          .at(testNodeId)
-          .customStats.count("testCustomExchangeStat"),
-      0);
-
-  auto planStats = toPlanStats(leafTask->taskStats());
-  const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
-  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
-  ASSERT_EQ(
-      serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
-  ASSERT_EQ(
-      serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 }
 
 // This test is to reproduce the race condition between task terminate and no
@@ -2749,7 +2766,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
   test(40 * kMB);
 }
 
-// Verifies that ExchangeClient stats are populated even if task fails.
+// Verifies that InMemoryExchangeClient stats are populated even if task fails.
 DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeStatsOnFailure) {
   // Triggers a failure after fetching first 10 pages.
   std::atomic_uint64_t expectedReceivedPages{0};
@@ -3342,12 +3359,12 @@ TEST_P(MultiFragmentTest, emptySchema) {
                       .singleAggregation({}, {"count(1)"})
                       .planNode();
 
-  test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+  test::AssertQueryBuilder(rootPlan)
       .split(remoteSplit(leafTaskId))
       .config(
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
-      .assertResults("SELECT 1000");
+      .assertSingleResult<int64_t>(1'000);
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();

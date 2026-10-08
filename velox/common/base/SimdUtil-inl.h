@@ -1116,9 +1116,12 @@ uint8_t gather8BitsImpl(
   // offset.  There is an AND which will be zero if the bit is not set.
   // This is finally converted to a mask with a negated SIMD
   // comparison with 0.
-  static const xsimd::batch<int32_t, A> kByteBits = {
-      1, 2, 4, 8, 16, 32, 64, 128};
-  auto maskV = detail::Permute<int32_t, A>::apply(kByteBits, vindex & 7, A{});
+  //
+  // A plain local, not a function-local static: a static's initialization
+  // guard is checked on every call, and it keeps this function from inlining
+  // into gatherBits(), which calls it once per 8 bits.
+  const xsimd::batch<int32_t, A> byteBits = {1, 2, 4, 8, 16, 32, 64, 128};
+  auto maskV = detail::Permute<int32_t, A>::apply(byteBits, vindex & 7, A{});
   auto zero = xsimd::batch<int32_t, A>::broadcast(0);
   auto data = detail::Gather<int32_t, int32_t, A>::template maskApply<1>(
       zero,
@@ -1437,21 +1440,12 @@ struct Crc32<uint64_t, A> {
 
 template <typename T, typename A>
 xsimd::batch<T, A> iota(const A&) {
-#ifdef _MSC_VER
   static const auto kMemo = [] {
     constexpr int N = xsimd::batch<T, A>::size;
     T tmp[N];
-    std::iota(tmp, tmp + N, T{0});
+    std::iota(tmp, tmp + N, 0);
     return xsimd::load_unaligned(tmp);
   }();
-#else
-  static const auto kMemo = ({
-    constexpr int N = xsimd::batch<T, A>::size;
-    T tmp[N];
-    std::iota(tmp, tmp + N, 0);
-    xsimd::load_unaligned(tmp);
-  });
-#endif
   return kMemo;
 }
 

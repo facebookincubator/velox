@@ -216,7 +216,7 @@ TEST_F(IPAddressFunctionsTest, ipSubnetMax) {
       "2001:db8:85a3:1:1:8a2e:370:7334");
 }
 
-TEST_F(IPAddressFunctionsTest, IPSubnetRange) {
+TEST_F(IPAddressFunctionsTest, ipSubnetRange) {
   ASSERT_EQ("192.0.0.0", ipSubnetRangeMin("192.64.1.1/9"));
   ASSERT_EQ("192.127.255.255", ipSubnetRangeMax("192.64.1.1/9"));
   ASSERT_EQ("0.0.0.0", ipSubnetRangeMin("192.64.1.1/0"));
@@ -271,7 +271,7 @@ TEST_F(IPAddressFunctionsTest, IPSubnetRange) {
   ASSERT_EQ("64:ff9b::17", ipSubnetRangeMax("64:ff9b::17/128"));
 }
 
-TEST_F(IPAddressFunctionsTest, IPSubnetOfIPPrefix) {
+TEST_F(IPAddressFunctionsTest, ipSubnetOfIPPrefix) {
   EXPECT_EQ(isSubnetOfIPPrefix("192.168.3.131/26", "192.168.3.144/30"), true);
   EXPECT_EQ(isSubnetOfIPPrefix("64:ff9b::17/64", "64:ffff::17/64"), false);
   EXPECT_EQ(isSubnetOfIPPrefix("64:ff9b::17/32", "64:ffff::17/24"), false);
@@ -298,7 +298,7 @@ TEST_F(IPAddressFunctionsTest, IPSubnetOfIPPrefix) {
   EXPECT_EQ(isSubnetOfIPPrefix("170.0.52.0/24", "170.0.52.0/22"), false);
 }
 
-TEST_F(IPAddressFunctionsTest, IPPrefixCollapseTest) {
+TEST_F(IPAddressFunctionsTest, ipPrefixCollapseTest) {
   auto makeIPPrefixFunc =
       [](const std::string& ipprefix) -> std::tuple<int128_t, int8_t> {
     auto ret = ipaddress::tryParseIpPrefixString(ipprefix);
@@ -553,7 +553,7 @@ TEST_F(IPAddressFunctionsTest, IPPrefixCollapseTest) {
   }
 }
 
-TEST_F(IPAddressFunctionsTest, IPPrefixSubnetsTest) {
+TEST_F(IPAddressFunctionsTest, ipPrefixSubnetsTest) {
   auto ipprefix = [](const std::string& ipprefixString) {
     auto tryIpPrefix = ipaddress::tryParseIpPrefixString(ipprefixString);
     return variant::row(
@@ -630,7 +630,7 @@ TEST_F(IPAddressFunctionsTest, IPPrefixSubnetsTest) {
   }
 }
 
-TEST_F(IPAddressFunctionsTest, IsPrivateIPTest) {
+TEST_F(IPAddressFunctionsTest, isPrivateIPTest) {
   const static std::vector<std::string> privateIpAddresses = {
       // The first and last IP address in each private range
       {"0.0.0.0"},

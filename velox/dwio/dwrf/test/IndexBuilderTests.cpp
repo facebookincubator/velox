@@ -41,14 +41,14 @@ class IndexBuilderTest : public testing::Test {
   StatisticsBuilderOptions options_{16};
 };
 
-TEST_F(IndexBuilderTest, Constructor) {
+TEST_F(IndexBuilderTest, constructor) {
   IndexBuilder builder{nullptr};
   EXPECT_EQ(1, builder.getEntrySize());
   // Ensure a clean start.
   EXPECT_EQ(0, getEntry(builder, 0).positionsSize());
 }
 
-TEST_F(IndexBuilderTest, AddEntry) {
+TEST_F(IndexBuilderTest, addEntry) {
   IndexBuilder builder{nullptr};
   ASSERT_EQ(1, builder.getEntrySize());
   builder.add(0uL);
@@ -70,7 +70,7 @@ TEST_F(IndexBuilderTest, AddEntry) {
   }
 }
 
-TEST_F(IndexBuilderTest, Add) {
+TEST_F(IndexBuilderTest, add) {
   IndexBuilder builder{nullptr};
   builder.add(0uL);
   EXPECT_THAT(getPositions(builder, 0), ElementsAreArray({0uL}));
@@ -90,7 +90,7 @@ TEST_F(IndexBuilderTest, Add) {
   EXPECT_THAT(getPositions(builder, 2), ElementsAreArray({144uL}));
 }
 
-TEST_F(IndexBuilderTest, Backfill) {
+TEST_F(IndexBuilderTest, backfill) {
   IndexBuilder builder{nullptr};
   StatisticsBuilder sb{options_};
   builder.addEntry(sb);
@@ -124,7 +124,7 @@ TEST_F(IndexBuilderTest, Backfill) {
   ASSERT_EQ(0, getEntry(builder, 6).positionsSize());
 }
 
-TEST_F(IndexBuilderTest, RemovePresentStreamPositions) {
+TEST_F(IndexBuilderTest, removePresentStreamPositions) {
   IndexBuilder builder{nullptr};
   auto indexCount = 3;
   StatisticsBuilder sb{options_};

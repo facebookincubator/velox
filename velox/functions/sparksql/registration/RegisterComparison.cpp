@@ -74,7 +74,7 @@ void registerCompareFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, double, double, double>(
       {prefix + "between"});
-  // Decimal comapre functions.
+  // Decimal compare functions.
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_decimal_gt, prefix + "decimal_greaterthan");
   VELOX_REGISTER_VECTOR_FUNCTION(

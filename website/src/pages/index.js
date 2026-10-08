@@ -217,15 +217,15 @@ function LatestCommunityNews() {
         <div className={styles.statsInline}>
           <div>
             <img src={useBaseUrl('img/icon-github-star.svg')} alt="GitHub Stars" />
-            <span>3.7k GitHub Stars</span>
+            <span>4.2k GitHub Stars</span>
           </div>
           <div>
             <img src={useBaseUrl('img/icon-contributors.svg')} alt="Contributors" />
-            <span>330+ Contributors</span>
+            <span>488 Contributors</span>
           </div>
           <div>
             <img src={useBaseUrl('img/icon-commits.svg')} alt="Commits" />
-            <span>5k+ Commits</span>
+            <span>13.5k+ Commits</span>
           </div>
         </div>
 
@@ -239,11 +239,130 @@ function LatestCommunityNews() {
 
           <div className={styles.tileScroll} ref={scrollRef}>
             {/* Each tile is boxed */}
-            <a href="https://veloxcon.io/" className={styles.newsTile} target="_blank" rel="noopener">
+            <a href="https://www.bagevent.com/event/9240454" className={styles.newsTile} target="_blank" rel="noopener">
   <span className={styles.newsTag}>Event</span>
-  <h3>VeloxCon 2026</h3>
-  <p>Join us at Meta HQ in the Bay Area, April 29-30 for in-person VeloxCon.</p>
+  <h3>VeloxCon China 2026</h3>
+  <p>Join us December 5 at Alibaba Xuhui Riverside Park, Shanghai. CFP is now open.</p>
+  <span className={styles.newsDate}>December 2026</span>
+</a>
+
+            <a href="https://www.youtube.com/playlist?list=PLJvBe8nQAEsE6CVJCCx7yMENUS7Id7Ptt" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Event</span>
+  <h3>VeloxCon 2026 Recordings</h3>
+  <p>Sessions from VeloxCon 2026 at Meta HQ are now available on-demand on our YouTube channel.</p>
+  <span className={styles.newsDate}>August 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/native-delta-statistics" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Native Delta Statistics with Velox Task Barriers</h3>
+  <p>Gluten now evaluates Delta Lake per-file statistics natively using a Velox Task Barrier instead of processing rows one at a time.</p>
+  <span className={styles.newsDate}>August 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/hash-table-caching" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Build Once, Probe Many: Hash Table Caching in Velox</h3>
+  <p>HashTableCache replaces build-per-task with a build-once, reuse-many protocol for broadcast joins.</p>
+  <span className={styles.newsDate}>August 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/war-of-the-allocators" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>War of the Allocators</h3>
+  <p>Comparing jemalloc against Velox's custom mmap-based allocator on performance, fragmentation, and RSS control.</p>
+  <span className={styles.newsDate}>July 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/openzl-in-nimble-oss" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Making OpenZL Available in Nimble OSS</h3>
+  <p>Nimble's long-standing OpenZL compression integration is now open source for external contributors.</p>
+  <span className={styles.newsDate}>July 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/right-semi-join-performance" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox</h3>
+  <p>Why a seemingly equivalent join rewrite caused a 10x regression, and the fix that closed the gap.</p>
+  <span className={styles.newsDate}>June 2026</span>
+</a>
+
+            <a href="https://prestodb.io/blog/2026/06/24/gpu-accelerated-presto-c/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>GPU-Accelerated Presto C++ is Here</h3>
+  <p>IBM and NVIDIA bring cuDF-backed GPU operators to Velox, with nightly GPU-accelerated Presto C++ images now published.</p>
+  <span className={styles.newsDate}>June 2026</span>
+</a>
+
+            <a href="https://arxiv.org/abs/2606.24647" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Paper</span>
+  <h3>Accelerating Presto with GPUs</h3>
+  <p>IBM Research paper (VLDB 2026) on GPU-aware Velox operators and a GPU-native Presto exchange, up to 6x cheaper than CPU-only Presto.</p>
+  <span className={styles.newsDate}>June 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/parquet-delta-decoding" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox</h3>
+  <p>Targeted bit-copy and SIMD optimizations cut Parquet DELTA decoding CPU time by 4.5x.</p>
+  <span className={styles.newsDate}>June 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/flatmapvector" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>FlatMapVector Adoption for Scaling High-Performance AI/ML Data Pre-Processing</h3>
+  <p>How FlatMapVector improves handling of the map-column features common in AI/ML feature stores.</p>
+  <span className={styles.newsDate}>May 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/nimble-cluster-index" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Nimble Cluster Index: Efficient Indexed Lookups on Columnar Data</h3>
+  <p>A hierarchical index embedded in Nimble files enables O(log n) point lookups without sacrificing columnar scan performance.</p>
   <span className={styles.newsDate}>April 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/axiom-composable-query-engines" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Axiom: Composable Query Engines Built on Velox</h3>
+  <p>Introducing Axiom, a C++ library for building fully composable, high-performance query engines on top of Velox.</p>
+  <span className={styles.newsDate}>April 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/nullif-special-form" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Why NULLIF Must Be a Special Form</h3>
+  <p>Why NULLIF can't be implemented as a regular function and must be handled as a SQL special form.</p>
+  <span className={styles.newsDate}>April 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/debugging-flaky-ci-across-repos" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>From flaky Axiom CI to a Velox bug fix: a cross-repo debugging story</h3>
+  <p>Tracing an intermittent macOS-only CI failure in Axiom back to a bug in its Velox submodule dependency.</p>
+  <span className={styles.newsDate}>March 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/velox-adaptive-cpu-sampling" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Adaptive Per-Function CPU Time Tracking</h3>
+  <p>A per-function CPU usage breakdown for Velox expression trees, useful for pinpointing costly functions in long-running jobs.</p>
+  <span className={styles.newsDate}>March 2026</span>
+</a>
+
+            <a href="https://www.nvidia.com/en-us/on-demand/session/gtc26-s81769/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Talk</span>
+  <h3>GTC 2026: GPU-Accelerated Presto and Velox</h3>
+  <p>NVIDIA and IBM Research walk through recent performance improvements for Velox's experimental cuDF-backed GPU execution mode.</p>
+  <span className={styles.newsDate}>March 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/simd-capped-unicode-length" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Accelerating Unicode string processing with SIMD in Velox</h3>
+  <p>SIMD-based Unicode length helpers deliver 2-15x speedups across most string length configurations.</p>
+  <span className={styles.newsDate}>March 2026</span>
 </a>
 
             <a href="https://velox-lib.io/blog/regex-hidden-traps" className={styles.newsTile} target="_blank" rel="noopener">

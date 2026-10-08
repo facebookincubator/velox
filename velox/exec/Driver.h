@@ -38,6 +38,8 @@ namespace facebook::velox::exec {
 
 class Driver;
 class ExchangeClient;
+struct ExchangeTransportEntry;
+class InMemoryExchangeClient;
 class Operator;
 struct OperatorStats;
 class Task;
@@ -827,9 +829,12 @@ struct DriverFactory {
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
+  /// Builds one driver. If the pipeline's leaf needs an exchange client, Task
+  /// supplies the client and matching transport entry; otherwise both are null.
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
       std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<ExchangeTransportEntry> exchangeTransportEntry,
       const PartitionedOutputFactory& outputOperatorFactory,
       std::shared_ptr<PipelinePushdownFilters> filters,
       std::function<int(int pipelineId)> numDrivers);

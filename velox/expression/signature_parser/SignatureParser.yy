@@ -1,4 +1,5 @@
 %{
+#define yyFlexLexer veloxspFlexLexer
 #include <FlexLexer.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/TypeSignature.h"

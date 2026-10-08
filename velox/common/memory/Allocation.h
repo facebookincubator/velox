@@ -21,7 +21,6 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
-#include "velox/common/base/GTestMacros.h"
 
 namespace facebook::velox::memory {
 
@@ -168,6 +167,18 @@ class Allocation {
   /// Moves the runs in 'from' to 'this'. 'from' is empty on return.
   void appendMove(Allocation& from);
 
+  /// Appends a run of pages owned by this allocation. The caller must ensure
+  /// that the pages have been allocated and are not owned by another object.
+  void append(uint8_t* address, MachinePageCount numPages);
+
+  /// Clears the allocation metadata without freeing the underlying pages. The
+  /// caller must release or transfer ownership of the pages before calling.
+  void clear() {
+    runs_.clear();
+    numPages_ = 0;
+    pool_ = nullptr;
+  }
+
   std::string toString() const;
 
  private:
@@ -176,31 +187,9 @@ class Allocation {
     VELOX_CHECK(numPages_ != 0 || pool_ == nullptr);
   }
 
-  void append(uint8_t* address, MachinePageCount numPages);
-
-  void clear() {
-    runs_.clear();
-    numPages_ = 0;
-    pool_ = nullptr;
-  }
-
   MemoryPool* pool_{nullptr};
   std::vector<PageRun> runs_;
   int32_t numPages_ = 0;
-
-  // NOTE: we only allow memory allocators to change an allocation's internal
-  // state.
-  friend class MemoryAllocator;
-  friend class MmapAllocator;
-  friend class MallocAllocator;
-
-  VELOX_FRIEND_TEST(MemoryAllocatorTest, allocationClass1);
-  VELOX_FRIEND_TEST(MemoryAllocatorTest, allocationClass2);
-  VELOX_FRIEND_TEST(AllocationTest, append);
-  VELOX_FRIEND_TEST(AllocationTest, appendMove);
-  VELOX_FRIEND_TEST(AllocationTest, copy);
-  VELOX_FRIEND_TEST(AllocationTest, copyOutOfRange);
-  VELOX_FRIEND_TEST(AllocationTest, maxPageRunLimit);
 };
 
 /// Represents a run of contiguous pages that do not belong to any size class.

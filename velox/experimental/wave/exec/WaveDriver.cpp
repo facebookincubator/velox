@@ -410,7 +410,7 @@ RowVectorPtr WaveDriver::getOutput() {
 }
 
 bool WaveDriver::maybeWaitForPeers() {
-  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) == 1) {
+  if (operatorCtx_->numPeers() == 0) {
     return false;
   }
   if (barrier_->stateMap().states.empty()) {
@@ -418,21 +418,17 @@ bool WaveDriver::maybeWaitForPeers() {
   }
   TR("wait_for_peers\n");
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
-          &blockingFuture_,
-          promises,
-          peers)) {
+  if (!operatorCtx_->allPeersFinished(
+          &blockingFuture_, promises, peerOperators)) {
     blockingReason_ = exec::BlockingReason::kYield;
     return true;
   }
 
   // Realize the promises so that the other Drivers (which were not
   // the last to finish) can continue from the barrier.
-  peers.clear();
+  peerOperators.clear();
   for (auto& promise : promises) {
     promise.setValue();
   }

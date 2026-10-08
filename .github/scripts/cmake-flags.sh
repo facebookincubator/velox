@@ -102,6 +102,13 @@ ubuntu-debug | ubuntu-bundled-deps)
     # runs on a bare runner that doesn't install it, so it can't enable CXL.
     CMAKE_FLAGS+=(-DVELOX_ENABLE_CXL=ON)
   fi
+  if [[ $BUILD_PROFILE == "ubuntu-bundled-deps" ]]; then
+    # Nimble needs OpenZL and FSST, neither of which is packaged by any distro
+    # (FSST has no releases at all), so BUNDLED is the only resolution mode that
+    # can satisfy them. This profile is therefore the one place in CI where
+    # VELOX_ENABLE_NIMBLE=ON can be exercised.
+    CMAKE_FLAGS+=(-DVELOX_ENABLE_NIMBLE=ON)
+  fi
   if [[ $BUILD_PROFILE == "ubuntu-debug" && ${USE_CLANG:-false} != "true" ]]; then
     # REMOTE_FUNCTIONS pulls in fbthrift / fizz / wangle / mvfst, which
     # velox doesn't bundle. ubuntu-debug runs in the velox-dev container

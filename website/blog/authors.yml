@@ -90,6 +90,16 @@ tanjialiang:
   url: https://github.com/tanjialiang
   image_url: https://github.com/tanjialiang.png
 
+duxiao:
+  name: Xiao Du
+  title: Software Engineer @ Meta
+
+pgolash:
+  name: Prashant Golash
+  title: Software Engineer @ Meta
+  url: https://github.com/prashantgolash
+  image_url: https://github.com/prashantgolash.png
+
 oerling:
   name: Orri Erling
   title: Software Engineer @ Meta
@@ -191,3 +201,9 @@ srsuryadev:
   title: Software Engineer @ Meta
   url: https://github.com/srsuryadev
   image_url: https://github.com/srsuryadev.png
+
+zhztheplayer:
+  name: Hongze Zhang
+  title: Software Engineer @ IBM
+  url: https://github.com/zhztheplayer
+  image_url: https://github.com/zhztheplayer.png

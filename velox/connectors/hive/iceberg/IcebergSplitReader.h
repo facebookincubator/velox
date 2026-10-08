@@ -50,7 +50,7 @@ class IcebergSplitReader : public FileSplitReader {
 
   void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats,
+      dwio::common::RuntimeStats& runtimeStats,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
       override;
 
@@ -66,9 +66,10 @@ class IcebergSplitReader : public FileSplitReader {
 
   // Builds the requested-schema field-id trees, one per top-level column,
   // aligned to tableHandle_->dataColumns(). Projected and filter-only Iceberg
-  // handles provide field IDs. Data columns without an Iceberg handle get a
+  // handles provide field IDs. Data columns without an Iceberg handle fall back
+  // to the table handle's full-schema field IDs when available, otherwise a
   // negative sentinel id that matches no physical field. Returns empty when no
-  // Iceberg handles are available.
+  // Iceberg handles and no full-schema field IDs are available.
   std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
 
   /// Adapts the data file schema to match the table schema expected by the
@@ -130,22 +131,63 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves the equality field IDs of an equality-delete file to the
-  // corresponding column names and types in the table schema. In Iceberg,
-  // field IDs for top-level columns are assigned sequentially starting from
-  // 1, matching the column order in the table schema.
+  // Resolves equality-delete field IDs to column names and types using the
+  // table handle's full-schema field IDs. Falls back to the legacy one-based
+  // ordinal mapping when those IDs are unavailable or incomplete.
   std::pair<std::vector<std::string>, std::vector<TypePtr>>
   resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
 
+  // A column next() fills in, whose filters run after the read.
+  struct PostReadFilter {
+    // Owned by 'scanSpec_'.
+    common::ScanSpec* scanSpec;
+    // Index of the column in the reader output.
+    column_index_t outputIndex;
+  };
+
+  // Appends the filled-in columns that are filtered but not projected, so
+  // next() has a slot to fill.
+  void projectFilterOnlyFilledColumns();
+
+  // Disables the filters on the filled-in columns in the reader, which sees
+  // the values before the fill-in, and records the columns in
+  // 'postReadFilters_' for next() to filter. A disabled filter prunes no files
+  // or row groups and drops no rows in the reader, so a split filtered only on
+  // filled-in columns reads every row: the file statistics do not describe the
+  // filled-in values.
+  void configurePostReadFilters();
+
+  // Sets the bit in 'rowsToRemove' of every row failing 'postReadFilters_'.
+  void markRowsFailingPostReadFilters(
+      const RowVector& output,
+      uint64_t* rowsToRemove);
+
+  // Appends 'names' and 'types' to 'readerOutputType_' and returns their
+  // projected scan spec children.
+  std::vector<common::ScanSpec*> appendProjectedColumns(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types);
+
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
-  // read and made available in the output RowVector. For partition columns
-  // the partition value is set as a constant on the scan-spec child so the
-  // augmentation works regardless of whether the data file physically
-  // contains the partition column. Augmented columns are appended at the end
-  // of 'readerOutputType_' so the upstream FileDataSource's positional
+  // read and made available in the output RowVector. When the split proves
+  // the column's Iceberg field ID belongs to an identity partition field
+  // (see 'HiveIcebergSplit::identityPartitionKeys'), the partition value is
+  // set as a constant on the scan-spec child so the augmentation works
+  // regardless of whether the data file physically contains the column;
+  // every other column, including one partitioned by a transform, is read
+  // from the file. Augmented columns are appended at the end of
+  // 'readerOutputType_' so the upstream FileDataSource's positional
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
+
+  // Fails if the reader tree for the current split cannot supply one of
+  // 'equalityColumnNames', which would silently match no row to delete.
+  // 'configureEqualityDeleteColumns' establishes what is checked, so a failure
+  // is an internal error. Reads subscripts the reader tree assigns, so call it
+  // only once 'nextRowNumber()' has loaded the first stripe or row group.
+  void checkEqualityDeleteColumnsAreReadable(
+      const std::vector<std::string>& equalityColumnNames) const;
 
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
@@ -161,8 +203,10 @@ class IcebergSplitReader : public FileSplitReader {
   // out of its file-natural position.
   folly::F14FastSet<std::string> equalityAugmentedPartitionColumns_;
 
+ protected:
   const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 
+ private:
   /// Read offset to the beginning of the split in number of rows for the
   /// current batch for the base data file.
   uint64_t baseReadOffset_;
@@ -195,10 +239,25 @@ class IcebergSplitReader : public FileSplitReader {
   // directly. row_position is computed in next() per row.
   std::optional<int32_t> targetTableSpecId_;
   std::optional<std::string> targetTablePartitionData_;
-  // Whether an implicit row-number column is needed for _row_id computation
-  // (set when filters, random-skip, or positional deletes make output
-  // positions non-contiguous).
+  // Output channels whose Iceberg schema type is, or contains, GEOMETRY.
+  // Resolved once per split in prepareSplit() from 'readerOutputType_', which
+  // mirrors the Iceberg column assignments, so next() pays nothing for tables
+  // without a geometry column. The Iceberg connector is the sole owner of the
+  // WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
+  std::vector<column_index_t> geometryOutputChannels_;
+  // Whether the reader appends a row-number column, the source of the file
+  // positions for _row_id and $target_table_row_id.
   bool useRowNumberColumn_{false};
+
+  // Filled-in columns of the current split, with or without a filter yet: a
+  // dynamic filter can arrive later.
+  std::vector<PostReadFilter> postReadFilters_;
+  // Rows of the current batch passing 'postReadFilters_'. Reused across
+  // batches.
+  BufferPtr passingRows_;
+  // Rows to drop from the current batch, shared by the post-read filters and
+  // the equality deletes. Reused across batches.
+  BufferPtr rowsToRemove_;
 
   /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
   std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;

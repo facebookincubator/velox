@@ -20,6 +20,7 @@
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook;
@@ -78,6 +79,11 @@ int main(int argc, char** argv) {
   // 'FunctionBenchmarkBase'. Register SparkSQL functions afterward so the
   // benchmarks use Spark cast implementations.
   functions::sparksql::registerFunctions("");
+  benchmarkBuilder.setQueryConfig(
+      functions::sparksql::SparkQueryConfig::qualify(
+          functions::sparksql::SparkQueryConfig::
+              kDecimalToFloatHighPrecisionCastEnabled),
+      "true");
   const vector_size_t vectorSize = 1000;
   auto vectorMaker = benchmarkBuilder.vectorMaker();
   auto decimalInput = vectorMaker.flatVector<int64_t>(
@@ -135,6 +141,20 @@ int main(int argc, char** argv) {
       .addExpression("cast_short_decimal", "cast (short_decimal as varchar)")
       .addExpression("cast_small_decimal", "cast (small_decimal as varchar)")
       .addExpression("cast_long_decimal", "cast (long_decimal as varchar)")
+      .addExpression("cast_decimal_as_float", "cast (decimal as float)")
+      .addExpression("cast_decimal_as_double", "cast (decimal as double)")
+      .addExpression(
+          "cast_short_decimal_as_float", "cast (short_decimal as float)")
+      .addExpression(
+          "cast_short_decimal_as_double", "cast (short_decimal as double)")
+      .addExpression(
+          "cast_small_decimal_as_float", "cast (small_decimal as float)")
+      .addExpression(
+          "cast_small_decimal_as_double", "cast (small_decimal as double)")
+      .addExpression(
+          "cast_long_decimal_as_float", "cast (long_decimal as float)")
+      .addExpression(
+          "cast_long_decimal_as_double", "cast (long_decimal as double)")
       .withIterations(iterations)
       .disableTesting();
 

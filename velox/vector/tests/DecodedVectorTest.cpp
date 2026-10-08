@@ -651,6 +651,367 @@ TEST_F(DecodedVectorTest, dictionary) {
       1000, [](vector_size_t i) { return std::make_shared<int>(i % 5); });
 }
 
+TEST_F(DecodedVectorTest, ownsIndices) {
+  auto base = makeFlatVector<int64_t>({10, 20, 30});
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+
+  // A single wrapping is adopted by pointer, so the caller may borrow it.
+  auto oneLevel = BaseVector::wrapInDictionary(nullptr, reversed, 3, base);
+  DecodedVector decoded(*oneLevel);
+  EXPECT_EQ(decoded.indices(), reversed->as<vector_size_t>());
+  EXPECT_FALSE(decoded.ownsIndices());
+
+  // Composing a second wrapping materializes indices here instead.
+  auto identity = makeIndices(3, [](auto row) { return row; });
+  auto twoLevels = BaseVector::wrapInDictionary(nullptr, identity, 3, oneLevel);
+  decoded.decode(*twoLevels);
+  EXPECT_NE(decoded.indices(), identity->as<vector_size_t>());
+  EXPECT_TRUE(decoded.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsIndicesSingleRow) {
+  // One row is where a range-based ownership check goes wrong, because the
+  // buffer's first and last element share an address. indices_ only ever
+  // points at the start of copiedIndices_ or somewhere else entirely, so the
+  // check is an equality and the size cannot matter. This pins that.
+  auto base = makeFlatVector<int64_t>({10});
+  auto indices = makeIndices(1, [](auto) { return 0; });
+  auto oneLevel = BaseVector::wrapInDictionary(nullptr, indices, 1, base);
+  auto twoLevels = BaseVector::wrapInDictionary(nullptr, indices, 1, oneLevel);
+
+  DecodedVector decoded(*twoLevels);
+  ASSERT_EQ(decoded.indices()[0], 0);
+  EXPECT_TRUE(decoded.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsIndicesBeforeIndicesIsCalled) {
+  // A caller deciding whether it may borrow should not have to allocate to
+  // find out, and for a flat input indices() allocates. The answer must
+  // therefore be available before it runs, and agree with it afterwards.
+  auto small = makeFlatIdentityVector<int64_t>(100);
+  DecodedVector decoded(*small);
+  EXPECT_FALSE(decoded.ownsIndices());
+  EXPECT_EQ(decoded.indices()[7], 7);
+  EXPECT_FALSE(decoded.ownsIndices());
+
+  // Past the shared array's 10'000 entries there is nothing to hand back, so
+  // indices() has to materialize and the answer flips.
+  auto large = makeFlatIdentityVector<int64_t>(20'000);
+  DecodedVector decodedLarge(*large);
+  EXPECT_TRUE(decodedLarge.ownsIndices());
+  EXPECT_EQ(decodedLarge.indices()[19'999], 19'999);
+  EXPECT_TRUE(decodedLarge.ownsIndices());
+}
+
+TEST_F(DecodedVectorTest, ownsNullsDoesNotDependOnCallOrder) {
+  // Asking first must give the same answer as asking after, or a caller that
+  // checks before fetching gets told a decoder-owned bitmap is borrowable.
+  auto base = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, reversed, 3, base);
+
+  DecodedVector asked(*dictionary);
+  EXPECT_TRUE(asked.ownsNulls());
+  EXPECT_TRUE(asked.ownsNulls());
+
+  DecodedVector fetched(*dictionary);
+  ASSERT_NE(fetched.nulls(), nullptr);
+  EXPECT_TRUE(fetched.ownsNulls());
+
+  // And the null-free case answers without materializing anything, which is
+  // what lets a caller ask unconditionally.
+  auto noNulls = makeFlatVector<int64_t>({1, 2, 3});
+  DecodedVector clean(*noNulls);
+  EXPECT_FALSE(clean.ownsNulls());
+  EXPECT_EQ(clean.nulls(), nullptr);
+}
+
+TEST_F(DecodedVectorTest, ownsNulls) {
+  // Flat nulls are the vector's own bitmap, so they can be borrowed.
+  auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  DecodedVector decoded(*flat);
+  ASSERT_NE(decoded.nulls(), nullptr);
+  EXPECT_FALSE(decoded.ownsNulls());
+  EXPECT_EQ(decoded.nulls(), flat->rawNulls());
+
+  // Reading a null-bearing base through a dictionary gathers the bits into
+  // top-level row order, which is storage this DecodedVector owns -- even
+  // though the wrapping added no nulls of its own.
+  auto reversed = makeIndices(3, [](auto row) { return 2 - row; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, reversed, 3, flat);
+  decoded.decode(*dictionary);
+  ASSERT_NE(decoded.nulls(), nullptr);
+  EXPECT_TRUE(decoded.ownsNulls());
+  EXPECT_NE(decoded.nulls(), flat->rawNulls());
+
+  // No nulls at all is neither owned nor borrowed.
+  auto noNulls = makeFlatVector<int64_t>({1, 2, 3});
+  decoded.decode(*noNulls);
+  ASSERT_EQ(decoded.nulls(), nullptr);
+  EXPECT_FALSE(decoded.ownsNulls());
+}
+
+TEST_F(DecodedVectorTest, nullsOfDictionaryOverNullableBase) {
+  // Gathering a base's nulls into row order builds the bitmap a word at a
+  // time when every row is decoded, so the rows to check are the word edges
+  // and the partial last word. 130 rows is two full words and a tail.
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) {
+    return row % 7 == 0 || row == 63 || row == 64 || row == 127 || row == 129;
+  };
+
+  // The indices reverse the base, so row i reads base row kSize - 1 - i.
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  std::vector<bool> expected(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    const auto baseRow = kSize - 1 - row;
+    if (!isRowNull(row)) {
+      baseValues[baseRow] = baseRow;
+    }
+    expected[row] = isRowNull(row);
+  }
+  auto base = makeNullableFlatVector<int64_t>(baseValues);
+  auto reversed = makeIndices(kSize, [](auto row) { return kSize - 1 - row; });
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, reversed, kSize, base);
+
+  const auto nullsOf = [&](const uint64_t* nulls) {
+    std::vector<bool> result(kSize);
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      result[row] = bits::isBitNull(nulls, row);
+    }
+    return result;
+  };
+
+  {
+    DecodedVector decoded(*dictionary);
+    ASSERT_NE(decoded.nulls(), nullptr);
+    EXPECT_EQ(nullsOf(decoded.nulls()), expected);
+  }
+
+  {
+    SelectivityVector rows(kSize);
+    DecodedVector decoded(*dictionary, rows);
+    ASSERT_NE(decoded.nulls(&rows), nullptr);
+    EXPECT_EQ(nullsOf(decoded.nulls(&rows)), expected);
+  }
+}
+
+TEST_F(DecodedVectorTest, nullsOfDictionaryWithNullsOverNullableBase) {
+  // Nulls on both levels: the dictionary's own and the base's, which decoding
+  // merges a word at a time. 130 rows is two full words and a tail, with nulls
+  // from each level on both sides of each word boundary.
+  constexpr vector_size_t kSize = 130;
+  const auto isWrapperNull = [](vector_size_t row) {
+    return row % 11 == 0 || row == 63 || row == 128;
+  };
+  const auto isBaseNull = [](vector_size_t row) {
+    return row % 7 == 0 || row == 64 || row == 127 || row == 129;
+  };
+
+  // The indices reverse the base, so row i reads base row kSize - 1 - i, and
+  // a base null placed there is what row i must see.
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    const auto baseRow = kSize - 1 - row;
+    if (!isBaseNull(row)) {
+      baseValues[baseRow] = baseRow;
+    }
+  }
+  auto wrapperNulls = allocateNulls(kSize, pool());
+  auto* rawWrapperNulls = wrapperNulls->asMutable<uint64_t>();
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    bits::setNull(rawWrapperNulls, row, isWrapperNull(row));
+  }
+  auto dictionary = BaseVector::wrapInDictionary(
+      wrapperNulls,
+      makeIndices(kSize, [](auto row) { return kSize - 1 - row; }),
+      kSize,
+      makeNullableFlatVector<int64_t>(baseValues));
+
+  const auto expectNulls = [&](DecodedVector& decoded,
+                               const SelectivityVector& rows) {
+    rows.applyToSelected([&](vector_size_t row) {
+      EXPECT_EQ(decoded.isNullAt(row), isWrapperNull(row) || isBaseNull(row))
+          << "row " << row;
+    });
+  };
+
+  {
+    DecodedVector decoded(*dictionary);
+    expectNulls(decoded, SelectivityVector(kSize));
+  }
+
+  {
+    // Rows 0-63 all selected, 64-127 the odd ones, 128-129 none.
+    SelectivityVector rows(kSize, false);
+    for (vector_size_t row = 0; row < 128; ++row) {
+      if (row < 64 || row % 2 == 1) {
+        rows.setValid(row, true);
+      }
+    }
+    rows.updateBounds();
+    DecodedVector decoded(*dictionary, rows);
+    expectNulls(decoded, rows);
+  }
+}
+
+TEST_F(DecodedVectorTest, nullsOfPartiallySelectedNestedDictionary) {
+  // A partial decode fills in indices for the selected rows only, and a
+  // reused DecodedVector keeps whatever an earlier decode left in the rest:
+  // here, indices past the end of the smaller base. Selected rows must come
+  // out right in a fully selected word, a partly selected one and an empty
+  // one.
+  constexpr vector_size_t kLargeSize = 10'000;
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) { return row % 5 == 0; };
+
+  // Two dictionary layers, so the indices are composed into storage the
+  // DecodedVector owns and reuses. A reversed outer layer leaves row i holding
+  // index size - 1 - i.
+  const auto makeNested = [&](vector_size_t size, bool reversed) {
+    std::vector<std::optional<int64_t>> baseValues(size);
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (!isRowNull(row)) {
+        baseValues[row] = row;
+      }
+    }
+    auto identity = [](auto row) { return row; };
+    auto inner = BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices(size, identity),
+        size,
+        makeNullableFlatVector<int64_t>(baseValues));
+    auto outer = reversed
+        ? makeIndices(size, [&](auto row) { return size - 1 - row; })
+        : makeIndices(size, identity);
+    return BaseVector::wrapInDictionary(nullptr, outer, size, inner);
+  };
+
+  // Both vectors outlive the decodes: DecodedVector borrows their buffers.
+  auto large = makeNested(kLargeSize, /*reversed=*/true);
+  auto small = makeNested(kSize, /*reversed=*/false);
+
+  DecodedVector decoded;
+  SelectivityVector largeRows(kLargeSize);
+  decoded.decode(*large, largeRows);
+  ASSERT_NE(decoded.nulls(&largeRows), nullptr);
+
+  // Rows 0-63 are all selected, 64-127 only the odd ones, 128-129 none: one
+  // word of each kind.
+  SelectivityVector rows(kSize, false);
+  for (vector_size_t row = 0; row < 128; ++row) {
+    if (row < 64 || row % 2 == 1) {
+      rows.setValid(row, true);
+    }
+  }
+  rows.updateBounds();
+  decoded.decode(*small, rows);
+  const auto* nulls = decoded.nulls(&rows);
+  ASSERT_NE(nulls, nullptr);
+
+  rows.applyToSelected([&](vector_size_t row) {
+    EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+  });
+}
+
+TEST_F(DecodedVectorTest, nullsAtSelectionEdges) {
+  // Where a selection starts and ends decides which rows of its first and last
+  // word count. Each case checks every row it selects.
+  const auto isRowNull = [](vector_size_t row) { return row % 3 == 0; };
+
+  // The indices reverse the base, so row i reads base row size - 1 - i.
+  const auto makeDictionary = [&](vector_size_t size) {
+    std::vector<std::optional<int64_t>> baseValues(size);
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (!isRowNull(row)) {
+        baseValues[size - 1 - row] = size - 1 - row;
+      }
+    }
+    return BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices(size, [size](auto row) { return size - 1 - row; }),
+        size,
+        makeNullableFlatVector<int64_t>(baseValues));
+  };
+
+  const auto expectNulls = [&](const VectorPtr& vector,
+                               const SelectivityVector& rows) {
+    DecodedVector decoded(*vector, rows);
+    const auto* nulls = decoded.nulls(&rows);
+    ASSERT_NE(nulls, nullptr);
+    rows.applyToSelected([&](vector_size_t row) {
+      EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+    });
+  };
+
+  {
+    // Starts and ends mid-word, before the vector's end, with a full word
+    // between.
+    SelectivityVector rows(130, false);
+    rows.setValidRange(10, 100, true);
+    rows.updateBounds();
+    expectNulls(makeDictionary(130), rows);
+  }
+
+  {
+    // Inside one word, partial at both ends.
+    SelectivityVector rows(130, false);
+    rows.setValidRange(5, 21, true);
+    rows.updateBounds();
+    expectNulls(makeDictionary(130), rows);
+  }
+
+  {
+    // Two whole words and no selection: no partial word at all.
+    constexpr vector_size_t kSize = 128;
+    auto dictionary = makeDictionary(kSize);
+    DecodedVector decoded(*dictionary);
+    const auto* nulls = decoded.nulls();
+    ASSERT_NE(nulls, nullptr);
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+    }
+  }
+}
+
+TEST_F(DecodedVectorTest, nullsOfSelectionEditedInPlace) {
+  // A caller may clear bits of 'rows' through asMutableRange() between
+  // nulls() calls without updating its bounds, as deselectRowsWithNulls does
+  // across join keys. isAllSelected() then still reports every row, and
+  // nulls() has to cover every row, as applyToSelected() does: a join reads
+  // the bitmap for rows it has just deselected.
+  constexpr vector_size_t kSize = 130;
+  const auto isRowNull = [](vector_size_t row) { return row % 3 == 0; };
+  std::vector<std::optional<int64_t>> baseValues(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    if (!isRowNull(row)) {
+      baseValues[kSize - 1 - row] = row;
+    }
+  }
+  auto dictionary = BaseVector::wrapInDictionary(
+      nullptr,
+      makeIndices(kSize, [](auto row) { return kSize - 1 - row; }),
+      kSize,
+      makeNullableFlatVector<int64_t>(baseValues));
+
+  SelectivityVector rows(kSize);
+  DecodedVector decoded(*dictionary, rows);
+  // Deselect every other row in place, leaving the bounds and the cached
+  // all-selected state as they were.
+  auto* bits = rows.asMutableRange().bits();
+  for (vector_size_t row = 0; row < kSize; row += 2) {
+    bits::clearBit(bits, row);
+  }
+  ASSERT_TRUE(rows.isAllSelected());
+
+  const auto* nulls = decoded.nulls(&rows);
+  ASSERT_NE(nulls, nullptr);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    EXPECT_EQ(bits::isBitNull(nulls, row), isRowNull(row)) << "row " << row;
+  }
+}
+
 TEST_F(DecodedVectorTest, valueAtOpaqueDoesNotCopy) {
   using TOpaque = std::shared_ptr<void>;
   constexpr vector_size_t size = 100;
@@ -845,8 +1206,7 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   // children. The input vector here is a dictionary wrapped over a
   // rowVector.
   const int kSize = 12;
-  auto intChildVector =
-      makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+  auto intChildVector = makeFlatIdentityVector<int32_t>(kSize);
   auto rowVector = makeRowVector({intChildVector});
   SelectivityVector allRows(kSize);
   DecodedVector decoded;
@@ -940,7 +1300,7 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
   SelectivityVector allRows(kSize);
 
   // non-null
-  auto intVector = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(kSize);
   auto rowVector = makeRowVector({intVector});
   auto constantVector = BaseVector::wrapInConstant(kSize, 1, rowVector);
 
@@ -967,8 +1327,7 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
   }
   {
     // null with empty size children
-    intVector =
-        makeFlatVector<int32_t>(0 /*size*/, [](auto row) { return row; });
+    intVector = makeFlatIdentityVector<int32_t>(0 /*size*/);
     rowVector = std::make_shared<RowVector>(
         pool_.get(),
         rowVector->type(),
@@ -1007,7 +1366,7 @@ TEST_F(DecodedVectorTest, dictionaryWrapOnConstantVector) {
   auto constantVector =
       BaseVector::createConstant(VARCHAR(), variant("abc"), size, pool_.get());
   // int Vector
-  auto intVector = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(size);
   // Row (int, const)
   auto rowVector = makeRowVector({intVector, constantVector});
   // Dictionary encoded row
@@ -1051,8 +1410,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // This test exercises various cases that wrap() can encounter and verifies
   // the expected behavior.
   size_t vectorSize = 5;
-  auto intVector =
-      makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+  auto intVector = makeFlatIdentityVector<int32_t>(vectorSize);
   auto arrayVector = makeArrayVector<int32_t>(
       100,
       [](auto /* row */) { return 2; },
@@ -1193,8 +1551,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // would not contain the nulls from the base.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     // Dict null at indices = 0, 2, 4
     auto dict = BaseVector::wrapInDictionary(
@@ -1216,8 +1573,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // the wrap.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     // Dict null at indices = 0, 2, 4
     auto dict = BaseVector::wrapInDictionary(
@@ -1245,8 +1601,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
   // TODO to ensure it is updated with the right behavior once its fixed.
   {
     // Flat vector identical intVector but has a null at index 1.
-    auto intNullableVector =
-        makeFlatVector<int32_t>(vectorSize, [](auto row) { return row; });
+    auto intNullableVector = makeFlatIdentityVector<int32_t>(vectorSize);
     intNullableVector->setNull(1, true);
     auto dict = BaseVector::wrapInDictionary(
         noNulls, indices, vectorSize, intNullableVector);
@@ -1326,10 +1681,7 @@ TEST_F(DecodedVectorTest, emptyRowsMultiDict) {
   auto dict = wrapInDictionary(
       indices,
       size,
-      wrapInDictionary(
-          indices, size, makeFlatVector<int64_t>(size, [](auto row) {
-            return row;
-          })));
+      wrapInDictionary(indices, size, makeFlatIdentityVector<int64_t>(size)));
 
   {
     SelectivityVector emptyRows(100, false);
@@ -1348,7 +1700,7 @@ TEST_F(DecodedVectorTest, emptyRowsMultiDict) {
 
 TEST_F(DecodedVectorTest, flatNulls) {
   // Flat vector with no nulls.
-  auto flatNoNulls = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  auto flatNoNulls = makeFlatIdentityVector<int64_t>(100);
   {
     SelectivityVector rows(100);
     DecodedVector d(*flatNoNulls, rows);
@@ -1387,7 +1739,7 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   SelectivityVector rows(100);
   DecodedVector d;
 
-  auto flatNoNulls = makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  auto flatNoNulls = makeFlatIdentityVector<int64_t>(100);
   auto flatWithNulls =
       makeFlatVector<int64_t>(100, [](auto row) { return row; }, nullEvery(7));
 
@@ -1739,7 +2091,7 @@ TEST_F(DecodedVectorTest, dictionaryWrapping) {
 }
 
 TEST_F(DecodedVectorTest, dictionaryWrappingForFlat) {
-  auto vector = makeFlatVector<int64_t>(10, folly::identity);
+  auto vector = makeFlatIdentityVector<int64_t>(10);
   DecodedVector decoded;
   auto base = decoded.decodeAndGetBase(vector);
   ASSERT_EQ(base.get(), vector.get());
@@ -1774,7 +2126,7 @@ TEST_F(DecodedVectorTest, previousIndicesInReUsedDecodedVector) {
   // 2-layers are created to ensure copiedIndices_ is used.
   auto indices = makeIndices(3, [](auto /* row */) { return 2; });
   auto innerindices = makeIndices(3, [](auto /* row */) { return 998; });
-  auto flat = makeFlatVector<int64_t>(1000, [](auto row) { return row; });
+  auto flat = makeFlatIdentityVector<int64_t>(1000);
   auto dict = BaseVector::wrapInDictionary(nullptr, innerindices, 3, flat);
   dict = BaseVector::wrapInDictionary(nullptr, indices, 3, dict);
 

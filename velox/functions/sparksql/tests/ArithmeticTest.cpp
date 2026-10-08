@@ -325,7 +325,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 };
 
-TEST_F(ArithmeticTest, UnaryMinus) {
+TEST_F(ArithmeticTest, unaryMinus) {
   EXPECT_EQ(unaryminus<int8_t>(1), -1);
   EXPECT_EQ(unaryminus<int16_t>(2), -2);
   EXPECT_EQ(unaryminus<int32_t>(3), -3);
@@ -361,7 +361,7 @@ TEST_F(ArithmeticTest, unaryMinusAnsi) {
   VELOX_ASSERT_THROW(unaryminus<int64_t>(INT64_MIN), "Arithmetic overflow");
 }
 
-TEST_F(ArithmeticTest, Divide) {
+TEST_F(ArithmeticTest, divide) {
   // Null cases.
   EXPECT_EQ(divide(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(divide(std::nullopt, 1), std::nullopt);
@@ -529,7 +529,7 @@ class CeilFloorTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(CeilFloorTest, Limits) {
+TEST_F(CeilFloorTest, limits) {
   EXPECT_EQ(1, ceil<int64_t>(1));
   EXPECT_EQ(-1, ceil<int64_t>(-1));
   EXPECT_EQ(3, ceil<double>(2.878));

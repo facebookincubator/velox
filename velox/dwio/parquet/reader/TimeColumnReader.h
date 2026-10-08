@@ -40,12 +40,13 @@ class TimeColumnReader : public IntegerColumnReader {
         std::static_pointer_cast<const ParquetTypeWithId>(fileType_);
     if (auto logicalType = typeWithId->logicalType_) {
       VELOX_CHECK(logicalType->getType() == thrift::LogicalType::Type::TIME);
-      const auto unit = logicalType->get_TIME().unit();
+      auto unit = logicalType->get_TIME().unit();
+      const auto unitType = unit->getType();
       VELOX_CHECK(
-          unit->getType() == thrift::TimeUnit::Type::MILLIS ||
-              unit->getType() == thrift::TimeUnit::Type::MICROS,
+          unitType == thrift::TimeUnit::Type::MILLIS ||
+              unitType == thrift::TimeUnit::Type::MICROS,
           "TIME precision other than milliseconds or microseconds is not supported");
-      isMicros_ = unit->getType() == thrift::TimeUnit::Type::MICROS;
+      isMicros_ = unitType == thrift::TimeUnit::Type::MICROS;
     } else if (auto convertedType = typeWithId->convertedType_) {
       VELOX_CHECK(
           convertedType == thrift::ConvertedType::TIME_MILLIS ||

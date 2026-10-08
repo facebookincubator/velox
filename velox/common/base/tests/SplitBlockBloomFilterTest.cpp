@@ -20,8 +20,8 @@
 #include <folly/container/F14Set.h>
 #include <gtest/gtest.h>
 
-#include <random>
 #include <cstring>
+#include <random>
 
 namespace facebook::velox::test {
 namespace {

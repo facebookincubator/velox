@@ -48,7 +48,8 @@ class DefaultOutputBufferManager : public OutputBufferManager {
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers) override;
+      int numDrivers,
+      const std::string& transportOptions = {}) override;
 
   /// Updates the number of destination buffers. Returns true if the buffer
   /// exists for a given taskId, else returns false.

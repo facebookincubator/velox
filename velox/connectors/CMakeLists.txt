@@ -11,6 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+velox_add_library(
+  velox_connector_exception_properties
+  INTERFACE
+  HEADERS
+  ConnectorExceptionProperties.h
+)
+velox_link_libraries(velox_connector_exception_properties INTERFACE velox_exception)
+
 velox_add_library(velox_connector Connector.cpp HEADERS Connector.h ConnectorRegistryInternal.h)
 
 velox_link_libraries(velox_connector velox_common_config velox_exec_spill_stats velox_vector)

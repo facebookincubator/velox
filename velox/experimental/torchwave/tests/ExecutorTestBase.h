@@ -30,7 +30,9 @@
 #include <torch/nativert/executor/Weights.h>
 #include <torch/nativert/kernels/KernelFactory.h>
 
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/GraphPrep.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/tests/CompiledPlan.h"
 #include "velox/experimental/torchwave/tests/DataGen.h"
@@ -92,25 +94,6 @@ std::vector<c10::IValue> loadReferenceValues(const std::string& path);
 /// Returns the device tensors and the transfer time in microseconds.
 std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
     std::vector<c10::IValue>& inputs);
-
-/// Inserts an `aten._to_copy(self, device=cpu)` node before every input
-/// argument flagged `cpuOnly` in its wave Metadata (e.g. the indices of
-/// `aten.tensor_split.tensor_indices_or_sections`), repointing just that edge.
-/// This lets the generic nativert executor run the graph on GPU: tensor_split
-/// reads its indices on the host and returns views of `self`, so `self` and the
-/// outputs stay on GPU and no move-back is needed. Mutates `graph` in place, so
-/// call it on a clone reserved for the nativert-GPU run (wave handles cpuOnly
-/// args itself at runtime and must keep its own copy-free graph). Returns the
-/// number of nodes inserted.
-int32_t insertCpuOnlyCopies(nativert::Graph& graph);
-
-/// Rewrites ops that have no CUDA implementation to a CUDA-capable equivalent
-/// so the generic nativert executor can run the graph on GPU. Currently
-/// rewrites `fb.simple_1d_concat` (CUDA registration is a throwing dummy) to
-/// `aten.cat.default(dim=0)`, mirroring wave's MoreBuiltins rewrite. Mutates
-/// `graph`; call on the nativert-GPU clone. Returns the number of nodes
-/// rewritten.
-int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
 
 /// Snapshots a frame: returns a map from value id to shape string (e.g.
 /// "[3,4]") for tensors, "scalar" for scalars. None slots are omitted.
@@ -269,6 +252,16 @@ class ExecutorTestBase : public ::testing::Test {
       std::vector<c10::IValue> inputs,
       const std::string& refFramePath);
 
+  /// Drops the reference-frame entries whose value ids the wave graph cannot
+  /// have, and returns how many were dropped. The reference run mints Values
+  /// the wave run does not (insertCpuOnlyCopies' _to_copy outputs), and they
+  /// take the ids straight after the loaded graph's last -- which is exactly
+  /// where the wave graph's own rewrites start numbering. Left in, those
+  /// entries make the intermediates check compare two unrelated tensors. No-op
+  /// until runNativertReferenceWithInputs has recorded the boundary.
+  int32_t dropUnsharedReferenceValues(
+      std::unordered_map<int32_t, c10::IValue>& refFrame) const;
+
   /// Runs 'fixture' through the wave executor with explicit 'inputs' and
   /// verifies against 'expected'. If 'refFramePath' is non-empty it is loaded
   /// as the reference frame so wave checks intermediates too.
@@ -293,6 +286,11 @@ class ExecutorTestBase : public ::testing::Test {
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
   int64_t lastRefNodesChecked_{0};
+
+  // Number of Values the reference graph and the wave graph agree on, recorded
+  // by runNativertReferenceWithInputs before the passes only the reference
+  // runs. Ids at or above it exist in one graph only. -1 until recorded.
+  int32_t numSharedReferenceValues_{-1};
 
   /// Display name for the current test, included in failure messages.
   std::string displayName_;
@@ -335,6 +333,14 @@ class ExecutorTestBase : public ::testing::Test {
   /// the multi-kernel grid contains every op; the single-block and cg grids
   /// hold only the ops that have such a variant (e.g. masked_select).
   ModePlans compilePlans(const std::string& pt2File);
+
+  /// Compiles 'pt2File' for the grid 'cg' names and returns what the
+  /// allocation-group pass makes of it, so a test can assert on the plan --
+  /// which concats are placed ahead of their operands, what the lifetime
+  /// grouping folds -- without running the graph. The mode runs on both grids,
+  /// and places fewer concat operands on the multi-kernel one, so which grid
+  /// the plan was built for is part of what a test is asserting.
+  AllocGroupStats allocGroupStats(const std::string& pt2File, bool cg = true);
 };
 
 } // namespace torch::wave

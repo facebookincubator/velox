@@ -101,6 +101,40 @@ TEST(TableHandleTest, hiveTableHandleDbName) {
   ASSERT_TRUE(cloneNoDb->dbName().empty());
 }
 
+TEST(TableHandleTest, hiveTableHandleDataColumnFieldIds) {
+  Type::registerSerDe();
+  connector::hive::HiveTableHandle::registerSerDe();
+
+  const auto dataColumns = ROW({"a", "c"}, {BIGINT(), VARCHAR()});
+  const std::vector<int32_t> fieldIds{1, 3};
+  auto handle = std::make_shared<connector::hive::HiveTableHandle>(
+      "test-connector",
+      "test_table",
+      common::SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      dataColumns,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      /*filterColumnHandles=*/
+      std::vector<connector::hive::HiveColumnHandlePtr>{},
+      /*sampleRate=*/1.0,
+      /*dbName=*/"",
+      fieldIds);
+
+  EXPECT_EQ(handle->dataColumnFieldIds(), fieldIds);
+
+  auto serialized = handle->serialize();
+  auto clone = ISerializable::deserialize<connector::hive::HiveTableHandle>(
+      serialized, /*context=*/nullptr);
+  EXPECT_EQ(clone->dataColumnFieldIds(), fieldIds);
+
+  serialized.erase("dataColumnFieldIds");
+  auto legacyClone =
+      ISerializable::deserialize<connector::hive::HiveTableHandle>(
+          serialized, /*context=*/nullptr);
+  EXPECT_TRUE(legacyClone->dataColumnFieldIds().empty());
+}
+
 TEST(TableHandleTest, hiveTableHandleIndexSupport) {
   // Test HiveTableHandle without index columns.
   auto tableHandleWithoutIndex =

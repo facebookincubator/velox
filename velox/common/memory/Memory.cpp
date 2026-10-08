@@ -190,7 +190,7 @@ MemoryManager::~MemoryManager() {
     if (checkUsageLeak_) {
       VELOX_FAIL(errMsg);
     } else {
-      LOG(ERROR) << errMsg;
+      VELOX_MEM_LOG(ERROR) << errMsg;
     }
   }
 }

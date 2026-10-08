@@ -107,6 +107,15 @@ class FileConfig {
       "Preserve dictionary encoding for Nimble string column reads.")
 
   VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleDictionaryAwareReadsSession,
+      kNimbleDictionaryAwareReads,
+      nimbleDictionaryAwareReads,
+      "nimble_dictionary_aware_reads",
+      "nimble.dictionary-aware-reads",
+      bool,
+      false,
+      "Enable dictionary-aware reads for Nimble dictionary-encoded columns.")
+  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
       nimbleLazyColumnIo,
@@ -240,6 +249,7 @@ class FileConfig {
       "quantum per stream is always issued; subsequent quanta are loaded on "
       "demand. Small streams that fit in one quantum see no reduction. "
       "Streams coalesced with eager columns may also be loaded early.")
+
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(

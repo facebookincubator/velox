@@ -34,12 +34,23 @@
 namespace facebook::velox::exec {
 
 class OutputBufferManager;
+struct ExchangeTransportEntry;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
 class NestedLoopJoinBridge;
 class SpatialJoinBridge;
 class SplitListener;
+
+class FixedPointLoop;
+struct FixedPointOptions;
+
+/// Runs one plan fragment.  By default it compiles the fragment into a
+/// Driver/Operator pipeline and executes that.  A fragment containing a
+/// FixedPointNode instead gets a FixedPointLoop composed in, which runs
+/// the loop as a schedule of ordinary sub-tasks; Task delegates start(),
+/// next(), addSplit() and noMoreSplits() to it.  Task stays the execution
+/// unit and stays concrete -- nothing on it is virtual.
 
 class Task : public std::enable_shared_from_this<Task> {
  public:
@@ -80,6 +91,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// and callback options. Default is std::nullopt (no spilling).
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
+  /// @param fixedPointOptions Coordinator-supplied hooks for a plan containing
+  /// a FixedPointNode, or nullptr for none.  Ignored for any other plan.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -89,7 +102,8 @@ class Task : public std::enable_shared_from_this<Task> {
       Consumer consumer = nullptr,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FixedPointOptions* fixedPointOptions = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -100,7 +114,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FixedPointOptions* fixedPointOptions = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -175,6 +190,20 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
     return consumerSupplier_;
+  }
+
+  /// The fixed point whose schedule created this task as one of its
+  /// per-iteration sub-tasks, or nullptr when nothing did.  Set once at
+  /// construction from FixedPointOptions::nested, so a running task cannot be
+  /// re-pointed; the fixed-point state operators walk it outward to find the
+  /// loop that declares the entry they read.  It outlives this task.
+  FixedPointLoop* parentFixedPoint() const {
+    return parentFixedPoint_;
+  }
+
+  /// The threading mode this task was created with.
+  ExecutionMode executionMode() const {
+    return mode_;
   }
 
   bool isGroupedExecution() const;
@@ -372,9 +401,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// yet.
   uint64_t timeSinceTerminationMs() const;
 
-  /// Returns the total number of drivers in the output pipeline, e.g. the
-  /// pipeline that produces the results.
+  /// Returns the number of task output streams. An ordinary task has one per
+  /// output driver; a task running a fixed-point loop has one.
   uint32_t numOutputDrivers() const {
+    if (fixedPoint_ != nullptr) {
+      return 1;
+    }
     return numDrivers(getOutputPipelineId());
   }
 
@@ -833,6 +865,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns the list of running tasks from velox runtime.
   static std::vector<std::shared_ptr<Task>> getRunningTasks();
 
+  /// The fixed point running this fragment, or nullptr when it runs as an
+  /// ordinary Driver pipeline.  Test-only: nothing in production reaches past
+  /// the Task API, which already delegates to the loop.
+  FixedPointLoop* testingFixedPoint() const {
+    return fixedPoint_.get();
+  }
+
   void testingIncrementThreads() {
     std::lock_guard l(mutex_);
     ++numThreads_;
@@ -872,6 +911,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // Returns the lock that protects the system-wide running task list.
   FOLLY_EXPORT static folly::SharedMutex& taskListLock();
 
+ private:
   Task(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -880,7 +920,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      FixedPointLoop* parentFixedPoint = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -903,11 +944,18 @@ class Task : public std::enable_shared_from_this<Task> {
   // Creates driver factories.
   void createDriverFactoriesLocked(uint32_t maxDrivers);
 
-  // Creates the output buffer in partitioned output buffer manager if needed.
-  void initializePartitionOutput();
+  // Creates exchange clients and the output buffer in the partitioned output
+  // buffer manager. Returns false if the task was terminated before this
+  // initialization acquired 'mutex_'.
+  bool initializePartitionOutput();
 
-  // Creates and starts drivers.
-  void createAndStartDrivers(uint32_t concurrentSplitGroups);
+  // Creates and starts drivers. Returns false if the task was terminated before
+  // this acquired 'mutex_'.
+  bool createAndStartDrivers(uint32_t concurrentSplitGroups);
+
+  // Marks planned drivers that were never tracked as finished. Called when
+  // startup stops.
+  void finishUnstartedDrivers();
 
   // Creates a bunch of drivers for the given split group.
   std::vector<std::shared_ptr<Driver>> createDriversLocked(
@@ -990,6 +1038,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // output buffer.
   void maybeRemoveFromOutputBufferManager();
 
+  // Completes output-buffer initialization and removes the task if termination
+  // won the race.
+  void finishOutputBufferInitialization();
+
   // Returns task execution error message or empty string if not error
   // occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
@@ -1055,8 +1107,9 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Add remote split to ExchangeClient for the specified plan node. Used to
-  /// close remote sources that are added after the task completed early.
+  /// Adds a remote split to ExchangeClient for the specified plan node.
+  /// Used to close remote sources that are added after the task completed
+  /// early.
   void addRemoteSplit(
       const core::PlanNodeId& planNodeId,
       const exec::Split& split);
@@ -1171,11 +1224,13 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
-  // Create an exchange client for the specified exchange plan node at a given
-  // pipeline.
+  // Creates a pipeline's exchange client and retains the entry that builds its
+  // matching operator. Custom leaf nodes use the built-in in-memory transport.
+  // Must be called with 'mutex_' held. Throws a user error for an unavailable
+  // transport or unsupported merge exchange.
   void createExchangeClientLocked(
       int32_t pipelineId,
-      const core::PlanNodeId& planNodeId,
+      const core::PlanNodePtr& planNode,
       int32_t numberOfConsumers);
 
   // Get a shared reference to the exchange client with the specified exchange
@@ -1194,6 +1249,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // 'pipelineId'. The function returns null if there is no client created for
   // 'pipelineId' set in 'exchangeClients_'.
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      int32_t pipelineId) const;
+
+  // Returns the exchange transport entry resolved for 'pipelineId', or null if
+  // the pipeline does not read from an exchange.
+  std::shared_ptr<ExchangeTransportEntry> getExchangeTransportEntryLocked(
       int32_t pipelineId) const;
 
   // Builds the query trace config.
@@ -1308,12 +1368,26 @@ class Task : public std::enable_shared_from_this<Task> {
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
       exchangeClientByPlanNode_;
 
+  // Entry that created each pipeline's client and builds its operators. Entries
+  // outlive termination because clients kept for late splits may depend on
+  // entry-owned state.
+  std::vector<std::shared_ptr<ExchangeTransportEntry>>
+      exchangeTransportEntries_;
+
   // Pool of unique row ids shared by all AssignUniqueId operators in this task.
   // See uniqueRowIdPool().
   const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_{
       std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
+
+  // Runs this fragment instead of a Driver pipeline when it contains a
+  // FixedPointNode; null otherwise.  Destroyed early in ~Task, while the pool
+  // and query context it reaches through are still held.
+  std::unique_ptr<FixedPointLoop> fixedPoint_;
+
+  // The fixed point whose schedule created this task, if any.  Outlives it.
+  FixedPointLoop* const parentFixedPoint_;
 
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.
@@ -1393,6 +1467,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // drivers finish their work. We use this number to detect when the Task is
   // completed.
   uint32_t numFinishedDrivers_{0};
+  // Drivers placed in 'drivers_'. Each tracked driver is accounted exactly once
+  // by normal removal or termination.
+  uint32_t numTrackedDrivers_{0};
   // Reflects number of drivers required to process single split group during
   // grouped execution. Zero for a completely ungrouped execution.
   uint32_t numDriversPerSplitGroup_{0};
@@ -1489,6 +1566,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // task has no partitioned output.
   PartitionedOutputFactory outputOperatorFactory_;
 
+  // Set under 'mutex_' after initializeTask() returns or throws. Whichever path
+  // observes both this flag and task termination owns buffer removal.
+  bool outputBufferInitializationFinished_{false};
+
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.
   bool noMoreOutputBuffers_{false};
@@ -1531,8 +1612,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // a path that will be into spillDirectory_
   std::function<std::string()> spillDirectoryCallback_;
 
-  // Mutex to ensure only the first caller thread of 'getOrCreateSpillDirectory'
-  // creates the directory.
+  // Serializes spill directory creation and removal.
   mutable std::mutex spillDirCreateMutex_;
 
   // Indicates whether the spill directory has been created.

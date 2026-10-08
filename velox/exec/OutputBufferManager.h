@@ -46,10 +46,11 @@ class Task;
 /// Lifecycle: initializeTask() exactly once per task and before any other call
 /// for it, then updateOutputBuffers() / updateNumDrivers() and the
 /// observability methods while it runs, then removeTask() once at termination.
-/// The update and observability methods tolerate an unknown task (returning
-/// false / nullopt), so callers need not race teardown; only the producer must
-/// have initialized before it enqueues. Skipping removeTask() leaks the buffer
-/// -- and the Task it pins -- until the manager is destroyed.
+/// If initializeTask() throws, Task still calls removeTask() once to clean up a
+/// partial registration. Update and observability methods tolerate an unknown
+/// task (returning false / nullopt), so callers need not race teardown; only
+/// producers require prior initialization. Skipping removeTask() leaks the
+/// buffer and its Task until the manager is destroyed.
 ///
 /// Implementations must honor two contracts:
 ///
@@ -74,12 +75,14 @@ class OutputBufferManager {
   /// initial destination-buffer count (fixed for kPartitioned, a starting point
   /// updateOutputBuffers() grows for broadcast / arbitrary); 'numDrivers' is
   /// the producing-driver count whose completion marks the output done (see
-  /// updateNumDrivers()).
+  /// updateNumDrivers()). 'transportOptions' is opaque configuration from the
+  /// PartitionedOutputNode and is interpreted only by the selected transport.
   virtual void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers) = 0;
+      int numDrivers,
+      const std::string& transportOptions = {}) = 0;
 
   /// Publishes the destination-buffer count as consumers register, finalizing
   /// it when 'noMoreBuffers' is true. Returns false if the task has no output

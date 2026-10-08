@@ -200,6 +200,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "map_update", // Velox-only function, not available in Presto
       "map_trim_values", // Velox-only function, not available in Presto
       "map_subset_key_in_range", // Velox-only function, not available in Presto
+      "at_timezone_convert", // Velox-only function, not available in Presto
       "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
       // https://github.com/facebookincubator/velox/issues/11034
       "cast(real) -> varchar",
@@ -345,6 +346,9 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       // Skipping until the new signature is merged and released in Presto:
       // https://github.com/prestodb/presto/pull/25521
       "xxhash64(varbinary,bigint) -> varbinary",
+      // Skipping until xxhash128 is merged and released in Presto.
+      "xxhash128(varbinary) -> varbinary",
+      "xxhash128(varbinary,bigint) -> varbinary",
       "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
       "$internal$split_to_map",
       "$internal$canonicalize",

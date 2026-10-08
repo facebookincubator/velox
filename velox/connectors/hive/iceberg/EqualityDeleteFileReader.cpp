@@ -19,6 +19,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
@@ -146,7 +147,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId)
     : equalityColumnNames_(equalityColumnNames),
       equalityColumnTypes_(equalityColumnTypes),
@@ -163,6 +164,22 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       equalityColumnNames_.size(),
       equalityColumnTypes_.size(),
       "Equality column names and types must have the same size.");
+
+  // Iceberg geometry support in this connector is Parquet-only, and an equality
+  // delete file carries its own format independent of the base data file. The
+  // WKB re-encoding below is format-agnostic, but no non-Parquet geometry
+  // fixture exists to verify it against, so refuse rather than convert values
+  // from an unverified path. This mirrors the base-file check in
+  // IcebergSplitReader::prepareSplit().
+  for (size_t i = 0; i < equalityColumnTypes_.size(); ++i) {
+    if (containsGeometry(equalityColumnTypes_[i])) {
+      VELOX_USER_CHECK_EQ(
+          deleteFile.fileFormat,
+          dwio::common::FileFormat::PARQUET,
+          "Reading Iceberg geometry equality delete columns is only supported for Parquet delete files; column '{}'",
+          equalityColumnNames_[i]);
+    }
+  }
 
   // Build the file schema for the equality delete columns only.
   auto deleteFileSchema =
@@ -256,6 +273,15 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     auto rowOutput = std::dynamic_pointer_cast<RowVector>(output);
     VELOX_CHECK_NOT_NULL(rowOutput);
 
+    // A geometry equality-delete column arrives from the delete file as the
+    // ISO WKB the Iceberg spec mandates, but the base rows this set is probed
+    // with have already been re-encoded into Velox's internal geometry
+    // encoding by IcebergSplitReader. Hashing the two representations would
+    // never collide, so geometry equality deletes would silently never match.
+    // Re-encode the delete keys with the same converter the base path uses, so
+    // both sides hash the same logical encoding.
+    convertGeometryColumns(rowOutput);
+
     size_t batchIndex = deleteRows_.size();
     deleteRows_.push_back(rowOutput);
 
@@ -278,6 +304,30 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   }
 }
 
+void EqualityDeleteFileReader::convertGeometryColumns(
+    const RowVectorPtr& deleteRows) const {
+  for (size_t i = 0; i < equalityColumnTypes_.size(); ++i) {
+    const auto& type = equalityColumnTypes_[i];
+    if (!containsGeometry(type)) {
+      continue;
+    }
+#ifdef VELOX_ENABLE_GEO
+    const auto childIndex = deleteRows->type()->as<TypeKind::ROW>().getChildIdx(
+        equalityColumnNames_[i]);
+    auto& child = deleteRows->childAt(childIndex);
+    child = convertIcebergGeometry(
+        child, type, deleteRows->pool(), equalityColumnNames_[i]);
+#else
+    // Matches the read-side guard in IcebergSplitReader::prepareSplit(): a
+    // geospatial-free build cannot re-encode WKB, and hashing the two sides in
+    // different encodings would silently drop every delete.
+    VELOX_USER_FAIL(
+        "Applying an Iceberg equality delete on the geometry column '{}' requires a build with geospatial support (VELOX_ENABLE_GEO=ON)",
+        equalityColumnNames_[i]);
+#endif
+  }
+}
+
 void EqualityDeleteFileReader::applyDeletes(
     const RowVectorPtr& output,
     BufferPtr deleteBitmap) {
@@ -289,7 +339,8 @@ void EqualityDeleteFileReader::applyDeletes(
 
   // For each row in the output, compute its hash and probe the delete set.
   for (vector_size_t i = 0; i < output->size(); ++i) {
-    // Skip rows already deleted by positional/DV deletes.
+    // Skip rows already removed by a post-read filter or an earlier delete
+    // file.
     if (bits::isBitSet(bitmap, i)) {
       continue;
     }

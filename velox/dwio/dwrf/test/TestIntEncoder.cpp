@@ -32,7 +32,7 @@ class VarintPairs {
       : value{value}, varInt{varInt} {}
 };
 
-TEST(TestIntEncoder, TestVarIntEncoder) {
+TEST(TestIntEncoder, testVarIntEncoder) {
   auto values = std::vector<VarintPairs>{
       {0, {0x0}},
       {(1ul << 7) - 1, {0x7F}},
@@ -62,7 +62,7 @@ TEST(TestIntEncoder, TestVarIntEncoder) {
   char outBuff[folly::kMaxVarintLength64];
 
   for (auto& pair : values) {
-    auto result = IntEncoder<true>::write64Varint(pair.value, outBuff);
+    const auto result = detail::write64Varint(pair.value, outBuff);
     EXPECT_EQ(result, pair.varInt.size()) << " value " << pair.value;
     ASSERT_THAT(pair.varInt, ElementsAreArray(outBuff, result))
         << " value " << pair.value;

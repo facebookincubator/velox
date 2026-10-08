@@ -70,14 +70,14 @@ class SimpleVectorNonParameterizedTest : public SimpleVectorTest {
       {"àá"_sv, "abc"_sv, "xyz"_sv, "mno"_sv, "wv"_sv, "abc"_sv, "xyz"_sv};
 };
 
-TEST_F(SimpleVectorNonParameterizedTest, ConstantVectorTest) {
+TEST_F(SimpleVectorNonParameterizedTest, constantVectorTest) {
   ExpectedData<int64_t> expected(10, 123456);
   auto vector =
       maker_.encodedVector(VectorEncoding::Simple::CONSTANT, expected);
   assertVectorAndProperties(expected, vector);
 }
 
-TEST_F(SimpleVectorNonParameterizedTest, ConstantVectorTestIsNull) {
+TEST_F(SimpleVectorNonParameterizedTest, constantVectorTestIsNull) {
   ExpectedData<int64_t> expected(10, std::nullopt);
   auto vector =
       maker_.encodedVector(VectorEncoding::Simple::CONSTANT, expected);
@@ -85,7 +85,7 @@ TEST_F(SimpleVectorNonParameterizedTest, ConstantVectorTestIsNull) {
 }
 
 // Single Entry Tests
-TEST_F(SimpleVectorNonParameterizedTest, SingleEntryIntegerVector) {
+TEST_F(SimpleVectorNonParameterizedTest, singleEntryIntegerVector) {
   for (auto t : kFullValueTypes) {
     LOG(INFO) << "Running:" << t;
     ExpectedData<int64_t> expected = {{123456}};
@@ -94,7 +94,7 @@ TEST_F(SimpleVectorNonParameterizedTest, SingleEntryIntegerVector) {
   }
 }
 
-TEST_F(SimpleVectorNonParameterizedTest, SingleNullEntryIntegerVector) {
+TEST_F(SimpleVectorNonParameterizedTest, singleNullEntryIntegerVector) {
   for (auto t : kFullValueTypes) {
     LOG(INFO) << "Running:" << t;
     ExpectedData<int64_t> expected = {{std::nullopt}};
@@ -123,14 +123,14 @@ TEST_F(SimpleVectorNonParameterizedTest, roundTripSortedDescThenNullLastData) {
   }
 }
 
-TEST_F(SimpleVectorNonParameterizedTest, BasicRoundTrip) {
+TEST_F(SimpleVectorNonParameterizedTest, basicRoundTrip) {
   auto expected =
       genTestDataWithSequences<int64_t>(1000, 100, true, true, 100, 10);
   auto vector = maker_.flatVectorNullable<int64_t>(expected.data());
   assertVectorAndProperties<int64_t>(expected.data(), vector);
 }
 
-TEST_F(SimpleVectorNonParameterizedTest, ThreadSafeAsciiCompute) {
+TEST_F(SimpleVectorNonParameterizedTest, threadSafeAsciiCompute) {
   const size_t numRows{100};
   const size_t numThreads{10};
 

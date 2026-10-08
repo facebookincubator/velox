@@ -79,7 +79,7 @@ void applyBitmapToMask(
     std::size_t numRows,
     cudf::column_view const& rowIndex,
     cudf::mutable_column_view const& deleteMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   auto iter = cuda::counting_iterator{0};
   thrust::transform(
@@ -93,7 +93,7 @@ void applyBitmapToMask(
 
 cudf::size_type countDeletedRows(
     cudf::column_view const& deleteMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   return static_cast<cudf::size_type>(thrust::count(
       rmm::exec_policy_nosync(stream, temp_mr),
@@ -105,7 +105,7 @@ cudf::size_type countDeletedRows(
 void scatterDeletesToMask(
     cudf::mutable_column_view const& deleteMask,
     cudf::device_span<const cudf::size_type> indices,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   // Alternate: Use `cudf::scatter` but it produces a new column.
   auto iter = cuda::constant_iterator<bool>(true);
@@ -121,7 +121,7 @@ void scatter32BitDVMatchesToMask(
     cudf::column_view const& rowIndex,
     cudf::column_view const& dvMatches,
     cudf::mutable_column_view const& deleteMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   auto indices = cuda::counting_iterator<cudf::size_type>{0};
   thrust::transform(
@@ -139,7 +139,7 @@ void fillSequence(
     cudf::mutable_column_view const& rowIndices,
     ValueType startRow,
     int64_t numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   auto rowIndexIter = rowIndices.begin<ValueType>();
   thrust::sequence(
@@ -153,14 +153,14 @@ template void fillSequence<uint32_t>(
     cudf::mutable_column_view const&,
     uint32_t,
     int64_t,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref);
 
 template void fillSequence<uint64_t>(
     cudf::mutable_column_view const&,
     uint64_t,
     int64_t,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
