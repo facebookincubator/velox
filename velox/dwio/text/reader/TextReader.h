@@ -231,7 +231,7 @@ class TextRowReader : public dwio::common::RowReader {
   uint64_t limit_; // lowest offset not in the range
   uint64_t fileLength_;
   std::string ownedString_;
-  std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
+  std::string varbinaryString_;
 };
 
 } // namespace facebook::velox::text

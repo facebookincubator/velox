@@ -19,20 +19,12 @@ CSV Functions
 
     **Parsing behavior:**
 
-    * Fields may be enclosed in double quotes. Spark's default escape is
-      backslash rather than RFC 4180 doubled quotes; doubled quotes can
-      therefore be preserved literally under the fixed defaults.
-    * Backslash escape character (Spark default): ``\"`` inside a quoted
-      field is treated as a literal double quote, and ``\\`` as one literal
-      backslash. Fixed at ``\``; the supported two-argument overload exposes
-      no option to change it.
+    * Fields may be enclosed in double quotes. Inside quoted fields, backslash
+      decodes only ``\"`` and ``\\``; before any other byte it is preserved.
+      In unquoted fields, backslash escapes the following byte, so ``\,`` is a
+      literal comma. A trailing backslash is preserved.
     * Delimiter: fixed at comma (``,``); the supported two-argument overload
       exposes no option to change it.
-    * REAL/DOUBLE trim code units from U+0000 through U+0020 before parsing,
-      matching Java's ``String.trim``. DATE/TIMESTAMP remove leading and
-      trailing bytes through 0x20 plus 0x7F before parsing. BOOLEAN,
-      integer types, DECIMAL, VARCHAR, and VARBINARY preserve whitespace.
-      Non-ASCII Unicode whitespace is not trimmed.
     * Empty fields map to NULL for all types, whether quoted (``""``) or
       unquoted (e.g. the two fields in ``,``). Spark's default ``emptyValue``
       and ``nullValue`` are both ``""``.
@@ -43,33 +35,31 @@ CSV Functions
     **Type-specific rules:**
 
     * BOOLEAN: accepts ``true``/``false`` (case-insensitive).
-    * Integer types: reject decimal points, hex notation, and leading ``+``
-      followed by non-digit. Overflow yields NULL.
-    * REAL/DOUBLE: accepts ``NaN`` with an optional sign, full
-      ``Infinity``/``-Infinity`` with an optional leading ``+``, and the exact
-      untrimmed Spark CSV sentinels ``Inf``/``-Inf``. Surrounding Java
-      whitespace is accepted for the full forms, but not for the short
-      sentinels. Rejects hex float notation (``0x...``). Overflow yields
-      ±Infinity; underflow yields ±0 (sign preserved from the input).
-    * DECIMAL: parsed with exact precision; overflow yields NULL.
-      Comma grouping separators are removed using Spark's fixed en-US locale.
-      Whitespace is not trimmed (matching Java's BigDecimal constructor).
-    * DATE: uses Velox's Spark CAST string-to-date parser. Supported forms
-      include single-digit month/day, year-month, year-only, and surrounding
-      ASCII whitespace/control bytes.
-    * TIMESTAMP: uses Velox's Spark CAST string-to-timestamp parser. Naive
-      timestamps use the session time zone. Supported forms include a space
-      date/time separator, date-only input, extended fractional seconds,
-      hour-only offsets, and surrounding ASCII whitespace/control bytes.
-      Values outside Spark's signed 64-bit microsecond range (approximately
-      years -290308 through 294247) produce NULL, as in Spark.
-    * VARBINARY: treated as raw UTF-8 bytes (no decoding).
-
-    **Input size implementation limit:** This implementation caps individual
-    CSV records at 10 MB. Inputs exceeding this limit yield a non-null row
-    with every field set to NULL (equivalent to Spark PERMISSIVE mode for a
-    row that failed to parse). Apache Spark itself has no such cap; this is
-    a Velox-specific safeguard against unbounded per-row allocation.
+    * Integer types: use the same conversion as TextReader. A leading ``+`` is
+      rejected. A decimal continuation is accepted and truncated toward zero
+      (for example, ``123.45`` becomes ``123``). Other trailing text, hex
+      notation, and overflow yield NULL.
+    * REAL/DOUBLE: use the same conversion as TextReader. Bytes 0x00 through
+      0x20 are trimmed, matching Java ``String.trim``. ``NaN``, ``+NaN``,
+      ``Inf``, and ``Infinity`` are accepted case-insensitively, while
+      ``-NaN`` yields NULL. Hexadecimal floating-point syntax is accepted.
+      Conversion uses the C numeric locale regardless of the process locale;
+      the platform C conversion determines overflow and underflow results.
+    * DECIMAL: uses Velox's canonical decimal conversion, including exponent
+      notation. Precision overflow yields NULL. Grouping commas are not
+      removed.
+    * DATE: uses Velox's Presto-cast date parser. The accepted form is
+      ``[+-]YYYY-MM-DD`` with single-digit month/day and surrounding ASCII
+      whitespace also accepted. Year-only and year-month forms yield NULL.
+    * TIMESTAMP: uses Velox's Presto-cast timestamp parser. Naive values are
+      interpreted as ``America/Los_Angeles`` local time, matching TextReader,
+      and converted to UTC. Local times skipped by a daylight-saving
+      transition yield NULL; repeated local times use the earlier instant. A
+      space separates date and time; date-only input and fractional seconds
+      are supported. ISO ``T`` separators and explicit zone suffixes yield
+      NULL. The query session time zone is not used.
+    * VARBINARY: valid base64 is decoded. Invalid base64 is copied unchanged
+      for TextReader compatibility.
 
     **Unsupported options:** The two-argument SQL overload
     ``from_csv(csvString, schema)`` is supported. Velox resolves the constant
@@ -81,7 +71,7 @@ CSV Functions
     Nested field types (``ARRAY``, ``MAP``, and nested ``ROW``) are rejected at
     plan time, matching Spark's ``UNSUPPORTED_DATATYPE`` behavior.
 
-    **Unsupported Spark features:**
+    **Notable Spark compatibility differences:**
 
     * ``columnNameOfCorruptRecord`` — a schema field named
       ``_corrupt_record`` (or whatever ``spark.sql.columnNameOfCorruptRecord``
@@ -89,33 +79,26 @@ CSV Functions
       it consumes a CSV field and shifts later columns. Spark excludes this
       field from positional matching and populates it with the raw input only
       for malformed records. Avoid corrupt-record fields in Velox schemas.
-    * Hexadecimal floating-point literals accepted by Spark's Java parser are
-      rejected.
+    * Integer conversion rejects leading ``+`` and accepts a trailing decimal
+      continuation, unlike Spark's Java integer parser.
+    * Floating-point conversion is case-insensitive for special values,
+      accepts hexadecimal syntax, and rejects Java type suffixes such as
+      ``1.0f``. Unlike Spark, ``-NaN`` yields NULL.
+    * Decimal grouping commas are rejected instead of removed.
+    * DATE and TIMESTAMP use the same Presto-cast conversion as TextReader
+      rather than Spark's CSV-specific conversion. In particular, TIMESTAMP
+      interprets naive values in ``America/Los_Angeles`` rather than the query
+      session time zone, does not accept explicit zone suffixes, and has a
+      wider supported year range than Spark. Values such as year 294248 are
+      accepted; values outside Velox's timestamp and time-zone conversion
+      range yield NULL.
+    * VARBINARY base64-decodes valid input instead of always returning raw
+      bytes.
+    * Backslash escapes the following byte in unquoted fields, and a trailing
+      backslash is preserved, matching TextReader rather than Spark's
+      Univocity parser.
     * Non-ASCII decimal digits accepted by Java's integer and decimal parsers
       are rejected.
-    * DATE parsing inherits differences between Velox's Spark CAST parser and
-      Spark's string-to-date parser; the following list is not exhaustive.
-      Velox accepts years wider than seven digits and accepts year-only or
-      year-month values followed by ``T`` (for example ``2024T`` or
-      ``2024-01T10``), while Spark returns NULL.
-    * Spark's from_csv-specific legacy fallback that removes literal ``GMT``
-      substrings after its primary date/time formatter fails is not
-      implemented. A bare ``GMT``/``UTC`` suffix and whole-hour
-      ``GMT±h[h]`` offsets parse normally. ``GMT``/``UTC``/``UT``-prefixed
-      offsets with non-zero minutes are truncated to the whole hour
-      (``GMT+05:30`` is read as ``+05:00``), whereas Spark keeps the minutes.
-    * TIMESTAMP parsing inherits differences between Velox's Spark CAST parser
-      and Spark's ``stringToTimestamp``; the following list is not exhaustive.
-      Velox rejects time-only values, bare hours, trailing decimal points, and
-      Java short zone IDs such as ``PST``/``EST`` that Spark accepts. Velox
-      accepts leap-second rollover, a zone directly after ``HH:mm``, and
-      case-insensitive zone names that Spark rejects. Zone IDs resolve through
-      Velox's case-insensitive time-zone table; fixed offsets support
-      ``±HH``, ``±HH:MM``, or ``±HHMM`` within ±14:00. Spellings accepted only
-      by Java ``ZoneId`` (including one-digit components, offset seconds,
-      ±18:00, and some aliases) produce NULL, while some case variants or
-      aliases rejected by Spark are accepted. Spark also limits timestamp
-      years to 4–6 digits; Velox accepts wider years within its range.
     * RFC 4180 doubled-quote escaping is not enabled because Spark's default
       escape character is backslash and the options overload is unsupported.
     * Malformed quoted fields can differ from Univocity's recovery in two

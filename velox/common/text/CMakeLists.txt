@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_common_text_field_parser TextFieldParser.cpp HEADERS TextFieldParser.h)
+velox_add_library(
+  velox_common_text_field_parser
+  DelimitedTextParser.cpp
+  TextFieldParser.cpp
+  HEADERS
+  DelimitedTextParser.h
+  TextFieldParser.h
+)
 
-velox_link_libraries(velox_common_text_field_parser Boost::headers)
+velox_link_libraries(velox_common_text_field_parser velox_encode velox_type Boost::headers)

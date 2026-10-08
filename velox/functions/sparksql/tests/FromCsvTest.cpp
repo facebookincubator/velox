@@ -17,7 +17,6 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
-#include "velox/core/QueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
@@ -118,16 +117,7 @@ TEST_F(FromCsvTest, fewerFields) {
   auto expectedA = makeNullableFlatVector<int32_t>({1, 2});
   auto expectedB = makeNullableFlatVector<double>({std::nullopt, std::nullopt});
   auto expected = makeRowVector({"a", "b"}, {expectedA, expectedB});
-
-  auto expr = createFromCsv(expected->type());
-  auto result = evaluate(expr, makeRowVector({input}));
-  auto* resultRow = result->as<RowVector>();
-
-  for (int i = 0; i < 2; ++i) {
-    EXPECT_FALSE(resultRow->isNullAt(i));
-    auto* childB = resultRow->childAt(1)->asFlatVector<double>();
-    EXPECT_TRUE(childB->isNullAt(i)) << "row " << i;
-  }
+  testFromCsv(input, expected);
 }
 
 // More fields than schema — extra fields are ignored.
@@ -244,11 +234,8 @@ TEST_F(FromCsvTest, floatFields) {
   testFromCsv(input, expected);
 }
 
-// NaN and Infinity for float/double fields — Spark-compatible case sensitivity.
+// Floating-point parsing uses TextReader's case-insensitive special values.
 TEST_F(FromCsvTest, nanAndInfinity) {
-  // Spark accepts: "NaN" with an optional sign,
-  // "Infinity"/"+Infinity"/"-Infinity" (Java), and "Inf"/"-Inf" (Spark CSV
-  // defaults: positiveInf="Inf", negativeInf="-Inf").
   auto input = makeFlatVector<std::string>(
       {"NaN,NaN",
        "+NaN,-NaN",
@@ -258,7 +245,8 @@ TEST_F(FromCsvTest, nanAndInfinity) {
        "inf,-inf",
        "nan,INFINITY",
        " Inf,-Inf ",
-       " Infinity, -Infinity "});
+       " Infinity, -Infinity ",
+       "value,other"});
 
   auto expr = createFromCsv(ROW({"a", "b"}, {DOUBLE(), DOUBLE()}));
   auto result = evaluate(expr, makeRowVector({input}));
@@ -266,74 +254,55 @@ TEST_F(FromCsvTest, nanAndInfinity) {
 
   auto* childA = resultRow->childAt(0)->asFlatVector<double>();
   auto* childB = resultRow->childAt(1)->asFlatVector<double>();
-  // Row 0: NaN, NaN — accepted.
   EXPECT_TRUE(std::isnan(childA->valueAt(0)));
   EXPECT_TRUE(std::isnan(childB->valueAt(0)));
-  // Row 1: signed NaN forms are accepted by Java's parser.
   EXPECT_TRUE(std::isnan(childA->valueAt(1)));
-  EXPECT_TRUE(std::isnan(childB->valueAt(1)));
-  // Row 2: Infinity, -Infinity — accepted (Java parseDouble).
+  EXPECT_TRUE(childB->isNullAt(1));
   EXPECT_TRUE(std::isinf(childA->valueAt(2)));
   EXPECT_GT(childA->valueAt(2), 0);
   EXPECT_TRUE(std::isinf(childB->valueAt(2)));
   EXPECT_LT(childB->valueAt(2), 0);
-  // Row 3: +Infinity, +Infinity — accepted.
   EXPECT_TRUE(std::isinf(childA->valueAt(3)));
   EXPECT_GT(childA->valueAt(3), 0);
   EXPECT_TRUE(std::isinf(childB->valueAt(3)));
   EXPECT_GT(childB->valueAt(3), 0);
-  // Row 4: "Inf", "-Inf" — accepted (Spark CSV defaults).
-  EXPECT_TRUE(std::isinf(childA->valueAt(4)));
-  EXPECT_GT(childA->valueAt(4), 0);
-  EXPECT_TRUE(std::isinf(childB->valueAt(4)));
-  EXPECT_LT(childB->valueAt(4), 0);
-  // Row 5: "inf", "-inf" — rejected (case-sensitive).
-  EXPECT_TRUE(childA->isNullAt(5));
-  EXPECT_TRUE(childB->isNullAt(5));
-  // Row 6: "nan", "INFINITY" — rejected (case-sensitive).
-  EXPECT_TRUE(childA->isNullAt(6));
-  EXPECT_TRUE(childB->isNullAt(6));
-  // Row 7: padded short CSV sentinels do not match, and Java's parser does
-  // not recognize "Inf".
-  EXPECT_TRUE(childA->isNullAt(7));
-  EXPECT_TRUE(childB->isNullAt(7));
-  // Row 8: padded full Java forms are accepted after Java-style trimming.
-  EXPECT_TRUE(std::isinf(childA->valueAt(8)));
-  EXPECT_GT(childA->valueAt(8), 0);
-  EXPECT_TRUE(std::isinf(childB->valueAt(8)));
-  EXPECT_LT(childB->valueAt(8), 0);
+  const auto expectSignedInfinities = [&](vector_size_t row) {
+    EXPECT_TRUE(std::isinf(childA->valueAt(row)));
+    EXPECT_GT(childA->valueAt(row), 0);
+    EXPECT_TRUE(std::isinf(childB->valueAt(row)));
+    EXPECT_LT(childB->valueAt(row), 0);
+  };
+  expectSignedInfinities(4);
+  expectSignedInfinities(5);
+  EXPECT_TRUE(std::isnan(childA->valueAt(6)));
+  EXPECT_TRUE(std::isinf(childB->valueAt(6)));
+  EXPECT_GT(childB->valueAt(6), 0);
+  expectSignedInfinities(7);
+  expectSignedInfinities(8);
+  EXPECT_TRUE(childA->isNullAt(9));
+  EXPECT_TRUE(childB->isNullAt(9));
 }
 
-// Leading '+' accepted for integers (Spark compatibility).
-TEST_F(FromCsvTest, leadingPlusSign) {
-  auto input = makeFlatVector<std::string>({"+123,+456", "+1,+2", "+789,+0"});
-  auto expectedA = makeFlatVector<int32_t>({123, 1, 789});
-  auto expectedB = makeFlatVector<int32_t>({456, 2, 0});
-  auto expected = makeRowVector({"a", "b"}, {expectedA, expectedB});
-  testFromCsv(input, expected);
+TEST_F(FromCsvTest, canonicalIntegerParsing) {
+  auto input = makeFlatVector<std::string>({"+123", "123.45", "-7.9", "123x"});
+  auto expr = createFromCsv(ROW({"a"}, {INTEGER()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* child = result->as<RowVector>()->childAt(0)->asFlatVector<int32_t>();
+  EXPECT_TRUE(child->isNullAt(0));
+  EXPECT_EQ(child->valueAt(1), 123);
+  EXPECT_EQ(child->valueAt(2), -7);
+  EXPECT_TRUE(child->isNullAt(3));
 }
 
-// Java's Float.parseFloat / Double.parseDouble accept a single trailing
-// type-suffix character (f/F/d/D). A second suffix or other trailing garbage
-// is still rejected.
-TEST_F(FromCsvTest, floatTypeSuffixAccepted) {
+TEST_F(FromCsvTest, floatTypeSuffixRejected) {
   auto input = makeFlatVector<std::string>(
       {"1.0f", "2.5d", "3F", "4.25D", "1.0fd", "1.0x"});
   auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
-  auto* childA = resultRow->childAt(0)->asFlatVector<double>();
-  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(0));
-  EXPECT_EQ(childA->valueAt(0), 1.0);
-  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(1));
-  EXPECT_EQ(childA->valueAt(1), 2.5);
-  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(2));
-  EXPECT_EQ(childA->valueAt(2), 3.0);
-  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(3));
-  EXPECT_EQ(childA->valueAt(3), 4.25);
-  // Double suffix and non-suffix trailing garbage → null.
-  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(4));
-  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(5));
+  for (vector_size_t row = 0; row < input->size(); ++row) {
+    EXPECT_TRUE(resultRow->childAt(0)->isNullAt(row));
+  }
 }
 
 // Mixed-type sanity check covering int + bool + string + double.
@@ -349,19 +318,10 @@ TEST_F(FromCsvTest, mixedTypes) {
   testFromCsv(input, expected);
 }
 
-// Hexadecimal floating-point literals remain unsupported.
-TEST_F(FromCsvTest, hexFloatUnsupported) {
-  auto input =
-      makeFlatVector<std::string>({"0x1A", "0X1.0p10", "+0x1", "-0x1p2"});
-
-  auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  auto* resultRow = result->as<RowVector>();
-  auto* childA = resultRow->childAt(0)->asFlatVector<double>();
-  EXPECT_TRUE(childA->isNullAt(0));
-  EXPECT_TRUE(childA->isNullAt(1));
-  EXPECT_TRUE(childA->isNullAt(2));
-  EXPECT_TRUE(childA->isNullAt(3));
+TEST_F(FromCsvTest, hexadecimalFloatingPoint) {
+  auto input = makeFlatVector<std::string>({"0x1p2", "-0x1p3"});
+  auto expected = makeRowVector({"a"}, {makeFlatVector<double>({4.0, -8.0})});
+  testFromCsv(input, expected);
 }
 
 // VARCHAR fields preserve leading/trailing whitespace (no trimming).
@@ -463,8 +423,8 @@ TEST_F(FromCsvTest, quotedFields) {
   EXPECT_EQ(childB->valueAt(1), 2);
 }
 
-// REAL/DOUBLE use Java String.trim semantics, DATE/TIMESTAMP use Spark
-// trimAll semantics, and integer fields do not trim.
+// REAL/DOUBLE trim bytes 0x00 through 0x20, matching Java String.trim.
+// Integer fields do not trim.
 TEST_F(FromCsvTest, whitespaceTrimming) {
   auto input = makeFlatVector<std::string>(
       {"  1  ,  2.5  ", "  42  ,  3.14  ", "  -7  ,  0.0  "});
@@ -540,7 +500,7 @@ TEST_F(FromCsvTest, intAndBigintOverflow) {
 }
 
 // Unclosed quoted fields return escape-decoded content after the opening
-// quote. A bare opening quote at end of input is preserved.
+// quote. A dangling escape is preserved to match TextReader.
 TEST_F(FromCsvTest, unclosedQuote) {
   auto input = makeFlatVector<std::string>(
       {R"("unclosed)", R"("unclosed,field)", R"(a,")", "\"a\\", "\"\\"});
@@ -558,9 +518,9 @@ TEST_F(FromCsvTest, unclosedQuote) {
   EXPECT_EQ(
       resultRow->childAt(1)->asFlatVector<StringView>()->valueAt(2).str(),
       "\"");
-  EXPECT_EQ(childA->valueAt(3).str(), "a");
+  EXPECT_EQ(childA->valueAt(3).str(), "a\\");
   EXPECT_TRUE(resultRow->childAt(1)->isNullAt(3));
-  EXPECT_TRUE(childA->isNullAt(4));
+  EXPECT_EQ(childA->valueAt(4).str(), "\\");
   EXPECT_TRUE(resultRow->childAt(1)->isNullAt(4));
 }
 
@@ -784,22 +744,6 @@ TEST_F(FromCsvTest, corruptRecordColumnIsPositional) {
   EXPECT_EQ(corruptCol->valueAt(2).str(), "x");
 }
 
-// Oversized input (>10MB) returns non-null row with all-null fields (DoS
-// guard).
-TEST_F(FromCsvTest, oversizedInput) {
-  // Create a string larger than kMaxCsvLineSize (10 MB).
-  std::string largeString(10 * 1024 * 1024 + 1, 'a');
-  auto input = makeFlatVector<std::string>({largeString});
-  auto expr = createFromCsv(ROW({"a", "b"}, {VARCHAR(), INTEGER()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  // Row itself is NOT null (Spark permissive mode returns row-present).
-  EXPECT_FALSE(result->isNullAt(0));
-  auto* resultRow = result->as<RowVector>();
-  // But all child fields are null.
-  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
-  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(0));
-}
-
 // Whitespace-only input is tokenized normally (no special-casing).
 // With default ignoreLeadingWhiteSpace=false and
 // ignoreTrailingWhiteSpace=false, the whitespace is preserved as the field
@@ -903,60 +847,49 @@ TEST_F(FromCsvTest, decimalPrecisionOverflow) {
   EXPECT_TRUE(child->isNullAt(2));
 }
 
-TEST_F(FromCsvTest, decimalGroupingAndMalformedExponent) {
+TEST_F(FromCsvTest, canonicalDecimalParsing) {
   auto input = makeFlatVector<std::string>({
       R"("1,234.5",ok)",
+      "3E2,ok",
+      "3E-2,ok",
       "1e99999999999,ok",
-      "1e-99999999999,ok",
-      "1e2147483647,ok",
-      "1.5e-2147483647,ok",
-      "0e2147483647,ok",
-      "1.0000000000000000000000000000000000000000e40,ok",
-      "0.00000000000000000000000000000000000000001e41,ok",
-      "0-0e99999999999,ok",
-      "0e99999999999,ok",
-      "1e-600000000,ok",
-      R"("1,e2",ok)",
-      R"("0,e5",ok)",
-      "0.0e-2147483647,ok",
-      "0.0e-2147483646,ok",
+      "malformed,ok",
   });
   auto expr = createFromCsv(ROW({"a", "b"}, {DECIMAL(10, 2), VARCHAR()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* decimal = resultRow->childAt(0)->asFlatVector<int64_t>();
   auto* text = resultRow->childAt(1)->asFlatVector<StringView>();
-  EXPECT_FALSE(decimal->isNullAt(0));
-  EXPECT_EQ(decimal->valueAt(0), 123450);
-  EXPECT_TRUE(decimal->isNullAt(1));
-  EXPECT_TRUE(decimal->isNullAt(2));
+  EXPECT_TRUE(decimal->isNullAt(0));
+  EXPECT_FALSE(decimal->isNullAt(1));
+  EXPECT_EQ(decimal->valueAt(1), 30000);
+  EXPECT_FALSE(decimal->isNullAt(2));
+  EXPECT_EQ(decimal->valueAt(2), 3);
   EXPECT_TRUE(decimal->isNullAt(3));
   EXPECT_TRUE(decimal->isNullAt(4));
-  EXPECT_FALSE(decimal->isNullAt(5));
-  EXPECT_EQ(decimal->valueAt(5), 0);
-  EXPECT_TRUE(decimal->isNullAt(6));
-  EXPECT_FALSE(decimal->isNullAt(7));
-  EXPECT_EQ(decimal->valueAt(7), 100);
-  EXPECT_TRUE(decimal->isNullAt(8));
-  EXPECT_TRUE(decimal->isNullAt(9));
-  EXPECT_TRUE(decimal->isNullAt(10));
-  EXPECT_FALSE(decimal->isNullAt(11));
-  EXPECT_EQ(decimal->valueAt(11), 10000);
-  EXPECT_FALSE(decimal->isNullAt(12));
-  EXPECT_EQ(decimal->valueAt(12), 0);
-  EXPECT_TRUE(decimal->isNullAt(13));
-  EXPECT_FALSE(decimal->isNullAt(14));
-  EXPECT_EQ(decimal->valueAt(14), 0);
   for (vector_size_t row = 0; row < input->size(); ++row) {
     EXPECT_EQ(text->valueAt(row).str(), "ok");
   }
 }
 
+TEST_F(FromCsvTest, scientificDecimalRoundsOnce) {
+  auto input =
+      makeFlatVector<std::string>({"4.5e-2", "0.045", "-4.5e-2", "-0.045"});
+  auto expr = createFromCsv(ROW({"a"}, {DECIMAL(10, 1)}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* decimal = result->as<RowVector>()->childAt(0)->asFlatVector<int64_t>();
+
+  for (vector_size_t row = 0; row < input->size(); ++row) {
+    EXPECT_FALSE(decimal->isNullAt(row));
+    EXPECT_EQ(decimal->valueAt(row), 0);
+  }
+}
+
 TEST_F(FromCsvTest, overflowingDateAndTimestampAreNull) {
   auto input = makeFlatVector<std::string>({
-      "2500000000-01-01,2500000000-01-01T00:00:00,ok",
-      "2024-01-01\r\n,2024-01-01T00:00:00\x01,trimmed",
-      "2024-01-01,294248-01-01T00:00:00,out-of-range",
+      "2500000000-01-01,2500000000-01-01 00:00:00,ok",
+      "2024-01-01,292278994-04-23 11:46:00,out-of-range",
+      "2024-01-01,294248-01-01 00:00:00,wider-than-spark",
   });
   auto expr =
       createFromCsv(ROW({"d", "t", "s"}, {DATE(), TIMESTAMP(), VARCHAR()}));
@@ -968,14 +901,15 @@ TEST_F(FromCsvTest, overflowingDateAndTimestampAreNull) {
       resultRow->childAt(2)->asFlatVector<StringView>()->valueAt(0).str(),
       "ok");
   EXPECT_FALSE(resultRow->childAt(0)->isNullAt(1));
-  EXPECT_FALSE(resultRow->childAt(1)->isNullAt(1));
+  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(1));
   EXPECT_EQ(
       resultRow->childAt(2)->asFlatVector<StringView>()->valueAt(1).str(),
-      "trimmed");
-  EXPECT_TRUE(resultRow->childAt(1)->isNullAt(2));
+      "out-of-range");
+  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(2));
+  EXPECT_FALSE(resultRow->childAt(1)->isNullAt(2));
   EXPECT_EQ(
       resultRow->childAt(2)->asFlatVector<StringView>()->valueAt(2).str(),
-      "out-of-range");
+      "wider-than-spark");
 }
 
 // DATE field parsing (yyyy-MM-dd).
@@ -998,10 +932,7 @@ TEST_F(FromCsvTest, dateField) {
   EXPECT_TRUE(child->isNullAt(3));
 }
 
-// Velox uses its Spark CAST date parser for the fixed two-argument overload.
-// Supported forms below are pinned independently of documented differences
-// from Spark's string-to-date parser.
-TEST_F(FromCsvTest, sparkDateParsing) {
+TEST_F(FromCsvTest, prestoDateParsing) {
   auto input = makeFlatVector<std::string>({
       "2024-01-01", // canonical default format.
       "12024-01-01", // wider year accepted.
@@ -1009,14 +940,15 @@ TEST_F(FromCsvTest, sparkDateParsing) {
       "20240101", // no separators: rejected.
       " 2024-01-01", // surrounding whitespace accepted.
       "2024-01-01 ",
-      "2024-01", // partial date defaults to the first day.
-      "2024", // year-only defaults to January 1.
+      "2024-01", // partial dates are rejected.
+      "2024", // year-only values are rejected.
       "not-a-date", // malformed: rejected.
   });
   auto expr = createFromCsv(ROW({"a"}, {DATE()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* childA = result->as<RowVector>()->childAt(0)->asFlatVector<int32_t>();
   EXPECT_FALSE(childA->isNullAt(0));
+  EXPECT_EQ(childA->valueAt(0), 19'723);
   EXPECT_FALSE(childA->isNullAt(1));
   EXPECT_EQ(childA->valueAt(1), 3'672'148);
   EXPECT_FALSE(childA->isNullAt(2));
@@ -1026,137 +958,65 @@ TEST_F(FromCsvTest, sparkDateParsing) {
   EXPECT_EQ(childA->valueAt(4), childA->valueAt(0));
   EXPECT_FALSE(childA->isNullAt(5));
   EXPECT_EQ(childA->valueAt(5), childA->valueAt(0));
-  EXPECT_FALSE(childA->isNullAt(6));
-  EXPECT_EQ(childA->valueAt(6), childA->valueAt(0));
-  EXPECT_FALSE(childA->isNullAt(7));
-  EXPECT_EQ(childA->valueAt(7), childA->valueAt(0));
+  EXPECT_TRUE(childA->isNullAt(6));
+  EXPECT_TRUE(childA->isNullAt(7));
   EXPECT_TRUE(childA->isNullAt(8));
 }
 
 // TIMESTAMP field parsing.
 TEST_F(FromCsvTest, timestampField) {
   auto input = makeFlatVector<std::string>(
-      {"2023-01-15T10:30:00", "1970-01-01T00:00:00", "bad-ts", ""});
+      {"2023-01-15 10:30:00", "1970-01-01 00:00:00", "bad-ts", ""});
   auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
-  // "2023-01-15T10:30:00" parses as wall-clock time (no session timezone
-  // configured in test → no adjustment).
+  // 10:30 in America/Los_Angeles (PST) is 18:30 UTC.
   EXPECT_FALSE(child->isNullAt(0));
-  EXPECT_EQ(child->valueAt(0), Timestamp(1673778600, 0));
-  // "1970-01-01T00:00:00" → epoch
+  EXPECT_EQ(child->valueAt(0), Timestamp(1'673'807'400, 0));
+  // TextReader normalizes midnight in Los Angeles to 08:00 UTC.
   EXPECT_FALSE(child->isNullAt(1));
-  EXPECT_EQ(child->valueAt(1), Timestamp(0, 0));
+  EXPECT_EQ(child->valueAt(1), Timestamp(28'800, 0));
   // "bad-ts" → null
   EXPECT_TRUE(child->isNullAt(2));
   // "" → null
   EXPECT_TRUE(child->isNullAt(3));
 }
 
-// Naive timestamp with session timezone: Spark interprets naive timestamps
-// (no timezone offset in string) using the session timezone.
-TEST_F(FromCsvTest, timestampWithSessionTimezone) {
-  // Set session timezone to America/Los_Angeles (UTC-8 in winter).
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-  });
-  auto input = makeFlatVector<std::string>({"2023-01-15T10:30:00"});
-  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  auto* resultRow = result->as<RowVector>();
-  auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
-  EXPECT_FALSE(child->isNullAt(0));
-  // 2023-01-15 10:30:00 PST = 2023-01-15 18:30:00 UTC = epoch 1673807400
-  EXPECT_EQ(child->valueAt(0), Timestamp(1673807400, 0));
-}
-
-TEST_F(FromCsvTest, timestampDstGapAndAmbiguity) {
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-  });
-  auto input = makeFlatVector<std::string>(
-      {"2024-03-10T02:30:00", "2024-11-03T01:30:00"});
-  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  auto* child = result->as<RowVector>()->childAt(0)->asFlatVector<Timestamp>();
-  EXPECT_EQ(child->valueAt(0), Timestamp(1'710'066'600, 0));
-  EXPECT_EQ(child->valueAt(1), Timestamp(1'730'622'600, 0));
-}
-
-// Timestamp with explicit timezone offset: the offset in the string should
-// override the session timezone.
-TEST_F(FromCsvTest, timestampWithExplicitTimezone) {
-  // Set session timezone to something different to prove it's overridden.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-  });
+TEST_F(FromCsvTest, prestoTimestampParsing) {
   auto input = makeFlatVector<std::string>({
-      "2023-01-15T10:30:00Z",
-      "2023-01-15T10:30:00+05:30",
-      "2023-01-15T10:30:00-03:00",
-  });
-  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  auto* resultRow = result->as<RowVector>();
-  auto* child = resultRow->childAt(0)->asFlatVector<Timestamp>();
-  // "Z" means UTC: 2023-01-15 10:30:00 UTC = epoch 1673778600
-  EXPECT_FALSE(child->isNullAt(0));
-  EXPECT_EQ(child->valueAt(0), Timestamp(1673778600, 0));
-  // "+05:30" means IST: 2023-01-15 10:30:00+05:30 = 2023-01-15 05:00:00 UTC
-  // = epoch 1673758800
-  EXPECT_FALSE(child->isNullAt(1));
-  EXPECT_EQ(child->valueAt(1), Timestamp(1673758800, 0));
-  // "-03:00": 2023-01-15 10:30:00-03:00 = 2023-01-15 13:30:00 UTC
-  // = epoch 1673789400
-  EXPECT_FALSE(child->isNullAt(2));
-  EXPECT_EQ(child->valueAt(2), Timestamp(1673789400, 0));
-}
-
-// Velox uses its Spark CAST timestamp parser for the fixed two-argument
-// overload. Supported forms below are pinned independently of known,
-// documented differences from Spark's stringToTimestamp parser.
-TEST_F(FromCsvTest, sparkTimestampParsing) {
-  auto input = makeFlatVector<std::string>({
-      "2024-01-01T00:00:00", // canonical ISO-8601 with 'T': accepted.
-      "2024-01-01T00:00:00.1", // one fractional digit: accepted.
-      "2024-01-01T00:00:00.123Z", // fraction and `Z`: accepted.
-      "2024-01-01T00:00:00+05:30", // numeric offset: accepted.
       "2024-01-01 00:00:00", // space separator accepted.
-      "2024-1-1T0:0:0", // single-digit fields accepted.
       "2024-01-01", // date only defaults to midnight.
-      R"("2024-01-01T00:00:00,123")", // comma fraction: rejected.
-      "2024-01-01T00:00:00.1234", // extended fraction accepted.
-      "2024-01-01T00:00:00.123456789", // truncated to microseconds.
-      "2024-01-01T00:00:00+05", // hour-only offset accepted.
+      "2024-01-01 00:00:00.123456789", // truncated to microseconds.
+      "2024-01-01T00:00:00", // ISO T separator is rejected.
+      "2024-01-01 00:00:00Z", // timezone suffixes are rejected.
       "garbage", // malformed: rejected.
   });
   auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* childA = result->as<RowVector>()->childAt(0)->asFlatVector<Timestamp>();
-  const auto expected = Timestamp(1'704'067'200, 0); // 2024-01-01T00:00:00Z
+  const auto expected = Timestamp(1'704'096'000, 0);
   EXPECT_FALSE(childA->isNullAt(0));
   EXPECT_EQ(childA->valueAt(0), expected);
   EXPECT_FALSE(childA->isNullAt(1));
-  EXPECT_EQ(childA->valueAt(1), Timestamp(1'704'067'200, 100'000'000));
+  EXPECT_EQ(childA->valueAt(1), expected);
   EXPECT_FALSE(childA->isNullAt(2));
-  EXPECT_EQ(childA->valueAt(2), Timestamp(1'704'067'200, 123'000'000));
-  EXPECT_FALSE(childA->isNullAt(3));
-  EXPECT_EQ(childA->valueAt(3), Timestamp(1'704'047'400, 0));
-  EXPECT_FALSE(childA->isNullAt(4));
-  EXPECT_EQ(childA->valueAt(4), expected);
-  EXPECT_FALSE(childA->isNullAt(5));
-  EXPECT_EQ(childA->valueAt(5), expected);
-  EXPECT_FALSE(childA->isNullAt(6));
-  EXPECT_EQ(childA->valueAt(6), expected);
-  EXPECT_TRUE(childA->isNullAt(7));
-  EXPECT_FALSE(childA->isNullAt(8));
-  EXPECT_EQ(childA->valueAt(8), Timestamp(1'704'067'200, 123'400'000));
-  EXPECT_FALSE(childA->isNullAt(9));
-  EXPECT_EQ(childA->valueAt(9), Timestamp(1'704'067'200, 123'456'000));
-  EXPECT_FALSE(childA->isNullAt(10));
-  EXPECT_EQ(childA->valueAt(10), Timestamp(1'704'049'200, 0));
-  EXPECT_TRUE(childA->isNullAt(11));
+  EXPECT_EQ(childA->valueAt(2), Timestamp(1'704'096'000, 123'456'000));
+  EXPECT_TRUE(childA->isNullAt(3));
+  EXPECT_TRUE(childA->isNullAt(4));
+  EXPECT_TRUE(childA->isNullAt(5));
+}
+
+TEST_F(FromCsvTest, nonexistentDefaultTimezoneTimestampIsNull) {
+  auto input = makeFlatVector<std::string>(
+      {"2024-03-10 02:30:00", "2024-03-10 03:30:00"});
+  auto expr = createFromCsv(ROW({"a"}, {TIMESTAMP()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* child = result->as<RowVector>()->childAt(0)->asFlatVector<Timestamp>();
+
+  EXPECT_TRUE(child->isNullAt(0));
+  EXPECT_FALSE(child->isNullAt(1));
+  EXPECT_EQ(child->valueAt(1), Timestamp(1'710'066'600, 0));
 }
 
 // Backslash escape in quoted fields (Spark default escape='\\').
@@ -1167,6 +1027,10 @@ TEST_F(FromCsvTest, backslashEscapeInQuotedField) {
       R"("C:\\temp",x)",
       R"("a\\",b)",
       R"("a\"b,c)",
+      R"("a\b",c)",
+      R"("\a",b)",
+      R"("four\,five",x)",
+      R"("line1\nline2",y)",
   });
   auto expr = createFromCsv(ROW({"s", "v"}, {VARCHAR(), VARCHAR()}));
   auto result = evaluate(expr, makeRowVector({input}));
@@ -1188,23 +1052,64 @@ TEST_F(FromCsvTest, backslashEscapeInQuotedField) {
   // Unclosed quoted fields retain already-unescaped content through EOF.
   EXPECT_EQ(childS->valueAt(4).str(), "a\"b,c");
   EXPECT_TRUE(childV->isNullAt(4));
+  EXPECT_EQ(childS->valueAt(5).str(), R"(a\b)");
+  EXPECT_EQ(childV->valueAt(5).str(), "c");
+  EXPECT_EQ(childS->valueAt(6).str(), R"(\a)");
+  EXPECT_EQ(childV->valueAt(6).str(), "b");
+  EXPECT_EQ(childS->valueAt(7).str(), R"(four\,five)");
+  EXPECT_EQ(childV->valueAt(7).str(), "x");
+  EXPECT_EQ(childS->valueAt(8).str(), R"(line1\nline2)");
+  EXPECT_EQ(childV->valueAt(8).str(), "y");
 }
 
-// VARBINARY field parsing (raw bytes preserved as-is).
-TEST_F(FromCsvTest, varbinaryField) {
+TEST_F(FromCsvTest, backslashEscapeInUnquotedField) {
   auto input =
-      makeFlatVector<std::string>({"hello,world", "binary\x01\x02,data"});
+      makeFlatVector<std::string>({R"(hello\,world,value)", R"(a\q,b)"});
+  auto expr = createFromCsv(ROW({"s", "v"}, {VARCHAR(), VARCHAR()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* childS = resultRow->childAt(0)->asFlatVector<StringView>();
+  auto* childV = resultRow->childAt(1)->asFlatVector<StringView>();
+
+  EXPECT_EQ(childS->valueAt(0).str(), "hello,world");
+  EXPECT_EQ(childV->valueAt(0).str(), "value");
+  EXPECT_EQ(childS->valueAt(1).str(), "aq");
+  EXPECT_EQ(childV->valueAt(1).str(), "b");
+}
+
+// VARBINARY uses TextReader's base64 decoding and raw fallback semantics.
+TEST_F(FromCsvTest, varbinaryField) {
+  auto input = makeFlatVector<std::string>(
+      {"aGVsbG8=,d29ybGQ=", "not-base64,also-invalid"});
   auto expr = createFromCsv(ROW({"a", "b"}, {VARBINARY(), VARBINARY()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* childA = resultRow->childAt(0)->asFlatVector<StringView>();
   auto* childB = resultRow->childAt(1)->asFlatVector<StringView>();
-  // First row: "hello" and "world"
+  // Valid base64 is decoded.
   EXPECT_EQ(childA->valueAt(0).getString(), "hello");
   EXPECT_EQ(childB->valueAt(0).getString(), "world");
-  // Second row: "binary\x01\x02" and "data" (binary content preserved)
-  EXPECT_EQ(childA->valueAt(1).getString(), std::string("binary\x01\x02"));
-  EXPECT_EQ(childB->valueAt(1).getString(), "data");
+  // Invalid base64 is copied as-is for compatibility.
+  EXPECT_EQ(childA->valueAt(1).getString(), "not-base64");
+  EXPECT_EQ(childB->valueAt(1).getString(), "also-invalid");
+}
+
+TEST_F(FromCsvTest, nonInlineVarbinaryValuesAreOwnedByResult) {
+  auto input = makeFlatVector<std::string>({
+      "VGhpcyBpcyBhIGxvbmdlciB2YWx1ZQ==,"
+      "QW5vdGhlciBsb25nZXIgdmFsdWU=",
+      "not-valid-base64-value,also-not-valid-base64",
+  });
+  auto expr = createFromCsv(ROW({"a", "b"}, {VARBINARY(), VARBINARY()}));
+  auto result = evaluate(expr, makeRowVector({input}));
+  auto* resultRow = result->as<RowVector>();
+  auto* childA = resultRow->childAt(0)->asFlatVector<StringView>();
+  auto* childB = resultRow->childAt(1)->asFlatVector<StringView>();
+
+  EXPECT_EQ(childA->valueAt(0).getString(), "This is a longer value");
+  EXPECT_EQ(childB->valueAt(0).getString(), "Another longer value");
+  EXPECT_EQ(childA->valueAt(1).getString(), "not-valid-base64-value");
+  EXPECT_EQ(childB->valueAt(1).getString(), "also-not-valid-base64");
 }
 
 // Float underflow returns a correctly-signed zero (matching Java's
@@ -1259,7 +1164,7 @@ TEST_F(FromCsvTest, floatUnderflow) {
   EXPECT_FALSE(std::signbit(child->valueAt(5)));
 }
 
-// parseFloat rejects bare "+" sign (empty after strip).
+// The canonical floating-point parser rejects malformed sign-only input.
 TEST_F(FromCsvTest, barePlusSign) {
   auto input = makeFlatVector<std::string>({"+", "+-1", "++"});
   auto expr = createFromCsv(ROW({"a"}, {DOUBLE()}));
@@ -1290,15 +1195,14 @@ TEST_F(FromCsvTest, delimiterOnlyInput) {
 }
 
 TEST_F(FromCsvTest, integerWithDecimalPoint) {
-  // "123.0" is not a valid integer — should return NULL.
   auto input = makeFlatVector<StringView>({"123.0"_sv, "45.6"_sv, "7.0"_sv});
   auto expr = createFromCsv(ROW({"a"}, {INTEGER()}));
   auto result = evaluate(expr, makeRowVector({input}));
   auto* resultRow = result->as<RowVector>();
   auto* child = resultRow->childAt(0)->asFlatVector<int32_t>();
-  EXPECT_TRUE(child->isNullAt(0));
-  EXPECT_TRUE(child->isNullAt(1));
-  EXPECT_TRUE(child->isNullAt(2));
+  EXPECT_EQ(child->valueAt(0), 123);
+  EXPECT_EQ(child->valueAt(1), 45);
+  EXPECT_EQ(child->valueAt(2), 7);
 }
 
 TEST_F(FromCsvTest, hexIntegerRejected) {
@@ -1334,19 +1238,6 @@ TEST_F(FromCsvTest, zeroFieldRowNullInput) {
   auto expr = createFromCsv(ROW({}, {}));
   auto result = evaluate(expr, makeRowVector({input}));
   EXPECT_TRUE(result->isNullAt(0));
-}
-
-// Exact 10MB boundary: input of exactly kMaxCsvLineSize should parse normally.
-TEST_F(FromCsvTest, exactSizeLimitBoundary) {
-  // Exactly 10 * 1024 * 1024 bytes — should NOT trigger the DoS guard.
-  std::string exactLimit(10 * 1024 * 1024, 'x');
-  auto input = makeFlatVector<std::string>({exactLimit});
-  auto expr = createFromCsv(ROW({"a"}, {VARCHAR()}));
-  auto result = evaluate(expr, makeRowVector({input}));
-  EXPECT_FALSE(result->isNullAt(0));
-  auto* resultRow = result->as<RowVector>();
-  // Field should parse as the full string (not null).
-  EXPECT_FALSE(resultRow->childAt(0)->isNullAt(0));
 }
 
 // Spark's default escape is backslash, not double quote. Doubled quotes only

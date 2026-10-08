@@ -29,9 +29,9 @@ class FromCsvCallToSpecialForm : public exec::FunctionCallToSpecialForm {
 
   /// Constructs the special-form expression for from_csv. Wraps a custom
   /// VectorFunction that parses each input CSV string into a row of the
-  /// requested ROW type. A NULL input produces a NULL row. Malformed,
-  /// oversized, or type-incompatible fields produce a non-null row with the
-  /// affected children set to NULL (PERMISSIVE mode).
+  /// requested ROW type. A NULL input produces a NULL row. Malformed or
+  /// type-incompatible fields produce a non-null row with the affected
+  /// children set to NULL (PERMISSIVE mode).
   exec::ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,

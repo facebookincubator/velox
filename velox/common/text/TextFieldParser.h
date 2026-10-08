@@ -19,61 +19,70 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
-#include <type_traits>
+
+#include "velox/common/base/Status.h"
+#include "velox/type/HugeInt.h"
+#include "velox/type/Timestamp.h"
 
 namespace facebook::velox::text {
 
-/// Groups the field-level parsers shared by the Hive text-file reader
-/// (TextReader) and the Spark `from_csv` special form (FromCsv). Opt-in flags
-/// preserve each caller's semantics:
-///   - allowTrailingDecimal: accept "123.45" as 123 when enabled.
-///   - allowOneZero: accept "0"/"1" as booleans when enabled.
+/// Groups the canonical field-level parsers shared by the Hive text-file
+/// reader (TextReader) and the Spark `from_csv` special form (FromCsv).
 class TextFieldParser {
  public:
   /// Parses a narrow signed integer (int8, int16, int32, int64) with
-  /// overflow checking against `T`'s range. See parseInt64 (private) for
-  /// details on `allowTrailingDecimal`.
+  /// overflow checking against `T`'s range. A leading '+' is rejected.
+  /// Trailing characters are accepted only when they form a decimal
+  /// continuation, e.g. "123.45" is parsed as 123.
   template <typename T>
-  static std::optional<T> parseNarrowInteger(
-      std::string_view field,
-      bool allowTrailingDecimal) {
-    static_assert(
-        std::is_signed_v<T> && std::is_integral_v<T>,
-        "parseNarrowInteger requires a signed integral type.");
-    auto wide = parseInt64(field, allowTrailingDecimal);
-    if (!wide.has_value()) {
-      return std::nullopt;
-    }
-    if (static_cast<int64_t>(static_cast<T>(*wide)) != *wide) {
-      return std::nullopt;
-    }
-    return static_cast<T>(*wide);
-  }
+  static std::optional<T> parseNarrowInteger(std::string_view field);
 
   /// Parses a boolean from `field`. Accepts case-insensitive "TRUE"/"FALSE".
-  /// When `allowOneZero` is true, also accepts the single characters '1' and
-  /// '0'. Returns std::nullopt for any other input, including empty input or
-  /// values with surrounding whitespace.
-  static std::optional<bool> parseBoolean(
-      std::string_view field,
-      bool allowOneZero);
+  /// Returns std::nullopt for any other input, including "0", "1", empty
+  /// input, or values with surrounding whitespace.
+  static std::optional<bool> parseBoolean(std::string_view field);
 
- private:
-  // Parses a signed 64-bit integer from `field`. Internal helper for
-  // parseNarrowInteger; kept private because it has no direct external
-  // callers.
-  //
-  // Rejects empty input, leading whitespace, and any first character other
-  // than '-' or an ASCII digit; a leading '+' is rejected. When
-  // `allowTrailingDecimal` is true (Hive default),
-  // trailing characters are accepted iff they form a valid decimal
-  // continuation (one optional '.' followed by digits, e.g. "123.45" → 123).
-  // When false (Spark `from_csv` default), any trailing character causes
-  // rejection.
-  static std::optional<int64_t> parseInt64(
-      std::string_view field,
-      bool allowTrailingDecimal);
+  /// Parses floating-point values using the canonical text-reader semantics.
+  /// Bytes 0x00 through 0x20 are trimmed, special values are matched
+  /// case-insensitively, and hexadecimal syntax is accepted. Conversion uses
+  /// the C numeric locale regardless of the calling thread's locale.
+  template <typename T>
+  static std::optional<T> parseFloatingPoint(std::string_view field);
+
+  /// Parses a decimal value using Velox's canonical decimal conversion.
+  template <typename T>
+  static Expected<T>
+  parseDecimal(std::string_view field, uint8_t precision, uint8_t scale);
+
+  /// Parses a date using Velox's Presto-cast date semantics.
+  static Expected<int32_t> parseDate(std::string_view field);
+
+  /// Parses a timestamp using Velox's Presto-cast timestamp semantics.
+  /// Interprets naive values in America/Los_Angeles and converts them to GMT.
+  static Expected<Timestamp> parseTimestamp(std::string_view field);
+
+  /// Decodes a base64-encoded VARBINARY field. Invalid base64 is copied
+  /// unchanged for compatibility with the text reader.
+  static void parseVarbinary(std::string_view field, std::string& output);
 };
+
+extern template std::optional<int8_t>
+    TextFieldParser::parseNarrowInteger<int8_t>(std::string_view);
+extern template std::optional<int16_t>
+    TextFieldParser::parseNarrowInteger<int16_t>(std::string_view);
+extern template std::optional<int32_t>
+    TextFieldParser::parseNarrowInteger<int32_t>(std::string_view);
+extern template std::optional<int64_t>
+    TextFieldParser::parseNarrowInteger<int64_t>(std::string_view);
+extern template std::optional<float> TextFieldParser::parseFloatingPoint<float>(
+    std::string_view);
+extern template std::optional<double>
+    TextFieldParser::parseFloatingPoint<double>(std::string_view);
+extern template Expected<int64_t>
+TextFieldParser::parseDecimal<int64_t>(std::string_view, uint8_t, uint8_t);
+extern template Expected<int128_t>
+TextFieldParser::parseDecimal<int128_t>(std::string_view, uint8_t, uint8_t);
 
 } // namespace facebook::velox::text
