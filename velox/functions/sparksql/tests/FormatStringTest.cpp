@@ -50,6 +50,35 @@ TEST_F(FormatStringTest, ignoresExtraArguments) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(FormatStringTest, encodedPatternsAndArguments) {
+  auto patterns =
+      makeFlatVector<StringView>({"%s:%d", "[%s]=%04d", "%s/%+d", "%s:%d"});
+  auto strings =
+      makeNullableFlatVector<StringView>({"a", "b", std::nullopt, "d"});
+  auto integers = makeFlatVector<int32_t>({1, 2, 3, -4});
+  auto expected =
+      makeFlatVector<StringView>({"a:1", "[b]=0002", "null/+3", "d:-4"});
+  auto expression = makeTypedExpr(
+      "format_string(c0, c1, c2)",
+      ROW({"c0", "c1", "c2"}, {VARCHAR(), VARCHAR(), INTEGER()}));
+
+  testEncodings(expression, {patterns, strings, integers}, expected);
+
+  const auto makeLazy = [&](const VectorPtr& vector) -> VectorPtr {
+    return std::make_shared<LazyVector>(
+        execCtx_.pool(),
+        vector->type(),
+        vector->size(),
+        std::make_unique<velox::test::SimpleVectorLoader>(
+            [vector](auto /*rows*/) { return vector; }));
+  };
+  auto result = evaluate<SimpleVector<StringView>>(
+      expression,
+      makeRowVector(
+          {makeLazy(patterns), makeLazy(strings), makeLazy(integers)}));
+  velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(FormatStringTest, replacesMalformedUtf8InStringArgument) {
   // Spark formats a %s argument via UTF8String.toString(), which decodes the
   // bytes through java.lang.String and replaces malformed UTF-8 with U+FFFD.
@@ -190,6 +219,19 @@ TEST_F(FormatStringTest, nullFormatStringSkipsArguments) {
       makeRowVector({formats, messages}));
 
   auto expected = makeNullableFlatVector<StringView>({std::nullopt, "ok"});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(FormatStringTest, preservesRowsInConditionalExpression) {
+  auto conditions = makeFlatVector<bool>({true, false, false, true});
+  auto integers = makeFlatVector<int32_t>({1, 2, 3, 4});
+  auto fallback =
+      makeFlatVector<StringView>({"unused", "fallback-2", "fallback-3", "x"});
+  auto result = evaluate<SimpleVector<StringView>>(
+      "if(c0, format_string('id=%04d', c1), c2)",
+      makeRowVector({conditions, integers, fallback}));
+  auto expected = makeFlatVector<StringView>(
+      {"id=0001", "fallback-2", "fallback-3", "id=0004"});
   velox::test::assertEqualVectors(expected, result);
 }
 
