@@ -369,13 +369,8 @@ void registerCudf() {
   }
 
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
-  // Advertise the UCX transport only when this process is configured to run it,
-  // and only once the memory resources and the driver adapter it relies on are
-  // in place, so that a registerCudf() that fails part way leaves no kUcx
-  // behind; unregisterCudf() withdraws it first. Whether a given node uses it
-  // is decided by the plan, not here. The registration lives in the transport's
-  // own module; cuDF only decides when to call it, because today cuDF is the
-  // only producer of UCX plans.
+  // Registered last, after the memory resources and driver adapter it relies
+  // on, so a registerCudf() that fails part way leaves no kUcx behind.
   if (CudfConfig::getInstance().exchange) {
     ucx_exchange::registerUcxTransports();
   }
@@ -386,10 +381,8 @@ void registerCudf() {
 
 void unregisterCudf() {
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
-  // Unconditionally, whether or not CudfConfig::exchange was set when
-  // registerCudf() ran: the registries are process-global and erase() is a
-  // no-op for an absent key, so this must not depend on config that may have
-  // changed in between.
+  // Unconditionally unregister the UCX transports, whether or not
+  // CudfConfig::exchange was set when registerCudf() ran.
   ucx_exchange::unregisterUcxTransports();
 #endif
   // Reset the any_resource copies before the adaptors they were copied from,
