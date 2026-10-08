@@ -274,16 +274,11 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
 
 } // namespace
 
-void registerDecimalRoundSpecialForm(const std::string& name) {
-  exec::registerFunctionCallToSpecialForm(
-      name,
-      std::make_unique<DecimalRoundCallToSpecialForm<RoundHalfUpPolicy>>(
-          name, true));
-}
-
 void registerDecimalRoundingForms() {
-  registerDecimalRoundSpecialForm(kRoundDecimal);
-  registerDecimalRoundSpecialForm(kSparkRoundDecimal);
+  exec::registerFunctionCallToSpecialForm(
+      kRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm<RoundHalfUpPolicy>>(
+          kRoundDecimal, true));
   exec::registerFunctionCallToSpecialForm(
       kCeilDecimal,
       std::make_unique<

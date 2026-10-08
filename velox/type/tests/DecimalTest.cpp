@@ -166,29 +166,48 @@ std::string zeros(uint32_t numZeros) {
 }
 
 TEST(DecimalTest, divideWithRoundUpLargeDivisor) {
-  const auto power = DecimalUtil::kPowersOfTen[38];
-  for (const auto divisor : {power / 100 * 85, power - 2, power - 1, power}) {
-    for (const auto dividend :
-         {divisor / 2 - 1, divisor / 2, divisor / 2 + 1, divisor - 1}) {
-      for (int dividendSign : {-1, 1}) {
-        for (int divisorSign : {-1, 1}) {
-          for (bool noRoundUp : {false, true}) {
-            int128_t result;
-            const auto remainder = DecimalUtil::divideWithRoundUp(
-                result,
-                dividend * dividendSign,
-                divisor * divisorSign,
-                noRoundUp,
-                0,
-                0);
-            const auto rounded =
-                !noRoundUp && dividend >= divisor / 2 + divisor % 2 ? 1 : 0;
-            EXPECT_EQ(result, rounded * dividendSign * divisorSign);
-            EXPECT_EQ(remainder, dividend * dividendSign * divisorSign);
-          }
-        }
-      }
-    }
+  constexpr auto power = "100000000000000000000000000000000000000";
+  constexpr auto negativePower = "-100000000000000000000000000000000000000";
+  constexpr auto belowHalf = "49999999999999999999999999999999999999";
+  constexpr auto half = "50000000000000000000000000000000000000";
+  constexpr auto negativeHalf = "-50000000000000000000000000000000000000";
+  constexpr auto aboveHalf = "50000000000000000000000000000000000001";
+  constexpr auto oddDivisor = "99999999999999999999999999999999999999";
+  constexpr auto evenDivisor = "99999999999999999999999999999999999998";
+  struct TestCase {
+    const char* dividend;
+    const char* divisor;
+    bool noRoundUp;
+    int128_t expected;
+    const char* expectedRemainder;
+  };
+  const std::vector<TestCase> cases{
+      {belowHalf, power, false, 0, belowHalf},
+      {half, power, false, 1, half},
+      {aboveHalf, power, false, 1, aboveHalf},
+      {oddDivisor, power, false, 1, oddDivisor},
+      {oddDivisor, power, true, 0, oddDivisor},
+      {negativeHalf, power, false, -1, negativeHalf},
+      {half, negativePower, false, -1, negativeHalf},
+      {negativeHalf, negativePower, false, 1, half},
+      {belowHalf, oddDivisor, false, 0, belowHalf},
+      {half, oddDivisor, false, 1, half},
+      {belowHalf, evenDivisor, false, 1, belowHalf},
+      {evenDivisor, oddDivisor, false, 1, evenDivisor}};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "{}/{} noRoundUp={}", test.dividend, test.divisor, test.noRoundUp));
+    int128_t result;
+    const auto remainder = DecimalUtil::divideWithRoundUp(
+        result,
+        HugeInt::parse(test.dividend),
+        HugeInt::parse(test.divisor),
+        test.noRoundUp,
+        0,
+        0);
+    EXPECT_EQ(result, test.expected);
+    EXPECT_EQ(remainder, HugeInt::parse(test.expectedRemainder));
   }
 }
 

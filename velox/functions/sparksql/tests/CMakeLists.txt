@@ -73,7 +73,6 @@ add_executable(
   RandStrTest.cpp
   RandTest.cpp
   RandnTest.cpp
-  RoundTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
   RoundTest.cpp
