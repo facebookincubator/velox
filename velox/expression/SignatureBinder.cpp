@@ -405,16 +405,6 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
 
   const auto& params = typeSignature.parameters();
 
-  // Bind the type variables to UNKNOWN so the parameterized formal resolves.
-  if (actualType->isUnknown()) {
-    for (const auto& param : params) {
-      if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   // A scalar of another type coerces to the target its rule stores, so the
   // parameters to bind are the target's.
   TypePtr boundType = actualType;
@@ -422,10 +412,21 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
       !boost::algorithm::iequals(baseName, actualType->name())) {
     const auto coercion =
         coercer_.coerce(actualType, boost::algorithm::to_upper_copy(baseName));
-    if (!coercion) {
+    if (coercion) {
+      boundType = coercion->type;
+    } else if (!actualType->isUnknown()) {
       return false;
     }
-    boundType = coercion->type;
+  }
+
+  // Bind the type variables to UNKNOWN so the parameterized formal resolves.
+  if (boundType->isUnknown()) {
+    for (const auto& param : params) {
+      if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
+        return false;
+      }
+    }
+    return true;
   }
 
   if (params.size() != boundType->parameters().size()) {

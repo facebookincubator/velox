@@ -1323,6 +1323,35 @@ TEST(SignatureBinderTest, integerToDecimalCoercions) {
       signature, {DECIMAL(38, 8), DOUBLE()}, /*allowCoercion=*/true);
 }
 
+// Binds UNKNOWN through its coercion target before evaluating result
+// constraints.
+TEST(SignatureBinderTest, unknownToDecimal) {
+  auto signature =
+      exec::FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("b_precision")
+          .integerVariable("b_scale")
+          .integerVariable(
+              "r_precision",
+              "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+          .integerVariable("r_scale", "max(a_scale, b_scale)")
+          .returnType("decimal(r_precision, r_scale)")
+          .argumentType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(b_precision, b_scale)")
+          .build();
+  const TypeCoercer coercer({{UNKNOWN(), DECIMAL(1, 0), 1}});
+  const std::vector<TypePtr> actualTypes{DECIMAL(10, 2), UNKNOWN()};
+  exec::SignatureBinder binder(*signature, actualTypes, coercer);
+  std::vector<Coercion> coercions;
+
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+  ASSERT_EQ(2, coercions.size());
+  EXPECT_EQ(nullptr, coercions[0].type);
+  VELOX_EXPECT_EQ_TYPES(coercions[1].type, DECIMAL(1, 0));
+  VELOX_EXPECT_EQ_TYPES(binder.tryResolveReturnType(), DECIMAL(11, 2));
+}
+
 // Arguments that share DECIMAL(p, s) variables bind p and s from their common
 // type, which every argument coerces to.
 TEST(SignatureBinderTest, sharedDecimalCoercions) {
