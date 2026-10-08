@@ -32,6 +32,8 @@ inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
+inline constexpr std::string_view kDirectGroupbyFinalizationStat{
+    "directGroupbyFinalization"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -89,6 +91,18 @@ struct GroupbyAggregator {
       std::vector<cudf::groupby::aggregation_result>& results,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
+
+  virtual bool supportsDirectFinalization() const {
+    return false;
+  }
+
+  // Finalizes one already-merged state per grouping key, without regrouping.
+  virtual std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> /*state*/,
+      cuda::stream_ref /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) {
+    VELOX_UNSUPPORTED("Aggregate does not support direct finalization");
+  }
 
   virtual ~GroupbyAggregator() = default;
 
@@ -189,6 +203,9 @@ class CudfGroupby : public CudfOperatorBase {
       TypePtr const& outputType,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
+
+  CudfVectorPtr finalizeGroupedStates(
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
 
   CudfVectorPtr releaseAndResetBufferedResult();
 

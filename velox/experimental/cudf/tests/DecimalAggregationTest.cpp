@@ -15,6 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -23,6 +25,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -810,6 +813,45 @@ TEST_F(CudfDecimalTest, decimalAvgIntermediateVarbinaryNullGroup) {
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, directFinalizationDecimalSumAndAvg) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 2}),
+      makeNullableFlatVector<int64_t>({100, 300, std::nullopt}, DECIMAL(12, 2)),
+      makeNullableFlatVector<int128_t>(
+          {100, 300, std::nullopt}, DECIMAL(20, 2)),
+  });
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeNullableFlatVector<int128_t>({800, std::nullopt}, DECIMAL(38, 2)),
+      makeNullableFlatVector<int64_t>({200, std::nullopt}, DECIMAL(12, 2)),
+      makeNullableFlatVector<int128_t>({800, std::nullopt}, DECIMAL(38, 2)),
+      makeNullableFlatVector<int128_t>({200, std::nullopt}, DECIMAL(20, 2)),
+  });
+  const std::vector<std::string> aggregates{
+      "sum(c1)", "avg(c1)", "sum(c2)", "avg(c2)"};
+  for (bool single : {true, false}) {
+    SCOPED_TRACE(single);
+    auto builder = exec::test::PlanBuilder().values({input, input});
+    if (single) {
+      builder.singleAggregation({"c0"}, aggregates);
+    } else {
+      builder.partialAggregation({"c0"}, aggregates).finalAggregation();
+    }
+    auto plan = builder.planNode();
+    auto task = exec::test::AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config(CudfFromVelox::kGpuBatchSizeRows, "3")
+                    .config(core::QueryConfig::kMaxPartialAggregationMemory, 1)
+                    .assertResults(expected);
+    const auto stats = exec::toPlanStats(task->taskStats());
+    EXPECT_GT(
+        stats.at(plan->id())
+            .customStats.at(std::string{kDirectGroupbyFinalizationStat})
+            .sum,
+        0);
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
