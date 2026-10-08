@@ -17,6 +17,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <algorithm>
 #include <mutex>
 
 #include "velox/core/PlanFragment.h"
@@ -529,6 +530,14 @@ void FixedPointLoop::buildHashTable(
       decoded.emplace_back(*child);
     }
     for (vector_size_t row = 0; row < batch->size(); ++row) {
+      // The table's keys are not nullable, so a NULL key would be stored as
+      // the value under it and match probe keys equal to that value.
+      if (std::any_of(
+              decoded.begin(), decoded.begin() + numKeys, [&](const auto& key) {
+                return key.isNullAt(row);
+              })) {
+        continue;
+      }
       char* newRow = rowContainer->newRow();
       if (nextOffset > 0) {
         *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
