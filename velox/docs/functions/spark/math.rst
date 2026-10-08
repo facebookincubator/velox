@@ -426,6 +426,16 @@ Mathematical Functions
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
 
+    Omitting ``d`` is equivalent to ``d = 0``. For integral inputs, nonnegative
+    ``d`` returns ``x`` unchanged. Negative ``d`` rounds to a multiple of
+    ``10^(-d)``, with halfway values rounded away from zero. Integral overflow
+    raises an error when ``spark.ansi_enabled`` is true; otherwise the result
+    wraps to the input type's two's-complement representation.
+
+    Integral inputs accept every INTEGER scale, including a scale column.
+    Extremely negative scales return zero rather than raising errors due to JVM
+    BigDecimal limits.
+
 .. spark:function:: sec(x) -> double
 
     Returns the secant of ``x``.
