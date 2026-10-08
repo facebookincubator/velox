@@ -280,9 +280,9 @@ struct WriterOptions {
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
 
-  /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-  /// encoding selection. False by default; do not enable for production until
-  /// ALP is production-ready.
+  /// Legacy experimental option for floating-point normalization and
+  /// policy-free nested ALP size estimates. Does not enable encoding
+  /// candidates; configure ALP explicitly in the selection policy.
   bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
