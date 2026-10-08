@@ -54,4 +54,12 @@ std::vector<RowVectorPtr> makeCopies(
     const std::vector<RowVectorPtr>& source,
     int32_t numCopies);
 
+/// Copies every source row twice. In the first copy, sets one column from each
+/// group in 'columnGroups' to null, selecting columns within each group in
+/// round-robin order. The second copy preserves the source row.
+RowVectorPtr makeInputWithNullRows(
+    const RowVectorPtr& source,
+    const std::vector<std::vector<std::string>>& columnGroups,
+    memory::MemoryPool* pool);
+
 } // namespace facebook::velox::exec::test
