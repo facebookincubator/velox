@@ -33,6 +33,23 @@ TEST_F(FormatStringTest, stringsAndSequentialArguments) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(FormatStringTest, booleanStringFormatting) {
+  auto booleans = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  auto result = evaluate<SimpleVector<StringView>>(
+      "format_string('%s', c0)", makeRowVector({booleans}));
+  auto expected = makeFlatVector<StringView>({"true", "false", "null"});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(FormatStringTest, ignoresExtraArguments) {
+  auto integers = makeFlatVector<int32_t>({1, 2, 3});
+  auto strings = makeFlatVector<StringView>({"unused", "values", "ignored"});
+  auto result = evaluate<SimpleVector<StringView>>(
+      "format_string('value=%d', c0, c1)", makeRowVector({integers, strings}));
+  auto expected = makeFlatVector<StringView>({"value=1", "value=2", "value=3"});
+  velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(FormatStringTest, replacesMalformedUtf8InStringArgument) {
   // Spark formats a %s argument via UTF8String.toString(), which decodes the
   // bytes through java.lang.String and replaces malformed UTF-8 with U+FFFD.

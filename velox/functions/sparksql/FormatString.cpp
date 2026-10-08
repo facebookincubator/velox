@@ -133,7 +133,7 @@ void snprintfAppend(std::string& output, const char* format, Values... values) {
   int formattedSize{
       std::snprintf(buffer.data(), buffer.size(), format, values...)};
   VELOX_CHECK_GE(formattedSize, 0, "snprintf encoding error in format_string");
-  VELOX_CHECK_LE(
+  VELOX_USER_CHECK_LE(
       formattedSize,
       kMaxFormattedSize,
       "format_string produced an unexpectedly large output ({} bytes)",
@@ -476,7 +476,7 @@ class FormatStringFunction : public exec::VectorFunction {
             normalizeUtf8(
                 decodedArguments[0]->valueAt<StringView>(rows.begin())),
             arguments.size());
-      } catch (const std::exception&) {
+      } catch (const VeloxUserError&) {
         context.setErrors(rows, std::current_exception());
         return;
       }
