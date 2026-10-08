@@ -535,21 +535,13 @@ void FlatMapVector::copyInMapRanges(
     column_index_t targetChannel,
     const uint64_t* sourceInMaps,
     const folly::Range<const BaseVector::CopyRange*>& ranges) {
-  auto* targetInMaps = mutableRawInMapsAt(targetChannel);
-
   // This means that the key being copied exists in all maps from both source
   // and target; nothing to update.
-  if (sourceInMaps == nullptr && targetInMaps == nullptr) {
+  if (sourceInMaps == nullptr && mutableRawInMapsAt(targetChannel) == nullptr) {
     return;
   }
 
-  // If there is something we need to copy, allocate the target in map buffer in
-  // case there isn't one.
-  if (targetInMaps == nullptr) {
-    inMapsAt(targetChannel, true) =
-        AlignedBuffer::allocate<bool>(size(), pool(), false);
-    targetInMaps = mutableRawInMapsAt(targetChannel);
-  }
+  auto* targetInMaps = ensureInMapAt(targetChannel);
 
   // If there is source in map, we need to copy the buffer range regions from
   // it.
@@ -573,6 +565,14 @@ void FlatMapVector::copyInMapRanges(
   }
 }
 
+uint64_t* FlatMapVector::ensureInMapAt(column_index_t channel) {
+  auto& inMap = inMapsAt(channel, /*resize=*/true);
+  if (inMap == nullptr) {
+    inMap = AlignedBuffer::allocate<bool>(size(), pool(), true);
+  }
+  return inMap->asMutable<uint64_t>();
+}
+
 void FlatMapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
@@ -590,6 +590,8 @@ void FlatMapVector::copyRanges(
   // If source may have nulls, copy top-level nulls from the ranges first.
   if (sourceFlatMap->mayHaveNulls()) {
     copyNulls(mutableRawNulls(), sourceFlatMap->rawNulls(), ranges);
+  } else if (rawNulls() != nullptr) {
+    setNulls(mutableRawNulls(), ranges, false);
   }
 
   auto startingNumDistinctKeys = numDistinctKeys();
@@ -623,12 +625,7 @@ void FlatMapVector::copyRanges(
     // If a key doesn't exist in the source, we need to go and clean its in map
     // buffer entries for all rows in range.
     if (sourceFlatMap->getKeyChannel(distinctKeys_, i) == std::nullopt) {
-      auto& targetInMapsBuffer = inMapsAt(i, true);
-      if (targetInMapsBuffer == nullptr) {
-        targetInMapsBuffer =
-            AlignedBuffer::allocate<bool>(size(), pool(), false);
-      }
-      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+      auto* targetInMaps = ensureInMapAt(i);
 
       applyToEachRange(
           ranges,

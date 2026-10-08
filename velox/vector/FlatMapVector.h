@@ -352,6 +352,11 @@ class FlatMapVector : public BaseVector {
       const folly::Range<const BaseVector::CopyRange*>& ranges);
 
  private:
+  // Returns the in-map bits of 'channel' for writing. A key without an in-map
+  // buffer is in every row, so a buffer allocated here starts with every bit
+  // set.
+  uint64_t* ensureInMapAt(column_index_t channel);
+
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 
   // Returns the index over distinct keys, building it on first use.
