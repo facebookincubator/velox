@@ -169,8 +169,8 @@ __device__ OutT decimalDivideImpl(
       static_cast<unsigned __int128>(rescaleFactor);
 
   unsigned __int128 scaled = uNum * uRescaleFactor;
-  // Match Velox CPU checkedMultiply on rescale.
-  if (uRescaleFactor != 0 && scaled / uRescaleFactor != uNum) {
+  if ((uRescaleFactor != 0 && scaled / uRescaleFactor != uNum) ||
+      scaled > kInt128MaxMagnitude) {
     markError(localStatus, DecimalBinaryOpStatus::kOverflow);
     return OutT{0};
   }
