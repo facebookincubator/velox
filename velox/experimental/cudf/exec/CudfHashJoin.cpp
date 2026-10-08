@@ -171,28 +171,32 @@ class ProbeMatchTracker {
 
 } // namespace
 
+CudfHashJoinProbe::ReadStream* CudfHashJoinProbe::findReadStream(
+    cuda::stream_ref stream) {
+  auto it = std::find_if(
+      readStreams_.begin(), readStreams_.end(), [&](const ReadStream& rs) {
+        return rs.stream.get() == stream.get();
+      });
+  return it == readStreams_.end() ? nullptr : &*it;
+}
+
 void CudfHashJoinProbe::registerReadStream(cuda::stream_ref stream) {
-  auto it = readStreams_.find(stream.get());
-  if (it == readStreams_.end()) {
-    it = readStreams_
-             .emplace(
-                 stream.get(),
-                 ReadStream{
-                     stream,
-                     std::make_unique<CudaEvent>(cudaEventDisableTiming)})
-             .first;
+  auto* readStream = findReadStream(stream);
+  if (readStream == nullptr) {
+    readStream = &readStreams_.emplace_back(ReadStream{
+        stream, std::make_unique<CudaEvent>(cudaEventDisableTiming)});
   }
-  it->second.pending = true;
+  readStream->pending = true;
 }
 
 void CudfHashJoinProbe::recordReadCompletion(cuda::stream_ref stream) noexcept {
-  auto it = readStreams_.find(stream.get());
-  if (it == readStreams_.end()) {
+  auto* readStream = findReadStream(stream);
+  if (readStream == nullptr) {
     return;
   }
   try {
-    it->second.completion->recordFrom(stream);
-    it->second.pending = false;
+    readStream->completion->recordFrom(stream);
+    readStream->pending = false;
   } catch (const std::exception& e) {
     LOG(WARNING) << "Failed to record hash join probe read completion; "
                  << "cleanup will synchronize the stream instead: " << e.what();
@@ -200,7 +204,7 @@ void CudfHashJoinProbe::recordReadCompletion(cuda::stream_ref stream) noexcept {
 }
 
 void CudfHashJoinProbe::waitForReadCompletion() {
-  for (auto& [_, readStream] : readStreams_) {
+  for (auto& readStream : readStreams_) {
     if (readStream.pending) {
       readStream.stream.sync();
     } else {

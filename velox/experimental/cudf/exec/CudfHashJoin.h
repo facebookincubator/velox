@@ -36,7 +36,7 @@
 #include <cuda/stream>
 
 #include <memory>
-#include <unordered_map>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
 
@@ -187,6 +187,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// so later isFinished()/doClose() calls do not wait again.
   void waitForReadCompletion();
 
+  struct ReadStream;
+  ReadStream* findReadStream(cuda::stream_ref stream);
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
@@ -280,8 +283,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// One reusable completion event per stream this probe instance has read
   /// shared or operator-owned state on. Streams are tracked independently so
   /// probe batches on different pool streams can overlap; they only converge
-  /// in waitForReadCompletion().
-  std::unordered_map<cudaStream_t, ReadStream> readStreams_;
+  /// in waitForReadCompletion(). Bounded by the global stream pool size, so a
+  /// linear search is sufficient.
+  std::vector<ReadStream> readStreams_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
