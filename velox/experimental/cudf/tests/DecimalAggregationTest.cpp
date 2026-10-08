@@ -1701,6 +1701,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
 
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
 
   // The total payload size is valid, but neither row contains a complete
   // serialized state. This exercises the per-row check rather than the
@@ -1709,7 +1710,11 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
       cudf::data_type{cudf::type_id::INT32}, {0, 16, 64}, nullptr, stream);
   rmm::device_buffer charsBuf(64, stream);
   auto stateCol = cudf::make_strings_column(
-      2, std::move(offsetsCol), std::move(charsBuf), 0, rmm::device_buffer{});
+      2,
+      std::move(offsetsCol),
+      std::move(charsBuf),
+      0,
+      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr));
 
   VELOX_ASSERT_THROW(
       deserializeDecimalSumState(stateCol->view(), 2, stream),
