@@ -38,7 +38,6 @@ velox_link_libraries(
   fmt::fmt
   velox_spark_query_config
   velox_functions_lib
-  velox_functions_spark_rounding
   velox_functions_json
   velox_expression
 )

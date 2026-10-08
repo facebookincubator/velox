@@ -150,7 +150,8 @@ struct DecimalArithmetic {
         unsignedDividendRescaled, R(powerOfTen(aRescale)), "Decimal");
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
-    if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
+    // Compare without doubling a remainder that can approach the int128 limit.
+    if (!noRoundUp && remainder >= unsignedDivisor - remainder) {
       ++quotient;
     }
     r = quotient * resultSign;

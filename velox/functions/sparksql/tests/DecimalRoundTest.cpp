@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/Rounding.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -230,6 +231,66 @@ TEST_F(DecimalRoundTest, roundNullScale) {
       kRoundDecimal);
 }
 
+TEST_F(DecimalRoundTest, sharedExtremeScaleAndErrors) {
+  const auto type = DECIMAL(38, 0);
+  const auto maximum = DecimalUtil::kPowersOfTen[38] - 1;
+  const auto input = makeNullableFlatVector<int128_t>(
+      {maximum, -maximum, 0, std::nullopt}, type);
+  for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    for (int32_t scale : {-38, -39, std::numeric_limits<int32_t>::min()}) {
+      const auto call = createDecimalRounding(type, scale, false, name);
+      const auto tryCall = std::make_shared<core::CallTypedExpr>(
+          type, std::vector<core::TypedExprPtr>{call}, "try");
+      const bool ceil = name == kCeilDecimal;
+      const bool floor = name == kFloorDecimal;
+      const bool roundOverflow = name == kRoundDecimal && scale == -38;
+      testEncodings(
+          tryCall,
+          {input},
+          makeNullableFlatVector<int128_t>(
+              {ceil || roundOverflow ? std::nullopt
+                                     : std::optional<int128_t>{0},
+               floor || roundOverflow ? std::nullopt
+                                      : std::optional<int128_t>{0},
+               0,
+               std::nullopt},
+              type));
+      if (ceil || floor || roundOverflow) {
+        VELOX_ASSERT_USER_THROW(
+            evaluate(call, makeRowVector({input})), "Decimal overflow");
+      }
+    }
+  }
+}
+
+TEST_F(DecimalRoundTest, sharedNullScaleAndMetadata) {
+  const auto type = DECIMAL(3, 1);
+  const auto input = makeFlatVector<int64_t>({25, -25, 0}, type);
+  for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    testDecimalRoundingWithNullScale(
+        input, BaseVector::createNullConstant(DECIMAL(3, 0), 3, pool()), name);
+    const auto field = std::make_shared<core::FieldAccessTypedExpr>(type, "c0");
+    const auto scale = std::make_shared<core::ConstantTypedExpr>(
+        INTEGER(), variant(int32_t{0}));
+    const auto bad = std::make_shared<core::CallTypedExpr>(
+        DECIMAL(2, 0), std::vector<core::TypedExprPtr>{field, scale}, name);
+    VELOX_ASSERT_USER_THROW(
+        evaluate(bad, makeRowVector({input})), "result type");
+  }
+}
+
+TEST_F(DecimalRoundTest, directionalOverflowIsUserError) {
+  const auto type = DECIMAL(38, 0);
+  for (const char* name : {kCeilDecimal, kFloorDecimal}) {
+    const auto value = name == kCeilDecimal ? DecimalUtil::kLongDecimalMax
+                                            : DecimalUtil::kLongDecimalMin;
+    const auto input = makeRowVector({makeFlatVector<int128_t>({value}, type)});
+    VELOX_ASSERT_USER_THROW(
+        evaluate(createDecimalRounding(type, -1, false, name), input),
+        "Decimal overflow");
+  }
+}
+
 TEST_F(DecimalRoundTest, roundPrefixedRegistration) {
   registerRoundFunctions("round_prefix_");
   const auto input =
@@ -362,6 +423,155 @@ TEST_F(DecimalRoundTest, roundPrecisionAndScaleMatrix) {
   }
 }
 
+TEST_F(DecimalRoundTest, directionalPrecisionAndScaleMatrix) {
+  for (uint8_t precision = 1; precision <= 38; ++precision) {
+    for (uint8_t scale = 0; scale <= precision; ++scale) {
+      const auto type = DECIMAL(precision, scale);
+      const auto input = type->isShortDecimal()
+          ? VectorPtr(
+                makeNullableFlatVector<int64_t>(
+                    {2, 5, 6, -5, -6, 0, std::nullopt}, type))
+          : VectorPtr(
+                makeNullableFlatVector<int128_t>(
+                    {2, 5, 6, -5, -6, 0, std::nullopt}, type));
+      for (const char* name : {kCeilDecimal, kFloorDecimal}) {
+        for (int32_t requested :
+             {static_cast<int32_t>(scale),
+              scale - 1,
+              -39,
+              std::numeric_limits<int32_t>::min(),
+              std::numeric_limits<int32_t>::max()}) {
+          SCOPED_TRACE(
+              fmt::format("{}({}, {}, {})", name, precision, scale, requested));
+          const auto call = createDecimalRounding(type, requested, false, name);
+          const auto resultType = call->type();
+          const bool ceil = name == kCeilDecimal;
+          std::vector<std::optional<int128_t>> values{
+              2, 5, 6, -5, -6, 0, std::nullopt};
+          if (requested == scale - 1) {
+            const int128_t unit = requested < 0 ? 10 : 1;
+            values = ceil
+                ? std::vector<std::optional<
+                      int128_t>>{unit, unit, unit, 0, 0, 0, std::nullopt}
+                : std::vector<std::optional<int128_t>>{
+                      0, 0, 0, -unit, -unit, 0, std::nullopt};
+          } else if (requested < 0) {
+            values = ceil
+                ? std::vector<std::optional<
+                      int128_t>>{std::nullopt, std::nullopt, std::nullopt, 0, 0, 0, std::nullopt}
+                : std::vector<std::optional<int128_t>>{
+                      0, 0, 0, std::nullopt, std::nullopt, 0, std::nullopt};
+          }
+          VectorPtr expected;
+          if (resultType->isShortDecimal()) {
+            std::vector<std::optional<int64_t>> shortValues;
+            for (auto value : values) {
+              shortValues.emplace_back(
+                  value ? std::optional<int64_t>(*value) : std::nullopt);
+            }
+            expected = makeNullableFlatVector<int64_t>(shortValues, resultType);
+          } else {
+            expected = makeNullableFlatVector<int128_t>(values, resultType);
+          }
+          const auto tryCall = std::make_shared<core::CallTypedExpr>(
+              resultType, std::vector<core::TypedExprPtr>{call}, "try");
+          testEncodings(tryCall, {input}, expected);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(DecimalRoundTest, sharedSelectionErrorsAndResultReuse) {
+  const auto type = DECIMAL(38, 0);
+  const auto maximum = DecimalUtil::kLongDecimalMax;
+  std::vector<std::optional<int128_t>> inputValues;
+  for (int i = 0; i < 33; ++i) {
+    inputValues.insert(
+        inputValues.end(), {maximum, -maximum, 0, std::nullopt, 15, -15});
+  }
+  const auto input = makeNullableFlatVector<int128_t>(inputValues, type);
+  for (bool ansi : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansi ? "true" : "false"}});
+    for (const char* name :
+         {kRoundDecimal, kSparkRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+      const auto call = createDecimalRounding(type, -1, false, name);
+      const auto tryCall = std::make_shared<core::CallTypedExpr>(
+          type, std::vector<core::TypedExprPtr>{call}, "try");
+      const bool ceil = name == kCeilDecimal;
+      const bool floor = name == kFloorDecimal;
+      std::vector<std::optional<int128_t>> expectedValues;
+      for (int i = 0; i < 33; ++i) {
+        expectedValues.insert(
+            expectedValues.end(),
+            {floor ? std::optional<int128_t>{maximum - 9} : std::nullopt,
+             ceil ? std::optional<int128_t>{-maximum + 9} : std::nullopt,
+             0,
+             std::nullopt,
+             floor ? 10 : 20,
+             ceil ? -10 : -20});
+      }
+      const auto expected =
+          makeNullableFlatVector<int128_t>(expectedValues, type);
+      testEncodings(tryCall, {input}, expected);
+      facebook::velox::test::assertEqualVectors(
+          expected,
+          evaluate(tryCall, makeRowVector({wrapInLazyDictionary(input)})));
+      const auto selectedCondition = makeFlatVector<bool>(
+          input->size(), [](auto row) { return row % 6 >= 4; });
+      const auto row = makeRowVector({input, selectedCondition});
+      const auto conditional = std::make_shared<core::CallTypedExpr>(
+          type,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c1"),
+              call,
+              std::make_shared<core::FieldAccessTypedExpr>(type, "c0")},
+          "if");
+      auto conditionalExpected = inputValues;
+      for (int i = 0; i < input->size(); ++i) {
+        if (i % 6 >= 4) {
+          conditionalExpected[i] = expectedValues[i];
+        }
+      }
+      facebook::velox::test::assertEqualVectors(
+          makeNullableFlatVector<int128_t>(conditionalExpected, type),
+          evaluate(conditional, row));
+
+      SelectivityVector selected(input->size(), false);
+      for (auto index : {4, 5, 64, 65, 130, 131, 196, 197}) {
+        selected.setValid(index, true);
+      }
+      selected.updateBounds();
+      exec::ExprSet expressions({call}, &execCtx_);
+      exec::EvalCtx context(&execCtx_, &expressions, row.get());
+      std::vector<VectorPtr> results{makeFlatVector<int128_t>(
+          input->size(), [](auto) { return -777; }, nullptr, type)};
+      expressions.eval(selected, context, results);
+      const auto* output = results[0]->as<SimpleVector<int128_t>>();
+      for (int i = 0; i < input->size(); ++i) {
+        EXPECT_FALSE(output->isNullAt(i));
+        EXPECT_EQ(
+            output->valueAt(i),
+            selected.isValid(i) ? *expectedValues[i] : -777);
+      }
+      exec::ExprSet tryExpressions({tryCall}, &execCtx_);
+      exec::EvalCtx tryContext(&execCtx_, &tryExpressions, row.get());
+      tryExpressions.eval(
+          SelectivityVector(input->size()), tryContext, results);
+      facebook::velox::test::assertEqualVectors(expected, results[0]);
+      const auto zeros = makeFlatVector<int128_t>(
+          input->size(), [](auto) { return 0; }, nullptr, type);
+      const auto zeroRow = makeRowVector({zeros});
+      exec::EvalCtx reuseContext(&execCtx_, &tryExpressions, zeroRow.get());
+      tryExpressions.eval(
+          SelectivityVector(input->size()), reuseContext, results);
+      facebook::velox::test::assertEqualVectors(zeros, results[0]);
+    }
+  }
+}
+
 TEST_F(DecimalRoundTest, roundMetadataValidation) {
   const auto type = DECIMAL(3, 1);
   const auto input = makeRowVector(
@@ -409,6 +619,71 @@ TEST_F(DecimalRoundTest, roundMetadataValidation) {
       "INTEGER");
 }
 
+TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
+  const auto type = DECIMAL(19, 2);
+  const auto row = makeRowVector(
+      {makeFlatVector<int128_t>({25, -25, 0}, type),
+       makeFlatVector<int32_t>({0, 1, 2})});
+  const auto field = std::make_shared<core::FieldAccessTypedExpr>(type, "c0");
+  const auto scale =
+      std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(int32_t{0}));
+  const auto nullScale = std::make_shared<core::ConstantTypedExpr>(
+      INTEGER(), variant::null(TypeKind::INTEGER));
+  for (const char* name :
+       {kRoundDecimal, kSparkRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    const auto call = [&](TypePtr result,
+                          std::vector<core::TypedExprPtr> args) {
+      return std::make_shared<core::CallTypedExpr>(
+          result, std::move(args), name);
+    };
+    for (const auto& output :
+         {TypePtr(BIGINT()), DECIMAL(19, 0), DECIMAL(18, 1), DECIMAL(17, 0)}) {
+      VELOX_ASSERT_USER_THROW(
+          evaluate(call(output, {field, scale}), row), "result type");
+      VELOX_ASSERT_USER_THROW(
+          evaluate(call(output, {field, nullScale}), row), "result type");
+    }
+    VELOX_ASSERT_USER_THROW(
+        evaluate(call(DECIMAL(18, 0), {}), row), "arguments");
+    VELOX_ASSERT_USER_THROW(
+        evaluate(call(DECIMAL(18, 0), {field, scale, scale}), row),
+        "arguments");
+    VELOX_ASSERT_USER_THROW(
+        evaluate(
+            call(
+                DECIMAL(18, 0),
+                {field,
+                 std::make_shared<core::FieldAccessTypedExpr>(
+                     INTEGER(), "c1")}),
+            row),
+        "constant expression");
+    VELOX_ASSERT_USER_THROW(
+        evaluate(
+            call(
+                DECIMAL(18, 0),
+                {field,
+                 std::make_shared<core::ConstantTypedExpr>(
+                     BOOLEAN(), variant(true))}),
+            row),
+        "INTEGER");
+    VELOX_ASSERT_USER_THROW(
+        evaluate(
+            call(
+                DECIMAL(18, 0),
+                {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1"),
+                 scale}),
+            row),
+        "must be decimal");
+    VELOX_ASSERT_USER_THROW(
+        evaluate(fmt::format("{}(c0, cast(0 as integer))", name), row),
+        "explicitly resolved result type");
+    if (name == kCeilDecimal || name == kFloorDecimal) {
+      VELOX_ASSERT_USER_THROW(
+          evaluate(call(DECIMAL(18, 0), {field}), row), "two arguments");
+    }
+  }
+}
+
 TEST_F(DecimalRoundTest, roundPrecisionCarry) {
   for (uint8_t precision = 1; precision <= 38; ++precision) {
     for (uint8_t scale : {uint8_t{0}, uint8_t{1}, precision}) {
@@ -428,26 +703,34 @@ TEST_F(DecimalRoundTest, roundPrecisionCarry) {
         const auto [resultPrecision, resultScale] =
             getResultPrecisionScale(precision, scale, requested);
         const auto resultType = DECIMAL(resultPrecision, resultScale);
-        const auto value = scale == requested
-            ? maximum
-            : DecimalUtil::kPowersOfTen[precision - scale];
-        const auto expected = resultType->isShortDecimal()
-            ? VectorPtr(
-                  makeNullableFlatVector<int64_t>(
-                      {static_cast<int64_t>(value),
-                       -static_cast<int64_t>(value),
-                       std::nullopt},
-                      resultType))
-            : VectorPtr(
-                  makeNullableFlatVector<int128_t>(
-                      {value, -value, std::nullopt}, resultType));
-        testDecimalRound(input, requested, expected);
+        for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+          const auto away = scale == requested
+              ? maximum
+              : DecimalUtil::kPowersOfTen[precision - scale];
+          const auto toward = scale == requested ? maximum : away - 1;
+          const auto positive = name == kFloorDecimal ? toward : away;
+          const auto negative = name == kCeilDecimal ? -toward : -away;
+          const auto expected = resultType->isShortDecimal()
+              ? VectorPtr(
+                    makeNullableFlatVector<int64_t>(
+                        {static_cast<int64_t>(positive),
+                         static_cast<int64_t>(negative),
+                         std::nullopt},
+                        resultType))
+              : VectorPtr(
+                    makeNullableFlatVector<int128_t>(
+                        {positive, negative, std::nullopt}, resultType));
+          testEncodings(
+              createDecimalRounding(type, requested, false, name),
+              {input},
+              expected);
+        }
       }
     }
   }
 }
 
-TEST_F(DecimalRoundTest, roundSupportedScaleInterval) {
+TEST_F(DecimalRoundTest, roundFullIntegerScaleDomain) {
   const auto type = DECIMAL(3, 1);
   const auto input =
       makeNullableFlatVector<int64_t>({25, -25, std::nullopt}, type);
@@ -464,11 +747,15 @@ TEST_F(DecimalRoundTest, roundSupportedScaleInterval) {
         -401,
         401,
         std::numeric_limits<int32_t>::max()}) {
-    const auto call = createDecimalRound(type, scale, false);
-    VELOX_ASSERT_THROW(
-        std::make_unique<exec::ExprSet>(
-            std::vector<core::TypedExprPtr>{call}, &execCtx_),
-        "between -400 and 400");
+    testDecimalRound(
+        input,
+        scale,
+        scale < 0 ? VectorPtr(
+                        makeNullableFlatVector<int128_t>(
+                            {0, 0, std::nullopt}, DECIMAL(38, 0)))
+                  : VectorPtr(
+                        makeNullableFlatVector<int64_t>(
+                            {25, -25, std::nullopt}, DECIMAL(4, 1))));
   }
 }
 
@@ -478,17 +765,20 @@ TEST_F(DecimalRoundTest, roundNullScaleSkipsChild) {
   const auto input =
       makeNullableFlatVector<int128_t>({maximum, -maximum, std::nullopt}, type);
   const auto child = createDecimalRound(type, -1, false);
-  const auto call = std::make_shared<core::CallTypedExpr>(
-      type,
-      std::vector<core::TypedExprPtr>{
-          child,
-          std::make_shared<core::ConstantTypedExpr>(
-              INTEGER(), variant::null(TypeKind::INTEGER))},
-      kRoundDecimal);
-  testEncodings(
-      call,
-      {input},
-      BaseVector::createNullConstant(type, input->size(), pool()));
+  for (const char* name :
+       {kRoundDecimal, kSparkRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    const auto call = std::make_shared<core::CallTypedExpr>(
+        type,
+        std::vector<core::TypedExprPtr>{
+            child,
+            std::make_shared<core::ConstantTypedExpr>(
+                INTEGER(), variant::null(TypeKind::INTEGER))},
+        name);
+    testEncodings(
+        call,
+        {input},
+        BaseVector::createNullConstant(type, input->size(), pool()));
+  }
 }
 
 } // namespace

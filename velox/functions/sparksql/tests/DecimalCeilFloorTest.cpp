@@ -76,6 +76,19 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
     auto expr = createCall(input->type(), scale, mode);
     testEncodings(expr, {input}, expected);
   }
+
+  void testOverflow(
+      const VectorPtr& input,
+      int32_t scale,
+      Mode mode,
+      const VectorPtr& expected) {
+    const auto call = createCall(input->type(), scale, mode);
+    VELOX_ASSERT_USER_THROW(
+        evaluate(call, makeRowVector({input})), "Decimal overflow");
+    const auto tryCall = std::make_shared<core::CallTypedExpr>(
+        call->type(), std::vector<core::TypedExprPtr>{call}, "try");
+    testEncodings(tryCall, {input}, expected);
+  }
 };
 
 TEST_F(DecimalCeilFloorTest, ceilPositiveScale) {
@@ -131,7 +144,7 @@ TEST_F(DecimalCeilFloorTest, negativeScale) {
       Mode::kFloor,
       makeFlatVector<int64_t>({90, 10, -20, 0}, DECIMAL(4, 0)));
 
-  // Scale lower than the integral magnitude becomes 0.
+  // A coarser quantum rounds positive inputs up, but negative inputs to zero.
   testCall(
       makeFlatVector<int64_t>({990, -990, 500}, DECIMAL(4, 1)),
       -3,
@@ -164,10 +177,8 @@ TEST_F(DecimalCeilFloorTest, scaleAboveInputScale) {
 }
 
 TEST_F(DecimalCeilFloorTest, highInputScaleNegativeRoundScale) {
-  // DECIMAL(38, 38) with negative round scale would compute divDigits = 39,
-  // exceeding kPowersOfTen bounds. Verify the cap to 38 still produces
-  // Spark-correct results (any input <= 10^38 - 1 is < 10^38, so dividing
-  // by either 10^38 or 10^39 yields quotient 0 with full remainder).
+  // Dropping 39 digits gives quotient zero and preserves the signed remainder,
+  // without indexing beyond kPowersOfTen or losing directional rounding.
   // Spark result type for (p=38, s=38, _scale=-1): DECIMAL(2, 0).
   // Values: 10^37 represents 0.1, -10^37 represents -0.1.
   constexpr int64_t kTenToTheNine = 1'000'000'000LL;
@@ -276,21 +287,18 @@ TEST_F(DecimalCeilFloorTest, nullPropagation) {
 }
 
 TEST_F(DecimalCeilFloorTest, precisionOverflow) {
-  // ceil(9.9999, -1) should produce 10 -> Decimal(2, 0); large input may
-  // overflow when widened. Build a 38-precision input and request a tiny
-  // scale to provoke the overflow-to-NULL path.
-  // Construct value just below 10^38 with scale 0; multiplying by 10 to round
-  // away to a wider precision overflows the 38-digit cap and must yield NULL.
+  // Spark 4.1.1 RoundBase constructs a Decimal at negative scales and raises
+  // NUMERIC_VALUE_OUT_OF_RANGE for these inputs, independent of ANSI mode.
   const int128_t huge = DecimalUtil::kLongDecimalMax; // 10^38 - 1
-  testCall(
+  testOverflow(
       makeFlatVector<int128_t>({huge, huge, huge}, DECIMAL(38, 0)),
       -1,
       Mode::kCeil,
       makeNullableFlatVector<int128_t>(
           {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(38, 0)));
 
-  // floor with negative values should also overflow to NULL.
-  testCall(
+  // TRY catches the error on only the overflowing rows.
+  testOverflow(
       makeFlatVector<int128_t>({-huge, -huge, -huge}, DECIMAL(38, 0)),
       -1,
       Mode::kFloor,
@@ -304,7 +312,7 @@ TEST_F(DecimalCeilFloorTest, precisionOverflow) {
   // so no +1 adjustment → result = -(10^37-1)*10 = valid 38-digit number.
   const int128_t ceilNegHuge =
       -(DecimalUtil::kPowersOfTen[37] - 1) * static_cast<int128_t>(10);
-  testCall(
+  testOverflow(
       makeFlatVector<int128_t>({huge, 0, -huge}, DECIMAL(38, 0)),
       -1,
       Mode::kCeil,
@@ -313,18 +321,15 @@ TEST_F(DecimalCeilFloorTest, precisionOverflow) {
           DECIMAL(38, 0)));
 }
 
-TEST_F(DecimalCeilFloorTest, scaleClampBoundaries) {
-  // scale = -100 → clamped to -38. For DECIMAL(5, 2) → result DECIMAL(38, 0).
-  // Any small value divided by 10^(2+38)=10^40 (capped to 10^38) yields
-  // quotient=0. Ceil of 0.01 should be 10^38 which overflows → NULL.
-  // But 0 stays 0.
+TEST_F(DecimalCeilFloorTest, scalesBeyondDecimalPrecision) {
+  // Zero stays zero even when the requested quantum cannot be represented.
   testCall(
       makeFlatVector<int64_t>({0, 0, 0}, DECIMAL(5, 2)),
       -100,
       Mode::kCeil,
       makeFlatVector<int128_t>({0, 0, 0}, DECIMAL(38, 0)));
 
-  // scale = 100 → clamped to 38 → treated as >= input scale → identity.
+  // A requested scale above the input scale is identity.
   testCall(
       makeFlatVector<int64_t>({123, -456, 0}, DECIMAL(5, 2)),
       100,
@@ -358,9 +363,9 @@ TEST_F(DecimalCeilFloorTest, negativeScaleRemainderZero) {
 TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
   // DECIMAL(38, 0), scale=-38. Result DECIMAL(38, 0).
   // Any value not exactly a multiple of 10^38 should:
-  //   ceil → 10^38 for positive (overflow → NULL), 0 for negative
-  //   floor → 0 for positive, -10^38 for negative (overflow → NULL)
-  testCall(
+  //   ceil -> 10^38 for positive (overflow), 0 for negative
+  //   floor -> 0 for positive, -10^38 for negative (overflow)
+  testOverflow(
       makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
       -38,
       Mode::kCeil,
@@ -368,7 +373,7 @@ TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
           {std::nullopt, static_cast<int128_t>(0), static_cast<int128_t>(0)},
           DECIMAL(38, 0)));
 
-  testCall(
+  testOverflow(
       makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 0)),
       -38,
       Mode::kFloor,

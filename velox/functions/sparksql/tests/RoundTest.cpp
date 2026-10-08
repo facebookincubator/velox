@@ -15,11 +15,9 @@
  */
 
 #include <bit>
-#include <cfenv>
 #include <cmath>
 #include <limits>
 
-#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -96,13 +94,8 @@ class RoundTest : public SparkFunctionBaseTest {
       EXPECT_EQ(round<T>(std::numeric_limits<T>::min(), scale), 0);
     }
     EXPECT_EQ(round<T>(T{25}, std::nullopt), std::nullopt);
-    for (int32_t scale :
-         {std::numeric_limits<int32_t>::min(),
-          -401,
-          401,
-          std::numeric_limits<int32_t>::max()}) {
-      VELOX_ASSERT_THROW(round<T>(T{0}, scale), "between -400 and 400");
-    }
+    EXPECT_EQ(round<T>(T{25}, std::numeric_limits<int32_t>::min()), 0);
+    EXPECT_EQ(round<T>(T{25}, std::numeric_limits<int32_t>::max()), 25);
   }
 
   template <typename T>
@@ -149,73 +142,22 @@ class RoundTest : public SparkFunctionBaseTest {
     }
   }
 
-  template <typename T>
-  void testFloating() {
-    for (T tie : {T{0.5}, T{1.5}, T{2.5}, T{15.5}, T{16.5}}) {
-      for (T sign : {T{-1}, T{1}}) {
-        const auto value = sign * tie;
-        EXPECT_EQ(round<T>(value, 0), sign * std::ceil(tie));
-        EXPECT_EQ(
-            round<T>(std::nextafter(value, -INFINITY), 0), std::floor(value));
-        EXPECT_EQ(
-            round<T>(std::nextafter(value, INFINITY), 0), std::ceil(value));
-      }
-    }
-    const auto maximum = std::numeric_limits<T>::max();
-    const auto smallest = std::numeric_limits<T>::denorm_min();
-    const auto input = makeNullableFlatVector<T>(
-        {maximum,
-         -maximum,
-         smallest,
-         -smallest,
-         T{2.5},
-         T{-2.5},
-         std::ldexp(T{1}, std::numeric_limits<T>::digits),
-         std::ldexp(T{1}, 63),
-         std::nullopt});
-    const auto expected = makeNullableFlatVector<T>(
-        {maximum,
-         -maximum,
-         0,
-         0,
-         3,
-         -3,
-         std::ldexp(T{1}, std::numeric_limits<T>::digits),
-         std::ldexp(T{1}, 63),
-         std::nullopt});
-    testEncodings(
-        makeTypedExpr("round(c0)", makeRowVector({input})->rowType()),
-        {input},
-        expected);
-    for (int32_t scale : {-400, -1, 0, 1, 400}) {
-      EXPECT_EQ(round<T>(INFINITY, scale), INFINITY);
-      EXPECT_EQ(round<T>(-INFINITY, scale), -INFINITY);
-      EXPECT_TRUE(
-          std::isnan(
-              round<T>(std::numeric_limits<T>::quiet_NaN(), scale).value()));
-      EXPECT_FALSE(std::signbit(round<T>(T{-0.0}, scale).value()));
-      EXPECT_EQ(round<T>(std::nullopt, scale), std::nullopt);
-    }
-    EXPECT_EQ(round<T>(T{2.5}, std::nullopt), std::nullopt);
-    for (int32_t scale :
-         {std::numeric_limits<int32_t>::min(),
-          -401,
-          401,
-          std::numeric_limits<int32_t>::max()}) {
-      VELOX_ASSERT_THROW(round<T>(T{0}, scale), "between -400 and 400");
-      VELOX_ASSERT_THROW(round<T>(INFINITY, scale), "between -400 and 400");
-      VELOX_ASSERT_THROW(
-          round<T>(std::numeric_limits<T>::quiet_NaN(), scale),
-          "between -400 and 400");
-    }
-  }
 };
 
-TEST_F(RoundTest, issue10929) {
-  EXPECT_EQ(round<double>(0.575, 2), 0.58);
-  EXPECT_EQ(round<double>(0.5549999999999999, 2), 0.55);
-  EXPECT_EQ(round<double>(0.499999999999994, 0), 0.0);
-  EXPECT_EQ(round<double>(-0.575, 2), -0.58);
+TEST_F(RoundTest, publicBinaryFloatingBaseline) {
+  EXPECT_EQ(round<double>(0.575, 2), 0.57);
+  EXPECT_EQ(round<double>(-0.575, 2), -0.57);
+  EXPECT_EQ(round<double>(1.005, 2), 1.0);
+  auto input = makeRowVector(
+      {makeFlatVector<double>({0.575, 1.005}),
+       makeFlatVector<int32_t>({2, 2})});
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<double>({0.57, 1.0}), evaluate("round(c0, c1)", input));
+  for (const auto* expression :
+       {"spark_round(c0)", "spark_round(c0, cast(2 as integer))"}) {
+    VELOX_ASSERT_THROW(
+        evaluate(expression, input), "signature is not supported");
+  }
 }
 
 TEST_F(RoundTest, integralNegativeScale) {
@@ -253,32 +195,16 @@ TEST_F(RoundTest, integralOverflow) {
   }
 }
 
-TEST_F(RoundTest, canonicalDecimalAndWidenedReal) {
-  EXPECT_EQ(round<double>(2.675, 2), 2.68);
-  EXPECT_EQ(round<double>(1.005, 2), 1.01);
-  EXPECT_EQ(round<float>(2.55f, 1), 2.5f);
-  EXPECT_EQ(round<float>(-2.55f, 1), -2.5f);
-  EXPECT_EQ(round<double>(std::numeric_limits<double>::max(), -309), 0);
-  const auto input = std::bit_cast<double>(uint64_t{0x43abc16d674ec7fc});
-  EXPECT_EQ(
-      std::bit_cast<uint64_t>(round<double>(input, -3).value()),
-      uint64_t{0x43abc16d674ec800});
-}
-
-TEST_F(RoundTest, positiveZero) {
-  for (int32_t scale : {-1, 0, 1, 400}) {
-    EXPECT_FALSE(std::signbit(round<double>(-0.0, scale).value()));
-    EXPECT_FALSE(std::signbit(round<float>(-0.0f, scale).value()));
-  }
-  EXPECT_FALSE(std::signbit(round<double>(-0.1, 0).value()));
-}
-
-TEST_F(RoundTest, standaloneRegistration) {
+TEST_F(RoundTest, roundRegistration) {
   EXPECT_EQ(round<double>(2.5, 0), 3.0);
-  VELOX_ASSERT_THROW(
-      evaluateOnce<double>("bround(c0)", std::optional<double>{2.5}),
-      "Scalar function doesn't exist");
-  EXPECT_FALSE(exec::isFunctionCallToSpecialFormRegistered("decimal_bround"));
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "spark_round(c0, cast(-1 as integer), false)",
+          std::optional<int64_t>{25}),
+      30);
+  EXPECT_TRUE(exec::isFunctionCallToSpecialFormRegistered("decimal_round"));
+  EXPECT_TRUE(
+      exec::isFunctionCallToSpecialFormRegistered("decimal_spark_round"));
 }
 
 TEST_F(RoundTest, capturedModeOverridesQuery) {
@@ -306,11 +232,11 @@ TEST_F(RoundTest, prefixedRegistration) {
       evaluateOnce<double>(
           "round_prefix_round(c0)", std::optional<double>{2.5}),
       3.0);
-  EXPECT_EQ(
+  VELOX_ASSERT_THROW(
       evaluateOnce<double>(
           "round_prefix_spark_round(c0, cast(2 as integer))",
           std::optional<double>{0.575}),
-      0.58);
+      "signature is not supported");
 }
 
 TEST_F(RoundTest, capturedIntegralModesAndEncodings) {
@@ -327,22 +253,14 @@ TEST_F(RoundTest, integrationCapturedModes) {
   testCapturedMode<int64_t>("spark_round");
 }
 
-TEST_F(RoundTest, integrationFloatingAndUnary) {
-  EXPECT_EQ(
-      evaluateOnce<double>(
-          "spark_round(c0, cast(2 as integer))", std::optional<double>{0.575}),
-      0.58);
-  EXPECT_EQ(
+TEST_F(RoundTest, integrationSignatures) {
+  VELOX_ASSERT_THROW(
       evaluateOnce<float>(
           "spark_round(c0, cast(1 as integer))", std::optional<float>{2.55f}),
-      2.5f);
-  EXPECT_EQ(
-      evaluateOnce<double>("spark_round(c0)", std::optional<double>{-2.5}),
-      -3.0);
+      "signature is not supported");
   VELOX_ASSERT_THROW(
-      evaluateOnce<double>(
-          "spark_round(c0, cast(401 as integer))", std::optional<double>{0}),
-      "between -400 and 400");
+      evaluateOnce<int64_t>("spark_round(c0)", std::optional<int64_t>{25}),
+      "signature is not supported");
   VELOX_ASSERT_THROW(
       evaluateOnce<double>(
           "spark_round(c0, cast(0 as integer), true)",
@@ -374,43 +292,48 @@ TEST_F(RoundTest, partialSelectionAndTry) {
   EXPECT_EQ(result->valueAt(5), 50);
 }
 
-TEST_F(RoundTest, floatingTypesAndEncodings) {
-  testFloating<float>();
-  testFloating<double>();
-  EXPECT_EQ(round<double>(std::numeric_limits<double>::max(), -308), INFINITY);
-  EXPECT_EQ(
-      round<double>(-std::numeric_limits<double>::max(), -308), -INFINITY);
-  EXPECT_EQ(round<float>(std::numeric_limits<float>::max(), -35), INFINITY);
-  const auto smallest = std::numeric_limits<double>::denorm_min();
-  EXPECT_EQ(round<double>(smallest, 324), smallest);
-  // Java selects at least two significant decimal digits: 4.9e-324, not
-  // the one-digit shortest representation 5e-324.
-  EXPECT_EQ(round<double>(smallest, 323), 0);
-  EXPECT_EQ(round<double>(5e-323, 322), 0);
-  EXPECT_EQ(
-      round<float>(std::numeric_limits<float>::denorm_min(), 45),
-      std::numeric_limits<float>::denorm_min());
-  const auto nan = std::bit_cast<double>(uint64_t{0xfff8000000000042});
-  EXPECT_EQ(
-      std::bit_cast<uint64_t>(round<double>(nan, 1).value()),
-      std::bit_cast<uint64_t>(nan));
-  const auto floatNan = std::bit_cast<float>(uint32_t{0xffc00042});
-  EXPECT_EQ(
-      std::bit_cast<uint32_t>(round<float>(floatNan, 1).value()),
-      std::bit_cast<uint32_t>(floatNan));
-}
-
-TEST_F(RoundTest, floatingEnvironment) {
-  const auto original = std::fegetround();
-  const auto restore = folly::makeGuard([&]() { std::fesetround(original); });
-  for (int mode : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
-    ASSERT_EQ(std::fesetround(mode), 0);
-    EXPECT_EQ(round<double>(2.55, 1), 2.6);
-    EXPECT_EQ(round<double>(-2.55, 1), -2.6);
-    EXPECT_EQ(round<double>(2.5, 0), 3.0);
-    EXPECT_EQ(round<double>(-0.5, 0), -1.0);
-    EXPECT_EQ(round<float>(2.45f, 1), 2.5f);
-  }
+TEST_F(RoundTest, floatingRegistrationsUseUnchangedBinaryHelper) {
+  const auto check = [&]<typename T>() {
+    using Bits = std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>;
+    for (T value :
+         {T{0.575},
+          T{-0.575},
+          T{2.55},
+          T{-0.0},
+          T{0.0},
+          T{2.5},
+          std::numeric_limits<T>::max(),
+          std::numeric_limits<T>::denorm_min(),
+          std::numeric_limits<T>::infinity(),
+          -std::numeric_limits<T>::infinity()}) {
+      for (int32_t scale :
+           {std::numeric_limits<int32_t>::min(),
+            -400,
+            -38,
+            -1,
+            0,
+            1,
+            2,
+            38,
+            400,
+            std::numeric_limits<int32_t>::max()}) {
+        const auto expected = functions::round<T, int32_t>(value, scale);
+        const auto actual = round<T>(value, scale).value();
+        if (std::isnan(expected)) {
+          EXPECT_TRUE(std::isnan(actual));
+        } else {
+          EXPECT_EQ(std::bit_cast<Bits>(expected), std::bit_cast<Bits>(actual));
+        }
+      }
+      EXPECT_EQ(
+          std::bit_cast<Bits>(
+              evaluateOnce<T>("round(c0)", std::optional<T>{value}).value()),
+          std::bit_cast<Bits>(functions::round<T, int32_t>(value, 0)));
+    }
+    EXPECT_EQ(round<T>(T{2.5}, std::nullopt), std::nullopt);
+  };
+  check.template operator()<float>();
+  check.template operator()<double>();
 }
 
 TEST_F(RoundTest, nullScaleSkipsChild) {
@@ -449,13 +372,9 @@ TEST_F(RoundTest, constantAndFoldableArguments) {
   }
 }
 
-TEST_F(RoundTest, unsupportedScaleAndVariableScale) {
-  for (int32_t scale : {-401, 401}) {
-    VELOX_ASSERT_THROW(round<double>(0.0, scale), "between -400 and 400");
-    VELOX_ASSERT_THROW(round<int64_t>(0, scale), "between -400 and 400");
-  }
+TEST_F(RoundTest, integralVariableScaleRejected) {
   auto input = makeRowVector(
-      {makeFlatVector<double>({2.5, 3.5}), makeFlatVector<int32_t>({0, 1})});
+      {makeFlatVector<int64_t>({25, 35}), makeFlatVector<int32_t>({0, 1})});
   VELOX_ASSERT_THROW(evaluate("round(c0, c1)", input), "constant");
 }
 

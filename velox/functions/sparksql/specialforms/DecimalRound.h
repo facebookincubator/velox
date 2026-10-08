@@ -16,12 +16,18 @@
 
 #pragma once
 
+#include <string>
+
 namespace facebook::velox::functions::sparksql {
 
 /// Function name constants for the decimal rounding special forms.
 inline constexpr const char* kRoundDecimal = "decimal_round";
+inline constexpr const char* kSparkRoundDecimal = "decimal_spark_round";
 inline constexpr const char* kCeilDecimal = "decimal_ceil";
 inline constexpr const char* kFloorDecimal = "decimal_floor";
+
+/// Registers the decimal HALF_UP special form under the supplied name.
+void registerDecimalRoundSpecialForm(const std::string& name);
 
 /// Registers decimal_round (also decimal_spark_round), decimal_ceil, and
 /// decimal_floor special forms.
