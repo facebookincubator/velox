@@ -470,9 +470,10 @@ in two places:
 * ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
   computes the common ``(p, s)`` for plan-level operations (UNION, CASE
   result type, etc.).
-* ``SignatureBinder``'s integer-parameter binding handles function
-  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
-  integer variables from the actual argument types.
+* ``SignatureBinder`` pre-binds ``P`` and ``S`` in function signatures of
+  the form ``DECIMAL(P, S)`` from actual DECIMAL arguments or from a scalar's
+  rule-defined DECIMAL target. Arguments that share literal variables widen
+  those variables to a common DECIMAL before the binder records casts.
 
 *DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
 ``DECIMAL(p2, s2)`` iff:
