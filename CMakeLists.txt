@@ -694,12 +694,15 @@ if(
   # propagate them, leading to unresolved utf8_range / absl symbols
   # when statically linking libprotobuf.a.
   #
-  # The version range (3.21.7...30) accommodates Protobuf's
-  # SameMajorVersion compat policy: a bare "3.21.7" is rejected by
-  # protobuf-config-version.cmake of 26.x because 26 != 3. The range
-  # tells CMake 3.19+ to accept any Protobuf from 3.21.7 up to <30.
+  # The requested version matches the pin in scripts/setup-versions.sh.
+  # Protobuf's protobuf-config-version.cmake implements SameMinorVersion
+  # compatibility and does not honor CMake's version-range syntax, so a
+  # bare "3.21.7" or range "3.21.7...30" is rejected against an
+  # installed 26.1.0 (26 != 3). Keeping the requested version in sync
+  # with the pin satisfies the compat check in both the SYSTEM and
+  # BUNDLED resolution paths.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf 3.21.7...30 CONFIG REQUIRED)
+  velox_resolve_dependency(Protobuf 26.1 CONFIG REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
