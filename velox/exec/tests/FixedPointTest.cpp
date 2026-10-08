@@ -2254,6 +2254,27 @@ TEST_F(FixedPointTest, stateHashJoinFindsProbeKeyByName) {
   expectBothModes(node, {{10, 1}, {20, 2}});
 }
 
+TEST_F(FixedPointTest, groupedExecutionIsRejected) {
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+  VELOX_ASSERT_THROW(
+      exec::Task::create(
+          fmt::format("local://fixedpoint-grouped-{}", queryCtx->queryId()),
+          core::PlanFragment{
+              countingNode(),
+              core::ExecutionStrategy::kGrouped,
+              /*numberOfSplitGroups=*/1,
+              /*groupedExecLeafNodeIds=*/{}},
+          /*destination=*/0,
+          queryCtx,
+          exec::Task::ExecutionMode::kParallel,
+          exec::Consumer{},
+          /*memoryArbitrationPriority=*/0,
+          /*spillDiskOpts=*/std::nullopt,
+          /*onError=*/nullptr,
+          &localOptions()),
+      "A fixed point does not support grouped execution");
+}
+
 // The contract a coordinator depends on: the owning task reaches a terminal
 // state when the loop is done, in both modes.  Nothing else moves a fixed point
 // off kRunning -- it has no drivers -- so without this taskCompletionFuture()
