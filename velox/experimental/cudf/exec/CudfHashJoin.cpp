@@ -183,8 +183,9 @@ CudfHashJoinProbe::ReadStream* CudfHashJoinProbe::findReadStream(
 void CudfHashJoinProbe::registerReadStream(cuda::stream_ref stream) {
   auto* readStream = findReadStream(stream);
   if (readStream == nullptr) {
-    readStream = &readStreams_.emplace_back(ReadStream{
-        stream, std::make_unique<CudaEvent>(cudaEventDisableTiming)});
+    readStream = &readStreams_.emplace_back(
+        ReadStream{
+            stream, std::make_unique<CudaEvent>(cudaEventDisableTiming)});
   }
   readStream->pending = true;
 }
