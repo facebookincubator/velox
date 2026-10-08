@@ -216,6 +216,9 @@ class Config : public velox::config::ConfigBase {
   /// Enable vectorized column statistics for row size estimation.
   static Entry<bool> ENABLE_VECTORIZED_STATS;
 
+  /// Longest string min/max, in bytes, kept in vectorized statistics.
+  static Entry<uint32_t> VECTORIZED_STATS_STRING_LENGTH_LIMIT;
+
   /// Enable the encoding selection cache: capture the encoding layout from the
   /// first encoding of each stream and replay it on subsequent chunks/stripes.
   static Entry<bool> ENABLE_ENCODING_SELECTION_CACHE;
@@ -268,6 +271,9 @@ class Config : public velox::config::ConfigBase {
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
+
+  /// Maps to WriterOptions::enableStreamChecksums.
+  static Entry<bool> ENABLE_STREAM_CHECKSUMS;
 
   static constexpr const char* kNimbleWriteTargetRawStripeSize =
       "nimble_write_target_raw_stripe_size";

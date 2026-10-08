@@ -314,10 +314,10 @@ class FlatMapTypeBuilder : public TypeBuilder {
 
 class HybridFlatMapTypeBuilder : public TypeBuilder {
  public:
-  /// References the key and row-presence streams for one physical group.
+  /// References key-presence and row-presence streams for one physical group.
   struct GroupDescriptor {
-    /// Stores the actual keys represented by the following in-map segments.
-    const StreamDescriptorBuilder& keyDescriptor;
+    /// Marks which schema-ordered group keys occur in the physical batch.
+    const StreamDescriptorBuilder& keyPresenceDescriptor;
     /// Stores key-major row-presence bits for the observed keys.
     const StreamDescriptorBuilder& inMapDescriptor;
   };
@@ -326,7 +326,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   struct Group {
     uint32_t groupId;
     const std::vector<std::string>& groupKeys;
-    const StreamDescriptorBuilder& keyDescriptor;
+    const StreamDescriptorBuilder& keyPresenceDescriptor;
     const StreamDescriptorBuilder& inMapDescriptor;
     const TypeBuilder& valueType;
   };
@@ -334,14 +334,22 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns the map-level null stream descriptor.
   const StreamDescriptorBuilder& nullsDescriptor() const;
 
-  /// Returns the scalar type used by map keys and group keys streams.
+  /// Returns the logical scalar type used by map keys.
   ScalarKind keyScalarKind() const;
 
-  /// Registers one physical group and its complete value subtree.
+  /// Registers one physical group and its complete value subtree. Configured
+  /// group keys must be non-empty and strictly ascending. Default keys are kept
+  /// in the given first-seen order. The group ID and every key must be unique
+  /// across all groups.
   GroupDescriptor addGroup(
       uint32_t groupId,
       std::vector<std::string> groupKeys,
       std::shared_ptr<TypeBuilder> valueType);
+
+  /// Appends a newly observed key to the Default group's first-seen catalog.
+  /// Fails when `key` is empty or already belongs to any group. Configured
+  /// groups are binary searched and Default keys are checked in a hash set.
+  void appendDefaultGroupKey(std::string key);
 
   /// Returns the number of physical groups present in this schema.
   size_t groupCount() const;
@@ -357,7 +365,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   struct StoredGroup {
     uint32_t groupId;
     std::vector<std::string> groupKeys;
-    std::unique_ptr<StreamDescriptorBuilder> keyDescriptor;
+    std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
   };
@@ -367,10 +375,18 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       ScalarKind keyScalarKind,
       bool requiresDefaultGroup);
 
+  // Returns whether any group holds `key`. Binary searches configured groups
+  // and checks the Default keys in defaultGroupKeys_.
+  bool containsKey(std::string_view key) const;
+
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   StreamDescriptorBuilder nullsDescriptor_;
   std::vector<StoredGroup> groups_;
+  // Zero-based schema position of the reserved Default group.
+  std::optional<size_t> defaultGroupIndex_{};
+  // Keys of the Default group's catalog, for containsKey().
+  folly::F14FastSet<std::string> defaultGroupKeys_;
 
   friend class SchemaBuilder;
 };
@@ -427,8 +443,9 @@ class SchemaBuilder {
       ScalarKind keyScalarKind);
 
   /// Creates a hybrid flat map builder. Every physical group owns a complete
-  /// value subtree, following FlatMap's child-type model. A projection may
-  /// omit the reserved Default group.
+  /// value subtree, following FlatMap's child-type model. A complete schema
+  /// requires the reserved Default group, which may be its only group. A
+  /// projection may omit Default but keeps at least one group.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
       bool projection = false);

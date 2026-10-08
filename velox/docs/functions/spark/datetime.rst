@@ -127,6 +127,10 @@ These functions support TIMESTAMP and DATE input types.
         SELECT dayname('2023-08-21'); -- 'Mon'
         SELECT dayname('1582-10-15'); -- 'Fri'
 
+.. spark:function:: day(date) -> integer
+
+    This is an alias for :spark:func:`dayofmonth`.
+
 .. spark:function:: dayofmonth(date) -> integer
 
     Returns the day of month of the date. ::
@@ -585,13 +589,12 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp(CAST(1739933174 AS TIMESTAMP)); -- 1739933174
         SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
-.. function:: week_of_year(x) -> integer
-   :noindex:
+.. spark:function:: week_of_year(x) -> integer
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.
 
-.. function:: weekday(date) -> integer
+.. spark:function:: weekday(date) -> integer
 
     Returns the day of the week for date (0 = Monday, 1 = Tuesday, …, 6 = Sunday). ::
 

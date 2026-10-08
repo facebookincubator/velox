@@ -174,12 +174,16 @@ bool ScanSpec::hasFilter() const {
 }
 
 bool ScanSpec::hasFilterApplicableToConstant() const {
+  return hasFilterIgnoringDisabled();
+}
+
+bool ScanSpec::hasFilterIgnoringDisabled() const {
   if (filter_) {
     return true;
   }
   for (auto& child : children_) {
     if (!child->isArrayElementOrMapEntry_ &&
-        child->hasFilterApplicableToConstant()) {
+        child->hasFilterIgnoringDisabled()) {
       return true;
     }
   }

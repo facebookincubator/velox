@@ -24,6 +24,26 @@
 
 namespace facebook::nimble::detail {
 
+/// Shares bounded sampling and scalar child-size heuristics for ALP and ALPRD.
+/// Uses the existing estimators' size convention for default-enabled codecs.
+class NestedAlpSizeEstimation {
+ public:
+  /// Picks a deterministic offset within an evenly sized sampling interval.
+  static uint32_t
+  sampledRowIndex(uint32_t sampleIndex, uint32_t numSamples, uint32_t numRows);
+
+  /// Estimates a non-empty integer child using its observed value range and
+  /// target row count. Constant stores one value; other ranges use the smaller
+  /// of FixedBitWidth and Trivial. Child writers select encodings
+  /// independently.
+  template <typename T>
+  static uint64_t estimateChildSize(
+      uint32_t numRows,
+      uint64_t minValue,
+      uint64_t maxValue,
+      const Encoding::Options& options);
+};
+
 /// Estimates the nested ALP size from all physical values when `T` is a
 /// floating-point type and nested ALP selection is enabled. Returns
 /// `std::nullopt` when nested ALP is not eligible.

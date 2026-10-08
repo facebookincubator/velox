@@ -111,6 +111,20 @@ String Functions
         SELECT conv("11abc", 10, 10); -- '11'
         SELECT conv('H016F', 16, 10); -- '0'
 
+.. spark:function:: elt(n, input1, input2, ...) -> varchar|varbinary (ANSI compliant)
+
+    Returns the ``n``-th input (1-based). The inputs must be all VARCHAR or all VARBINARY,
+    and the result has the same type. Spark's analyzer casts other input types to VARCHAR
+    before calling this function. Returns NULL if ``n`` is NULL or the selected input is NULL.
+    If ``n`` is out of range (zero, negative, or greater than the number of inputs),
+    returns NULL when Spark ANSI mode is disabled and throws an exception when Spark ANSI mode
+    is enabled. ::
+
+        SELECT elt(1, 'hello', 'world'); -- 'hello'
+        SELECT elt(2, 'hello', 'world'); -- 'world'
+        SELECT elt(3, 'hello', 'world'); -- NULL (with ANSI mode disabled)
+        SELECT elt(3, 'hello', 'world'); -- Error (with ANSI mode enabled)
+
 .. spark:function:: empty2null(input) -> varchar
 
     Returns NULL if ``input`` is empty. Otherwise, returns ``input``.

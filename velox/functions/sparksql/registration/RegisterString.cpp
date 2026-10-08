@@ -22,6 +22,7 @@
 #include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
+#include "velox/functions/sparksql/Elt.h"
 #include "velox/functions/sparksql/FormatNumber.h"
 #include "velox/functions/sparksql/FormatString.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
@@ -251,6 +252,12 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "format_number"});
   registerFunction<FormatNumberFunction, Varchar, double, int32_t>(
       {prefix + "format_number"});
+
+  exec::registerStatefulVectorFunction(
+      prefix + "elt",
+      eltSignatures(),
+      makeElt,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 
   registerToPrettyStringFunctions(prefix);
 }

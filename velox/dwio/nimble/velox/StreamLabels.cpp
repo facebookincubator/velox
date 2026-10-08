@@ -148,13 +148,13 @@ void addLabels(
         const auto& group = hybridMap.groupAt(i);
         NIMBLE_CHECK_GT(
             offsetToLabel.size(),
-            group.keyDescriptor.offset(),
-            "Unexpected keys offset.");
+            group.keyPresenceDescriptor.offset(),
+            "Unexpected key-presence offset.");
         NIMBLE_CHECK_GT(
             offsetToLabel.size(),
             group.inMapDescriptor.offset(),
             "Unexpected in-map offset.");
-        offsetToLabel.at(group.keyDescriptor.offset()) = labelIndex;
+        offsetToLabel.at(group.keyPresenceDescriptor.offset()) = labelIndex;
         offsetToLabel.at(group.inMapDescriptor.offset()) = labelIndex;
         addLabels(group.valueType, labelIndex, "", labels, offsetToLabel);
       }
@@ -244,8 +244,8 @@ StreamLabels::StreamLabels(const std::shared_ptr<const Type>& root) {
                 maxOffset, hybridMap.nullsDescriptor().offset());
             for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
               const auto& group = hybridMap.groupAt(i);
-              maxOffset =
-                  std::max<size_t>(maxOffset, group.keyDescriptor.offset());
+              maxOffset = std::max<size_t>(
+                  maxOffset, group.keyPresenceDescriptor.offset());
               maxOffset =
                   std::max<size_t>(maxOffset, group.inMapDescriptor.offset());
             }

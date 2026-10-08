@@ -423,6 +423,16 @@ bool StringColumnReader::readWithDictionary(
   });
 
   const auto endReadRow = rows.back() + 1;
+  // Check 1: An indexed skip reached EOF. This is valid only when the requested
+  // range is all null and therefore needs no value encoding.
+  if (decoder_.currentEncoding() == nullptr) {
+    NIMBLE_CHECK(
+        allNull_, "No encoding is available for a non-null string read");
+    abandonDictionaryEncoding(endReadRow);
+    return false;
+  }
+
+  // Check 2:
   // Check convertibility once, on that chunk. Only a genuinely non-dictionary
   // encoding (e.g. Trivial) fails it. When it is not convertible, no dictionary
   // indices were materialized; re-type the value buffer to StringView
