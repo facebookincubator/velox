@@ -275,6 +275,7 @@ velox_add_cudf_test(
   LIBS
     velox_cudf_exec_test_lib
     velox_cudf_hive_connector
+    velox_dwio_parquet_reader
     velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib
