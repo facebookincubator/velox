@@ -43,6 +43,7 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::Trivial,
       nimble::EncodingType::MainlyConstant,
       nimble::EncodingType::ALP,
+      nimble::EncodingType::ALPRD,
       nimble::EncodingType::FixedBitWidth,
       nimble::EncodingType::Dictionary,
       nimble::EncodingType::SparseBool,

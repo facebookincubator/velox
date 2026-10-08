@@ -582,13 +582,14 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     }
   }
 
-  template <typename T>
+  template <typename T, bool dense>
   void testAlprdVisitor(
       bool nullable,
       bool filtered,
       bool filterOnly,
       bool useVarint,
-      EncodingType childType) {
+      EncodingType childType,
+      vector_size_t batchSize) {
     SCOPED_TRACE(
         fmt::format(
             "type={} nullable={} filtered={} filterOnly={} varint={} child={}",
@@ -654,12 +655,15 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     ASSERT_EQ(metadata.exceptionCount, exceptionRows.size());
     ASSERT_EQ(metadata.parameters.rightBitWidth, kShift);
 
-    const auto chunkRows = nullable ? kNumValues * 5 / 4 : kNumValues;
+    const auto nullPrefix = dense && nullable ? 256 : 0;
+    const auto chunkRows =
+        nullable ? kNumValues * 5 / 4 + nullPrefix : kNumValues;
     Vector<bool> notNulls(pool(), chunkRows, true);
     std::vector<T> data(chunkRows);
     std::vector<bool> exceptions(chunkRows, false);
     for (vector_size_t row = 0, valueIndex = 0; row < chunkRows; ++row) {
-      notNulls[row] = !nullable || row % 5 != 0;
+      notNulls[row] =
+          !nullable || (row >= nullPrefix && (row - nullPrefix) % 5 != 0);
       if (notNulls[row]) {
         data[row] = values[valueIndex];
         exceptions[row] = std::binary_search(
@@ -718,10 +722,10 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     uint32_t skippedExceptions = 0;
     for (vector_size_t offset = 0; offset < numRows;) {
       SCOPED_TRACE(fmt::format("offset={}", offset));
-      const auto count = std::min<vector_size_t>(1'031, numRows - offset);
+      const auto count = std::min(batchSize, numRows - offset);
       std::vector<vector_size_t> rowNumbers;
       for (vector_size_t row = 0; row < count; ++row) {
-        const bool selected = row % 3 == 1 || row == count - 1;
+        const bool selected = dense || row % 3 == 1 || row == count - 1;
         if (selected) {
           rowNumbers.push_back(row);
         }
@@ -734,7 +738,7 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       const auto read = [&](auto& filter, auto extract) {
         using Filter = std::remove_reference_t<decltype(filter)>;
         using Extract = decltype(extract);
-        DecoderVisitor<T, Filter, Extract, false> visitor(
+        DecoderVisitor<T, Filter, Extract, dense> visitor(
             filter, reader.get(), rows, extract);
         decoder.readWithVisitor(visitor);
         EXPECT_EQ(visitor.rowIndex(), rows.size());
@@ -784,7 +788,11 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       offset += count;
     }
     EXPECT_GT(selectedExceptions, 0);
-    EXPECT_GT(skippedExceptions, 0);
+    if constexpr (dense) {
+      EXPECT_EQ(skippedExceptions, 0);
+    } else {
+      EXPECT_GT(skippedExceptions, 0);
+    }
   }
 
   template <typename FloatType>
@@ -2084,12 +2092,60 @@ TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpNullableAcrossChunks) {
   }
 }
 
+TEST_P(ReadWithVisitorTest, alprdDenseExceptions) {
+  for (const bool nullable : {false, true}) {
+    for (const bool useVarint : {false, true}) {
+      if (nullable && useVarint && !useNonLegacy()) {
+        continue;
+      }
+      // Exercise both sides of the cutoff, all-null batches, and a single
+      // visitor crossing a chunk boundary with an existing output prefix.
+      for (const auto batchSize : {127, 128, 129, 1'031, 8'193}) {
+        SCOPED_TRACE(batchSize);
+        for (const auto child :
+             {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+          testAlprdVisitor<float, true>(
+              nullable, false, false, useVarint, child, batchSize);
+          testAlprdVisitor<double, true>(
+              nullable, false, false, useVarint, child, batchSize);
+        }
+      }
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorTest, alprdDenseFilter) {
+  for (const bool nullable : {false, true}) {
+    for (const bool filterOnly : {false, true}) {
+      for (const auto batchSize : {127, 128, 1'031, 8'193}) {
+        SCOPED_TRACE(batchSize);
+        testAlprdVisitor<float, true>(
+            nullable,
+            true,
+            filterOnly,
+            false,
+            EncodingType::FixedBitWidth,
+            batchSize);
+        testAlprdVisitor<double, true>(
+            nullable,
+            true,
+            filterOnly,
+            false,
+            EncodingType::FixedBitWidth,
+            batchSize);
+      }
+    }
+  }
+}
+
 TEST_P(ReadWithVisitorTest, alprdSparseExceptions) {
   for (const bool useVarint : {false, true}) {
     for (const auto child :
          {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
-      testAlprdVisitor<float>(false, false, false, useVarint, child);
-      testAlprdVisitor<double>(false, false, false, useVarint, child);
+      testAlprdVisitor<float, false>(
+          false, false, false, useVarint, child, 1'031);
+      testAlprdVisitor<double, false>(
+          false, false, false, useVarint, child, 1'031);
     }
   }
 }
@@ -2102,8 +2158,10 @@ TEST_P(ReadWithVisitorTest, alprdNullableSparseExceptions) {
     }
     for (const auto child :
          {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
-      testAlprdVisitor<float>(true, false, false, useVarint, child);
-      testAlprdVisitor<double>(true, false, false, useVarint, child);
+      testAlprdVisitor<float, false>(
+          true, false, false, useVarint, child, 1'031);
+      testAlprdVisitor<double, false>(
+          true, false, false, useVarint, child, 1'031);
     }
   }
 }
@@ -2114,10 +2172,10 @@ TEST_P(ReadWithVisitorTest, alprdSparseFilter) {
       if (nullable && useVarint && !useNonLegacy()) {
         continue;
       }
-      testAlprdVisitor<float>(
-          nullable, true, false, useVarint, EncodingType::FixedBitWidth);
-      testAlprdVisitor<double>(
-          nullable, true, false, useVarint, EncodingType::FixedBitWidth);
+      testAlprdVisitor<float, false>(
+          nullable, true, false, useVarint, EncodingType::FixedBitWidth, 1'031);
+      testAlprdVisitor<double, false>(
+          nullable, true, false, useVarint, EncodingType::FixedBitWidth, 1'031);
     }
   }
 }
@@ -2128,10 +2186,10 @@ TEST_P(ReadWithVisitorTest, alprdSparseFilterOnly) {
       if (nullable && useVarint && !useNonLegacy()) {
         continue;
       }
-      testAlprdVisitor<float>(
-          nullable, true, true, useVarint, EncodingType::FixedBitWidth);
-      testAlprdVisitor<double>(
-          nullable, true, true, useVarint, EncodingType::FixedBitWidth);
+      testAlprdVisitor<float, false>(
+          nullable, true, true, useVarint, EncodingType::FixedBitWidth, 1'031);
+      testAlprdVisitor<double, false>(
+          nullable, true, true, useVarint, EncodingType::FixedBitWidth, 1'031);
     }
   }
 }
