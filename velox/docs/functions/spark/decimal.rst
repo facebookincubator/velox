@@ -282,11 +282,6 @@ Decimal Special Forms
     output type is the same as for scale zero.
     The expression must supply the resolved decimal result type, which is
     validated against Spark's precision and scale rules below.
-    Integrations should validate and emit the capability-specific
-    ``decimal_spark_round`` name, rather than infer support from the bare name
-    in an older dependency. It is also registered by
-    ``registerDecimalRoundingForms()``. See the integration contract under
-    :spark:func:`round`.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
     If a negative scale causes the rounded value to exceed decimal precision

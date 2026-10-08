@@ -26,46 +26,18 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
  protected:
   enum class Mode { kCeil, kFloor };
 
-  /// Computes result precision and scale for decimal rounding. Matches Spark's
-  /// logic from version 3.3+.
-  static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
-      uint8_t precision,
-      uint8_t scale,
-      int32_t roundScale) {
-    const int32_t integralLeastNumDigits = precision - scale + 1;
-    if (roundScale < 0) {
-      const auto newPrecision = std::max(
-          integralLeastNumDigits,
-          -std::max(
-              roundScale,
-              -static_cast<int32_t>(LongDecimalType::kMaxPrecision)) +
-              1);
-      return {
-          std::min(
-              newPrecision,
-              static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-          0};
-    }
-    const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
-    return {
-        std::min(
-            integralLeastNumDigits + newScale,
-            static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-        newScale};
-  }
-
-  core::CallTypedExprPtr
-  createCall(const TypePtr& inputType, int32_t scale, Mode mode) {
+  core::CallTypedExprPtr createCall(
+      const TypePtr& inputType,
+      const TypePtr& resultType,
+      int32_t scale,
+      Mode mode) {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(scale))};
-    const auto [precision, inputScale] = getDecimalPrecisionScale(*inputType);
-    const auto [resultPrecision, resultScale] =
-        getResultPrecisionScale(precision, inputScale, scale);
     const std::string& name = mode == Mode::kCeil ? std::string(kCeilDecimal)
                                                   : std::string(kFloorDecimal);
     return std::make_shared<const core::CallTypedExpr>(
-        DECIMAL(resultPrecision, resultScale), std::move(inputs), name);
+        resultType, std::move(inputs), name);
   }
 
   void testCall(
@@ -73,7 +45,7 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
       int32_t scale,
       Mode mode,
       const VectorPtr& expected) {
-    auto expr = createCall(input->type(), scale, mode);
+    auto expr = createCall(input->type(), expected->type(), scale, mode);
     testEncodings(expr, {input}, expected);
   }
 
@@ -82,7 +54,7 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
       int32_t scale,
       Mode mode,
       const VectorPtr& expected) {
-    const auto call = createCall(input->type(), scale, mode);
+    const auto call = createCall(input->type(), expected->type(), scale, mode);
     VELOX_ASSERT_USER_THROW(
         evaluate(call, makeRowVector({input})), "Decimal overflow");
     const auto tryCall = std::make_shared<core::CallTypedExpr>(
