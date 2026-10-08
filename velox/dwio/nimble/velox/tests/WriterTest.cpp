@@ -5165,6 +5165,47 @@ TEST_F(WriterTest, rawSizeWritten) {
   }
 }
 
+// Applies the writer's string stats length limit to the vectorized file stats:
+// a max longer than the default 64 bytes is absent, while the short min stays.
+TEST_F(WriterTest, vectorizedStatsDropStringMinMaxOverLengthLimit) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const std::string longValue(65, 'z');
+  auto vector = vectorMaker.rowVector(
+      {"name"}, {vectorMaker.flatVector<std::string>({"abc", longValue})});
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      nimble::WriterOptions{});
+  writer.write(vector);
+  writer.close();
+
+  nimble::TabletReader::Options readerOptions =
+      makeTestTabletOptions(leafPool_.get());
+  readerOptions.preloadOptionalSections = {
+      std::string(facebook::nimble::kVectorizedStatsSection)};
+  auto tablet = facebook::nimble::TabletReader::create(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      leafPool_.get(),
+      readerOptions);
+  auto statsSection =
+      tablet->loadOptionalSection(readerOptions.preloadOptionalSections[0]);
+  ASSERT_TRUE(statsSection.has_value());
+  auto fileStats = nimble::VectorizedFileStats::deserialize(
+      statsSection->content(), *leafPool_);
+  ASSERT_NE(fileStats, nullptr);
+  auto columnStats = fileStats->toColumnStatistics(
+      vector->type(), nimble::convertToNimbleType(*vector->type()));
+  ASSERT_EQ(columnStats.size(), 2);
+
+  auto* nameStats = columnStats[1]->as<nimble::StringStatistics>();
+  ASSERT_NE(nameStats, nullptr);
+  EXPECT_EQ(nameStats->getMin(), "abc");
+  EXPECT_EQ(nameStats->getMax(), std::nullopt);
+}
+
 struct ChunkFlushPolicyTestCase {
   const size_t batchCount{20};
   const bool enableChunking{true};

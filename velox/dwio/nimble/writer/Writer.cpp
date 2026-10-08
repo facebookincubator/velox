@@ -2287,14 +2287,17 @@ void Writer::writeColumnStats() {
   }
 
   if (context_->options().enableVectorizedStats) {
+    VectorizedFileStats::Options statsOptions{
+        .stringStatsLengthLimit =
+            context_->options().vectorizedStatsStringLengthLimit};
     VectorizedFileStats fileStats{
-        context_->columnStats(), encodingMemoryPool_.get()};
+        context_->columnStats(), encodingMemoryPool_.get(), statsOptions};
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
     if (context_->stripeStatsWriteEnabled()) {
       VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get()};
+          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
       Buffer stripeStatsBuffer{*encodingMemoryPool_};
       tabletWriter_->writeOptionalSection(
           std::string(kStripeStatsSection),

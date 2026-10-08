@@ -1201,12 +1201,14 @@ std::string NimbleWriterFuzzer::writeFile(
   // regime identical.
   const bool chunkStatsEnabled = writerOptions.enableChunkStats;
   const auto maxChunkStringStatSize = writerOptions.maxChunkStringStatSize;
+  const VectorizedFileStats::Options statsOptions{
+      .stringStatsLengthLimit = writerOptions.vectorizedStatsStringLengthLimit};
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled, maxChunkStringStatSize);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
-  verifyColumnStatistics(file, schema, batches);
+  verifyColumnStatistics(file, schema, batches, statsOptions);
   verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
@@ -1617,7 +1619,8 @@ void accumulateNodeStats(
 void NimbleWriterFuzzer::verifyColumnStatistics(
     const std::string& file,
     const RowTypePtr& schema,
-    const std::vector<VectorPtr>& batches) {
+    const std::vector<VectorPtr>& batches,
+    const VectorizedFileStats::Options& statsOptions) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -1728,20 +1731,43 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
     auto* expectedStr =
         dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
             expectedCommon.get());
-    if (actualStr != nullptr && expectedStr != nullptr &&
-        expectedStr->getMinimum().has_value()) {
-      NIMBLE_CHECK_EQ(
-          *actualStr->getMinimum(),
-          *expectedStr->getMinimum(),
-          "Node {} string min mismatch (seed {}).",
-          node,
-          options_.seed);
-      NIMBLE_CHECK_EQ(
-          *actualStr->getMaximum(),
-          *expectedStr->getMaximum(),
-          "Node {} string max mismatch (seed {}).",
-          node,
-          options_.seed);
+    if (actualStr != nullptr && expectedStr != nullptr) {
+      const auto applyLengthLimit =
+          [&](const std::optional<std::string>& value) {
+            return value.has_value() &&
+                    value->size() <= statsOptions.stringStatsLengthLimit
+                ? value
+                : std::nullopt;
+          };
+      const auto checkBound =
+          [&](std::string_view bound,
+              const std::optional<std::string>& actualValue,
+              const std::optional<std::string>& expectedValue) {
+            NIMBLE_CHECK_EQ(
+                actualValue.has_value(),
+                expectedValue.has_value(),
+                "Node {} string {} presence mismatch (seed {}).",
+                node,
+                bound,
+                options_.seed);
+            if (expectedValue.has_value()) {
+              NIMBLE_CHECK_EQ(
+                  *actualValue,
+                  *expectedValue,
+                  "Node {} string {} mismatch (seed {}).",
+                  node,
+                  bound,
+                  options_.seed);
+            }
+          };
+      checkBound(
+          "min",
+          actualStr->getMinimum(),
+          applyLengthLimit(expectedStr->getMinimum()));
+      checkBound(
+          "max",
+          actualStr->getMaximum(),
+          applyLengthLimit(expectedStr->getMaximum()));
     }
   }
 }
