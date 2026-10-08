@@ -189,11 +189,11 @@ std::string UcxExchangeClient::toString() const {
 folly::dynamic UcxExchangeClient::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
-  obj["closed"] = closed_.load(std::memory_order_relaxed);
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
+    obj["closed"] = closed_;
     for (auto& source : sources_) {
       clientsObj[std::to_string(index++)] = source->toJson();
     }

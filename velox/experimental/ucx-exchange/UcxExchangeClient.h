@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <atomic>
 #include "velox/exec/ExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
@@ -68,8 +67,8 @@ class UcxExchangeClient
 
   folly::dynamic toJson() const override;
 
-  /// Queue the received packed tables are buffered in. Part of the UCX data
-  /// plane, used by the UcxExchange operator and by UcxExchangeSource.
+  /// Returns the queue the received packed tables are buffered in. Part of the
+  /// UCX data plane, used by the UcxExchange operator and by UcxExchangeSource.
   const std::shared_ptr<UcxExchangeQueue>& queue() const {
     return queue_;
   }
@@ -91,9 +90,8 @@ class UcxExchangeClient
 
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<UcxExchangeSource>> sources_;
-  // Written under queue_->mutex(). Atomic so that toJson() can report it
-  // without taking that mutex.
-  std::atomic<bool> closed_{false};
+  // Guarded by queue_->mutex().
+  bool closed_{false};
 
   // Total number of packed columns in flight.
   int64_t totalPendingColumns_{0};
