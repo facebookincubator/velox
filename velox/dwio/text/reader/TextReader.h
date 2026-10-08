@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <array>
 #include <limits>
 #include <string>
 
@@ -55,7 +54,6 @@ struct FileContents {
   CompressionKind compression;
   dwio::common::compression::CompressionOptions compressionOptions;
   SerDeOptions serDeOptions;
-  std::array<bool, 128> needsEscape;
 };
 
 using DelimType = uint8_t;

@@ -113,9 +113,10 @@ TEST_F(FromCsvTest, nullInput) {
 
 // Fewer fields than schema — missing fields become null.
 TEST_F(FromCsvTest, fewerFields) {
-  auto input = makeFlatVector<std::string>({"1", "2"});
-  auto expectedA = makeNullableFlatVector<int32_t>({1, 2});
-  auto expectedB = makeNullableFlatVector<double>({std::nullopt, std::nullopt});
+  auto input = makeFlatVector<std::string>({"1", "2", "-3"});
+  auto expectedA = makeNullableFlatVector<int32_t>({1, 2, -3});
+  auto expectedB = makeNullableFlatVector<double>(
+      {std::nullopt, std::nullopt, std::nullopt});
   auto expected = makeRowVector({"a", "b"}, {expectedA, expectedB});
   testFromCsv(input, expected);
 }
@@ -319,8 +320,9 @@ TEST_F(FromCsvTest, mixedTypes) {
 }
 
 TEST_F(FromCsvTest, hexadecimalFloatingPoint) {
-  auto input = makeFlatVector<std::string>({"0x1p2", "-0x1p3"});
-  auto expected = makeRowVector({"a"}, {makeFlatVector<double>({4.0, -8.0})});
+  auto input = makeFlatVector<std::string>({"0x1p2", "-0x1p3", "0x1.8p1"});
+  auto expected =
+      makeRowVector({"a"}, {makeFlatVector<double>({4.0, -8.0, 3.0})});
   testFromCsv(input, expected);
 }
 

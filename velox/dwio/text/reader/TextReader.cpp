@@ -130,11 +130,7 @@ FileContents::FileContents(
       pool{pool},
       fileLength{0},
       compression{CompressionKind::CompressionKind_NONE},
-      compressionOptions{},
-      needsEscape{} {
-  needsEscape.fill(false);
-  needsEscape.at(0) = true;
-}
+      compressionOptions{} {}
 
 TextRowReader::TextRowReader(
     std::shared_ptr<FileContents> fileContents,
@@ -1409,12 +1405,6 @@ TextReader::TextReader(
 
   // Set the SerDe options.
   contents_->serDeOptions = options_.serDeOptions();
-  if (contents_->serDeOptions.isEscaped) {
-    for (auto delim : contents_->serDeOptions.separators) {
-      contents_->needsEscape.at(delim) = true;
-    }
-    contents_->needsEscape.at(contents_->serDeOptions.escapeChar) = true;
-  }
 
   // Validate SerDe options.
   VELOX_CHECK(
