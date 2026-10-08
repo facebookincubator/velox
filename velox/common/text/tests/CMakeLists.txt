@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_dwio_text_reader TextReader.cpp HEADERS TextReader.h)
-
-velox_link_libraries(
-  velox_dwio_text_reader
+add_executable(velox_common_text_test TextFieldParserTest.cpp)
+add_test(velox_common_text_test velox_common_text_test)
+target_link_libraries(
+  velox_common_text_test
   velox_common_text
-  velox_type_fbhive
-  velox_dwio_common_compression
-  fmt::fmt
+  velox_type_tz
+  velox_exception
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
 )

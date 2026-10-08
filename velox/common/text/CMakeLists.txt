@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_dwio_text_reader TextReader.cpp HEADERS TextReader.h)
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
 
+velox_add_library(velox_common_text TextFieldParser.cpp HEADERS TextFieldParser.h)
 velox_link_libraries(
-  velox_dwio_text_reader
   velox_common_text
-  velox_type_fbhive
-  velox_dwio_common_compression
-  fmt::fmt
+  velox_type
+  velox_encode
+  velox_status
+  velox_exception
+  Boost::headers
 )
