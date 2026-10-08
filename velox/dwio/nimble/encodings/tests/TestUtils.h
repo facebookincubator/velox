@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
@@ -107,6 +108,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::ForEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::FOR;
+};
+
+template <>
+struct EncodingTypeTraits<nimble::FsstEncoding> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Fsst;
 };
 
 template <typename T>
