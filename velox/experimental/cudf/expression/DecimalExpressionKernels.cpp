@@ -67,17 +67,6 @@ void checkDecimalBinaryOpStatus(
   }
 }
 
-/// Column of \p outputType with \p size rows, all null (e.g. NULL scalar
-/// operand).
-std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
-    cudf::data_type outputType,
-    cudf::size_type size,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  return cudf::make_fixed_width_column(
-      outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
-}
-
 void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   VELOX_CHECK(
       inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
@@ -204,7 +193,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       decimalOverflowMessage(cudf::binary_operator::DIV));
 
   if (!rhs.is_valid(stream)) {
-    return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
+    return detail::makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
   }
 
   // The scalar is valid here, so the column's mask is the whole stencil.
@@ -255,7 +244,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       decimalOverflowMessage(cudf::binary_operator::DIV));
 
   if (!lhs.is_valid(stream)) {
-    return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
+    return detail::makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
   // The scalar is valid here, so the column's mask is the whole stencil.

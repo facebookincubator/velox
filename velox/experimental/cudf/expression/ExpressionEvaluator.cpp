@@ -3021,21 +3021,24 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // bools_to_mask clears false and null alike, already the then branch's set.
+  auto [thenMask, unusedUnsetCount] =
+      cudf::bools_to_mask(condition, stream, mr);
   if (takeWhenTrue) {
-    auto [mask, unusedUnsetCount] = cudf::bools_to_mask(condition, stream, mr);
-    return std::move(*mask);
+    return std::move(*thenMask);
   }
-  // The else branch also owns the null rows, and NOT maps null to null.
-  auto negated =
-      cudf::unary_operation(condition, cudf::unary_operator::NOT, stream, mr);
-  std::unique_ptr<cudf::column> elseCondition;
-  if (negated->view().has_nulls()) {
-    const cudf::numeric_scalar<bool> nullsTakeElse(true, true, stream, mr);
-    elseCondition =
-        cudf::replace_nulls(negated->view(), nullsTakeElse, stream, mr);
-  }
-  auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
-      elseCondition ? elseCondition->view() : negated->view(), stream, mr);
+  // The else branch owns exactly the rows the then mask clears. Inverting that
+  // mask, rather than the condition, never reads the payload of null condition
+  // rows, which the condition's producer may leave uninitialized.
+  auto thenRows = cudf::mask_to_bools(
+      reinterpret_cast<const cudf::bitmask_type*>(thenMask->data()),
+      0,
+      condition.size(),
+      stream,
+      mr);
+  auto elseRows = cudf::unary_operation(
+      thenRows->view(), cudf::unary_operator::NOT, stream, mr);
+  auto [mask, unusedElseUnsetCount] =
+      cudf::bools_to_mask(elseRows->view(), stream, mr);
   return std::move(*mask);
 }
 
