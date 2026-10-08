@@ -358,7 +358,10 @@ class FixedPointLoop {
   // Phase 1: runs each state's initial plan and stores this worker's shard.
   void initializeState();
 
-  // Builds a join hash table once from its initial plan and stores it.
+  // Builds a join hash table once from its initial plan and stores it.  Each
+  // output driver of the initial plan fills its own table as rows arrive, and
+  // the tables are merged at the end, in parallel on the query executor for a
+  // large table.
   void buildHashTable(const core::HashTableStateDeclaration& declaration);
 
   // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
@@ -396,6 +399,15 @@ class FixedPointLoop {
       const core::PlanNodePtr& plan,
       memory::MemoryPool* pool,
       uint32_t maxDrivers);
+
+  // Runs 'plan' as a sub-task in this worker's execution mode and feeds its
+  // split source, handing its output to consumers from 'consumerSupplier': one
+  // per output driver in parallel mode, a single one on the calling thread in
+  // serial mode.
+  void consumePlan(
+      const core::PlanNodePtr& plan,
+      uint32_t maxDrivers,
+      const exec::ConsumerSupplier& consumerSupplier);
 
   // Feeds 'plan's split source on 'task': an Exchange source reads the upstream
   // producer named by options_.upstreamExchangeUri (keyed by the Exchange node
