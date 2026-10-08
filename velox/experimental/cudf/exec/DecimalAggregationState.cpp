@@ -33,14 +33,12 @@ namespace facebook::velox::cudf_velox {
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
       cudf::type_to_name(stateCol.type()));
-  // The decoded sum/count columns are consumed by the next groupby/reduce and
-  // never leave the operator and should use the temporary memory resource.
-  auto const mr = get_temp_mr();
   auto numRows = stateCol.size();
   if (numRows == 0) {
     DecimalSumStateColumns empty;

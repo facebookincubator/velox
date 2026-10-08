@@ -41,12 +41,14 @@ struct DecimalSumStateColumns {
  * @param scale decimal scale used to set the output sum column's scale to
  *        -scale.
  * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
  * @return decoded sum and count columns.
  */
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    cuda::stream_ref stream);
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * Encodes partial decimal SUM state (DECIMAL64 or DECIMAL128 sums plus INT64

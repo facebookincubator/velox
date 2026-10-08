@@ -92,17 +92,12 @@ struct GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
-  virtual bool supportsDirectFinalization() const {
-    return false;
-  }
-
-  // Finalizes one already-merged state per grouping key, without regrouping.
+  // Finalizes the kIntermediate state column, which must hold exactly one
+  // already-merged state per grouping key. Does not regroup.
   virtual std::unique_ptr<cudf::column> finalize(
-      std::unique_ptr<cudf::column> /*state*/,
-      cuda::stream_ref /*stream*/,
-      rmm::device_async_resource_ref /*mr*/) {
-    VELOX_UNSUPPORTED("Aggregate does not support direct finalization");
-  }
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) = 0;
 
   virtual ~GroupbyAggregator() = default;
 
@@ -204,6 +199,8 @@ class CudfGroupby : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
+  // Converts the merged per-key states in 'bufferedResult_' to final output
+  // without regrouping. Keeps key columns as-is.
   CudfVectorPtr finalizeGroupedStates(
       std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
 
