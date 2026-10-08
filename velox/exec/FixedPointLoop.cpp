@@ -17,6 +17,8 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <algorithm>
+#include <limits>
 #include <mutex>
 
 #include "velox/core/PlanFragment.h"
@@ -24,6 +26,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/VectorHasher.h"
@@ -173,6 +176,15 @@ FixedPointLoop::FixedPointLoop(
   node_ = findFixedPointNode(owner_->planFragment().planNode);
   VELOX_CHECK_NOT_NULL(
       node_, "FixedPointLoop requires a FixedPointNode in its plan");
+  VELOX_USER_CHECK_GE(
+      options_.iterationMaxDrivers,
+      1,
+      "FixedPointOptions::iterationMaxDrivers must be at least 1");
+  // The trailing sub-task reuses this fragment, so each split group would
+  // re-read the whole output state.
+  VELOX_USER_CHECK(
+      !owner_->planFragment().isGroupedExecution(),
+      "A fixed point does not support grouped execution");
   // Trailing nodes are present when the fragment root is not the
   // FixedPointNode.
   hasTrailing_ = owner_->planFragment().planNode.get() != node_.get();
@@ -307,8 +319,6 @@ void FixedPointLoop::start(
     uint32_t /*concurrentSplitGroups*/,
     std::function<void(std::exception_ptr)> onComplete) {
   // Task::start() already rejected a serial task before delegating here.
-  // The Phase-1 initial plans run at the parent's maxDrivers; the body,
-  // convergence, and trailing sub-tasks always run single-driver.
   maxDrivers_ = maxDrivers;
   // Parallel execution: run the loop asynchronously on the orchestration
   // executor so start() returns immediately (Task::start's contract), deliver
@@ -480,15 +490,19 @@ void FixedPointLoop::initializeState() {
   }
 }
 
-void FixedPointLoop::buildHashTable(
-    const HashTableStateDeclaration& declaration) {
+namespace {
+
+// Creates an empty join table for 'declaration', owning its own key hashers.
+std::unique_ptr<BaseHashTable> createHashTable(
+    const HashTableStateDeclaration& declaration,
+    const core::QueryConfig& queryConfig,
+    memory::MemoryPool* pool) {
   const auto& schema = declaration.schema();
   const auto& keyColumns = declaration.keyColumns();
   const auto numKeys = static_cast<int32_t>(keyColumns.size());
 
-  // Prototype requirement: key columns are the leading columns, so a build
-  // input column index equals its RowContainer column index (keys first, then
-  // dependents), and a probe input shares the same key channels.
+  // Key columns are the leading columns, so a build input column index equals
+  // its RowContainer column index (keys first, then dependents).
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers;
   hashers.reserve(numKeys);
   std::vector<TypePtr> dependentTypes;
@@ -504,50 +518,100 @@ void FixedPointLoop::buildHashTable(
       dependentTypes.push_back(schema->childAt(channel));
     }
   }
-
-  auto table = exec::HashTable<true>::createForJoin(
+  return exec::HashTable<true>::createForJoin(
       std::move(hashers),
       dependentTypes,
       /*allowDuplicates=*/true,
       /*hasProbedFlag=*/false,
       /*hasCountFlag=*/false,
-      /*minTableSizeForParallelJoinBuild=*/1'000,
-      state_->pool());
+      queryConfig.minTableRowsForParallelJoinBuild(),
+      pool);
+}
 
-  auto buildPool = owner_->pool()->addLeafChild("fixedpoint.hashbuild");
-  auto batches =
-      drainPlan(declaration.initialPlan(), buildPool.get(), maxDrivers_);
-  auto* rowContainer = table->rows();
-  // With allowDuplicates the container chains same-key rows through a
-  // next-link; it must start null on each new row so chain insertion is
-  // well-formed.
-  const auto nextOffset = rowContainer->nextOffset();
-  for (const auto& batch : batches) {
-    std::vector<DecodedVector> decoded;
-    decoded.reserve(batch->childrenSize());
-    for (const auto& child : batch->children()) {
-      decoded.emplace_back(*child);
-    }
-    for (vector_size_t row = 0; row < batch->size(); ++row) {
-      char* newRow = rowContainer->newRow();
-      if (nextOffset > 0) {
-        *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-      }
-      for (int32_t column = 0; column < static_cast<int32_t>(decoded.size());
-           ++column) {
-        rowContainer->store(decoded[column], row, newRow, column);
-      }
-    }
+// Adds 'batch' to 'table' as HashBuild::addInput does for an inner join.  Rows
+// with a null key are dropped, since they match nothing.
+void addToHashTable(const RowVector& batch, BaseHashTable& table) {
+  auto& hashers = table.hashers();
+  SelectivityVector activeRows(batch.size());
+  for (auto& hasher : hashers) {
+    hasher->decode(
+        *batch.childAt(hasher->channel())->loadedVector(), activeRows);
   }
+  deselectRowsWithNulls(hashers, activeRows);
+  if (!activeRows.hasSelections()) {
+    return;
+  }
+
+  const auto numKeys = hashers.size();
+  std::vector<DecodedVector> dependents;
+  dependents.reserve(batch.childrenSize() - numKeys);
+  for (auto column = numKeys; column < batch.childrenSize(); ++column) {
+    dependents.emplace_back(*batch.childAt(column)->loadedVector(), activeRows);
+  }
+  auto* rows = table.rows();
+  // With allowDuplicates the container chains same-key rows through a
+  // next-link, which must start null on each new row.
+  const auto nextOffset = rows->nextOffset();
+  activeRows.applyToSelected([&](vector_size_t row) {
+    char* newRow = rows->newRow();
+    if (nextOffset > 0) {
+      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
+    }
+    for (auto i = 0; i < numKeys; ++i) {
+      rows->store(hashers[i]->decodedVector(), row, newRow, i);
+    }
+    for (auto i = 0; i < dependents.size(); ++i) {
+      rows->store(dependents[i], row, newRow, numKeys + i);
+    }
+  });
+}
+
+} // namespace
+
+void FixedPointLoop::buildHashTable(
+    const HashTableStateDeclaration& declaration) {
+  const auto& queryCtx = *owner_->queryCtx();
+  std::mutex partsMutex;
+  std::vector<std::unique_ptr<BaseHashTable>> parts;
+  // One table per output driver; HashTable merges at most 255 tables.
+  const auto numDrivers =
+      std::min<uint32_t>(maxDrivers_, std::numeric_limits<uint8_t>::max());
+  consumePlan(declaration.initialPlan(), numDrivers, [&]() -> exec::Consumer {
+    auto part =
+        createHashTable(declaration, queryCtx.queryConfig(), state_->pool());
+    auto* rawPart = part.get();
+    {
+      std::lock_guard<std::mutex> l(partsMutex);
+      parts.push_back(std::move(part));
+    }
+    return
+        [rawPart](
+            RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            addToHashTable(*batch, *rawPart);
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+  });
+
+  VELOX_CHECK(!parts.empty());
+  auto table = std::move(parts.front());
+  std::vector<std::unique_ptr<BaseHashTable>> otherTables(
+      std::make_move_iterator(parts.begin() + 1),
+      std::make_move_iterator(parts.end()));
   table->prepareJoinTable(
-      {}, exec::BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
+      std::move(otherTables),
+      exec::BaseHashTable::kNoSpillInputStartPartitionBit,
+      /*vectorHasherMaxNumDistinct=*/1'000'000,
+      /*dropDuplicates=*/false,
+      queryCtx.executor());
 
   state_->setHashTable(
       declaration.name(),
       HashTableEntry{
           std::shared_ptr<exec::BaseHashTable>(std::move(table)),
-          schema,
-          numKeys,
+          declaration.schema(),
+          static_cast<int32_t>(declaration.keyColumns().size()),
       });
 }
 
@@ -640,8 +704,9 @@ void FixedPointLoop::runTrailingPlan() {
   auto consumer =
       [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
         if (batch != nullptr && batch->size() > 0) {
+          auto copy = copyRowVector(batch, outputPool_.get());
           std::lock_guard<std::mutex> l(mutex);
-          outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
+          outputBuffer_.push_back(std::move(copy));
         }
         return exec::BlockingReason::kNotBlocked;
       };
@@ -659,7 +724,7 @@ void FixedPointLoop::runTrailingPlan() {
   SCOPE_FAIL {
     abortAndWait({task});
   };
-  task->start(/*maxDrivers=*/1);
+  task->start(iterationDrivers());
   if (node_->requiresSplits()) {
     task->noMoreSplits(node_->id());
   }
@@ -676,8 +741,27 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
     memory::MemoryPool* pool,
     uint32_t maxDrivers) {
   std::vector<RowVectorPtr> batches;
+  std::mutex mutex;
+  consumePlan(plan, maxDrivers, [&]() -> exec::Consumer {
+    return
+        [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            auto copy = copyRowVector(batch, pool);
+            std::lock_guard<std::mutex> l(mutex);
+            batches.push_back(std::move(copy));
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+  });
+  return batches;
+}
+
+void FixedPointLoop::consumePlan(
+    const core::PlanNodePtr& plan,
+    uint32_t maxDrivers,
+    const exec::ConsumerSupplier& consumerSupplier) {
+  const auto subOptions = subTaskOptions();
   if (executionMode_ == exec::Task::ExecutionMode::kSerial) {
-    const auto subOptions = subTaskOptions();
     auto task = exec::Task::create(
         subTaskId(),
         core::PlanFragment{plan},
@@ -690,32 +774,22 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
         /*onError=*/nullptr,
         &subOptions);
     feedInitSplits(*task, plan);
+    auto consumer = consumerSupplier();
     while (auto batch = task->next()) {
-      batches.push_back(copyRowVector(batch, pool));
+      consumer(std::move(batch), /*drained=*/false, /*future=*/nullptr);
     }
-    return batches;
+    return;
   }
 
-  // Parallel: start on the executor and collect through a consumer (guarded, as
-  // it runs on the sub-task's driver thread).  The sub-task's pool is released
-  // on completion, so each batch is copied into 'pool'.
-  std::mutex mutex;
-  auto consumer =
-      [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          std::lock_guard<std::mutex> l(mutex);
-          batches.push_back(copyRowVector(batch, pool));
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-  const auto subOptions = subTaskOptions();
+  // The supplier gives each output driver its own consumer, called on that
+  // driver's thread.
   auto task = exec::Task::create(
       subTaskId(),
       core::PlanFragment{plan},
       /*destination=*/workerIndex_,
       owner_->queryCtx(),
       exec::Task::ExecutionMode::kParallel,
-      consumer,
+      consumerSupplier,
       /*memoryArbitrationPriority=*/0,
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
@@ -730,7 +804,6 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
   if (auto error = task->error()) {
     std::rethrow_exception(error);
   }
-  return batches;
 }
 
 void FixedPointLoop::feedInitSplits(
@@ -802,6 +875,40 @@ void FixedPointLoop::feedInitSplits(
   }
 }
 
+namespace {
+
+// Splits 'budget' drivers across 'numPlans' plans that run at the same time.
+// Every plan gets at least one driver, so the total exceeds 'budget' when there
+// are more plans than drivers.  With 'singleDriverLastPlan' the last plan gets
+// exactly one and the others share the rest.
+std::vector<uint32_t> distributeDriverBudget(
+    uint32_t budget,
+    size_t numPlans,
+    bool singleDriverLastPlan) {
+  std::vector<uint32_t> planDrivers(numPlans, 1);
+  const size_t numScalablePlans = numPlans - (singleDriverLastPlan ? 1 : 0);
+  if (numScalablePlans == 0 || budget <= numPlans) {
+    return planDrivers;
+  }
+  const size_t numExtraDrivers = budget - numPlans;
+  for (size_t i = 0; i < numScalablePlans; ++i) {
+    planDrivers[i] += static_cast<uint32_t>(
+        numExtraDrivers / numScalablePlans +
+        (i < numExtraDrivers % numScalablePlans ? 1 : 0));
+  }
+  return planDrivers;
+}
+
+} // namespace
+
+uint32_t FixedPointLoop::iterationDrivers() const {
+  VELOX_CHECK_LE(
+      options_.iterationMaxDrivers,
+      maxDrivers_,
+      "iterationMaxDrivers must be less than or equal to maxDrivers");
+  return options_.iterationMaxDrivers;
+}
+
 // TODO: Reuse sub-tasks across iterations to avoid per-iteration planning and
 // operator initialization (notably the body's HashBuild rebuilding a constant
 // table every iteration).  Not possible via the public API today: Tasks are
@@ -813,7 +920,8 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
     const std::vector<core::PlanNodePtr>& plans,
     size_t planIndexOffset,
     int32_t iteration,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    bool singleDriverLastPlan) {
   const size_t lastPlan = plans.size() - 1;
 
   // The last plan's output -- this iteration's rows for the output state entry,
@@ -839,8 +947,12 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
   // every peer extends its own the same way, so the nested loops find each
   // other.
   const auto peers = peerAddresses();
+  const auto planDrivers = distributeDriverBudget(
+      iterationDrivers(), plans.size(), singleDriverLastPlan);
   for (size_t p = 0; p < plans.size(); ++p) {
     auto subOptions = subTaskOptions();
+    // A loop nested in this plan runs its iterations within the plan's share.
+    subOptions.iterationMaxDrivers = planDrivers[p];
     subOptions.nested->workerAddress =
         nestedAddress(workerAddress(), iteration, planIndexOffset + p);
     subOptions.nested->peerAddresses.reserve(peers.size());
@@ -882,8 +994,9 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
                           bool /*drained*/,
                           ContinueFuture* /*future*/) {
         if (batch != nullptr && batch->size() > 0) {
+          auto copy = copyRowVector(batch, pool);
           std::lock_guard<std::mutex> l(outputMutex);
-          output.push_back(copyRowVector(batch, pool));
+          output.push_back(std::move(copy));
         }
         return exec::BlockingReason::kNotBlocked;
       };
@@ -917,8 +1030,8 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
 
   // One sub-task per plan: the split wiring below indexes tasks by plan index.
   VELOX_CHECK_EQ(tasks.size(), plans.size());
-  for (auto& task : tasks) {
-    task->start(/*maxDrivers=*/1);
+  for (size_t p = 0; p < tasks.size(); ++p) {
+    tasks[p]->start(planDrivers[p]);
   }
 
   // Wire each consumer plan's Exchange to plan p-1's producer of every peer the
@@ -991,7 +1104,11 @@ void FixedPointLoop::runIteration(int32_t iteration) {
   std::vector<RowVectorPtr> output;
   if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
     output = runParallelChain(
-        node_->plans(), /*planIndexOffset=*/0, iteration, scratchPool.get());
+        node_->plans(),
+        /*planIndexOffset=*/0,
+        iteration,
+        scratchPool.get(),
+        /*singleDriverLastPlan=*/false);
   } else {
     output =
         drainPlan(node_->plans().front(), scratchPool.get(), /*maxDrivers=*/1);
@@ -1035,7 +1152,8 @@ bool FixedPointLoop::converged() {
         config.plans,
         /*planIndexOffset=*/node_->plans().size(),
         static_cast<int32_t>(iterations_),
-        convergencePool.get());
+        convergencePool.get(),
+        /*singleDriverLastPlan=*/true);
   } else {
     rows = drainPlan(
         config.plans.front(), convergencePool.get(), /*maxDrivers=*/1);
