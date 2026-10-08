@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
@@ -99,6 +100,97 @@ struct NestedFixedPoint {
   bool dispatch{true};
 };
 
+/// Experimental and subject to change, like FixedPointExecutionStats.
+/// Statistics of one sub-task a fixed point ran.
+struct FixedPointPlanExecutionStats {
+  /// Index of the plan in the body plans followed by the convergence plans; 0
+  /// for an initial or trailing plan.
+  size_t planIndex{0};
+
+  /// Driver limit the sub-task was started with.
+  uint32_t maxDrivers{0};
+
+  /// The sub-task's statistics.  Empty for a plan that nests a fixed point,
+  /// whose work runs in that nested loop's sub-tasks.
+  /// TODO: Report the nested loop's own FixedPointExecutionStats.
+  TaskStats taskStats{};
+};
+
+/// Experimental and subject to change, like FixedPointExecutionStats.
+/// Statistics of one run of a body or convergence plan chain.
+/// Serial mode runs a single plan per chain, so it reports only totalNanos,
+/// outputRows and plans; the other timings stay zero.
+struct FixedPointChainExecutionStats {
+  /// Time to create the chain's sub-tasks.
+  uint64_t taskCreationNanos{0};
+
+  /// Time to start them.
+  uint64_t taskStartNanos{0};
+
+  /// Time to wire each consumer plan to its peers' producers.
+  uint64_t exchangeWiringNanos{0};
+
+  /// Time from the end of wiring until every sub-task completed.
+  uint64_t taskCompletionWaitNanos{0};
+
+  /// Time spent copying the last plan's output, summed across its drivers, so
+  /// it can exceed totalNanos.
+  uint64_t outputCopyNanos{0};
+
+  /// Wall time of the whole chain.
+  uint64_t totalNanos{0};
+
+  /// Rows the last plan produced.
+  uint64_t outputRows{0};
+
+  /// One entry per plan, in chain order.
+  std::vector<FixedPointPlanExecutionStats> plans{};
+};
+
+/// Experimental and subject to change, like FixedPointExecutionStats.
+/// Statistics of one loop iteration.
+struct FixedPointIterationExecutionStats {
+  /// Zero-based iteration number.
+  int32_t iteration{0};
+
+  /// The body chain.
+  FixedPointChainExecutionStats body{};
+
+  /// Time to write the body's output into the output state entry.
+  uint64_t stateWriteNanos{0};
+
+  /// The convergence chain, when the node has one.
+  std::optional<FixedPointChainExecutionStats> convergence{};
+
+  /// Whether this iteration converged.
+  bool converged{false};
+
+  /// Wall time of the body, the state write and the convergence chain.
+  uint64_t totalNanos{0};
+};
+
+/// Experimental: this struct and the structs it holds may change without
+/// notice, so projects outside Velox should not depend on them yet.
+/// Statistics of a fixed point's run so far.
+struct FixedPointExecutionStats {
+  /// Time to create the persistent state and run the initial plans.
+  uint64_t initializationNanos{0};
+
+  /// One entry per initial plan, in declaration order.
+  std::vector<FixedPointPlanExecutionStats> initializationPlans{};
+
+  /// One entry per completed iteration.  To bound memory, only the first
+  /// three iterations and the latest one keep their sub-tasks' TaskStats; the
+  /// others keep empty TaskStats.
+  std::vector<FixedPointIterationExecutionStats> iterations{};
+
+  /// Time to produce the output, including the trailing plan.
+  uint64_t finalizationNanos{0};
+
+  /// The trailing plan, when the fragment has one.
+  std::optional<FixedPointPlanExecutionStats> trailingPlan{};
+};
+
 /// Hooks a coordinator passes to Task::create for a plan containing a
 /// FixedPointNode, which Task composes a FixedPointLoop into.  A FixedPointLoop
 /// generates no task ids or exchange URIs itself -- the coordinator owns its
@@ -156,6 +248,18 @@ struct FixedPointOptions {
   /// Sizing it for the largest concurrent fixed point satisfies both.
   folly::Executor* orchestrationExecutor{nullptr};
 
+  /// Maximum number of drivers for the plans a parallel loop runs after
+  /// initialization: the body, convergence and trailing plans.  Must not exceed
+  /// the parent task's maxDrivers.  A loop nested in a plan gets that plan's
+  /// share of the budget as its own iterationMaxDrivers.  The plans of one body
+  /// or convergence chain run at the same time and share this budget, each
+  /// getting at least one driver.  With more than one driver these plans follow
+  /// ordinary Velox multi-driver semantics, so an aggregation that must see
+  /// every row needs a local exchange in front of it.  The last convergence
+  /// plan always runs single-driver, because it must produce one verdict row
+  /// per worker.  The default of 1 runs all of them single-driver.
+  uint32_t iterationMaxDrivers{1};
+
   /// Set by an enclosing FixedPointLoop on the sub-tasks it creates; left empty
   /// by a coordinator, which owns none of what it carries.
   std::optional<NestedFixedPoint> nested;
@@ -191,7 +295,8 @@ struct FixedPointOptions {
 ///    remote split on the FixedPointNode, an initial plan's source splits, or
 ///    an enclosing loop's trailing Exchange splits.  Any other plan node id is
 ///    rejected.
-///  - taskStats() covers none of the work -- see the TODO below.
+///  - taskStats() covers none of the work -- see the TODO below.  The
+///    experimental Task::fixedPointExecutionStats() reports it instead.
 ///
 /// TODO: Cancellation does not reach the loop.  Task::requestCancel(),
 /// requestAbort() and requestPause() move the owning task to a terminal state
@@ -208,10 +313,10 @@ struct FixedPointOptions {
 /// to the phase that creates them.
 ///
 /// TODO: taskStats() on the owning task reports no drivers and no operator
-/// stats, because all the work happens in sub-tasks whose stats are discarded
-/// when each phase ends.  Aggregating them needs a way to fold per-iteration
-/// pipelines into one TaskStats, whose pipelineStats are indexed by a
-/// pipeline id that is only unique within a single task.
+/// stats, because all the work happens in sub-tasks.  Their TaskStats are kept
+/// in FixedPointExecutionStats instead.  Folding them into the owning task's
+/// TaskStats needs a way to merge per-iteration pipelines, whose pipelineStats
+/// are indexed by a pipeline id that is only unique within a single task.
 class FixedPointLoop {
  public:
   /// Whether 'planFragment' contains a FixedPointNode as its leaf, whether or
@@ -248,10 +353,10 @@ class FixedPointLoop {
   /// taskCompletionFuture() (as a coordinator running the fixed point as a
   /// parallel stage would).  Use next() for serial, in-process driving.
   /// 'maxDrivers' is used for the Phase-1 initial plans, which read real
-  /// sources (TableScan/Exchange) that parallelize naturally; the iteration
-  /// body, convergence, and trailing sub-tasks always run single-driver
-  /// (multi-driver body support is a future extension -- see the design doc's
-  /// open questions).
+  /// sources (TableScan/Exchange) that parallelize naturally.  The body,
+  /// convergence and trailing plans run with up to
+  /// FixedPointOptions::iterationMaxDrivers drivers, which must not exceed
+  /// 'maxDrivers'.
   /// 'onComplete' runs on the orchestration executor when the loop finishes:
   /// with a null exception on success, or the one it failed with.  The owning
   /// Task uses it to reach a terminal state, which keeps terminate() private to
@@ -266,6 +371,10 @@ class FixedPointLoop {
   int64_t iterations() const {
     return iterations_;
   }
+
+  /// Returns a snapshot of the execution statistics so far.  Safe to call from
+  /// any thread, during the run or after it ends, including after a failure.
+  FixedPointExecutionStats executionStats() const;
 
   /// This worker's persistent state, owned by this loop.  Its sub-tasks'
   /// StateSource/StateHashJoin operators reach it through
@@ -343,11 +452,17 @@ class FixedPointLoop {
   // an address or trailing id belonging to the loop above it.
   FixedPointOptions subTaskOptions();
 
-  // Phase 1: runs each state's initial plan and stores this worker's shard.
-  void initializeState();
+  // Phase 1: runs each state's initial plan and stores this worker's shard,
+  // recording each plan into 'initializationPlans'.
+  void initializeState(
+      std::vector<FixedPointPlanExecutionStats>& initializationPlans);
 
-  // Builds a join hash table once from its initial plan and stores it.
-  void buildHashTable(const core::HashTableStateDeclaration& declaration);
+  // Builds a join hash table once from its initial plan and stores it.  Each
+  // output driver of the initial plan fills its own table as rows arrive, and
+  // the tables are merged at the end, in parallel on the query executor for a
+  // large table.  Returns the initial plan's statistics.
+  FixedPointPlanExecutionStats buildHashTable(
+      const core::HashTableStateDeclaration& declaration);
 
   // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
   // 'iteration', wiring each consumer plan's Exchange to the previous-plan
@@ -356,28 +471,52 @@ class FixedPointLoop {
   // point runs: 'planIndexOffset' is added to the plan index passed to
   // producerLocation, so the body's producers (offset 0) and the convergence
   // sequence's (offset node_->plans().size()) get distinct ids in the same
-  // iteration.
+  // iteration.  The plans run concurrently and share iterationDrivers();
+  // 'singleDriverLastPlan' keeps the last one at one driver.  Records the run
+  // into 'stats'.
   std::vector<RowVectorPtr> runParallelChain(
       const std::vector<core::PlanNodePtr>& plans,
       size_t planIndexOffset,
       int32_t iteration,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      bool singleDriverLastPlan,
+      FixedPointChainExecutionStats& stats);
+
+  // Driver budget for the plans run after initialization; see
+  // FixedPointOptions::iterationMaxDrivers.
+  uint32_t iterationDrivers() const;
 
   // Appends a copy (in outputPool_) of the named Vector state entry to the
   // output buffer.
   void appendOutput(const std::string& stateEntry);
+
+  // The output of a sub-task drainPlan ran, and the sub-task's statistics.
+  struct DrainedPlan {
+    std::vector<RowVectorPtr> batches;
+    TaskStats taskStats;
+  };
 
   // Runs 'plan' as a sub-task in this worker's execution mode and returns its
   // output batches, copied into 'pool'.  Serial mode drains via next() on the
   // calling thread (single-driver); parallel mode starts the sub-task on the
   // executor with 'maxDrivers' drivers and collects through a consumer.  Feeds
   // the plan's split source (TableScan files or an Exchange upstream) when it
-  // has one.  Used for the initial and hash-build plans (with the parent
-  // maxDrivers) and the convergence plan (single-driver).
-  std::vector<RowVectorPtr> drainPlan(
+  // has one.  Used for the initial plans (with the parent maxDrivers) and, in
+  // serial mode, the body and convergence plans.
+  DrainedPlan drainPlan(
       const core::PlanNodePtr& plan,
       memory::MemoryPool* pool,
       uint32_t maxDrivers);
+
+  // Runs 'plan' as a sub-task in this worker's execution mode and feeds its
+  // split source, handing its output to consumers from 'consumerSupplier': one
+  // per output driver in parallel mode, a single one on the calling thread in
+  // serial mode.  Returns the sub-task's
+  // statistics.
+  TaskStats consumePlan(
+      const core::PlanNodePtr& plan,
+      uint32_t maxDrivers,
+      const exec::ConsumerSupplier& consumerSupplier);
 
   // Feeds 'plan's split source on 'task': an Exchange source reads the upstream
   // producer named by options_.upstreamExchangeUri (keyed by the Exchange node
@@ -426,10 +565,8 @@ class FixedPointLoop {
 
   // The parent task's maxDrivers (from start()), used for the Phase-1 initial
   // plans -- they read real sources (TableScan / Exchange / upstream) that
-  // parallelize naturally.  Serial mode (next()) is always single-driver, so
-  // this stays 1.  The iteration body, convergence, and trailing sub-tasks
-  // always run single-driver for now (multi-driver body support is a future
-  // extension -- see the design doc's open questions).
+  // parallelize naturally -- and as a cap on iterationDrivers().  Serial mode
+  // (next()) is always single-driver, so this stays 1.
   uint32_t maxDrivers_{1};
 
   core::FixedPointNodePtr node_;
@@ -474,6 +611,10 @@ class FixedPointLoop {
 
   int64_t subTaskCounter_{0};
   int64_t iterations_{0};
+
+  // Written by the loop thread as each phase completes; read by
+  // executionStats() from any thread.
+  folly::Synchronized<FixedPointExecutionStats> executionStats_;
 
   // Output rows, copied into outputPool_, emitted one batch per next() (or
   // pushed to the consumer by start()).
