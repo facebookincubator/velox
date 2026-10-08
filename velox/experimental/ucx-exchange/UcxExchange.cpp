@@ -48,7 +48,7 @@ UcxExchange::UcxExchange(
       pipelineId_{driverCtx->pipelineId},
       driverId_{driverCtx->driverId},
       planNodeBoundary_{
-          std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode)
+          planNode->is<core::MergeExchangeNode>()
               ? core::PlanNode::Boundary::kInput
               : core::PlanNode::Boundary::kBoth} {
   VELOX_CHECK_NOT_NULL(

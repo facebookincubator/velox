@@ -105,8 +105,8 @@ void registerUcxTransports() {
              const std::shared_ptr<const core::ExchangeNode>& node,
              const std::shared_ptr<UcxExchangeClient>& client)
               -> std::unique_ptr<exec::Operator> {
-            VELOX_CHECK_NOT_NULL(
-                std::dynamic_pointer_cast<const core::MergeExchangeNode>(node),
+            VELOX_CHECK(
+                node->is<core::MergeExchangeNode>(),
                 "Expected a MergeExchangeNode, plan node: {}",
                 node->id());
             return std::make_unique<UcxExchange>(operatorId, ctx, node, client);
