@@ -41,11 +41,10 @@ class ArbitrationParticipantTestHelper;
 class ArbitrationOperation;
 class ScopedArbitrationParticipant;
 
-/// Custom lock that keeps track of the time of the ongoing arbitration
-/// operation while waiting for the lock. The lock will identify if it needs to
-/// apply a wait timeout by checking arbitrationCtx thread local variable. If a
-/// local arbitration is ongoing on the current locking thread, timeout will
-/// automatically be applied.
+/// Lock guard that acquires the guarded 'std::timed_mutex' within the given
+/// wait timeout and releases it on destruction. Throws if the lock can't be
+/// acquired within 'timeoutNs'. The caller passes the remaining wait time
+/// budget of its arbitration operation as 'timeoutNs'.
 ///
 /// NOTE: TSAN is incompatible with std::timed_mutex when used with timeout. So
 /// in TSAN build a trivial lock is implemented.

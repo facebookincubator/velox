@@ -217,7 +217,6 @@ DeserializeStats runDeserializeWithStats(
       state.schema,
       pool.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .bufferPoolCapacity = bufferPoolCapacity,
       }};
   velox::VectorPtr output;
@@ -244,7 +243,6 @@ void runDeserialize(
       state.schema,
       pool.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .bufferPoolCapacity = bufferPoolCapacity,
       }};
   velox::VectorPtr output;

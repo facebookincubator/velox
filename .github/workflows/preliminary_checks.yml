@@ -14,6 +14,12 @@
 name: Run Checks
 
 on:
+  # Commits can reach main without a pull request (internal imports and
+  # exports), so run the checks there too to catch what no PR run saw.
+  push:
+    branches:
+      - main
+
   pull_request:
     types:
       - opened
@@ -40,6 +46,8 @@ jobs:
 
   title-check:
     name: PR Title Format
+    # A push event carries no pull request title to check.
+    if: github.event_name == 'pull_request'
     runs-on: 4-core-ubuntu
     steps:
       - shell: python

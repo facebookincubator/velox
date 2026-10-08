@@ -65,7 +65,7 @@ SerializationDump::SerializationStats SerializationDump::serializationStats(
   const char* pos = serialized.data();
   const char* end = pos + serialized.size();
 
-  const auto header = serde::readSerializationHeader(pos, end, true);
+  const auto header = serde::readSerializationHeader(pos, end);
   info.version = header.version;
   info.rowCount = header.rowCount;
 

@@ -766,7 +766,7 @@ class MainlyConstantEncodingBase
     const std::string_view otherValues{pos, otherValuesSize};
     pos += otherValuesSize;
     const std::string_view commonValue{
-        pos, static_cast<size_t>(encoded.end() - pos)};
+        pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
@@ -934,7 +934,9 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
       *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   this->commonValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
 }
 
 template <typename T>
@@ -952,6 +954,14 @@ std::string_view MainlyConstantEncoding<T>::encode(
   const auto commonElement = uniqueCounts.mostFrequent().value();
 
   const uint32_t entryCount = values.size();
+
+  if (commonElement.second == entryCount) {
+    // Every row is the common value, so the isCommon bitmap would be all-true
+    // and otherValues empty -- neither carries information. Fall back to the
+    // strictly smaller ConstantEncoding, the same downgrade slice() already
+    // performs for an all-common range.
+    return ConstantEncoding<T>::encode(selection, values, buffer, options);
+  }
 
   auto* pool = &buffer.getMemoryPool();
   physicalType commonValue = commonElement.first;

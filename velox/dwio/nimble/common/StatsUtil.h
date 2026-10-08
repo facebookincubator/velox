@@ -34,6 +34,13 @@ struct MinMax {
 };
 
 template <typename T>
+struct MinMaxAndTotalSize {
+  T min;
+  T max;
+  uint64_t totalSize;
+};
+
+template <typename T>
 constexpr bool kIntegralMinMaxType = std::is_integral_v<std::remove_cv_t<T>> &&
     !std::is_same_v<std::remove_cv_t<T>, bool>;
 
@@ -138,6 +145,35 @@ MinMax<std::remove_cv_t<T>> findMinMax(std::span<T> values) {
   return {
       .min = minValue,
       .max = maxValue,
+  };
+}
+
+/// Returns what findMinMax returns, plus the summed byte length of all values,
+/// from a single traversal. A caller needing both otherwise walks the batch
+/// twice. Bounds carry the same lifetime caveat as findMinMax.
+template <typename T>
+  requires(kStringMinMaxType<T>)
+MinMaxAndTotalSize<std::remove_cv_t<T>> findMinMaxAndTotalSize(
+    std::span<T> values) {
+  using Value = std::remove_cv_t<T>;
+
+  Value minValue{values.front()};
+  Value maxValue{values.front()};
+  uint64_t totalSize{0};
+
+  for (const Value value : values) {
+    totalSize += value.size();
+    if (value < minValue) {
+      minValue = value;
+    } else if (value > maxValue) {
+      maxValue = value;
+    }
+  }
+
+  return {
+      .min = minValue,
+      .max = maxValue,
+      .totalSize = totalSize,
   };
 }
 

@@ -1069,6 +1069,12 @@ void validateFsstArtifactStructure(
       artifact, EncodingType::Fsst, DataType::String, rowCount);
 
   size_t offset = EncodingPrefix::kFixedPrefixSize;
+  require(offset < artifact.size(), "FSST compression type is truncated");
+  const auto compressionType =
+      static_cast<CompressionType>(static_cast<uint8_t>(artifact[offset++]));
+  require(
+      compressionType == CompressionType::Uncompressed,
+      "FSST benchmark artifact must use uncompressed secondary storage");
   const uint32_t symbolTableSize =
       readBoundedVarint32(artifact, offset, "FSST symbol table size");
   require(symbolTableSize > 0, "FSST symbol table must not be empty");

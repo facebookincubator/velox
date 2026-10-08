@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <span>
+
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
@@ -24,6 +26,7 @@
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/Decoder.h"
+#include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/vector/BaseVector.h"
 
@@ -54,6 +57,13 @@ struct FieldReaderParams {
   /// Callback to populate feature projection stats when needed
   std::function<void(velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback{nullptr};
+
+  /// Reports whether a Hybrid FlatMap group's value subtree has streams in
+  /// the current batch. The argument is the group's in-map stream offset.
+  /// Readers that reuse decoder instances across batches must provide this
+  /// callback; standalone readers may omit it because the factory infers
+  /// presence from the decoder map.
+  std::function<bool(uint32_t)> hybridFlatMapValueStreamsPresent{nullptr};
 
   bool optimizeStringBufferHandling{false};
 
@@ -117,6 +127,13 @@ class FieldReader {
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap = nullptr) = 0;
 
+  /// Reads absolute source ranges and maps the dense decoded values to the
+  /// specified output ranges.
+  virtual folly::coro::Task<void> co_read(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::VectorPtr& output);
+
   /// Advances past count rows without materializing output.
   virtual folly::coro::Task<void> co_skip(uint32_t count) = 0;
 
@@ -138,6 +155,10 @@ class FieldReader {
   Decoder* const decoder_;
   folly::Executor* const decodeExecutor_;
   const uint32_t numDecodeTasks_;
+
+  // Reusable empty container satisfying the decoder API for non-string
+  // streams, which never retain a buffer. Avoids a heap allocation per call.
+  std::vector<velox::BufferPtr> stringBuffers_;
 };
 
 class FieldReaderFactory {

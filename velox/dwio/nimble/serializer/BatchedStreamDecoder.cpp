@@ -59,6 +59,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 10;
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       return 1;
     case Kind::Array:
     case Kind::ArrayWithOffsets:
@@ -69,7 +70,9 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
   NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
 }
 
-// Get the ScalarKind for a type based on its storage format.
+// Get the ScalarKind for a type based on its storage format. Types the legacy
+// headerless format never wrote map to Undefined, which StreamData rejects for
+// raw streams.
 inline ScalarKind getScalarKindForType(const Type& type) {
   if (type.isScalar()) {
     return type.asScalar().scalarDescriptor().scalarKind();
@@ -80,7 +83,7 @@ inline ScalarKind getScalarKindForType(const Type& type) {
     // Array/Map lengths streams are uint32_t.
     return ScalarKind::UInt32;
   }
-  NIMBLE_UNSUPPORTED("Unsupported type: {}", toString(type.kind()));
+  return ScalarKind::Undefined;
 }
 
 // Empty scattered reads still need to mark every output row as absent.
@@ -109,15 +112,15 @@ inline void markEmptyScatteredOutputNulls(
 } // namespace
 
 BatchedStreamDecoder::BatchedStreamDecoder(
-    const Type* type,
+    const Type& type,
     bool isInMapStream,
     size_t bufferPoolCapacity,
     velox::memory::MemoryPool* pool)
-    : type_{type},
+    : typeKind_{type.kind()},
       pool_{pool},
       isInMapStream_{isInMapStream},
-      scalarKind_{getScalarKindForType(*type)},
-      typeStorageWidth_{getTypeStorageWidth(*type)},
+      scalarKind_{getScalarKindForType(type)},
+      typeStorageWidth_{getTypeStorageWidth(type)},
       bufferPool_{
           bufferPoolCapacity > 0
               ? std::make_unique<velox::BufferPool>(bufferPoolCapacity)
@@ -130,8 +133,8 @@ BatchedStreamDecoder::BatchedStreamDecoder(
 uint32_t BatchedStreamDecoder::next(
     uint32_t count,
     void* output,
-    std::vector<velox::BufferPtr>& stringBuffers,
     std::function<void*()> getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers,
     const velox::bits::Bitmap* scatterOutputBitmap) {
   NIMBLE_CHECK(
       scatterOutputBitmap == nullptr || !isInMapStream(),
@@ -155,18 +158,39 @@ uint32_t BatchedStreamDecoder::next(
   return nonNullCount;
 }
 
+uint32_t BatchedStreamDecoder::read(
+    std::span<const uint32_t> /*rows*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "BatchedStreamDecoder does not support selective row decoding");
+}
+
+uint32_t BatchedStreamDecoder::read(
+    std::span<const RowRange> /*ranges*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "BatchedStreamDecoder does not support range row decoding");
+}
+
 void BatchedStreamDecoder::skip(uint32_t count) {
   if (count == 0) {
     return;
   }
 
   // For non-in-map streams, an empty `streamSegments_` is only valid
-  // for Row/FlatMap null streams that the writer omitted (all-non-null).
+  // for complex-type null streams that the writer omitted (all-non-null).
   // Nothing decoded → nothing to advance; just bump the cursor.
   if (FOLLY_UNLIKELY(!isInMapStream() && streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
-        "Empty streamSegments_ only valid for Row/FlatMap null streams");
+        typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
+            typeKind_ == Kind::HybridFlatMap,
+        "Empty streamSegments_ only valid for complex-type null streams");
     currentRow_ += count;
     return;
   }
@@ -204,6 +228,22 @@ const Encoding* BatchedStreamDecoder::encoding() const {
   NIMBLE_UNREACHABLE("unexpected call");
 }
 
+uint32_t BatchedStreamDecoder::remainingRows() {
+  if (streamSegmentIndex_ >= streamSegments_.size()) {
+    return 0;
+  }
+  NIMBLE_CHECK(
+      !streamSegments_[streamSegmentIndex_].legacyHeaderless,
+      "remainingRows is not supported for legacy headerless streams");
+  auto& streamData = ensureStreamData(skipStringBuffers_);
+  NIMBLE_CHECK(
+      streamData.hasEncoding(),
+      "remainingRows requires an encoded stream segment");
+  const auto rowCount = streamData.remainingRows();
+  NIMBLE_CHECK_GT(rowCount, 0, "Stream segment has no rows");
+  return rowCount;
+}
+
 serde::StreamData& BatchedStreamDecoder::ensureStreamData(
     std::vector<velox::BufferPtr>& stringBuffers) {
   if (streamData_.has_value()) {
@@ -221,12 +261,12 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData(
   NIMBLE_CHECK_LT(streamSegmentIndex_, streamSegments_.size());
   const auto& segment = streamSegments_[streamSegmentIndex_];
   streamData_.emplace(
-      scalarKind_,
       segment.data,
+      scalarKind_,
       stringBuffers,
       pool_,
       serde::StreamData::Options{
-          .version = segment.version,
+          .legacyHeaderless = segment.legacyHeaderless,
           .streamEncodingUsesVarintRowCount =
               segment.streamEncodingUsesVarintRowCount,
           .bufferPool = bufferPool_.get(),
@@ -286,14 +326,15 @@ uint32_t BatchedStreamDecoder::fillInMapGap(
   return numGapRows;
 }
 
-serde::StreamData::DecodeResult BatchedStreamDecoder::readLegacyStreamSegment(
+serde::StreamData::DecodeResult
+BatchedStreamDecoder::readLegacyHeaderlessSegment(
     serde::StreamData& streamData,
     void* output,
     uint32_t offset,
     uint32_t count) {
   const auto width = typeStorageWidth_;
   if (width > 0) {
-    return streamData.decodeLegacy(output, offset, count, width);
+    return streamData.decodeLegacyHeaderless(output, offset, count, width);
   }
 
   auto* dest = static_cast<std::string_view*>(output) + offset;
@@ -317,7 +358,7 @@ serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
     NIMBLE_CHECK_NULL(
         scatterOutputBitmap,
         "scatterOutputBitmap is only used for encoded streams");
-    return readLegacyStreamSegment(streamData, output, offset, count);
+    return readLegacyHeaderlessSegment(streamData, output, offset, count);
   }
 
   const auto width = typeStorageWidth_;
@@ -400,12 +441,13 @@ uint32_t BatchedStreamDecoder::denseRead(
   const auto width = typeStorageWidth_;
   if (FOLLY_UNLIKELY(streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
+        typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
+            typeKind_ == Kind::HybridFlatMap,
         "streamSegments_ is empty for unexpected stream type={}",
-        type_->kind());
+        typeKind_);
     NIMBLE_CHECK_EQ(
-        width, sizeof(bool), "Row/FlatMap null stream should be bool");
-    // All-non-null Row/FlatMap null streams are omitted on the wire and
+        width, sizeof(bool), "Complex-type null stream should be bool");
+    // All-non-null complex-type null streams are omitted on the wire and
     // reconstructed as all-true here (no null rows).
     std::fill_n(static_cast<bool*>(output), count, true);
     return count;
@@ -467,7 +509,7 @@ uint32_t BatchedStreamDecoder::denseRead(
       rowsRead,
       count,
       "Incomplete read: typeKind={} inMap={} segments={} streamSegmentIndex={}",
-      toString(type_->kind()),
+      toString(typeKind_),
       isInMapStream_,
       streamSegments_.size(),
       streamSegmentIndex_);
@@ -541,7 +583,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
     const velox::bits::Bitmap* scatterOutputBitmap,
     std::vector<velox::BufferPtr>& stringBuffers) {
   NIMBLE_CHECK(
-      !type_->isFlatMap(),
+      typeKind_ != Kind::FlatMap,
       "scatterOutputBitmap not used for FlatMap null streams");
 
   const auto outputSize = scatterOutputBitmap->size();
@@ -609,7 +651,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
       rowsRead,
       count,
       "Incomplete scattered read: typeKind={} segments={} streamSegmentIndex={}",
-      toString(type_->kind()),
+      toString(typeKind_),
       streamSegments_.size(),
       streamSegmentIndex_);
   return nonNullCount;

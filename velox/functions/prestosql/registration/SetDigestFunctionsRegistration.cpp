@@ -21,34 +21,40 @@
 
 namespace facebook::velox::functions {
 
-void registerSetDigestFunctions(const std::string& prefix) {
+void registerSetDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   facebook::velox::registerSetDigestType();
 
   // Register cardinality(setdigest) -> bigint
   registerFunction<
       CardinalitySetDigestFunction,
       int64_t,
-      facebook::velox::SetDigest>({prefix + "cardinality"});
+      facebook::velox::SetDigest>(
+      {prefix + "cardinality"}, {}, true, defaultOwner);
 
   // Register intersection_cardinality(setdigest, setdigest) -> bigint
   registerFunction<
       IntersectionCardinalityFunction,
       int64_t,
       facebook::velox::SetDigest,
-      facebook::velox::SetDigest>({prefix + "intersection_cardinality"});
+      facebook::velox::SetDigest>(
+      {prefix + "intersection_cardinality"}, {}, true, defaultOwner);
 
   // Register jaccard_index(setdigest, setdigest) -> double
   registerFunction<
       JaccardIndexFunction,
       double,
       facebook::velox::SetDigest,
-      facebook::velox::SetDigest>({prefix + "jaccard_index"});
+      facebook::velox::SetDigest>(
+      {prefix + "jaccard_index"}, {}, true, defaultOwner);
 
   // Register hash_counts(setdigest) -> map(bigint, smallint)
   registerFunction<
       HashCountsFunction,
       Map<int64_t, int16_t>,
-      facebook::velox::SetDigest>({prefix + "hash_counts"});
+      facebook::velox::SetDigest>(
+      {prefix + "hash_counts"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

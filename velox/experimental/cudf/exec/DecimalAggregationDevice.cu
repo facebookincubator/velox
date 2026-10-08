@@ -163,14 +163,17 @@ struct StateValidPredicate {
   }
 };
 
-std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMaskImpl(
+std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+buildStateValidityMaskImpl(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto numRows = sumCol.size();
   if (numRows == 0) {
-    return {rmm::device_buffer{}, 0};
+    return {
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        0};
   }
   auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);
   auto countDeviceView = cudf::column_device_view::create(countCol, stream);
@@ -381,7 +384,8 @@ void packDecimalSumState(
           sumCol, counts, offsetsView, chars, numRows, stream});
 }
 
-std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
+std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     cuda::stream_ref stream,

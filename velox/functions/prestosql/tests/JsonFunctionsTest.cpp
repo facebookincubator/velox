@@ -287,7 +287,66 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
   testJsonParse(R"({ "abc" : "\/"})", R"({"abc":"/"})");
   testJsonParse(R"({ "abc" : "\\/"})", R"({"abc":"\\/"})");
-  testJsonParse("{\"\\\\\":null, \"\\\\\":null}", R"({"\\":null,"\\":null})");
+  // Exact-duplicate keys collapse to the last value, matching Presto. The
+  // backslash key takes the normalized path, the bare keys the fast path.
+  testJsonParse(R"({"\\":1,"\\":2})", R"({"\\":2})");
+  testJsonParse(R"({"\\":1,"\\":2,"\\":3})", R"({"\\":3})");
+  testJsonParse(R"({"a":1,"a":2})", R"({"a":2})");
+  testJsonParse(R"({"a":1,"a":2,"a":3})", R"({"a":3})");
+  testJsonParse(R"({"a":1,"A":2})", R"({"A":2,"a":1})");
+  testJsonParse(R"({"b":1,"a":2,"a":3})", R"({"a":3,"b":1})");
+  testJsonParse(R"({"a":1,"a":2,"b":3,"b":4})", R"({"a":2,"b":4})");
+  testJsonParse(R"({"a":1,"a":null})", R"({"a":null})");
+  testJsonParse(R"({"a":1,"a":[1,2]})", R"({"a":[1,2]})");
+  testJsonParse(R"({"":1,"":2})", R"({"":2})");
+  testJsonParse(R"({"x":{"a":1,"a":2}})", R"({"x":{"a":2}})");
+  testJsonParse(R"([{"a":1,"a":2},{"b":1,"b":2}])", R"([{"a":2},{"b":2}])");
+  // Key lengths around the 8-byte packing chunks and the 24-byte fast-path
+  // limit.
+  testJsonParse(R"({"1234567":1,"1234567":2})", R"({"1234567":2})");
+  testJsonParse(R"({"12345678":1,"12345678":2})", R"({"12345678":2})");
+  testJsonParse(R"({"123456789":1,"123456789":2})", R"({"123456789":2})");
+  testJsonParse(
+      R"({"123456789012345":1,"123456789012345":2})",
+      R"({"123456789012345":2})");
+  testJsonParse(
+      R"({"1234567890123456":1,"1234567890123456":2})",
+      R"({"1234567890123456":2})");
+  testJsonParse(
+      R"({"12345678901234567":1,"12345678901234567":2})",
+      R"({"12345678901234567":2})");
+  testJsonParse(
+      R"({"123456789012345678901234":1,"123456789012345678901234":2})",
+      R"({"123456789012345678901234":2})");
+  testJsonParse(
+      R"({"1234567890123456789012345":1,"1234567890123456789012345":2})",
+      R"({"1234567890123456789012345":2})");
+  // Escapes that normalization decodes are collapsed.
+  testJsonParse(R"({"\/":1,"/":2})", R"({"/":2})");
+  testJsonParse(R"({"信":1,"信":2})", R"({"信":2})");
+  // Control-character escapes are not decoded before comparison, so the two
+  // forms of U+000A stay distinct and both survive.
+  testJsonParse(R"({"\n":1,"\u000A":2})", R"({"\n":1,"\u000A":2})");
+  // The sort's scratch state is reset between rows, including after a row
+  // that fails to parse.
+  {
+    auto data = makeRowVector({makeFlatVector<std::string>({
+        R"({"a":1,"a":2})",
+        R"({"b":1})",
+        R"({"123456789012345678901234":1,"123456789012345678901234":2})",
+        R"({"k1":})",
+        R"({"c":1,"c":2})",
+    })});
+    auto expected = makeNullableFlatVector<StringView>(
+        {StringView(R"({"a":2})"),
+         StringView(R"({"b":1})"),
+         StringView(R"({"123456789012345678901234":2})"),
+         std::nullopt,
+         StringView(R"({"c":2})")},
+        JSON());
+    velox::test::assertEqualVectors(
+        expected, evaluate("try(json_parse(c0))", data));
+  }
   testJsonParse(R"({ "abc" : [1, 2, 3, 4    ]})", R"({"abc":[1,2,3,4]})");
   // Test out with unicodes and empty keys.
   testJsonParse(
@@ -1218,6 +1277,7 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
       jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$"));
   EXPECT_EQ(
       R"({"a":1,"b":2})", jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x"));
+  EXPECT_EQ(R"({"a":2})", jsonExtract(R"({"x": {"a" : 1, "a" : 2} })", "$.x"));
 
   // Invalid JSON
   EXPECT_EQ(std::nullopt, jsonExtract(R"({"x": {"a" : 1, "b" : "2""} })", "$"));

@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
+#include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -59,6 +60,8 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .allowNestedAlpSelection = allowNestedAlpSelection,
+        .subIntSplitDeltaPreTransform =
+            FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
@@ -89,20 +92,30 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
-  /// When true, chunk-level position index is built for all streams,
-  /// enabling O(1) chunk-level seeking within stripes. Independent of
-  /// the cluster index (clusterIndexConfig). When clusterIndexConfig is set,
-  /// chunk index is always enabled regardless of this flag.
+  /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
+  /// are written as absent, matching the DWRF writer's default limit.
+  uint32_t vectorizedStatsStringLengthLimit{64};
+
+  /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
+  /// alias before passing the canonical chunk stats options to TabletWriter.
+  bool enableChunkIndex{false};
+
+  /// When true, chunk statistics are built for all streams.
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
-  // TODO: keeps the chunkIndex name for now; rename to the chunkStats naming
-  // once per-chunk null/min/max stats are fully rolled out.
-  bool enableChunkIndex{false};
+  bool enableChunkStats{false};
+
+  /// Selects the on-disk chunk statistics representation.
+  ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
 
   /// Skip writing chunk stats for a stripe group if the average number
   /// of chunks per stream is below this threshold. 0 disables chunk stats
   /// skipping.
   float chunkStatsMinAvgChunks{2};
+
+  /// Maximum string or binary value length retained in per-chunk bounds.
+  uint32_t maxChunkStringStatSize{
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
 
   /// NOTE: !!! This is under experimentation and please do not turn on in
   /// production use case !!!
@@ -231,6 +244,18 @@ struct WriterOptions {
   /// encodings, based on history data.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
+  /// Velox subfield paths whose stored VARCHAR value streams prefer FSST.
+  /// Paths identify fields in the input schema and are resolved to the matching
+  /// stored data streams during construction; nested ROW fields use '.', while
+  /// ARRAY elements and MAP values use '[*]'. Targeting a cluster-index key is
+  /// rejected; non-key paths are resolved against the stored schema. A chunk
+  /// that misses FSST's compression target safely falls back to Trivial. FSST
+  /// and its fallback use the writer's normal encoding compression policy.
+  /// Targeting the same value stream with shared dictionary encoding is
+  /// rejected. Field names containing Velox subfield separators such as '.'
+  /// are not addressable as literal names through this interface.
+  std::vector<std::string> fsstEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
@@ -255,9 +280,9 @@ struct WriterOptions {
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
 
-  /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-  /// encoding selection. False by default; do not enable for production until
-  /// ALP is production-ready.
+  /// Legacy experimental option for floating-point normalization and
+  /// policy-free nested ALP size estimates. Does not enable encoding
+  /// candidates; configure ALP explicitly in the selection policy.
   bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
@@ -286,6 +311,13 @@ struct WriterOptions {
   /// compressed.
   std::optional<uint32_t> metadataCompressionThreshold{};
 
+  /// If present, overrides how much estimated stripe group metadata the tablet
+  /// writer accumulates before closing a stripe group. One index partition is
+  /// emitted per stripe group, so lowering this is the only way to produce a
+  /// multi-partition index without writing enough stripes to reach the 8MB
+  /// default.
+  std::optional<uint32_t> metadataFlushThreshold{};
+
   /// When flushing data streams into chunks, streams with raw data size smaller
   /// than this threshold will not be flushed.
   /// Note: this threshold is ignored when it is time to flush a stripe.
@@ -302,6 +334,18 @@ struct WriterOptions {
   /// When the number of schema nodes exceeds this threshold we use
   /// wideSchemaMaxStreamChunkRawSize in place of maxStreamChunkRawSize.
   size_t largeSchemaThreshold{500};
+
+  /// Chunks a stream once it exceeds maxStreamChunkRawSize, rather than only
+  /// when the writer is also under aggregate memory pressure. Off by default:
+  /// it changes chunk boundaries, and therefore stripe boundaries, for every
+  /// writer with chunking enabled.
+  ///
+  /// Without it, maxStreamChunkRawSize is only consulted once shouldChunk()
+  /// reports pressure on the writer's total footprint, so a single stream can
+  /// grow far past the cap. That is costly: a stream buffer grows by ~1.19x
+  /// and holds the old and new allocations across the move, so a regrow
+  /// transiently needs about twice the buffer.
+  bool eagerChunking{false};
 
   /// Number of streams to try chunking between memory pressure evaluations.
   /// Note: this is ignored when it is time to flush a stripe.
@@ -409,16 +453,16 @@ struct WriterOptions {
 
   bool enableStreamDeduplication{true};
 
+  /// When true, records a checksum of each stream's on-disk bytes in the
+  /// stripe group, so a reader can verify an individual stream without reading
+  /// the whole file. Costs 4 bytes per stream per stripe in the footer, and
+  /// the checksums do not compress. The whole-file checksum in the postscript
+  /// is written either way.
+  bool enableStreamChecksums{false};
+
   /// When true, string fields use per-field buffers instead of a shared buffer.
   /// This enables incremental memory reclamation during chunking.
   bool disableSharedStringBuffers{false};
-
-  /// When true, enables consistency check between fileRawSize (accumulated via
-  /// RawSizeUtils) and the root column statistics during file close.
-  /// This is used to validate that column statistics accurately track raw
-  /// sizes, with the goal of eventually replacing RawSizeUtils accumulation
-  /// with column statistics for non-deduplicated columns.
-  bool enableStatsConsistencyCheck{true};
 
   // Cache the encoding layout from the first encoding of each stream and
   // replay it on subsequent chunks/stripes, skipping the full encoding

@@ -330,7 +330,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   std::atomic_size_t sourceDriversWithRetainedInputs{0};
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+      "facebook::velox::cudf_velox::CudfJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
       std::function<void(size_t*)>([&](size_t* retainedInputBatches) {
         ++sourceDriversChecked;
         if (*retainedInputBatches != 0) {
@@ -357,6 +357,40 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   EXPECT_EQ(sourceDriversChecked.load(), 1);
   EXPECT_EQ(sourceDriversWithRetainedInputs.load(), 0)
       << "Source build drivers retained input batches after transfer";
+}
+
+DEBUG_ONLY_TEST_F(HashJoinTest, releasesBatchedBuildInputsIncrementally) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
+
+  std::vector<size_t> retainedInputBatches;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
+      std::function<void(size_t*)>([&](size_t* retained) {
+        retainedInputBatches.push_back(*retained);
+      }));
+
+  // Each 10-row build vector forms its own output batch. The source references
+  // must be released after each batch rather than all at function exit.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(1)
+      .keyTypes({BIGINT()})
+      .probeVectors(10, 1)
+      .buildVectors(10, 3)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+
+  EXPECT_EQ(retainedInputBatches, std::vector<size_t>({2, 1, 0}));
 }
 
 TEST_P(MultiThreadedHashJoinTest, normalizedKey) {
@@ -6057,7 +6091,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   // Create probe data
   std::vector<RowVectorPtr> probeVectors{makeRowVector({
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
-      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -6132,8 +6166,8 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> rightProbe = {makeRowVector(
       {"aa", "bb"},
       {
-          makeFlatVector<int64_t>(10, folly::identity),
-          makeFlatVector<int64_t>(10, folly::identity),
+          makeFlatIdentityVector<int64_t>(10),
+          makeFlatIdentityVector<int64_t>(10),
       })};
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), rightProbe);
@@ -8489,7 +8523,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
         }
         injectedSpillOnce = true;
         EXPECT_EQ(
-            dynamic_cast<HashProbe*>(op)->testingState(),
+            op->as<HashProbe>()->testingState(),
             ProbeOperatorState::kWaitForPeers);
         testingRunArbitration(op->pool());
       }));
@@ -9609,7 +9643,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([&](Operator* op) {
         if (probeOp == nullptr && op->operatorType() == "HashProbe") {
-          probeOp = dynamic_cast<HashProbe*>(op);
+          probeOp = op->as<HashProbe>();
         }
       }));
 

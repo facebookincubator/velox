@@ -169,14 +169,14 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
         pool,
         compressionType,
         DataType::Undefined,
-        {pos, static_cast<size_t>(data.end() - pos)},
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
         options.decompressCounter(),
         options.bufferPool);
     fixedBitArray_ = FixedBitArray{
         {uncompressedData_->as<char>(), uncompressedData_->size()}, bitWidth_};
   } else {
-    fixedBitArray_ =
-        FixedBitArray{{pos, static_cast<size_t>(data.end() - pos)}, bitWidth_};
+    fixedBitArray_ = FixedBitArray{
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)}, bitWidth_};
   }
 }
 
@@ -319,37 +319,8 @@ void FixedBitWidthEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation,
-  // and hook forwarding. For non-hook paths, values points to the reader's
-  // output buffer (rawValues). For hooks, values stays as the local decode
-  // buffer since hook.addValue() consumes values without writing to the reader.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 
@@ -440,7 +411,8 @@ std::string_view FixedBitWidthEncoding<T>::slice(
 
   velox::BufferPtr uncompressed;
   std::string_view packedData{
-      sourcePos, static_cast<size_t>(encoded.end() - sourcePos)};
+      sourcePos,
+      static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)};
   if (sourceCompressionType != CompressionType::Uncompressed) {
     uncompressed = Compression::uncompress(
         buffer.getMemoryPool(),

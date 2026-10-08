@@ -28,6 +28,8 @@ endif()
 
 add_library(
   nimble_encodings
+  ALPEncoding.cpp
+  ALPRDEncoding.cpp
   ConstantEncoding.cpp
   EncodingSliceFactory.cpp
   FsstEncoding.cpp
@@ -41,13 +43,33 @@ add_library(
   SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
+  subintsplit/CostModel.cpp
+  subintsplit/CostModel.h
+  subintsplit/EncodingConfig.h
+  subintsplit/BitSection.h
+  subintsplit/DeltaTransform.h
+  subintsplit/Format.h
+  subintsplit/Sampler.h
+  subintsplit/SectionAccumulator.h
+  subintsplit/SectionEncoder.h
+  subintsplit/SectionMetrics.cpp
+  subintsplit/SectionMetrics.h
+  subintsplit/SectionTable.h
+  subintsplit/SplitBoundaries.cpp
+  subintsplit/SplitBoundaries.h
+  subintsplit/SplitSelector.cpp
+  subintsplit/SplitSelector.h
+  subintsplit/TuningConfig.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
+  common/EncodingPrefix.cpp
   common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
+  selection/NestedAlpSizeEstimation.cpp
   selection/Statistics.cpp
+  views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
@@ -55,12 +77,15 @@ add_library(
   views/TrivialEncodingView.h
   views/SparseBoolEncodingView.h
   views/SimdForBitpackEncodingView.h
+  views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
+  views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
+  views/EncodingViewUtils.h
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
@@ -84,12 +109,7 @@ add_library(
   common/BufferedEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
-  SubIntSplitSelector.h
-  SubIntSplitSampler.h
-  SubIntSplitMetrics.h
   SubIntSplitEncoding.h
-  SubIntSplitCostModels.h
-  SubIntSplitConfig.h
   SparseBoolEncoding.h
   SliceEncoding.h
   SimdForBitpackEncoding.h
@@ -114,6 +134,7 @@ add_library(
   BlockBitPackingEncoding.h
   BitRangeSplitEncoding.h
   ALPEncoding.h
+  ALPRDEncoding.h
 )
 
 # FSST is vendored at velox/external/fsst and added by velox/CMakeLists.txt

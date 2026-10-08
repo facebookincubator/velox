@@ -483,6 +483,7 @@ void registerArbitraryAggregate(
                 inputType->kindName());
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

@@ -39,7 +39,9 @@ class DictionaryEncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_NOT_NULL(alphabet_);
     pos += alphabetSize;
     indices_ = detail::createTypedEncodingView<uint32_t>(
-        {pos, static_cast<size_t>(data.end() - pos)}, this->pool_, options);
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+        this->pool_,
+        options);
     NIMBLE_CHECK_NOT_NULL(indices_);
   }
 

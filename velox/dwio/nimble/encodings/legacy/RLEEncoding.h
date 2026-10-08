@@ -304,7 +304,7 @@ RLEEncoding<T>::RLEEncoding(
           memoryPool,
           {internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart(),
            static_cast<size_t>(
-               data.end() -
+               data.data() + data.size() -
                internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart())},
           stringBufferFactory,
           Encoding::Options{})} {

@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/HashAggregation.h"
@@ -35,6 +36,7 @@
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/transform.hpp>
@@ -692,7 +694,8 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf::data_type(cudf::type_id::STRUCT),
             size,
             rmm::device_buffer{},
-            rmm::device_buffer{},
+            cudf::create_null_mask(
+                0, cudf::mask_state::UNALLOCATED, stream, mr),
             0,
             std::move(children));
       }
@@ -727,7 +730,8 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf::data_type(cudf::type_id::STRUCT),
             size,
             rmm::device_buffer{},
-            rmm::device_buffer{},
+            cudf::create_null_mask(
+                0, cudf::mask_state::UNALLOCATED, stream, mr),
             0,
             std::move(children));
       }
@@ -952,7 +956,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type(cudf::type_id::STRUCT),
         size,
         rmm::device_buffer{},
-        rmm::device_buffer{},
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
         0,
         std::move(children));
   }
@@ -1611,6 +1615,9 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
     return;
   }
 
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeConcatenate",
+      &bufferedResult_);
   std::vector<cudf::table_view> tablesToConcat;
   tablesToConcat.push_back(bufferedResult_->getTableView());
   tablesToConcat.push_back(permutedInputView);
@@ -1623,6 +1630,13 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
   cudf::detail::join_streams(
       std::vector<cuda::stream_ref>{finalStream}, inputTableStream);
+  // The concatenation owns a replacement for the retained result. Release
+  // the old table before aggregation allocates its working/output buffers.
+  // Its deallocation is ordered after concatenation on finalStream.
+  bufferedResult_.reset();
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeAggregate",
+      &bufferedResult_);
   auto compactedOutput = doGroupByAggregation(
       concatenatedTable->view(),
       groupingKeyOutputChannels_,
