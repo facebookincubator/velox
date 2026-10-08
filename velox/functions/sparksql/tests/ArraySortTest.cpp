@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/sparksql/tests/ArraySortTestData.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -44,6 +45,11 @@ struct AlwaysThrowArraySortFunction {
 
 class ArraySortTest : public SparkFunctionBaseTest {
  protected:
+  static void SetUpTestCase() {
+    SparkFunctionBaseTest::SetUpTestCase();
+    facebook::velox::functions::registerArrayConstructor("array_constructor");
+  }
+
   ArraySortTest() {
     options_.parseIntegerAsBigint = false;
   }
@@ -678,10 +684,10 @@ TEST_F(ArraySortTest, unsupportedLambda) {
   VELOX_ASSERT_THROW(
       evaluate(
           "array_sort(c0, (a, b) -> "
-          "if(lessthan(a + cast(rand() as integer), "
-          "b + cast(rand() as integer)), -1, "
-          "if(greaterthan(a + cast(rand() as integer), "
-          "b + cast(rand() as integer)), 1, 0)))",
+          "if(lessthan(add(a, cast(rand() as integer)), "
+          "add(b, cast(rand() as integer))), -1, "
+          "if(greaterthan(add(a, cast(rand() as integer)), "
+          "add(b, cast(rand() as integer))), 1, 0)))",
           data),
       "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
 

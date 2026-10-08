@@ -125,9 +125,9 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
 
   const auto inputType =
       ROW({"a", "captured", "captured_array"},
-          {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()})),
-           BIGINT(),
-           ARRAY(BIGINT())});
+          {ARRAY(ROW({"f", "g"}, {INTEGER(), INTEGER()})),
+           INTEGER(),
+           ARRAY(INTEGER())});
 
   auto checker = std::make_unique<SimpleComparisonChecker>();
 
@@ -195,10 +195,14 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       "if(coalesce(x.f, captured) > coalesce(y.f, captured), 1, 0))",
       true);
   testMatcher(
-      "if(x.f + cardinality(filter(captured_array, z -> z > captured)) < "
-      "y.f + cardinality(filter(captured_array, z -> z > captured)), -1, "
-      "if(x.f + cardinality(filter(captured_array, z -> z > captured)) > "
-      "y.f + cardinality(filter(captured_array, z -> z > captured)), 1, 0))",
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer), 1, 0))",
       true);
 
   // Non-matching expressions.
@@ -218,26 +222,34 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       "if(coalesce(x.f, captured) > y.f, 37, 0))",
       std::nullopt);
   testMatcher(
-      "if(x.f + cardinality(filter(captured_array, z -> z > y.f)) < "
-      "y.f + cardinality(filter(captured_array, z -> z > x.f)), -1, "
-      "if(x.f + cardinality(filter(captured_array, z -> z > y.f)) > "
-      "y.f + cardinality(filter(captured_array, z -> z > x.f)), 1, 0))",
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > y.f)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > x.f)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > y.f)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > x.f)) as integer), 1, 0))",
       std::nullopt);
   testMatcher(
-      "if(x.f + cardinality(filter(captured_array, y -> y > captured)) < "
-      "y.f + cardinality(filter(captured_array, x -> x > captured)), -1, "
-      "if(x.f + cardinality(filter(captured_array, y -> y > captured)) > "
-      "y.f + cardinality(filter(captured_array, x -> x > captured)), 1, 0))",
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "y -> y > captured)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "x -> x > captured)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "y -> y > captured)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "x -> x > captured)) as integer), 1, 0))",
       std::nullopt);
   testMatcher(
-      "if(x.f + cardinality(filter(captured_array, "
-      "z -> z > cast(random() as bigint))) < "
-      "y.f + cardinality(filter(captured_array, "
-      "z -> z > cast(random() as bigint))), -1, "
-      "if(x.f + cardinality(filter(captured_array, "
-      "z -> z > cast(random() as bigint))) > "
-      "y.f + cardinality(filter(captured_array, "
-      "z -> z > cast(random() as bigint))), 1, 0))",
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer), 1, 0))",
       std::nullopt);
   testMatcher("if(x.f > (y.f + 5), 1, if(x.f < y.f, -1, 0))", std::nullopt);
   testMatcher("x.f + y.f", std::nullopt);
