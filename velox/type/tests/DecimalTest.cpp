@@ -165,6 +165,65 @@ std::string zeros(uint32_t numZeros) {
   return std::string(numZeros, '0');
 }
 
+TEST(DecimalTest, divideWithRoundUpLargeDivisor) {
+  const auto power = DecimalUtil::kPowersOfTen[38];
+  for (const auto divisor : {power / 100 * 85, power - 2, power - 1, power}) {
+    for (const auto dividend :
+         {divisor / 2 - 1, divisor / 2, divisor / 2 + 1, divisor - 1}) {
+      for (int dividendSign : {-1, 1}) {
+        for (int divisorSign : {-1, 1}) {
+          for (bool noRoundUp : {false, true}) {
+            int128_t result;
+            const auto remainder = DecimalUtil::divideWithRoundUp(
+                result,
+                dividend * dividendSign,
+                divisor * divisorSign,
+                noRoundUp,
+                0,
+                0);
+            const auto rounded =
+                !noRoundUp && dividend >= divisor / 2 + divisor % 2 ? 1 : 0;
+            EXPECT_EQ(result, rounded * dividendSign * divisorSign);
+            EXPECT_EQ(remainder, dividend * dividendSign * divisorSign);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(DecimalTest, divideWithRoundUpMixedWidthsAndRescaling) {
+  const auto check = []<typename R, typename A, typename B>(
+                         R,
+                         A dividend,
+                         B divisor,
+                         uint8_t rescale,
+                         R expected,
+                         R expectedRemainder) {
+    R result;
+    const auto remainder = DecimalUtil::divideWithRoundUp(
+        result, dividend, divisor, false, rescale, 0);
+    EXPECT_EQ(result, expected);
+    EXPECT_EQ(remainder, expectedRemainder);
+  };
+  check(
+      int128_t{},
+      int64_t{9},
+      DecimalUtil::kPowersOfTen[38],
+      37,
+      int128_t{1},
+      9 * DecimalUtil::kPowersOfTen[37]);
+  check(int64_t{}, int64_t{-45}, int128_t{90}, 0, int64_t{-1}, int64_t{-45});
+  check(int128_t{}, int128_t{14}, int64_t{-9}, 0, int128_t{-2}, int128_t{-5});
+  check(int64_t{}, int64_t{4}, int64_t{9}, 0, int64_t{0}, int64_t{4});
+  check(int64_t{}, int64_t{5}, int64_t{9}, 0, int64_t{1}, int64_t{5});
+  int64_t result;
+  VELOX_ASSERT_USER_THROW(
+      DecimalUtil::divideWithRoundUp(
+          result, int64_t{1}, int64_t{0}, false, 0, 0),
+      "Division by zero");
+}
+
 TEST(DecimalTest, toString) {
   EXPECT_EQ(std::to_string(HugeInt::build(0, 0)), "0");
   EXPECT_EQ(std::to_string(HugeInt::build(0, 1)), "1");

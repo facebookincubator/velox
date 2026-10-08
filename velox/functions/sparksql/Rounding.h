@@ -20,17 +20,12 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Identifies the primitive Spark-compatible ROUND integration contract.
+/// Identifies the integral ROUND integration contract (two or three arguments).
 inline constexpr const char* kSparkRound = "spark_round";
 
-/// Identifies the decimal Spark-compatible ROUND integration contract.
-inline constexpr const char* kSparkRoundDecimal = "decimal_spark_round";
-
-/// Registers primitive HALF_UP round functions and the decimal_round special
-/// form, including their capability-specific integration names, with a prefix.
+/// Registers round and its integral and decimal integration names with a
+/// prefix. Floating-point round retains the existing binary arithmetic
+/// implementation.
 void registerRoundFunctions(const std::string& prefix);
-
-/// Registers the decimal HALF_UP special form under the supplied name.
-void registerDecimalRoundSpecialForm(const std::string& name);
 
 } // namespace facebook::velox::functions::sparksql

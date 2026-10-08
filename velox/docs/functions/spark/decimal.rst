@@ -276,10 +276,10 @@ Decimal Special Forms
 
     Rounds ``decimal`` to a new scale using HALF_UP rounding: exact halfway
     cases round away from zero.
-    ``scale`` defaults to zero and must be a constant INTEGER expression in
-    ``[-400, 400]``, or NULL. A null scale returns null without evaluating the
-    decimal child. Unsupported scales are rejected, not clamped; integrations
-    must fall back outside this native qualification interval.
+    ``scale`` defaults to zero and must be a constant INTEGER expression, or
+    NULL. The full INTEGER scale range is supported without clamping. A null
+    scale returns null without evaluating the decimal child; its resolved
+    output type is the same as for scale zero.
     The expression must supply the resolved decimal result type, which is
     validated against Spark's precision and scale rules below.
     Integrations should validate and emit the capability-specific
@@ -292,6 +292,11 @@ Decimal Special Forms
     If a negative scale causes the rounded value to exceed decimal precision
     38, evaluation raises a user error regardless of ANSI mode. ``try`` catches
     that error per row.
+    Dropping more than 38 digits returns zero; dropping exactly 38 digits can
+    still round away from zero and overflow.
+    Extreme-scale arithmetic is mathematical, not an emulation of JVM
+    BigInteger resource limits or INTEGER negation overflow. This domain is
+    not a claim of matching Spark's extreme-scale exceptions or result types.
 
     ::
 
