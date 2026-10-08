@@ -16,19 +16,30 @@
 
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/expression/ExprConstants.h"
-#include "velox/functions/FunctionRegistry.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-bool isDeterministicSpecialForm(std::string_view name) {
-  return name == expression::kAnd || name == expression::kOr ||
-      name == expression::kSwitch || name == expression::kIf ||
-      name == expression::kCoalesce || name == expression::kCast ||
-      name == expression::kTryCast || name == expression::kTry ||
-      name == expression::kRowConstructor || name == expression::kNullIf ||
-      name == expression::kCase || name == expression::kIn ||
-      name == expression::kNot || name == "array_constructor";
+// Returns false if 'name' is a registered non-deterministic function, or is
+// neither a registered function nor a special form. Special forms (if, switch,
+// cast, coalesce, etc.) are deterministic given deterministic inputs.
+bool isDeterministicCall(const std::string& name) {
+  const auto simpleFunctions =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(name);
+  const auto vectorMetadata = exec::getVectorFunctionMetadata(name);
+  if (simpleFunctions.empty() && !vectorMetadata.has_value()) {
+    return exec::specialFormRegistry().getSpecialForm(name) != nullptr;
+  }
+
+  for (const auto& [metadata, _] : simpleFunctions) {
+    if (!metadata.deterministic) {
+      return false;
+    }
+  }
+  return !vectorMetadata.has_value() || vectorMetadata->deterministic;
 }
 
 bool isDeterministicTransform(const core::TypedExprPtr& expr) {
@@ -38,10 +49,7 @@ bool isDeterministicTransform(const core::TypedExprPtr& expr) {
   }
 
   if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
-    const auto deterministic = facebook::velox::isDeterministic(call->name());
-    if ((!deterministic.has_value() &&
-         !isDeterministicSpecialForm(call->name())) ||
-        (deterministic.has_value() && !deterministic.value())) {
+    if (!isDeterministicCall(call->name())) {
       return false;
     }
   }
@@ -228,12 +236,6 @@ bool SimpleComparisonChecker::isLessThen(
   }
 
   return result > 0;
-}
-
-std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
-    const std::string& prefix,
-    const core::LambdaTypedExpr& expr) {
-  return isSimpleComparison(prefix, expr, false);
 }
 
 std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(

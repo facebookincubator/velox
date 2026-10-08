@@ -32,11 +32,11 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
       name,
       inputArgs,
       config,
-      true /*ascending*/,
-      false /*nullsFirst*/,
-      true /*nestedNullsFirst*/,
-      false /*throwOnNestedNull*/,
-      true /*stable*/);
+      {.ascending = true,
+       .nullsFirst = false,
+       .nestedNullsFirst = true,
+       .throwOnNestedNull = false,
+       .stable = true});
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
@@ -55,10 +55,10 @@ std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
       name,
       inputArgs,
       config,
-      true /*ascending*/,
-      false /*throwOnNestedNull*/,
-      true /*rejectNullSortKeys*/,
-      true /*skipLambdaForTrivialArrays*/);
+      {.ascending = true,
+       .throwOnNestedNull = false,
+       .rejectNullSortKeys = true,
+       .skipLambdaForTrivialArrays = true});
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
@@ -69,10 +69,10 @@ std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
       name,
       inputArgs,
       config,
-      false /*ascending*/,
-      false /*throwOnNestedNull*/,
-      true /*rejectNullSortKeys*/,
-      true /*skipLambdaForTrivialArrays*/);
+      {.ascending = false,
+       .throwOnNestedNull = false,
+       .rejectNullSortKeys = true,
+       .skipLambdaForTrivialArrays = true});
 }
 
 // Signatures:
@@ -82,6 +82,22 @@ arraySortDescSignatures() {
   return {
       exec::FunctionSignatureBuilder()
           .orderableTypeVariable("T")
+          .orderableTypeVariable("U")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .constantArgumentType("function(T,U)")
+          .build(),
+  };
+}
+
+// Signatures:
+//   $internal$array_sort_comparator(array(T), function(T,U)) -> array(T)
+//   $internal$array_sort_comparator_desc(array(T), function(T,U)) -> array(T)
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arraySortComparatorSignatures() {
+  return {
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
           .orderableTypeVariable("U")
           .returnType("array(T)")
           .argumentType("array(T)")
@@ -133,10 +149,11 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
       name,
       inputArgs,
       config,
-      ascending /*ascending*/,
-      nullsFirst /*nullsFirst*/,
-      nullsFirst /*nestedNullsFirst*/,
-      false /*throwOnNestedNull*/);
+      {.ascending = ascending,
+       .nullsFirst = nullsFirst,
+       .nestedNullsFirst = nullsFirst,
+       .throwOnNestedNull = false,
+       .stable = true});
 }
 
 } // namespace facebook::velox::functions::sparksql

@@ -99,6 +99,9 @@ class AnySingleInputMatcher : public Matcher {
   core::FieldAccessTypedExprPtr* const input_;
 };
 
+/// Matches an expression that depends on exactly one of 'lambdaInputs'. Unlike
+/// AnySingleInputMatcher, the expression may also reference captured columns.
+/// Nested lambdas that shadow any of 'lambdaInputs' are rejected.
 class AnySingleLambdaInputMatcher : public Matcher {
  public:
   AnySingleLambdaInputMatcher(
@@ -214,14 +217,18 @@ class SimpleComparisonChecker {
   ///
   /// Can be used to re-write generic lambda expressions passed to array_sort
   /// into simpler ones that can be evaluated more efficiently.
-  std::optional<SimpleComparison> isSimpleComparison(
-      const std::string& prefix,
-      const core::LambdaTypedExpr& expr);
-
+  ///
+  /// The transform may reference captured columns as long as both sides of
+  /// each comparison use the same transform. Non-deterministic transforms are
+  /// not recognized.
+  ///
+  /// @param supportsArbitraryComparatorResults If true, the comparator may
+  /// return any negative value, zero, and any positive value. Otherwise, only
+  /// -1, 0, and 1 are recognized.
   std::optional<SimpleComparison> isSimpleComparison(
       const std::string& prefix,
       const core::LambdaTypedExpr& expr,
-      bool supportsArbitraryComparatorResults);
+      bool supportsArbitraryComparatorResults = false);
 };
 
 } // namespace facebook::velox::functions

@@ -24,7 +24,6 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/tests/utils/CustomTypesForTesting.h"
 
 namespace facebook::velox::expression {
 namespace {
@@ -241,59 +240,15 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       "array_sort_desc(c0, x -> length(x))",
       type);
 
+  // Comparators returning INTEGER constants are rewritten.
   type = ROW({"c0"}, {ARRAY(BIGINT())});
   testExpression(
       "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0)",
+      "array_sort(c0, x -> x)",
       type);
   testExpression(
       "array_sort(c0, (x, y) -> if(x > y, (-1)::integer, if(x < y, 1::integer, 0::integer)))",
       "array_sort_desc(c0, x -> x)",
-      type);
-
-  type = ROW({"c0"}, {ARRAY(DOUBLE())});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type = ROW({"c0"}, {ARRAY(REAL())});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type = ROW({"c0"}, {ARRAY(ARRAY(DOUBLE()))});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type = ROW({"c0"}, {ARRAY(ROW({BIGINT(), DOUBLE()}))});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type = ROW({"c0"}, {ARRAY(test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type =
-      ROW({"c0"}, {ARRAY(ARRAY(test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()))});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
-      type);
-
-  type = ROW(
-      {"c0"},
-      {ARRAY(ROW({INTEGER(), test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()}))});
-  testExpression(
-      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
-      "array_sort(c0, x -> x)",
       type);
 
   testExpression(

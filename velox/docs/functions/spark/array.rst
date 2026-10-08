@@ -171,9 +171,11 @@ Array Functions
 .. spark:function:: array_sort(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
-    be orderable. NULL and NaN elements will be placed at the end of the returned array, with NaN elements appearing before NULL elements for floating-point types.
-    Elements that compare equal retain their original relative order.
-    NULL values nested inside arrays and rows are ordered first, matching Spark's natural ordering. ::
+    be orderable. NULL and NaN elements will be placed at the end of the returned array, with NaN
+    elements appearing before NULL elements for floating-point types.
+    Elements that compare equal, such as ``-0.0`` and ``0.0``, retain their original relative
+    order. NULL values nested inside arrays and rows are ordered first, matching Spark's natural
+    ordering. ::
 
         SELECT array_sort(array(1, 2, 3)); -- [1, 2, 3]
         SELECT array_sort(array(3, 2, 1)); -- [1, 2, 3]
@@ -188,24 +190,32 @@ Array Functions
 
     Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
     NULL and NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before NULL elements.
-    This function is not supported in Spark and is only used inside Velox for rewriting :spark:func:`array_sort(array(E), function(E,E,integer)) -> array(E)` as :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`. ::
+    This function is not supported in Spark and is only used inside Velox for rewriting
+    :spark:func:`array_sort(array(E), function(E,E,integer)) -> array(E)` as
+    :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`. ::
 
 .. spark:function:: array_sort(array(E), function(E,E,integer)) -> array(E)
     :noindex:
 
     Returns the array sorted using the specified comparator lambda.
     The function attempts to analyze the comparator and rewrite it into a simpler call that
-    specifies the sort-by expression (like :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown.
-    Comparator results may use any negative value, zero, and any positive value. Comparators based on
-    arithmetic differences, such as ``left - right``, are not rewritten because integer overflow can
-    change their ordering semantics. Elements whose rewritten sort keys compare equal retain their
-    original relative order, matching Spark's stable comparator sort.
+    specifies the sort-by expression (like
+    :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`). For example,
+    ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))``
+    will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error is thrown
+    when the expression is compiled.
+    Comparator results may use any negative value, zero, and any positive value. Comparators based
+    on arithmetic differences, such as ``left - right``, are not rewritten because integer overflow
+    can change their ordering semantics. Elements whose rewritten sort keys compare equal retain
+    their original relative order, matching Spark's stable comparator sort. ``E`` does not need to
+    be orderable as long as the sort key is orderable.
     Binary, timestamp-without-time-zone, and year-month interval values use their Spark physical
     ordering.
     Transform comparators may use equivalent nested ``if`` forms, equality-position variants, and
     captured fields shared by both sides of the comparison. The transform must be deterministic.
-    Comparator rewrites that produce a NULL sort key are rejected because ordering the NULL key
-    independently would not preserve Spark's pairwise comparator semantics. ::
+    If the rewritten sort key is NULL for any element of an array with two or more elements, a
+    user error is thrown at runtime, because ordering the NULL key independently would not
+    preserve Spark's pairwise comparator semantics. ::
 
         SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
 
@@ -346,7 +356,9 @@ Array Functions
 .. spark:function:: sort_array(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array. The elements of array must
-    be orderable. Null elements, including nulls nested inside complex values, will be ordered first. ::
+    be orderable. Null elements, including nulls nested inside complex values, will be ordered
+    first. Elements that compare equal, such as ``-0.0`` and ``0.0``, retain their original
+    relative order. ::
 
         SELECT sort_array(array(1, 2, 3)); -- [1, 2, 3]
         SELECT sort_array(array(NULL, 2, 1)); -- [NULL, 1, 2]
@@ -357,7 +369,8 @@ Array Functions
     Returns an array which has the sorted order of the input array. The elements of array must
     be orderable. Null elements will be placed at the beginning of the returned array in ascending
     order or at the end of the returned array in descending order. Nulls nested inside complex
-    values follow the same ordering. ::
+    values follow the same ordering. Elements that compare equal retain their original relative
+    order in both directions. ::
 
         SELECT sort_array(array(3, 2, 1), true); -- [1, 2, 3]
         SELECT sort_array(array(2, 1, NULL), true); -- [NULL, 1, 2]

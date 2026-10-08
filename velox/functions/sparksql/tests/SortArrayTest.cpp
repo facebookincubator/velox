@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 
@@ -24,6 +25,7 @@
 #include "velox/functions/sparksql/tests/ArraySortTestData.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::test;
 
@@ -74,6 +76,39 @@ class SortArrayTest : public SparkFunctionBaseTest {
         makeNullableArrayVector(expected),
         makeNullableArrayVector(reverseNested(expected)));
   }
+
+  // Spark sorts with a stable comparator that treats -0.0 and 0.0 as equal, so
+  // their original relative order is preserved in both directions.
+  template <typename T>
+  void testPreservesSignedZeroOrder() {
+    auto input = makeArrayVector<T>({{-0.0, 1.0, 0.0, -0.0}, {0.0, -0.0}});
+
+    auto verify = [&](const std::string& expr,
+                      const std::vector<T>& expectedValues,
+                      const std::vector<bool>& expectedSigns) {
+      SCOPED_TRACE(expr);
+      auto result = evaluate(expr, makeRowVector({input}));
+      auto* arrays = result->template as<ArrayVector>();
+      ASSERT_NE(arrays, nullptr);
+      DecodedVector decodedElements(*arrays->elements());
+      ASSERT_EQ(expectedSigns.size(), arrays->elements()->size());
+      for (vector_size_t i = 0; i < expectedSigns.size(); ++i) {
+        ASSERT_FALSE(decodedElements.isNullAt(i));
+        EXPECT_EQ(expectedValues[i], decodedElements.valueAt<T>(i));
+        EXPECT_EQ(
+            expectedSigns[i], std::signbit(decodedElements.valueAt<T>(i)));
+      }
+    };
+
+    verify(
+        "sort_array(c0)",
+        {-0.0, 0.0, -0.0, 1.0, 0.0, -0.0},
+        {true, false, true, false, false, true});
+    verify(
+        "sort_array(c0, false)",
+        {1.0, -0.0, 0.0, -0.0, 0.0, -0.0},
+        {false, true, false, true, false, true});
+  }
 };
 
 TEST_F(SortArrayTest, invalidInput) {
@@ -107,6 +142,11 @@ TEST_F(SortArrayTest, float) {
 
 TEST_F(SortArrayTest, double) {
   testFloatingPoint<double>();
+}
+
+TEST_F(SortArrayTest, preservesSignedZeroOrder) {
+  testPreservesSignedZeroOrder<float>();
+  testPreservesSignedZeroOrder<double>();
 }
 
 TEST_F(SortArrayTest, string) {

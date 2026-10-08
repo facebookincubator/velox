@@ -271,17 +271,8 @@ class ArraySortFunction : public exec::VectorFunction {
   /// and 'offsets' vectors that control where output arrays start and end
   /// remain the same in the output ArrayVector.
 
-  explicit ArraySortFunction(
-      bool ascending,
-      bool nullsFirst,
-      bool nestedNullsFirst,
-      bool throwOnNestedNull,
-      bool stable)
-      : ascending_{ascending},
-        nullsFirst_{nullsFirst},
-        nestedNullsFirst_{nestedNullsFirst},
-        throwOnNestedNull_{throwOnNestedNull},
-        stable_{stable} {}
+  explicit ArraySortFunction(const ArraySortOptions& options)
+      : options_{options} {}
 
   // Execute function.
   void apply(
@@ -323,16 +314,18 @@ class ArraySortFunction : public exec::VectorFunction {
     auto inputArray = arg->as<ArrayVector>();
     VectorPtr resultElements;
 
-    if (stable_) {
+    // The in-place scalar sort is not stable, so stable sorts use the
+    // index-based path.
+    if (options_.stable) {
       applyComplexType(
           rows,
           inputArray,
-          ascending_,
-          nullsFirst_,
-          nestedNullsFirst_,
+          options_.ascending,
+          options_.nullsFirst,
+          options_.nestedNullsFirst,
           context,
           resultElements,
-          throwOnNestedNull_,
+          options_.throwOnNestedNull,
           true /*stable*/);
     } else if constexpr (velox::TypeTraits<Kind>::isPrimitiveType) {
       VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -340,21 +333,20 @@ class ArraySortFunction : public exec::VectorFunction {
           Kind,
           rows,
           inputArray,
-          ascending_,
-          nullsFirst_,
+          options_.ascending,
+          options_.nullsFirst,
           context,
           resultElements);
-
     } else {
       applyComplexType(
           rows,
           inputArray,
-          ascending_,
-          nullsFirst_,
-          nestedNullsFirst_,
+          options_.ascending,
+          options_.nullsFirst,
+          options_.nestedNullsFirst,
           context,
           resultElements,
-          throwOnNestedNull_,
+          options_.throwOnNestedNull,
           false /*stable*/);
     }
 
@@ -369,24 +361,13 @@ class ArraySortFunction : public exec::VectorFunction {
         inputArray->getNullCount());
   }
 
-  const bool ascending_;
-  const bool nullsFirst_;
-  const bool nestedNullsFirst_;
-  const bool throwOnNestedNull_;
-  const bool stable_;
+  const ArraySortOptions options_;
 };
 
 class ArraySortLambdaFunction : public exec::VectorFunction {
  public:
-  explicit ArraySortLambdaFunction(
-      bool ascending,
-      bool throwOnNestedNull,
-      bool rejectNullSortKeys,
-      bool skipLambdaForTrivialArrays)
-      : ascending_{ascending},
-        throwOnNestedNull_{throwOnNestedNull},
-        rejectNullSortKeys_{rejectNullSortKeys},
-        skipLambdaForTrivialArrays_{skipLambdaForTrivialArrays} {}
+  explicit ArraySortLambdaFunction(const ArraySortLambdaOptions& options)
+      : options_{options} {}
 
   void apply(
       const SelectivityVector& rows,
@@ -403,7 +384,7 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
     auto numElements = flatArray->elements()->size();
     const std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
     SelectivityVector rowsToSort{rows};
-    if (skipLambdaForTrivialArrays_) {
+    if (options_.skipLambdaForTrivialArrays) {
       rows.applyToSelected([&](vector_size_t row) {
         if (flatArray->sizeAt(row) < 2) {
           rowsToSort.setValid(row, false);
@@ -437,13 +418,13 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
         rows,
         *flatArray,
         *newElements,
-        ascending_,
+        options_.ascending,
         false /*nullsFirst*/,
-        ascending_ /*nestedNullsFirst*/,
+        options_.ascending /*nestedNullsFirst*/,
         context,
-        throwOnNestedNull_,
+        options_.throwOnNestedNull,
         true /*stable*/,
-        rejectNullSortKeys_);
+        options_.rejectNullSortKeys);
     auto sortedElements = BaseVector::wrapInDictionary(
         nullptr,
         indices,
@@ -465,23 +446,15 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
   }
 
  private:
-  const bool ascending_;
-  const bool throwOnNestedNull_;
-  const bool rejectNullSortKeys_;
-  const bool skipLambdaForTrivialArrays_;
+  const ArraySortLambdaOptions options_;
 };
 
 // Create function template based on type.
 template <TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
     const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
-    bool ascending,
-    bool nullsFirst,
-    bool nestedNullsFirst,
-    bool throwOnNestedNull,
-    bool stable) {
-  return std::make_shared<ArraySortFunction<kind>>(
-      ascending, nullsFirst, nestedNullsFirst, throwOnNestedNull, stable);
+    const ArraySortOptions& options) {
+  return std::make_shared<ArraySortFunction<kind>>(options);
 }
 
 // Define function signature.
@@ -537,11 +510,10 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAscNoThrowOnNestedNull(
       name,
       inputArgs,
       config,
-      true,
-      false /*nullsFirst=*/,
-      false /*nestedNullsFirst=*/,
-      false /*throwOnNestedNull=*/,
-      false /*stable=*/);
+      {.ascending = true,
+       .nullsFirst = false,
+       .nestedNullsFirst = false,
+       .throwOnNestedNull = false});
 }
 
 core::CallTypedExprPtr asArraySortCall(
@@ -555,23 +527,16 @@ core::CallTypedExprPtr asArraySortCall(
   return nullptr;
 }
 
-bool isIdentityTransform(
-    const core::TypedExprPtr& expr,
-    const core::LambdaTypedExpr& lambda) {
-  const auto field =
-      std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr);
-  return field != nullptr && field->isInputColumn() &&
-      field->name() == lambda.signature()->nameOf(0);
-}
-
-bool requiresStableIdentitySort(const TypePtr& type) {
+// Returns true if values of 'type' can compare equal while remaining
+// distinguishable, e.g. -0.0 and 0.0, so that sort stability is observable.
+bool hasDistinguishableEqualValues(const TypePtr& type) {
   if (type->providesCustomComparison() || type->kind() == TypeKind::REAL ||
       type->kind() == TypeKind::DOUBLE) {
     return true;
   }
 
   for (auto i = 0; i < type->size(); ++i) {
-    if (requiresStableIdentitySort(type->childAt(i))) {
+    if (hasDistinguishableEqualValues(type->childAt(i))) {
       return true;
     }
   }
@@ -590,43 +555,16 @@ std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
       name,
       inputArgs,
       config,
-      ascending,
-      throwOnNestedNull,
-      false /*rejectNullSortKeys*/,
-      false /*skipLambdaForTrivialArrays*/);
-}
-
-std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
-    const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config,
-    bool ascending,
-    bool throwOnNestedNull,
-    bool rejectNullSortKeys) {
-  return makeArraySortLambdaFunction(
-      name,
-      inputArgs,
-      config,
-      ascending,
-      throwOnNestedNull,
-      rejectNullSortKeys,
-      false /*skipLambdaForTrivialArrays*/);
+      {.ascending = ascending, .throwOnNestedNull = throwOnNestedNull});
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
     const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/,
-    bool ascending,
-    bool throwOnNestedNull,
-    bool rejectNullSortKeys,
-    bool skipLambdaForTrivialArrays) {
+    const ArraySortLambdaOptions& options) {
   VELOX_CHECK_EQ(inputArgs.size(), 2);
-  return std::make_shared<ArraySortLambdaFunction>(
-      ascending,
-      throwOnNestedNull,
-      rejectNullSortKeys,
-      skipLambdaForTrivialArrays);
+  return std::make_shared<ArraySortLambdaFunction>(options);
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySort(
@@ -640,61 +578,30 @@ std::shared_ptr<exec::VectorFunction> makeArraySort(
       name,
       inputArgs,
       config,
-      ascending,
-      nullsFirst,
-      nullsFirst,
-      throwOnNestedNull,
-      false /*stable*/);
-}
-
-std::shared_ptr<exec::VectorFunction> makeArraySort(
-    const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config,
-    bool ascending,
-    bool nullsFirst,
-    bool nestedNullsFirst,
-    bool throwOnNestedNull) {
-  return makeArraySort(
-      name,
-      inputArgs,
-      config,
-      ascending,
-      nullsFirst,
-      nestedNullsFirst,
-      throwOnNestedNull,
-      false /*stable*/);
+      {.ascending = ascending,
+       .nullsFirst = nullsFirst,
+       .nestedNullsFirst = nullsFirst,
+       .throwOnNestedNull = throwOnNestedNull});
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySort(
     const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/,
-    bool ascending,
-    bool nullsFirst,
-    bool nestedNullsFirst,
-    bool throwOnNestedNull,
-    bool stable) {
+    const ArraySortOptions& options) {
   const auto elementType = inputArgs.front().type->childAt(0);
   if (elementType->isUnknown()) {
-    return createTyped<TypeKind::UNKNOWN>(
-        inputArgs,
-        ascending,
-        nullsFirst,
-        nestedNullsFirst,
-        throwOnNestedNull,
-        stable);
+    return createTyped<TypeKind::UNKNOWN>(inputArgs, options);
   }
 
+  // Stability is only observable when equal values are distinguishable. Other
+  // types keep the faster unstable sort.
+  auto effectiveOptions = options;
+  effectiveOptions.stable =
+      options.stable && hasDistinguishableEqualValues(elementType);
+
   return VELOX_DYNAMIC_TYPE_DISPATCH(
-      createTyped,
-      elementType->kind(),
-      inputArgs,
-      ascending,
-      nullsFirst,
-      nestedNullsFirst,
-      throwOnNestedNull,
-      stable);
+      createTyped, elementType->kind(), inputArgs, effectiveOptions);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> arraySortSignatures(
@@ -706,28 +613,14 @@ core::TypedExprPtr rewriteArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr,
     const std::shared_ptr<SimpleComparisonChecker> checker) {
-  return rewriteArraySortCall(prefix, expr, checker, false);
+  return rewriteArraySortCall(prefix, expr, checker, ArraySortRewriteOptions{});
 }
 
 core::TypedExprPtr rewriteArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr,
     const std::shared_ptr<SimpleComparisonChecker> checker,
-    bool supportsArbitraryComparatorResults) {
-  return rewriteArraySortCall(
-      prefix,
-      expr,
-      checker,
-      supportsArbitraryComparatorResults,
-      false /*rejectNullSortKeys*/);
-}
-
-core::TypedExprPtr rewriteArraySortCall(
-    const std::string& prefix,
-    const core::TypedExprPtr& expr,
-    const std::shared_ptr<SimpleComparisonChecker> checker,
-    bool supportsArbitraryComparatorResults,
-    bool rejectNullSortKeys) {
+    const ArraySortRewriteOptions& options) {
   auto call = asArraySortCall(prefix, expr);
   if (call == nullptr || call->inputs().size() != 2) {
     return nullptr;
@@ -745,9 +638,9 @@ core::TypedExprPtr rewriteArraySortCall(
       "into a transform is not supported: {}";
 
   if (auto comparison = checker->isSimpleComparison(
-          prefix, *lambda, supportsArbitraryComparatorResults)) {
+          prefix, *lambda, options.supportsArbitraryComparatorResults)) {
     std::string name;
-    if (rejectNullSortKeys) {
+    if (options.rejectNullSortKeys) {
       name = comparison->isLessThen
           ? prefix + "$internal$array_sort_comparator"
           : prefix + "$internal$array_sort_comparator_desc";
@@ -758,13 +651,6 @@ core::TypedExprPtr rewriteArraySortCall(
 
     if (!comparison->expr->type()->isOrderable()) {
       VELOX_USER_FAIL(kNotSupported, lambda->toString());
-    }
-
-    if (!rejectNullSortKeys && comparison->isLessThen &&
-        !requiresStableIdentitySort(comparison->expr->type()) &&
-        isIdentityTransform(comparison->expr, *lambda)) {
-      return std::make_shared<core::CallTypedExpr>(
-          call->type(), name, call->inputs()[0]);
     }
 
     auto rewritten = std::make_shared<core::CallTypedExpr>(

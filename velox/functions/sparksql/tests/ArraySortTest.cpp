@@ -74,7 +74,7 @@ class ArraySortTest : public SparkFunctionBaseTest {
         fmt::format("{}(c0, {})", name, lamdaExpr),
         makeRowVector({input}),
         firstRow);
-    assertEqualVectors(expected->slice(0, 1), result);
+    assertEqualVectors(expected, result, firstRow);
   }
 
   template <typename T>
@@ -630,6 +630,38 @@ TEST_F(ArraySortTest, comparatorEncodings) {
       makeRowVector({constantInput}));
   assertEqualVectors(
       makeNullableArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}}),
+      result);
+}
+
+// Comparator rewrites order elements by the sort key, so the elements do not
+// need to be orderable.
+TEST_F(ArraySortTest, comparatorNonOrderableElements) {
+  using Map = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
+  using MapArrays = std::vector<std::vector<Map>>;
+  auto input = makeArrayOfMapVector<int32_t, int32_t>(MapArrays{
+      {Map{{1, 10}, {2, 20}}, Map{{3, 30}}, Map{}, Map{{5, 50}}},
+  });
+
+  auto result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(size(x, false), size(y, false)), -1, "
+      "if(greaterthan(size(x, false), size(y, false)), 1, 0)))",
+      makeRowVector({input}));
+  assertEqualVectors(
+      makeArrayOfMapVector<int32_t, int32_t>(MapArrays{
+          {Map{}, Map{{3, 30}}, Map{{5, 50}}, Map{{1, 10}, {2, 20}}},
+      }),
+      result);
+
+  result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(size(x, false), size(y, false)), 1, "
+      "if(greaterthan(size(x, false), size(y, false)), -1, 0)))",
+      makeRowVector({input}));
+  assertEqualVectors(
+      makeArrayOfMapVector<int32_t, int32_t>(MapArrays{
+          {Map{{1, 10}, {2, 20}}, Map{{3, 30}}, Map{{5, 50}}, Map{}},
+      }),
       result);
 }
 
