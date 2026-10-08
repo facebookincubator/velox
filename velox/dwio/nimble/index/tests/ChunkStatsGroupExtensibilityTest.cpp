@@ -19,6 +19,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 
 namespace facebook::nimble::index::test {
@@ -69,6 +71,17 @@ TEST(ChunkStatsGroupExtensibilityTest, dispatchesThroughBaseTypes) {
   EXPECT_EQ(location.rowOffset, 17);
   EXPECT_EQ(stream->chunkNullCount(29), 30);
   EXPECT_EQ(stream->rowCount(), 19);
+}
+
+TEST(ChunkStatsGroupExtensibilityTest, chunkIterationDefaultsToUnsupported) {
+  TestStreamIndex stream;
+
+  NIMBLE_ASSERT_THROW(stream.chunkRange(), "Chunk iteration is not supported");
+  NIMBLE_ASSERT_THROW(
+      stream.chunkEndRow(0), "Chunk iteration is not supported");
+  EXPECT_EQ(stream.chunkMinValue(0), std::nullopt);
+  EXPECT_EQ(stream.chunkMaxValue(0), std::nullopt);
+  EXPECT_EQ(stream.chunkBounds(0), std::nullopt);
 }
 
 } // namespace

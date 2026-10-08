@@ -269,6 +269,9 @@ class Config : public velox::config::ConfigBase {
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
 
+  /// Maps to WriterOptions::enableStreamChecksums.
+  static Entry<bool> ENABLE_STREAM_CHECKSUMS;
+
   static constexpr const char* kNimbleWriteTargetRawStripeSize =
       "nimble_write_target_raw_stripe_size";
 

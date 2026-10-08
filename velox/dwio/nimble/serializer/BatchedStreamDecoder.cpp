@@ -112,15 +112,15 @@ inline void markEmptyScatteredOutputNulls(
 } // namespace
 
 BatchedStreamDecoder::BatchedStreamDecoder(
-    const Type* type,
+    const Type& type,
     bool isInMapStream,
     size_t bufferPoolCapacity,
     velox::memory::MemoryPool* pool)
-    : type_{type},
+    : typeKind_{type.kind()},
       pool_{pool},
       isInMapStream_{isInMapStream},
-      scalarKind_{getScalarKindForType(*type)},
-      typeStorageWidth_{getTypeStorageWidth(*type)},
+      scalarKind_{getScalarKindForType(type)},
+      typeStorageWidth_{getTypeStorageWidth(type)},
       bufferPool_{
           bufferPoolCapacity > 0
               ? std::make_unique<velox::BufferPool>(bufferPoolCapacity)
@@ -188,7 +188,8 @@ void BatchedStreamDecoder::skip(uint32_t count) {
   // Nothing decoded → nothing to advance; just bump the cursor.
   if (FOLLY_UNLIKELY(!isInMapStream() && streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
+        typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
+            typeKind_ == Kind::HybridFlatMap,
         "Empty streamSegments_ only valid for complex-type null streams");
     currentRow_ += count;
     return;
@@ -225,6 +226,22 @@ void BatchedStreamDecoder::clear() {
 
 const Encoding* BatchedStreamDecoder::encoding() const {
   NIMBLE_UNREACHABLE("unexpected call");
+}
+
+uint32_t BatchedStreamDecoder::remainingRows() {
+  if (streamSegmentIndex_ >= streamSegments_.size()) {
+    return 0;
+  }
+  NIMBLE_CHECK(
+      !streamSegments_[streamSegmentIndex_].legacyHeaderless,
+      "remainingRows is not supported for legacy headerless streams");
+  auto& streamData = ensureStreamData(skipStringBuffers_);
+  NIMBLE_CHECK(
+      streamData.hasEncoding(),
+      "remainingRows requires an encoded stream segment");
+  const auto rowCount = streamData.remainingRows();
+  NIMBLE_CHECK_GT(rowCount, 0, "Stream segment has no rows");
+  return rowCount;
 }
 
 serde::StreamData& BatchedStreamDecoder::ensureStreamData(
@@ -424,9 +441,10 @@ uint32_t BatchedStreamDecoder::denseRead(
   const auto width = typeStorageWidth_;
   if (FOLLY_UNLIKELY(streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
+        typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
+            typeKind_ == Kind::HybridFlatMap,
         "streamSegments_ is empty for unexpected stream type={}",
-        type_->kind());
+        typeKind_);
     NIMBLE_CHECK_EQ(
         width, sizeof(bool), "Complex-type null stream should be bool");
     // All-non-null complex-type null streams are omitted on the wire and
@@ -491,7 +509,7 @@ uint32_t BatchedStreamDecoder::denseRead(
       rowsRead,
       count,
       "Incomplete read: typeKind={} inMap={} segments={} streamSegmentIndex={}",
-      toString(type_->kind()),
+      toString(typeKind_),
       isInMapStream_,
       streamSegments_.size(),
       streamSegmentIndex_);
@@ -565,7 +583,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
     const velox::bits::Bitmap* scatterOutputBitmap,
     std::vector<velox::BufferPtr>& stringBuffers) {
   NIMBLE_CHECK(
-      !type_->isFlatMap(),
+      typeKind_ != Kind::FlatMap,
       "scatterOutputBitmap not used for FlatMap null streams");
 
   const auto outputSize = scatterOutputBitmap->size();
@@ -633,7 +651,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
       rowsRead,
       count,
       "Incomplete scattered read: typeKind={} segments={} streamSegmentIndex={}",
-      toString(type_->kind()),
+      toString(typeKind_),
       streamSegments_.size(),
       streamSegmentIndex_);
   return nonNullCount;

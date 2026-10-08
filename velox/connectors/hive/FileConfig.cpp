@@ -33,7 +33,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleIntegerDictionaryAwareFilteringSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
     VELOX_HIVE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
     VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
@@ -47,7 +47,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kPinIndexSession);
     VELOX_HIVE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kDirectBufferedInputSharedAllocationSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
     VELOX_HIVE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampUnitSession);
