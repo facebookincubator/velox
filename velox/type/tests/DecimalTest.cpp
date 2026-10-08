@@ -696,7 +696,10 @@ TEST(DecimalTest, castFromString) {
   testCastFromString<int64_t>(
       {"4.5e-2", "0.045", "5e-2", "0.05"}, 10, 1, {0, 0, 1, 1});
   testCastFromString<int64_t>(
-      {"0.0000000000000000000000000000000000000001e40"}, 10, 2, {100});
+      std::vector<std::string>{"0.0000000000000000000000000000000000000001e40"},
+      10,
+      2,
+      std::vector<int64_t>{100});
 
   const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
   const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
