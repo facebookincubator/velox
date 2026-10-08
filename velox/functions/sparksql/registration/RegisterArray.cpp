@@ -263,11 +263,11 @@ void registerArrayFunctions(const std::string& prefix) {
       prefix + "array_sort_desc", arraySortDescSignatures(), makeArraySortDesc);
   exec::registerStatefulVectorFunction(
       prefix + "$internal$array_sort_comparator",
-      arraySortDescSignatures(),
+      arraySortComparatorSignatures(),
       makeArraySortComparatorAsc);
   exec::registerStatefulVectorFunction(
       prefix + "$internal$array_sort_comparator_desc",
-      arraySortDescSignatures(),
+      arraySortComparatorSignatures(),
       makeArraySortComparatorDesc);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
@@ -279,8 +279,8 @@ void registerArrayFunctions(const std::string& prefix) {
             prefix,
             expr,
             checker,
-            true /*supportsArbitraryComparatorResults*/,
-            true /*rejectNullSortKeys*/);
+            {.supportsArbitraryComparatorResults = true,
+             .rejectNullSortKeys = true});
       });
   exec::registerStatefulVectorFunction(
       prefix + "array_repeat",

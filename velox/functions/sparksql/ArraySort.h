@@ -54,6 +54,12 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
     const core::QueryConfig& config);
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> arraySortDescSignatures();
+
+/// Signatures for the internal comparator sort functions. Unlike
+/// array_sort_desc, the element type does not need to be orderable because
+/// elements are ordered by the rewritten sort key.
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arraySortComparatorSignatures();
 std::vector<std::shared_ptr<exec::FunctionSignature>> sortArraySignatures();
 
 } // namespace facebook::velox::functions::sparksql
