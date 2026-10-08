@@ -79,10 +79,6 @@ class IntegralRoundTest : public SparkFunctionBaseTest,
       assertEqualVectors(values, evaluate(expression, input));
     }
     assertEqualVectors(
-        makeNullableFlatVector<T>({0, 0, 0, 0, 0, std::nullopt}),
-        evaluate("round(c0, cast(-2147483648 as integer))", input));
-
-    assertEqualVectors(
         makeNullableFlatVector<T>({30, 0, std::nullopt, std::nullopt, 25}),
         evaluate(
             "round(c0, c1)",
@@ -99,6 +95,24 @@ class IntegralRoundTest : public SparkFunctionBaseTest,
              std::nullopt,
              std::nullopt}),
         evaluate("round(c0, cast(null as integer))", input));
+  }
+
+  template <typename T>
+  void checkMinimumScale() {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<T>(
+             {std::numeric_limits<T>::min(),
+              std::numeric_limits<T>::max(),
+              -25,
+              0,
+              25,
+              std::nullopt}),
+         makeFlatVector<int32_t>(
+             6, [](auto) { return std::numeric_limits<int32_t>::min(); })});
+    auto expected = makeNullableFlatVector<T>({0, 0, 0, 0, 0, std::nullopt});
+    assertEqualVectors(
+        expected, evaluate("round(c0, cast(-2147483648 as integer))", input));
+    assertEqualVectors(expected, evaluate("round(c0, c1)", input));
   }
 
   template <typename T>
@@ -120,6 +134,13 @@ TEST_P(IntegralRoundTest, halfUpAndIdentity) {
   checkCommon<int16_t>();
   checkCommon<int32_t>();
   checkCommon<int64_t>();
+}
+
+TEST_P(IntegralRoundTest, int32MinScale) {
+  checkMinimumScale<int8_t>();
+  checkMinimumScale<int16_t>();
+  checkMinimumScale<int32_t>();
+  checkMinimumScale<int64_t>();
 }
 
 TEST_P(IntegralRoundTest, narrowOverflow) {
