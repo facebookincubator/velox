@@ -906,6 +906,7 @@ void exportValues(
         out.null_count,
         out.length,
         "Missing values buffer is only supported for all-null vectors.");
+    std::memset(values->asMutable<uint8_t>(), 0, values->size());
   } else if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (

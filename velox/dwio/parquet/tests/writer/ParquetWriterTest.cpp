@@ -1980,10 +1980,8 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   const int64_t kRows = 100;
 
-  // Create a nulls buffer with all bits set to null (0).
-  BufferPtr nulls = AlignedBuffer::allocate<bool>(kRows, leafPool_.get());
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  bits::fillBits(rawNulls, 0, kRows, bits::kNull);
+  // Share an all-null bitmap across every column.
+  BufferPtr nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
 
   auto vector = std::make_shared<RowVector>(
       leafPool_.get(),

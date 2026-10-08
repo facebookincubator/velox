@@ -23,6 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -877,13 +878,41 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
   EXPECT_EQ(values.Value(3), 5);
 }
 
-TEST_F(ArrowBridgeArrayExportTest, arrayGapWithAllNullTimestampValues) {
-  constexpr vector_size_t kElementCount = 5;
-  auto nulls = AlignedBuffer::allocate<bool>(kElementCount, pool_.get());
-  bits::fillBits(nulls->asMutable<uint64_t>(), 0, kElementCount, bits::kNull);
-  auto elements = std::make_shared<FlatVector<Timestamp>>(
+TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
+  constexpr vector_size_t kSize = 5;
+  auto nulls = allocateNulls(kSize, pool_.get(), bits::kNull);
+  auto vec = std::make_shared<FlatVector<Timestamp>>(
       pool_.get(),
       TIMESTAMP(),
+      nulls,
+      kSize,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_NE(nullptr, data.buffers[1]);
+  const auto* rawValues = static_cast<const int64_t*>(data.buffers[1]);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->length(), kSize);
+  EXPECT_EQ(array->null_count(), kSize);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
+  constexpr vector_size_t kElementCount = 5;
+  auto nulls = allocateNulls(kElementCount, pool_.get(), bits::kNull);
+  auto elements = std::make_shared<FlatVector<int64_t>>(
+      pool_.get(),
+      BIGINT(),
       nulls,
       kElementCount,
       /*values=*/nullptr,
@@ -892,7 +921,7 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapWithAllNullTimestampValues) {
   auto offsets = makeBuffer<vector_size_t>({0, 3});
   auto sizes = makeBuffer<vector_size_t>({2, 2});
   auto vec = std::make_shared<ArrayVector>(
-      pool_.get(), ARRAY(TIMESTAMP()), nullptr, 2, offsets, sizes, elements);
+      pool_.get(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
 
   ArrowSchema schema;
   ArrowArray data;
@@ -901,28 +930,22 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapWithAllNullTimestampValues) {
 
   ASSERT_EQ(1, data.n_children);
   ASSERT_NE(nullptr, data.children[0]);
-  EXPECT_NE(nullptr, data.children[0]->buffers[1]);
+  ASSERT_NE(nullptr, data.children[0]->buffers[1]);
+  const auto* rawValues =
+      static_cast<const int64_t*>(data.children[0]->buffers[1]);
+  for (vector_size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
 
   ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
   ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
   ASSERT_OK(array->ValidateFull());
-}
-
-TEST_F(ArrowBridgeArrayExportTest, missingValuesWithNonNulls) {
-  constexpr vector_size_t kSize = 2;
-  auto nulls = AlignedBuffer::allocate<bool>(kSize, pool_.get());
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  bits::fillBits(rawNulls, 0, kSize, bits::kNotNull);
-  bits::setNull(rawNulls, 0);
-  EXPECT_THROW(
-      std::make_shared<FlatVector<int64_t>>(
-          pool_.get(),
-          BIGINT(),
-          nulls,
-          kSize,
-          /*values=*/nullptr,
-          std::vector<BufferPtr>{}),
-      VeloxRuntimeError);
+  ASSERT_EQ(*array->type(), *arrow::list(arrow::int64()));
+  const auto& listArray = static_cast<const arrow::ListArray&>(*array);
+  const auto& values =
+      static_cast<const arrow::Int64Array&>(*listArray.values());
+  EXPECT_EQ(values.length(), 4);
+  EXPECT_EQ(values.null_count(), 4);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
