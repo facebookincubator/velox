@@ -26,24 +26,6 @@ namespace {
 constexpr vector_size_t kToStringMaxFlatMapElements = 5;
 constexpr std::string_view kToStringDelimiter{", "};
 
-template <typename T>
-std::optional<column_index_t> getKeyChannelImpl(
-    const VectorPtr& distinctKeys,
-    const detail::FlatMapKeyIndex& keyIndex,
-    T keyValue) {
-  auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
-  VELOX_CHECK(
-      simpleKeys != nullptr,
-      "Incompatible vector type for flat map vector keys: {}",
-      distinctKeys->toString());
-
-  return keyIndex.find(
-      folly::hasher<T>{}(keyValue), [&](column_index_t channel) {
-        return simpleKeys->valueAt(static_cast<vector_size_t>(channel)) ==
-            keyValue;
-      });
-}
-
 } // namespace
 
 FlatMapVector::FlatMapVector(
@@ -137,34 +119,30 @@ void FlatMapVector::appendDistinctKey(
 
   // An index that is not built yet picks up the new key when it is built.
   if (keyIndex_->has_value()) {
-    keyIndex_->value().add(distinctKeys_->hashValueAt(targetChannel));
+    keyIndex_->value().appendLast(*distinctKeys_);
   }
   sortedKeys_ = false;
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int32_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int64_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     StringView scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyIndex(), scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     const VectorPtr& keysVector,
     vector_size_t index) const {
-  return keyIndex().find(
-      keysVector->hashValueAt(index), [&](column_index_t channel) {
-        return keysVector->equalValueAt(
-            distinctKeys_.get(), index, static_cast<vector_size_t>(channel));
-      });
+  return keyIndex().find(*distinctKeys_, *keysVector, index);
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
