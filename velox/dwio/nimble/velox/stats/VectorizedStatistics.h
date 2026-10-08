@@ -120,9 +120,22 @@ using DeduplicatedVectorizedStatistics = TypedVectorizedStatistic<uint64_t>;
 
 class VectorizedFileStats {
  public:
-  explicit VectorizedFileStats(
+  /// Options for building file and stripe vectorized statistics.
+  struct Options {
+    /// Longest string min/max, in bytes, kept in vectorized stats. Longer
+    /// values are written as absent, matching the DWRF writer's default limit.
+    uint32_t stringStatsLengthLimit{64};
+  };
+
+  VectorizedFileStats(
       const std::vector<ColumnStatistics*>& columnStats,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool)
+      : VectorizedFileStats(columnStats, pool, Options{}) {}
+
+  VectorizedFileStats(
+      const std::vector<ColumnStatistics*>& columnStats,
+      velox::memory::MemoryPool* pool,
+      Options options);
 
   std::string_view serialize(nimble::Buffer& buffer);
 
@@ -156,6 +169,8 @@ class VectorizedFileStats {
       std::string_view payload,
       velox::memory::MemoryPool& pool);
 
+  // Options applied when constructing the vectorized statistics streams.
+  Options options_;
   std::set<StatType> statTypes_;
   std::map<StatStreamType, std::unique_ptr<VectorizedStatistic>> statStreams_;
   EncodingSelectionPolicyCreator encodingSelectionPolicyCreator_ =
@@ -174,7 +189,17 @@ class VectorizedStripeStats {
   VectorizedStripeStats(
       const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
           stripeStats,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool)
+      : VectorizedStripeStats(
+            stripeStats,
+            pool,
+            VectorizedFileStats::Options{}) {}
+
+  VectorizedStripeStats(
+      const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+          stripeStats,
+      velox::memory::MemoryPool* pool,
+      VectorizedFileStats::Options options);
 
   std::string_view serialize(nimble::Buffer& buffer);
 

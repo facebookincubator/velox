@@ -2029,9 +2029,11 @@ class FlatMapFieldWriter : public FieldWriter {
 template <velox::TypeKind K>
 class HybridFlatMapFieldWriter : public FieldWriter {
   using KeyType = typename velox::TypeTraits<K>::NativeType;
+
+  // Keys live in the type builder so the schema catalog and key-presence
+  // bitmaps share one order.
   struct Group {
     uint32_t groupId{};
-    std::vector<std::string> groupKeys;
     ContentStreamData<bool>& keyPresenceStream;
     ContentStreamData<bool>& inMapStream;
     std::unique_ptr<FieldWriter> valueWriter;
@@ -2199,7 +2201,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     // Each group owns a complete value subtree; the schema node carries its
     // key-presence and in-map descriptors.
     const auto addGroup = [&](uint32_t groupId,
-                              std::vector<std::string> groupKeys) -> Group& {
+                              std::vector<std::string> groupKeys) {
       auto valueWriter = FieldWriter::create(context_, valueType_);
       const auto descriptors = hybridTypeBuilder.addGroup(
           groupId, std::move(groupKeys), valueWriter->typeBuilder());
@@ -2212,10 +2214,9 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       keyPresenceStream.disableChunking();
       inMapStream.disableChunking();
 
-      return groups_.emplace_back(
+      groups_.emplace_back(
           Group{
               .groupId = groupId,
-              .groupKeys = {},
               .keyPresenceStream = keyPresenceStream,
               .inMapStream = inMapStream,
               .valueWriter = std::move(valueWriter),
@@ -2228,19 +2229,24 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       const auto groupIndex = groups_.size();
       const bool isDefault =
           configuredGroup.groupId == HybridFlatMap::kDefaultGroupId;
-      auto& group =
-          addGroup(configuredGroup.groupId, configuredGroup.groupKeys);
+      NIMBLE_USER_CHECK(
+          !isDefault || configuredGroup.groupKeys.empty(),
+          "Hybrid FlatMap Default group keys are appended in first-seen "
+          "order and cannot be configured for node {}.",
+          nodeId_);
+      addGroup(configuredGroup.groupId, configuredGroup.groupKeys);
       if (isDefault) {
-        NIMBLE_CHECK(configuredGroup.groupKeys.empty());
         defaultGroupIndex_ = groupIndex;
-      } else {
-        for (const auto& key : configuredGroup.groupKeys) {
-          const bool uniqueKey = groupByKey_.emplace(key, groupIndex).second;
-          NIMBLE_CHECK(uniqueKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-        }
+        continue;
       }
-      group.groupKeys = configuredGroup.groupKeys;
+      for (const auto& key : configuredGroup.groupKeys) {
+        const bool uniqueKey = groupByKey_.emplace(key, groupIndex).second;
+        NIMBLE_CHECK(uniqueKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
+      }
     }
+
+    // ingestMap() reads group i's keys from type builder group i.
+    NIMBLE_CHECK_EQ(hybridTypeBuilder.groupCount(), groups_.size());
 
     NIMBLE_USER_CHECK(
         defaultGroupIndex_.has_value(),
@@ -2261,11 +2267,8 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       NIMBLE_CHECK(
           defaultGroupIndex_.has_value(),
           "Hybrid FlatMap Default group is not initialized.");
-      const auto defaultGroupIndex = *defaultGroupIndex_;
-      auto& defaultGroup = groups_[defaultGroupIndex];
-      defaultGroup.groupKeys.push_back(key);
       typeBuilder_->asHybridFlatMap().appendDefaultGroupKey(key);
-      group = groupByKey_.emplace(key, defaultGroupIndex).first;
+      group = groupByKey_.emplace(key, *defaultGroupIndex_).first;
     }
     const auto groupIndex = group->second;
     batch->second.groupIndex = groupIndex;
@@ -2394,10 +2397,12 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     NIMBLE_CHECK(
         defaultGroupIndex_.has_value(),
         "Hybrid FlatMap Default group is not initialized.");
+    const auto& hybridTypeBuilder = typeBuilder_->asHybridFlatMap();
     for (size_t groupIndex = 0; groupIndex < groups_.size(); ++groupIndex) {
       auto& group = groups_[groupIndex];
-      const bool hasPresentKey = std::any_of(
-          group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
+      const auto& groupKeys = hybridTypeBuilder.groupAt(groupIndex).groupKeys;
+      const bool hasPresentKey =
+          std::any_of(groupKeys.begin(), groupKeys.end(), [&](const auto& key) {
             return batches.contains(key);
           });
       if (!hasPresentKey) {
@@ -2405,7 +2410,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       }
       std::vector<velox::vector_size_t> groupValueIndices;
       auto& keyPresence = group.keyPresenceStream.mutableData();
-      for (const auto& key : group.groupKeys) {
+      for (const auto& key : groupKeys) {
         const auto batchIt = batches.find(key);
         const bool keyPresent = batchIt != batches.end();
         keyPresence.push_back(keyPresent);

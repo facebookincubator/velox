@@ -443,6 +443,93 @@ TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
   assertEqualVectors(source, target);
 }
 
+TEST_F(FlatMapVectorTest, copyRangesKeepsKeysOutsideRanges) {
+  // Target key 4 has no in-map buffer, so it is in both rows.  The source
+  // lacks key 4, so copying source row 0 removes it from target row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({40, 41})},
+      std::vector<BufferPtr>{nullptr});
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{4, 41}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesKeepsSharedKeysOutsideRanges) {
+  // Key 1 has no in-map buffer in the target, so it is in both rows.  In the
+  // source it is only in row 1, so copying source row 0 removes it from target
+  // row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+  auto sourceInMap = AlignedBuffer::allocate<bool>(2, pool_.get(), false);
+  bits::setBit(sourceInMap->asMutable<uint64_t>(), 1);
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({100, 101})},
+      std::vector<BufferPtr>{sourceInMap});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesClearsTargetNulls) {
+  auto target = maker_.flatMapVectorNullable<int32_t, int32_t>({
+      std::nullopt,
+      {{{1, 11}}},
+  });
+  auto source = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 101}},
+  });
+  ASSERT_FALSE(source->mayHaveNulls());
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
 struct MockBufferViewReleaser {
   void addRef() {}
   void release() {}
@@ -854,6 +941,73 @@ TEST_F(FlatMapVectorTest, slice) {
   EXPECT_EQ(slicedVector->compare(vector.get(), 2, 3), 0);
 
   EXPECT_NE(slicedVector->compare(vector.get(), 0, 0), 0);
+}
+
+TEST_F(FlatMapVectorTest, shareKeyIndex) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({"{1:10, 2:20}"});
+  EXPECT_TRUE(
+      vector->slice(0, 1)->as<FlatMapVector>()->testingSharesKeyIndex(*vector));
+
+  auto sameKeys = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      vector->type(),
+      nullptr,
+      vector->size(),
+      vector->distinctKeys(),
+      vector->mapValues(),
+      vector->inMaps());
+  EXPECT_FALSE(sameKeys->testingSharesKeyIndex(*vector));
+  sameKeys->shareKeyIndex(*vector);
+  EXPECT_TRUE(sameKeys->testingSharesKeyIndex(*vector));
+
+  // Equal keys in a different vector are not enough.
+  auto equalKeys =
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{1:10, 2:20}"});
+  equalKeys->shareKeyIndex(*vector);
+  EXPECT_FALSE(equalKeys->testingSharesKeyIndex(*vector));
+}
+
+TEST_F(FlatMapVectorTest, appendKeyAfterSlice) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20}",
+      "{1:11}",
+  });
+  const auto channel = vector->getKeyChannel(int64_t{2});
+  ASSERT_TRUE(channel.has_value());
+
+  auto slice = vector->slice(0, 1);
+  auto* slicedVector = slice->as<FlatMapVector>();
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{2}), channel);
+
+  // Appending a key to the original must leave the slice's keys unchanged.
+  vector->ensureWritable(SelectivityVector(vector->size()));
+  auto source = makeFlatMapVectorFromJson<int64_t, int32_t>({"{3:30}"});
+  std::vector<BaseVector::CopyRange> ranges = {{0, 1, 1}};
+  vector->copyRanges(source.get(), ranges);
+
+  EXPECT_TRUE(vector->getKeyChannel(int64_t{3}).has_value());
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{3}), std::nullopt);
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{2}), channel);
+  EXPECT_EQ(slicedVector->numDistinctKeys(), 2);
+}
+
+TEST_F(FlatMapVectorTest, appendKeyAfterSliceBeforeLookup) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20}",
+      "{1:11}",
+  });
+  auto slice = vector->slice(0, 1);
+  auto* slicedVector = slice->as<FlatMapVector>();
+
+  // Append to the original before either vector has looked up a key.
+  vector->ensureWritable(SelectivityVector(vector->size()));
+  auto source = makeFlatMapVectorFromJson<int64_t, int32_t>({"{3:30}"});
+  vector->appendDistinctKey(source->distinctKeys(), 0);
+
+  // The slice looks up first, which must not decide the original's index.
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{3}), std::nullopt);
+  EXPECT_TRUE(vector->getKeyChannel(int64_t{3}).has_value());
+  EXPECT_TRUE(slicedVector->getKeyChannel(int64_t{2}).has_value());
 }
 
 TEST_F(FlatMapVectorTest, toMapVector) {
