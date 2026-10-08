@@ -15,15 +15,20 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/VectorStream.h"
 
 #include <fmt/format.h>
 
@@ -239,9 +244,8 @@ TEST_F(OrderByTest, singleKey) {
   runTest(plan, orderById, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
 }
 
-// A CudfOrderBy built for a MergeExchangeNode reports only its node's output,
-// because the exchange sharing that node reports the input. One built for an
-// OrderByNode is the node's only operator and keeps counting both.
+// A CudfOrderBy built for an OrderByNode is the node's only operator, so it
+// counts both the node's input and its output.
 TEST_F(OrderByTest, orderByNodeReportsBothPlanNodeBoundaries) {
   auto data = makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return 100 - row; })});
@@ -260,6 +264,38 @@ TEST_F(OrderByTest, orderByNodeReportsBothPlanNodeBoundaries) {
     }
   }
   EXPECT_EQ(numCudfOrderBy, 1);
+}
+
+// A CudfOrderBy built for a MergeExchangeNode shares that node with the
+// exchange in front of it, which reports the node's input, so the sort reports
+// only the node's output.
+TEST_F(OrderByTest, mergeExchangeNodeReportsOutputPlanNodeBoundary) {
+  auto plan = PlanBuilder()
+                  .mergeExchange(
+                      rowType_,
+                      {"c0"},
+                      VectorSerde::kindName(VectorSerde::Kind::kPresto))
+                  .planFragment();
+  auto mergeExchangeNode =
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(plan.planNode);
+  ASSERT_NE(mergeExchangeNode, nullptr);
+  auto task = Task::create(
+      "test-merge-exchange-order-by",
+      std::move(plan),
+      /*destination=*/0,
+      core::QueryCtx::create(executor_.get()),
+      Task::ExecutionMode::kParallel);
+  DriverCtx driverCtx(
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+
+  cudf_velox::CudfOrderBy orderBy(
+      /*operatorId=*/0, &driverCtx, mergeExchangeNode);
+  EXPECT_EQ(orderBy.planNodeBoundary(), core::PlanNode::Boundary::kOutput);
+  orderBy.close();
 }
 
 TEST_F(OrderByTest, multipleKeys) {

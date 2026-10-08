@@ -78,7 +78,7 @@ class CudfOrderBy : public CudfOperatorBase {
   bool finished_{false};
 
   // See planNodeBoundary().
-  core::PlanNode::Boundary planNodeBoundary_{core::PlanNode::Boundary::kBoth};
+  const core::PlanNode::Boundary planNodeBoundary_;
 };
 
 } // namespace facebook::velox::cudf_velox
