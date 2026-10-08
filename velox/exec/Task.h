@@ -43,6 +43,7 @@ class SpatialJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
+struct FixedPointExecutionStats;
 struct FixedPointOptions;
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
@@ -370,6 +371,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns Task Stats by copy as other threads might be updating the
   /// structure.
   TaskStats taskStats() const;
+
+  /// Experimental: the returned struct may change without notice, so projects
+  /// outside Velox should not depend on it yet.  Returns a snapshot of the
+  /// execution statistics of the fixed point this task runs, or std::nullopt
+  /// when it runs none.  Callable at any time, including while the fixed point
+  /// runs and after it fails.
+  std::optional<FixedPointExecutionStats> fixedPointExecutionStats() const;
 
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
