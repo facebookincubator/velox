@@ -568,9 +568,10 @@ in two places:</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">LongDecimalType::commonSuperType</span></code> inside <code class="docutils literal notranslate"><span class="pre">leastCommonSuperType</span></code>
 computes the common <code class="docutils literal notranslate"><span class="pre">(p,</span> <span class="pre">s)</span></code> for plan-level operations (UNION, CASE
 result type, etc.).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">SignatureBinder</span></code>’s integer-parameter binding handles function
-signatures of the form <code class="docutils literal notranslate"><span class="pre">DECIMAL(P,</span> <span class="pre">S)</span></code> by binding <code class="docutils literal notranslate"><span class="pre">P</span></code> and <code class="docutils literal notranslate"><span class="pre">S</span></code> as
-integer variables from the actual argument types.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SignatureBinder</span></code> pre-binds <code class="docutils literal notranslate"><span class="pre">P</span></code> and <code class="docutils literal notranslate"><span class="pre">S</span></code> in function signatures of
+the form <code class="docutils literal notranslate"><span class="pre">DECIMAL(P,</span> <span class="pre">S)</span></code> from actual DECIMAL arguments or from a scalar’s
+rule-defined DECIMAL target. Arguments that share literal variables widen
+those variables to a common DECIMAL before the binder records casts.</p></li>
 </ul>
 <p><em>DECIMAL widening rule.</em> <code class="docutils literal notranslate"><span class="pre">DECIMAL(p1,</span> <span class="pre">s1)</span></code> is coercible to
 <code class="docutils literal notranslate"><span class="pre">DECIMAL(p2,</span> <span class="pre">s2)</span></code> iff:</p>
