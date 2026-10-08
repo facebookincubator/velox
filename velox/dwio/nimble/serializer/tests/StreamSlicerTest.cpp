@@ -1100,6 +1100,67 @@ TEST_P(StreamSlicerRawStreamApiTest, slicesAlprdExceptions) {
   check.template operator()<double>();
 }
 
+TEST_P(StreamSlicerPayloadApiTest, slicesAlprdNullableArrayElements) {
+  const auto check = [&]<typename T>() {
+    using Physical = typename TypeTraits<T>::physicalType;
+    constexpr auto kShift = sizeof(T) * 8 - 16;
+    const Physical high = sizeof(T) == 8 ? 0x3ff1 : 0x3f81;
+    std::vector<T> values(4'096);
+    for (uint32_t i = 0; i < values.size(); ++i) {
+      values[i] = std::bit_cast<T>((high << kShift) | Physical(i));
+    }
+    values[1'793] = -T{0};
+    values[2'049] = std::bit_cast<T>(
+        std::bit_cast<Physical>(std::numeric_limits<T>::quiet_NaN()) | 37);
+    auto elements = makeFlatVector<T>(values);
+    for (uint32_t i = 0; i < values.size(); i += 17) {
+      elements->setNull(i, true);
+    }
+    auto arrays = makeArrayVector({512, 0, 1'024, 256, 1'024, 1'280}, elements);
+    arrays->setNull(1, true);
+    auto input = makeRowVector({"items"}, {arrays});
+    auto [serialized, schema] =
+        serialize(input, input->type(), EncodingType::ALPRD, std::nullopt);
+    auto payload = makePayload(serialized, schema, {"items"}, GetParam());
+    StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+    for (const auto& [offset, length] :
+         std::vector<std::pair<uint32_t, uint32_t>>{
+             {0, 6}, {1, 1}, {2, 3}, {5, 1}}) {
+      const auto sliced =
+          iobufToString(slicer.slice(payload.data, offset, length));
+      auto output = deserialize(sliced, payload.schema);
+      auto* result = output->template as<RowVector>()
+                         ->childAt(0)
+                         ->template as<ArrayVector>();
+      ASSERT_NE(result, nullptr);
+      auto* actual = result->elements()->template as<FlatVector<T>>();
+      if (result->elements()->size() != 0) {
+        ASSERT_NE(actual, nullptr);
+      }
+      for (uint32_t row = 0; row < length; ++row) {
+        EXPECT_EQ(result->isNullAt(row), arrays->isNullAt(offset + row));
+        if (result->isNullAt(row)) {
+          continue;
+        }
+        ASSERT_EQ(result->sizeAt(row), arrays->sizeAt(offset + row));
+        for (vector_size_t i = 0; i < result->sizeAt(row); ++i) {
+          const auto sourceIndex = arrays->offsetAt(offset + row) + i;
+          const auto outputIndex = result->offsetAt(row) + i;
+          ASSERT_EQ(
+              actual->isNullAt(outputIndex), elements->isNullAt(sourceIndex));
+          if (!actual->isNullAt(outputIndex)) {
+            EXPECT_EQ(
+                std::bit_cast<Physical>(actual->valueAt(outputIndex)),
+                std::bit_cast<Physical>(values[sourceIndex]));
+          }
+        }
+      }
+    }
+  };
+  check.template operator()<float>();
+  check.template operator()<double>();
+}
+
 TEST_P(StreamSlicerPayloadApiTest, slicesAlpEncoding) {
   auto type = ROW({{"value", REAL()}});
   const std::vector<float> values{

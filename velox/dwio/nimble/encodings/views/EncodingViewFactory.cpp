@@ -19,6 +19,7 @@
 #include <array>
 
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
@@ -68,6 +69,13 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "ALP encoding only supports float and double data types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::ALPRD:
+      if constexpr (isFloatingPointType<T>()) {
+        return std::make_unique<ALPRDEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ALPRD encoding only supports float and double data types, got {}.",
           TypeTraits<T>::dataType);
     case EncodingType::FixedBitWidth:
       if constexpr (isNumericType<physicalType>()) {
@@ -199,6 +207,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::Trivial,
       EncodingType::MainlyConstant,
       EncodingType::ALP,
+      EncodingType::ALPRD,
       EncodingType::FixedBitWidth,
       EncodingType::Dictionary,
       EncodingType::SparseBool,

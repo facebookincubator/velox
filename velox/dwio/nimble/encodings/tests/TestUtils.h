@@ -19,6 +19,7 @@
 #include <optional>
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -53,6 +54,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::ALPEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::ALP;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::ALPRDEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::ALPRD;
 };
 
 template <typename T>
