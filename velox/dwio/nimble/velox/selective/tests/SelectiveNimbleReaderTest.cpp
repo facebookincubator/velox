@@ -204,7 +204,8 @@ class SelectiveNimbleReaderTest
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
       std::shared_ptr<const ExternalDictionaryResolver>
-          externalDictionaryResolver = nullptr) {
+          externalDictionaryResolver = nullptr,
+      bool dictionaryAwareReads = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -265,6 +266,7 @@ class SelectiveNimbleReaderTest
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setLazyColumnIo(lazyColumnIo);
+    rowOptions.setNimbleDictionaryAwareReads(dictionaryAwareReads);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
   }
@@ -278,6 +280,176 @@ class SelectiveNimbleReaderTest
         test::createNimbleFile(*rootPool(), input),
         scanSpec,
         stringDecoderZeroCopy);
+  }
+
+  template <typename T>
+  void testDictionaryAwareReadsProjection(
+      const std::function<bool(vector_size_t)>& isNullAt,
+      vector_size_t batchSize) {
+    constexpr vector_size_t kNumRows{4'097};
+    constexpr int64_t kCardinality{1'000};
+    const auto valueAt = [](auto row) {
+      const auto value = (static_cast<int64_t>(row) * 9'973) % kCardinality;
+      if constexpr (std::is_floating_point_v<T>) {
+        return static_cast<T>(value) / 4 - 125.5;
+      } else {
+        return static_cast<T>(value);
+      }
+    };
+    auto values = makeFlatVector<T>(kNumRows, valueAt, isNullAt);
+    auto rowIds = makeFlatVector<int64_t>(kNumRows, folly::identity);
+    auto input = makeRowVector({"c0", "c1"}, {values, rowIds});
+    EncodingLayout indicesLayout{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+    EncodingLayout dictionaryLayout{
+        EncodingType::Dictionary,
+        {},
+        CompressionType::Uncompressed,
+        {std::nullopt, std::move(indicesLayout)}};
+    WriterOptions writerOptions;
+    writerOptions.encodingLayoutTree.emplace(
+        Kind::Row,
+        std::unordered_map<
+            EncodingLayoutTree::StreamIdentifier,
+            EncodingLayout>{},
+        "",
+        std::vector<EncodingLayoutTree>{
+            EncodingLayoutTree{
+                Kind::Scalar, {{0, std::move(dictionaryLayout)}}, "c0"},
+            EncodingLayoutTree{Kind::Scalar, {}, "c1"}});
+    writerOptions.maxStreamChunkRawSize = 512;
+    writerOptions.minStreamChunkRawSize = 1;
+    const auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+
+    constexpr T kFilterMin = std::is_floating_point_v<T> ? -75.5 : 200;
+    constexpr T kFilterMax = std::is_floating_point_v<T> ? 75.5 : 800;
+    const auto makeFilter =
+        [&](bool nullAllowed) -> std::unique_ptr<common::Filter> {
+      if constexpr (std::is_floating_point_v<T>) {
+        return std::make_unique<common::FloatingPointRange<T>>(
+            kFilterMin,
+            /*lowerUnbounded=*/false,
+            /*lowerExclusive=*/false,
+            kFilterMax,
+            /*upperUnbounded=*/false,
+            /*upperExclusive=*/false,
+            nullAllowed);
+      } else {
+        return std::make_unique<common::BigintRange>(
+            kFilterMin, kFilterMax, nullAllowed);
+      }
+    };
+    const auto validateRead = [&](std::optional<bool> nullAllowed,
+                                  bool filterOnly) {
+      SCOPED_TRACE(
+          nullAllowed.has_value() ? fmt::format(
+                                        "nullAllowed={} filterOnly={}",
+                                        nullAllowed.value(),
+                                        filterOnly)
+                                  : "no filter");
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      if (nullAllowed.has_value()) {
+        auto* valueSpec = scanSpec->childByName("c0");
+        valueSpec->setFilter(makeFilter(nullAllowed.value()));
+        if (filterOnly) {
+          valueSpec->setProjectOut(false);
+          valueSpec->setChannel(common::ScanSpec::kNoChannel);
+          scanSpec->childByName("c1")->setChannel(0);
+        }
+      }
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/false,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(
+          *input,
+          *readers.rowReader,
+          batchSize,
+          filterOnly ? 0 : -1,
+          [&, nullAllowed](auto row) {
+            if (!nullAllowed.has_value()) {
+              return true;
+            }
+            if (values->isNullAt(row)) {
+              return nullAllowed.value();
+            }
+            const auto value = valueAt(row);
+            return value >= kFilterMin && value <= kFilterMax;
+          });
+    };
+
+    validateRead(std::nullopt, /*filterOnly=*/false);
+    if (isNullAt) {
+      validateRead(true, /*filterOnly=*/false);
+      validateRead(false, /*filterOnly=*/false);
+      validateRead(true, /*filterOnly=*/true);
+      validateRead(false, /*filterOnly=*/true);
+    } else {
+      validateRead(false, /*filterOnly=*/false);
+      validateRead(false, /*filterOnly=*/true);
+    }
+
+    if (isNullAt) {
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      std::vector<int64_t> evenRows;
+      evenRows.reserve((kNumRows + 1) / 2);
+      for (vector_size_t row = 0; row < kNumRows; row += 2) {
+        evenRows.push_back(row);
+      }
+      scanSpec->childByName("c1")->setFilter(
+          std::make_unique<common::BigintValuesUsingBitmask>(
+              0, kNumRows - 1, std::move(evenRows), /*nullAllowed=*/false));
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/true,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(*input, *readers.rowReader, batchSize, [](auto row) {
+        return row % 2 == 0;
+      });
+
+      scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      scanSpec->childByName("c0")->setFilter(makeFilter(/*nullAllowed=*/true));
+      std::vector<int64_t> sparseRows;
+      sparseRows.reserve((kNumRows + 7) / 8);
+      for (vector_size_t row = 0; row < kNumRows; row += 8) {
+        sparseRows.push_back(row);
+      }
+      scanSpec->childByName("c1")->setFilter(
+          std::make_unique<common::BigintValuesUsingBitmask>(
+              0, kNumRows - 1, std::move(sparseRows), /*nullAllowed=*/false));
+      readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/true,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(*input, *readers.rowReader, batchSize, [&](auto row) {
+        if (row % 8 != 0) {
+          return false;
+        }
+        if (values->isNullAt(row)) {
+          return true;
+        }
+        const auto value = valueAt(row);
+        return value >= kFilterMin && value <= kFilterMax;
+      });
+    }
   }
 
   uint32_t readerIdCounter_{0};
@@ -340,7 +512,7 @@ class SelectiveNimbleReaderTest
           ASSERT_TRUE(result->equalValueAt(&input, j, i));
         } else {
           auto* resultRow = result->asUnchecked<RowVector>();
-          for (int k = 0, kk = 0; k < resultRow->childrenSize(); ++k) {
+          for (int k = 0, kk = 0; k < input.childrenSize(); ++k) {
             if (k != dropColumn) {
               auto& expected = input.childAt(k);
               auto& actual = resultRow->childAt(kk++);
@@ -1448,6 +1620,99 @@ TEST_P(SelectiveNimbleReaderTest, dictionary) {
   scanSpec->addAllChildFields(*input->type());
   auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsBigintProjection) {
+  testDictionaryAwareReadsProjection<int64_t>(nullptr, 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsNullableBigintProjection) {
+  testDictionaryAwareReadsProjection<int64_t>(nullEvery(17), 127);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsAllNullBigintProjection) {
+  testDictionaryAwareReadsProjection<int64_t>(
+      [](auto /*row*/) { return true; }, 127);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsIntegerProjection) {
+  testDictionaryAwareReadsProjection<int32_t>(nullptr, 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsNullableIntegerProjection) {
+  testDictionaryAwareReadsProjection<int32_t>(nullEvery(17), 127);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsSmallintProjection) {
+  testDictionaryAwareReadsProjection<int16_t>(nullptr, 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsNullableSmallintProjection) {
+  testDictionaryAwareReadsProjection<int16_t>(nullEvery(17), 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsLongLeadingNullsSmallintProjection) {
+  testDictionaryAwareReadsProjection<int16_t>(
+      [](auto row) { return row < 3'073; }, 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsMultiChunkNullableSmallintProjection) {
+  testDictionaryAwareReadsProjection<int16_t>(
+      nullEvery(17), /*batchSize=*/4'097);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsRealProjection) {
+  testDictionaryAwareReadsProjection<float>(nullptr, 127);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsRealNullableProjection) {
+  testDictionaryAwareReadsProjection<float>(nullEvery(17), 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsRealMultiChunkNullableProjection) {
+  testDictionaryAwareReadsProjection<float>(nullEvery(17), 4'097);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsRealLongLeadingNullsProjection) {
+  testDictionaryAwareReadsProjection<float>(
+      [](auto row) { return row < 3'073; }, 127);
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsDoubleProjection) {
+  testDictionaryAwareReadsProjection<double>(nullptr, 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsDoubleNullableProjection) {
+  testDictionaryAwareReadsProjection<double>(nullEvery(17), 127);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsDoubleMultiChunkNullableProjection) {
+  testDictionaryAwareReadsProjection<double>(nullEvery(17), 4'097);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    dictionaryAwareReadsDoubleLongLeadingNullsProjection) {
+  testDictionaryAwareReadsProjection<double>(
+      [](auto row) { return row < 3'073; }, 127);
 }
 
 TEST_P(SelectiveNimbleReaderTest, smallDictionaryValue) {

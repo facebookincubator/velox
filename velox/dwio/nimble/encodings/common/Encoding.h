@@ -886,6 +886,15 @@ T* mutableValues(const V& visitor, vector_size_t size) {
   return values;
 }
 
+// Returns whether a hook explicitly opts in to the encoding bulk fast path.
+template <typename Hook>
+constexpr bool hookAllowsBulkFastPath() {
+  if constexpr (requires { Hook::kBulkFastPath; }) {
+    return Hook::kBulkFastPath;
+  }
+  return false;
+}
+
 } // namespace detail
 
 } // namespace facebook::nimble
