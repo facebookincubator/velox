@@ -22,6 +22,7 @@
 #include <string_view>
 #include <vector>
 
+#include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
 #include "velox/dwio/nimble/index/IndexLookup.h"
@@ -45,22 +46,59 @@ namespace facebook::nimble::index {
 /// necessary.
 class VectorIndex {
  public:
-  /// Configures one nearest-neighbor query.
-  struct SearchConfig {
-    /// Supplies a query with the same dimensionality as the indexed vectors.
-    std::vector<float> queryVector;
+  /// Defines index-specific search behavior.
+  struct SearchOptions {
+    enum class Kind {
+      kIvf,
+      kHnsw,
+    };
 
-    /// Sets the maximum number of nearest neighbors to return.
+    virtual ~SearchOptions() = default;
+
+    virtual Kind kind() const = 0;
+
+   protected:
+    SearchOptions() = default;
+  };
+
+  /// Configures IVF-specific search behavior.
+  struct IvfSearchOptions final : SearchOptions {
+    explicit IvfSearchOptions(uint32_t _numProbes) : numProbes{_numProbes} {}
+
+    Kind kind() const override {
+      return Kind::kIvf;
+    }
+
+    /// Sets the number of coarse partitions to probe.
+    const uint32_t numProbes;
+  };
+
+  /// Configures HNSW-specific search behavior.
+  struct HnswSearchOptions final : SearchOptions {
+    explicit HnswSearchOptions(uint32_t _searchDepth)
+        : searchDepth{_searchDepth} {}
+
+    Kind kind() const override {
+      return Kind::kHnsw;
+    }
+
+    /// Sets the HNSW candidate-list size.
+    const uint32_t searchDepth;
+  };
+
+  /// Configures one or more nearest-neighbor queries.
+  struct SearchConfig {
+    /// Sets the number of vectors in 'queryVectors'.
+    uint32_t numQueries;
+
+    /// Supplies 'numQueries' contiguous query vectors.
+    std::vector<float> queryVectors;
+
+    /// Sets the maximum number of nearest neighbors returned per query.
     uint32_t numNeighbors{10};
 
-    /// Sets the number of IVF partitions to probe. IVF first assigns the query
-    /// to its nearest partitions, then searches vectors only within them.
-    /// Higher values generally improve recall at the cost of more work.
-    uint32_t numProbes{32};
-
-    /// Sets the HNSW candidate-list size used while traversing the graph.
-    /// Higher values generally improve recall at the cost of more work.
-    uint32_t hnswSearchDepth{32};
+    /// Configures the selected index implementation.
+    std::shared_ptr<const SearchOptions> searchOptions;
   };
 
   /// Identifies one nearest-neighbor match and its metric-specific score.
@@ -71,6 +109,40 @@ class VectorIndex {
     /// Contains squared Euclidean distance for L2, where smaller is better.
     /// Contains similarity for cosine and dot product, where larger is better.
     float score{0};
+  };
+
+  /// Stores batch results contiguously while preserving each query's
+  /// score-ordered range.
+  class SearchResults {
+   public:
+    /// Constructs results from flat matches and per-query offsets.
+    SearchResults(
+        std::vector<SearchResult> results,
+        std::vector<size_t> resultOffsets);
+
+    SearchResults(const SearchResults&) = delete;
+    SearchResults& operator=(const SearchResults&) = delete;
+    SearchResults(SearchResults&&) = default;
+    SearchResults& operator=(SearchResults&&) = default;
+    ~SearchResults() = default;
+
+    /// Returns the number of queries represented by this result.
+    size_t numQueries() const;
+
+    /// Returns the total number of neighbors across all queries.
+    size_t totalNumResults() const;
+
+    /// Returns the score-ordered results for one query.
+    folly::Range<const SearchResult*> results(size_t queryIndex) const&;
+    folly::Range<const SearchResult*> results(size_t queryIndex) const&& =
+        delete;
+
+   private:
+    // Stores all matches in query order.
+    std::vector<SearchResult> results_;
+
+    // Locates each query's half-open range in results_.
+    std::vector<size_t> resultOffsets_;
   };
 
   /// Describes the logical vector index stored in a Nimble file.
@@ -99,9 +171,8 @@ class VectorIndex {
 
   ~VectorIndex();
 
-  /// Searches for nearest neighbors in score order. Row IDs are not
-  /// numerically ordered.
-  std::vector<SearchResult> search(const SearchConfig& config) const;
+  /// Searches query vectors together and preserves query order.
+  SearchResults search(const SearchConfig& config) const;
 
   /// Returns the column name this index was built on.
   const std::string& columnName() const;
