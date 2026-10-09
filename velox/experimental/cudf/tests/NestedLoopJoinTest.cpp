@@ -16,8 +16,10 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/core/Expressions.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -375,6 +377,31 @@ TEST_F(CudfNestedLoopJoinTest, multipleColumnTypes) {
                   .planNode();
 
   assertQuery(plan, "SELECT * FROM t, u");
+}
+
+// cuDF would evaluate the condition on the packed bits, so a join whose
+// condition touches such a column must stay on the CPU.
+TEST_F(CudfNestedLoopJoinTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto probe = keys.makeRowsInZone(
+      {"t_k", "t_v"}, "America/Los_Angeles", {1, 2, 3}, {1, 2, 3});
+  auto build =
+      keys.makeRowsInZone({"u_k", "u_v"}, "UTC", {1, 2, 4}, {10, 20, 40});
+
+  for (const auto joinType : {core::JoinType::kInner, core::JoinType::kLeft}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    keys.assertFallsBackToCpu(
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "t_k = u_k",
+                {"t_v", "u_v"},
+                joinType)
+            .planNode(),
+        exec::OperatorType::kNestedLoopJoinProbe);
+  }
 }
 
 // Output column order differs from probe-first/build-second.

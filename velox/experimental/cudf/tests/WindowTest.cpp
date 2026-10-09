@@ -18,12 +18,14 @@
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/Window.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -2089,6 +2091,27 @@ TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
     VELOX_ASSERT_THROW(
         AssertQueryBuilder(plan).copyResults(pool()),
         "Replacement with cuDF operator failed");
+  }
+}
+
+// cuDF would reduce the packed bits of the argument, so a min or max tie
+// between two zone encodings of one instant would go to the zone key where
+// Velox keeps the first encoding seen.
+TEST_F(CudfWindowTest, customComparisonWindowArgumentFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  for (const auto& function : {"min(k)", "max(k)"}) {
+    SCOPED_TRACE(function);
+    keys.assertFallsBackToCpu(
+        PlanBuilder()
+            .values({data})
+            .window(
+                {std::string(function) +
+                 " over (partition by g rows between unbounded preceding "
+                 "and unbounded following) as w"})
+            .planNode(),
+        exec::OperatorType::kWindow);
   }
 }
 

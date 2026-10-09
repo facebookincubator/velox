@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -239,18 +240,6 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
     VELOX_FAIL("Unsupported global aggregate window function: {}", baseName);
   }
   return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
-}
-
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 cudf::size_type constantRowsBoundValue(const core::TypedExprPtr& value) {
@@ -551,9 +540,15 @@ bool CudfWindow::canRunOnGPU(
           (baseName == "min" || baseName == "max") &&
           (argumentType->isArray() || argumentType->isMap() ||
            argumentType->isRow());
+      // cuDF orders the physical representation, so min and max over a
+      // custom-comparison type would break ties by zone key where Velox keeps
+      // the first value seen.
+      const bool customComparisonMinMax =
+          (baseName == "min" || baseName == "max") &&
+          containsCustomComparison(argumentType);
 
       if (unsupportedRealSum || unsupportedDecimalAverage ||
-          unsupportedNestedMinMax) {
+          unsupportedNestedMinMax || customComparisonMinMax) {
         if (reason) {
           *reason = fmt::format(
               "{} does not support input type {} on cuDF",

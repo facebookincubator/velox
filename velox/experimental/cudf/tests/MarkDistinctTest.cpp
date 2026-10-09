@@ -16,8 +16,10 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -200,6 +202,21 @@ TEST_F(CudfMarkDistinctTest, stringKeys) {
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
   assertEqualVectors(expected, result);
+}
+
+// cuDF would mark both zone encodings of one instant as new where Velox marks
+// the second one seen as a duplicate, so the operator must stay on the CPU.
+TEST_F(CudfMarkDistinctTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  for (const auto& distinctKeys :
+       {std::vector<std::string>{"k"}, std::vector<std::string>{"g", "k"}}) {
+    SCOPED_TRACE(testing::PrintToString(distinctKeys));
+    keys.assertFallsBackToCpu(
+        PlanBuilder().values({data}).markDistinct("m", distinctKeys).planNode(),
+        exec::OperatorType::kMarkDistinct);
+  }
 }
 
 // Test 9: Three or more batches to verify state accumulation

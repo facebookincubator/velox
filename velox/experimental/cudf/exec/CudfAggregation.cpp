@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -426,6 +427,34 @@ bool canAggregationBeEvaluatedByRegistry(
   return matchTypedCallAgainstSignatures(call, stepIt->second);
 }
 
+namespace {
+// Returns true if any aggregate reduces an input whose type provides a custom
+// comparison. cuDF orders and hashes the physical representation, so min and
+// max would keep the encoding with the smallest or largest zone key where Velox
+// keeps the first one seen. count ignores the input values and stays eligible.
+// The raw input types are checked as well so that the final step of an
+// aggregate stays on the CPU with its partial step.
+bool aggregateInputsUseCustomComparison(
+    const std::vector<core::AggregationNode::Aggregate>& aggregates) {
+  for (const auto& aggregate : aggregates) {
+    if (isCountFunctionName(aggregate.call->name())) {
+      continue;
+    }
+    for (const auto& input : aggregate.call->inputs()) {
+      if (containsCustomComparison(input->type())) {
+        return true;
+      }
+    }
+    for (const auto& rawInputType : aggregate.rawInputTypes) {
+      if (containsCustomComparison(rawInputType)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+} // namespace
+
 bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
     core::QueryCtx* queryCtx,
@@ -436,6 +465,10 @@ bool canBeEvaluatedByCudf(
 
   if (sourceNode && sourceNode->outputType()->size() == 0 &&
       !isSupportedZeroColumnAggregation(aggregationNode)) {
+    return false;
+  }
+
+  if (aggregateInputsUseCustomComparison(aggregationNode.aggregates())) {
     return false;
   }
 
@@ -481,6 +514,10 @@ bool canGroupingKeysBeEvaluatedByCudf(
     const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
+  if (keysUseCustomComparison(groupingKeys)) {
+    return false;
+  }
+
   // Check grouping key expressions (with expansion)
   for (const auto& groupingKey : groupingKeys) {
     auto expandedKey = expandFieldReference(groupingKey, sourceNode);
