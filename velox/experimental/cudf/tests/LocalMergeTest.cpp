@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -28,6 +29,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -64,7 +66,7 @@ class LocalMergeTest : public OperatorTestBase {
                                .planNode()})
                       .planNode();
       CursorParameters params;
-      params.planNode = plan;
+      params.planNode = rewriteToCudfPlan(plan);
       params.maxDrivers = 1;
       assertQueryOrdered(
           params,
@@ -83,7 +85,9 @@ class LocalMergeTest : public OperatorTestBase {
                  .planNode();
 
       assertQueryOrdered(
-          plan, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+          rewriteToCudfPlan(plan),
+          "SELECT * FROM tmp ORDER BY " + orderByClause,
+          {keyIndex});
     }
   }
 
@@ -115,7 +119,7 @@ class LocalMergeTest : public OperatorTestBase {
                                  .planNode()})
                         .planNode();
         CursorParameters params;
-        params.planNode = plan;
+        params.planNode = rewriteToCudfPlan(plan);
         params.maxDrivers = 1;
         assertQueryOrdered(
             params,
@@ -134,7 +138,9 @@ class LocalMergeTest : public OperatorTestBase {
                    .planNode();
 
         assertQueryOrdered(
-            plan, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+            rewriteToCudfPlan(plan),
+            "SELECT * FROM tmp " + orderBySql,
+            sortingKeys);
       }
     }
   }
@@ -188,7 +194,7 @@ TEST_F(LocalMergeTest, offByOne) {
           .planNode();
 
   CursorParameters params;
-  params.planNode = plan;
+  params.planNode = rewriteToCudfPlan(plan);
   params.queryCtx = core::QueryCtx::create(executor_.get());
   params.queryCtx->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchRows, "6"}});

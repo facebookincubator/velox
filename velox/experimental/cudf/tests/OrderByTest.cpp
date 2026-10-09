@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
@@ -31,6 +32,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -160,7 +162,7 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      assertQueryOrdered(rewriteToCudfPlan(planNode), duckDbSql, sortingKeys);
     }
   }
 
@@ -377,7 +379,7 @@ TEST_F(OrderByTest, outputBatchRows) {
          {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode,
           "false"}});
     CursorParameters params;
-    params.planNode = plan;
+    params.planNode = rewriteToCudfPlan(plan, 32, queryCtx);
     params.queryCtx = queryCtx;
     auto task = assertQueryOrdered(
         params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
@@ -385,7 +387,7 @@ TEST_F(OrderByTest, outputBatchRows) {
     EXPECT_EQ(
         testData.expectedOutputVectors,
         toPlanStats(task->taskStats())
-            .at(orderById)
+            .at(orderById + "_to_velox")
             .operatorStats.at("CudfToVelox")
             ->outputVectors);
   }

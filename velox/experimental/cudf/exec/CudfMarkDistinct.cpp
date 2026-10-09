@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -35,6 +36,16 @@ CudfMarkDistinct::CudfMarkDistinct(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::MarkDistinctNode>& planNode)
+    : CudfMarkDistinct(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfMarkDistinctNode>(
+              planNode)) {}
+
+CudfMarkDistinct::CudfMarkDistinct(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfMarkDistinctNode>& planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

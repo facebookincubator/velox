@@ -16,9 +16,11 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -33,6 +35,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -138,16 +141,16 @@ class CudfBatchConcatTest : public OperatorTestBase {
     return makeFlatVector<T>(size, [start](auto row) { return start + row; });
   }
 
-  // Builds fragmented input via localPartitionRoundRobin to prevent Values
-  // from coalescing small batches.
+  // Builds fragmented CPU input. The test plan rewriter uses direct conversion
+  // boundaries, so Values batches reach CudfBatchConcat independently.
   core::PlanNodePtr createFragmentedSource(
       const std::vector<RowVectorPtr>& vectors,
       std::shared_ptr<core::PlanNodeIdGenerator> generator) {
-    std::vector<core::PlanNodePtr> sources;
-    for (const auto& vec : vectors) {
-      sources.push_back(PlanBuilder(generator).values({vec}).planNode());
-    }
-    return PlanBuilder(generator).localPartitionRoundRobin(sources).planNode();
+    return PlanBuilder(generator).values(vectors).planNode();
+  }
+
+  core::PlanNodeId concatNodeId(const core::PlanNodeId& aggNodeId) {
+    return aggNodeId + "_batch_concat";
   }
 
   // Returns the CudfBatchConcat stats for the given plan node, or nullptr if
@@ -156,7 +159,7 @@ class CudfBatchConcatTest : public OperatorTestBase {
       const std::shared_ptr<Task>& task,
       const core::PlanNodeId& aggNodeId) {
     auto planStats = toPlanStats(task->taskStats());
-    auto nodeIt = planStats.find(aggNodeId);
+    auto nodeIt = planStats.find(concatNodeId(aggNodeId));
     if (nodeIt == planStats.end()) {
       return nullptr;
     }
@@ -360,13 +363,13 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end())
       << "CudfBatchConcat should be present in operator stats";
@@ -405,8 +408,9 @@ TEST_F(CudfBatchConcatTest, concatFlushesMidStreamAtByteTarget) {
                   .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+                  .plan(rewriteToCudfPlan(plan))
                   .maxDrivers(1)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, 10)
                   .assertResults("SELECT sum(c0) FROM tmp");
 
   auto concatStats = getConcatStats(task, aggNodeId);
@@ -441,14 +445,13 @@ TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
-  EXPECT_EQ(nodeStats.operatorStats.count("CudfBatchConcat"), 0)
+  EXPECT_EQ(planStats.count(concatNodeId(aggNodeId)), 0)
       << "CudfBatchConcat should not be present when optimization is disabled";
 }
 
@@ -475,13 +478,13 @@ TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end())
       << "CudfBatchConcat should still be inserted even with high threshold";
@@ -516,13 +519,13 @@ TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end());
   EXPECT_EQ(concatIt->second->inputVectors, 6);
@@ -549,13 +552,13 @@ TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end());
   EXPECT_EQ(concatIt->second->inputVectors, 1);
@@ -603,13 +606,14 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
 
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
+          .plan(rewriteToCudfPlan(plan))
           .maxDrivers(1)
+          .config(CudfFromVelox::kGpuBatchSizeRows, 10)
           .assertResults(
               "SELECT p.c0, p.c1 FROM probe p INNER JOIN build b ON p.c0 = b.u_c0");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(joinNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(joinNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end())
       << "CudfBatchConcat should be present before hash join probe";
@@ -643,6 +647,7 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
                   .addNode([&](auto id, auto pool) {
                     return createFragmentedSource(probeVectors, generator);
                   })
+                  .localPartitionRoundRobin()
                   .hashJoin(
                       {"c0"},
                       {"u_c0"},
@@ -654,7 +659,7 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
                   .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+                  .plan(rewriteToCudfPlan(plan))
                   .maxDrivers(3)
                   .assertResults(
                       "SELECT p.c0, p.c1, b.u_c0 FROM probe p "
@@ -662,7 +667,10 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
 
   auto planStats = toPlanStats(task->taskStats());
   auto& nodeStats = planStats.at(joinNodeId);
-  ASSERT_NE(nodeStats.operatorStats.count("CudfBatchConcat"), 0);
+  ASSERT_NE(
+      planStats.at(concatNodeId(joinNodeId))
+          .operatorStats.count("CudfBatchConcat"),
+      0);
   ASSERT_NE(nodeStats.operatorStats.count("CudfHashJoinProbe"), 0);
   ASSERT_EQ(nodeStats.operatorStats.at("CudfHashJoinProbe")->numDrivers, 3);
 }
@@ -690,13 +698,13 @@ TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+  auto task = AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, "10")
                   .maxDrivers(1)
                   .assertResults("SELECT count(*) FROM tmp WHERE c0 >= 0");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end());
   EXPECT_EQ(concatIt->second->inputVectors, 3);
@@ -721,12 +729,12 @@ TEST_F(CudfBatchConcatTest, singleZeroColumnBatchSplitsAtMaxThreshold) {
                   .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(plan)
+                  .plan(rewriteToCudfPlan(plan))
                   .maxDrivers(1)
                   .assertResults("SELECT count(*) FROM tmp WHERE c0 >= 0");
 
   auto planStats = toPlanStats(task->taskStats());
-  auto& nodeStats = planStats.at(aggNodeId);
+  auto& nodeStats = planStats.at(concatNodeId(aggNodeId));
   auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
   ASSERT_NE(concatIt, nodeStats.operatorStats.end());
   EXPECT_EQ(concatIt->second->inputVectors, 1);

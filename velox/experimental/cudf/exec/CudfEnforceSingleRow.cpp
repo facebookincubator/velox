@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -27,6 +28,16 @@ CudfEnforceSingleRow::CudfEnforceSingleRow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::EnforceSingleRowNode>& planNode)
+    : CudfEnforceSingleRow(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfEnforceSingleRowNode>(
+              planNode)) {}
+
+CudfEnforceSingleRow::CudfEnforceSingleRow(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfEnforceSingleRowNode>& planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

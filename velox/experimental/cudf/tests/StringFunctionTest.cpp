@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -25,6 +26,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -44,6 +46,12 @@ class CudfStringFunctionTest : public OperatorTestBase {
   void TearDown() override {
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    return OperatorTestBase::assertQuery(rewriteToCudfPlan(plan), duckDbSql);
   }
 };
 

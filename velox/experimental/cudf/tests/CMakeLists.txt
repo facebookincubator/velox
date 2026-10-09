@@ -302,6 +302,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_plan_rewriter_test
+  SOURCES Main.cpp PlanRewriterTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt

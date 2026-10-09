@@ -15,8 +15,6 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
@@ -33,6 +31,7 @@
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfScanUtils.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
@@ -42,7 +41,6 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/memory/Memory.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -127,17 +125,7 @@ class TableScanAdapter : public OperatorAdapter {
           planNode->id());
       return false;
     }
-    auto const& connector = velox::connector::ConnectorRegistry::tryGet(
-        tableScanNode->tableHandle()->connectorId());
-    auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-        connector);
-    auto cudfIcebergConnector =
-        std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
-                                      iceberg::CudfIcebergConnector>(connector);
-
-    bool canRunOnGPU =
-        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
+    bool canRunOnGPU = isGpuTableScan(*tableScanNode);
 
     if (!canRunOnGPU) {
       LOG_FALLBACK(

@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -31,6 +32,9 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+using exec::test::AssertQueryBuilder;
+using test::rewriteToCudfPlan;
 
 class CudfDecimalTest : public exec::test::OperatorTestBase {
  protected:
@@ -70,8 +74,8 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
             pool());
     registerCudf();
     auto gpuResult =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   }
 };
@@ -125,7 +129,7 @@ TEST_F(CudfDecimalTest, decimal64And128ArithmeticAndComparison) {
                   })
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults(
           "SELECT d64_a + d64_b AS sum64, "
           "d64_a - d64_b AS diff64, "
@@ -189,7 +193,7 @@ TEST_F(CudfDecimalTest, decimalIdentityProjection64And128) {
                   .project({"d64", "d128"})
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults("SELECT d64, d128 FROM tmp");
 }
 
@@ -256,7 +260,7 @@ TEST_F(CudfDecimalTest, decimalAddition64And128) {
                   })
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults(
           "SELECT d64_a + d64_b AS sum64, d128_a + d128_b AS sum128 FROM tmp");
 }
@@ -295,13 +299,12 @@ TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   // GPU (enable cuDF, no fallback).
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   // Verify promotion to long decimal and exact results on CPU/GPU.
   ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
@@ -349,13 +352,12 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   // GPU (cuDF enabled).
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
   ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
@@ -384,7 +386,7 @@ TEST_F(CudfDecimalTest, decimalAddDifferentScales) {
                   .project({"a + b AS sum"})
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults("SELECT a + b AS sum FROM tmp");
 }
 
@@ -409,7 +411,7 @@ TEST_F(CudfDecimalTest, decimalSubtractDifferentScales) {
                   .project({"a - b AS diff"})
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults("SELECT a - b AS diff FROM tmp");
 }
 
@@ -444,8 +446,7 @@ TEST_F(CudfDecimalTest, decimalMultiplyDifferentScales) {
           },
           DECIMAL(20, 3))});
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -487,8 +488,7 @@ TEST_F(CudfDecimalTest, decimalCompareDecimalDecimal) {
           makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -562,8 +562,7 @@ TEST_F(CudfDecimalTest, decimalCompareWithLiteral) {
               {true, true, false, std::nullopt}, BOOLEAN()),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -597,7 +596,7 @@ TEST_F(CudfDecimalTest, decimalLogicalAndOrProject) {
                   })
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults(
           "SELECT "
           "(a > CAST('1.00' AS DECIMAL(10, 2)) "
@@ -641,7 +640,7 @@ TEST_F(CudfDecimalTest, decimalLogicalAndOrFilter) {
                   .project({"a", "b"})
                   .planNode();
 
-  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .assertResults(
           "SELECT a, b FROM tmp WHERE "
           "((a between CAST('1.50' AS DECIMAL(10, 2)) AND "
@@ -689,8 +688,7 @@ TEST_F(CudfDecimalTest, decimalBinaryNullPropagation) {
               {false, std::nullopt, std::nullopt, std::nullopt}, BOOLEAN()),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -720,9 +718,9 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCast) {
                     .values(vectors)
                     .project({"cast(d as double) * x AS prod"})
                     .planNode();
-    auto result =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+    auto result = useCudf
+        ? AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool())
+        : exec::test::AssertQueryBuilder(plan).copyResults(pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -756,9 +754,9 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
                     .values(vectors)
                     .project({"x * cast(d as double) AS prod"})
                     .planNode();
-    auto result =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+    auto result = useCudf
+        ? AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool())
+        : exec::test::AssertQueryBuilder(plan).copyResults(pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -791,8 +789,7 @@ TEST_F(CudfDecimalTest, decimalAstRecursiveMixedScaleAdd) {
                   .project({"cast(a + b as double) + x AS prod"})
                   .planNode();
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -817,9 +814,9 @@ TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
                     .values(vectors)
                     .project({"cast(d as double) AS d_double"})
                     .planNode();
-    auto result =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+    auto result = useCudf
+        ? AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool())
+        : exec::test::AssertQueryBuilder(plan).copyResults(pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -848,9 +845,9 @@ TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
                     .values(vectors)
                     .project({"cast(d as real) AS d_real"})
                     .planNode();
-    auto result =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+    auto result = useCudf
+        ? AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool())
+        : exec::test::AssertQueryBuilder(plan).copyResults(pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -893,12 +890,11 @@ TEST_P(CudfDecimalBinaryTest, cpuGpuMatch) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1059,8 +1055,7 @@ TEST_F(CudfDecimalTest, decimalDivideRounds) {
           {computeDiv(200, 300), computeDiv(100, 300), computeDiv(-200, 300)},
           DECIMAL(12, 2))});
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -1073,8 +1068,8 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
         "Division by zero");
     registerCudf();
     VELOX_ASSERT_USER_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool()),
         "Division by zero");
   };
 
@@ -1154,8 +1149,8 @@ TEST_F(CudfDecimalTest, decimalDivideOverflowAndDivideByZeroPrecedence) {
         cpuMessage);
     registerCudf();
     VELOX_ASSERT_USER_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool()),
         gpuMessage);
   };
 
@@ -1240,12 +1235,11 @@ TEST_F(CudfDecimalTest, decimalModulo) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1266,12 +1260,11 @@ TEST_F(CudfDecimalTest, decimalModuloDifferentScales) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1308,12 +1301,11 @@ TEST_F(CudfDecimalTest, decimalSubtractPromotesToLong) {
           DECIMAL(19, 0))});
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   ASSERT_TRUE(cpuResult->childAt(0)->type()->isLongDecimal());
   ASSERT_TRUE(gpuResult->childAt(0)->type()->isLongDecimal());
@@ -1337,12 +1329,11 @@ TEST_F(CudfDecimalTest, decimalDivideDifferentScales) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1369,12 +1360,11 @@ TEST_F(CudfDecimalTest, decimalModuloNullPropagation) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1400,12 +1390,11 @@ TEST_F(CudfDecimalTest, decimalArithmeticWithScalarRight) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1431,12 +1420,11 @@ TEST_F(CudfDecimalTest, decimalArithmeticWithScalarLeft) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1459,12 +1447,11 @@ TEST_F(CudfDecimalTest, decimalDivideNullScalar) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1501,7 +1488,8 @@ TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
@@ -1543,8 +1531,7 @@ TEST_F(CudfDecimalTest, DISABLED_decimalCompareDifferentScales) {
           makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -1582,8 +1569,7 @@ TEST_F(CudfDecimalTest, decimalCompareDifferentScalesWithCast) {
           makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -1602,11 +1588,10 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastAllColumns) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1626,11 +1611,10 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastMixed) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1664,8 +1648,7 @@ TEST_F(CudfDecimalTest, decimalGreatestLeastWithNulls) {
               {100, 200, std::nullopt}, DECIMAL(10, 2)),
       });
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
@@ -1680,11 +1663,10 @@ TEST_F(CudfDecimalTest, decimalBetween) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1701,11 +1683,10 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
           .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1724,11 +1705,10 @@ TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
           .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1748,11 +1728,10 @@ TEST_F(CudfDecimalTest, decimalCoalesceStopsAtFirstLiteral) {
                   .planNode();
 
   unregisterCudf();
-  auto cpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto cpuResult = exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1801,7 +1780,8 @@ TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
       "overflow");
   registerCudf();
   VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool()),
       param.expectedMessage);
 }
 
@@ -1945,7 +1925,8 @@ TEST_F(CudfDecimalTest, decimalAddNoFalseOverflowAtBoundary) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -1973,7 +1954,8 @@ TEST_F(CudfDecimalTest, decimalSubtractNoFalseOverflowAtBoundary) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -2001,7 +1983,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyNoFalseOverflowAtBoundary) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -2032,7 +2015,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyInt64ToInt128PromotionAtBoundary) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
 
   // Pin the promotion explicitly: DECIMAL(18, 0) * DECIMAL(18, 0) derives
   // precision 18 + 18 = 36, so the int64 inputs must yield an int128-backed
@@ -2075,7 +2059,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyScaledPromotesToLong) {
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
 
   auto gpuType = gpuResult->childAt(0)->type();
   ASSERT_TRUE(gpuType->equivalent(*DECIMAL(36, 4)))
@@ -2120,7 +2105,8 @@ TEST_F(CudfDecimalTest, decimalDivideNoFalseOverflowAtBoundary) {
   registerCudf();
 
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
@@ -2138,42 +2124,47 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"a + CAST('20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a + CAST('20000000000000000000000000000000000000' "
+                            "AS DECIMAL(38, 0)) AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in add");
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"CAST('20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) + a AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"CAST('20000000000000000000000000000000000000' "
+                            "AS DECIMAL(38, 0)) + a AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in add");
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"a - CAST('-20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project(
+                      {"a - CAST('-20000000000000000000000000000000000000' "
+                       "AS DECIMAL(38, 0)) AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in subtract");
 
   // -2e37 - 9e37 = -1.1e38, exceeds output precision 38 (lhs-scalar path).
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"CAST('-20000000000000000000000000000000000000' "
-                        "AS DECIMAL(38, 0)) - a AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"CAST('-20000000000000000000000000000000000000' "
+                            "AS DECIMAL(38, 0)) - a AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in subtract");
 
@@ -2184,21 +2175,23 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(mulVectors)
-              .project(
-                  {"a * CAST('10000000000000000000' AS DECIMAL(38, 0)) AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(mulVectors)
+                  .project(
+                      {"a * CAST('10000000000000000000' AS DECIMAL(38, 0)) AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in multiply");
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(mulVectors)
-              .project(
-                  {"CAST('10000000000000000000' AS DECIMAL(38, 0)) * a AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(mulVectors)
+                  .project(
+                      {"CAST('10000000000000000000' AS DECIMAL(38, 0)) * a AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in multiply");
 
@@ -2209,10 +2202,11 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(divRescaleVectors)
-              .project({"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(divRescaleVectors)
+                  .project({"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in divide");
 
@@ -2223,11 +2217,12 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(divPrecisionVectors)
-              .project({"CAST('150000000000000000000000000000000000.00' "
-                        "AS DECIMAL(38, 2)) / a AS result"})
-              .planNode())
+          rewriteToCudfPlan(
+              exec::test::PlanBuilder()
+                  .values(divPrecisionVectors)
+                  .project({"CAST('150000000000000000000000000000000000.00' "
+                            "AS DECIMAL(38, 2)) / a AS result"})
+                  .planNode()))
           .copyResults(pool()),
       "Decimal overflow in divide");
 }
@@ -2276,7 +2271,9 @@ TEST_F(CudfDecimalTest, decimalMixedScaleOverflowCpuGpuParity) {
                     .project({c.projection + " AS result"})
                     .planNode();
     try {
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(
+          cudfIsRegistered() ? rewriteToCudfPlan(plan) : plan)
+          .copyResults(pool());
       return false;
     } catch (const VeloxException&) {
       return true;
@@ -2308,8 +2305,8 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
         "Modulus by zero");
     registerCudf();
     VELOX_ASSERT_USER_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool()),
         "Modulus by zero");
   };
 
@@ -2394,7 +2391,8 @@ TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
       "overflow");
   registerCudf();
   VELOX_ASSERT_USER_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool()),
       "Decimal overflow in add");
 }
 
@@ -2453,7 +2451,8 @@ TEST_F(CudfDecimalTest, decimalNullRowOverflowNotFlagged) {
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
   auto gpuResult =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+          .copyResults(pool());
 
   facebook::velox::test::assertEqualVectors(expected, cpuResult);
   facebook::velox::test::assertEqualVectors(expected, gpuResult);
@@ -2499,8 +2498,8 @@ TEST_F(CudfDecimalTest, decimalDivideBoundaryRoundingStorageWidths) {
             pool());
     registerCudf();
     auto gpuResult =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   }
 }
@@ -2522,8 +2521,8 @@ TEST_F(CudfDecimalTest, decimalModuloByNegativeOneNoOverflow) {
             pool());
     registerCudf();
     auto gpuResult =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   };
 
@@ -2590,8 +2589,8 @@ TEST_F(CudfDecimalTest, decimalModuloMixedStorageWidths) {
             pool());
     registerCudf();
     auto gpuResult =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   };
 
@@ -2651,8 +2650,8 @@ TEST_F(CudfDecimalTest, decimalPromotingOpsMixedStorageWidths) {
             pool());
     registerCudf();
     auto gpuResult =
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool());
+        facebook::velox::exec::test::AssertQueryBuilder(rewriteToCudfPlan(plan))
+            .copyResults(pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   }
 }

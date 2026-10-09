@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -703,6 +704,16 @@ CudfWindow::CudfWindow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::WindowNode>& windowNode)
+    : CudfWindow(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfWindowNode>(
+              windowNode)) {}
+
+CudfWindow::CudfWindow(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfWindowNode>& windowNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
@@ -710,7 +721,9 @@ CudfWindow::CudfWindow(
           windowNode->id(),
           "CudfWindow",
           nvtx3::rgb{255, 165, 0},
-          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
+          std::nullopt,
+          windowNode),
       windowNode_(windowNode),
       inputRowType_(asRowType(windowNode->inputType())) {
   const auto& inputType = windowNode->inputType();

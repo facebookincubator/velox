@@ -126,7 +126,7 @@ struct GroupbyAggregator {
 // pass the raw-input mask channels for raw base/partial steps and an empty
 // vector for intermediate/final steps.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -134,7 +134,7 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
 
 std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
 toStreamingGroupbyAggregators(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     const RowTypePtr& inputType,
     const std::vector<column_index_t>& aggregationInputChannels,
     const TypePtr& outputType,
@@ -159,6 +159,11 @@ class CudfGroupby : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::AggregationNode> const& aggregationNode);
+
+  CudfGroupby(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfAggregationNode> aggregationNode);
 
   void initialize() override;
 
@@ -214,7 +219,7 @@ class CudfGroupby : public CudfOperatorBase {
   std::vector<column_index_t> groupingKeyOutputChannels_;
   std::vector<column_index_t> aggregationInputChannels_;
 
-  std::shared_ptr<const core::AggregationNode> aggregationNode_;
+  std::shared_ptr<const CudfAggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators_;
   std::vector<std::unique_ptr<GroupbyAggregator>> intermediateAggregators_;
   // Used for kSingle streaming: partial-step aggregators (raw -> intermediate)

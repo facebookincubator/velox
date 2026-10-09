@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -23,6 +24,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class TopNRowNumberTest : public OperatorTestBase {
  public:
@@ -66,7 +68,7 @@ class TopNRowNumberTest : public OperatorTestBase {
   void assertGpuTopNRowNumber(
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
-    auto task = assertQuery(plan, duckDbSql);
+    auto task = assertQuery(rewriteToCudfPlan(plan), duckDbSql);
     ASSERT_TRUE(wasCudfTopNRowNumberUsed(task));
     ASSERT_FALSE(wasCpuTopNRowNumberUsed(task));
   }
@@ -283,9 +285,42 @@ TEST_F(TopNRowNumberTest, rankFallsBackToCpu) {
                   .topNRank("rank", {"c0"}, {"c1"}, 2, true)
                   .planNode();
   auto task = assertQuery(
-      plan,
+      rewriteToCudfPlan(plan),
       "SELECT * FROM (SELECT *, rank() over (partition by c0 order by c1) as row_number FROM tmp) "
       "WHERE row_number <= 2");
   ASSERT_FALSE(wasCudfTopNRowNumberUsed(task));
   ASSERT_TRUE(wasCpuTopNRowNumberUsed(task));
+}
+
+TEST_F(TopNRowNumberTest, unsupportedRanksPreserveGpuSource) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 2, 2}),
+      makeFlatVector<int64_t>({10, 10, 20, 30, 30, 40}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+  });
+  createDuckDbTable({data});
+  for (const auto& function : {"rank", "dense_rank"}) {
+    SCOPED_TRACE(function);
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .project({"c0", "c1", "c2 + 1 AS x"})
+                    .topNRank(function, {"c0"}, {"c1"}, 1, true)
+                    .planNode();
+    auto task =
+        AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+            .assertResults(
+                fmt::format(
+                    "SELECT * FROM (SELECT c0, c1, c2 + 1 AS x, {}() over "
+                    "(partition by c0 order by c1) AS row_number FROM tmp) WHERE row_number <= 1",
+                    function));
+    EXPECT_FALSE(wasCudfTopNRowNumberUsed(task));
+    EXPECT_TRUE(wasCpuTopNRowNumberUsed(task));
+    bool hasGpuProject = false;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        hasGpuProject |= op.operatorType == "CudfFilterProject";
+      }
+    }
+    EXPECT_TRUE(hasGpuProject);
+  }
 }

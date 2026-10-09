@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -32,6 +33,7 @@
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
+using cudf_velox::test::rewriteToCudfPlan;
 namespace {
 
 class LocalPartitionTest : public HiveConnectorTestBase {
@@ -65,6 +67,13 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       writeToFile(filePaths[i]->getPath(), vectors[i]);
     }
     return filePaths;
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    return HiveConnectorTestBase::assertQuery(
+        rewriteToCudfPlan(plan), duckDbSql);
   }
 };
 
@@ -117,7 +126,7 @@ TEST_F(LocalPartitionTest, gather) {
            .singleAggregation({}, {"min(c0)", "max(c0)"})
            .planNode();
 
-  AssertQueryBuilder queryBuilder(op);
+  AssertQueryBuilder queryBuilder(rewriteToCudfPlan(op));
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
@@ -161,7 +170,8 @@ TEST_F(LocalPartitionTest, partition) {
 
   createDuckDbTable(vectors);
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  auto queryBuilder =
+      AssertQueryBuilder(rewriteToCudfPlan(op), duckDbQueryRunner_);
   queryBuilder.maxDrivers(2);
   queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2");
 
@@ -224,15 +234,16 @@ TEST_F(LocalPartitionTest, hashAfterRemoteHashUsesAllLocalDrivers) {
                       .singleAggregation({"c0"}, {"count(1)"})
                       .capturePlanNodeId(aggId)
                       .planNode();
-      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-                      .maxDrivers(localCount)
-                      .config(
-                          core::QueryConfig::kMaxLocalExchangePartitionCount,
-                          std::to_string(localCount))
-                      .config(
-                          cudf_velox::CudfFromVelox::kGpuBatchSizeRows,
-                          std::to_string(kRows))
-                      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+      auto task =
+          AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
+              .maxDrivers(localCount)
+              .config(
+                  core::QueryConfig::kMaxLocalExchangePartitionCount,
+                  std::to_string(localCount))
+              .config(
+                  cudf_velox::CudfFromVelox::kGpuBatchSizeRows,
+                  std::to_string(kRows))
+              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
       bool sawLocalPartition = false;
       bool sawAggregation = false;
@@ -306,21 +317,22 @@ TEST_F(LocalPartitionTest, unionAllLocalExchange) {
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .localPartitionRoundRobin(
+                        {PlanBuilder(planNodeIdGenerator)
+                             .values({data1})
+                             .project({"d0 as c0"})
+                             .planNode(),
+                         PlanBuilder(planNodeIdGenerator)
+                             .values({data2})
+                             .project({"e0 as c0"})
+                             .planNode()})
+                    .project({"length(c0)"})
+                    .planNode();
+    auto queryBuilder =
+        AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_);
     // applyTestParameters(queryBuilder);
     queryBuilder.serialExecution(serialExecutionMode)
-        .plan(PlanBuilder(planNodeIdGenerator)
-                  .localPartitionRoundRobin(
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
-                           .project({"d0 as c0"})
-                           .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
-                           .project({"e0 as c0"})
-                           .planNode()})
-                  .project({"length(c0)"})
-                  .planNode())
         .assertResults(
             "SELECT length(c0) FROM ("
             "   SELECT * FROM (VALUES ('x')) as t1(c0) UNION ALL "
@@ -456,7 +468,8 @@ TEST_F(LocalPartitionTest, roundRobinWithTableScan) {
 
   createDuckDbTable(vectors);
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  auto queryBuilder =
+      AssertQueryBuilder(rewriteToCudfPlan(op), duckDbQueryRunner_);
   queryBuilder.maxDrivers(3); // 3 partitions
   queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, "3");
 
@@ -634,7 +647,7 @@ TEST_F(LocalPartitionTest, gpuBytesTriggerBackpressure) {
                     .planNode();
 
     auto task =
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
+        AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
             .maxDrivers(numDrivers)
             .config(
                 core::QueryConfig::kMaxLocalExchangePartitionCount, numDrivers)

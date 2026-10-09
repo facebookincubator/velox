@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/lists/filling.hpp>
@@ -27,6 +28,20 @@ CudfAssignUniqueId::CudfAssignUniqueId(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::AssignUniqueIdNode>& planNode,
+    int32_t uniqueTaskId,
+    std::shared_ptr<std::atomic_int64_t> rowIdPool)
+    : CudfAssignUniqueId(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfAssignUniqueIdNode>(
+              planNode),
+          uniqueTaskId,
+          std::move(rowIdPool)) {}
+
+CudfAssignUniqueId::CudfAssignUniqueId(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfAssignUniqueIdNode>& planNode,
     int32_t uniqueTaskId,
     std::shared_ptr<std::atomic_int64_t> rowIdPool)
     : CudfOperatorBase(

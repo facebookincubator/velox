@@ -204,7 +204,7 @@ std::unique_ptr<cudf::column> maskToValidityColumn(
 }
 
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -246,7 +246,7 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
 }
 
 AggregationInputChannels buildAggregationInputChannels(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     exec::OperatorCtx const& operatorCtx,
     RowTypePtr const& inputRowSchema,
     std::vector<column_index_t> const& groupingKeyInputChannels) {
@@ -313,7 +313,7 @@ AggregationInputChannels buildAggregationInputChannels(
   return result;
 }
 
-RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode) {
+RowTypePtr getBufferedResultType(const CudfAggregationNode& aggregationNode) {
   const auto outputRowType = asRowType(aggregationNode.outputType());
   const auto numKeys = aggregationNode.groupingKeys().size();
 
@@ -341,7 +341,7 @@ bool hasFinalAggs(
 }
 
 void setupGroupingKeyChannelProjections(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     std::vector<column_index_t>& groupingKeyInputChannels,
     std::vector<column_index_t>& groupingKeyOutputChannels) {
   VELOX_CHECK(groupingKeyInputChannels.empty());

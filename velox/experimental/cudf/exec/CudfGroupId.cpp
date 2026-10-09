@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupId.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -31,6 +32,16 @@ CudfGroupId::CudfGroupId(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::GroupIdNode>& groupIdNode)
+    : CudfGroupId(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfGroupIdNode>(
+              groupIdNode)) {}
+
+CudfGroupId::CudfGroupId(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfGroupIdNode>& groupIdNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

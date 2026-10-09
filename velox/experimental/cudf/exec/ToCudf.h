@@ -23,10 +23,12 @@ namespace facebook::velox::cudf_velox {
 
 class CompileState {
  public:
-  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
+  CompileState(
+      const facebook::velox::exec::DriverFactory& driverFactory,
+      facebook::velox::exec::Driver& driver)
       : driverFactory_(driverFactory), driver_(driver) {}
 
-  exec::Driver& driver() {
+  facebook::velox::exec::Driver& driver() {
     return driver_;
   }
 
@@ -36,14 +38,15 @@ class CompileState {
   // Resolve the plan node for an operator. Falls back to
   // driverFactory_.consumerNode for operators like CallbackSink whose
   // planNodeId is "N/A". May return nullptr.
-  core::PlanNodePtr resolveOperatorPlanNode(const exec::Operator* op) const;
+  core::PlanNodePtr resolveOperatorPlanNode(
+      const facebook::velox::exec::Operator* op) const;
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
   bool compile(bool allow_cpu_fallback);
 
-  const exec::DriverFactory& driverFactory_;
-  exec::Driver& driver_;
+  const facebook::velox::exec::DriverFactory& driverFactory_;
+  facebook::velox::exec::Driver& driver_;
 };
 
 /// Registers adapter to add cuDF operators to Drivers.

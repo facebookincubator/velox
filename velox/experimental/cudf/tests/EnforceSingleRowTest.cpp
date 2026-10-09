@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -25,6 +26,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class CudfEnforceSingleRowTest : public HiveConnectorTestBase {
  protected:
@@ -48,7 +50,7 @@ TEST_F(CudfEnforceSingleRowTest, singleRow) {
   createDuckDbTable({singleRow});
 
   auto plan = PlanBuilder().values({singleRow}).enforceSingleRow().planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQuery(rewriteToCudfPlan(plan), "SELECT * FROM tmp");
 }
 
 TEST_F(CudfEnforceSingleRowTest, twoSingleRowBatches) {
@@ -59,11 +61,11 @@ TEST_F(CudfEnforceSingleRowTest, twoSingleRowBatches) {
       makeRowVector({makeFlatVector<int32_t>(1, [](auto row) { return row; })});
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({singleRow, singleRow})
-              .enforceSingleRow()
-              .planNode())
+      AssertQueryBuilder(rewriteToCudfPlan(
+                             PlanBuilder()
+                                 .values({singleRow, singleRow})
+                                 .enforceSingleRow()
+                                 .planNode()))
           .copyResults(pool()),
       "Expected single row of input");
 }
@@ -74,8 +76,11 @@ TEST_F(CudfEnforceSingleRowTest, multipleRows) {
       {makeFlatVector<int32_t>(27, [](auto row) { return row; })});
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder().values({multipleRows}).enforceSingleRow().planNode())
+      AssertQueryBuilder(rewriteToCudfPlan(
+                             PlanBuilder()
+                                 .values({multipleRows})
+                                 .enforceSingleRow()
+                                 .planNode()))
           .copyResults(pool()),
       "Expected single row of input. Received 27 rows.");
 }
@@ -90,7 +95,7 @@ TEST_F(CudfEnforceSingleRowTest, emptyInput) {
                   .filter("c0 = 12345")
                   .enforceSingleRow()
                   .planNode();
-  assertQuery(plan, "SELECT null");
+  assertQuery(rewriteToCudfPlan(plan), "SELECT null");
 }
 
 TEST_F(CudfEnforceSingleRowTest, multipleColumns) {
@@ -105,7 +110,7 @@ TEST_F(CudfEnforceSingleRowTest, multipleColumns) {
   createDuckDbTable({singleRow});
 
   auto plan = PlanBuilder().values({singleRow}).enforceSingleRow().planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQuery(rewriteToCudfPlan(plan), "SELECT * FROM tmp");
 }
 
 TEST_F(CudfEnforceSingleRowTest, withNulls) {
@@ -118,7 +123,7 @@ TEST_F(CudfEnforceSingleRowTest, withNulls) {
   createDuckDbTable({singleRow});
 
   auto plan = PlanBuilder().values({singleRow}).enforceSingleRow().planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQuery(rewriteToCudfPlan(plan), "SELECT * FROM tmp");
 }
 
 TEST_F(CudfEnforceSingleRowTest, largeBatch) {
@@ -128,7 +133,8 @@ TEST_F(CudfEnforceSingleRowTest, largeBatch) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(
-          PlanBuilder().values({largeRows}).enforceSingleRow().planNode())
+          rewriteToCudfPlan(
+              PlanBuilder().values({largeRows}).enforceSingleRow().planNode()))
           .copyResults(pool()),
       "Expected single row of input. Received 1000 rows.");
 }

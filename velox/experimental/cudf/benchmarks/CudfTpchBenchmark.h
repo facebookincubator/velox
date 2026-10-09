@@ -31,6 +31,9 @@ class CudfTpchBenchmark : public TpchBenchmark {
  public:
   void initialize() override;
 
+  facebook::velox::exec::test::TpchPlan getQueryPlanForExecution(
+      int32_t queryId) override;
+
   std::shared_ptr<facebook::velox::config::ConfigBase> makeConnectorProperties()
       override;
 

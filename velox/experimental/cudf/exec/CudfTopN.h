@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -30,6 +31,11 @@ class CudfTopN : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::TopNNode>& topNNode);
+
+  CudfTopN(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfTopNNode> topNNode);
 
   bool needsInput() const override {
     return !noMoreInput_;
@@ -49,7 +55,7 @@ class CudfTopN : public CudfOperatorBase {
  private:
   const int32_t count_; // N value of TopN
 
-  std::shared_ptr<const core::TopNNode> topNNode_;
+  std::shared_ptr<const CudfTopNNode> topNNode_;
   std::vector<cudf::size_type> sortKeys_;
   std::vector<cudf::order> columnOrder_;
   std::vector<cudf::null_order> nullOrder_;

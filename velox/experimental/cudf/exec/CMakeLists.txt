@@ -33,11 +33,14 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfPlanRewriter.cpp
   CudfReduce.cpp
+  CudfScanUtils.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
   CudfWindow.cpp
   DebugUtil.cpp
+  CudfPlanNodeTranslator.cpp
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
