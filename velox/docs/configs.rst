@@ -1483,6 +1483,10 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
    * - spark.legacy_date_formatter
      - bool
      - false
@@ -1490,6 +1494,10 @@ Spark-specific Configuration
        Joda date formatter performs strict checking of its input and uses different pattern string.
        For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
        Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see :issue:`10354`.
+   * - spark.legacy_java_charsets
+     - bool
+     - false
+     - If true, the Spark ``encode`` function accepts supported Java charset aliases.
    * - spark.legacy_statistical_aggregate
      - bool
      - false
