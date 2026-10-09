@@ -49,6 +49,7 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
+  ToPrettyString.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
   XxHash64.cpp
