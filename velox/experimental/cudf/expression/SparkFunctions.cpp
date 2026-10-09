@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -22,7 +23,16 @@
 #include "velox/experimental/cudf/expression/sparksql/HashFunction.h"
 #include "velox/experimental/cudf/expression/sparksql/SubStringFunction.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
+
+#include <cudf/strings/convert/convert_datetime.hpp>
+
+#include <cctype>
+#include <memory>
+#include <optional>
+#include <string_view>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -40,6 +50,160 @@ void registerSparkArrayAccessFunctions(const std::string& prefix) {
       },
       arrayAccessSignatures({"tinyint", "smallint", "integer", "bigint"}));
 }
+
+// Appends a literal character, escaping '%' as "%%" for cuDF's strftime
+// parser.
+void appendCudfLiteralCharacter(std::string& result, char character) {
+  if (character == '%') {
+    result += "%%";
+  } else {
+    result += character;
+  }
+}
+
+// Maps one repeated Spark pattern token to its cuDF strftime directive. For
+// example, "yyyy" maps to "%Y" and "MM" maps to "%m".
+std::optional<std::string_view> cudfDateFormatToken(
+    char token,
+    size_t tokenLength) {
+  if (token == 'y') {
+    if (tokenLength == 4) {
+      return "%Y";
+    }
+    if (tokenLength == 2) {
+      return "%y";
+    }
+    return std::nullopt;
+  }
+
+  if (tokenLength != 2) {
+    return std::nullopt;
+  }
+
+  switch (token) {
+    case 'M':
+      return "%m";
+    case 'd':
+      return "%d";
+    case 'H':
+      return "%H";
+    case 'm':
+      return "%M";
+    case 's':
+      return "%S";
+    default:
+      return std::nullopt;
+  }
+}
+
+// Converts a complete Spark datetime pattern, including quoted literals, to
+// cuDF strftime syntax. For example, "yyyy-MM-dd" becomes "%Y-%m-%d" and
+// "yyyy'Q'MM" becomes "%YQ%m". Returns nullopt for valid Spark patterns that
+// cuDF does not support and throws for malformed patterns.
+std::optional<std::string> sparkToCudfDateFormat(std::string_view sparkFormat) {
+  VELOX_USER_CHECK(!sparkFormat.empty(), "Invalid pattern specification");
+
+  std::string result;
+  result.reserve(sparkFormat.size() * 2);
+
+  for (size_t i = 0; i < sparkFormat.size();) {
+    const auto character = sparkFormat[i];
+    if (character == '\'') {
+      if (i + 1 < sparkFormat.size() && sparkFormat[i + 1] == '\'') {
+        appendCudfLiteralCharacter(result, '\'');
+        i += 2;
+        continue;
+      }
+
+      ++i;
+      bool closedLiteral{false};
+      while (i < sparkFormat.size()) {
+        if (sparkFormat[i] != '\'') {
+          appendCudfLiteralCharacter(result, sparkFormat[i]);
+          ++i;
+          continue;
+        }
+        if (i + 1 < sparkFormat.size() && sparkFormat[i + 1] == '\'') {
+          appendCudfLiteralCharacter(result, '\'');
+          i += 2;
+          continue;
+        }
+        ++i;
+        closedLiteral = true;
+        break;
+      }
+      if (!closedLiteral) {
+        VELOX_USER_FAIL("No closing single quote for literal");
+      }
+      continue;
+    }
+
+    if (!std::isalpha(static_cast<unsigned char>(character))) {
+      appendCudfLiteralCharacter(result, character);
+      ++i;
+      continue;
+    }
+
+    const auto tokenStart = i;
+    while (i < sparkFormat.size() && sparkFormat[i] == character) {
+      ++i;
+    }
+    const auto cudfToken = cudfDateFormatToken(character, i - tokenStart);
+    if (!cudfToken.has_value()) {
+      return std::nullopt;
+    }
+    result += cudfToken.value();
+  }
+
+  return result;
+}
+
+// Extracts and translates a non-null constant format argument. For example,
+// date_format(c0, 'yyyy') produces "%Y".
+std::optional<std::string> getCudfSparkDateFormat(
+    const core::TypedExprPtr& expr) {
+  if (expr->inputs().size() != 2) {
+    return std::nullopt;
+  }
+  const auto format = constantVarcharValue(expr->inputs()[1]);
+  if (!format.has_value()) {
+    return std::nullopt;
+  }
+  return sparkToCudfDateFormat(
+      std::string_view(format->data(), format->size()));
+}
+
+bool canEvaluateDateFormat(const core::TypedExprPtr& expression) {
+  return getCudfSparkDateFormat(expression).has_value();
+}
+
+// Formats timestamps using the subset of Spark patterns supported by cuDF.
+class DateFormatFunction : public CudfFunction {
+ public:
+  explicit DateFormatFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "date_format expects exactly 2 inputs");
+
+    auto cudfFormat = getCudfSparkDateFormat(expr);
+    VELOX_CHECK(
+        cudfFormat.has_value(),
+        "date_format format string must be a supported non-null constant");
+    cudfFormat_ = std::move(cudfFormat.value());
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    const auto inputColumn = asView(inputColumns[0]);
+    return cudf::strings::from_timestamps(
+        inputColumn, cudfFormat_, cudf::strings_column_view{}, stream, mr);
+  }
+
+ private:
+  // Uses cuDF strftime syntax after validation and translation at construction.
+  std::string cudfFormat_;
+};
 
 } // namespace
 
@@ -125,6 +289,21 @@ void registerSparkFunctions(const std::string& prefix) {
            .build()},
       true,
       DateTruncFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "date_format",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<DateFormatFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("timestamp")
+           .constantArgumentType("varchar")
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/canEvaluateDateFormat);
 
   registerSparkArrayAccessFunctions(prefix);
 }

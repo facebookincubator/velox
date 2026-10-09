@@ -278,6 +278,7 @@ velox_add_cudf_test(
     velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib
+    velox_functions_spark
     velox_test_util
     fmt::fmt
 )
