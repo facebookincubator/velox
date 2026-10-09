@@ -24,6 +24,20 @@ namespace facebook::velox::functions::sparksql {
 
 /// Compiles Spark's format_string and printf calls into a conditional special
 /// form that evaluates the format pattern before the remaining arguments.
+///
+/// Supports the following subset of Java's Formatter syntax:
+///   - '%%' for a literal percent sign.
+///   - Bare '%s' for VARCHAR, BOOLEAN, TINYINT, SMALLINT, INTEGER, and BIGINT.
+///   - '%d' for integral types with an optional width and the '-', '+',
+///     space, and '0' flags.
+///   - '%o', '%x', and '%X' for integral types with an optional width and the
+///     '-' and '0' flags.
+/// Widths are limited to 1,048,576. Precision, argument indexes, other
+/// conversions, and other flags raise a user error.
+///
+/// Follow-up work, including '%s' width and alignment, integral grouping, and
+/// '%f' for REAL and DOUBLE, is tracked in
+/// https://github.com/facebookincubator/velox/issues/19471.
 class FormatStringCallToSpecialForm : public exec::FunctionCallToSpecialForm {
  public:
   /// Resolves the return type to VARCHAR.
