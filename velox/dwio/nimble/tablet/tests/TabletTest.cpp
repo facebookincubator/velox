@@ -2465,6 +2465,107 @@ TEST_P(TabletTest, stripeGroupMetadataConfigurableReadFactors) {
   }
 }
 
+namespace {
+// Writes a kStreamMajor tablet with one stream per stripe, sized
+// `streamSizes[i]` in stripe i. Empty `readFactors` keeps the writer's default
+// stripe-group metadata candidates.
+std::string writeStreamMajorTablet(
+    velox::memory::MemoryPool& pool,
+    const std::vector<uint32_t>& streamSizes,
+    const std::vector<std::pair<nimble::EncodingType, float>>& readFactors) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::TabletWriter::Options options{
+      .streamDeduplicationEnabled = false,
+      .stripeGroupEncodingLayout =
+          nimble::StripeGroup::EncodingLayout::kStreamMajor};
+  options.stripeGroupEncodingLayoutReadFactors = readFactors;
+  auto tabletWriter =
+      nimble::TabletWriter::create(&writeFile, pool, std::move(options));
+  nimble::Buffer buffer{pool};
+  for (const auto size : streamSizes) {
+    std::vector<nimble::Stream> streams;
+    streams.push_back(
+        nimble::index::test::createStream(
+            buffer, {.offset = 0, .chunks = {{.rowCount = 10, .size = size}}}));
+    tabletWriter->writeStripe(10, std::move(streams));
+  }
+  tabletWriter->close();
+  writeFile.close();
+  return file;
+}
+
+uint64_t stripeGroupMetadataSize(const nimble::TabletReader& tablet) {
+  uint64_t total{0};
+  for (const auto& section : tablet.stripeGroupsMetadata()) {
+    total += section.size();
+  }
+  return total;
+}
+} // namespace
+
+TEST_P(TabletTest, stripeGroupMetadataDictionaryForLowCardinality) {
+  // Stream sizes cycle through three values that need 10 bits each. A
+  // three-entry dictionary with 2-bit indices beats 10-bit FixedBitWidth, so
+  // the default candidates, which include Dictionary, must produce smaller
+  // stripe-group metadata than Constant/Trivial/FixedBitWidth alone.
+  constexpr uint32_t kStripeCount = 256;
+  const std::vector<uint32_t> cycle{1, 300, 600};
+  std::vector<uint32_t> streamSizes(kStripeCount);
+  for (uint32_t i = 0; i < kStripeCount; ++i) {
+    streamSizes[i] = cycle[i % cycle.size()];
+  }
+  auto roundTripMetadataSize =
+      [&](const std::vector<std::pair<nimble::EncodingType, float>>&
+              readFactors) {
+        const auto file =
+            writeStreamMajorTablet(*pool_, streamSizes, readFactors);
+        const auto tablet = createTabletReader(
+            std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
+                file, false));
+        EXPECT_EQ(tablet->stripeCount(), kStripeCount);
+        for (uint32_t i = 0; i < kStripeCount; ++i) {
+          EXPECT_EQ(
+              tablet->streamSize(tablet->stripeIdentifier(i), 0),
+              streamSizes[i]);
+        }
+        return stripeGroupMetadataSize(*tablet);
+      };
+
+  const auto withDictionary = roundTripMetadataSize({});
+  const auto withoutDictionary = roundTripMetadataSize(
+      {{nimble::EncodingType::Constant, 1.0},
+       {nimble::EncodingType::Trivial, 1.0},
+       {nimble::EncodingType::FixedBitWidth, 1.0}});
+  EXPECT_LT(withDictionary, withoutDictionary);
+}
+
+TEST_P(TabletTest, stripeGroupMetadataExactBitWidths) {
+  // With FixedBitWidth as the only candidate, stream sizes spanning 9 bits must
+  // encode smaller than sizes spanning 10 bits. Byte-rounded widths would store
+  // both at 16 bits and produce equal metadata.
+  constexpr uint32_t kStripeCount = 256;
+  auto roundTripMetadataSize = [&](uint32_t limit) {
+    std::vector<uint32_t> streamSizes(kStripeCount);
+    for (uint32_t i = 0; i < kStripeCount; ++i) {
+      streamSizes[i] = 1 + (i * 7'919) % limit;
+    }
+    const auto file = writeStreamMajorTablet(
+        *pool_, streamSizes, {{nimble::EncodingType::FixedBitWidth, 1.0}});
+    const auto tablet = createTabletReader(
+        std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
+            file, false));
+    EXPECT_EQ(tablet->stripeCount(), kStripeCount);
+    for (uint32_t i = 0; i < kStripeCount; ++i) {
+      EXPECT_EQ(
+          tablet->streamSize(tablet->stripeIdentifier(i), 0), streamSizes[i]);
+    }
+    return stripeGroupMetadataSize(*tablet);
+  };
+
+  EXPECT_LT(roundTripMetadataSize(511), roundTripMetadataSize(1'023));
+}
+
 // TabletWithIndexTest is a derived test fixture for tablet index related tests.
 // It inherits the memory pool and helper methods from TabletTest.
 class TabletWithIndexTest : public TabletTest {
