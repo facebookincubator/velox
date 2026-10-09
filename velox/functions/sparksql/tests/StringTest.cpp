@@ -99,11 +99,10 @@ TEST_F(StringTest, octetLength) {
     // Consists of five codepoints (17 bytes).
     EXPECT_EQ(octetLength(kWomanFacepalmingLightSkinTone, inputType), 17);
     EXPECT_EQ(octetLength("\U0001F408", inputType), 4);
+    EXPECT_EQ(octetLength(std::string("\xFF\x00\x80", 3), inputType), 3);
     EXPECT_EQ(octetLength(std::nullopt, inputType), std::nullopt);
   }
 
-  // Arbitrary binary values do not require valid UTF-8.
-  EXPECT_EQ(octetLength(std::string("\xFF\x00\x80", 3), VARBINARY()), 3);
   // ASCII boundary: DEL (0x7F) is 1 byte, next codepoint (0x80) is 2 bytes.
   EXPECT_EQ(octetLength("\x7F", VARBINARY()), 1);
   EXPECT_EQ(octetLength("\xC2\x80", VARBINARY()), 2);

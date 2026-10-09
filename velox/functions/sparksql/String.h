@@ -107,9 +107,7 @@ struct OctetLengthFunction {
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const TInput& input) {
-    // StringView is constructed with an int32_t length, so input.size() is
-    // guaranteed to fit.
-    result = static_cast<int32_t>(input.size());
+    result = input.size();
   }
 };
 
