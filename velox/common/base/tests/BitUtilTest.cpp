@@ -851,19 +851,16 @@ TEST_F(BitUtilTest, rotateLeft64) {
   }
 }
 
-#ifndef _MSC_VER
 TEST_F(BitUtilTest, bswap128) {
   EXPECT_EQ(builtin_bswap128(10), HugeInt::build(720575940379279360, 0));
   EXPECT_EQ(
       builtin_bswap128(HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       -248);
 }
-#endif
 
 TEST_F(BitUtilTest, countLeadingZeros) {
   EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
   EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
-#ifndef _MSC_VER
   EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
@@ -873,7 +870,6 @@ TEST_F(BitUtilTest, countLeadingZeros) {
       4);
   EXPECT_EQ(
       countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
-#endif
 }
 
 TEST_F(BitUtilTest, storeBitsToByte) {

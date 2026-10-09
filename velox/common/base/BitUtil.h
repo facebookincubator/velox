@@ -732,11 +732,7 @@ bool inline hasIntersection(
 
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
-#ifdef _MSC_VER
-  static_assert(std::is_same_v<T, uint64_t>);
-#else
   static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
-#endif
   return std::countl_zero(word);
 }
 
@@ -973,7 +969,6 @@ inline void padToAlignment(
   }
 }
 
-#ifndef _MSC_VER
 /// Returns value with the order of the bytes reversed; for example, 0xaabb
 /// becomes 0xbbaa. Byte here always means exactly 8 bits.
 inline __int128_t builtin_bswap128(__int128_t value) {
@@ -990,7 +985,6 @@ inline __int128_t builtin_bswap128(__int128_t value) {
 #undef VELOX_HAS_BUILTIN_BSWAP_INT128
 #endif
 }
-#endif
 
 /// Store `bits' into the memory region pointed by `byte', at `index' (bit
 /// index).  If `kSize' is 8, we store the whole byte directly; otherwise it
