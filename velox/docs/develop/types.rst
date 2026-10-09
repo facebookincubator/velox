@@ -549,12 +549,14 @@ BIGINT           DECIMAL(19, 0), REAL, DOUBLE
 REAL             DOUBLE
 DECIMAL          REAL, DOUBLE
 DATE             TIMESTAMP
-UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
-                 VARCHAR, VARBINARY
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, DECIMAL(1, 0),
+                 REAL, DOUBLE, VARCHAR, VARBINARY
 ==============   ==========================================================
 
 Differences from Velox's defaults:
 
+* ``UNKNOWN -> DECIMAL(1, 0)`` is added so an unknown literal can bind to a
+  parameterized DECIMAL signature.
 * ``BIGINT -> REAL`` is added. The BIGINT row becomes
   ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
   ordering. This makes ``divide(real, bigint)`` resolve to
