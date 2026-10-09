@@ -22,9 +22,11 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
+#include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cub/device/device_reduce.cuh>
 #include <cuda/iterator>
 #include <cuda/std/span>
 #include <cuda/std/type_traits>
@@ -46,6 +48,41 @@ struct DecimalSumState {
   int64_t overflow; // net int128 carries (CPU parity); always 0 on GPU for now
   uint64_t lower; // lower 64 bits of the decimal sum
   int64_t upper; // upper 64 bits of the decimal sum (signed)
+};
+
+struct DecimalSumCount {
+  __int128_t sum;
+  int64_t count;
+};
+
+struct Decimal64ToSumCount {
+  int64_t const* values;
+  cudf::bitmask_type const* nullMask;
+
+  __device__ DecimalSumCount operator()(cudf::size_type idx) const {
+    return nullMask && !cudf::bit_is_set(nullMask, idx)
+        ? DecimalSumCount{0, 0}
+        : DecimalSumCount{static_cast<__int128_t>(values[idx]), 1};
+  }
+};
+
+struct AddDecimalSumCount {
+  __device__ DecimalSumCount operator()(
+      DecimalSumCount lhs,
+      DecimalSumCount rhs) const {
+    return {lhs.sum + rhs.sum, lhs.count + rhs.count};
+  }
+};
+
+struct StoreDecimalSumCount {
+  DecimalSumCount const* result;
+  __int128_t* sum;
+  int64_t* count;
+
+  __device__ void operator()(cudf::size_type) const {
+    *sum = result->sum;
+    *count = result->count;
+  }
 };
 
 static_assert(sizeof(DecimalSumState) == detail::kDecimalSumStateSize);
@@ -199,6 +236,57 @@ buildStateValidityMaskImpl(
 } // namespace
 
 namespace detail {
+
+void reduceDecimal64SumCount(
+    cudf::column_view input,
+    cudf::mutable_column_view sum,
+    cudf::mutable_column_view count,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  CUDF_EXPECTS(
+      input.type().id() == cudf::type_id::DECIMAL64,
+      "Direct decimal reduction requires DECIMAL64 input");
+  CUDF_EXPECTS(
+      sum.type().id() == cudf::type_id::DECIMAL128 && sum.size() == 1,
+      "Direct decimal reduction requires one DECIMAL128 sum output");
+  CUDF_EXPECTS(
+      count.type().id() == cudf::type_id::INT64 && count.size() == 1,
+      "Direct decimal reduction requires one INT64 count output");
+
+  auto indices = cuda::counting_iterator<cudf::size_type>{0};
+  auto transform = Decimal64ToSumCount{
+      input.data<int64_t>(), input.nullable() ? input.null_mask() : nullptr};
+  auto result = rmm::device_uvector<DecimalSumCount>(1, stream, mr);
+  size_t tempStorageBytes = 0;
+  CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(
+      nullptr,
+      tempStorageBytes,
+      indices,
+      result.data(),
+      input.size(),
+      AddDecimalSumCount{},
+      transform,
+      DecimalSumCount{0, 0},
+      stream.get()));
+  auto tempStorage = rmm::device_buffer(tempStorageBytes, stream, mr);
+  CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(
+      tempStorage.data(),
+      tempStorageBytes,
+      indices,
+      result.data(),
+      input.size(),
+      AddDecimalSumCount{},
+      transform,
+      DecimalSumCount{0, 0},
+      stream.get()));
+  cub::DeviceFor::ForEachN(
+      cuda::counting_iterator<cudf::size_type>{0},
+      1,
+      StoreDecimalSumCount{
+          result.data(), sum.data<__int128_t>(), count.data<int64_t>()},
+      stream.get());
+  CUDF_CUDA_TRY(cudaGetLastError());
+}
 
 template <typename T>
 concept OffsetStorageType =

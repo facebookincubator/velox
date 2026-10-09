@@ -46,7 +46,6 @@
 namespace {
 
 using namespace facebook::velox;
-using facebook::velox::cudf_velox::castDecimal64InputToDecimal128;
 using facebook::velox::cudf_velox::CountInputKind;
 using facebook::velox::cudf_velox::finalizeDecimalAverage;
 using facebook::velox::cudf_velox::get_output_mr;
@@ -298,12 +297,13 @@ cudf_velox::DecimalSumStateColumns makeSumCountColumns(
   return cols;
 }
 
-std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
+cudf_velox::DecimalSumStateColumns reduceRawDecimalSumCount(
     cudf::column_view inputCol,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  std::unique_ptr<cudf::column> castedInput;
-  inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
+  if (inputCol.type().id() == cudf::type_id::DECIMAL64) {
+    return cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr);
+  }
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
       cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
@@ -315,7 +315,14 @@ std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
       cudf::data_type{cudf::type_id::INT64},
       stream,
       get_temp_mr());
-  auto cols = makeSumCountColumns(*sumScalar, *countScalar, stream, mr);
+  return makeSumCountColumns(*sumScalar, *countScalar, stream, mr);
+}
+
+std::unique_ptr<cudf::column> partialDecimalSumCountToSerializedString(
+    cudf::column_view inputCol,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto cols = reduceRawDecimalSumCount(inputCol, stream, mr);
   return serializeDecimalPartialOrIntermediateState(
       std::move(cols.sum), std::move(cols.count), stream, mr);
 }
@@ -374,20 +381,7 @@ std::unique_ptr<cudf::column> singleDecimalAvgFromRawColumn(
     TypePtr const& resultType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  std::unique_ptr<cudf::column> castedInput;
-  inputCol = castDecimal64InputToDecimal128(inputCol, castedInput, stream);
-  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto sumScalar =
-      cudf::reduce(inputCol, *sumAgg, inputCol.type(), stream, get_temp_mr());
-  auto countAgg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
-      cudf::null_policy::EXCLUDE);
-  auto countScalar = cudf::reduce(
-      inputCol,
-      *countAgg,
-      cudf::data_type{cudf::type_id::INT64},
-      stream,
-      get_temp_mr());
-  auto cols = makeSumCountColumns(*sumScalar, *countScalar, stream, mr);
+  auto cols = reduceRawDecimalSumCount(inputCol, stream, mr);
   return finalizeDecimalAverage(
       std::move(cols.sum), std::move(cols.count), resultType, stream, mr);
 }
@@ -397,13 +391,11 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
     TypePtr const& outputType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  if (inputCol.type().id() == cudf::type_id::DECIMAL64) {
+    return cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr).sum;
+  }
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
-  std::unique_ptr<cudf::column> castedInput;
-  if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
-    castedInput = cudf::cast(inputCol, cudfOutType, stream, get_temp_mr());
-    inputCol = castedInput->view();
-  }
   auto const resultScalar =
       cudf::reduce(inputCol, *sumAgg, cudfOutType, stream, get_temp_mr());
   return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);

@@ -30,6 +30,35 @@
 
 namespace facebook::velox::cudf_velox {
 
+DecimalSumStateColumns reduceDecimal64SumCount(
+    const cudf::column_view& input,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  DecimalSumStateColumns result;
+  result.sum = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::DECIMAL128, input.type().scale()},
+      1,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  result.count = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      1,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  detail::reduceDecimal64SumCount(
+      input,
+      result.sum->mutable_view(),
+      result.count->mutable_view(),
+      stream,
+      mr);
+  auto [nullMask, nullCount] = detail::buildStateValidityMask(
+      result.sum->view(), result.count->view(), stream, mr);
+  result.sum->set_null_mask(std::move(nullMask), nullCount);
+  return result;
+}
+
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,

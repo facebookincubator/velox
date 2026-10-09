@@ -36,6 +36,17 @@ namespace facebook::velox::cudf_velox::detail {
 constexpr size_t kDecimalSumStateSize = 32;
 
 /**
+ * Reduces a DECIMAL64 column directly into one DECIMAL128 sum and one INT64
+ * non-null count without materializing a DECIMAL128 input column.
+ */
+void reduceDecimal64SumCount(
+    cudf::column_view input,
+    cudf::mutable_column_view sum,
+    cudf::mutable_column_view count,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+/**
  * Writes strings-style prefix offsets: offset[i] == i * kDecimalSumStateSize.
  *
  * @param offsetType INT32 or INT64; selects offset storage width via
