@@ -468,8 +468,8 @@ TEST_F(ArraySortTest, comparatorIgnoresNullArrayWithStaleSize) {
       std::vector<NullableIntArray>{{{1, 2, 3}}, std::nullopt});
   for (const auto& comparator :
        {"(x, y) -> if(lessthan(x, y), -1, if(greaterthan(x, y), 1, 0))",
-        "(x, y) -> if(lessthan(x + 1, y + 1), -1, "
-        "if(greaterthan(x + 1, y + 1), 1, 0))"}) {
+        "(x, y) -> if(lessthan(add(x, 1), add(y, 1)), -1, "
+        "if(greaterthan(add(x, 1), add(y, 1)), 1, 0))"}) {
     SCOPED_TRACE(comparator);
     auto result = evaluate(
         fmt::format("array_sort(c0, {})", comparator), makeRowVector({input}));
