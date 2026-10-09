@@ -217,6 +217,8 @@ class MemoryArbitrator {
     uint64_t freeCapacityBytes{0};
     /// The free reserved memory capacity in bytes.
     uint64_t freeReservedCapacityBytes{0};
+    /// The total reserved memory capacity in bytes.
+    uint64_t reservedCapacityBytes{0};
     /// The total number of times of the reclaim attempts that end up failing
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
@@ -232,6 +234,7 @@ class MemoryArbitrator {
         uint64_t _maxCapacityBytes,
         uint64_t _freeCapacityBytes,
         uint64_t _freeReservedCapacityBytes,
+        uint64_t _reservedCapacityBytes,
         uint64_t _numNonReclaimableAttempts);
 
     Stats() = default;
