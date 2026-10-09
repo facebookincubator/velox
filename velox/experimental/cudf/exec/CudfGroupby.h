@@ -32,6 +32,8 @@ inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
+inline constexpr std::string_view kDirectGroupbyFinalizationStat{
+    "directGroupbyFinalization"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -87,6 +89,13 @@ struct GroupbyAggregator {
 
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) = 0;
+
+  // Finalizes the kIntermediate state column, which must hold exactly one
+  // already-merged state per grouping key. Does not regroup.
+  virtual std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
@@ -189,6 +198,11 @@ class CudfGroupby : public CudfOperatorBase {
       TypePtr const& outputType,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
+
+  // Converts the merged per-key states in 'bufferedResult_' to final output
+  // without regrouping. Keeps key columns as-is.
+  CudfVectorPtr finalizeGroupedStates(
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
 
   CudfVectorPtr releaseAndResetBufferedResult();
 

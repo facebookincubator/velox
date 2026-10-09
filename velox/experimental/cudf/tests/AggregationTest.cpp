@@ -1142,6 +1142,46 @@ DEBUG_ONLY_TEST_F(
   EXPECT_EQ(replacements, concatenations);
 }
 
+TEST_F(AggregationTest, directFinalizationMixedAggregates) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 1, 2, std::nullopt}),
+      makeNullableFlatVector<int64_t>({10, 30, std::nullopt, 50}),
+  });
+  std::vector<RowVectorPtr> vectors{input, input};
+  createDuckDbTable(vectors);
+  const std::vector<std::string> aggregates{
+      "sum(c1)",
+      "min(c1)",
+      "max(c1)",
+      "count(c1)",
+      "count(*)",
+      "avg(c1)",
+      "stddev_samp(c1)"};
+
+  for (bool single : {true, false}) {
+    SCOPED_TRACE(single);
+    auto builder = PlanBuilder().values(vectors);
+    if (single) {
+      builder.singleAggregation({"c0"}, aggregates);
+    } else {
+      builder.partialAggregation({"c0"}, aggregates).finalAggregation();
+    }
+    auto plan = builder.planNode();
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(1)
+            .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "4")
+            .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+            .assertResults(
+                "SELECT c0, sum(c1), min(c1), max(c1), count(c1), "
+                "count(*), avg(c1), stddev_samp(c1) FROM tmp GROUP BY c0");
+    EXPECT_GT(
+        streamingGroupbyStatSum(
+            task, plan->id(), cudf_velox::kDirectGroupbyFinalizationStat),
+        0);
+  }
+}
+
 TEST_F(AggregationTest, finalAggregationStreamingMixedAggs) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
