@@ -478,6 +478,17 @@ TEST_F(DecimalArithmeticTest, decimalMod) {
            DECIMAL(20, 0)),
        makeFlatVector<int64_t>({7, 7, -7, -7}, DECIMAL(10, 0))});
 
+  // long % short -> long, with the dividend's scale above the divisor's, so
+  // the divisor is rescaled by 10^20, which does not fit int64_t. The old code
+  // narrowed that factor and returned 0.05843009213693952 for 2 % 1.
+  const int128_t twoE20 = HugeInt::build(10, 15532559262904483840ull); // 2e20
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector<int128_t>({0, twoE20, -twoE20, twoE20}, DECIMAL(30, 20)),
+      "mod(c0, c1)",
+      {makeFlatVector<int128_t>(
+           {twoE20, twoE20, -twoE20, twoE20}, DECIMAL(38, 20)),
+       makeFlatVector<int64_t>({1, 3, 3, -3}, DECIMAL(10, 0))});
+
   // short % long -> long.
   testDecimalExpr<TypeKind::HUGEINT>(
       makeFlatVector<int128_t>({0, -16, 0, -16}, DECIMAL(25, 10)),
