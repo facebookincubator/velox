@@ -156,6 +156,18 @@ struct FixedPointOptions {
   /// Sizing it for the largest concurrent fixed point satisfies both.
   folly::Executor* orchestrationExecutor{nullptr};
 
+  /// Maximum number of drivers for the plans a parallel loop runs after
+  /// initialization: the body, convergence and trailing plans.  Must not exceed
+  /// the parent task's maxDrivers.  A loop nested in a plan gets that plan's
+  /// share of the budget as its own iterationMaxDrivers.  The plans of one body
+  /// or convergence chain run at the same time and share this budget, each
+  /// getting at least one driver.  With more than one driver these plans follow
+  /// ordinary Velox multi-driver semantics, so an aggregation that must see
+  /// every row needs a local exchange in front of it.  The last convergence
+  /// plan always runs single-driver, because it must produce one verdict row
+  /// per worker.  The default of 1 runs all of them single-driver.
+  uint32_t iterationMaxDrivers{1};
+
   /// Set by an enclosing FixedPointLoop on the sub-tasks it creates; left empty
   /// by a coordinator, which owns none of what it carries.
   std::optional<NestedFixedPoint> nested;
@@ -248,10 +260,10 @@ class FixedPointLoop {
   /// taskCompletionFuture() (as a coordinator running the fixed point as a
   /// parallel stage would).  Use next() for serial, in-process driving.
   /// 'maxDrivers' is used for the Phase-1 initial plans, which read real
-  /// sources (TableScan/Exchange) that parallelize naturally; the iteration
-  /// body, convergence, and trailing sub-tasks always run single-driver
-  /// (multi-driver body support is a future extension -- see the design doc's
-  /// open questions).
+  /// sources (TableScan/Exchange) that parallelize naturally.  The body,
+  /// convergence and trailing plans run with up to
+  /// FixedPointOptions::iterationMaxDrivers drivers, which must not exceed
+  /// 'maxDrivers'.
   /// 'onComplete' runs on the orchestration executor when the loop finishes:
   /// with a null exception on success, or the one it failed with.  The owning
   /// Task uses it to reach a terminal state, which keeps terminate() private to
@@ -356,12 +368,18 @@ class FixedPointLoop {
   // point runs: 'planIndexOffset' is added to the plan index passed to
   // producerLocation, so the body's producers (offset 0) and the convergence
   // sequence's (offset node_->plans().size()) get distinct ids in the same
-  // iteration.
+  // iteration.  The plans run concurrently and share iterationDrivers();
+  // 'singleDriverLastPlan' keeps the last one at one driver.
   std::vector<RowVectorPtr> runParallelChain(
       const std::vector<core::PlanNodePtr>& plans,
       size_t planIndexOffset,
       int32_t iteration,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      bool singleDriverLastPlan);
+
+  // Driver budget for the plans run after initialization; see
+  // FixedPointOptions::iterationMaxDrivers.
+  uint32_t iterationDrivers() const;
 
   // Appends a copy (in outputPool_) of the named Vector state entry to the
   // output buffer.
@@ -426,10 +444,8 @@ class FixedPointLoop {
 
   // The parent task's maxDrivers (from start()), used for the Phase-1 initial
   // plans -- they read real sources (TableScan / Exchange / upstream) that
-  // parallelize naturally.  Serial mode (next()) is always single-driver, so
-  // this stays 1.  The iteration body, convergence, and trailing sub-tasks
-  // always run single-driver for now (multi-driver body support is a future
-  // extension -- see the design doc's open questions).
+  // parallelize naturally -- and as a cap on iterationDrivers().  Serial mode
+  // (next()) is always single-driver, so this stays 1.
   uint32_t maxDrivers_{1};
 
   core::FixedPointNodePtr node_;
