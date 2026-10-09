@@ -21,6 +21,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace velox_connector = ::facebook::velox::connector;
@@ -71,6 +75,12 @@ class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
  private:
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
+
+  // Output and filter-only columns whose handles are `kPartitionKey`.
+  std::unordered_set<std::string> partitionColumnNames_;
+
+  // Iceberg source field IDs of output and filter-only columns, by name.
+  std::unordered_map<std::string, int32_t> sourceFieldIds_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
