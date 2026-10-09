@@ -3022,7 +3022,7 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
 }
 
 /// Rows where \p condition is anything but a valid \p value, nulls included.
-rmm::device_buffer makeRowMaskExcept(
+cuda::device_buffer<std::byte> makeRowMaskExcept(
     const cudf::column_view& condition,
     bool value,
     cuda::stream_ref stream,
@@ -3222,7 +3222,7 @@ ColumnOrView FunctionExpression::eval(
       // nothing here; LogicalFunction folds them.
       const bool isAnd =
           expr_->asUnchecked<core::CallTypedExpr>()->name() == "and";
-      rmm::device_buffer undecided;
+      std::optional<cuda::device_buffer<std::byte>> undecided;
       branchInputs.reserve(subexpressions_.size() - 1);
       for (size_t operand = 0; operand < subexpressions_.size(); ++operand) {
         if (operand == 0) {
@@ -3231,7 +3231,7 @@ ColumnOrView FunctionExpression::eval(
         } else {
           branchInputs.push_back(maskInputRows(
               inputColumnViews,
-              static_cast<const cudf::bitmask_type*>(undecided.data()),
+              reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
               stream,
               mr));
           subexprResults.push_back(
@@ -3246,18 +3246,18 @@ ColumnOrView FunctionExpression::eval(
         auto stillUndecided =
             makeRowMaskExcept(result, /*value=*/!isAnd, stream, mr);
         if (operand == 0) {
-          undecided = std::move(stillUndecided);
+          undecided.emplace(std::move(stillUndecided));
           continue;
         }
         // Rows hidden from this operand may have evaluated to anything, so only
         // the rows it saw can stay undecided.
         const std::vector<const cudf::bitmask_type*> masks{
-            static_cast<const cudf::bitmask_type*>(undecided.data()),
-            static_cast<const cudf::bitmask_type*>(stillUndecided.data())};
+            reinterpret_cast<const cudf::bitmask_type*>(undecided->data()),
+            reinterpret_cast<const cudf::bitmask_type*>(stillUndecided.data())};
         const std::vector<cudf::size_type> beginBits{0, 0};
-        undecided =
+        undecided.emplace(
             cudf::bitmask_and(masks, beginBits, result.size(), stream, mr)
-                .first;
+                .first);
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
