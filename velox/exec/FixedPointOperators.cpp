@@ -15,6 +15,8 @@
  */
 #include "velox/exec/FixedPointOperators.h"
 
+#include <numeric>
+
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/HashTable.h"
@@ -62,7 +64,8 @@ PersistentState* stateOf(
 // read.  A delta source reads what an iteration consumes -- an append entry's
 // latest delta (the frontier) or a replace entry's full contents; a non-delta
 // source reads the entry's whole contents (the fixed point's output, an append
-// entry's whole accumulation).
+// entry's whole accumulation).  The drivers of a pipeline split the batches
+// between them, so together they emit each batch once.
 class StateSourceOperator : public exec::SourceOperator {
  public:
   StateSourceOperator(
@@ -76,20 +79,32 @@ class StateSourceOperator : public exec::SourceOperator {
             node->id(),
             "FixedPointStateSource"),
         stateName_{node->stateName()},
-        delta_{node->delta()} {}
+        delta_{node->delta()},
+        driverIndex_{driverCtx->partitionId} {}
 
   void initialize() override {
     Operator::initialize();
     auto* state = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/false);
     batches_ =
         delta_ ? state->readVector(stateName_) : state->getVector(stateName_);
+    numDrivers_ =
+        operatorCtx_->task()->numDrivers(operatorCtx_->driverCtx()->driver);
+    VELOX_CHECK_LT(driverIndex_, numDrivers_);
+    current_ = driverIndex_;
   }
 
   RowVectorPtr getOutput() override {
     while (current_ < batches_.size()) {
-      auto batch = batches_[current_++];
+      auto batch = batches_[current_];
+      current_ += numDrivers_;
       if (batch != nullptr && batch->size() > 0) {
-        return batch;
+        return std::make_shared<RowVector>(
+            batch->pool(),
+            outputType_,
+            batch->nulls(),
+            batch->size(),
+            batch->children(),
+            batch->getNullCount());
       }
     }
     return nullptr;
@@ -125,9 +140,25 @@ class StateSourceOperator : public exec::SourceOperator {
   // Snapshot of the state entry taken in initialize().
   std::vector<RowVectorPtr> batches_;
 
+  // This driver emits batches driverIndex_, driverIndex_ + numDrivers_, and so
+  // on.
+  const uint32_t driverIndex_;
+  uint32_t numDrivers_{1};
+
   // Index of the next batch to emit.
   size_t current_{0};
 };
+
+// Creates hashers over the probe key columns of 'node', which lead the probe
+// input as they lead the table (keys first on both sides).  Each operator owns
+// its own: a hasher keeps per-batch decoding state, so drivers cannot share the
+// table's.
+std::vector<std::unique_ptr<VectorHasher>> createProbeHashers(
+    const core::StateHashJoinNode& node) {
+  std::vector<column_index_t> keyChannels(node.probeKeys().size());
+  std::iota(keyChannels.begin(), keyChannels.end(), 0);
+  return createVectorHashers(node.sources()[0]->outputType(), keyChannels);
+}
 
 // Inner-joins the probe input against a HashTable persistent state entry built
 // once and reused across iterations.  Emits the probe columns (wrapped via the
@@ -146,7 +177,8 @@ class StateHashJoinOperator : public exec::Operator {
             node->id(),
             "FixedPointStateHashJoin"),
         stateName_{node->stateName()},
-        probeType_{node->sources()[0]->outputType()} {}
+        probeType_{node->sources()[0]->outputType()},
+        hashers_{createProbeHashers(*node)} {}
 
   void initialize() override {
     Operator::initialize();
@@ -156,7 +188,7 @@ class StateHashJoinOperator : public exec::Operator {
         entry.has_value(), "No hash table state registered: {}", stateName_);
     entry_ = std::move(entry);
     table_ = entry_->table.get();
-    lookup_ = std::make_unique<exec::HashLookup>(table_->hashers(), pool());
+    lookup_ = std::make_unique<exec::HashLookup>(hashers_, pool());
   }
 
   bool needsInput() const override {
@@ -228,8 +260,7 @@ class StateHashJoinOperator : public exec::Operator {
     // than in the destructor: the loop waits only on each sub-task's
     // taskCompletionFuture, which fires when drivers close, while this
     // operator object can be destroyed later on an executor thread, after
-    // the loop and its pool are gone.  'lookup_' borrows the table's hashers,
-    // so it is released before 'entry_'.
+    // the loop and its pool are gone.
     input_ = nullptr;
     probe_ = nullptr;
     lookup_.reset();
@@ -274,6 +305,9 @@ class StateHashJoinOperator : public exec::Operator {
   const std::string stateName_;
   const RowTypePtr probeType_;
 
+  // Hashers over the probe keys, borrowed by 'lookup_'.
+  const std::vector<std::unique_ptr<VectorHasher>> hashers_;
+
   std::optional<HashTableEntry> entry_;
   exec::BaseHashTable* table_{nullptr};
   std::unique_ptr<exec::HashLookup> lookup_;
@@ -293,49 +327,35 @@ class StateHashJoinOperator : public exec::Operator {
   std::vector<char*> rowBuffer_;
 };
 
-// The FixedPointNode itself runs as a FixedPointLoop composed into its
-// task, not
-// an Operator, so this translator only handles the per-iteration state
-// operators that run inside its sub-tasks.
-class FixedPointOperatorTranslator : public exec::Operator::PlanNodeTranslator {
- public:
-  std::unique_ptr<exec::Operator> toOperator(
-      exec::DriverCtx* ctx,
-      int32_t id,
-      const core::PlanNodePtr& node) override {
-    if (auto fixedPoint =
-            std::dynamic_pointer_cast<const FixedPointNode>(node)) {
-      // A FixedPointNode that reaches a driver pipeline is the leaf of a
-      // FixedPointLoop's trailing plan: read the loop's already-computed
-      // output state (the enclosing FixedPointLoop populated it before
-      // running the trailing plan). The output reads the entry's full contents
-      // (an append entry's whole accumulation, not just its latest delta), so
-      // the synthesized source is a non-delta read.
-      auto stateSource = std::make_shared<StateSourceNode>(
-          fixedPoint->id(),
-          fixedPoint->outputStateEntry(),
-          fixedPoint->outputType(),
-          /*delta=*/false);
-      return std::make_unique<StateSourceOperator>(id, ctx, stateSource);
-    }
-    if (auto source = std::dynamic_pointer_cast<const StateSourceNode>(node)) {
-      // The node's delta flag selects an append entry's latest delta (frontier)
-      // vs. its full accumulation; immaterial for a replace entry.
-      return std::make_unique<StateSourceOperator>(id, ctx, source);
-    }
-    if (auto hashJoin =
-            std::dynamic_pointer_cast<const StateHashJoinNode>(node)) {
-      return std::make_unique<StateHashJoinOperator>(id, ctx, hashJoin);
-    }
-    return nullptr;
-  }
-};
-
 } // namespace
 
-void registerFixedPoint() {
-  exec::Operator::registerOperator(
-      std::make_unique<FixedPointOperatorTranslator>());
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::FixedPointNodePtr& node) {
+  // A FixedPointNode reaches a driver pipeline only as the leaf of its loop's
+  // trailing plan. Read the complete output state populated by the loop.
+  auto stateSource = std::make_shared<StateSourceNode>(
+      node->id(),
+      node->outputStateEntry(),
+      node->outputType(),
+      /*delta=*/false);
+  return std::make_unique<StateSourceOperator>(
+      operatorId, driverCtx, stateSource);
+}
+
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::StateSourceNodePtr& node) {
+  return std::make_unique<StateSourceOperator>(operatorId, driverCtx, node);
+}
+
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::StateHashJoinNodePtr& node) {
+  return std::make_unique<StateHashJoinOperator>(operatorId, driverCtx, node);
 }
 
 } // namespace facebook::velox::exec

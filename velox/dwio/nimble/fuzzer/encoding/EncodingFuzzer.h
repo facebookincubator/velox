@@ -634,8 +634,17 @@ class EncodingFuzzer {
         throw;
       }
 
-      auto encoding = std::make_unique<EncodingClass>(
-          *pool_, encoded, stringBufferFactory, options_);
+      // encode() may legitimately emit a different, cheaper encoding for some
+      // inputs (e.g. MainlyConstant falls back to Constant when every row is
+      // the common value), so construct EncodingClass only when that is what
+      // was actually written. Experimental encodings are not all registered
+      // with EncodingFactory, so the direct construction stays the default.
+      auto encoding = EncodingPrefix::encodingType(encoded) ==
+              Encoder<EncodingClass>::encodingType()
+          ? std::unique_ptr<Encoding>(std::make_unique<EncodingClass>(
+                *pool_, encoded, stringBufferFactory, options_))
+          : EncodingFactory{}.create(
+                *pool_, encoded, stringBufferFactory, options_);
       EXPECT_EQ(encoding->rowCount(), data.size());
 
       encoding->reset();
@@ -792,8 +801,17 @@ class EncodingFuzzer {
       throw;
     }
 
-    auto encoding = std::make_unique<EncodingClass>(
-        *pool_, encoded, stringBufferFactory, options_);
+    // encode() may legitimately emit a different, cheaper encoding for some
+    // inputs (e.g. MainlyConstant falls back to Constant when every row is the
+    // common value), so construct EncodingClass only when that is what was
+    // actually written. Experimental encodings are not all registered with
+    // EncodingFactory, so the direct construction stays the default.
+    auto encoding = EncodingPrefix::encodingType(encoded) ==
+            Encoder<EncodingClass>::encodingType()
+        ? std::unique_ptr<Encoding>(std::make_unique<EncodingClass>(
+              *pool_, encoded, stringBufferFactory, options_))
+        : EncodingFactory{}.create(
+              *pool_, encoded, stringBufferFactory, options_);
 
     EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
     EXPECT_EQ(encoding->rowCount(), data.size());

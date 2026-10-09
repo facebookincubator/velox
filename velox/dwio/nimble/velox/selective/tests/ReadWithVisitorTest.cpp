@@ -209,7 +209,9 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
     const std::vector<T>& data,
     Buffer& buffer,
     velox::memory::MemoryPool& memPool,
-    const Encoding::Options& options = {}) {
+    const Encoding::Options& options = {},
+    const subintsplit::TuningConfig& tuning =
+        subintsplit::kDefaultTuningConfig) {
   using PhysicalType = typename TypeTraits<T>::physicalType;
   auto span = std::span<const PhysicalType>(
       reinterpret_cast<const PhysicalType*>(data.data()), data.size());
@@ -218,9 +220,9 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
       Statistics<PhysicalType>::create(span),
       std::make_unique<NonRecursiveSubIntSplitPolicy<T>>()};
   auto encoded =
-      SubIntSplitEncoding<T>::encode(selection, span, buffer, options);
+      SubIntSplitEncoding<T>::encode(selection, span, buffer, options, tuning);
   return std::make_unique<SubIntSplitEncoding<T>>(
-      memPool, encoded, [](uint32_t) { return nullptr; }, options);
+      memPool, encoded, [](uint32_t) { return nullptr; }, options, tuning);
 }
 
 EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
@@ -1402,7 +1404,7 @@ TEST_P(ReadWithVisitorTest, denseNoFilterWithNulls) {
 // ===========================================================================
 TEST_P(ReadWithVisitorTest, sparseWithBigintRange) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -1742,7 +1744,7 @@ TEST_P(ReadWithVisitorTest, multipleColumnTypesWithFilters) {
 // ===========================================================================
 TEST_P(ReadWithVisitorTest, filterOnOneColumnInspectState) {
   constexpr int kRows = 300;
-  auto c0 = makeFlatVector<int64_t>(kRows, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(kRows);
   auto input = makeRowVector({c0});
   auto rowType = asRowType(input->type());
 
@@ -1783,7 +1785,7 @@ TEST_P(ReadWithVisitorTest, filterOnOneColumnInspectState) {
 // Explicit readWithVisitor: BigintRange filter, dense rows, ExtractToReader.
 TEST_P(ReadWithVisitorTest, explicitReadWithVisitorBigintRangeDense) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -1890,7 +1892,7 @@ TEST_P(ReadWithVisitorTest, explicitReadWithVisitorAlwaysTrueDense) {
 // Explicit readWithVisitor: BigintRange filter, sparse rows (non-dense).
 TEST_P(ReadWithVisitorTest, explicitReadWithVisitorBigintRangeSparse) {
   constexpr int kRows = 500;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
 
   auto ctx = makeFileContext(input);
@@ -2294,7 +2296,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelTrivialBigintRangeDense) {
   std::iota(data.begin(), data.end(), 0);
 
   // Write nimble file with the same data (for reader infrastructure).
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
   auto ctx = makeFileContext(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -2612,7 +2614,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelTrivialAlwaysTrueDenseSlowPath) {
   std::vector<int64_t> data(kRows);
   std::iota(data.begin(), data.end(), 0);
 
-  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kRows)});
   auto rowType = asRowType(input->type());
   auto ctx = makeFileContext(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -5951,10 +5953,10 @@ TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitDoubleSlowPath) {
   reader->doPrepareRead(0, rows, nullptr);
 
   Buffer buffer(*pool());
-  Encoding::Options options;
-  options.subIntSplitDecodeChunkSize = 1;
-  auto encoding =
-      makeSubIntSplitEncoding<double>(data, buffer, *pool(), options);
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.decodeChunkSize = 1;
+  auto encoding = makeSubIntSplitEncoding<double>(
+      data, buffer, *pool(), Encoding::Options{}, tuning);
   common::AlwaysTrue filter;
   dwio::common::ExtractToReader extractValues(reader.get());
   DecoderVisitor<

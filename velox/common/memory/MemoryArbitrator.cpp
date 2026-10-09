@@ -347,6 +347,7 @@ MemoryArbitrator::Stats::Stats(
     uint64_t _maxCapacityBytes,
     uint64_t _freeCapacityBytes,
     uint64_t _freeReservedCapacityBytes,
+    uint64_t _reservedCapacityBytes,
     uint64_t _numNonReclaimableAttempts)
     : numRequests(_numRequests),
       numRunning(_numRunning),
@@ -358,11 +359,12 @@ MemoryArbitrator::Stats::Stats(
       maxCapacityBytes(_maxCapacityBytes),
       freeCapacityBytes(_freeCapacityBytes),
       freeReservedCapacityBytes(_freeReservedCapacityBytes),
+      reservedCapacityBytes(_reservedCapacityBytes),
       numNonReclaimableAttempts(_numNonReclaimableAttempts) {}
 
 std::string MemoryArbitrator::Stats::toString() const {
   return fmt::format(
-      "numRequests {} numRunning {} numSucceded {} numAborted {} numFailures {} numNonReclaimableAttempts {} reclaimedFreeCapacity {} reclaimedUsedCapacity {} maxCapacity {} freeCapacity {} freeReservedCapacity {}",
+      "numRequests {} numRunning {} numSucceded {} numAborted {} numFailures {} numNonReclaimableAttempts {} reclaimedFreeCapacity {} reclaimedUsedCapacity {} maxCapacity {} freeCapacity {} freeReservedCapacity {} reservedCapacity {}",
       numRequests,
       numRunning,
       numSucceeded,
@@ -373,7 +375,8 @@ std::string MemoryArbitrator::Stats::toString() const {
       succinctBytes(reclaimedUsedBytes),
       succinctBytes(maxCapacityBytes),
       succinctBytes(freeCapacityBytes),
-      succinctBytes(freeReservedCapacityBytes));
+      succinctBytes(freeReservedCapacityBytes),
+      succinctBytes(reservedCapacityBytes));
 }
 
 MemoryArbitrator::Stats MemoryArbitrator::Stats::operator-(
@@ -388,6 +391,7 @@ MemoryArbitrator::Stats MemoryArbitrator::Stats::operator-(
   result.maxCapacityBytes = maxCapacityBytes;
   result.freeCapacityBytes = freeCapacityBytes;
   result.freeReservedCapacityBytes = freeReservedCapacityBytes;
+  result.reservedCapacityBytes = reservedCapacityBytes;
   result.numNonReclaimableAttempts =
       numNonReclaimableAttempts - other.numNonReclaimableAttempts;
   return result;
@@ -404,6 +408,7 @@ bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
              maxCapacityBytes,
              freeCapacityBytes,
              freeReservedCapacityBytes,
+             reservedCapacityBytes,
              numNonReclaimableAttempts) ==
       std::tie(
              other.numRequests,
@@ -415,6 +420,7 @@ bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
              other.maxCapacityBytes,
              other.freeCapacityBytes,
              other.freeReservedCapacityBytes,
+             other.reservedCapacityBytes,
              other.numNonReclaimableAttempts);
 }
 

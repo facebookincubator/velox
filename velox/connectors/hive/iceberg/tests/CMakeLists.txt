@@ -81,7 +81,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
-    IcebergParquetStatsTest.cpp
     IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
@@ -212,6 +211,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_reader
       velox_dwio_parquet_writer
     )
+
+    target_sources(velox_hive_iceberg_insert_test PRIVATE IcebergParquetStatsTest.cpp)
   endif()
 
   add_executable(
@@ -266,6 +267,28 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_dwio_common_exception
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_changelog_test
+    IcebergChangelogE2ETest.cpp
+    IcebergChangelogSplitReaderTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_changelog_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_changelog_test velox_hive_iceberg_changelog_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_changelog_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_vector_test_lib
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
     GTest::gtest
     GTest::gtest_main
   )

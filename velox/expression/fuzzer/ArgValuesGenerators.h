@@ -233,4 +233,19 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
       ExpressionFuzzerState& state) override;
 };
 
+/// Generates arguments for inverse_f_cdf. Reads each argument from an input
+/// column, with degrees of freedom in [0, 1e6] and p in [0, 1]. Boost's F
+/// quantile slows down sharply once both degrees of freedom are large: with
+/// both at 1e30 a single row takes over a minute in a debug build.
+class InverseFCdfArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~InverseFCdfArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
 } // namespace facebook::velox::fuzzer

@@ -23,6 +23,7 @@ target_link_libraries(
 
 add_executable(
   velox_expression_fuzzer_unit_test
+  ArgValuesGeneratorsTest.cpp
   ArgumentTypeFuzzerTest.cpp
   DecimalArgTypesGeneratorTest.cpp
   ExpressionFuzzerUnitTest.cpp

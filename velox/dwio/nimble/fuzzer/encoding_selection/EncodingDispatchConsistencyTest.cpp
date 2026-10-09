@@ -94,6 +94,10 @@ struct ColumnCase {
 // kNotApplied: EncodingSizeEstimation declines the stream and the policy
 // substitutes Trivial. The encoder is never reached, so it never refuses.
 //
+// A miss can also surface after the encoder runs: MainlyConstant downgrades to
+// Constant instead of refusing. That is still kNotApplied, because the outcome
+// turns on which encoding the chunks carry, not on whether encode() threw.
+//
 // Only the preconditions the column cases can actually trip are modelled. The
 // rest hold by construction of the table, and a new case must preserve them or
 // add its own rule here:
@@ -110,6 +114,13 @@ WriteOutcome expectedOutcome(
     const ColumnCase& columnCase,
     EncodingType encodingType) {
   if (encodingType == EncodingType::Constant && !columnCase.isSingleValued) {
+    return WriteOutcome::kNotApplied;
+  }
+  // A single-valued column leaves MainlyConstant with an all-true isCommon
+  // bitmap and an empty otherValues stream, neither of which carries
+  // information, so encode() emits the strictly smaller Constant instead.
+  if (encodingType == EncodingType::MainlyConstant &&
+      columnCase.isSingleValued) {
     return WriteOutcome::kNotApplied;
   }
   if ((encodingType == EncodingType::DeltaBlock ||
@@ -275,6 +286,31 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
   std::vector<std::string> symbolRichValues_;
 };
+
+TEST_F(EncodingDispatchConsistencyTest, cappingJsonSelectsFsst) {
+  std::vector<std::string> values;
+  values.reserve(kNumRows);
+  for (velox::vector_size_t row = 0; row < kNumRows; ++row) {
+    values.push_back(makeCappingJsonValue(0xc0ffeeULL + row, row));
+  }
+  const auto batch = vectorMaker_->rowVector(
+      {"c0"},
+      {vectorMaker_->flatVector<velox::StringView>(kNumRows, [&](auto row) {
+        return velox::StringView(values.at(row));
+      })});
+
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.randomizeWriterConfig = false;
+  NimbleWriterFuzzer fuzzer(options, *rootPool_);
+
+  EXPECT_EQ(
+      fuzzer.runFixed({batch}, EncodingType::Fsst), WriteOutcome::kApplied);
+  const auto entry =
+      fuzzer.pairCoverage().find({DataType::String, EncodingType::Fsst});
+  ASSERT_NE(entry, fuzzer.pairCoverage().end());
+  EXPECT_GT(entry->second.numChunksApplied, 0u);
+}
 
 TEST_F(
     EncodingDispatchConsistencyTest,

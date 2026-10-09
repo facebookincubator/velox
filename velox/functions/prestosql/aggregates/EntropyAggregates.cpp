@@ -391,6 +391,7 @@ void registerEntropyAggregate(
           return std::make_unique<EntropyAggregate<int64_t>>(resultType);
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

@@ -244,32 +244,30 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
     // Initialize new partitions.
     initializeNewPartitions();
+  }
 
-    // Process input rows. For each row, lookup the partition. If the highest
-    // (top) rank in that partition is less than limit, add the new row.
-    // Otherwise, check if row should replace an existing row or be discarded.
-    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
+  // Process input rows. For each row, lookup the partition. If the highest
+  // (top) rank in that partition is less than limit, add the new row.
+  // Otherwise, check if row should replace an existing row or be discarded.
+  RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
 
-    // It is determined that the TopNRowNumber (as a partial) is not rejecting
-    // enough input rows to make the duplicate detection worthwhile. Hence,
-    // abandon the processing at this partial TopN and let the final TopN do
-    // the processing.
-    if (abandonPartialEarly()) {
-      abandonedPartial_ = true;
-      addRuntimeStat(
-          std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
+  // It is determined that the TopNRowNumber (as a partial) is not rejecting
+  // enough input rows to make the duplicate detection worthwhile. Hence,
+  // abandon the processing at this partial TopN and let the final TopN do
+  // the processing.
+  if (abandonPartialEarly()) {
+    abandonedPartial_ = true;
+    addRuntimeStat(
+        std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
 
-      updateEstimatedOutputRowSize();
-      outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);
-      outputRows_.resize(outputBatchSize_);
-    }
-  } else {
-    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
+    updateEstimatedOutputRowSize();
+    outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);
+    outputRows_.resize(outputBatchSize_);
   }
 }
 
 bool TopNRowNumber::abandonPartialEarly() const {
-  if (table_ == nullptr || generateRowNumber_ || spiller_ != nullptr) {
+  if (generateRowNumber_ || spiller_ != nullptr) {
     return false;
   }
 

@@ -119,8 +119,15 @@ TabletReaderCache::Generator::operator()(
     const Properties* properties,
     void* /*stats*/) {
   NIMBLE_CHECK_NOT_NULL(properties);
+  return std::make_unique<std::shared_ptr<CachedTabletReader>>(
+      create(filename, *properties));
+}
+
+std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
+    const std::string& filename,
+    const Properties& properties) const {
   const auto shardIdx = std::hash<std::string>{}(filename)&shardMask_;
-  auto options = properties->tabletOptions;
+  auto options = properties.tabletOptions;
   // The caller's ioOptions are replaced here, so its metadata/index statistics
   // never see this tablet's IO. Keeping the pair on the entry lets a lifetime
   // observer reach it instead.
@@ -132,7 +139,7 @@ TabletReaderCache::Generator::operator()(
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
   auto tablet = TabletReader::create(
-      properties->readFile, pools_[shardIdx].get(), options);
+      properties.readFile, pools_[shardIdx].get(), options);
   auto section = tablet->loadOptionalSection(
       std::string(kSchemaSection), /*keepCache=*/true);
   NIMBLE_CHECK(section.has_value(), "Schema section not found in tablet");
@@ -152,31 +159,35 @@ TabletReaderCache::Generator::operator()(
   if (onCreate_ != nullptr) {
     onCreate_(*entry);
   }
-  return std::make_unique<std::shared_ptr<CachedTabletReader>>(
-      std::move(entry));
+  return entry;
 }
 
-TabletReaderCache::Factory TabletReaderCache::createFactory(
-    const Options& opts) {
-  checkOptions(opts);
+TabletReaderCache::Generator TabletReaderCache::createGenerator(
+    const Options& options) {
+  checkOptions(options);
 
   std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools;
-  pools.reserve(opts.numShards);
-  for (uint32_t i = 0; i < opts.numShards; ++i) {
+  pools.reserve(options.numShards);
+  for (uint32_t i = 0; i < options.numShards; ++i) {
     pools.push_back(
         velox::memory::memoryManager()->addLeafPool(
             fmt::format("tablet_reader_cache_{}", i)));
   }
+  return Generator(
+      std::move(pools), options.executor, options.onCreate, options.onRelease);
+}
 
+TabletReaderCache::Factory TabletReaderCache::createFactory(
+    const Options& options,
+    const Generator& generator) {
   auto cache = std::make_unique<TabletReaderCache::LRUCache>(
-      opts.maxEntries, opts.expireDurationMs);
-  auto generator = std::make_unique<TabletReaderCache::Generator>(
-      std::move(pools), opts.executor, opts.onCreate, opts.onRelease);
-  return Factory(std::move(cache), std::move(generator));
+      options.maxEntries, options.expireDurationMs);
+  return Factory(std::move(cache), std::make_unique<Generator>(generator));
 }
 
 TabletReaderCache::TabletReaderCache(const Options& options)
-    : factory_{createFactory(options)} {
+    : generator_{createGenerator(options)},
+      factory_{createFactory(options, generator_)} {
   LOG(INFO) << "TabletReaderCache created: " << options.toString();
 }
 
@@ -188,6 +199,12 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::get(
   // cache pin momentary; the entry stays alive through the returned pointer.
   auto cached = factory_.generate(readFile->getName(), &properties);
   return *cached;
+}
+
+std::shared_ptr<CachedTabletReader> TabletReaderCache::create(
+    const std::shared_ptr<velox::ReadFile>& readFile,
+    const TabletReader::Options& tabletOptions) const {
+  return generator_.create(readFile->getName(), {readFile, tabletOptions});
 }
 
 velox::SimpleLRUCacheStats TabletReaderCache::stats() {

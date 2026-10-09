@@ -46,24 +46,9 @@ namespace velox {
 
 /// Base class for typed, structured context attached to a VeloxException via
 /// ExceptionContext::propertiesFunc (see VeloxException::properties()).
-/// Consumers dynamic_cast to the concrete subtype they understand, so different
-/// producers can attach distinct typed context without the key collisions a
-/// shared string map would risk.
 class ExceptionContextProperties {
  public:
   virtual ~ExceptionContextProperties() = default;
-};
-
-/// Structured context for an error thrown while evaluating an expression: the
-/// function owner (empty when the function has no registered owner), the
-/// function name, and the expression string.
-struct ExpressionExceptionProperties : public ExceptionContextProperties {
-  /// The owner registered for the failing function; empty when none.
-  std::string owner;
-  /// The name of the failing function (Expr::name()), e.g. the UDF name.
-  std::string functionName;
-  /// The string form of the expression that threw (Expr::toString()).
-  std::string expression;
 };
 
 namespace error_source {
@@ -288,11 +273,9 @@ class VeloxException : public std::exception {
     return state_->additionalContext;
   }
 
-  /// Typed, structured context propagated onto the exception (e.g. an
-  /// ExpressionExceptionProperties for an expression-evaluation error),
-  /// collected from ExceptionContext::propertiesFunc. Consumers dynamic_cast to
-  /// the concrete type to read structured attribution without parsing the
-  /// formatted context string. Null when no context in the chain provided one.
+  /// Typed, structured context collected from
+  /// ExceptionContext::propertiesFunc. Null when no context in the chain
+  /// provided one.
   const std::shared_ptr<const ExceptionContextProperties>& properties() const {
     return state_->properties;
   }
@@ -524,8 +507,7 @@ struct ExceptionContext {
   /// are hierarchical exception contexts.
   bool isEssential{false};
 
-  /// Optional structured counterpart to `messageFunc`: returns typed context
-  /// (e.g. ExpressionExceptionProperties) collected onto
+  /// Optional structured counterpart to `messageFunc`, collected onto
   /// VeloxException::properties() at throw time. Called with the same `arg` as
   /// `messageFunc`. Declared after the fields above to preserve positional
   /// aggregate initialization of the leading members.

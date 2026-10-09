@@ -43,7 +43,7 @@ struct SortedIndexConfig final : IndexConfig {
 
   /// Columns forming the composite lookup key.
   std::vector<std::string> columns;
-  /// Key-stream encoding. Only Prefix and Trivial encodings are supported.
+  /// Key-stream encoding supported by KeyEncoding.
   EncodingLayout encodingLayout;
   /// Maximum rows per key chunk. Zero produces one chunk per partition.
   uint64_t maxRowsPerKeyChunk;

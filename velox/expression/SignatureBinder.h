@@ -46,6 +46,13 @@ class SignatureBinderBase {
       const TypePtr& actualType,
       Coercion& coercion);
 
+  // Binds the integer variables of 'typeSignature', such as p and s in
+  // DECIMAL(p, s), to the least common super type of 'candidateType' and the
+  // type they are already bound to.
+  bool tryBindToCommonType(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& candidateType);
+
   // Return the variables of the signature.
   auto& variables() const {
     return signature_.variables();
@@ -199,12 +206,12 @@ class SignatureBinder : private SignatureBinderBase {
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
 
-  // Pre-binds type variables to their least common super type across all
-  // arguments. Runs before the main binding loop. Only binds type variables,
-  // not integer variables (e.g. decimal precision/scale) -- those are bound
-  // later by tryBind. Does not check base type name match since coercion may
-  // change the base type. Returns false if a type variable conflict is found
-  // that would prevent binding; true otherwise.
+  // Pre-binds variables to the least common super type of the arguments that
+  // share them. Runs before the main binding loop. Binds type variables, and
+  // the integer variables of a formal such as DECIMAL(p, s). A scalar argument
+  // of a parameterized formal with another base name, such as INTEGER for
+  // DECIMAL(p, s), counts as the target its coercion rule stores. Returns
+  // false if the arguments have no common type.
   bool tryBindVariablesWithCoercion(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);

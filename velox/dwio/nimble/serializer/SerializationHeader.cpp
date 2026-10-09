@@ -42,7 +42,7 @@ TabletChunkHeader extractTabletChunkHeader(const char*& pos, const char* end) {
 
   NIMBLE_CHECK_GT(end, pos, "Truncated chunk header (flags)");
   const auto flags = readHeaderFlags(pos, SerializationVersion::kTablet);
-  header.requiresNullBarrier = flags.requiresNullBarrier;
+  header.requiredBarrier = flags.requiredBarrier;
   header.streamEncodingUsesVarintRowCount =
       flags.streamEncodingUsesVarintRowCount;
   header.streamHasChunkHeader = flags.streamHasChunkHeader;
@@ -84,7 +84,7 @@ SerializationHeader readSerializationHeader(const char*& pos, const char* end) {
     auto tablet = extractTabletChunkHeader(pos, end);
     header.rowCount = tablet.rowCount;
     header.flags = {
-        .requiresNullBarrier = tablet.requiresNullBarrier,
+        .requiredBarrier = tablet.requiredBarrier,
         .streamEncodingUsesVarintRowCount =
             tablet.streamEncodingUsesVarintRowCount,
         .streamHasChunkHeader = tablet.streamHasChunkHeader,
@@ -128,7 +128,7 @@ folly::IOBuf createTabletChunkHeader(const TabletChunkHeader& header) {
   *pos++ = static_cast<char>(SerializationVersion::kTablet);
   varint::writeVarint(/*val=*/header.rowCount, &pos);
   *pos++ = static_cast<char>(detail::makeFlagsByte(
-      header.requiresNullBarrier,
+      header.requiredBarrier,
       header.streamEncodingUsesVarintRowCount,
       header.streamHasChunkHeader));
   varint::writeVarint(/*val=*/header.rowRange.startRow, &pos);

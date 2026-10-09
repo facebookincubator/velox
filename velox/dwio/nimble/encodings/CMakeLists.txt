@@ -45,6 +45,7 @@ add_library(
   TrivialEncoding.cpp
   subintsplit/CostModel.cpp
   subintsplit/CostModel.h
+  subintsplit/EncodingConfig.h
   subintsplit/BitSection.h
   subintsplit/DeltaTransform.h
   subintsplit/Format.h
@@ -58,6 +59,7 @@ add_library(
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
   subintsplit/SplitSelector.h
+  subintsplit/TuningConfig.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
@@ -65,6 +67,7 @@ add_library(
   common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
+  selection/NestedAlpSizeEstimation.cpp
   selection/Statistics.cpp
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h

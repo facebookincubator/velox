@@ -16,6 +16,8 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,7 +29,7 @@
 
 namespace facebook::nimble::index {
 
-/// Configuration for generating a cluster index over sorted input.
+/// Configuration shared by the built-in flat and hierarchical cluster indexes.
 ///
 /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
 /// production tables without consulting the Nimble team (oncall: dwios).
@@ -59,7 +61,8 @@ struct ClusterIndexConfig final : IndexConfig {
   bool enforceKeyOrder;
   /// Whether duplicate encoded keys are rejected when key order is enforced.
   bool noDuplicateKey;
-  /// Key-stream encoding. Only Prefix and Trivial encodings are supported.
+  /// Encoding layout for flat keys. Hierarchical indexes select an encoding
+  /// for each level internally.
   EncodingLayout encodingLayout;
   /// Maximum rows per key chunk. Smaller values improve lookup granularity at
   /// the cost of additional metadata.
@@ -69,12 +72,18 @@ struct ClusterIndexConfig final : IndexConfig {
   CompressionType keyChunkCompressionType;
 };
 
-/// Builds configuration for the built-in cluster index.
+/// Builds configuration for a registered cluster-index implementation.
 ///
 /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
 /// production tables without consulting the Nimble team (oncall: dwios).
 class ClusterIndexConfigBuilder {
  public:
+  ClusterIndexConfigBuilder() = default;
+
+  /// Selects the registered cluster-index implementation by name.
+  explicit ClusterIndexConfigBuilder(std::string_view indexName)
+      : indexName_{indexName} {}
+
   ClusterIndexConfigBuilder& withKeyColumns(std::vector<std::string> columns) {
     columns_ = std::move(columns);
     return *this;
@@ -115,7 +124,7 @@ class ClusterIndexConfigBuilder {
   /// Builds an immutable configuration consumed by the index factory.
   std::shared_ptr<const IndexConfig> build() const {
     return std::make_shared<const ClusterIndexConfig>(
-        std::string{kClusterIndexName},
+        indexName_,
         columns_,
         sortOrders_,
         enforceKeyOrder_,
@@ -126,6 +135,8 @@ class ClusterIndexConfigBuilder {
   }
 
  private:
+  // Factory used to construct the writer and reader.
+  std::string indexName_{kClusterIndexName};
   std::vector<std::string> columns_;
   std::vector<SortOrder> sortOrders_;
   bool enforceKeyOrder_{false};
