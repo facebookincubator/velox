@@ -44,9 +44,10 @@ namespace facebook::velox::functions {
 /// number to the rounded fraction for small numbers.
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
-/// 'scaleFactor' is 10^decimals when the caller has already computed it. A
-/// caller whose 'decimals' is constant computes the power once per batch
-/// instead of once per row; the result is the same either way.
+/// If set, 'scaleFactor' must equal std::pow(10, decimals). round() uses it in
+/// place of computing the power, and still branches on 'decimals', so a
+/// mismatched value returns a wrong result without an error. A caller whose
+/// 'decimals' is constant computes the power once instead of once per row.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
     const TNum& number,
@@ -62,6 +63,10 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
       return number;
     }
   }
+  VELOX_DCHECK(
+      !scaleFactor.has_value() || *scaleFactor == std::pow(10, decimals),
+      "scaleFactor must be 10^decimals");
+
   if (!std::isfinite(number)) {
     return number;
   }

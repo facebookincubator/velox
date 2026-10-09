@@ -304,9 +304,9 @@ struct RoundFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const TInput* /*number*/,
-      const int32_t* digits) {
-    if (digits != nullptr) {
-      scaleFactor_ = std::pow(10, *digits);
+      const int32_t* decimals) {
+    if (decimals != nullptr) {
+      scaleFactor_ = std::pow(10, *decimals);
     }
   }
 
@@ -317,8 +317,8 @@ struct RoundFunction {
   }
 
  private:
-  // 10^digits when 'digits' is a constant. Saves round() a pow() per row in
-  // the common constant case.
+  // 10^decimals when 'decimals' is a constant. Saves round() a pow() per row
+  // in the common constant case.
   std::optional<double> scaleFactor_;
 };
 
