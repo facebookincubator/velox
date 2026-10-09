@@ -337,7 +337,7 @@ class S3FileSystem::Impl {
       LOG_FIRST_N(WARNING, 1)
           << "[S3] FIPS is enabled but web identity credentials use the "
              "non-FIPS STS endpoint. Set AWS_ENDPOINT_URL_STS to the "
-             "STS FIPS endpoint.";
+             "STS FIPS host name, without a scheme.";
     }
     return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
   }

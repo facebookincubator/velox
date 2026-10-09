@@ -1355,7 +1355,8 @@ decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
 fail with "A custom endpoint cannot be combined with FIPS". Set
 ``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
 AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
-set to the STS FIPS endpoint.
+set to the STS FIPS host name, such as ``sts-fips.us-east-1.amazonaws.com``.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
