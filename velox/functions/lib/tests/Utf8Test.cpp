@@ -106,7 +106,7 @@ TEST(Utf8Test, tryCharLength) {
   ASSERT_EQ(-1, tryCharLength({0xBF}));
 }
 
-TEST(UTF8Test, replaceInvalidUTF8Characters) {
+TEST(Utf8Test, replaceInvalidUTF8Characters) {
   auto testReplaceInvalidUTF8Chars = [](const std::string& input,
                                         const std::string& expected) {
     std::string output;

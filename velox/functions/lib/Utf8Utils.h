@@ -60,6 +60,11 @@ tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint);
 /// Decodes the next UTF-8 code point, replacing malformed input with U+FFFD
 /// using Java's malformed-input grouping. Returns the number of input bytes
 /// consumed and always sets codePoint.
+///
+/// @param input Pointer to the first byte of the code point. Must not be null.
+/// @param size Number of available bytes. Must be greater than zero.
+/// @param codePoint Populated with the decoded code point or U+FFFD for
+/// malformed input.
 int32_t decodeUtf8CodePointOrReplacement(
     const char* input,
     int64_t size,
