@@ -520,16 +520,22 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
           join->stateName());
       const auto& entrySchema = entry->schema();
       const auto numKeys = static_cast<int32_t>(entry->keyColumns().size());
-      // Keys-first contract: the probe input's leading key columns must occupy
-      // the same channels and share the type of the hash table's build keys.
-      for (int32_t channel = 0; channel < numKeys; ++channel) {
+      // Probe key i names the probe column matched against build key i, which
+      // is column i of the hash table (keys first).
+      for (int32_t key = 0; key < numKeys; ++key) {
+        const auto& probeKey = join->probeKeys()[key];
+        const auto probeChannel = probeType->getChildIdxIfExists(probeKey);
         VELOX_USER_CHECK(
-            probeType->childAt(channel)->equivalent(
-                *entrySchema->childAt(channel)),
-            "FixedPointNode: StateHashJoin probe key column type at channel {} "
-            "must match the hash table build key type for entry: {}",
-            channel,
-            join->stateName());
+            probeChannel.has_value(),
+            "FixedPointNode: StateHashJoin probe key is not a probe input "
+            "column: {}",
+            probeKey);
+        VELOX_USER_CHECK(
+            probeType->childAt(*probeChannel)
+                ->equivalent(*entrySchema->childAt(key)),
+            "FixedPointNode: StateHashJoin probe key type must match the hash "
+            "table build key type: {}",
+            probeKey);
       }
       for (int32_t channel = 0; channel < numProbe; ++channel) {
         VELOX_USER_CHECK(
