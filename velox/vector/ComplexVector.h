@@ -25,6 +25,15 @@
 
 namespace facebook::velox {
 
+namespace detail {
+
+/// Runs quick checks to determine whether 'vector' has only null values.
+/// Returns true if it has only null values, and false if it may have non-null
+/// values.
+bool isAllNullVector(const BaseVector& vector);
+
+} // namespace detail
+
 class RowVector : public BaseVector {
  public:
   RowVector(const RowVector&) = delete;
@@ -754,6 +763,11 @@ class MapVector : public ArrayVectorBase {
   // Returns true if the keys for map at 'index' are sorted from first
   // to last in the type's collation order.
   bool isSorted(vector_size_t index) const;
+
+  // Copies 'ranges' from 'source', whose wrapped vector is a FlatMapVector.
+  void copyFlatMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
 
   // makes a Buffer with 0, 1, 2,... size-1. This is later sorted to
   // get elements in key order in each map.

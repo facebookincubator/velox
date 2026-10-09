@@ -1433,6 +1433,15 @@ TEST_F(VectorTest, copyFromUnknown) {
         [](auto row) { return row * 0.1; });
   });
 
+  // Copy to FLAT_MAP.
+  test([&]() {
+    return vectorMaker_.flatMapVector<int64_t>(makeMapVector<int64_t, double>(
+        size,
+        [](auto row) { return row % 7; },
+        [](auto index) { return index % 7; },
+        [](auto index) { return index * 0.1; }));
+  });
+
   // Copy to ROW.
   test([&]() {
     return makeRowVector({
