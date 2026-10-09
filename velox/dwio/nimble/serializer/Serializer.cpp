@@ -138,7 +138,30 @@ Serializer::Serializer(
   // The Serializer never reads column statistics, so skipping
   // initStatsCollectors() avoids unnecessary per-row stats overhead
   // in all field writers (their null statisticsCollector_ guards handle this).
+  // Hybrid descriptors are allocated during field-writer construction, so
+  // create the writer before registering their offsets below.
   writer_ = FieldWriter::create(context_, typeWithId);
+
+  if (options_.skipConstantHybridFlatMapMetadataStreams &&
+      !options_.hybridFlatMapColumns.empty()) {
+    const auto& rootBuilder = context_.schemaBuilder().root()->asRow();
+    for (const auto& [columnName, _] : options_.hybridFlatMapColumns) {
+      const auto& hybridMap =
+          rootBuilder.findChild(columnName).asHybridFlatMap();
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto& group = hybridMap.groupAt(i);
+        hybridMetadataStreamOffsets_.insert(group.inMapDescriptor.offset());
+        const auto keyPresenceOffset = group.keyPresenceDescriptor.offset();
+        hybridMetadataStreamOffsets_.insert(keyPresenceOffset);
+        // Non-Default groups have fixed key catalogs, so an all-true
+        // key-presence stream can be inferred from the schema. The Default
+        // catalog can grow across batches, so keep its stream explicit.
+        if (!HybridFlatMap::isDefaultGroup(group.groupId)) {
+          hybridNonDefaultGroupKeyPresenceOffsets_.insert(keyPresenceOffset);
+        }
+      }
+    }
+  }
 
   buildStreamEncodingLayouts();
 }

@@ -26,73 +26,123 @@ namespace {
 constexpr vector_size_t kToStringMaxFlatMapElements = 5;
 constexpr std::string_view kToStringDelimiter{", "};
 
-template <typename T, typename TMap>
-std::optional<column_index_t> getKeyChannelImpl(
-    const VectorPtr& distinctKeys,
-    const TMap& keyToChannel,
-    T keyValue) {
-  if (distinctKeys == nullptr) {
-    return std::nullopt;
-  }
+} // namespace
 
-  auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
-  VELOX_CHECK(
-      simpleKeys != nullptr,
-      "Incompatible vector type for flat map vector keys: {}",
-      distinctKeys->toString());
+FlatMapVector::FlatMapVector(
+    velox::memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    vector_size_t length,
+    VectorPtr distinctKeys,
+    std::vector<VectorPtr> mapValues,
+    std::vector<BufferPtr> inMaps,
+    std::optional<vector_size_t> nullCount,
+    bool sortedKeys)
+    : BaseVector(
+          pool,
+          type,
+          VectorEncoding::Simple::FLAT_MAP,
+          std::move(nulls),
+          length,
+          std::nullopt,
+          nullCount),
+      mapValues_(std::move(mapValues)),
+      inMaps_(std::move(inMaps)),
+      sortedKeys_(sortedKeys) {
+  VELOX_CHECK(type->isMap(), "FlatMapVector requires a MAP type.");
+  distinctKeys_ = BaseVector::getOrCreateEmpty(
+      std::move(distinctKeys), type->childAt(0), pool);
+  setDistinctKeysImpl(distinctKeys_);
 
-  uint64_t hash = folly::hasher<T>{}(keyValue);
-  auto range = keyToChannel.equal_range(hash);
-
-  // Key hash wasn't found on the map.
-  if (range.first == range.second) {
-    return std::nullopt;
-  }
-
-  // Here there was at least one hash match. Need to compare to the keys vector
-  // to ensure it's an actual match and not a hash collision.
-  for (auto it = range.first; it != range.second; ++it) {
-    if (simpleKeys->valueAt(it->second) == keyValue) {
-      return it->second;
-    }
-  }
-  return std::nullopt;
+  VELOX_CHECK_EQ(
+      numDistinctKeys(),
+      mapValues_.size(),
+      "Wrong number of map value vectors.");
+  VELOX_CHECK_LE(
+      inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
 }
 
-} // namespace
+void FlatMapVector::setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys) {
+  setDistinctKeysImpl(std::move(distinctKeys));
+  mapValues_.resize(numDistinctKeys());
+  inMaps_.clear();
+  sortedKeys_ = sortedKeys;
+}
+
+void FlatMapVector::setDistinctKeysImpl(VectorPtr distinctKeys) {
+  VELOX_CHECK(distinctKeys != nullptr);
+  VELOX_CHECK(
+      *distinctKeys->type() == *keyType(),
+      "Unexpected key type: {}",
+      distinctKeys->type()->toString());
+
+  distinctKeys_ = std::move(distinctKeys);
+  keyIndex_ = std::make_shared<folly::DelayedInit<detail::FlatMapKeyIndex>>();
+}
+
+void FlatMapVector::shareKeyIndex(const FlatMapVector& other) {
+  if (distinctKeys_ == other.distinctKeys_) {
+    keyIndex_ = other.keyIndex_;
+  }
+}
+
+bool FlatMapVector::testingSharesKeyIndex(const FlatMapVector& other) const {
+  return keyIndex_ == other.keyIndex_;
+}
+
+const detail::FlatMapKeyIndex& FlatMapVector::keyIndex() const {
+  return keyIndex_->try_emplace_with(
+      [this] { return detail::FlatMapKeyIndex(*distinctKeys_); });
+}
+
+void FlatMapVector::ensureWritableKeyIndex() {
+  if (keyIndex_.use_count() == 1) {
+    return;
+  }
+  auto index = std::make_shared<folly::DelayedInit<detail::FlatMapKeyIndex>>();
+  if (keyIndex_->has_value()) {
+    index->try_emplace(keyIndex_->value());
+  }
+  keyIndex_ = std::move(index);
+}
+
+void FlatMapVector::appendDistinctKey(
+    const VectorPtr& sourceDistinctKeys,
+    column_index_t sourceChannel) {
+  ensureWritableKeyIndex();
+  const vector_size_t targetChannel = distinctKeys_->size();
+
+  distinctKeys_->resize(targetChannel + 1);
+  distinctKeys_->copy(
+      sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
+  mapValues_.resize(distinctKeys_->size());
+
+  // An index that is not built yet picks up the new key when it is built.
+  if (keyIndex_->has_value()) {
+    keyIndex_->value().appendLast(*distinctKeys_);
+  }
+  sortedKeys_ = false;
+}
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int32_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     int64_t scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     StringView scalarValue) const {
-  return getKeyChannelImpl(distinctKeys_, keyToChannel_, scalarValue);
+  return keyIndex().find(*distinctKeys_, scalarValue);
 }
 
 std::optional<column_index_t> FlatMapVector::getKeyChannel(
     const VectorPtr& keysVector,
     vector_size_t index) const {
-  uint64_t hash = keysVector->hashValueAt(index);
-  auto range = keyToChannel_.equal_range(hash);
-
-  // Key hash wasn't found on the map.
-  if (range.first == range.second) {
-    return std::nullopt;
-  }
-
-  for (auto it = range.first; it != range.second; ++it) {
-    if (keysVector->equalValueAt(distinctKeys_.get(), index, it->second)) {
-      return it->second;
-    }
-  }
-  return std::nullopt;
+  return keyIndex().find(*distinctKeys_, *keysVector, index);
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
@@ -161,7 +211,7 @@ VectorPtr FlatMapVector::slice(vector_size_t offset, vector_size_t length)
     }
   }
 
-  return std::make_shared<FlatMapVector>(
+  auto result = std::make_shared<FlatMapVector>(
       pool_,
       type_,
       sliceNulls(offset, length),
@@ -171,6 +221,8 @@ VectorPtr FlatMapVector::slice(vector_size_t offset, vector_size_t length)
       std::move(inMaps),
       std::nullopt,
       sortedKeys_);
+  result->shareKeyIndex(*this);
+  return result;
 }
 
 VectorPtr FlatMapVector::testingCopyPreserveEncodings(
@@ -259,7 +311,7 @@ bool FlatMapVector::containsNullAt(vector_size_t index) const {
         return true;
       }
 
-      if (mapValues_[i]->containsNullAt(i)) {
+      if (mapValues_[i]->containsNullAt(index)) {
         return true;
       }
     }
@@ -483,21 +535,13 @@ void FlatMapVector::copyInMapRanges(
     column_index_t targetChannel,
     const uint64_t* sourceInMaps,
     const folly::Range<const BaseVector::CopyRange*>& ranges) {
-  auto* targetInMaps = mutableRawInMapsAt(targetChannel);
-
   // This means that the key being copied exists in all maps from both source
   // and target; nothing to update.
-  if (sourceInMaps == nullptr && targetInMaps == nullptr) {
+  if (sourceInMaps == nullptr && mutableRawInMapsAt(targetChannel) == nullptr) {
     return;
   }
 
-  // If there is something we need to copy, allocate the target in map buffer in
-  // case there isn't one.
-  if (targetInMaps == nullptr) {
-    inMapsAt(targetChannel, true) =
-        AlignedBuffer::allocate<bool>(size(), pool(), false);
-    targetInMaps = mutableRawInMapsAt(targetChannel);
-  }
+  auto* targetInMaps = ensureInMapAt(targetChannel);
 
   // If there is source in map, we need to copy the buffer range regions from
   // it.
@@ -521,6 +565,14 @@ void FlatMapVector::copyInMapRanges(
   }
 }
 
+uint64_t* FlatMapVector::ensureInMapAt(column_index_t channel) {
+  auto& inMap = inMapsAt(channel, /*resize=*/true);
+  if (inMap == nullptr) {
+    inMap = AlignedBuffer::allocate<bool>(size(), pool(), true);
+  }
+  return inMap->asMutable<uint64_t>();
+}
+
 void FlatMapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
@@ -538,6 +590,8 @@ void FlatMapVector::copyRanges(
   // If source may have nulls, copy top-level nulls from the ranges first.
   if (sourceFlatMap->mayHaveNulls()) {
     copyNulls(mutableRawNulls(), sourceFlatMap->rawNulls(), ranges);
+  } else if (rawNulls() != nullptr) {
+    setNulls(mutableRawNulls(), ranges, false);
   }
 
   auto startingNumDistinctKeys = numDistinctKeys();
@@ -571,12 +625,7 @@ void FlatMapVector::copyRanges(
     // If a key doesn't exist in the source, we need to go and clean its in map
     // buffer entries for all rows in range.
     if (sourceFlatMap->getKeyChannel(distinctKeys_, i) == std::nullopt) {
-      auto& targetInMapsBuffer = inMapsAt(i, true);
-      if (targetInMapsBuffer == nullptr) {
-        targetInMapsBuffer =
-            AlignedBuffer::allocate<bool>(size(), pool(), false);
-      }
-      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+      auto* targetInMaps = ensureInMapAt(i);
 
       applyToEachRange(
           ranges,

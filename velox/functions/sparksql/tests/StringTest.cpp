@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
 #include <stdint.h>
+#include <limits>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -276,6 +278,268 @@ TEST_F(StringTest, levenshtein) {
   EXPECT_EQ(levenshtein("千世", "fog", 2), -1);
   EXPECT_EQ(levenshtein("世界千世", "大a界b", 4), 4);
   EXPECT_EQ(levenshtein("世界千世", "大a界b", 3), -1);
+}
+
+TEST_F(StringTest, elt) {
+  const auto elt = [&](std::optional<int32_t> index,
+                       std::optional<std::string> s1,
+                       std::optional<std::string> s2,
+                       std::optional<std::string> s3) {
+    return evaluateOnce<std::string>(
+        "elt(c0, c1, c2, c3)",
+        {INTEGER(), VARCHAR(), VARCHAR(), VARCHAR()},
+        index,
+        s1,
+        s2,
+        s3);
+  };
+
+  EXPECT_EQ(elt(1, "hello", "world", "!"), "hello");
+  EXPECT_EQ(elt(2, "hello", "world", "!"), "world");
+  EXPECT_EQ(elt(3, "hello", "world", "!"), "!");
+  EXPECT_EQ(elt(1, "", "b", "c"), "");
+
+  // NULL index or NULL selected input returns NULL. NULL inputs that are not
+  // selected do not affect the result.
+  EXPECT_EQ(elt(std::nullopt, "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(elt(2, "hello", std::nullopt, "world"), std::nullopt);
+  EXPECT_EQ(elt(1, "hello", std::nullopt, std::nullopt), "hello");
+
+  // Out-of-range index returns NULL with ANSI mode disabled.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  EXPECT_EQ(elt(0, "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(elt(-1, "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(elt(4, "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(
+      elt(std::numeric_limits<int32_t>::min(), "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(
+      elt(std::numeric_limits<int32_t>::max(), "a", "b", "c"), std::nullopt);
+
+  // A single input is the minimum number of arguments.
+  EXPECT_EQ(
+      (evaluateOnce<std::string, int32_t, std::string>("elt(c0, c1)", 1, "a")),
+      "a");
+  EXPECT_EQ(
+      (evaluateOnce<std::string, int32_t, std::string>("elt(c0, c1)", 2, "a")),
+      std::nullopt);
+
+  // Out-of-range index throws with ANSI mode enabled.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  VELOX_ASSERT_THROW(
+      elt(0, "a", "b", "c"), "Index is out of bounds: 0. Number of inputs: 3");
+  VELOX_ASSERT_THROW(
+      elt(-1, "a", "b", "c"),
+      "Index is out of bounds: -1. Number of inputs: 3");
+  VELOX_ASSERT_THROW(
+      elt(4, "a", "b", "c"), "Index is out of bounds: 4. Number of inputs: 3");
+  VELOX_ASSERT_THROW(
+      elt(std::numeric_limits<int32_t>::min(), "a", "b", "c"),
+      "Index is out of bounds: -2147483648. Number of inputs: 3");
+  VELOX_ASSERT_THROW(
+      elt(std::numeric_limits<int32_t>::max(), "a", "b", "c"),
+      "Index is out of bounds: 2147483647. Number of inputs: 3");
+  EXPECT_EQ(elt(2, "hello", "world", "!"), "world");
+  EXPECT_EQ(elt(std::nullopt, "a", "b", "c"), std::nullopt);
+  EXPECT_EQ(elt(2, "hello", std::nullopt, "world"), std::nullopt);
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      (evaluateOnce<std::string, int32_t, std::string, std::string>(
+          "try(elt(c0, c1, c2))", 3, "a", "b")),
+      std::nullopt);
+}
+
+TEST_F(StringTest, eltVarbinary) {
+  const auto elt = [&](std::optional<int32_t> index,
+                       std::optional<std::string> b1,
+                       std::optional<std::string> b2) {
+    return evaluateOnce<std::string>(
+        "elt(c0, c1, c2)",
+        {INTEGER(), VARBINARY(), VARBINARY()},
+        index,
+        b1,
+        b2);
+  };
+
+  EXPECT_EQ(elt(1, "\x01\x02", "\x03"), "\x01\x02");
+  EXPECT_EQ(elt(2, "\x01\x02", "\x03"), "\x03");
+  EXPECT_EQ(elt(3, "\x01\x02", "\x03"), std::nullopt);
+  EXPECT_EQ(elt(1, std::nullopt, "\x03"), std::nullopt);
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  VELOX_ASSERT_THROW(
+      elt(3, "\x01\x02", "\x03"),
+      "Index is out of bounds: 3. Number of inputs: 2");
+}
+
+TEST_F(StringTest, eltMultipleRows) {
+  // Rows select non-inlined strings (longer than 12 bytes) from different
+  // inputs. The result must remain valid after the input is released.
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5}),
+      makeFlatVector<std::string>({
+          "first input row 0",
+          "first input row 1",
+          "first input row 2",
+          "first input row 3",
+          "first input row 4",
+      }),
+      makeFlatVector<std::string>({
+          "second input row 0",
+          "second input row 1",
+          "second input row 2",
+          "second input row 3",
+          "second input row 4",
+      }),
+      makeNullableFlatVector<std::string>({
+          "third input row 0",
+          "third input row 1",
+          std::nullopt,
+          "third input row 3",
+          "third input row 4",
+      }),
+  });
+  auto expected = makeNullableFlatVector<std::string>({
+      "first input row 0",
+      "second input row 1",
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto result = evaluate("elt(c0, c1, c2, c3)", data);
+  data.reset();
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(StringTest, eltConstantInputs) {
+  // Constant inputs with non-inlined strings (longer than 12 bytes). The
+  // result must remain valid after the expression and the input are released.
+  auto data =
+      makeRowVector({makeNullableFlatVector<int32_t>({1, 2, std::nullopt})});
+  auto result = evaluate(
+      "elt(c0, 'first constant input', 'second constant input')", data);
+  data.reset();
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>({
+          "first constant input",
+          "second constant input",
+          std::nullopt,
+      }),
+      result);
+
+  // Constant index.
+  data = makeRowVector({
+      makeFlatVector<std::string>({
+          "first input row 0",
+          "first input row 1",
+      }),
+      makeNullableFlatVector<std::string>({
+          "second input row 0",
+          std::nullopt,
+      }),
+  });
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>({
+          "second input row 0",
+          std::nullopt,
+      }),
+      evaluate("elt(cast(2 as integer), c0, c1)", data));
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+      evaluate("elt(cast(3 as integer), c0, c1)", data));
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+      evaluate("elt(cast(null as integer), c0, c1)", data));
+}
+
+TEST_F(StringTest, eltDictionaryInputs) {
+  // The first input is dictionary-encoded, with rows in reverse order.
+  auto dictionaryInput = wrapInDictionary(
+      makeIndicesInReverse(4),
+      4,
+      makeFlatVector<std::string>({
+          "dictionary base row 0",
+          "dictionary base row 1",
+          "dictionary base row 2",
+          "dictionary base row 3",
+      }));
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 1, 2}),
+      dictionaryInput,
+      makeFlatVector<std::string>({
+          "flat input row 0",
+          "flat input row 1",
+          "flat input row 2",
+          "flat input row 3",
+      }),
+  });
+  auto result = evaluate("elt(c0, c1, c2)", data);
+  data.reset();
+  dictionaryInput.reset();
+  velox::test::assertEqualVectors(
+      makeFlatVector<std::string>({
+          "dictionary base row 3",
+          "flat input row 1",
+          "dictionary base row 1",
+          "flat input row 3",
+      }),
+      result);
+}
+
+TEST_F(StringTest, eltAnsiMultipleRows) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 5, 2, 0}),
+      makeFlatVector<std::string>({"a0", "a1", "a2", "a3"}),
+      makeFlatVector<std::string>({"b0", "b1", "b2", "b3"}),
+  });
+  VELOX_ASSERT_THROW(
+      evaluate("elt(c0, c1, c2)", data),
+      "Index is out of bounds: 5. Number of inputs: 2");
+
+  // try() nulls out only the rows with an out-of-range index.
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"a0", std::nullopt, "b2", std::nullopt}),
+      evaluate("try(elt(c0, c1, c2))", data));
+}
+
+TEST_F(StringTest, eltInConditional) {
+  // elt is evaluated only on the rows where the condition is true. With ANSI
+  // mode enabled, the out-of-range indices in the other rows must not throw,
+  // and the values written by the other branch must be preserved.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 0, 2, 5}),
+      makeFlatVector<std::string>({
+          "first input row 0",
+          "first input row 1",
+          "first input row 2",
+          "first input row 3",
+      }),
+      makeFlatVector<std::string>({
+          "second input row 0",
+          "second input row 1",
+          "second input row 2",
+          "second input row 3",
+      }),
+  });
+  velox::test::assertEqualVectors(
+      makeFlatVector<std::string>({
+          "first input row 0",
+          "index is out of range",
+          "second input row 2",
+          "index is out of range",
+      }),
+      evaluate(
+          "if(greaterthan(c0, 0) AND lessthan(c0, 3), elt(c0, c1, c2), "
+          "'index is out of range')",
+          data));
 }
 
 TEST_F(StringTest, endsWith) {

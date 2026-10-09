@@ -79,17 +79,19 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
     });
   }
 
-  void setSessionZoneNonLegacy(std::string_view timeZone) {
+  void useSessionZoneForRendering(std::string_view timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, std::string{timeZone}},
-        {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
+         "true"},
     });
   }
 
-  void setSessionZoneLegacy(std::string_view timeZone) {
+  void useEmbeddedZoneForRendering(std::string_view timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, std::string{timeZone}},
-        {core::QueryConfig::kLegacyTimestampWithTimezone, "true"},
+        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
+         "false"},
     });
   }
 
@@ -190,7 +192,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, toVarcharSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
 
   // 1970-01-01 05:30 UTC, the same instant tagged with two different zones.
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -206,10 +208,8 @@ TEST_F(TimestampWithTimeZoneCastTest, toVarcharSessionZone) {
   test::assertEqualVectors(expected, result);
 }
 
-TEST_F(
-    TimestampWithTimeZoneCastTest,
-    toVarcharLegacyPreservesEmbeddedZoneRegressionGuard) {
-  setSessionZoneLegacy("America/New_York");
+TEST_F(TimestampWithTimeZoneCastTest, toVarcharEmbeddedZoneRegressionGuard) {
+  useEmbeddedZoneForRendering("America/New_York");
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
   auto input = sameInstantInZones(utcMillis, "-04:00", "-07:00");
@@ -341,7 +341,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestampSessionZone) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
   });
 
   // 1970-01-01 05:30 UTC read in the session zone (EST, -05:00) is 00:30, for
@@ -361,11 +361,11 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestampSessionZone) {
 
 TEST_F(
     TimestampWithTimeZoneCastTest,
-    toTimestampAdjustsToUtcInNonLegacyModeRegressionGuard) {
+    toTimestampAdjustsToUtcWithSessionZoneRenderingRegressionGuard) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
   });
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -380,13 +380,11 @@ TEST_F(
   test::assertEqualVectors(expected, result);
 }
 
-TEST_F(
-    TimestampWithTimeZoneCastTest,
-    toTimestampLegacyPreservesEmbeddedZoneRegressionGuard) {
+TEST_F(TimestampWithTimeZoneCastTest, toTimestampEmbeddedZoneRegressionGuard) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "America/New_York"},
       {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "true"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "false"},
   });
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -421,7 +419,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDate) {
   auto result = evaluate("cast(c0 as date)", makeRowVector({input}));
   test::assertEqualVectors(expected, result);
 
-  // Under the legacy default the session time zone does not affect the result.
+  // By default the session time zone does not affect the result.
 
   for (auto tz : {"America/New_York", "America/Los_Angeles", "Asia/Shanghai"}) {
     setQueryTimeZone(tz);
@@ -431,7 +429,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDate) {
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
 
   // 1970-01-01 05:30 UTC; in -07:00 this is the previous day, but in the
   // session zone (EST, -05:00) both fall on 1970-01-01.
@@ -446,7 +444,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZone) {
 
 TEST_F(TimestampWithTimeZoneCastTest, toDateUnsetSessionZoneRendersGmt) {
   queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
   });
 
   // 1970-01-01 05:30 UTC falls on 1970-01-01 in GMT, so both values render to
@@ -463,7 +461,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateUnsetSessionZoneRendersGmt) {
 TEST_F(TimestampWithTimeZoneCastTest, toDateInvalidSessionZoneThrows) {
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, "Not/AZone"},
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
   });
 
   auto input = makeFlatVector<int64_t>(
@@ -475,7 +473,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateInvalidSessionZoneThrows) {
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZoneUsesDstOffset) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
 
   // 2024-07-01 04:30 UTC is 00:30 in New York under daylight time (-04:00).
   // Applying the winter offset (-05:00) would produce the previous date.
@@ -489,10 +487,8 @@ TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZoneUsesDstOffset) {
   test::assertEqualVectors(expected, result);
 }
 
-TEST_F(
-    TimestampWithTimeZoneCastTest,
-    toDateLegacyPreservesEmbeddedZoneRegressionGuard) {
-  setSessionZoneLegacy("America/New_York");
+TEST_F(TimestampWithTimeZoneCastTest, toDateEmbeddedZoneRegressionGuard) {
+  useEmbeddedZoneForRendering("America/New_York");
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
   auto input = sameInstantInZones(utcMillis, "-04:00", "-07:00");
@@ -887,7 +883,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTime) {
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, toTimeSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
 
   // 1970-01-01 05:30 UTC, the same instant tagged with two different zones.
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
@@ -900,10 +896,8 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimeSessionZone) {
   testCast(input, expected);
 }
 
-TEST_F(
-    TimestampWithTimeZoneCastTest,
-    toTimeLegacyPreservesEmbeddedZoneRegressionGuard) {
-  setSessionZoneLegacy("America/New_York");
+TEST_F(TimestampWithTimeZoneCastTest, toTimeEmbeddedZoneRegressionGuard) {
+  useEmbeddedZoneForRendering("America/New_York");
 
   const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
   auto input = sameInstantInZones(utcMillis, "-04:00", "-07:00");

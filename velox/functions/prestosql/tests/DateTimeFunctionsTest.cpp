@@ -84,10 +84,11 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     });
   }
 
-  void setSessionZoneNonLegacy(const std::string& timeZone) {
+  void useSessionZoneForRendering(const std::string& timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, timeZone},
-        {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
+         "true"},
     });
   }
 
@@ -752,7 +753,7 @@ TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto hourTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<int64_t>(
@@ -770,7 +771,7 @@ TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneSessionZone) {
 }
 
 TEST_F(DateTimeFunctionsTest, timestampWithTimezoneFieldsUseSessionZone) {
-  setSessionZoneNonLegacy("America/Los_Angeles");
+  useSessionZoneForRendering("America/Los_Angeles");
   const auto timestampWithTimezone =
       TimestampWithTimezone::pack(TimestampWithTimezone(
           parseTimestamp("2023-01-01 00:30:00").toMillis(), "+14:00"));
@@ -806,7 +807,7 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneFieldsUseSessionZone) {
 
 TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneGmtFallback) {
   queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
   });
 
   EXPECT_EQ(
@@ -1229,7 +1230,7 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampWithTimeZoneIntervalDayTimeIgnoresSessionZone) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
   auto input = makeRowVector({
       makeTimestampWithTimeZoneVector(0, "UTC"),
       makeNullableFlatVector<int64_t>({1'000}, INTERVAL_DAY_TIME()),
@@ -2258,7 +2259,7 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
       20,
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
 
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
   EXPECT_EQ(
       123,
       millisecondTimestampWithTimezone(
@@ -2866,7 +2867,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto truncDayEpoch =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<double>(
@@ -2888,7 +2889,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneSessionZone) {
               makeTimestampWithTimeZoneVector(28'800'000, "-04:00"),
           })));
 
-  setSessionZoneNonLegacy("Asia/Kolkata");
+  useSessionZoneForRendering("Asia/Kolkata");
   const auto truncHourEpoch =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<double>(
@@ -2904,7 +2905,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneSessionZone) {
 TEST_F(
     DateTimeFunctionsTest,
     dateTruncSecondTimestampWithTimezoneIgnoresSessionZone) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
   const auto timestampWithTimezone =
       TimestampWithTimezone::pack(TimestampWithTimezone(1'234, "+05:30"));
   const auto expected =
@@ -3489,7 +3490,7 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto addMonthEpoch =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<double>(
@@ -3546,7 +3547,7 @@ TEST_F(
     DateTimeFunctionsTest,
     plusMinusIntervalYearMonthTimestampWithTimezoneSessionZone) {
   // The +/- interval operators must agree with date_add on the render zone.
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto epochOf = [&](const std::string& expression) {
     return evaluateOnce<double>(
         fmt::format("to_unixtime({})", expression),
@@ -3582,7 +3583,7 @@ TEST_F(
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddHourTimestampWithTimezoneFallback) {
-  setSessionZoneNonLegacy("America/Los_Angeles");
+  useSessionZoneForRendering("America/Los_Angeles");
   // 00:30 PDT + 2 hours reaches the second 01:30, after the offset changes.
   // Calendar addition instead reaches 02:30 PST, one hour later.
   const auto result = evaluateOnce<double>(
@@ -3596,7 +3597,7 @@ TEST_F(DateTimeFunctionsTest, dateAddHourTimestampWithTimezoneFallback) {
 TEST_F(
     DateTimeFunctionsTest,
     dateAddSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
   const auto timestampWithTimezone =
       TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
 
@@ -4363,7 +4364,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto diffMonth = [&](std::optional<TimestampWithTimezone> from) {
     return evaluateOnce<int64_t>(
         "date_diff('month', c0, from_iso8601_timestamp('1970-05-30T12:00:00Z'))",
@@ -4388,7 +4389,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezoneSessionZone) {
 TEST_F(
     DateTimeFunctionsTest,
     dateDiffSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
   const auto from =
       TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
   const auto to =
@@ -4428,7 +4429,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezoneLegacyDefault) {
 TEST_F(DateTimeFunctionsTest, dateDiffDayTimestampWithTimezoneSpringForward) {
   // Day-and-above units diff on local wall time in the session zone, so the
   // 23-hour spring-forward day still counts as one calendar day.
-  setSessionZoneNonLegacy("America/Los_Angeles");
+  useSessionZoneForRendering("America/Los_Angeles");
   // 2024-03-10 00:00 PST (08:00 UTC) to 2024-03-11 00:00 PDT (07:00 UTC) spans
   // 23 hours but one calendar day in Los Angeles.
   const auto result = evaluateOnce<int64_t>(
@@ -5135,7 +5136,7 @@ TEST_F(DateTimeFunctionsTest, formatDateTimeTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, formatDatetimeTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto formatDatetimeTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<std::string>(
@@ -5479,7 +5480,7 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto dateFormatTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<std::string>(
@@ -6084,7 +6085,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateTimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto dateTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<int32_t>(
@@ -6268,7 +6269,7 @@ TEST_F(DateTimeFunctionsTest, timezoneHourTimestampWithTimezone) {
 
   // New York is -05:00 at this instant, so reading the session zone would
   // report -5 for both instead of the offset each value carries.
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   EXPECT_EQ(-4, timezoneHour(TimestampWithTimezone(28'800'000, "-04:00")));
   EXPECT_EQ(-7, timezoneHour(TimestampWithTimezone(28'800'000, "-07:00")));
 
@@ -6312,7 +6313,7 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
 
   // New York is -05:00 at this instant, so reading the session zone would
   // report 0 for both instead of the offset each value carries.
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   EXPECT_EQ(30, timezone_minute("1970-01-01 03:20:00", "Asia/Kolkata"));
   EXPECT_EQ(45, timezone_minute("1970-01-01 03:20:00", "Pacific/Chatham"));
 }
@@ -6320,7 +6321,7 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampWithTimezoneOffsetAccessorsIgnoreSessionZone) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
 
   const auto evaluateOffset = [&](const char* expression,
                                   const char* timeZone) {
@@ -6862,7 +6863,7 @@ TEST_F(DateTimeFunctionsTest, toISO8601TimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, toIso8601TimestampWithTimezoneSessionZone) {
-  setSessionZoneNonLegacy("America/New_York");
+  useSessionZoneForRendering("America/New_York");
   const auto toIso8601TimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<std::string>(
@@ -6902,7 +6903,7 @@ TEST_F(DateTimeFunctionsTest, toIso8601TimestampWithTimezoneLegacyDefault) {
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
-  setSessionZoneNonLegacy("Not/AZone");
+  useSessionZoneForRendering("Not/AZone");
 
   const auto at_timezone = [&](std::optional<int64_t> timestampWithTimezone,
                                std::optional<std::string> targetTimezone) {

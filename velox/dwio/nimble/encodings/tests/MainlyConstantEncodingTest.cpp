@@ -186,13 +186,114 @@ TYPED_TEST(MainlyConstantEncodingTest, serializeThenDeserialize) {
     nimble::Vector<DataType> result(this->pool_.get(), rowCount);
     encoding->materialize(rowCount, result.data());
 
-    EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::MainlyConstant);
+    // An all-common group carries no uncommon values, so MainlyConstant falls
+    // back to ConstantEncoding. Derive the expectation from the data using the
+    // same physical equality the encoder's unique counts use.
+    const auto firstPhysical =
+        nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalType(
+            values[0]);
+    const bool allCommon =
+        std::all_of(values.begin(), values.end(), [&](const DataType& value) {
+          return nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalType(
+                     value) == firstPhysical;
+        });
+
+    EXPECT_EQ(
+        encoding->encodingType(),
+        allCommon ? nimble::EncodingType::Constant
+                  : nimble::EncodingType::MainlyConstant);
     EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<DataType>::dataType);
     EXPECT_EQ(encoding->rowCount(), rowCount);
     for (uint32_t i = 0; i < rowCount; ++i) {
       EXPECT_TRUE(
           nimble::NimbleCompare<DataType>::equals(result[i], values[i]));
     }
+  }
+}
+
+// MainlyConstant cannot express "no uncommon values" more cheaply than
+// ConstantEncoding: the isCommon bitmap would be all-true and otherValues
+// empty. So an all-common input falls back to ConstantEncoding, mirroring the
+// downgrade slice() already performs for an all-common range. The fallback must
+// produce exactly what ConstantEncoding would have written, so it costs nothing
+// relative to selecting Constant directly.
+TYPED_TEST(MainlyConstantEncodingTest, encodeFallbackToConstant) {
+  using DataType = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  for (const uint32_t rowCount : {1u, 2u, 7u, 64u, 1000u}) {
+    nimble::Vector<DataType> values{this->pool_.get()};
+    values.resize(rowCount);
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      values[i] = static_cast<DataType>(42);
+    }
+
+    const auto encoded =
+        nimble::test::Encoder<nimble::MainlyConstantEncoding<DataType>>::encode(
+            *this->buffer_,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+    const auto viaConstant =
+        nimble::test::Encoder<nimble::ConstantEncoding<DataType>>::encode(
+            *this->buffer_,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+    EXPECT_EQ(encoded, viaConstant) << "rowCount=" << rowCount;
+
+    auto encoding = nimble::EncodingFactory{options}.create(
+        *this->pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        });
+
+    EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant)
+        << "rowCount=" << rowCount;
+    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<DataType>::dataType);
+    EXPECT_EQ(encoding->rowCount(), rowCount);
+
+    nimble::Vector<DataType> result(this->pool_.get(), rowCount);
+    encoding->materialize(rowCount, result.data());
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      EXPECT_TRUE(
+          nimble::NimbleCompare<DataType>::equals(result[i], values[i]));
+    }
+  }
+}
+
+// Guards the other direction: data with uncommon values must still encode as
+// MainlyConstant, so the fallback cannot swallow the normal case.
+TYPED_TEST(MainlyConstantEncodingTest, encodeWithoutFallback) {
+  using DataType = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  nimble::Vector<DataType> values{this->pool_.get()};
+  values.resize(64);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    // A single uncommon value is enough to keep the bitmap meaningful.
+    values[i] = static_cast<DataType>(i == 17 ? 3 : 42);
+  }
+
+  const auto encoded =
+      nimble::test::Encoder<nimble::MainlyConstantEncoding<DataType>>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options);
+  auto encoding = nimble::EncodingFactory{options}.create(
+      *this->pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      });
+
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::MainlyConstant);
+  EXPECT_EQ(encoding->rowCount(), values.size());
+
+  nimble::Vector<DataType> result(this->pool_.get(), values.size());
+  encoding->materialize(values.size(), result.data());
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    EXPECT_TRUE(nimble::NimbleCompare<DataType>::equals(result[i], values[i]));
   }
 }
 
@@ -386,6 +487,76 @@ TYPED_TEST(MainlyConstantEncodingTest, deterministicSerializationOnTie) {
           << "MainlyConstant serialization is not deterministic (iteration "
           << i << ")";
     }
+  }
+}
+
+// The string specialization has its own encode(), so the fallback is covered
+// separately from the numeric typed suite.
+TEST(MainlyConstantStringEncodingTest, encodeFallbackToConstant) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const nimble::Encoding::Options options{};
+
+  nimble::Vector<std::string_view> values{pool.get()};
+  values.resize(50);
+  for (auto& value : values) {
+    value = "the-only-value";
+  }
+
+  const auto encoded = nimble::test::
+      Encoder<nimble::MainlyConstantEncoding<std::string_view>>::encode(
+          buffer, values, nimble::CompressionType::Uncompressed, options);
+
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto stringBufferFactory = [&](uint32_t totalLength) {
+    auto& stringBuffer = stringBuffers.emplace_back(
+        velox::AlignedBuffer::allocate<char>(totalLength, pool.get()));
+    return stringBuffer->asMutable<void>();
+  };
+  auto encoding = nimble::EncodingFactory{options}.create(
+      *pool, encoded, stringBufferFactory);
+
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant);
+  EXPECT_EQ(encoding->dataType(), nimble::DataType::String);
+  EXPECT_EQ(encoding->rowCount(), values.size());
+
+  nimble::Vector<std::string_view> result(pool.get(), values.size());
+  encoding->materialize(values.size(), result.data());
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(result[i], values[i]);
+  }
+}
+
+TEST(MainlyConstantStringEncodingTest, encodeWithoutFallback) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const nimble::Encoding::Options options{};
+
+  nimble::Vector<std::string_view> values{pool.get()};
+  values.resize(50);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = (i == 11) ? "rare" : "the-common-value";
+  }
+
+  const auto encoded = nimble::test::
+      Encoder<nimble::MainlyConstantEncoding<std::string_view>>::encode(
+          buffer, values, nimble::CompressionType::Uncompressed, options);
+
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto stringBufferFactory = [&](uint32_t totalLength) {
+    auto& stringBuffer = stringBuffers.emplace_back(
+        velox::AlignedBuffer::allocate<char>(totalLength, pool.get()));
+    return stringBuffer->asMutable<void>();
+  };
+  auto encoding = nimble::EncodingFactory{options}.create(
+      *pool, encoded, stringBufferFactory);
+
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::MainlyConstant);
+
+  nimble::Vector<std::string_view> result(pool.get(), values.size());
+  encoding->materialize(values.size(), result.data());
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(result[i], values[i]);
   }
 }
 

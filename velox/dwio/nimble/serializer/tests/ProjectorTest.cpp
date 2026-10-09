@@ -43,6 +43,8 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using testing::ElementsAre;
@@ -2027,12 +2029,12 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
     return std::find(selectedOffsets.begin(), selectedOffsets.end(), offset) !=
         selectedOffsets.end();
   };
-  EXPECT_TRUE(
-      containsOffset(sourceHybridMap.groupAt(0).keyDescriptor.offset()));
-  EXPECT_FALSE(
-      containsOffset(sourceHybridMap.groupAt(1).keyDescriptor.offset()));
-  EXPECT_TRUE(
-      containsOffset(sourceHybridMap.defaultGroup().keyDescriptor.offset()));
+  EXPECT_TRUE(containsOffset(
+      sourceHybridMap.groupAt(0).keyPresenceDescriptor.offset()));
+  EXPECT_FALSE(containsOffset(
+      sourceHybridMap.groupAt(1).keyPresenceDescriptor.offset()));
+  EXPECT_TRUE(containsOffset(
+      sourceHybridMap.defaultGroup().keyPresenceDescriptor.offset()));
   EXPECT_THAT(
       selectedOffsets,
       ElementsAre(
@@ -2042,13 +2044,13 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
               .valueType->asScalar()
               .scalarDescriptor()
               .offset(),
-          sourceHybridMap.groupAt(0).keyDescriptor.offset(),
+          sourceHybridMap.groupAt(0).keyPresenceDescriptor.offset(),
           sourceHybridMap.groupAt(0).inMapDescriptor.offset(),
           sourceHybridMap.defaultGroup()
               .valueType->asScalar()
               .scalarDescriptor()
               .offset(),
-          sourceHybridMap.defaultGroup().keyDescriptor.offset(),
+          sourceHybridMap.defaultGroup().keyPresenceDescriptor.offset(),
           sourceHybridMap.defaultGroup().inMapDescriptor.offset()));
 
   const auto projectedSchema = projector.projectedSchema();
@@ -2061,7 +2063,9 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
   EXPECT_EQ(
       projectedHybridMap.groupAt(0).groupKeys,
       (std::vector<std::string>{"1", "2"}));
-  EXPECT_TRUE(projectedHybridMap.groupAt(1).groupKeys.empty());
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(1).groupKeys,
+      (std::vector<std::string>{"99", "100"}));
 
   for (bool useChained : {false, true}) {
     const auto projected = projectInput(projector, serialized, useChained);
@@ -2087,6 +2091,85 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
     ASSERT_NE(filteredMap, nullptr);
     EXPECT_EQ(filteredMap->sizeAt(0), 2);
     EXPECT_EQ(filteredMap->sizeAt(1), 1);
+  }
+}
+
+TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features", "id"},
+        {vectorMaker.mapVectorFromJson<int64_t, double>(maps),
+         makeIntVector<int64_t>({0, 1, 2, 3})});
+  };
+  const std::vector<std::string> inputMaps{
+      "{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"};
+  const auto input = makeInput(inputMaps);
+  auto options = inputSerializerOptions();
+  options.hybridFlatMapColumns = {{"features", makeHybridFlatMap({})}};
+  const auto [serialized, inputSchema] =
+      serializeWithSchema(input, input->type(), std::move(options));
+  const auto& sourceRow = inputSchema->asRow();
+  const auto& sourceHybridMap = sourceRow.childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(sourceHybridMap.groupCount(), 1);
+  const auto& defaultGroup = sourceHybridMap.defaultGroup();
+
+  struct TestCase {
+    std::string featuresSubfield;
+    // JSON maps that a decode restricted to the projected subfields returns.
+    std::vector<std::string> expectedMaps;
+  };
+  const std::vector<TestCase> testCases{
+      {.featuresSubfield = "features[1]",
+       .expectedMaps = {"{1: 10}", "null", "{}", "{1: 11}"}},
+      {.featuresSubfield = "features[99]",
+       .expectedMaps = {"{}", "null", "{}", "{}"}},
+      {.featuresSubfield = "features", .expectedMaps = inputMaps},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.featuresSubfield);
+    std::vector<common::Subfield> subfields;
+    subfields.emplace_back(testCase.featuresSubfield);
+    subfields.emplace_back("id");
+    Projector projector{
+        inputSchema, subfields, pool_.get(), projectorOptions()};
+
+    // A selected Default key or an unknown key carries the whole Default
+    // group. Exact key filtering happens while decoding.
+    EXPECT_THAT(
+        projector.testingInputStreamIndices(),
+        ElementsAre(
+            sourceRow.nullsDescriptor().offset(),
+            sourceHybridMap.nullsDescriptor().offset(),
+            defaultGroup.valueType->asScalar().scalarDescriptor().offset(),
+            defaultGroup.keyPresenceDescriptor.offset(),
+            defaultGroup.inMapDescriptor.offset(),
+            sourceRow.childAt(1)->asScalar().scalarDescriptor().offset()));
+    const auto projectedSchema = projector.projectedSchema();
+    const auto& projectedHybridMap =
+        projectedSchema->asRow().childAt(0)->asHybridFlatMap();
+    ASSERT_EQ(projectedHybridMap.groupCount(), 1);
+    EXPECT_EQ(
+        projectedHybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_EQ(projectedHybridMap.groupAt(0).groupKeys, defaultGroup.groupKeys);
+
+    for (bool useIOBuf : {false, true}) {
+      SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
+      const auto projected = projectInput(projector, serialized, useIOBuf);
+      EXPECT_TRUE(outputRequiredBarrier(projected));
+      const auto projectedBytes = toString(projected);
+      velox::test::assertEqualVectors(
+          input,
+          deserialize(
+              projectedBytes, projectedSchema, outputDeserializerOptions()));
+
+      Deserializer selectedDeserializer{
+          projectedSchema, subfields, pool_.get(), outputDeserializerOptions()};
+      VectorPtr selected;
+      selectedDeserializer.deserialize(projectedBytes, selected);
+      velox::test::assertEqualVectors(
+          makeInput(testCase.expectedMaps), selected);
+    }
   }
 }
 

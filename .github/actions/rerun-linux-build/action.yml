@@ -68,11 +68,9 @@ runs:
         echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
         echo "run_status=$run_status" >> "$GITHUB_OUTPUT"
 
-        # The `Full build mode` job in linux-build-base.yml is gated on
-        # `is-full-mode` alone and resolves to `completed:skipped` the
-        # moment a selective run starts. Any other state means the run
-        # is already full and a re-run would repeat it. Treat absence
-        # (job missing from the response) as "re-run anyway".
+        # The `Full build mode` job runs only in full runs. If it was not
+        # skipped, this run is already full, so do not re-run it. If the
+        # job is missing, re-run to be safe.
         marker_conclusion=$(gh_api "/repos/$REPO/actions/runs/$run_id/jobs" \
           --jq '[.jobs[] | select(.name | test("^Build with GCC / Full build mode"))][0].conclusion // ""')
         if [ -n "$marker_conclusion" ] && [ "$marker_conclusion" != "skipped" ]; then

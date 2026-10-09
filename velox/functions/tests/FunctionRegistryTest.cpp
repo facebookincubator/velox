@@ -911,6 +911,15 @@ struct DummySimpleFunction {
   void call(T&, const T&, const T&) {}
 };
 
+// Takes two arrays and returns an array, like array_union.
+template <typename TExec>
+struct DummyArrayFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename TOut, typename TIn>
+  void call(TOut&, const TIn&, const TIn&) {}
+};
+
 // Two overloads that tie on a bare UNKNOWN argument but return different
 // types.
 template <typename TExec>
@@ -964,6 +973,43 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testNoCoercions("foo", {DOUBLE(), DOUBLE()}, DOUBLE());
 
     testCannotResolve("foo", {TINYINT(), VARCHAR()});
+  }
+
+  // A generic signature plus fast paths for some element types, like
+  // array_union. A signature that binds the arguments as is wins; otherwise the
+  // lowest coercion cost wins.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    registerFunction<
+        DummyArrayFunction,
+        Array<Generic<T1>>,
+        Array<Generic<T1>>,
+        Array<Generic<T1>>>({"foo"});
+    registerFunction<
+        DummyArrayFunction,
+        Array<int8_t>,
+        Array<int8_t>,
+        Array<int8_t>>({"foo"});
+    registerFunction<
+        DummyArrayFunction,
+        Array<float>,
+        Array<float>,
+        Array<float>>({"foo"});
+
+    testNoCoercions(
+        "foo", {ARRAY(UNKNOWN()), ARRAY(UNKNOWN())}, ARRAY(UNKNOWN()));
+    testNoCoercions(
+        "foo",
+        {ARRAY(DECIMAL(10, 2)), ARRAY(DECIMAL(10, 2))},
+        ARRAY(DECIMAL(10, 2)));
+    testCoercions(
+        "foo",
+        {ARRAY(DECIMAL(10, 2)), ARRAY(DECIMAL(12, 2))},
+        ARRAY(DECIMAL(12, 2)),
+        {ARRAY(DECIMAL(12, 2)), nullptr});
   }
 
   {

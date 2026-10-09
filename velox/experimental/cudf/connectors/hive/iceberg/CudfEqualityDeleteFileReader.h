@@ -137,10 +137,13 @@ class CudfEqualityDeleteFileReader {
 
   // Eagerly reads the Parquet-format equality delete file into the
   // deleteKeyTable_ cudf table, normalizing decimals to the logical key types.
+  // Key columns are matched case-insensitively when caseInsensitiveColumnNames
+  // is set.
   void directReadEqualityDeleteFile(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
       std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
-      const std::vector<TypePtr>& equalityColumnTypes);
+      const std::vector<TypePtr>& equalityColumnTypes,
+      bool caseInsensitiveColumnNames);
 
   // Lazily constructs the equality column indices in the input table
   // on the first call to applyDeletes().

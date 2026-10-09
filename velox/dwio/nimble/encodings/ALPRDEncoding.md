@@ -12,14 +12,16 @@ does not contain ALP blocks or switch between the two algorithms internally.
 
 ## Scope and selection
 
-The initial implementation supports explicit encoding and fixed/replayed layouts,
-including ordinary Nimble file reads and the generic visitor path. It does not
-add ALP_RD to automatic encoding selection or provide an encoding view.
+ALP_RD supports explicit layouts, opt-in automatic selection through the manual
+policy, ordinary Nimble file reads, and the generic visitor path. It has no
+encoding view yet.
 
-Automatic selection is planned as a separate change. ALP and ALP_RD will compete
-with other eligible encodings at the same Nimble selection node using
-`estimatedSize * readFactor`. There is no dedicated ALP-failure-to-ALP_RD fallback
-or special mutual exclusion between the two encodings.
+To enable automatic selection, add `ALPRD=<readFactor>` to the manual policy's
+candidate configuration. ALP_RD is absent from production default candidates.
+ALP and ALP_RD compete with all eligible encodings at the same selection node
+using `estimatedSize * readFactor`; there is no dedicated ALP-failure fallback
+or special mutual exclusion. A lower factor favors an encoding. A size win
+alone does not establish a decoding-speed win.
 
 The encoding applies to one Nimble encoding payload. Each payload has its own
 split width, dictionary, child encodings, and exception list. There is no fixed
@@ -32,10 +34,36 @@ Their types are integers, so ALP and ALP_RD cannot directly encode these childre
 This is a type constraint, not a global exclusion between ALP and ALP_RD in a
 larger encoding tree.
 
-A Nullable wrapper keeps its existing physical-type child selection. When that
-selection explicitly requests ALP or ALP_RD, the child is encoded with the
-parent's logical floating-point type. Other nullable child encodings retain
-their existing physical type tags and selection behavior.
+Dictionary alphabets, RLE run values, and MainlyConstant uncommon values can
+select ALP or ALP_RD through their inherited or explicitly overridden candidates.
+Parent containers retain their existing heuristic estimates. Their value
+children select from the configured candidates when written, and ancestor
+encoding filters apply as usual.
+
+ALP and ALP_RD both require explicit candidate configuration. The legacy
+`allowNestedAlpSelection` option does not add ALP to nested candidates. Callers
+that relied on this option must add ALP to their nested candidate configuration.
+The option retains its existing floating-point normalization and policy-free
+estimation behavior.
+
+`AlpLike` denotes ALP and ALP_RD. The policy hook `hasAlpLikeCandidates()` reports
+whether configured candidates or replayed layouts include either encoding. This
+includes nested candidate overrides and replay fallback policies for unspecified
+value encodings. A specified value layout is inspected directly. Missing auxiliary
+layouts, such as null flags or dictionary indices, do not trigger a fallback
+capability query. Callers use logical floating-point types for nested encoding
+selection when the hook returns
+`true`. Its default is `false`.
+The selected encoding determines which type is serialized. NULL handling
+remains the responsibility of the enclosing Nullable wrapper.
+
+A Nullable wrapper retains physical selection and type tags by default. When
+its policy enables ALP or ALP_RD, the data child uses logical floating-point
+selection so both encodings and floating-point containers remain eligible.
+Containers containing ALP or ALP_RD retain their logical type during layout
+replay. Leaf encodings other than ALP/ALP_RD keep their physical tags. Explicit
+ALP/ALP_RD layouts also retain
+the logical type. The default nullable layout is unchanged.
 
 ## Binary layout
 
@@ -113,24 +141,130 @@ empty ALP_RD payload.
 
 ## Writer parameters and layout replay
 
-The current writer samples at most 1,024 evenly spaced values and evaluates
-high-part widths from 1 through 16. For each width it builds a dictionary from
-the eight most frequent sampled high parts, or all keys when there are fewer
-than eight. It estimates packed codes, right parts, dictionary entries, and
-32-bit-position/16-bit-high exceptions to choose the split. The full input is
-then encoded against that dictionary; unsampled keys become exceptions.
+The writer samples at most 1,024 values from evenly sized intervals, varying
+the offset within each interval deterministically to avoid aliasing periodic
+input. It evaluates high-part widths from 1 through 16. At each width it counts
+high-prefix frequencies and tries dictionaries containing one through eight
+of the most frequent prefixes, bounded by the number of distinct prefixes.
 
-This is an internal parameter heuristic, not an automatic encoding-selection
-cost model or a requirement for other writers. Readers depend only on the
-serialized parameters and reconstruction rules. Future writers may improve
-training without changing this layout.
+Each split is scored using fixed scalar child-size heuristics. All modeled
+codecs are enabled by Nimble's default manual policy: Constant, FixedBitWidth
+and Trivial. The cost model does not create child policies or invoke selection,
+and it does not encode candidate payloads. Split selection needs only the
+bounded input sample, prefix frequencies and value ranges; it does not build
+four candidate child arrays.
+
+| Child | Heuristic |
+| --- | --- |
+| Codes | Constant for one dictionary entry; otherwise the smaller of FixedBitWidth and Trivial over `[0, dictionarySize - 1]`. Exception rows use code zero. |
+| Right parts | Constant for a constant sampled range; otherwise the smaller of FixedBitWidth and Trivial using the sampled minimum and maximum. |
+| Exception positions | Omitted when the estimated count is zero; Constant for one position; otherwise the smaller of FixedBitWidth and Trivial over `[0, numRows - 1]`. |
+| Exception high parts | Omitted when there are no sampled exceptions; otherwise Constant or the smaller of FixedBitWidth and Trivial using the uncovered prefixes' range. |
+
+Exception positions are distinct absolute row numbers. A sample with one
+exception can represent multiple exceptions in the target stream, so their
+estimated range must not become constant merely because the sample has one
+position. Using the full row range is conservative when exceptions cluster.
+Nimble's Varint encodes offsets from the minimum value rather than gaps between
+successive positions. It also requires 32- or 64-bit values, whereas codes and
+exception high parts are uint16. The fixed model therefore uses the three
+scalar codecs above; actual child selection can still choose other configured
+encodings.
+
+FixedBitWidth uses the caller's `fixedBitWidthUseExactBits` option. By default,
+widths round up to whole bytes: two dictionary entries therefore cost about
+one byte per code, not one bit. Trivial limits the estimate when the packed
+width approaches the physical integer width. Equal split costs prefer narrower
+right parts, then smaller dictionaries.
+
+### Size estimation from samples
+
+The same bounded split search supplies both ALP_RD's automatic size estimate
+and its writer parameters. Let `N` be the target row count, `M` the number of
+sampled values, and `e` the number of sampled dictionary misses. The projected
+exception count is:
+
+```text
+E = ceil(e * N / M)
+```
+
+Codes and right parts each represent `N` values. The two exception streams each
+represent `E` values and are omitted when `E == 0`. For a non-empty child with
+estimated range `[minValue, maxValue]`, the shared scalar model is:
+
+```text
+if minValue == maxValue:
+    childSize = prefixSize(childRows) + sizeof(childType)
+else:
+    childSize = min(
+        FixedBitWidth::estimateSize(childRows, minValue, maxValue, options),
+        Trivial::estimateSize(childRows))
+```
+
+The existing child estimators receive the target child row count directly.
+Their headers are counted once, not multiplied by the sampling ratio. They
+retain Nimble's existing approximate size convention, including the fixed
+prefix used by FixedBitWidth and Trivial estimates. ALP_RD does not convert
+those estimates to exact serialized bytes or add codec-specific padding.
+
+ALP_RD then adds its own format overhead once:
+
+```text
+estimatedSize = prefixSize(N)
+    + 2                         // right width and dictionary size
+    + 2 * dictionarySize        // uint16 high prefixes
+    + varintSize(E)
+    + sum(varintSize(childSize) + childSize for each present child)
+```
+
+`prefixSize` follows `useVarintRowCount`. Child-length fields and the exception
+count always use varints. The result is a heuristic byte estimate for comparing
+ALP_RD with other candidates through the ordinary policy's
+`estimatedSize * readFactor` rule. It is not an exact prediction of serialized
+size. Sampling may miss rare values, and generic compression is not predicted.
+
+ALP uses the same scalar child-cost helpers in `NestedAlpSizeEstimation` for its
+transformed integers, exception positions and original exception values. It
+retains its own exponent/factor training algorithm. This shared code is limited
+to sampling and scalar size heuristics; the general selection policy and other
+encoding estimators keep their existing contracts.
+
+### Writing the selected split
+
+The writer trains with the same policy-independent model, transforms the full
+input into child arrays, and passes each array to the existing `encodeNested()`
+path. Child policies then apply their configured candidates, read factors,
+ancestor filters and replayed layouts to the actual child data.
+
+Consequently, changing a child policy does not change the split model, but it
+can change the written child encodings and payload size. The model can be less
+accurate under custom candidates or weights. This is the same separation of
+heuristic parent estimation and actual child selection used by existing Nimble
+containers. Dictionary, RLE and MainlyConstant retain their existing parent
+estimators; they do not recursively simulate an ALP_RD subtree during estimation.
+
+For the same input, target row count and options, split selection is
+deterministic. The full input is encoded against the selected dictionary;
+unsampled keys become exceptions. Readers depend only on the serialized
+parameters and reconstruction rules, so training can evolve without changing
+the format. Neither training nor automatic selection guarantees the smallest
+serialized payload.
+
+### Layout replay
 
 Layout capture records the ALP_RD ID and four child slots, with absent layouts
 for the two exception children when there are no exceptions. These slots let
 the replay policy select layouts for newly appearing exception streams. Replay
 recomputes the dictionary and split from the new values. It does not reuse the
 previous payload's dictionary. Newly appearing exceptions use the replay
-policy's normal child fallback.
+policy's normal child fallback. If a saved child layout is incompatible with
+the newly trained split, the writer retries with ordinary selection, as it does
+for other encodings. For example, a captured Constant codes child cannot store
+the varying codes produced by a new two-entry dictionary.
+
+Selection remains greedy: a compatible explicit or replayed ALP_RD layout is
+honored even when another encoding would be smaller. The writer does not encode
+the full input and then re-encode it for comparison.
 
 A fixed layout can specify all four children, for example:
 
@@ -188,6 +322,13 @@ existing nullable physical child layouts. It separately checks memory-pool
 limits during exception loading, invalid positions throughout the exception
 stream, and valid compressed exception streams whose counts exceed their
 payload sizes.
+`ALPRDSelectionTest` checks scalar size heuristics, bounded sampling, exception
+projection, policy-independent estimation, writer candidate constraints, positive
+and negative choices, read factors, candidate inheritance, ALP/ALP_RD nesting,
+nullable layouts and replay. File tests cover automatic selection without an
+explicit layout and ordinary writer fallback for incompatible child layouts.
+Random selection and the writer fuzzer also offer
+ALP_RD, including shared-prefix workloads and unmodified special values.
 `FloatingPointColumnReaderTest` and
 `ALPRDColumnReaderTest` verify real file reads, filters, NULLs, multiple chunks,
 and layout caching through both the native and legacy reader paths.
@@ -207,3 +348,11 @@ Data generation/loading, encoded snapshot copying and caller output allocation
 are outside timing. Complete encoding includes training and child selection;
 construction-plus-decoding includes exception loading and destruction. Both
 decoding lifecycles are validated bit-for-bit before timing.
+
+The `--selection_profile` mode compares a configured baseline candidate set
+against the same set with ALP_RD added. It reports serialized trees, estimated
+and actual bytes, and separate selection, encoding and construction-plus-decoding
+wall/CPU times. The default benchmark configuration uses equal read factors for
+size comparisons; `--selection_read_factors` and `--alprd_read_factor` make the
+weights explicit. These are encoding-payload measurements, not file-scan
+measurements. Selection timing creates fresh lazy statistics on each iteration.

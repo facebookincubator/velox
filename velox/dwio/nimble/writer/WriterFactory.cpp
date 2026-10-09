@@ -116,9 +116,12 @@ std::unique_ptr<dwio::common::Writer> WriterFactory::createWriter(
         fmt::format(
             "{}.nimble.buffered_write_file.{}",
             options->memoryPool->name(),
-            folly::to<std::string>(folly::Random::rand64())));
-    auto bufferedFileLeaf =
-        bufferedFilePool->addLeafChild("buffered_write_file_buffer");
+            folly::to<std::string>(folly::Random::rand64())),
+        options->memoryReclaimerFactory());
+    auto bufferedFileLeaf = bufferedFilePool->addLeafChild(
+        "buffered_write_file_buffer",
+        /*threadSafe=*/true,
+        options->memoryReclaimerFactory());
     return std::make_unique<facebook::dwio::api::BufferedWriteFile>(
         std::move(bufferedFileLeaf), writeFileBufferBytes, std::move(file));
   };

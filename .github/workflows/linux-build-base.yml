@@ -96,14 +96,9 @@ jobs:
             echo "run_clang_tidy=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Marks the run as full rather than selective, for anything reading the
-  # jobs API. It exists only to carry that signal, so it stays correct as
-  # real jobs change which modes they run in.
-  #
-  # CONTRACT: .github/actions/rerun-linux-build/action.yml matches this
-  # display name with `^Build with GCC / Full build mode`. Renaming it
-  # without updating that regex makes every approval re-run a build that
-  # is already full.
+  # Does no work. It runs only in full runs, so rerun-linux-build checks
+  # it to tell whether a run was full. That action finds it by the name
+  # "Full build mode", so rename both together.
   full-mode-marker:
     if: ${{ inputs.is-full-mode }}
     runs-on: 4-core-ubuntu
@@ -532,17 +527,14 @@ jobs:
   ubuntu-debug:
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
-    # Runs in both modes. The adapters job is release, and
-    # DEBUG_ONLY_TEST* compiles to DISABLED_ under NDEBUG, so skipping
-    # this job in selective mode left 339 tests unrun on those pull
-    # requests. Selective mode builds and tests only the planned
-    # targets, so the saving is kept.
+    # Runs in both modes. It is the only Linux debug build, and
+    # DEBUG_ONLY_TEST tests run only in debug builds.
     if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
-      # Empty in full mode; space-separated cmake targets when selective.
+      # Targets to build. Empty means build everything.
       BUILD_TARGETS: ${{ inputs.cmake-targets }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
@@ -645,6 +637,7 @@ jobs:
           # find_package(OpenMP) to define it, so a SYSTEM resolution
           # fails the configure.
           faiss_SOURCE: BUNDLED
+          LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
           # exported config references gflags_static which BUNDLED gflags provides.
@@ -668,8 +661,35 @@ jobs:
              export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
-          # Empty TARGETS = full build.
-          make debug TARGETS="$BUILD_TARGETS" 2>&1 | tee /tmp/build-output.log
+
+          # Configure and build in two steps, so the targets can be
+          # checked in between.
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug 2>&1 \
+            | tee /tmp/build-output.log
+
+          targets=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            # The plan can name targets this build does not have, such as
+            # the cloud adapter tests. Ninja fails on any unknown target,
+            # so drop them.
+            ninja -C _build/debug -t targets all \
+              | sed -n 's/^\([A-Za-z0-9_+.-]*\): phony$/\1/p' \
+              | sort -u > available-targets.txt
+            read -ra planned <<< "$BUILD_TARGETS"
+            for target in "${planned[@]}"; do
+              if grep -qxF "$target" available-targets.txt; then
+                targets+=("$target")
+              fi
+            done
+            echo "plan targets : $BUILD_TARGETS"
+            echo "building     : ${targets[*]:-<none matched, building everything>}"
+            # The test step reads this to run only what was built.
+            echo "BUILD_TARGETS=${targets[*]}" >> "$GITHUB_ENV"
+          fi
+
+          # Empty TARGETS builds everything.
+          make build BUILD_DIR=debug TARGETS="${targets[*]}" 2>&1 \
+            | tee -a /tmp/build-output.log
 
       - name: Extract build errors
         id: build-errors
@@ -703,10 +723,8 @@ jobs:
         run: |
           ulimit -n 65536
           cd _build/debug
-          # In selective mode most registered tests have no binary, and
-          # ctest reports each as "Unable to find executable". Restrict
-          # it to what was built. --no-tests=error is dropped there so a
-          # target list holding no test executables still passes.
+          # In selective mode, run only the tests that were built. Allow
+          # zero tests there, since a change may build none.
           CTEST_FILTER=()
           if [[ -n "$BUILD_TARGETS" ]]; then
             regex_targets="$(
@@ -867,6 +885,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
+          LibXml2_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
