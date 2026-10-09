@@ -162,6 +162,17 @@ class SparkQueryConfig {
       true,
       "If true, Spark collect_list() ignores nulls in the input.")
 
+  /// If true, array_sort with a comparator lambda throws when a rewritten
+  /// sort key is NULL for an array with at least two elements. If false, NULL
+  /// sort keys are placed last.
+  VELOX_SPARK_CONFIG(
+      kArraySortRejectNullComparatorKeys,
+      arraySortRejectNullComparatorKeys,
+      "array_sort.reject_null_comparator_keys",
+      bool,
+      true,
+      "If true, Spark array_sort() with a comparator throws on NULL sort keys; otherwise, NULL sort keys are placed last.")
+
   VELOX_SPARK_CONFIG(
       kDecimalToFloatHighPrecisionCastEnabled,
       decimalToFloatHighPrecisionCastEnabled,

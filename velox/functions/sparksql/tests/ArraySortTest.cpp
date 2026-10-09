@@ -408,7 +408,7 @@ TEST_F(ArraySortTest, comparatorRejectsNullSortKeys) {
           "if(lessthan(length(x), length(y)), -1, "
           "if(greaterthan(length(x), length(y)), 1, 0)))",
           makeRowVector({input})),
-      "array_sort comparator rewrite does not support null sort keys");
+      "array_sort comparator does not support NULL sort keys");
 
   auto identityInput = makeNullableArrayVector<int32_t>({{2, std::nullopt, 1}});
   VELOX_ASSERT_THROW(
@@ -416,7 +416,65 @@ TEST_F(ArraySortTest, comparatorRejectsNullSortKeys) {
           "array_sort(c0, (x, y) -> "
           "if(lessthan(x, y), -1, if(greaterthan(x, y), 1, 0)))",
           makeRowVector({identityInput})),
-      "array_sort comparator rewrite does not support null sort keys");
+      "array_sort comparator does not support NULL sort keys");
+}
+
+TEST_F(ArraySortTest, comparatorNullSortKeysLastWhenRejectionDisabled) {
+  queryCtx_->testingOverrideConfigUnsafe({
+      {SparkQueryConfig::qualify(
+           SparkQueryConfig::kArraySortRejectNullComparatorKeys),
+       "false"},
+  });
+
+  auto input = makeNullableArrayVector<std::string>(
+      {{"abcd123", "abcd", std::nullopt, "abc"}});
+  auto result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(length(x), length(y)), -1, "
+      "if(greaterthan(length(x), length(y)), 1, 0)))",
+      makeRowVector({input}));
+  assertEqualVectors(
+      makeNullableArrayVector<std::string>(
+          {{"abc", "abcd", "abcd123", std::nullopt}}),
+      result);
+
+  auto identityInput = makeNullableArrayVector<int32_t>({{2, std::nullopt, 1}});
+  result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(x, y), 1, if(greaterthan(x, y), -1, 0)))",
+      makeRowVector({identityInput}));
+  assertEqualVectors(
+      makeNullableArrayVector<int32_t>({{2, 1, std::nullopt}}), result);
+}
+
+TEST_F(ArraySortTest, comparatorIgnoresNullArrayWithStaleSize) {
+  // Row 1 is null, but its offset and size still cover a null element.
+  auto elements = makeNullableFlatVector<int32_t>({3, 1, 2, std::nullopt, 4});
+  auto offsets = allocateOffsets(2, pool());
+  auto sizes = allocateSizes(2, pool());
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[0] = 0;
+  rawSizes[0] = 3;
+  rawOffsets[1] = 3;
+  rawSizes[1] = 2;
+  auto nulls = allocateNulls(2, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 1);
+  auto input = std::make_shared<ArrayVector>(
+      pool(), ARRAY(INTEGER()), nulls, 2, offsets, sizes, elements);
+
+  using NullableIntArray = std::optional<std::vector<std::optional<int32_t>>>;
+  auto expected = makeNullableArrayVector<int32_t>(
+      std::vector<NullableIntArray>{{{1, 2, 3}}, std::nullopt});
+  for (const auto& comparator :
+       {"(x, y) -> if(lessthan(x, y), -1, if(greaterthan(x, y), 1, 0))",
+        "(x, y) -> if(lessthan(x + 1, y + 1), -1, "
+        "if(greaterthan(x + 1, y + 1), 1, 0))"}) {
+    SCOPED_TRACE(comparator);
+    auto result = evaluate(
+        fmt::format("array_sort(c0, {})", comparator), makeRowVector({input}));
+    assertEqualVectors(expected, result);
+  }
 }
 
 TEST_F(ArraySortTest, comparatorSparseSelection) {

@@ -190,6 +190,8 @@ Array Functions
 
     Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
     NULL and NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before NULL elements.
+    Elements whose sort keys compare equal retain their original relative order. NULL values
+    nested inside sort keys are ordered first.
     This function is not supported in Spark and is only used inside Velox for rewriting
     :spark:func:`array_sort(array(E), function(E,E,integer)) -> array(E)` as
     :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`. ::
@@ -215,7 +217,9 @@ Array Functions
     captured fields shared by both sides of the comparison. The transform must be deterministic.
     If the rewritten sort key is NULL for any element of an array with two or more elements, a
     user error is thrown at runtime, because ordering the NULL key independently would not
-    preserve Spark's pairwise comparator semantics. ::
+    preserve Spark's pairwise comparator semantics. When the configuration property
+    ``spark.array_sort.reject_null_comparator_keys`` is set to false, NULL sort keys are placed
+    at the end of the returned array instead, which may differ from Spark. ::
 
         SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
 

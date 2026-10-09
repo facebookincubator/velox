@@ -15,6 +15,7 @@
  */
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
@@ -57,7 +58,8 @@ std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
       config,
       {.ascending = true,
        .throwOnNestedNull = false,
-       .rejectNullSortKeys = true,
+       .rejectNullSortKeys =
+           SparkQueryConfig{config}.arraySortRejectNullComparatorKeys(),
        .skipLambdaForTrivialArrays = true});
 }
 
@@ -71,7 +73,8 @@ std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
       config,
       {.ascending = false,
        .throwOnNestedNull = false,
-       .rejectNullSortKeys = true,
+       .rejectNullSortKeys =
+           SparkQueryConfig{config}.arraySortRejectNullComparatorKeys(),
        .skipLambdaForTrivialArrays = true});
 }
 
