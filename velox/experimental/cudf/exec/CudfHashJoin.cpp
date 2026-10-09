@@ -171,8 +171,53 @@ class ProbeMatchTracker {
 
 } // namespace
 
+CudfHashJoinProbe::ReadStream* CudfHashJoinProbe::findReadStream(
+    cuda::stream_ref stream) {
+  auto it = std::find_if(
+      readStreams_.begin(), readStreams_.end(), [&](const ReadStream& rs) {
+        return rs.stream.get() == stream.get();
+      });
+  return it == readStreams_.end() ? nullptr : &*it;
+}
+
+void CudfHashJoinProbe::registerReadStream(cuda::stream_ref stream) {
+  auto* readStream = findReadStream(stream);
+  if (readStream == nullptr) {
+    readStream = &readStreams_.emplace_back(
+        ReadStream{
+            stream, std::make_unique<CudaEvent>(cudaEventDisableTiming)});
+  }
+  readStream->pending = true;
+}
+
+void CudfHashJoinProbe::recordReadCompletion(cuda::stream_ref stream) noexcept {
+  auto* readStream = findReadStream(stream);
+  if (readStream == nullptr) {
+    return;
+  }
+  try {
+    readStream->completion->recordFrom(stream);
+    readStream->pending = false;
+  } catch (const std::exception& e) {
+    LOG(WARNING) << "Failed to record hash join probe read completion; "
+                 << "cleanup will synchronize the stream instead: " << e.what();
+  }
+}
+
+void CudfHashJoinProbe::waitForReadCompletion() {
+  for (auto& readStream : readStreams_) {
+    if (readStream.pending) {
+      readStream.stream.sync();
+    } else {
+      readStream.completion->synchronize();
+    }
+  }
+  readStreams_.clear();
+}
+
 void CudfHashJoinProbe::doClose() {
   Operator::close();
+  waitForReadCompletion();
   filterEvaluator_.reset();
   scalars_.clear();
   tree_ = {};
@@ -2058,6 +2103,10 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         !finished_ && isLastDriver_) {
       auto& rightTables = hashObject_.value().first;
       auto stream = cudfGlobalStreamPool().get_stream();
+      registerReadStream(stream);
+      SCOPE_EXIT {
+        recordReadCompletion(stream);
+      };
       std::vector<std::unique_ptr<cudf::table>> toConcat;
       vector_size_t unmatchedRows = 0;
       for (size_t i = 0; i < rightTables.size(); ++i) {
@@ -2125,6 +2174,10 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
+  registerReadStream(stream);
+  SCOPE_EXIT {
+    recordReadCompletion(stream);
+  };
   waitForBuildReady(stream);
   // Use getTableView() to avoid expensive materialization for packed_table.
   // cudfInput is staying alive until the table view is no longer needed.
@@ -2347,8 +2400,11 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 bool CudfHashJoinProbe::isFinished() {
   auto const isFinished = finished_ || (noMoreInput_ && input_ == nullptr);
 
-  // Release hashObject_ if finished
+  // hashObject_ is shared with the bridge and other probe instances, so this
+  // reset() may not be the last reference; each instance still waits for its
+  // own reads before dropping its reference.
   if (isFinished) {
+    waitForReadCompletion();
     hashObject_.reset();
     buildReadyEvent_.reset();
     buildStream_.reset();
