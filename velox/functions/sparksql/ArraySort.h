@@ -34,15 +34,15 @@ std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
 
-/// Sorts using a comparator rewritten to an ascending sort key and rejects
-/// null keys that cannot preserve Spark comparator semantics.
+/// Sorts using a comparator rewritten to an ascending sort key. Rejects NULL
+/// sort keys unless 'spark.array_sort.reject_null_comparator_keys' is false.
 std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
 
-/// Sorts using a comparator rewritten to a descending sort key and rejects
-/// null keys that cannot preserve Spark comparator semantics.
+/// Sorts using a comparator rewritten to a descending sort key. Rejects NULL
+/// sort keys unless 'spark.array_sort.reject_null_comparator_keys' is false.
 std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
@@ -60,6 +60,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> arraySortDescSignatures();
 /// elements are ordered by the rewritten sort key.
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 arraySortComparatorSignatures();
+
 std::vector<std::shared_ptr<exec::FunctionSignature>> sortArraySignatures();
 
 } // namespace facebook::velox::functions::sparksql

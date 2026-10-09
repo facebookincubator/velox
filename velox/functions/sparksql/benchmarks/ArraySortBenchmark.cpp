@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 #include <folly/Benchmark.h>
@@ -114,6 +115,66 @@ void addDefaultOrderingBenchmarks(ExpressionBenchmarkBuilder& builder) {
   }
 }
 
+// Returns arrays of doubles with repeated values, signed zeros and NaNs, so
+// that the stable floating-point sort path is exercised.
+RowVectorPtr makeDoubleInput(
+    ExpressionBenchmarkBuilder& builder,
+    vector_size_t arrayLength,
+    InputPattern pattern) {
+  const auto numRows =
+      std::max<vector_size_t>(32, kElementsPerBatch / arrayLength);
+  auto arrays = builder.vectorMaker().arrayVector<double>(
+      numRows,
+      [=](vector_size_t /*row*/) { return arrayLength; },
+      [=](vector_size_t row, vector_size_t position) {
+        switch (pattern) {
+          case InputPattern::kAscending:
+            return static_cast<double>(position);
+          case InputPattern::kDescending:
+            return static_cast<double>(arrayLength - position);
+          case InputPattern::kRandom: {
+            const auto value = randomValue(row, position) / 1024.0;
+            return position % 2 == 0 ? value : -value;
+          }
+          case InputPattern::kDuplicates: {
+            const auto bucket = (row + position * 5) % 8;
+            if (bucket == 0) {
+              return -0.0;
+            }
+            if (bucket == 1) {
+              return std::numeric_limits<double>::quiet_NaN();
+            }
+            return static_cast<double>(bucket) - 4;
+          }
+        }
+        VELOX_UNREACHABLE();
+      });
+  return builder.vectorMaker().rowVector({arrays});
+}
+
+void addFloatingPointBenchmarks(ExpressionBenchmarkBuilder& builder) {
+  constexpr std::array<vector_size_t, 3> kArrayLengths = {8, 64, 1024};
+  constexpr std::array<InputPattern, 2> kPatterns = {
+      InputPattern::kRandom, InputPattern::kDuplicates};
+
+  for (const auto arrayLength : kArrayLengths) {
+    for (const auto pattern : kPatterns) {
+      builder
+          .addBenchmarkSet(
+              fmt::format(
+                  "array_sort_double_{}_length{}",
+                  patternName(pattern),
+                  arrayLength),
+              makeDoubleInput(builder, arrayLength, pattern))
+          .withIterations(20)
+          .disableTesting()
+          .addExpression("array_sort", "array_sort(c0)")
+          .addExpression("sort_array_asc", "sort_array(c0)")
+          .addExpression("sort_array_desc", "sort_array(c0, false)");
+    }
+  }
+}
+
 void addComparatorBenchmarks(ExpressionBenchmarkBuilder& builder) {
   constexpr std::array<vector_size_t, 4> kArrayLengths = {8, 64, 256, 1024};
 
@@ -125,7 +186,7 @@ void addComparatorBenchmarks(ExpressionBenchmarkBuilder& builder) {
         .withIterations(20)
         .disableTesting()
         .addExpression(
-            "identityStableComparator",
+            "identity",
             "array_sort(c0, (x, y) -> "
             "if(lessthan(x, y), (-10)::integer, "
             "if(greaterthan(x, y), 37::integer, 0::integer)))")
@@ -169,6 +230,7 @@ int main(int argc, char** argv) {
 
   facebook::velox::ExpressionBenchmarkBuilder builder;
   facebook::velox::addDefaultOrderingBenchmarks(builder);
+  facebook::velox::addFloatingPointBenchmarks(builder);
   facebook::velox::addComparatorBenchmarks(builder);
   builder.registerBenchmarks();
   builder.testBenchmarks();

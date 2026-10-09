@@ -36,6 +36,7 @@ SparkQueryConfig::registeredProperties() {
     VELOX_REGISTER_SPARK_CONFIG(kLegacyCodingErrorAction);
     VELOX_REGISTER_SPARK_CONFIG(kJsonIgnoreNullFields);
     VELOX_REGISTER_SPARK_CONFIG(kCollectListIgnoreNulls);
+    VELOX_REGISTER_SPARK_CONFIG(kArraySortRejectNullComparatorKeys);
     VELOX_REGISTER_SPARK_CONFIG(kDecimalToFloatHighPrecisionCastEnabled);
 
 #undef VELOX_REGISTER_SPARK_CONFIG
