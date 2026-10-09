@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -31,7 +32,6 @@
 #include <cudf/copying.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
-#include <cudf/join/distinct_hash_join.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/rolling.hpp>
@@ -260,18 +260,16 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
   requests[0].values = input;
   requests[0].aggregations.push_back(
       cudf::make_mean_aggregation<cudf::groupby_aggregation>());
-  auto [keys, results] = grouper.aggregate(requests, stream, mr);
+  requests[0].aggregations.push_back(
+      cudf::make_count_aggregation<cudf::groupby_aggregation>(
+          cudf::null_policy::INCLUDE));
+  auto [keys, results] = grouper.aggregate(requests, stream, get_temp_mr());
 
-  // Groupby does not guarantee key order, so join each input key to its
-  // aggregate and gather the results in input order. Null keys must match just
-  // as they do in PARTITION BY.
-  cudf::distinct_hash_join join(
-      keys->view(), cudf::null_equality::EQUAL, 0.5, stream, mr);
-  auto indices = join.left_join(partitionKeys, stream, mr);
-  auto result = cudf::gather(
+  // The presorted groupby returns groups in partition order. Repeat each mean
+  // for every row in its partition, including rows whose AVG input is null.
+  auto result = cudf::repeat(
       cudf::table_view{{results[0].results[0]->view()}},
-      cudf::column_view{cudf::device_span<cudf::size_type const>{*indices}},
-      cudf::out_of_bounds_policy::DONT_CHECK,
+      results[0].results[1]->view(),
       stream,
       mr);
   return std::move(result->release()[0]);
@@ -289,7 +287,7 @@ bool containsCustomComparison(const TypePtr& type) {
   return false;
 }
 
-// Rank scans cannot handle lists, even when they are nested in structs.
+// ARRAY and MAP both map to cuDF lists, including when nested in structs.
 bool containsList(const TypePtr& type) {
   if (type->isArray() || type->isMap()) {
     return true;
@@ -501,18 +499,37 @@ bool CudfWindow::canRunOnGPU(
       return false;
     }
 
-    if (windowNode.sortingKeys().size() > 1 &&
-        (baseName == "row_number" || baseName == "rank" ||
-         baseName == "dense_rank")) {
+    // Keep the existing restriction on multi-column list-containing keys.
+    // For a single key, grouped rank scans and ungrouped rank() reject lists.
+    // Ungrouped row_number() uses a sequence, and ungrouped dense_rank()
+    // supports lists, so preserve those single-key paths.
+    const bool isRankFunction = baseName == "row_number" ||
+        baseName == "rank" || baseName == "dense_rank";
+    if (isRankFunction &&
+        (windowNode.sortingKeys().size() > 1 || baseName == "rank" ||
+         !windowNode.partitionKeys().empty())) {
       for (const auto& key : windowNode.sortingKeys()) {
         if (containsList(key->type())) {
           if (reason) {
-            *reason =
-                "Multi-column ranking with ARRAY or MAP sort keys is not supported";
+            *reason = "Ranking with ARRAY or MAP sort keys is not supported";
           }
           return false;
         }
       }
+    }
+
+    // Without ORDER BY, grouped row_number() uses the first partition key as
+    // its values column. cuDF still validates that column's type even though
+    // this rank method does not inspect values for ties.
+    if (baseName == "row_number" && windowNode.sortingKeys().empty() &&
+        !windowNode.partitionKeys().empty() &&
+        containsList(windowNode.partitionKeys()[0]->type())) {
+      if (reason) {
+        *reason =
+            "ROW_NUMBER without ORDER BY with an ARRAY or MAP partition key "
+            "is not supported";
+      }
+      return false;
     }
 
     if (windowArgIsCast(func)) {
@@ -622,14 +639,13 @@ bool CudfWindow::canRunOnGPU(
 
     const bool isFullPartition =
         isFullPartitionFrame(func, !windowNode.sortingKeys().empty());
-    const bool hasPartitionOrSortKeys = !windowNode.partitionKeys().empty() ||
-        !windowNode.sortingKeys().empty();
-
-    if (baseName == "avg" && isFullPartition && hasPartitionOrSortKeys &&
+    // Full-partition AVG without partition keys uses the global reduction
+    // path, which also supports integer and REAL inputs, even with ORDER BY.
+    if (baseName == "avg" && isFullPartition &&
+        !windowNode.partitionKeys().empty() &&
         !func.functionCall->inputs()[0]->type()->isDouble()) {
       if (reason) {
-        *reason =
-            "Partitioned or ordered full-partition AVG requires DOUBLE input";
+        *reason = "Partitioned full-partition AVG requires DOUBLE input";
       }
       return false;
     }

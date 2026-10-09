@@ -88,6 +88,19 @@ class CudfWindowTest : public testing::Test,
     }
     EXPECT_TRUE(hasCudfWindow);
   }
+
+  void assertWindowRejected(
+      const core::PlanNodePtr& plan,
+      const std::string& expectedReason) {
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    ASSERT_NE(windowNode, nullptr);
+    std::string reason;
+    EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
+    EXPECT_NE(reason.find(expectedReason), std::string::npos) << reason;
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
 };
 
 TEST_F(CudfWindowTest, rowNumberPartitionOrder) {
@@ -564,31 +577,73 @@ TEST_F(CudfWindowTest, multiColumnOrderBy) {
   }
 }
 
-TEST_F(CudfWindowTest, multiColumnRankWithNestedKeysFallsBack) {
-  auto arrayKey = makeArrayVector<int64_t>({{1}, {1, 2}, {2}});
+TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
+  auto arrayKey = makeArrayVector<int64_t>({{2}, {1, 2}, {1}, {1, 2}, {2}, {}});
+  auto mapKey = makeMapVector<int64_t, int64_t>(
+      {{{2, 20}},
+       {{1, 10}, {2, 20}},
+       {{1, 10}},
+       {{1, 10}, {2, 20}},
+       {{2, 20}},
+       {}});
   const std::vector<VectorPtr> nestedKeys = {
-      arrayKey, makeRowVector({arrayKey})};
+      arrayKey, mapKey, makeRowVector({arrayKey}), makeRowVector({mapKey})};
   for (const auto& nestedKey : nestedKeys) {
     SCOPED_TRACE(nestedKey->type()->toString());
     auto data = makeRowVector(
         {"p", "ord", "nested_key"},
         {
-            makeFlatVector<int32_t>({1, 1, 2}),
-            makeFlatVector<int32_t>({1, 1, 2}),
+            makeFlatVector<int32_t>({2, 1, 2, 1, 2, 1}),
+            makeFlatVector<int32_t>({5, 2, 1, 3, 6, 4}),
             nestedKey,
         });
     for (const auto& partition : {"", "partition by p"}) {
-      for (const auto& function : {"row_number", "rank", "dense_rank"}) {
-        const auto expression = fmt::format(
-            "{}() over ({} order by ord, nested_key)", function, partition);
-        SCOPED_TRACE(expression);
-        auto plan =
-            PlanBuilder().values({data}).window({expression}).planNode();
-        VELOX_ASSERT_THROW(
-            AssertQueryBuilder(plan).copyResults(pool()),
-            "Replacement with cuDF operator failed");
+      for (const auto& ordering : {"nested_key", "nested_key, ord"}) {
+        for (const auto& function : {"row_number", "rank", "dense_rank"}) {
+          if (std::string(partition).empty() &&
+              std::string(ordering) == "nested_key" &&
+              std::string(function) != "rank") {
+            continue;
+          }
+          const auto expression = fmt::format(
+              "{}() over ({} order by {})", function, partition, ordering);
+          SCOPED_TRACE(expression);
+          assertWindowRejected(
+              PlanBuilder().values({data}).window({expression}).planNode(),
+              "ARRAY or MAP");
+        }
       }
     }
+
+    assertWindowRejected(
+        PlanBuilder()
+            .values({data})
+            .window({"row_number() over (partition by nested_key, p)"})
+            .planNode(),
+        "ARRAY or MAP");
+  }
+
+  // Ungrouped row_number uses a sequence and dense_rank supports a single
+  // ARRAY sort key, including one nested in a ROW. Duplicate rows have
+  // identical input columns, so row_number does not depend on tie ordering.
+  const std::vector<VectorPtr> supportedKeys = {
+      arrayKey, makeRowVector({arrayKey})};
+  for (const auto& nestedKey : supportedKeys) {
+    SCOPED_TRACE(nestedKey->type()->toString());
+    auto supportedData = makeRowVector({"nested_key"}, {nestedKey});
+    auto plan = PlanBuilder()
+                    .values(split(supportedData, 3))
+                    .window({
+                        "row_number() over (order by nested_key)",
+                        "dense_rank() over (order by nested_key)",
+                    })
+                    .planNode();
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    ASSERT_NE(windowNode, nullptr);
+    std::string reason;
+    EXPECT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason))
+        << reason;
+    assertCpuAndGpuResults(plan);
   }
 }
 
@@ -2125,10 +2180,7 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
                                   const std::string& expression) {
     SCOPED_TRACE(expression);
     auto plan = PlanBuilder().values({data}).window({expression}).planNode();
-
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowRejected(plan, "does not support input type");
   };
 
   auto realData = makeRowVector(
@@ -2141,10 +2193,12 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
       realData,
       "sum(v) over (order by ord rows between unbounded preceding "
       "and current row) as s");
-  assertFallback(
-      realData,
-      "avg(v) over (order by ord rows between unbounded preceding "
-      "and unbounded following) as a");
+  assertWindowRejected(
+      PlanBuilder()
+          .values({realData})
+          .window({"avg(v) over (partition by ord) as a"})
+          .planNode(),
+      "Partitioned full-partition AVG requires DOUBLE input");
 
   auto integerData = makeRowVector(
       {"p", "v"},
@@ -2152,7 +2206,12 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
           makeFlatVector<int32_t>({1, 1}),
           makeFlatVector<int64_t>({1, 2}),
       });
-  assertFallback(integerData, "avg(v) over (partition by p) as a");
+  assertWindowRejected(
+      PlanBuilder()
+          .values({integerData})
+          .window({"avg(v) over (partition by p) as a"})
+          .planNode(),
+      "Partitioned full-partition AVG requires DOUBLE input");
 
   auto decimalData = makeRowVector(
       {"ord", "d"},
@@ -2168,6 +2227,11 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
       decimalData,
       "avg(d) over (order by ord range between unbounded preceding "
       "and unbounded following) as a");
+  assertFallback(
+      decimalData,
+      "avg(d) over (order by ord rows between unbounded preceding "
+      "and unbounded following) as a");
+  assertFallback(decimalData, "avg(d) over () as a");
 
   auto arrayData = makeRowVector(
       {"ord", "v"},
@@ -2220,6 +2284,48 @@ TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
     VELOX_ASSERT_THROW(
         AssertQueryBuilder(plan).copyResults(pool()),
         "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, orderedGlobalFullPartitionAverageNumericInputs) {
+  auto data = makeRowVector(
+      {"ord", "s", "i", "b", "r", "s_null", "i_null", "b_null", "r_null"},
+      {
+          makeFlatVector<int32_t>({4, 1, 6, 2, 5, 3}),
+          makeNullableFlatVector<int16_t>(
+              {1, std::nullopt, 2, -1, std::nullopt, 3}),
+          makeNullableFlatVector<int32_t>(
+              {1, std::nullopt, 2, -1, std::nullopt, 3}),
+          makeNullableFlatVector<int64_t>(
+              {1, std::nullopt, 2, -1, std::nullopt, 3}),
+          makeNullableFlatVector<float>(
+              {1.25F, std::nullopt, 3.75F, -0.5F, std::nullopt, 1.0F}),
+          makeAllNullFlatVector<int16_t>(6),
+          makeAllNullFlatVector<int32_t>(6),
+          makeAllNullFlatVector<int64_t>(6),
+          makeAllNullFlatVector<float>(6),
+      });
+
+  for (const auto& frame : {"rows", "range"}) {
+    SCOPED_TRACE(frame);
+    std::vector<std::string> expressions;
+    for (const auto& name :
+         {"s", "i", "b", "r", "s_null", "i_null", "b_null", "r_null"}) {
+      expressions.push_back(
+          fmt::format(
+              "avg({}) over (order by ord {} between unbounded preceding "
+              "and unbounded following)",
+              name,
+              frame));
+    }
+    auto plan =
+        PlanBuilder().values(split(data, 3)).window(expressions).planNode();
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    ASSERT_NE(windowNode, nullptr);
+    std::string reason;
+    EXPECT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason))
+        << reason;
+    assertCpuAndGpuResults(plan);
   }
 }
 
