@@ -17,12 +17,14 @@
 #pragma once
 
 #include "velox/core/Expressions.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 #include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
 
@@ -36,10 +38,19 @@ using CudfExpressionEvaluatorCreate =
         const RowTypePtr& inputRowSchema,
         memory::MemoryPool* pool)>;
 
+/// Returns the function signatures an evaluator can evaluate, keyed by the
+/// function name calls carry. A name mapped to an empty list is supported, but
+/// whether a call is accepted depends on more than its argument types (e.g.
+/// cast). The evaluator must keep the signatures alive while it is registered.
+using CudfExpressionEvaluatorSignatures = std::function<
+    std::unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>()>;
+
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
   CudfExpressionEvaluatorCreate create;
+  // Null when the evaluator does not describe what it supports.
+  CudfExpressionEvaluatorSignatures signatures;
 };
 
 /// Ensure that built-in expression evaluators are registered.
@@ -51,11 +62,14 @@ getCudfExpressionEvaluatorRegistry();
 
 /// Register a CudfExpression evaluator.
 /// Internal API used by expression evaluators to self-register.
+/// \param signatures Optional. Lists what the evaluator supports for
+///                   getCudfFunctionSignatureMap().
 bool registerCudfExpressionEvaluator(
     const std::string& name,
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfExpressionEvaluatorSignatures signatures = nullptr);
 
 } // namespace facebook::velox::cudf_velox

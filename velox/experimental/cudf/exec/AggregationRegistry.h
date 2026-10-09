@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 
 #include <string>
@@ -43,6 +44,12 @@ StepAwareAggregationRegistry& getReduceAggregationRegistry();
 /// themselves so mask eligibility lives with the function, not as a separate
 /// list in the validators.
 std::unordered_set<std::string>& maskSupportedAggregations();
+
+/// Returns the aggregate function signatures of the groupby and reduce
+/// registries, keyed by function name. A single-step signature is paired with
+/// the partial-step signature for the same arguments, whose return type is the
+/// intermediate type. Signatures missing either step are left out.
+exec::AggregateFunctionSignatureMap getCudfAggregationFunctionSignatureMap();
 
 /// Shared registration helpers used to populate a target physical registry.
 bool registerAggregationFunctionForStep(

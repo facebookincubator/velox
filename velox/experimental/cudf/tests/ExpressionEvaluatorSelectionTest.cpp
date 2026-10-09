@@ -32,6 +32,7 @@
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -473,6 +474,146 @@ TEST_F(CudfExpressionSelectionTest, switchWithElseRetainsNestedTypes) {
         optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
     EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
+}
+
+TEST_F(CudfExpressionSelectionTest, scalarSignatureExportSanity) {
+  auto signatureMap = getCudfFunctionSignatureMap();
+
+  auto coalesceIt = signatureMap.find("coalesce");
+  ASSERT_NE(coalesceIt, signatureMap.end());
+  ASSERT_FALSE(coalesceIt->second.empty());
+
+  bool foundCoalesceVarArg = false;
+  for (const auto* signature : coalesceIt->second) {
+    if (signature->toString().find("...") != std::string::npos) {
+      foundCoalesceVarArg = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(foundCoalesceVarArg);
+}
+
+// Returns the exported signatures of 'name', sorted.
+std::vector<std::string> exportedSignatures(const std::string& name) {
+  const auto signatureMap = getCudfFunctionSignatureMap();
+  std::vector<std::string> signatures;
+  if (auto it = signatureMap.find(name); it != signatureMap.end()) {
+    for (const auto* signature : it->second) {
+      signatures.push_back(signature->toString());
+    }
+  }
+  std::sort(signatures.begin(), signatures.end());
+  return signatures;
+}
+
+bool containsSignature(
+    const std::vector<std::string>& signatures,
+    const std::string& signature) {
+  return std::find(signatures.begin(), signatures.end(), signature) !=
+      signatures.end();
+}
+
+TEST_F(CudfExpressionSelectionTest, scalarSignatureExportMergesOverloads) {
+  // plus has one registration from the builtin arithmetic (double, decimal) and
+  // one from registerPrestoFunctions (date + interval day to second).
+  const auto plusSignatures = exportedSignatures("plus");
+  EXPECT_TRUE(containsSignature(plusSignatures, "(double,double) -> double"));
+  EXPECT_TRUE(containsSignature(
+      plusSignatures, "(date,interval day to second) -> date"));
+
+  // Registering the builtins again appends duplicate registrations; each
+  // signature is still exported once.
+  registerBuiltinFunctions("");
+  EXPECT_EQ(exportedSignatures("plus"), plusSignatures);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    scalarSignatureExportIncludesAstOperations) {
+  // sqrt is evaluated by the AST evaluator only, over floating-point types.
+  const auto sqrtSignatures = exportedSignatures("sqrt");
+  EXPECT_TRUE(containsSignature(sqrtSignatures, "(double) -> double"));
+  EXPECT_TRUE(containsSignature(sqrtSignatures, "(real) -> real"));
+  EXPECT_FALSE(containsSignature(sqrtSignatures, "(bigint) -> bigint"));
+
+  // The function registry evaluates plus over doubles, the AST over bigints.
+  // cuDF adds TINYINTs as INTEGERs, so that signature is left out.
+  const auto plusSignatures = exportedSignatures("plus");
+  EXPECT_TRUE(containsSignature(plusSignatures, "(double,double) -> double"));
+  EXPECT_TRUE(containsSignature(plusSignatures, "(bigint,bigint) -> bigint"));
+  EXPECT_FALSE(
+      containsSignature(plusSignatures, "(tinyint,tinyint) -> tinyint"));
+
+  EXPECT_TRUE(containsSignature(
+      exportedSignatures("eq"), "(integer,integer) -> boolean"));
+
+  // Subtracting dates yields a duration in cuDF, which has no Velox type here.
+  EXPECT_FALSE(
+      containsSignature(exportedSignatures("minus"), "(date,date) -> date"));
+
+  // Calls the AST evaluator supports by name rather than as an operation.
+  EXPECT_TRUE(containsSignature(
+      exportedSignatures("between"), "(bigint,bigint,bigint) -> boolean"));
+  EXPECT_TRUE(containsSignature(
+      exportedSignatures("in"), "(bigint,constant array(bigint)) -> boolean"));
+  EXPECT_TRUE(containsSignature(
+      exportedSignatures("isnotnull"), "(varchar) -> boolean"));
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    scalarSignatureExportListsNameOnlyFunctions) {
+  // cast is supported per pair of types rather than by signature.
+  const auto signatureMap = getCudfFunctionSignatureMap();
+  ASSERT_TRUE(signatureMap.contains("cast"));
+  EXPECT_TRUE(signatureMap.at("cast").empty());
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    scalarSignatureExportPrefixesAstOperations) {
+  auto& config = CudfConfig::getInstance();
+  const auto previousPrefix = config.functionNamePrefix;
+  config.functionNamePrefix = "presto.default.";
+  SCOPE_EXIT {
+    config.functionNamePrefix = previousPrefix;
+  };
+
+  const auto signatureMap = getCudfFunctionSignatureMap();
+  EXPECT_TRUE(signatureMap.contains("presto.default.sqrt"));
+  EXPECT_FALSE(signatureMap.contains("sqrt"));
+
+  // AND is a special form, which calls name without the prefix.
+  EXPECT_TRUE(signatureMap.contains("and"));
+  EXPECT_FALSE(signatureMap.contains("presto.default.and"));
+}
+
+TEST_F(CudfExpressionSelectionTest, scalarSignatureExportIncludesEvaluators) {
+  const std::string evaluatorName = "signature_export_test";
+  const auto signature = exec::FunctionSignatureBuilder()
+                             .returnType("bigint")
+                             .argumentType("bigint")
+                             .build();
+  registerCudfExpressionEvaluator(
+      evaluatorName,
+      /*priority=*/0,
+      [](const core::TypedExprPtr&) { return false; },
+      [](const core::TypedExprPtr&, const RowTypePtr&, memory::MemoryPool*)
+          -> std::shared_ptr<CudfExpression> { return nullptr; },
+      /*overwrite=*/true,
+      [signature] {
+        return std::
+            unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>{
+                {"signature_export_test_function", {signature}},
+            };
+      });
+  SCOPE_EXIT {
+    getCudfExpressionEvaluatorRegistry().erase(evaluatorName);
+  };
+
+  EXPECT_EQ(
+      exportedSignatures("signature_export_test_function"),
+      std::vector<std::string>{"(bigint) -> bigint"});
 }
 
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {

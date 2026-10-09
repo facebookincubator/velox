@@ -36,13 +36,18 @@ bool registerCudfExpressionEvaluator(
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
-    bool overwrite) {
+    bool overwrite,
+    CudfExpressionEvaluatorSignatures signatures) {
   auto& registry = getCudfExpressionEvaluatorRegistry();
   if (!overwrite && registry.find(name) != registry.end()) {
     return false;
   }
   registry[name] = CudfExpressionEvaluatorEntry{
-      priority, std::move(canEvaluate), std::move(create)};
+      priority,
+      std::move(canEvaluate),
+      std::move(create),
+      std::move(signatures),
+  };
   return true;
 }
 
@@ -71,7 +76,8 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
          memory::MemoryPool* pool) {
         return FunctionExpression::create(expr, row, pool);
       },
-      /*overwrite=*/false);
+      /*overwrite=*/false,
+      [] { return FunctionExpression::signatures(); });
 
   registeredBuiltins = true;
 }

@@ -93,7 +93,9 @@ void registerJitEvaluator(int priority) {
          memory::MemoryPool* pool) {
         return std::make_shared<JitExpression>(expr, row, pool);
       },
-      /*overwrite=*/false);
+      /*overwrite=*/false,
+      // JIT accepts the same calls as the AST evaluator.
+      [] { return ASTExpression::signatures(); });
 }
 
 } // namespace facebook::velox::cudf_velox
