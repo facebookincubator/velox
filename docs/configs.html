@@ -1458,7 +1458,7 @@ Session: <code class="docutils literal notranslate"><span class="pre">hive.parqu
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
 <td><p>bool</p></td>
-<td><p>false</p></td>
+<td><p>true</p></td>
 <td><p>Whether to write the Parquet page index (column index and offset index) when writing into
 Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
 index instead of the data page headers, letting readers skip pages that cannot match a filter.
