@@ -682,13 +682,15 @@ Same table conventions as above.</p>
 <td><p>TIMESTAMP</p></td>
 </tr>
 <tr class="row-odd"><td><p>UNKNOWN</p></td>
-<td><p>TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
-VARCHAR, VARBINARY</p></td>
+<td><p>TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, DECIMAL(1, 0),
+REAL, DOUBLE, VARCHAR, VARBINARY</p></td>
 </tr>
 </tbody>
 </table>
 <p>Differences from Velox’s defaults:</p>
 <ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">UNKNOWN</span> <span class="pre">-&gt;</span> <span class="pre">DECIMAL(1,</span> <span class="pre">0)</span></code> is added so an unknown literal can bind to a
+parameterized DECIMAL signature.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">-&gt;</span> <span class="pre">REAL</span></code> is added. The BIGINT row becomes
 <code class="docutils literal notranslate"><span class="pre">DECIMAL(19,</span> <span class="pre">0),</span> <span class="pre">REAL,</span> <span class="pre">DOUBLE</span></code>, mirroring the INTEGER row’s
 ordering. This makes <code class="docutils literal notranslate"><span class="pre">divide(real,</span> <span class="pre">bigint)</span></code> resolve to
