@@ -22,6 +22,7 @@
 #include <string>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -682,6 +683,41 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
   EXPECT_EQ(streamingDepth, 1);
   EXPECT_EQ(streamingWidth, 4);
   EXPECT_EQ(streamingCount, 0);
+
+  const auto* countMinSketchEntry =
+      exec::getAggregateFunctionEntry("count_min_sketch");
+  ASSERT_NE(countMinSketchEntry, nullptr);
+  const auto sortedSignatures = countMinSketchEntry->signatures;
+  const auto sortedFactory = countMinSketchEntry->factory;
+  auto sortedMetadata = countMinSketchEntry->metadata;
+  sortedMetadata.orderSensitive = true;
+  exec::registerAggregateFunction(
+      "sorted_count_min_sketch",
+      sortedSignatures,
+      sortedFactory,
+      sortedMetadata,
+      false,
+      true);
+
+  auto sortedMaskedPlan =
+      exec::test::PlanBuilder(pool())
+          .values({vectors[0]})
+          .singleAggregation(
+              groupingKeys,
+              {"sorted_count_min_sketch(c0, c1, c2, c3 ORDER BY c0)"},
+              masks)
+          .planNode();
+  auto sortedMasked =
+      exec::test::AssertQueryBuilder(sortedMaskedPlan).copyResults(pool());
+  ASSERT_EQ(sortedMasked->size(), 1);
+  auto sortedMaskedSketch =
+      sortedMasked->childAt(1)->asFlatVector<StringView>();
+  ASSERT_FALSE(sortedMaskedSketch->isNullAt(0));
+  auto [sortedDepth, sortedWidth, sortedCount] =
+      parseSketch(sortedMaskedSketch->valueAt(0));
+  EXPECT_EQ(sortedDepth, 1);
+  EXPECT_EQ(sortedWidth, 4);
+  EXPECT_EQ(sortedCount, 0);
 
   auto maskedCompanionPlan =
       exec::test::PlanBuilder(pool())
