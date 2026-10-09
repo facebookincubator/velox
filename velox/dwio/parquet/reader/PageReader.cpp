@@ -326,8 +326,10 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         bufferStart_,
         bufferEnd_);
 
+    stats_.accumulateStat(ParquetRuntimeStats::kSkippedPagesMetric, 1);
     return;
   }
+  stats_.accumulateStat(ParquetRuntimeStats::kProcessedPagesMetric, 1);
   pageData_ = readBytes(static_cast<int32_t>(compressedPageSize), pageBuffer_);
   if (codec_ != common::CompressionKind::CompressionKind_NONE) {
     pageData_ =
@@ -418,6 +420,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   if (row != kRepDefOnly && numRowsInPage_ != kRowsUnknown &&
       numRowsInPage_ + rowOfPage_ <= row) {
     skipBytes(compressedPageSize, inputStream_.get(), bufferStart_, bufferEnd_);
+    stats_.accumulateStat(ParquetRuntimeStats::kSkippedPagesMetric, 1);
     return;
   }
 
@@ -444,6 +447,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   auto levelsSize = static_cast<uint32_t>(levelsSizeRaw);
   const auto bytes = static_cast<int32_t>(compressedPageSize);
   pageData_ = readBytes(bytes, pageBuffer_);
+  stats_.accumulateStat(ParquetRuntimeStats::kProcessedPagesMetric, 1);
 
   if (repeatLength) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
