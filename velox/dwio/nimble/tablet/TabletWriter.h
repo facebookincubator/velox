@@ -92,7 +92,7 @@ class TabletWriter {
     // Candidate encodings (with read-cost weights) considered when encoding
     // per-stripe-group offsets/sizes in the encoded layouts. Only O(1)
     // point-access encodings are valid. Empty (default) lets the writer pick
-    // its own candidate set (Constant, Trivial, FixedBitWidth).
+    // its own candidate set (Constant, Trivial, FixedBitWidth, Dictionary).
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
     // Callback invoked at stripe group flush boundaries. Used by index

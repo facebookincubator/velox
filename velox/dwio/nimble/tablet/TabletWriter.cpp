@@ -560,6 +560,7 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeMetadataEncodingPolicy(
       {EncodingType::Constant, 1.0},
       {EncodingType::Trivial, 1.0},
       {EncodingType::FixedBitWidth, 1.0},
+      {EncodingType::Dictionary, 1.0},
   };
   ManualEncodingSelectionPolicyFactory factory{
       readFactors.empty() ? kDefaultReadFactors : readFactors,
@@ -624,6 +625,11 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   encodedOffsets.reserve(streamCount);
   encodedSizes.reserve(streamCount);
 
+  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
+  // pin metadata keep these arrays resident, so pack them at exact widths.
+  Encoding::Options encodingOptions;
+  encodingOptions.fixedBitWidthUseExactBits = true;
+
   // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
   // buffer so peak memory stays bounded to a single stream.
   Buffer encodingBuffer{*pool_};
@@ -633,7 +639,8 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
         const auto encoded = EncodingFactory::encode<uint32_t>(
             makeMetadataEncodingPolicy<uint32_t>(readFactors),
             std::span<const uint32_t>(values),
-            encodingBuffer);
+            encodingBuffer,
+            encodingOptions);
         auto encodedStream = serialization::CreateEncodedStream(
             builder,
             builder.CreateVector(

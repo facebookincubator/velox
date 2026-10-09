@@ -129,7 +129,7 @@ struct WriterOptions {
   /// encoding per-stripe-group stream offsets/sizes (kStreamMajor). Only
   /// encodings with O(1) stateless point access (via EncodingView) are valid.
   /// Empty (default) lets the writer pick its own candidate set (Constant,
-  /// Trivial, FixedBitWidth).
+  /// Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
 
