@@ -105,6 +105,40 @@ TEST_F(FilterProjectTest, roundTrip) {
   AssertQueryBuilder(plan).assertResults(vectors);
 }
 
+TEST_F(FilterProjectTest, blockSizeMultiple) {
+  // A batch whose row count is an exact multiple of the thread block size must
+  // return all of its rows.
+  constexpr int32_t kNumRows = 4 * 256;
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder().values({data}).project({"c0", "c0 + 1 as c1"}).planNode();
+  assertQuery(plan, "SELECT c0, c0 + 1 FROM tmp");
+}
+
+TEST_F(FilterProjectTest, nullableValues) {
+  // Nulls of a Values source must survive the round trip to device, where they
+  // are one byte per row instead of one bit.
+  constexpr int32_t kNumRows = 1000;
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(
+           kNumRows,
+           [](auto row) { return row; },
+           [](auto row) {
+             return row == 0 || row == kNumRows - 1 || row % 7 == 0;
+           }),
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 2; })});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0", "c1", "c0 + c1 as c2"})
+                  .planNode();
+  assertQuery(plan, "SELECT c0, c1, c0 + c1 FROM tmp");
+}
+
 TEST_F(FilterProjectTest, project) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {

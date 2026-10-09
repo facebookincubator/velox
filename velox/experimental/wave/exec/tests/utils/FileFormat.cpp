@@ -204,6 +204,13 @@ template <typename T>
 std::unique_ptr<Column> Encoder<T>::toColumn() {
   auto column = std::make_unique<Column>();
   column->kind = kind_;
+  if (count_ == 0) {
+    // An empty stripe. 'values' must be set for the stripe to count as loaded.
+    column->encoding = kFlat;
+    column->values = AlignedBuffer::allocate<char>(1, pool_);
+    column->bitWidth = 1;
+    return column;
+  }
   if (!nulls_.empty()) {
     auto n = bits::nwords(count_);
     if (nulls_.size() < n) {

@@ -67,6 +67,16 @@ void ensureVectors(
   }
 }
 
+namespace {
+// Wave marks nulls with one byte per value, Velox with one bit. Expands 'size'
+// null bits into 'bytes'.
+void nullsToBytes(const uint64_t* nulls, vector_size_t size, uint8_t* bytes) {
+  for (auto i = 0; i < size; ++i) {
+    bytes[i] = bits::isBitNull(nulls, i) ? kNull : kNotNull;
+  }
+}
+} // namespace
+
 void transferVector(
     const BaseVector* source,
     int32_t index,
@@ -74,7 +84,8 @@ void transferVector(
     std::vector<WaveVectorPtr>& waveVectors,
     std::vector<Operand>& operands,
     GpuArena& arena,
-    int64_t& totalBytes) {
+    int64_t& totalBytes,
+    std::vector<BufferPtr>& nullsStaging) {
   if (waveVectors.size() <= index) {
     waveVectors.resize(index + 1);
   }
@@ -99,8 +110,12 @@ void transferVector(
       totalBytes += bytes;
     }
     if (rawNulls) {
-      auto bytes = bits::nbytes(source->size());
-      transfers.emplace_back(rawNulls, waveVectors[index]->nulls(), bytes);
+      auto bytes = source->size();
+      auto& staging = nullsStaging.emplace_back(
+          AlignedBuffer::allocate<uint8_t>(bytes, source->pool()));
+      nullsToBytes(rawNulls, source->size(), staging->asMutable<uint8_t>());
+      transfers.emplace_back(
+          staging->as<uint8_t>(), waveVectors[index]->nulls(), bytes);
       totalBytes += bytes;
     }
   }
@@ -114,10 +129,20 @@ void vectorsToDevice(
   int64_t bytes = 0;
   std::vector<Operand> operandVector;
   std::vector<WaveVectorPtr> waveVectors;
+  // Host side byte-per-row nulls referenced by 'transfers'. startTransfer()
+  // copies the data before it returns, so these outlive their use.
+  std::vector<BufferPtr> nullsStaging;
   auto& arena = stream.arena();
   for (auto i = 0; i < source.size(); ++i) {
     transferVector(
-        source[i], i, transfers, waveVectors, operandVector, arena, bytes);
+        source[i],
+        i,
+        transfers,
+        waveVectors,
+        operandVector,
+        arena,
+        bytes,
+        nullsStaging);
   }
   Executable::startTransfer(
       ids, std::move(waveVectors), std::move(transfers), stream);
