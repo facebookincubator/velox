@@ -26,7 +26,6 @@ add_executable(
   ArgumentTypeFuzzerTest.cpp
   DecimalArgTypesGeneratorTest.cpp
   ExpressionFuzzerUnitTest.cpp
-  FuzzerToolkitTest.cpp
 )
 
 target_link_libraries(
@@ -35,10 +34,8 @@ target_link_libraries(
   velox_functions_prestosql
   velox_presto_types
   velox_core
-  velox_exec
   velox_expression
   velox_expression_fuzzer_test_utility
-  velox_vector_test_lib
   GTest::gtest
   GTest::gtest_main
 )

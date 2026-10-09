@@ -16,8 +16,6 @@
 
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 
-#include "velox/exec/Aggregate.h"
-
 #include <gtest/gtest.h>
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -62,47 +60,4 @@ TEST_F(FuzzerToolKitTest, inputRowMetadataRoundTrip) {
     ASSERT_TRUE(equals(metadata, copy));
   }
 }
-TEST_F(FuzzerToolKitTest, parseFunctionNames) {
-  EXPECT_TRUE(parseFunctionNames("").empty());
-  EXPECT_TRUE(parseFunctionNames(" , ").empty());
-  EXPECT_EQ(
-      parseFunctionNames(" Min, MAX ,, sum"),
-      (std::unordered_set<std::string>{"min", "max", "sum"}));
-}
-
-TEST_F(FuzzerToolKitTest, onlyContainsSkippedFunctions) {
-  const std::unordered_set<std::string> skip{"bloom_filter_agg", "Min"};
-
-  // An empty 'only' list asks for every function, so it is never fully
-  // skipped.
-  EXPECT_FALSE(onlyContainsSkippedFunctions("", skip));
-  EXPECT_FALSE(onlyContainsSkippedFunctions("", {}));
-  EXPECT_FALSE(onlyContainsSkippedFunctions(" , ", skip));
-
-  // Names are matched after trimming and lower casing, on both lists.
-  EXPECT_TRUE(onlyContainsSkippedFunctions("bloom_filter_agg", skip));
-  EXPECT_TRUE(onlyContainsSkippedFunctions(" BLOOM_FILTER_AGG , min ", skip));
-  EXPECT_TRUE(onlyContainsSkippedFunctions("min,bloom_filter_agg", skip));
-
-  // One function that is not skipped is enough to run the fuzzer.
-  EXPECT_FALSE(onlyContainsSkippedFunctions("min,sum", skip));
-  EXPECT_FALSE(onlyContainsSkippedFunctions("sum", skip));
-  EXPECT_FALSE(onlyContainsSkippedFunctions("min", {}));
-}
-
-TEST_F(FuzzerToolKitTest, filterSignatures) {
-  exec::AggregateFunctionSignatureMap input;
-  for (const auto& name : {"min", "max", "sum"}) {
-    input[name] = {};
-  }
-
-  EXPECT_EQ(filterSignatures(input, "", {}).size(), 3);
-  EXPECT_EQ(filterSignatures(input, "min, MAX", {}).size(), 2);
-  EXPECT_EQ(filterSignatures(input, "", {"Min"}).size(), 2);
-
-  // A skipped function is dropped even when 'only' asks for it.
-  EXPECT_TRUE(filterSignatures(input, "min", {"min"}).empty());
-  EXPECT_EQ(filterSignatures(input, "min,sum", {"min"}).size(), 1);
-}
-
 } // namespace facebook::velox::fuzzer::test

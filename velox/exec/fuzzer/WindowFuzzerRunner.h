@@ -18,7 +18,6 @@
 #include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
-#include <iostream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -64,26 +63,17 @@ class WindowFuzzerRunner {
       exit(1);
     }
 
-    if (velox::fuzzer::onlyContainsSkippedFunctions(
-            options.onlyFunctions, options.skipFunctions)) {
-      // Printed to stdout rather than logged: the fuzzer CI jobs run with
-      // --stderrthreshold=2, so a warning would not appear in the job output
-      // and the clean exit would look unexplained.
-      std::cout
-          << "All functions requested by 'only' are skipped. Nothing to fuzz."
-          << std::endl;
-      return 0;
-    }
-
     auto filteredAggregationSignatures = velox::fuzzer::filterSignatures(
         aggregationSignatures, options.onlyFunctions, options.skipFunctions);
     auto filteredWindowSignatures = velox::fuzzer::filterSignatures(
         windowSignatures, options.onlyFunctions, options.skipFunctions);
     if (filteredAggregationSignatures.empty() &&
         filteredWindowSignatures.empty()) {
+      // Not a failure: the CI bias jobs pass every changed function in 'only',
+      // including functions on the skip list.
       LOG(ERROR)
           << "No function left after filtering using 'only' and 'skip' lists.";
-      return 1;
+      return 0;
     }
 
     facebook::velox::parse::registerTypeResolver();

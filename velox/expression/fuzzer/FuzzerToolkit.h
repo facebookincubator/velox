@@ -68,29 +68,11 @@ void compareExceptions(
     std::exception_ptr exceptionPtr,
     std::exception_ptr otherExceptionPr);
 
-/// Parses a comma separated list of function names into a set of trimmed,
-/// lower case names. Empty names are dropped.
-std::unordered_set<std::string> parseFunctionNames(const std::string& names);
-
-/// Returns 'names' with every entry trimmed and lower cased.
-std::unordered_set<std::string> normalizeFunctionNames(
-    const std::unordered_set<std::string>& names);
-
-/// Returns true if 'onlyFunctions' names at least one function and every
-/// function it names is in 'skipFunctions'. The fuzzers use this to tell a
-/// request they intentionally cannot serve from an empty request: CI jobs
-/// derive --only from the functions a change touches, which may all be
-/// skipped.
-bool onlyContainsSkippedFunctions(
-    const std::string& onlyFunctions,
-    const std::unordered_set<std::string>& skipFunctions);
-
 /// Parse the comma separated list of function names, and use it to filter the
 /// input signatures. Return a signature map that (1) only include functions
 /// appearing in onlyFunctions if onlyFunctions is non-empty, and (2) not
 /// include any functions appearing in skipFunctions if skipFunctions is
-/// non-empty. Skipped functions are removed even when onlyFunctions asks for
-/// them.
+/// non-empty.
 /// @tparam SignatureMapType can be AggregateFunctionSignatureMap or
 /// WindowFunctionMap.
 template <typename SignatureMapType>
@@ -104,7 +86,16 @@ SignatureMapType filterSignatures(
 
   SignatureMapType output;
   if (!onlyFunctions.empty()) {
-    const auto nameSet = parseFunctionNames(onlyFunctions);
+    // Parse, lower case and trim it.
+    std::vector<std::string_view> nameList;
+    folly::split(',', onlyFunctions, nameList);
+    std::unordered_set<std::string> nameSet;
+    for (const auto& it : nameList) {
+      auto str = folly::trimWhitespace(it).toString();
+      folly::toLowerAscii(str);
+      nameSet.insert(str);
+    }
+
     for (const auto& it : input) {
       if (nameSet.count(it.first) > 0) {
         output.insert(it);
@@ -114,8 +105,10 @@ SignatureMapType filterSignatures(
     output = input;
   }
 
-  for (const auto& name : normalizeFunctionNames(skipFunctions)) {
-    output.erase(name);
+  for (auto s : skipFunctions) {
+    auto str = s;
+    folly::toLowerAscii(str);
+    output.erase(str);
   }
   return output;
 }
