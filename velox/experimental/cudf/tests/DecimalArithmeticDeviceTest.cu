@@ -105,9 +105,9 @@ struct Arithmetic {
   template <typename T>
   __device__ std::array<Outcome, 3> operator()(Operands<T> o) const {
     T wrapped;
-    const bool sumOverflow = detail::addOverflow(o.a, o.b, &wrapped);
-    const bool differenceOverflow = detail::subOverflow(o.a, o.b, &wrapped);
-    const bool productOverflow = detail::mulOverflow(o.a, o.b, &wrapped);
+    const bool sumOverflow = addWithOverflow(o.a, o.b, &wrapped);
+    const bool differenceOverflow = subWithOverflow(o.a, o.b, &wrapped);
+    const bool productOverflow = mulWithOverflow(o.a, o.b, &wrapped);
     return {
         Outcome{sumOverflow, checkedPlus(o.a, o.b)},
         Outcome{differenceOverflow, checkedMinus(o.a, o.b)},

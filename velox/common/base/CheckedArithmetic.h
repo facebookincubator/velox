@@ -41,13 +41,10 @@
 
 namespace facebook::velox {
 
-namespace detail {
-
-// Thin seam over the overflow primitive so the checked* bodies below read the
-// same on both compilers. Each returns true on overflow and always stores the
-// wrapped result, matching __builtin_*_overflow exactly.
+/// Portable __builtin_{add,sub,mul}_overflow, also callable from device code.
+/// Returns true on overflow and always stores the wrapped result.
 template <typename R, typename A, typename B>
-VELOX_GPU_COMPATIBLE bool addOverflow(A a, B b, R* result) {
+VELOX_GPU_COMPATIBLE bool addWithOverflow(A a, B b, R* result) {
 #ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
   return cuda::add_overflow(*result, a, b);
 #else
@@ -56,7 +53,7 @@ VELOX_GPU_COMPATIBLE bool addOverflow(A a, B b, R* result) {
 }
 
 template <typename R, typename A, typename B>
-VELOX_GPU_COMPATIBLE bool subOverflow(A a, B b, R* result) {
+VELOX_GPU_COMPATIBLE bool subWithOverflow(A a, B b, R* result) {
 #ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
   return cuda::sub_overflow(*result, a, b);
 #else
@@ -65,7 +62,7 @@ VELOX_GPU_COMPATIBLE bool subOverflow(A a, B b, R* result) {
 }
 
 template <typename R, typename A, typename B>
-VELOX_GPU_COMPATIBLE bool mulOverflow(A a, B b, R* result) {
+VELOX_GPU_COMPATIBLE bool mulWithOverflow(A a, B b, R* result) {
 #ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
   return cuda::mul_overflow(*result, a, b);
 #else
@@ -73,12 +70,10 @@ VELOX_GPU_COMPATIBLE bool mulOverflow(A a, B b, R* result) {
 #endif
 }
 
-} // namespace detail
-
 template <typename T>
 VELOX_GPU_COMPATIBLE T checkedPlus(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = detail::addOverflow(a, b, &result);
+  bool overflow = addWithOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
   }
@@ -89,7 +84,7 @@ template <typename T>
 VELOX_GPU_COMPATIBLE T
 checkedMinus(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = detail::subOverflow(a, b, &result);
+  bool overflow = subWithOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
   }
@@ -100,7 +95,7 @@ template <typename T>
 VELOX_GPU_COMPATIBLE T
 checkedMultiply(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = detail::mulOverflow(a, b, &result);
+  bool overflow = mulWithOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
   }

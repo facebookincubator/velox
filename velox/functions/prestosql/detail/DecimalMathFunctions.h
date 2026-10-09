@@ -55,13 +55,13 @@ struct DecimalPlusFunction {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (velox::detail::mulOverflow(
+    if (mulWithOverflow(
             a, DecimalArithmetic::powerOfTen(aRescale_), &aRescaled) ||
-        velox::detail::mulOverflow(
+        mulWithOverflow(
             b, DecimalArithmetic::powerOfTen(bRescale_), &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} + {}", a, b);
     }
-    out = velox::checkedPlus<R>(R(aRescaled), R(bRescaled));
+    out = checkedPlus<R>(R(aRescaled), R(bRescaled));
     DecimalArithmetic::valueInRange(out);
   }
 
@@ -106,13 +106,13 @@ struct DecimalMinusFunction {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (velox::detail::mulOverflow(
+    if (mulWithOverflow(
             a, DecimalArithmetic::powerOfTen(aRescale_), &aRescaled) ||
-        velox::detail::mulOverflow(
+        mulWithOverflow(
             b, DecimalArithmetic::powerOfTen(bRescale_), &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} - {}", a, b);
     }
-    out = velox::checkedMinus<R>(R(aRescaled), R(bRescaled));
+    out = checkedMinus<R>(R(aRescaled), R(bRescaled));
     DecimalArithmetic::valueInRange(out);
   }
 
@@ -136,8 +136,7 @@ struct DecimalMultiplyFunction {
 
   template <typename R, typename A, typename B>
   VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b) {
-    out =
-        velox::checkedMultiply<R>(velox::checkedMultiply<R>(R(a), R(b)), R(1));
+    out = checkedMultiply<R>(checkedMultiply<R>(R(a), R(b)), R(1));
     DecimalArithmetic::valueInRange(out);
   }
 };
@@ -206,7 +205,7 @@ struct DecimalModulusFunction {
       remainderSign *= -1;
       unsignedDividendRescaled *= -1;
     }
-    unsignedDividendRescaled = velox::checkedMultiply<R>(
+    unsignedDividendRescaled = checkedMultiply<R>(
         unsignedDividendRescaled,
         R(DecimalArithmetic::powerOfTen(aRescale_)),
         "Decimal");
@@ -215,7 +214,7 @@ struct DecimalModulusFunction {
     if (b < 0) {
       unsignedDivisorRescaled *= -1;
     }
-    unsignedDivisorRescaled = velox::checkedMultiply<B>(
+    unsignedDivisorRescaled = checkedMultiply<B>(
         unsignedDivisorRescaled,
         R(DecimalArithmetic::powerOfTen(bRescale_)),
         "Decimal");
