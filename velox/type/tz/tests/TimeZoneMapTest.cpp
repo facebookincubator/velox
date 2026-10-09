@@ -25,6 +25,10 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::tz {
+
+// Defined in the generated TimeZoneDatabase.cpp; declared locally as
+// TimeZoneMap.cpp does, since the table is not part of the public API.
+extern const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries();
 namespace {
 
 using namespace std::chrono;
@@ -414,10 +418,11 @@ TEST(TimeZoneMapTest, invalid) {
 TEST(TimeZoneMapTest, outOfRangeID) {
   // The database is a vector sized to the highest generated id plus one, so
   // the id just past it indexes one past the end of the vector. Taken from the
-  // table, not from getTimeZoneIDs(), whose last entry depends on which zones
-  // the local tzdata provides.
-  const auto pastTheEnd = static_cast<int16_t>(maxTimeZoneID() + 1);
-  EXPECT_NE(nullptr, locateZone(maxTimeZoneID(), false));
+  // generated table, not from getTimeZoneIDs(): when the local tzdata lacks the
+  // last zone, that list ends at an earlier id and the probe would hit a hole
+  // the old guard already rejected.
+  const auto pastTheEnd =
+      static_cast<int16_t>(getTimeZoneEntries().back().first + 1);
   for (const int16_t timeZoneID :
        {pastTheEnd,
         std::numeric_limits<int16_t>::max(),
@@ -431,10 +436,18 @@ TEST(TimeZoneMapTest, outOfRangeID) {
         getTimeZoneName(timeZoneID), "Unable to resolve timeZoneID");
   }
 
-  // An id that only fits in int64_t must not wrap into a valid int16_t id.
-  const int64_t wrapped =
-      (int64_t{1} << 16) + getTimeZoneID("America/Los_Angeles");
-  VELOX_ASSERT_THROW(getTimeZoneName(wrapped), "Unable to resolve timeZoneID");
+  // An id that only fits in int64_t must not wrap into a valid int16_t id,
+  // from either side of the int16_t range.
+  const int64_t losAngeles = getTimeZoneID("America/Los_Angeles");
+  for (const int64_t wrapped :
+       {(int64_t{1} << 16) + losAngeles,
+        -(int64_t{1} << 16) + losAngeles,
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::min()}) {
+    SCOPED_TRACE(wrapped);
+    VELOX_ASSERT_THROW(
+        getTimeZoneName(wrapped), "Unable to resolve timeZoneID");
+  }
 }
 
 TEST(TimeZoneMapTest, getShortName) {

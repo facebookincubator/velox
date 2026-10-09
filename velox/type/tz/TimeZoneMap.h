@@ -63,12 +63,6 @@ std::string getTimeZoneName(int64_t timeZoneID);
 /// Otherwise, returns -1.
 int16_t getTimeZoneID(std::string_view timeZone, bool failOnError = true);
 
-/// Returns the highest time zone id the database reserves a slot for, taken
-/// from the generated zone table rather than the local tzdata. Ids above it
-/// are out of range; ids at or below it may still name a zone the local
-/// tzdata lacks, which locateZone() reports as unresolvable.
-int16_t maxTimeZoneID();
-
 /// Returns the timeZoneID for a given offset in minutes. The offset must be in
 /// [-14:00, +14:00] range.
 int16_t getTimeZoneID(int32_t offsetMinutes);

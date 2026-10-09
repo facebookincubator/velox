@@ -465,10 +465,6 @@ int16_t getTimeZoneID(int32_t offsetMinutes) {
   }
 }
 
-int16_t maxTimeZoneID() {
-  return static_cast<int16_t>(getTimeZoneDatabase().size() - 1);
-}
-
 std::vector<int16_t> getTimeZoneIDs() {
   const auto& timeZoneDatabase = getTimeZoneDatabase();
 
