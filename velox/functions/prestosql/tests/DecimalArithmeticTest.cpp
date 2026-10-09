@@ -15,8 +15,6 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-// Order matters: see structsInstantiateAlongsideCheckedArithmetic.
-#include "velox/functions/lib/CheckedArithmetic.h"
 
 #include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -925,48 +923,4 @@ TEST_F(DecimalArithmeticTest, negate) {
            DecimalUtil::kLongDecimalMax,
            DecimalUtil::kLongDecimalMin},
           DECIMAL(38, 19))});
-}
-
-// With functions/lib/CheckedArithmetic.h in scope, the three-argument
-// checkedMultiply in DecimalModulusFunction compiles only when qualified with
-// velox::. Registration does not instantiate the bodies, so this test does.
-TEST_F(DecimalArithmeticTest, structsInstantiateAlongsideCheckedArithmetic) {
-  const core::QueryConfig config{
-      std::unordered_map<std::string, std::string>{}};
-  const std::vector<TypePtr> inputTypes{DECIMAL(20, 2), DECIMAL(20, 2)};
-  int128_t out = 0;
-
-  // Mixed scales, so the second operand is rescaled through mulOverflow.
-  const std::vector<TypePtr> mixedScaleTypes{DECIMAL(20, 2), DECIMAL(20, 1)};
-
-  functions::detail::DecimalPlusFunction<exec::VectorExec> plus;
-  plus.initialize(
-      mixedScaleTypes,
-      config,
-      static_cast<const int128_t*>(nullptr),
-      static_cast<const int128_t*>(nullptr));
-  plus.call<int128_t, int128_t, int128_t>(out, 700, 30);
-  EXPECT_EQ(out, 1000); // 7.00 + 3.0
-
-  functions::detail::DecimalMinusFunction<exec::VectorExec> minus;
-  minus.initialize(
-      mixedScaleTypes,
-      config,
-      static_cast<const int128_t*>(nullptr),
-      static_cast<const int128_t*>(nullptr));
-  minus.call<int128_t, int128_t, int128_t>(out, 700, 30);
-  EXPECT_EQ(out, 400); // 7.00 - 3.0
-
-  functions::detail::DecimalModulusFunction<exec::VectorExec> modulus;
-  modulus.initialize(
-      inputTypes,
-      config,
-      static_cast<const int128_t*>(nullptr),
-      static_cast<const int128_t*>(nullptr));
-  modulus.call<int128_t, int128_t, int128_t>(out, 700, 300);
-  EXPECT_EQ(out, 100); // 7.00 % 3.00
-
-  functions::detail::DecimalMultiplyFunction<exec::VectorExec> multiply;
-  multiply.call<int128_t, int128_t, int128_t>(out, 700, 300);
-  EXPECT_EQ(out, 210000); // 7.00 * 3.00, at the result scale of 4
 }

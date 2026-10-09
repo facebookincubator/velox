@@ -17,40 +17,17 @@
 #pragma once
 
 #include "velox/common/base/CheckedArithmetic.h"
-#include "velox/common/base/Macros.h"
 
-// Forwarding the definitions here so that codegen can still use functions in
-// this namespace.
+// Names the velox:: overloads, default typeName included, so codegen can keep
+// calling functions::checkedPlus(a, b) while code in nested namespaces finds
+// the originals without qualification.
 namespace facebook::velox::functions {
 
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedPlus(const T& a, const T& b) {
-  return facebook::velox::checkedPlus(a, b);
-}
-
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedMinus(const T& a, const T& b) {
-  return facebook::velox::checkedMinus(a, b);
-}
-
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedMultiply(const T& a, const T& b) {
-  return facebook::velox::checkedMultiply(a, b);
-}
-
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedDivide(const T& a, const T& b) {
-  return facebook::velox::checkedDivide(a, b);
-}
-
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedModulus(const T& a, const T& b) {
-  return facebook::velox::checkedModulus(a, b);
-}
-
-template <typename T>
-VELOX_GPU_COMPATIBLE T checkedNegate(const T& a) {
-  return facebook::velox::checkedNegate(a);
-}
+using facebook::velox::checkedDivide;
+using facebook::velox::checkedMinus;
+using facebook::velox::checkedModulus;
+using facebook::velox::checkedMultiply;
+using facebook::velox::checkedNegate;
+using facebook::velox::checkedPlus;
 
 } // namespace facebook::velox::functions
