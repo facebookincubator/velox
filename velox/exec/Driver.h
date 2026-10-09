@@ -600,7 +600,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
     bool isThrow_{true};
   };
 
-  Driver() = default;
+  Driver();
 
   // Invoked to record the driver cpu yield count.
   static void recordYieldCount();
@@ -795,6 +795,19 @@ struct DriverAdapter {
 };
 
 struct DriverFactory {
+  struct MixedExecutionModeJoinNodeIds {
+    folly::F14FastSet<core::PlanNodeId> hashJoin;
+    folly::F14FastSet<core::PlanNodeId> nestedLoopJoin;
+    folly::F14FastSet<core::PlanNodeId> custom;
+
+    folly::F14FastSet<core::PlanNodeId> all() const {
+      auto nodeIds = hashJoin;
+      nodeIds.insert(nestedLoopJoin.begin(), nestedLoopJoin.end());
+      nodeIds.insert(custom.begin(), custom.end());
+      return nodeIds;
+    }
+  };
+
   std::vector<std::shared_ptr<const core::PlanNode>> planNodes;
   /// Function that will generate the final operator of a driver being
   /// constructed.
@@ -820,14 +833,10 @@ struct DriverFactory {
   /// True if 'planNodes' contains a sync node for the task, e.g.
   /// PartitionedOutput.
   bool outputDriver{false};
-  /// Contains node ids for which Hash Join Bridges connect ungrouped
-  /// execution and grouped execution and must be created in ungrouped
-  /// execution pipeline and skipped in grouped execution pipeline.
-  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
-  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
-  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
-  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
-  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
+  /// Contains join node IDs whose bridges connect ungrouped and grouped
+  /// execution. These bridges must be created in the ungrouped pipeline and
+  /// skipped in the grouped pipeline.
+  MixedExecutionModeJoinNodeIds mixedExecutionModeJoinNodeIds;
 
   /// Builds one driver. If the pipeline's leaf needs an exchange client, Task
   /// supplies the client and matching transport entry; otherwise both are null.
