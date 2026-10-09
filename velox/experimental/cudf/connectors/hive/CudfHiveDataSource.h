@@ -47,6 +47,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   static constexpr std::string_view kDwioStorageReadBytes{
       "dwio.storageReadBytes"};
 
+  /// Returns whether the table handle's remaining filter can be evaluated by
+  /// this data source under the connector query's semantic configuration.
+  /// Returns false for non-Hive table handles.
+  static bool isSupported(
+      const ConnectorTableHandlePtr& tableHandle,
+      bool adjustTimestampToTimezone,
+      memory::MemoryPool* pool);
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,

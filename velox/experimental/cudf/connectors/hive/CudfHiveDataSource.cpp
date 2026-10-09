@@ -61,6 +61,30 @@ bool isTrueConstant(
 
 } // namespace
 
+bool CudfHiveDataSource::isSupported(
+    const ConnectorTableHandlePtr& tableHandle,
+    bool adjustTimestampToTimezone,
+    memory::MemoryPool* pool) {
+  auto hiveTableHandle =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  if (!hiveTableHandle) {
+    return false;
+  }
+
+  const auto& remainingFilter = hiveTableHandle->remainingFilter();
+  if (!remainingFilter) {
+    return true;
+  }
+
+  VELOX_CHECK_NOT_NULL(pool);
+  auto optimizeQueryCtx = core::QueryCtx::create();
+  auto optimizedRemainingFilter =
+      expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool);
+
+  return facebook::velox::cudf_velox::canExprRunOnGpu(
+      optimizedRemainingFilter, adjustTimestampToTimezone);
+}
+
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,

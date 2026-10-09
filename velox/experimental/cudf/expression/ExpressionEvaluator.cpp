@@ -3326,13 +3326,11 @@ bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
 
 // True if `expr` must fall back to CPU because it contains a timezone-sensitive
 // date_trunc while the session enables adjust_timestamp_to_session_timezone,
-// which cuDF cannot honor. False when `queryCtx` is null or the config is
-// disabled.
+// which cuDF cannot honor. False when timestamp adjustment is disabled.
 bool requiresCpuForTimezone(
     const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx) {
-  if (queryCtx == nullptr ||
-      !queryCtx->queryConfig().adjustTimestampToTimezone()) {
+    bool adjustTimestampToTimezone) {
+  if (!adjustTimestampToTimezone) {
     return false;
   }
   if (containsTimezoneSensitiveDateTrunc(expr)) {
@@ -3358,8 +3356,17 @@ bool canExprRunOnGpu(
   const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
       ? expression::optimize(expr, queryCtx, pool)
       : expr;
-  return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+  return canExprRunOnGpu(
+      checked,
+      queryCtx != nullptr &&
+          queryCtx->queryConfig().adjustTimestampToTimezone());
+}
+
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    bool adjustTimestampToTimezone) {
+  return !requiresCpuForTimezone(expr, adjustTimestampToTimezone) &&
+      canBeEvaluatedByCudf(expr);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(

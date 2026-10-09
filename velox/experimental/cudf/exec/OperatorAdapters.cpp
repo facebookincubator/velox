@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
@@ -118,7 +119,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -136,16 +137,26 @@ class TableScanAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
                                       iceberg::CudfIcebergConnector>(connector);
 
-    bool canRunOnGPU =
-        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
-
-    if (!canRunOnGPU) {
+    if (cudfHiveConnector == nullptr && cudfIcebergConnector == nullptr) {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
           planNode->id());
+      return false;
     }
 
-    return canRunOnGPU;
+    const auto* queryCtx = ctx->task->queryCtx().get();
+    if (!facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource::
+            isSupported(
+                tableScanNode->tableHandle(),
+                queryCtx->queryConfig().adjustTimestampToTimezone(),
+                op->pool())) {
+      LOG_FALLBACK(
+          "TableScan table handle or remaining filter is not supported by cuDF, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
+    return true;
   }
 
   bool acceptsGpuInput() const override {
