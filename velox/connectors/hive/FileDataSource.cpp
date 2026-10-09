@@ -492,7 +492,7 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   // In case there is a remaining filter that excludes some but not all
   // rows, collect the indices of the passing rows. If there is no filter,
-  // or it passes on all rows, leave this as null and let exec::wrap skip
+  // or it passes on all rows, leave this as null and let exec::wrapChild skip
   // wrapping the results.
   BufferPtr remainingIndices;
   filterRows_.resize(rowVector->size());
@@ -509,10 +509,6 @@ std::optional<RowVectorPtr> FileDataSource::next(
       // Some, but not all rows passed the remaining filter.
       remainingIndices = filterEvalCtx_.selectedIndices;
     }
-  }
-
-  if (outputType_->size() == 0) {
-    return BaseVector::create<RowVector>(outputType_, rowsRemaining, pool_);
   }
 
   std::vector<VectorPtr> outputColumns;
