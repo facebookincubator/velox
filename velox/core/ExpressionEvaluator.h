@@ -38,8 +38,12 @@ class ExpressionEvaluator {
 
   // Compiles an expression. Returns an instance of exec::ExprSet that can be
   // used to evaluate that expression on multiple vectors using evaluate method.
+  // Constant subexpressions are folded during compilation unless
+  // 'enableConstantFolding' is false. The expression optimizer passes false
+  // because it folds constant subexpressions itself.
   virtual std::unique_ptr<exec::ExprSet> compile(
-      const std::shared_ptr<const ITypedExpr>& expression) = 0;
+      const std::shared_ptr<const ITypedExpr>& expression,
+      bool enableConstantFolding = true) = 0;
 
   virtual std::unique_ptr<exec::ExprSet> compile(
       const std::vector<std::shared_ptr<const ITypedExpr>>& expressions) = 0;
