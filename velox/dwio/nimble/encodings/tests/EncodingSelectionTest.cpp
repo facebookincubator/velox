@@ -475,6 +475,119 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, nestedReadFactorsOverrideRoot) {
           {nimble::EncodingType::Varint, 1.0}}));
 }
 
+TEST(
+    ManualEncodingSelectionPolicyFactoryTest,
+    nestedCompressionRatiosProviderAdjustsIndividualChildren) {
+  nimble::ManualEncodingSelectionPolicyFactory factory{
+      {{nimble::EncodingType::Constant, 1.0},
+       {nimble::EncodingType::Trivial, 1.0},
+       {nimble::EncodingType::FixedBitWidth, 1.0},
+       {nimble::EncodingType::ALPRD, 1.0}},
+      /*compressionOptions=*/nimble::CompressionOptions{},
+      /*nestedEncodingReadFactors=*/std::nullopt,
+      [](nimble::EncodingType parent,
+         nimble::NestedEncodingIdentifier identifier,
+         nimble::DataType)
+          -> std::optional<
+              std::vector<std::pair<nimble::EncodingType, float>>> {
+        if (parent != nimble::EncodingType::ALPRD ||
+            identifier != nimble::EncodingIdentifiers::ALPRD::RightParts) {
+          return std::nullopt;
+        }
+        return std::vector<std::pair<nimble::EncodingType, float>>{
+            {nimble::EncodingType::Trivial, 0.25}};
+      }};
+
+  auto root = factory.createPolicy(nimble::DataType::Double);
+  for (nimble::NestedEncodingIdentifier identifier = 0; identifier < 4;
+       ++identifier) {
+    auto childBase =
+        root->create<uint64_t>(nimble::EncodingType::ALPRD, identifier);
+    auto* child =
+        dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+            childBase.get());
+    ASSERT_NE(child, nullptr);
+    if (identifier == nimble::EncodingIdentifiers::ALPRD::RightParts) {
+      EXPECT_EQ(
+          child->estimatedCompressionRatios(),
+          (std::optional<std::vector<std::pair<nimble::EncodingType, float>>>{
+              {{nimble::EncodingType::Trivial, 0.25}}}));
+    } else {
+      EXPECT_EQ(child->estimatedCompressionRatios(), std::nullopt);
+    }
+  }
+
+  auto unrelatedChildBase = root->create<uint64_t>(
+      nimble::EncodingType::Dictionary,
+      nimble::EncodingIdentifiers::Dictionary::Indices);
+  auto* unrelatedChild =
+      dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+          unrelatedChildBase.get());
+  ASSERT_NE(unrelatedChild, nullptr);
+  EXPECT_EQ(unrelatedChild->estimatedCompressionRatios(), std::nullopt);
+}
+
+TEST(ManualEncodingSelectionPolicyTest, compressionRatioChangesSelectionCost) {
+  std::vector<uint32_t> values(4'096);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = i * 65'537;
+  }
+  const auto statistics = nimble::Statistics<uint32_t>::create(values);
+  const std::vector<std::pair<nimble::EncodingType, float>> readFactors{
+      {nimble::EncodingType::FixedBitWidth, 0.1},
+      {nimble::EncodingType::Trivial, 1.0}};
+  const std::vector<std::pair<nimble::EncodingType, float>> compressionRatios{
+      {nimble::EncodingType::Trivial, 0.01}};
+
+  nimble::ManualEncodingSelectionPolicy<uint32_t> withCompression{
+      readFactors,
+      nimble::CompressionOptions{},
+      std::nullopt,
+      std::nullopt,
+      compressionRatios};
+  EXPECT_EQ(
+      withCompression.select(values, statistics, nimble::Encoding::Options{})
+          .encodingType,
+      nimble::EncodingType::Trivial);
+
+  nimble::ManualEncodingSelectionPolicy<uint32_t> withoutCompression{
+      readFactors, std::nullopt, std::nullopt, std::nullopt, compressionRatios};
+  EXPECT_EQ(
+      withoutCompression.select(values, statistics, nimble::Encoding::Options{})
+          .encodingType,
+      nimble::EncodingType::FixedBitWidth);
+}
+
+TEST(ManualEncodingSelectionPolicyTest, rejectsInvalidCompressionRatios) {
+  const auto makePolicy = [](auto compressionRatios) {
+    return std::make_unique<nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+        std::vector<std::pair<nimble::EncodingType, float>>{
+            {nimble::EncodingType::Trivial, 1.0}},
+        nimble::CompressionOptions{},
+        std::nullopt,
+        std::nullopt,
+        std::move(compressionRatios));
+  };
+  for (const float invalidRatio :
+       {0.0f,
+        -0.1f,
+        1.1f,
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    NIMBLE_ASSERT_USER_THROW(
+        makePolicy(
+            std::vector<std::pair<nimble::EncodingType, float>>{
+                {nimble::EncodingType::Trivial, invalidRatio}}),
+        "must be finite and in (0, 1]");
+  }
+  NIMBLE_ASSERT_USER_THROW(
+      makePolicy(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::Trivial, 0.5},
+              {nimble::EncodingType::Trivial, 0.25}}),
+      "Duplicate estimated compression ratio");
+}
+
 TYPED_TEST(EncodingSelectionNumericTests, selectConst) {
   using T = TypeParam;
 
