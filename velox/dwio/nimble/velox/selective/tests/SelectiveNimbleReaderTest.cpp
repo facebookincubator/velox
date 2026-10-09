@@ -3045,9 +3045,6 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructAllNulls) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
-  GTEST_SKIP() << "Per column decode counters moved from RuntimeStats to "
-                  "SplitStats, which readers own privately and do not expose. "
-                  "Re-enable once Velox provides caller access.";
   const int numRows = 100'000;
   auto input = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto i) { return i * 7 + 13; }),
@@ -3080,8 +3077,6 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
-  // zeroCopy=true uses nimble::EncodingFactory (not legacy), which forwards
-  // Encoding::Options including decodingStats to encoding constructors.
   rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setCollectColumnStats(true);
   rowOptions.setEagerFirstStripeLoad(true);
@@ -3098,11 +3093,29 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   }
   EXPECT_EQ(totalRows, numRows) << "should read all rows";
 
-  // The per column decode and decompress assertions that used to live here
-  // read counters off RuntimeStatistics::columnReaderStats. Velox moved those
-  // counters onto SplitStats, which every reader owns privately and none
-  // exposes, so there is no supported way to reach them from a caller. The
-  // skip above records that this coverage is currently unavailable.
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+
+  // The schema is ROW(BIGINT, VARCHAR). Node IDs: 0=root, 1=bigint, 2=varchar.
+  // Both leaf columns should have per-column decodeCPUTimeNanos populated via
+  // splitStats_.mergeFrom.
+  ASSERT_FALSE(stats.columnStats.empty());
+  const auto nimbleFormat = dwio::common::FileFormat::NIMBLE;
+  for (uint32_t nodeId : {1, 2}) {
+    SCOPED_TRACE(fmt::format("nodeId={}", nodeId));
+    auto nodeIt = stats.columnStats.find(nodeId);
+    ASSERT_NE(nodeIt, stats.columnStats.end());
+    auto formatIt = nodeIt->second.find(nimbleFormat);
+    ASSERT_NE(formatIt, nodeIt->second.end());
+    ASSERT_TRUE(formatIt->second.decodingStats.has_value());
+    EXPECT_GT(formatIt->second.decodingStats->decodeCPUTimeNanos.count(), 0);
+  }
+
+  // Verify per-column stats also surface through toRuntimeMetricMap with
+  // the nimble.column_{id}.{type} prefix.
+  auto metrics = stats.toRuntimeMetricMap();
+  EXPECT_TRUE(metrics.count("nimble.column_1.BIGINT.decodeCPUTimeNanos") > 0);
+  EXPECT_TRUE(metrics.count("nimble.column_2.VARCHAR.decodeCPUTimeNanos") > 0);
 }
 
 // Tests for FixedBitWidthEncoding fast path.

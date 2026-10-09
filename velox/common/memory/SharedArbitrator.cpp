@@ -1546,6 +1546,7 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   stats.maxCapacityBytes = capacity_;
   stats.freeCapacityBytes = freeNonReservedCapacity_ + freeReservedCapacity_;
   stats.freeReservedCapacityBytes = freeReservedCapacity_;
+  stats.reservedCapacityBytes = reservedCapacity_;
   stats.numNonReclaimableAttempts = numNonReclaimableAttempts_;
   return stats;
 }

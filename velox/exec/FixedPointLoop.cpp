@@ -15,6 +15,9 @@
  */
 #include "velox/exec/FixedPointLoop.h"
 
+#include <folly/ScopeGuard.h>
+
+#include <algorithm>
 #include <mutex>
 
 #include "velox/core/PlanFragment.h"
@@ -43,6 +46,29 @@ RowVectorPtr copyRowVector(
       BaseVector::create<RowVector>(source->type(), source->size(), pool);
   target->copy(source.get(), 0, 0, source->size());
   return target;
+}
+
+// Aborts 'tasks' and waits until none of their drivers is on a thread. A failed
+// task resolves its completion future while drivers that are on thread keep
+// running, and those drivers can still call a consumer that writes into the
+// caller's frame.  A task that runs a nested fixed point has no drivers, so
+// this returns at once for it while its loop keeps running; see the
+// cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
+// a failure to abort instead of throwing.
+void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+  std::vector<ContinueFuture> futures;
+  futures.reserve(tasks.size());
+  for (const auto& task : tasks) {
+    try {
+      futures.push_back(task->requestAbort());
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to abort fixed-point sub-task " << task->taskId()
+                 << ": " << e.what();
+    }
+  }
+  for (auto& future : futures) {
+    std::move(future).wait();
+  }
 }
 
 // Returns the id of the first ExchangeNode found in the plan, if any.
@@ -148,6 +174,10 @@ FixedPointLoop::FixedPointLoop(
   node_ = findFixedPointNode(owner_->planFragment().planNode);
   VELOX_CHECK_NOT_NULL(
       node_, "FixedPointLoop requires a FixedPointNode in its plan");
+  VELOX_USER_CHECK_GE(
+      options_.iterationMaxDrivers,
+      1,
+      "FixedPointOptions::iterationMaxDrivers must be at least 1");
   // Trailing nodes are present when the fragment root is not the
   // FixedPointNode.
   hasTrailing_ = owner_->planFragment().planNode.get() != node_.get();
@@ -282,8 +312,6 @@ void FixedPointLoop::start(
     uint32_t /*concurrentSplitGroups*/,
     std::function<void(std::exception_ptr)> onComplete) {
   // Task::start() already rejected a serial task before delegating here.
-  // The Phase-1 initial plans run at the parent's maxDrivers; the body,
-  // convergence, and trailing sub-tasks always run single-driver.
   maxDrivers_ = maxDrivers;
   // Parallel execution: run the loop asynchronously on the orchestration
   // executor so start() returns immediately (Task::start's contract), deliver
@@ -463,7 +491,7 @@ void FixedPointLoop::buildHashTable(
 
   // Prototype requirement: key columns are the leading columns, so a build
   // input column index equals its RowContainer column index (keys first, then
-  // dependents), and a probe input shares the same key channels.
+  // dependents).
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers;
   hashers.reserve(numKeys);
   std::vector<TypePtr> dependentTypes;
@@ -504,6 +532,14 @@ void FixedPointLoop::buildHashTable(
       decoded.emplace_back(*child);
     }
     for (vector_size_t row = 0; row < batch->size(); ++row) {
+      // The table's keys are not nullable, so a NULL key would be stored as
+      // the value under it and match probe keys equal to that value.
+      if (std::any_of(
+              decoded.begin(), decoded.begin() + numKeys, [&](const auto& key) {
+                return key.isNullAt(row);
+              })) {
+        continue;
+      }
       char* newRow = rowContainer->newRow();
       if (nextOffset > 0) {
         *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
@@ -615,8 +651,9 @@ void FixedPointLoop::runTrailingPlan() {
   auto consumer =
       [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
         if (batch != nullptr && batch->size() > 0) {
+          auto copy = copyRowVector(batch, outputPool_.get());
           std::lock_guard<std::mutex> l(mutex);
-          outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
+          outputBuffer_.push_back(std::move(copy));
         }
         return exec::BlockingReason::kNotBlocked;
       };
@@ -631,7 +668,10 @@ void FixedPointLoop::runTrailingPlan() {
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
       &trailingOptions);
-  task->start(/*maxDrivers=*/1);
+  SCOPE_FAIL {
+    abortAndWait({task});
+  };
+  task->start(iterationDrivers());
   if (node_->requiresSplits()) {
     task->noMoreSplits(node_->id());
   }
@@ -675,8 +715,9 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
   auto consumer =
       [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
         if (batch != nullptr && batch->size() > 0) {
+          auto copy = copyRowVector(batch, pool);
           std::lock_guard<std::mutex> l(mutex);
-          batches.push_back(copyRowVector(batch, pool));
+          batches.push_back(std::move(copy));
         }
         return exec::BlockingReason::kNotBlocked;
       };
@@ -692,6 +733,9 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
       &subOptions);
+  SCOPE_FAIL {
+    abortAndWait({task});
+  };
   task->start(maxDrivers);
   feedInitSplits(*task, plan);
   auto future = task->taskCompletionFuture();
@@ -771,6 +815,40 @@ void FixedPointLoop::feedInitSplits(
   }
 }
 
+namespace {
+
+// Splits 'budget' drivers across 'numPlans' plans that run at the same time.
+// Every plan gets at least one driver, so the total exceeds 'budget' when there
+// are more plans than drivers.  With 'singleDriverLastPlan' the last plan gets
+// exactly one and the others share the rest.
+std::vector<uint32_t> distributeDriverBudget(
+    uint32_t budget,
+    size_t numPlans,
+    bool singleDriverLastPlan) {
+  std::vector<uint32_t> planDrivers(numPlans, 1);
+  const size_t numScalablePlans = numPlans - (singleDriverLastPlan ? 1 : 0);
+  if (numScalablePlans == 0 || budget <= numPlans) {
+    return planDrivers;
+  }
+  const size_t numExtraDrivers = budget - numPlans;
+  for (size_t i = 0; i < numScalablePlans; ++i) {
+    planDrivers[i] += static_cast<uint32_t>(
+        numExtraDrivers / numScalablePlans +
+        (i < numExtraDrivers % numScalablePlans ? 1 : 0));
+  }
+  return planDrivers;
+}
+
+} // namespace
+
+uint32_t FixedPointLoop::iterationDrivers() const {
+  VELOX_CHECK_LE(
+      options_.iterationMaxDrivers,
+      maxDrivers_,
+      "iterationMaxDrivers must be less than or equal to maxDrivers");
+  return options_.iterationMaxDrivers;
+}
+
 // TODO: Reuse sub-tasks across iterations to avoid per-iteration planning and
 // operator initialization (notably the body's HashBuild rebuilding a constant
 // table every iteration).  Not possible via the public API today: Tasks are
@@ -782,7 +860,8 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
     const std::vector<core::PlanNodePtr>& plans,
     size_t planIndexOffset,
     int32_t iteration,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    bool singleDriverLastPlan) {
   const size_t lastPlan = plans.size() - 1;
 
   // The last plan's output -- this iteration's rows for the output state entry,
@@ -798,14 +877,22 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
   // plan) -- so a peer can address it knowing only this worker's task id.
   std::vector<std::shared_ptr<exec::Task>> tasks;
   tasks.reserve(plans.size());
+  // Also covers a throw while later tasks are still being created or wired.
+  SCOPE_FAIL {
+    abortAndWait(tasks);
+  };
   // A plan may itself contain a FixedPointNode, whose sub-task becomes a nested
   // FixedPointLoop.  It cannot address peers by task id, so hand it the
   // worker addresses extended by the (iteration, plan) this loop is running --
   // every peer extends its own the same way, so the nested loops find each
   // other.
   const auto peers = peerAddresses();
+  const auto planDrivers = distributeDriverBudget(
+      iterationDrivers(), plans.size(), singleDriverLastPlan);
   for (size_t p = 0; p < plans.size(); ++p) {
     auto subOptions = subTaskOptions();
+    // A loop nested in this plan runs its iterations within the plan's share.
+    subOptions.iterationMaxDrivers = planDrivers[p];
     subOptions.nested->workerAddress =
         nestedAddress(workerAddress(), iteration, planIndexOffset + p);
     subOptions.nested->peerAddresses.reserve(peers.size());
@@ -847,8 +934,9 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
                           bool /*drained*/,
                           ContinueFuture* /*future*/) {
         if (batch != nullptr && batch->size() > 0) {
+          auto copy = copyRowVector(batch, pool);
           std::lock_guard<std::mutex> l(outputMutex);
-          output.push_back(copyRowVector(batch, pool));
+          output.push_back(std::move(copy));
         }
         return exec::BlockingReason::kNotBlocked;
       };
@@ -882,8 +970,8 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
 
   // One sub-task per plan: the split wiring below indexes tasks by plan index.
   VELOX_CHECK_EQ(tasks.size(), plans.size());
-  for (auto& task : tasks) {
-    task->start(/*maxDrivers=*/1);
+  for (size_t p = 0; p < tasks.size(); ++p) {
+    tasks[p]->start(planDrivers[p]);
   }
 
   // Wire each consumer plan's Exchange to plan p-1's producer of every peer the
@@ -956,7 +1044,11 @@ void FixedPointLoop::runIteration(int32_t iteration) {
   std::vector<RowVectorPtr> output;
   if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
     output = runParallelChain(
-        node_->plans(), /*planIndexOffset=*/0, iteration, scratchPool.get());
+        node_->plans(),
+        /*planIndexOffset=*/0,
+        iteration,
+        scratchPool.get(),
+        /*singleDriverLastPlan=*/false);
   } else {
     output =
         drainPlan(node_->plans().front(), scratchPool.get(), /*maxDrivers=*/1);
@@ -1000,7 +1092,8 @@ bool FixedPointLoop::converged() {
         config.plans,
         /*planIndexOffset=*/node_->plans().size(),
         static_cast<int32_t>(iterations_),
-        convergencePool.get());
+        convergencePool.get(),
+        /*singleDriverLastPlan=*/true);
   } else {
     rows = drainPlan(
         config.plans.front(), convergencePool.get(), /*maxDrivers=*/1);
