@@ -74,7 +74,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
       "ARBITRATOR[SHARED CAPACITY[6.00GB] STATS[numRequests 1 numRunning 1 "
       "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
       "reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 6.00GB "
-      "freeCapacity 5.50GB freeReservedCapacity 0B] CONFIG[kind=SHARED;"
+      "freeCapacity 5.50GB freeReservedCapacity 0B reservedCapacity 0B] CONFIG[kind=SHARED;"
       "capacity=6.00GB;arbitrationStateCheckCb=(set);"
       "memory-pool-abort-capacity-limit=0B;memory-pool-min-reclaim-pct=0;"
       "memory-pool-reserved-capacity=0B;"
