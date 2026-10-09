@@ -559,10 +559,6 @@ void IndexLookupJoin::initLookupOutput() {
         lookupSourceOutputType->childAt(lookupChannelOpt.value()));
     VELOX_CHECK(outputType_->childAt(i)->equivalent(*lookupOutputTypes.back()));
   }
-  // TODO: support index lookup without output value columns.
-  VELOX_CHECK(
-      !lookupOutputNames.empty(),
-      "Must read at least one value column from index lookup table");
   lookupOutputType_ =
       ROW(std::move(lookupOutputNames), std::move(lookupOutputTypes));
 }

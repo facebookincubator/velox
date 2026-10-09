@@ -145,6 +145,15 @@ TEST(TypeCoercerTest, integerToDecimal) {
   ASSERT_FALSE(TypeCoercer::defaults().coerce(DECIMAL(10, 2), BIGINT()));
 }
 
+TEST(TypeCoercerTest, namedTarget) {
+  auto coercion = TypeCoercer::defaults().coerce(INTEGER(), "DECIMAL");
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, DECIMAL(10, 0));
+  EXPECT_EQ(coercion->cost, 2);
+
+  EXPECT_FALSE(TypeCoercer::defaults().coerce(INTEGER(), "VARCHAR"));
+}
+
 TEST(TypeCoercerTest, integerToDecimalLeastCommonSuperType) {
   VELOX_ASSERT_EQ_TYPES(
       TypeCoercer::defaults().leastCommonSuperType(INTEGER(), DECIMAL(38, 4)),

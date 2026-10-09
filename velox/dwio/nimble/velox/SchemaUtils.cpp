@@ -1286,7 +1286,7 @@ void projectHybridFlatMapStreamOffsets(
     appendProjectedStream(
         projectedStreamOffsets,
         rowOrFlatMapNullStreams,
-        sourceGroup.keyDescriptor.offset(),
+        sourceGroup.keyPresenceDescriptor.offset(),
         /*isRowOrFlatMapNullStream=*/true);
     appendProjectedStream(
         projectedStreamOffsets,

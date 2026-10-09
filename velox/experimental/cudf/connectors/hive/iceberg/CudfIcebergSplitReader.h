@@ -80,7 +80,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   rmm::device_async_resource_ref determineCudfMemoryResource() const override;
 
   // Override to apply Iceberg deletes after reading a cudf table chunk.
-  std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
+  std::optional<TableChunk> readNextChunk() override;
 
   // Clear delete readers, column injection, and the base reader state.
   void resetSplit() override;
@@ -147,12 +147,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Setup column projection to include any equality delete key columns
   // that are not already in the output projection.
   void setupEqualityColumnKeys();
-
-  // Read metadata and cache `splitRowCount_` and `fileColumnNames_`
-  void cacheSchemaFromMetadata();
-
-  // Returns the row range covered by the split.
-  std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
 
   // Adapts the data file schema to match the table schema expected by the
   // query. Classifies each output and filter-only column into one of:
@@ -258,10 +252,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Columns to inject after reading.
   std::vector<InjectedColumn> injectedColumns_;
 
-  // Whether every projected column is injected
-  bool noColumnsToRead_{false};
-  bool syntheticTableProduced_{false};
-
   // Whether the filter rejects this split entirely.
   bool skipSplit_{false};
 
@@ -273,13 +263,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Transform of the logical filter, held only when a `PushdownFilterBuilder`
   // has transformed it differently from the pushed filter.
   std::optional<TransformedFilter> transformedLogicalFilter_;
-
-  // Top-level column names and total row count from the file metadata
-  std::unordered_set<std::string> fileColumnNames_;
-
-  // Tracks the absolute row range covered by the split.
-  std::size_t baseReadOffset_{0};
-  std::size_t splitRowCount_{0};
 
   // Bitmaps for positional deletes
   BufferPtr deleteBitmap_{nullptr};

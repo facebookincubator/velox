@@ -1155,6 +1155,39 @@ std::string_view encodeWithFallback(
   }
 }
 
+// Returns the layout to cache for a stream, generalizing Constant to
+// MainlyConstant and passing every other layout through unchanged.
+//
+// A stream that is constant in its first chunk is often not constant in the
+// next. Caching Constant verbatim makes every later chunk fail the replay --
+// ConstantEncoding rejects non-constant data -- and fall back to the full
+// selection cascade, which is what the cache exists to avoid. MainlyConstant
+// covers both shapes: while the data stays constant its encode() falls back to
+// ConstantEncoding and emits byte-identical output, and once uncommon values
+// appear it absorbs them without discarding the cached layout. Both child slots
+// are left absent so each sub-stream still runs its own selection.
+template <typename T>
+EncodingLayout cacheEncodingLayout(EncodingLayout captured) {
+  // MainlyConstant is not defined for bool streams (EncodingFactory rejects
+  // it), so a constant bool stream keeps its captured layout.
+  if constexpr (std::is_same_v<T, bool>) {
+    return captured;
+  } else {
+    if (captured.encodingType() != EncodingType::Constant) {
+      return captured;
+    }
+    std::vector<std::optional<const EncodingLayout>> children;
+    children.reserve(2);
+    children.emplace_back(std::nullopt);
+    children.emplace_back(std::nullopt);
+    return EncodingLayout{
+        EncodingType::MainlyConstant,
+        /*encodingConfig=*/{},
+        CompressionType::Uncompressed,
+        std::move(children)};
+  }
+}
+
 template <typename T>
 std::string_view encodeStreamTyped(
     detail::WriterContext& context,
@@ -1198,8 +1231,8 @@ std::string_view encodeStreamTyped(
   if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
-            EncodingLayoutCapture::capture(
-                encoded, context.options().buildEncodingOptions()));
+            cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
+                encoded, context.options().buildEncodingOptions())));
   }
   return encoded;
 }
@@ -1489,6 +1522,10 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   }
   descriptor.setContext(std::make_unique<WriterStreamContext>());
   return *descriptor.context<WriterStreamContext>();
+}
+
+bool noChunking(const StreamData& streamData) {
+  return streamData.noChunking();
 }
 
 void initializeEncodingLayouts(
@@ -2250,14 +2287,17 @@ void Writer::writeColumnStats() {
   }
 
   if (context_->options().enableVectorizedStats) {
+    VectorizedFileStats::Options statsOptions{
+        .stringStatsLengthLimit =
+            context_->options().vectorizedStatsStringLengthLimit};
     VectorizedFileStats fileStats{
-        context_->columnStats(), encodingMemoryPool_.get()};
+        context_->columnStats(), encodingMemoryPool_.get(), statsOptions};
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
     if (context_->stripeStatsWriteEnabled()) {
       VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get()};
+          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
       Buffer stripeStatsBuffer{*encodingMemoryPool_};
       tabletWriter_->writeOptionalSection(
           std::string(kStripeStatsSection),
@@ -3135,8 +3175,8 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are constant, since the
-    // reader recovers the in-map state from value stream presence.
+    // When enabled, skip encoding constant in-map streams, since the reader
+    // recovers the in-map state from value stream presence.
     //
     // All-false is dropped here: the key really is absent from this stripe,
     // which is exactly what the reader concludes from two missing streams.
@@ -3177,20 +3217,31 @@ bool Writer::encodeStreamChunk(
     uint64_t minChunkSize,
     uint64_t maxChunkSize,
     bool ensureFullChunks,
+    bool lastChunk,
     Stream& encodedStream,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool,
     uint64_t& streamBytes,
     std::atomic_uint64_t& chunkBytes,
     std::atomic_uint64_t& logicalBytes) {
+  const bool chunkingDisabled = noChunking(streamData);
+  if (chunkingDisabled && !lastChunk) {
+    return false;
+  }
+
   bool writtenChunk{false};
   logicalBytes += streamData.memoryUsed();
   auto& streamChunks = encodedStream.chunks;
+  // Protected streams reach this path only at stripe close. Raising the cap
+  // to the complete buffered size makes the chunker emit at most one chunk.
+  const auto streamMaxChunkSize = chunkingDisabled
+      ? std::max(maxChunkSize, streamData.memoryUsed())
+      : maxChunkSize;
   auto chunker = getStreamChunker(
       streamData,
       StreamChunkerOptions{
           .minChunkSize = minChunkSize,
-          .maxChunkSize = maxChunkSize,
+          .maxChunkSize = streamMaxChunkSize,
           .ensureFullChunks = ensureFullChunks,
           .isFirstChunk = streamChunks.empty()});
   uint64_t encodedChunkBytes{0};
@@ -3204,6 +3255,12 @@ bool Writer::encodeStreamChunk(
   chunkBytes += encodedChunkBytes;
   // Compact erases processed stream data to reclaim memory.
   chunker->compact();
+  if (chunkingDisabled) {
+    NIMBLE_CHECK_LE(
+        streamChunks.size(),
+        1,
+        "A stream with chunking disabled produced multiple chunks.");
+  }
   logicalBytes -= streamData.memoryUsed();
   return writtenChunk;
 }
@@ -3383,6 +3440,7 @@ bool Writer::writeChunks(
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
+                    lastChunk,
                     encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
@@ -3416,6 +3474,7 @@ bool Writer::writeChunks(
                 minChunkSize,
                 maxChunkSize,
                 ensureFullChunks,
+                lastChunk,
                 encodedStreams_[offset],
                 encodingScratchBufferPool,
                 encodingBufferPool,
@@ -3573,7 +3632,8 @@ bool Writer::evaluateFlushPolicy() {
       std::vector<uint32_t> indices;
       indices.reserve(streamCount);
       for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
-        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+        if (!noChunking(*streams[streamIndex].second) &&
+            streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
           indices.push_back(streamIndex);
         }
       }
@@ -3607,8 +3667,14 @@ bool Writer::evaluateFlushPolicy() {
         // TODO(T240072104): Improve performance by bucketing the streams
         // by size (by most significant bit) instead of sorting them.
         // Only sort streams above minChunkSize.
-        std::vector<uint32_t> streamIndices(streams.size());
-        std::iota(streamIndices.begin(), streamIndices.end(), 0);
+        std::vector<uint32_t> streamIndices;
+        streamIndices.reserve(streams.size());
+        for (uint32_t streamIndex = 0; streamIndex < streams.size();
+             ++streamIndex) {
+          if (!noChunking(*streams[streamIndex].second)) {
+            streamIndices.push_back(streamIndex);
+          }
+        }
         std::sort(
             streamIndices.begin(),
             streamIndices.end(),

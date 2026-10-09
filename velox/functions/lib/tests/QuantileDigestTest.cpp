@@ -799,6 +799,54 @@ TEST_F(QuantileDigestTest, mergeWithEmpty) {
   testMergeEmpty<float>(false);
 }
 
+TEST_F(QuantileDigestTest, mergeSerializedFullRangeReal) {
+  constexpr double kAccuracy = 0.01;
+  QuantileDigest<float> first{StlAllocator<float>(allocator()), kAccuracy};
+  QuantileDigest<float> second{StlAllocator<float>(allocator()), kAccuracy};
+
+  first.add(-2.0f, 1.0);
+  first.add(1.0f, 1.0);
+  second.add(-1.0f, 1.0);
+  second.add(2.0f, 1.0);
+
+  const auto serializeDigest = [](auto& digest) {
+    std::string serialized(digest.serializedByteSize(), '\0');
+    serialized.resize(digest.serialize(serialized.data()));
+    return serialized;
+  };
+
+  auto firstSerialized = serializeDigest(first);
+  auto secondSerialized = serializeDigest(second);
+
+  QuantileDigest<float> merged{StlAllocator<float>(allocator()), kAccuracy};
+  merged.mergeSerialized(firstSerialized.data());
+  merged.mergeSerialized(secondSerialized.data());
+
+  EXPECT_DOUBLE_EQ(4.0, merged.getCount());
+  EXPECT_EQ(-2.0f, merged.getMin());
+  EXPECT_EQ(2.0f, merged.getMax());
+  EXPECT_EQ(1.0f, merged.estimateQuantile(0.5));
+}
+
+TEST_F(QuantileDigestTest, serDeChildlessFullRangeReal) {
+  // compress() folds children lighter than 1e-5 into the root, leaving a
+  // full-range root without children.
+  QuantileDigest<float> digest{StlAllocator<float>(allocator()), 0.01};
+  digest.add(-1.0f, 1.05e-5);
+  digest.add(1.0f, 1.05e-5);
+  digest.scale(0.9);
+  std::string serialized(digest.serializedByteSize(), '\0');
+  serialized.resize(digest.serialize(serialized.data()));
+
+  // Expect a childless node to decode one level lower, matching Java.
+  QuantileDigest<float> deserialized{
+      StlAllocator<float>(allocator()), serialized.data()};
+  EXPECT_DOUBLE_EQ(digest.getCount(), deserialized.getCount());
+  EXPECT_EQ(-1.0f, deserialized.getMin());
+  EXPECT_EQ(0.0f, deserialized.getMax());
+  EXPECT_EQ(0.0f, deserialized.estimateQuantile(0.5));
+}
+
 TEST_F(QuantileDigestTest, infinity) {
   const double kInf = std::numeric_limits<double>::infinity();
   const float kFInf = std::numeric_limits<float>::infinity();

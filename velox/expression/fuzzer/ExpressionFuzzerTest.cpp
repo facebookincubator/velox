@@ -76,6 +76,7 @@ using facebook::velox::fuzzer::AtTimezoneArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::InverseFCdfArgValuesGenerator;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::prestoSkippedFunctions;
@@ -166,7 +167,8 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
         {"s2_cell_parent", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_to_token", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_from_token",
-         std::make_shared<S2CellTokenArgValuesGenerator>()}};
+         std::make_shared<S2CellTokenArgValuesGenerator>()},
+        {"inverse_f_cdf", std::make_shared<InverseFCdfArgValuesGenerator>()}};
 
 const std::unordered_set<std::string> skipFunctionsLocalRunner{};
 

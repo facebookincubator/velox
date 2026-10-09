@@ -140,12 +140,6 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
-    /// When set, every stream this call reads from storage is checked against
-    /// the checksum recorded in its stripe group, and a mismatch fails the
-    /// call. Asking for this on a file that records no checksums fails the
-    /// call; a file recording a checksum type this binary cannot build is
-    /// rejected earlier, when the projector is created.
-    bool verifyStreamChecksums{false};
   };
 
   /// Request for a batch of index lookups.
@@ -240,6 +234,12 @@ class NimbleIndexProjector {
     uint64_t numProjectedRows{0};
     /// Total serialized or vector-retained output bytes.
     uint64_t numOutputBytes{0};
+    /// Projected stream bytes charged against Options::maxBytes: the running
+    /// total that decides where a byte-limited projection stops.
+    uint64_t numPlannedBytes{0};
+    /// Number of projections that stopped with stripes left to read because
+    /// numPlannedBytes reached Options::maxBytes.
+    uint32_t numMaxBytesTruncations{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
@@ -265,7 +265,8 @@ class NimbleIndexProjector {
       std::unique_ptr<DataInput> dataInput,
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<velox::io::IoStatistics> ioStats);
+      std::shared_ptr<velox::io::IoStatistics> ioStats,
+      bool verifyStreamChecksums);
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
@@ -527,9 +528,9 @@ class NimbleIndexProjector {
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
   // Verifies a stream read from storage against the checksum recorded in its
-  // stripe group. Built for any file that records a checksum type, and null
-  // only when the file records none; whether a given project() call uses it is
-  // Options::verifyStreamChecksums. Stateful, so it relies on this class being
+  // stripe group. Built only when ReaderOptions::verifyStreamChecksums() is set
+  // and the file records per-stream checksums, so null means this projector
+  // does not verify. Stateful, so it relies on this class being
   // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
   // Reused across stripes; its raw input format is fixed by the tablet.
