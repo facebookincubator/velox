@@ -40,18 +40,10 @@ std::optional<SubfieldFilterDecimalType> subfieldDecimalType(
 
   if (const auto it = decimalTypes->find(fieldName);
       it != decimalTypes->end()) {
+    const cudf::data_type storageType{it->second.type};
     VELOX_CHECK(
-        it->second.type == cudf::type_id::INT8 ||
-            it->second.type == cudf::type_id::INT16 ||
-            it->second.type == cudf::type_id::INT32 ||
-            it->second.type == cudf::type_id::INT64 ||
-            it->second.type == cudf::type_id::UINT8 ||
-            it->second.type == cudf::type_id::UINT16 ||
-            it->second.type == cudf::type_id::UINT32 ||
-            it->second.type == cudf::type_id::UINT64 ||
-            it->second.type == cudf::type_id::DECIMAL32 ||
-            it->second.type == cudf::type_id::DECIMAL64 ||
-            it->second.type == cudf::type_id::DECIMAL128,
+        cudf::is_integral_not_bool(storageType) ||
+            cudf::is_fixed_point(storageType),
         "Invalid cuDF storage type for decimal field '{}'",
         fieldName);
     return it->second;

@@ -38,7 +38,6 @@ namespace facebook::velox::cudf_velox {
 struct SubfieldFilterDecimalType {
   cudf::type_id type;
   int32_t scale;
-  bool isDecimal{true};
 };
 
 // Physical cuDF storage type and scale for each top-level decimal input field.

@@ -180,9 +180,9 @@ const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
 
 void CudfIcebergSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& runtimeStats) {
-  // Base `prepareSplit` already called `resetSplit()` through virtual
-  // dispatch, which for this class clears both the iceberg-specific state
-  // and the base reader state.
+  // Base `prepareSplitMetadata` already called `resetSplit()` through virtual
+  // dispatch, which for this class clears both the iceberg-specific state and
+  // the base reader state.
 
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
@@ -283,8 +283,8 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
     return;
   }
 
-  // A `PushdownFilterBuilder` may have rebuilt the pushed filter against the
-  // split's physical decimal types. The deferred filter runs over the assembled
+  // The pushed filter may have been rebuilt against the split's physical
+  // decimal types. The deferred filter runs over the assembled
   // table instead, so it has to come from the logical filter. Both are built
   // from the same subfield filters, so both fold the same way.
   auto* logicalFilter = subfieldFilterAst();

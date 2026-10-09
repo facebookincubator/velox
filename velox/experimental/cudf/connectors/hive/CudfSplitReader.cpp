@@ -331,15 +331,39 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
   return {startRow, numRows};
 }
 
-void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  // Reset existing split and split readers, if any
+void CudfSplitReader::prepareSplitMetadata() {
   resetSplit();
-
-  // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
+  fileMetaDatas();
+  metadataPrepared_ = true;
+}
 
-  // Perform split-specific setup.
+const cudf::io::parquet::FileMetaData& CudfSplitReader::fileMetadata() const {
+  VELOX_CHECK(
+      metadataPrepared_, "Call prepareSplitMetadata() before fileMetadata()");
+  VELOX_CHECK_EQ(
+      fileMetaData_.size(),
+      1,
+      "Expected a single Parquet footer for the split");
+  return fileMetaData_.front();
+}
+
+void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
+  VELOX_CHECK(
+      metadataPrepared_,
+      "Call prepareSplitMetadata() before setPushdownFilter()");
+  VELOX_CHECK_NOT_NULL(filter);
+  pushdownFilterExpr_ = filter;
+  hasSplitSpecificPushdownFilter_ = true;
+}
+
+void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
+  VELOX_CHECK(
+      metadataPrepared_, "Call prepareSplitMetadata() before prepareSplit()");
+  VELOX_CHECK(!splitPrepared_, "Split is already prepared");
+
   prepareSplitInternal(runtimeStats);
+  splitPrepared_ = true;
 
   // Update runtime stats.
   if (isSplitSkipped()) {
@@ -512,6 +536,8 @@ void CudfSplitReader::resetSplit() {
   splitRowCount_ = 0;
   readAllFileColumns_ = false;
   noColumnsToRead_ = false;
+  metadataPrepared_ = false;
+  splitPrepared_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -696,18 +722,6 @@ void CudfSplitReader::fileMetaDatas() {
       fileMetaData_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
-
-  if (pushdownFilterBuilder_) {
-    VELOX_CHECK_EQ(
-        fileMetaData_.size(),
-        1,
-        "Split-specific pushdown filters require exactly one Parquet metadata");
-    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
-    VELOX_CHECK_NOT_NULL(
-        pushdownFilterExpr_,
-        "Split-specific pushdown filter builder must return an expression");
-    hasSplitSpecificPushdownFilter_ = true;
-  }
 }
 
 void CudfSplitReader::createCudfReader() {

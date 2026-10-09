@@ -84,11 +84,12 @@ class SubfieldFilterAstTest : public OperatorTestBase {
         auto columns = cudfTable->release();
         for (const auto& [name, decimalType] : *decimalTypes) {
           const auto index = rowType->getChildIdx(name);
+          const cudf::data_type storageType{decimalType.type};
           columns[index] = cudf::cast(
               columns[index]->view(),
-              decimalType.isDecimal
+              cudf::is_fixed_point(storageType)
                   ? cudf::data_type{decimalType.type, -decimalType.scale}
-                  : cudf::data_type{decimalType.type},
+                  : storageType,
               stream,
               mr);
         }
@@ -194,8 +195,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       const RowVectorPtr& vector,
       const common::Filter& filter,
       cudf::type_id physicalType,
-      std::optional<int32_t> fileScale = std::nullopt,
-      bool isDecimal = true) {
+      std::optional<int32_t> fileScale = std::nullopt) {
     SCOPED_TRACE(filter.toString());
     const auto& rowType = vector->rowType();
     const auto& name = rowType->nameOf(0);
@@ -204,14 +204,14 @@ class SubfieldFilterAstTest : public OperatorTestBase {
         getDecimalPrecisionScale(*rowType->childAt(0));
     const auto physicalScale = fileScale.value_or(logicalScale);
     const SubfieldFilterDecimalTypes decimalTypes{
-        {name, {physicalType, physicalScale, isDecimal}}};
+        {name, {physicalType, physicalScale}}};
     cudf::ast::tree tree;
     std::vector<std::unique_ptr<cudf::scalar>> scalars;
     const auto& expr = createAstFromSubfieldFilter(
         subfield, filter, tree, scalars, rowType, &decimalTypes);
     for (const auto& scalar : scalars) {
       EXPECT_EQ(scalar->type().id(), physicalType);
-      if (isDecimal) {
+      if (cudf::is_fixed_point(cudf::data_type{physicalType})) {
         EXPECT_EQ(scalar->type().scale(), numeric::scale_type{-physicalScale});
       }
     }
@@ -808,7 +808,7 @@ TEST_F(SubfieldFilterAstTest, decimalRawIntegerStorage) {
   const auto vector = makeRowVector({makeFlatVector<int64_t>(
       {-30000, -20000, -10000, 0, 10000, 20000, 30000}, DECIMAL(10, 4))});
   auto check = [&](const common::Filter& filter, cudf::type_id type) {
-    assertPhysicalFilter(vector, filter, type, 0, /*isDecimal=*/false);
+    assertPhysicalFilter(vector, filter, type, 0);
   };
 
   for (const auto type : {cudf::type_id::INT32, cudf::type_id::INT64}) {
@@ -827,8 +827,7 @@ TEST_F(SubfieldFilterAstTest, decimalRawIntegerStorage) {
       decimal32Vector,
       common::BigintRange(3000000000, 3000000000, false),
       cudf::type_id::INT32,
-      0,
-      /*isDecimal=*/false);
+      0);
 
   const auto narrowVector =
       makeRowVector({makeFlatVector<int64_t>({-100, 0, 100}, DECIMAL(10, 0))});
@@ -843,11 +842,7 @@ TEST_F(SubfieldFilterAstTest, decimalRawIntegerStorage) {
         type == cudf::type_id::INT8 || type == cudf::type_id::INT16 ? -100
                                                                     : 100;
     assertPhysicalFilter(
-        narrowVector,
-        common::BigintRange(value, value, false),
-        type,
-        0,
-        /*isDecimal=*/false);
+        narrowVector, common::BigintRange(value, value, false), type, 0);
   }
 }
 

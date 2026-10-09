@@ -260,8 +260,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // nothing can be pushed.
   std::optional<TransformedFilter> transformedPushdownFilter_;
 
-  // Transform of the logical filter, held only when a `PushdownFilterBuilder`
-  // has transformed it differently from the pushed filter.
+  // Transform of the logical filter, held only when the split-specific filter
+  // is transformed differently from the pushed filter.
   std::optional<TransformedFilter> transformedLogicalFilter_;
 
   // Bitmaps for positional deletes
