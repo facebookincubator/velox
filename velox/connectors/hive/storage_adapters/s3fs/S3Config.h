@@ -89,6 +89,7 @@ class S3Config {
     kCredentialsProvider,
     kIMDSEnabled,
     kMultipartMinPartSize,
+    kUseFips,
     kEnd
   };
 
@@ -130,6 +131,7 @@ class S3Config {
             {Keys::kIMDSEnabled, std::make_pair("aws-imds-enabled", "true")},
             {Keys::kMultipartMinPartSize,
              std::make_pair("min-part-size", "10MB")},
+            {Keys::kUseFips, std::make_pair("use-fips", std::nullopt)},
         };
     return config;
   }
@@ -253,6 +255,16 @@ class S3Config {
   bool useProxyFromEnv() const {
     auto value = config_.find(Keys::kUseProxyFromEnv)->second.value();
     return folly::to<bool>(value);
+  }
+
+  /// Whether to use AWS FIPS endpoints. Unset means the AWS_USE_FIPS_ENDPOINT
+  /// environment variable decides.
+  std::optional<bool> useFips() const {
+    auto value = config_.find(Keys::kUseFips)->second;
+    if (value.has_value()) {
+      return folly::to<bool>(value.value());
+    }
+    return std::nullopt;
   }
 
   std::string payloadSigningPolicy() const {

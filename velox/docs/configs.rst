@@ -1286,6 +1286,11 @@ key set with the ``s3.`` prefix takes precedence over the same key set with the
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
+   * - ``s3.use-fips``
+     - bool
+     -
+     - Use AWS FIPS endpoints. When unset, the ``AWS_USE_FIPS_ENDPOINT`` environment variable decides. Cannot be combined
+       with ``s3.endpoint``. See `FIPS Endpoints`_.
    * - ``s3.connect-timeout``
      - string
      -
@@ -1340,6 +1345,17 @@ explicitly set will override the base ``s3.`` values. The deprecated
 ``hive.s3.`` prefix follows the same rules (for example
 ``hive.s3.bucket.velox.endpoint``).
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
+FIPS Endpoints
+""""""""""""""
+``s3.use-fips`` sets ``useFIPS`` on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+``s3.iam-role``. When unset, the environment variable ``AWS_USE_FIPS_ENDPOINT``
+decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
+fail with "A custom endpoint cannot be combined with FIPS". Set
+``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
+set to the STS FIPS endpoint.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
