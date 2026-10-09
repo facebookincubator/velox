@@ -433,8 +433,15 @@ Mathematical Functions
     wraps to the input type's two's-complement representation.
 
     Integral inputs accept every INTEGER scale, including a scale column.
-    Extremely negative scales return zero rather than raising errors due to JVM
-    BigDecimal limits.
+    Column scales are a native extension: Spark 4.1 requires a foldable scale
+    expression, which need not be a literal.
+
+    Extreme-scale behavior is not fully compatible with Spark 4.1. For BIGINT
+    input ``25`` and scale ``-2147483648``, Velox returns zero whereas Spark's
+    interpreted and generated evaluators throw. At scale ``2147483647``, Velox
+    and Spark's generated evaluator return ``25``, but Spark's interpreted
+    evaluator throws. Velox does not reproduce JVM BigDecimal/BigInteger
+    scale and resource limits.
 
 .. spark:function:: sec(x) -> double
 
