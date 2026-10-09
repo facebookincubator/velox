@@ -168,29 +168,30 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // create a CudfVector directly with an empty table, preserving the
   // logical row count. This mirrors the zero-column handling in
   // CudfToVelox::doGetOutput().
+  RowVectorPtr output;
   if (input->childrenSize() == 0) {
     auto emptyTable = std::make_unique<cudf::table>();
-    return std::make_shared<CudfVector>(
+    output = std::make_shared<CudfVector>(
         input->pool(),
         outputType_,
         input->size(),
         std::move(emptyTable),
         stream);
+  } else {
+    // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
+    // internally before releasing Arrow host buffers, so no additional sync
+    // is needed here.
+    auto tbl = with_arrow::toCudfTable(
+        input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
+
+    VELOX_CHECK_NOT_NULL(tbl);
+
+    // Return a CudfVector that owns the cudf table
+    const auto size = tbl->num_rows();
+
+    output = std::make_shared<CudfVector>(
+        input->pool(), outputType_, size, std::move(tbl), stream);
   }
-
-  // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
-  // internally before releasing Arrow host buffers, so no additional sync
-  // is needed here.
-  auto tbl = with_arrow::toCudfTable(
-      input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
-
-  VELOX_CHECK_NOT_NULL(tbl);
-
-  // Return a CudfVector that owns the cudf table
-  const auto size = tbl->num_rows();
-
-  RowVectorPtr output = std::make_shared<CudfVector>(
-      input->pool(), outputType_, size, std::move(tbl), stream);
   common::testutil::TestValue::adjust(
       "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput", &output);
   return output;

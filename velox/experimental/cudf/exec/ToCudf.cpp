@@ -169,9 +169,15 @@ bool CompileState::compile(bool allowCpuFallback) {
       const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
       if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
         // CudfFromVelox converts the batches of the CPU operator before
-        // 'oper', so it takes that operator's output type. 'planNode'
-        // describes what 'oper' produces, and for a join build its input is
-        // another source.
+        // 'oper', so it takes that operator's output type. That operator may
+        // already have been replaced, so its plan node comes from 'opProps',
+        // which was filled before any replacement.
+        //
+        // 'planNode' cannot provide the type: its output type is what 'oper'
+        // produces, and its first source is not always the input of 'oper'.
+        // For HashBuild, 'planNode' is the HashJoinNode, whose output type is
+        // the join result and whose first source is the probe side. The
+        // build-side batches come from the second source.
         replaceOp.push_back(
             std::make_unique<CudfFromVelox>(
                 id,
