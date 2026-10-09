@@ -113,6 +113,32 @@ TEST(ConfigTests, writerOptionsDefaultConfig) {
   ASSERT_TRUE(getConfig(config, Config::LINEAR_STRIPE_SIZE_HEURISTICS));
 }
 
+TEST(ConfigTests, writerOptionsMerge) {
+  constexpr uint64_t kWriterStripeSize = 32 * 1024 * 1024;
+  auto writerConfig = std::make_shared<Config>();
+  writerConfig->set(Config::STRIPE_SIZE, kWriterStripeSize);
+  DwrfWriterOptions writerOptions(writerConfig);
+  DwrfWriterFactory factory;
+
+  const facebook::velox::config::ConfigBase empty({});
+  auto configOptions = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
+      factory.createFormatOptions(empty, empty));
+  writerOptions.merge(*configOptions);
+  EXPECT_EQ(
+      getConfig(writerOptions.config, Config::STRIPE_SIZE), kWriterStripeSize);
+
+  const facebook::velox::config::ConfigBase session(
+      std::unordered_map<std::string, std::string>{
+          {Config::kOrcWriterMaxStripeSizeSession, "100MB"},
+      });
+  configOptions = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
+      factory.createFormatOptions(empty, session));
+  writerOptions.merge(*configOptions);
+  EXPECT_EQ(
+      getConfig(writerOptions.config, Config::STRIPE_SIZE),
+      static_cast<uint64_t>(100) * 1024 * 1024);
+}
+
 TEST(ConfigTests, writerOptionsOverrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {Config::kOrcWriterMaxStripeSize, "100MB"},
