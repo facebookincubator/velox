@@ -82,28 +82,28 @@ static_assert(
     1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
         (int128_t)100);
 
-/// 10^0 through 10^kMaxLongDecimalPrecision. A struct, so that the device copy
-/// below can be initialized from it.
+#ifdef __CUDACC__
+/// 10^0 through 10^kMaxLongDecimalPrecision for device code. A struct, because
+/// device code cannot call std::array::operator[].
 struct DecimalPowersOfTen {
   int128_t values[kMaxLongDecimalPrecision + 1];
 };
 
-inline constexpr DecimalPowersOfTen kDecimalPowersOfTen = [] {
+constexpr DecimalPowersOfTen makeDecimalPowersOfTen() {
   DecimalPowersOfTen table{};
   for (uint8_t i = 0; i <= kMaxLongDecimalPrecision; ++i) {
     table.values[i] = decimalPowerOfTen(i);
   }
   return table;
-}();
+}
 
-#ifdef __CUDACC__
-/// The device's copy of kDecimalPowersOfTen, in global memory. The driver loads
-/// it once with its module, not on each launch. `static` gives every CUDA
-/// translation unit its own 624-byte copy, and is the one form that links
+/// The device's copy of the powers-of-ten table, in global memory. The driver
+/// loads it once with its module, not on each launch. `static` gives every
+/// CUDA translation unit its own 624-byte copy, and is the one form that links
 /// correctly both with and without -rdc: a static __constant__ table reads
 /// zeros under -rdc, and an inline or extern one only links with it.
 static __device__ const DecimalPowersOfTen kDeviceDecimalPowersOfTen =
-    kDecimalPowersOfTen;
+    makeDecimalPowersOfTen();
 #endif
 
 } // namespace detail
@@ -125,9 +125,16 @@ struct DecimalArithmetic {
 #endif
   }
 
-  /// kPowersOfTen[i] == 10^i. Host-only: device code uses powerOfTen().
+  /// kPowersOfTen[i] == 10^i, derived from detail::decimalPowerOfTen() so the
+  /// literals are written once. Host-only: device code uses powerOfTen().
   static constexpr std::array<int128_t, kMaxLongPrecision + 1> kPowersOfTen =
-      std::to_array(detail::kDecimalPowersOfTen.values);
+      [] {
+        std::array<int128_t, kMaxLongPrecision + 1> table{};
+        for (uint8_t i = 0; i <= kMaxLongPrecision; ++i) {
+          table[i] = detail::decimalPowerOfTen(i);
+        }
+        return table;
+      }();
 
   static constexpr int128_t kLongDecimalMin =
       -detail::decimalPowerOfTen(kMaxLongPrecision) + 1;
