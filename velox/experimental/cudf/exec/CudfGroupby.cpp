@@ -139,11 +139,13 @@ using StreamingGroupbyMaxAggregator = SimpleStreamingGroupbyAggregator<
 using StreamingGroupbyCountAggregator = SimpleStreamingGroupbyAggregator<
     &cudf::make_sum_aggregation<cudf::groupby_aggregation>>;
 
-struct StreamingGroupbyDecimalSumAggregator final : StreamingGroupbyAggregator {
-  StreamingGroupbyDecimalSumAggregator(
+struct StreamingGroupbyDecimalAggregator final : StreamingGroupbyAggregator {
+  StreamingGroupbyDecimalAggregator(
       column_index_t inputIndex,
-      TypePtr resultType)
-      : StreamingGroupbyAggregator(inputIndex, std::move(resultType)) {}
+      TypePtr resultType,
+      bool average)
+      : StreamingGroupbyAggregator(inputIndex, std::move(resultType)),
+        average_(average) {}
 
   void prepareInput(
       cudf::table_view input,
@@ -155,10 +157,15 @@ struct StreamingGroupbyDecimalSumAggregator final : StreamingGroupbyAggregator {
     decodedSum_ = std::move(decoded.sum);
     preparedInputIndex_ = preparedColumns.size();
     preparedColumns.push_back(decodedSum_->view());
+    if (average_) {
+      decodedCount_ = std::move(decoded.count);
+      preparedColumns.push_back(decodedCount_->view());
+    }
   }
 
   void releaseInput() override {
     decodedSum_.reset();
+    decodedCount_.reset();
   }
 
   void addStreamingRequest(
@@ -170,20 +177,36 @@ struct StreamingGroupbyDecimalSumAggregator final : StreamingGroupbyAggregator {
         cudf::groupby::streaming_aggregation_request{
             static_cast<cudf::size_type>(*preparedInputIndex_),
             cudf::make_sum_aggregation<cudf::groupby_aggregation>()});
+    if (average_) {
+      requests.push_back(
+          cudf::groupby::streaming_aggregation_request{
+              static_cast<cudf::size_type>(*preparedInputIndex_ + 1),
+              cudf::make_sum_aggregation<cudf::groupby_aggregation>()});
+    }
   }
 
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
-    return castStreamingOutput(
-        std::move(results[resultIndex_].results[0]), resultType, stream, mr);
+    auto sum = std::move(results[resultIndex_].results[0]);
+    if (average_) {
+      return finalizeDecimalAverage(
+          std::move(sum),
+          std::move(results[resultIndex_ + 1].results[0]),
+          resultType,
+          stream,
+          mr);
+    }
+    return castStreamingOutput(std::move(sum), resultType, stream, mr);
   }
 
  private:
+  const bool average_;
   std::optional<column_index_t> preparedInputIndex_;
   size_t resultIndex_{0};
   std::unique_ptr<cudf::column> decodedSum_;
+  std::unique_ptr<cudf::column> decodedCount_;
 };
 
 struct StreamingGroupbyAverageAggregator final : StreamingGroupbyAggregator {
@@ -1068,14 +1091,21 @@ std::unique_ptr<StreamingGroupbyAggregator> createStreamingGroupbyAggregator(
 
   const auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (aggregate.isDecimalAggregate) {
-    if (aggregate.kind != prefix + "sum" ||
-        !cudf::groupby::is_streaming_groupby_supported(
-            cudf_velox::veloxToCudfDataType(resultType),
-            cudf::aggregation::SUM)) {
+    const bool average = aggregate.kind == prefix + "avg";
+    if (aggregate.kind != prefix + "sum" && !average) {
       return nullptr;
     }
-    return std::make_unique<StreamingGroupbyDecimalSumAggregator>(
-        inputIndex, resultType);
+    const auto scale = getDecimalPrecisionScale(*resultType).second;
+    if (!cudf::groupby::is_streaming_groupby_supported(
+            cudf::data_type{cudf::type_id::DECIMAL128, -scale},
+            cudf::aggregation::SUM) ||
+        (average &&
+         !cudf::groupby::is_streaming_groupby_supported(
+             cudf::data_type{cudf::type_id::INT64}, cudf::aggregation::SUM))) {
+      return nullptr;
+    }
+    return std::make_unique<StreamingGroupbyDecimalAggregator>(
+        inputIndex, resultType, average);
   }
   if (aggregate.kind == prefix + "sum") {
     if (!cudf::groupby::is_streaming_groupby_supported(

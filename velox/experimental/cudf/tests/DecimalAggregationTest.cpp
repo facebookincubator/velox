@@ -815,7 +815,7 @@ TEST_F(CudfDecimalTest, decimalAvgIntermediateVarbinaryNullGroup) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfDecimalTest, streamingDecimalSum) {
+TEST_F(CudfDecimalTest, streamingDecimalSumAndAvg) {
   auto& config = CudfConfig::getInstance();
   const auto savedEnabled = config.streamingGroupbyEnabled;
   const auto savedMultiplier = config.streamingGroupbyCapacityMultiplier;
@@ -845,7 +845,12 @@ TEST_F(CudfDecimalTest, streamingDecimalSum) {
         makeNullableFlatVector<int128_t>(
             {1200, -2400, std::nullopt, 0}, DECIMAL(38, 2))};
     if (includeAvg) {
+      aggregates.push_back("avg(c1)");
       aggregates.push_back("avg(c2)");
+      expectedColumns.push_back(
+          makeNullableFlatVector<int64_t>(
+              {999'999'999'999'999'999, -200, std::nullopt, 0},
+              DECIMAL(18, 2)));
       expectedColumns.push_back(
           makeNullableFlatVector<int128_t>(
               {100, -200, std::nullopt, 0}, DECIMAL(20, 2)));
@@ -862,14 +867,59 @@ TEST_F(CudfDecimalTest, streamingDecimalSum) {
                     .assertResults(makeRowVector(expectedColumns));
     const auto stats = exec::toPlanStats(task->taskStats());
     const auto& customStats = stats.at(plan->id()).customStats;
-    EXPECT_EQ(
-        customStats.count(std::string{kStreamingGroupbyUsedStat}),
-        includeAvg ? 0 : 1);
-    if (!includeAvg) {
-      EXPECT_GT(
-          customStats.at(std::string{kStreamingGroupbyRebuildsStat}).sum, 0);
-    }
+    EXPECT_GT(customStats.at(std::string{kStreamingGroupbyUsedStat}).sum, 0);
+    EXPECT_GT(
+        customStats.at(std::string{kStreamingGroupbyRebuildsStat}).sum, 0);
   }
+}
+
+TEST_F(CudfDecimalTest, streamingDecimalAvgUnequalCounts) {
+  auto& config = CudfConfig::getInstance();
+  const auto savedEnabled = config.streamingGroupbyEnabled;
+  config.streamingGroupbyEnabled = true;
+  SCOPE_EXIT {
+    config.streamingGroupbyEnabled = savedEnabled;
+  };
+  auto keys = makeFlatVector<int32_t>({0, 0, 1, 1, 2, 2});
+  auto first = makeRowVector({
+      keys,
+      makeNullableFlatVector<int64_t>(
+          {101, 102, -101, -102, std::nullopt, std::nullopt}, DECIMAL(12, 2)),
+      makeNullableFlatVector<int128_t>(
+          {101, 102, -101, -102, std::nullopt, std::nullopt}, DECIMAL(20, 2)),
+  });
+  auto second = makeRowVector({
+      keys,
+      makeNullableFlatVector<int64_t>(
+          {104, std::nullopt, -104, std::nullopt, std::nullopt, std::nullopt},
+          DECIMAL(12, 2)),
+      makeNullableFlatVector<int128_t>(
+          {104, std::nullopt, -104, std::nullopt, std::nullopt, std::nullopt},
+          DECIMAL(20, 2)),
+  });
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2}),
+      makeNullableFlatVector<int64_t>(
+          {102, -102, std::nullopt}, DECIMAL(12, 2)),
+      makeNullableFlatVector<int128_t>(
+          {102, -102, std::nullopt}, DECIMAL(20, 2)),
+  });
+  auto plan = exec::test::PlanBuilder()
+                  .values({first, second})
+                  .partialAggregation({"c0"}, {"avg(c1)", "avg(c2)"})
+                  .finalAggregation()
+                  .planNode();
+  auto task = exec::test::AssertQueryBuilder(plan)
+                  .maxDrivers(1)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, 6)
+                  .config(core::QueryConfig::kMaxPartialAggregationMemory, 1)
+                  .assertResults(expected);
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_GT(
+      stats.at(plan->id())
+          .customStats.at(std::string{kStreamingGroupbyUsedStat})
+          .sum,
+      0);
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
