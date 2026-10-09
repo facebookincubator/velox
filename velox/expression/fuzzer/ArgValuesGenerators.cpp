@@ -642,6 +642,8 @@ std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
   }
   return inputExpressions;
 }
+
+#ifdef VELOX_ENABLE_GEO
 namespace {
 
 // Generates a random valid S2 cell ID.
@@ -704,6 +706,7 @@ std::vector<core::TypedExprPtr> S2CellTokenArgValuesGenerator::generate(
 
   return inputExpressions;
 }
+#endif // VELOX_ENABLE_GEO
 
 std::vector<core::TypedExprPtr> InverseFCdfArgValuesGenerator::generate(
     const CallableSignature& signature,
