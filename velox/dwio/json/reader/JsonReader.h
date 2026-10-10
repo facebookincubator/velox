@@ -1,0 +1,262 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <string>
+#include <unordered_map>
+
+#include "velox/buffer/Buffer.h"
+
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Reader.h"
+#include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/common/compression/Compression.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
+
+namespace facebook::velox::json {
+
+/// Shared state for a JSON file between JsonReader and the JsonRowReader
+/// instances it spawns. Holds the input stream, schema, and SerDe options
+/// so they are not duplicated across readers.
+struct FileContents {
+  FileContents(
+      memory::MemoryPool& pool,
+      std::shared_ptr<const RowType> schema,
+      dwio::common::JsonSerDeOptions serDeOptions);
+
+  /// Memory pool used for vector allocations during reads.
+  memory::MemoryPool& pool;
+
+  /// Top-level row schema requested by the caller. JSON has no embedded
+  /// schema; this comes from the connector.
+  const std::shared_ptr<const RowType> schema;
+
+  /// SerDe options controlling parse behavior, including the Joda-style
+  /// format strings used to parse DATE and TIMESTAMP columns.
+  dwio::common::JsonSerDeOptions serDeOptions;
+
+  /// Formatter compiled once from serDeOptions.dateFormat, reused across
+  /// rows to parse DATE columns. simdjson hands us the JSON string; this
+  /// turns it into days since the epoch.
+  std::shared_ptr<functions::DateTimeFormatter> dateFormatter;
+
+  /// Formatter compiled once from serDeOptions.timestampFormat, reused
+  /// across rows to parse TIMESTAMP columns.
+  std::shared_ptr<functions::DateTimeFormatter> timestampFormatter;
+
+  /// Byte stream for the file. Owned here so JsonRowReader can read from it
+  /// without taking ownership. May hold compressed bytes; see compression.
+  std::unique_ptr<dwio::common::BufferedInput> input;
+
+  /// Compression codec inferred once from the file name extension (.gz,
+  /// .deflate, .zst). JSON Lines files are decompressed whole at row-reader
+  /// construction; they are not byte-addressable, so a compressed file cannot
+  /// be split (the first split reads it all, the rest read nothing).
+  common::CompressionKind compression{
+      common::CompressionKind::CompressionKind_NONE};
+
+  /// Format-specific decompression options (e.g. zlib window bits) paired with
+  /// compression. Empty for uncompressed files.
+  dwio::common::compression::CompressionOptions compressionOptions{};
+
+  /// For every ROW type reachable from the schema (the top-level row and
+  /// any ROW nested inside ARRAY elements, MAP values, or other ROWs), maps
+  /// its lowercased field names to child indices, keyed by RowType identity.
+  /// Built once at construction; reused across rows. The iterate-once dispatch
+  /// pattern requires a fast name
+  /// lookup because simdjson On-Demand is forward-only and values cannot be
+  /// stashed for later association with a column.
+  std::unordered_map<const RowType*, std::unordered_map<std::string, uint32_t>>
+      fieldIndexes;
+};
+
+/// Reader for the JSON file format (JSON Lines, matching Hive 4.0.0
+/// org.apache.hadoop.hive.serde2.JsonSerDe and its HiveJsonReader).
+/// Constructs JsonRowReader instances that parse records out of the underlying
+/// stream.
+///
+/// The reference implementation is specifically the serde2 SerDe, not the
+/// legacy org.apache.hive.hcatalog.data.JsonSerDe. Through Hive 3.1 the two
+/// differ on type mismatch: HCatalog's reads the token stream with Jackson's
+/// strict numeric accessors, which throw when a column's JSON value has the
+/// wrong token type, whereas serde2's builds a Jackson document and coerces
+/// through JsonNode.asLong()/asBoolean()/asText(), which fall back to a default
+/// instead of throwing. (From Hive 4.0.0 the HCatalog class is a thin wrapper
+/// that delegates to serde2, so both SerDe names behave the same there.) This
+/// reader follows serde2: a leaf whose JSON type does not match its column type
+/// coerces silently (a non-numeric string into BIGINT becomes 0, and a DECIMAL
+/// that has no such default value becomes NULL), and only a container-shape
+/// mismatch — a scalar or the wrong container where ARRAY, MAP, or ROW is
+/// declared — is an error. There is no lenient mode that skips bad records;
+/// every error that is raised throws.
+///
+/// The pin to 4.0.0 matters: Hive has since changed the BOOLEAN and BINARY leaf
+/// rules on its development branch. Divergences are tracked against 4.0.0.
+///
+/// Known v1 divergence: VARCHAR-formatted JSON numbers may differ in exact
+/// string form from the reference for edge cases involving trailing zeros and
+/// scientific notation. The reference stringifies a JSON float through
+/// JsonNode.asText() on a DoubleNode, i.e. Java's String.valueOf(double), so
+/// 1e3 reads back as "1000.0"; v1 emits the original lexeme. The semantic
+/// numeric value is preserved; only the textual representation may diverge.
+class JsonReader : public dwio::common::Reader {
+ public:
+  JsonReader(
+      const dwio::common::ReaderOptions& options,
+      std::unique_ptr<dwio::common::BufferedInput> input);
+
+  /// JSON Lines has no record count metadata; always returns nullopt.
+  std::optional<uint64_t> numberOfRows() const override;
+
+  /// JSON Lines has no per-column statistics; always returns nullptr.
+  std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
+      uint32_t index) const override;
+
+  /// Returns the schema supplied via ReaderOptions::fileSchema().
+  const RowTypePtr& rowType() const override;
+
+  /// Returns the schema with node identifiers attached.
+  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
+      const override;
+
+  /// Creates a row reader for the given range and column selection.
+  std::unique_ptr<dwio::common::RowReader> createRowReader(
+      const dwio::common::RowReaderOptions& options) const override;
+
+ private:
+  // Reader-level options (memory pool, file schema, SerDe options).
+  dwio::common::ReaderOptions options_;
+
+  // Lazily computed schema with node identifiers.
+  mutable std::shared_ptr<const dwio::common::TypeWithId> typeWithId_;
+
+  // Per-file shared state passed to every row reader this reader creates.
+  std::shared_ptr<FileContents> contents_;
+};
+
+/// Row reader for the JSON file format. Reads one JSON object per line,
+/// dispatching each field to the matching column via the schema field
+/// index. The whole file is loaded into memory at construction. Reads are
+/// split-aware: a row reader created for the byte range [offset, offset +
+/// length) processes exactly the records whose starting byte falls in that
+/// range, so concatenating the output of splits that tile the file
+/// reproduces a whole-file read with no dropped or duplicated records.
+class JsonRowReader : public dwio::common::RowReader {
+ public:
+  JsonRowReader(
+      std::shared_ptr<FileContents> contents,
+      const dwio::common::RowReaderOptions& options);
+
+  /// Reads up to size records from this reader's split into result.
+  ///
+  /// Column projection and filter pushdown are not implemented. Projection is
+  /// ignored: every column of the file schema is materialized regardless of
+  /// what the scan spec selects, which a caller can see in the result's type. A
+  /// filter or a row-level delete cannot be ignored the same way — the rows it
+  /// asked to remove would come back with nothing to say the request was
+  /// dropped — so a scan spec carrying a filter is refused when the reader is
+  /// built, and a mutation carrying deletions throws here. Callers needing
+  /// either must apply them above this reader.
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& result,
+      const dwio::common::Mutation* mutation = nullptr) override;
+
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
+
+  void updateRuntimeStats(
+      dwio::common::RuntimeStatistics& stats) const override;
+
+  void resetFilterCaches() override;
+
+  std::optional<size_t> estimatedRowSize() const override;
+
+ private:
+  // True once this split is exhausted: past the end of the file, or the next
+  // record would start beyond the split boundary. Note '>' rather than '>=':
+  // a record starting exactly at splitEnd_ is still read in full here, and
+  // the next split skips it via the constructor's first-line skip.
+  bool atSplitEnd() const {
+    return pos_ >= fileLength_ || pos_ > splitEnd_;
+  }
+
+  // Reads the next newline-terminated line from the file buffer into
+  // lineBuffer_, padded with SIMDJSON_PADDING zero bytes for safe
+  // simdjson parsing. Returns false when there are no more lines.
+  bool readNextLine();
+
+  // Parses lineBuffer_ as a single JSON object and writes its fields
+  // into the corresponding columns of row at rowIndex. Fields not in
+  // the schema are silently ignored; fields in the schema but absent
+  // from the JSON object remain NULL. Wraps parseRecord so any parse
+  // error is reported with the record's byte offset.
+  void writeRow(RowVector& row, vector_size_t rowIndex);
+
+  // Parses and dispatches the record in lineBuffer_ into row at rowIndex,
+  // throwing a VeloxUserError (without location) on any malformed input.
+  void parseRecord(RowVector& row, vector_size_t rowIndex);
+
+  // Per-file shared state (input stream, schema, options).
+  const std::shared_ptr<FileContents> contents_;
+
+  // Caller-supplied row reader options (range, selector, scan spec).
+  dwio::common::RowReaderOptions options_;
+
+  // Entire file contents loaded at construction, allocated from the memory
+  // pool so bytes are accounted. Reads are restricted to this reader's split
+  // via splitStart_ and splitEnd_ below.
+  BufferPtr fileBuffer_;
+
+  // Length of valid bytes in fileBuffer_. fileBuffer_ has additional
+  // SIMDJSON_PADDING bytes of zeroes after fileLength_ so the last
+  // line can be parsed in place.
+  size_t fileLength_{0};
+
+  // First byte of this reader's split (RowReaderOptions::offset()). When
+  // nonzero, the record straddling this offset belongs to the previous
+  // split, so the constructor skips it by scanning forward to the byte
+  // after the next newline.
+  size_t splitStart_{0};
+
+  // One past the last byte this reader claims (RowReaderOptions::limit(),
+  // i.e. offset + length saturated). A record is read while its starting
+  // byte is <= splitEnd_, so the record straddling the boundary is read
+  // in full here and skipped by the next split. Matches the Presto/Hive
+  // line-split convention (see TextReader).
+  size_t splitEnd_{0};
+
+  // Current read offset into fileBuffer_. Records start at this position.
+  size_t pos_{0};
+
+  // Byte offset into the file (decompressed bytes, for a compressed file) at
+  // which the line currently held in lineBuffer_ begins. Used to locate parse
+  // errors; line numbers are ambiguous under splits, so errors report the byte
+  // offset instead.
+  size_t recordStartOffset_{0};
+
+  // Reusable padded buffer holding the current line. Sized to fit the
+  // longest line seen so far plus SIMDJSON_PADDING.
+  std::string lineBuffer_;
+
+  // Length of valid line content in lineBuffer_ (excluding padding).
+  size_t lineLength_{0};
+};
+
+} // namespace facebook::velox::json
