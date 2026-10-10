@@ -17,7 +17,7 @@
 #pragma once
 
 #include <folly/init/Init.h>
-#include <velox/common/base/VeloxException.h>
+#include "velox/common/base/VeloxException.h"
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"

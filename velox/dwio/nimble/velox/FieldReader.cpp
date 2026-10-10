@@ -15,10 +15,10 @@
  */
 #include "velox/dwio/nimble/velox/FieldReader.h"
 
-#include <velox/type/StringView.h>
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include "velox/type/StringView.h"
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"

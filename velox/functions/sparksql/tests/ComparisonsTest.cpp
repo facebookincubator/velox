@@ -17,7 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
-#include <velox/vector/SimpleVector.h>
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {

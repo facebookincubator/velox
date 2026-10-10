@@ -17,4 +17,4 @@
 // dbgen EXTERN references get defined here.
 #define DECLARER
 
-#include <velox/tpch/gen/dbgen/include/dbgen/dss.h>
+#include "velox/tpch/gen/dbgen/include/dbgen/dss.h"

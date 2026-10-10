@@ -17,7 +17,7 @@
 
 #include <fmt/core.h>
 
-#include <velox/common/base/Exceptions.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"

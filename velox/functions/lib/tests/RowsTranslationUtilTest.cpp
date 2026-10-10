@@ -17,7 +17,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <velox/type/Type.h>
+#include "velox/type/Type.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
