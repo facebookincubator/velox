@@ -16,6 +16,7 @@
 
 #include <fmt/ranges.h>
 #include <gtest/gtest.h>
+#include <random>
 
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -265,6 +266,20 @@ TEST_F(PrefixSortTest, multipleKeys) {
     testPrefixSort({kAsc, kAsc}, data);
     testPrefixSort({kDesc, kDesc}, data);
   }
+
+  // Test 10 keys to stress the runtime fallback sort path (> 9 fixed size key
+  // words).
+  {
+    std::vector<VectorPtr> columns;
+    std::vector<CompareFlags> flags;
+    for (int32_t i = 0; i < 10; ++i) {
+      columns.push_back(
+          makeFlatVector<int64_t>({10 - i, i, 5, 2, 8, 1, 9, 3, 7, 4}));
+      flags.push_back(kAsc);
+    }
+    const auto data = makeRowVector(columns);
+    testPrefixSort(flags, data);
+  }
 }
 
 TEST_F(PrefixSortTest, fuzz) {
@@ -469,6 +484,79 @@ TEST_F(PrefixSortTest, makeSortLayoutForString) {
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes.size(), 2);
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[0], 9);
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[1], 9);
+}
+
+template <int32_t kNumWords>
+void testFixedSizeRunnerDirectHelper(memory::MemoryPool* pool) {
+  constexpr int32_t kEntryWords = kNumWords + 1; // keys + 1 row pointer word
+  constexpr uint64_t kEntrySize = kEntryWords * sizeof(uint64_t);
+
+  constexpr int32_t kNumRows = 1000;
+  std::vector<char> buffer1(kNumRows * kEntrySize);
+  std::vector<char> buffer2(kNumRows * kEntrySize);
+
+  std::mt19937_64 rng(12345);
+
+  for (int32_t i = 0; i < kNumRows; ++i) {
+    char* entry1 = buffer1.data() + i * kEntrySize;
+    char* entry2 = buffer2.data() + i * kEntrySize;
+
+    // Fill normalized key words with random values
+    for (int32_t w = 0; w < kNumWords; ++w) {
+      uint64_t val = rng();
+      reinterpret_cast<uint64_t*>(entry1)[w] = val;
+      reinterpret_cast<uint64_t*>(entry2)[w] = val;
+    }
+
+    // Fill the row address word with sequential index
+    reinterpret_cast<uint64_t*>(entry1)[kNumWords] = i;
+    reinterpret_cast<uint64_t*>(entry2)[kNumWords] = i;
+  }
+
+  // Create comparator
+  auto compareFunc = [](char* lhs, char* rhs) {
+    const auto* lhsWords = reinterpret_cast<const uint64_t*>(lhs);
+    const auto* rhsWords = reinterpret_cast<const uint64_t*>(rhs);
+    for (int32_t i = 0; i < kNumWords; ++i) {
+      if (lhsWords[i] != rhsWords[i]) {
+        return lhsWords[i] > rhsWords[i] ? 1 : -1;
+      }
+    }
+    return 0;
+  };
+
+  // 1. Sort using PrefixSortRunnerBase<kEntryWords>
+  PrefixSortRunnerBase<kEntryWords> fixedRunner(kEntrySize);
+  fixedRunner.quickSort(
+      buffer1.data(), buffer1.data() + kNumRows * kEntrySize, compareFunc);
+
+  // 2. Sort using PrefixSortRunner (runtime PrefixSortRunnerBase<0>)
+  auto swapBuffer = AlignedBuffer::allocate<char>(kEntrySize, pool);
+  PrefixSortRunner runtimeRunner(kEntrySize, swapBuffer->asMutable<char>());
+  runtimeRunner.quickSort(
+      buffer2.data(), buffer2.data() + kNumRows * kEntrySize, compareFunc);
+
+  // Verify they sorted identically
+  ASSERT_EQ(buffer1, buffer2);
+
+  // Verify they are actually sorted
+  for (int32_t i = 1; i < kNumRows; ++i) {
+    char* prev = buffer1.data() + (i - 1) * kEntrySize;
+    char* curr = buffer1.data() + i * kEntrySize;
+    ASSERT_GE(compareFunc(curr, prev), 0);
+  }
+}
+
+TEST_F(PrefixSortTest, fixedSizeRunnerDirect) {
+  testFixedSizeRunnerDirectHelper<1>(pool_.get());
+  testFixedSizeRunnerDirectHelper<2>(pool_.get());
+  testFixedSizeRunnerDirectHelper<3>(pool_.get());
+  testFixedSizeRunnerDirectHelper<4>(pool_.get());
+  testFixedSizeRunnerDirectHelper<5>(pool_.get());
+  testFixedSizeRunnerDirectHelper<6>(pool_.get());
+  testFixedSizeRunnerDirectHelper<7>(pool_.get());
+  testFixedSizeRunnerDirectHelper<8>(pool_.get());
+  testFixedSizeRunnerDirectHelper<9>(pool_.get());
 }
 
 } // namespace
