@@ -41,6 +41,7 @@
 #include <aws/s3/model/HeadObjectRequest.h>
 #include <aws/s3/model/ListObjectsRequest.h>
 #include <aws/s3/model/PutObjectRequest.h>
+#include <aws/sts/STSClient.h>
 
 namespace facebook::velox::filesystems {
 namespace {
@@ -239,6 +240,10 @@ class S3FileSystem::Impl {
         Aws::Client::RequestChecksumCalculation::WHEN_REQUIRED;
     clientConfig.checksumConfig.responseChecksumValidation =
         Aws::Client::ResponseChecksumValidation::WHEN_REQUIRED;
+    clientConfig.useFIPS = useFipsEndpoint(*s3Config_);
+    if (clientConfig.useFIPS) {
+      LOG_FIRST_N(INFO, 1) << "[S3] Using AWS FIPS endpoints.";
+    }
     if (s3Config_->endpoint().has_value()) {
       clientConfig.endpointOverride = s3Config_->endpoint().value();
     }
@@ -323,17 +328,42 @@ class S3FileSystem::Impl {
 
   // Return a default AWSCredentialsProvider.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-  getDefaultCredentialsProvider() const {
+  getDefaultCredentialsProvider(const S3Config& s3Config) const {
+    // The chain's web identity provider builds its STS endpoint in the CRT,
+    // which has no FIPS option and only honors AWS_ENDPOINT_URL_STS.
+    if (useFipsEndpoint(s3Config) &&
+        std::getenv("AWS_WEB_IDENTITY_TOKEN_FILE") != nullptr &&
+        std::getenv("AWS_ENDPOINT_URL_STS") == nullptr) {
+      LOG_FIRST_N(WARNING, 1)
+          << "[S3] FIPS is enabled but web identity credentials use the "
+             "non-FIPS STS endpoint. Set AWS_ENDPOINT_URL_STS to the "
+             "STS FIPS endpoint.";
+    }
     return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
   }
 
   // Configure and return an AWSCredentialsProvider with S3 IAM Role.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-  getIAMRoleCredentialsProvider(
-      const std::string& s3IAMRole,
-      const std::string& sessionName) const {
+  getIAMRoleCredentialsProvider(const S3Config& s3Config) const {
+    std::shared_ptr<Aws::STS::STSClient> stsClient;
+    if (useFipsEndpoint(s3Config)) {
+      // Same init values and region override as the S3 client, so both resolve
+      // the same region.
+      Aws::Client::ClientConfigurationInitValues initValues;
+      initValues.shouldDisableIMDS = !s3Config.useIMDS();
+      Aws::STS::STSClientConfiguration stsConfig(initValues);
+      if (s3Config.endpointRegion().has_value()) {
+        stsConfig.region = s3Config.endpointRegion().value();
+      }
+      stsConfig.useFIPS = true;
+      stsClient = std::make_shared<Aws::STS::STSClient>(stsConfig);
+    }
     return std::make_shared<Aws::Auth::STSAssumeRoleCredentialsProvider>(
-        awsString(s3IAMRole), awsString(sessionName));
+        awsString(s3Config.iamRole().value()),
+        awsString(s3Config.iamRoleSessionName()),
+        Aws::String(),
+        Aws::Auth::DEFAULT_CREDS_LOAD_FREQ_SECONDS,
+        stsClient);
   }
 
   // Return an AWSCredentialsProvider based on the config.
@@ -370,15 +400,14 @@ class S3FileSystem::Impl {
     }
 
     if (s3Config.useInstanceCredentials()) {
-      return getDefaultCredentialsProvider();
+      return getDefaultCredentialsProvider(s3Config);
     }
 
     if (iamRole.has_value()) {
-      return getIAMRoleCredentialsProvider(
-          iamRole.value(), s3Config.iamRoleSessionName());
+      return getIAMRoleCredentialsProvider(s3Config);
     }
 
-    return getDefaultCredentialsProvider();
+    return getDefaultCredentialsProvider(s3Config);
   }
 
   // Return a client RetryStrategy based on the config.

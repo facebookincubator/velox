@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/config/Config.h"
 
 #include "gtest/gtest.h"
 
@@ -146,6 +148,43 @@ TEST(S3UtilTest, parseAWSRegion) {
       parseAWSStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
   EXPECT_EQ(parseAWSStandardRegionName(""), std::nullopt);
   EXPECT_EQ(parseAWSStandardRegionName("velox"), std::nullopt);
+}
+
+TEST(S3UtilTest, useFipsEndpoint) {
+  const S3Config unsetConfig(
+      "bucket",
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{}));
+  unsetenv("AWS_USE_FIPS_ENDPOINT");
+  EXPECT_FALSE(useFipsEndpoint(unsetConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "", 1);
+  EXPECT_FALSE(useFipsEndpoint(unsetConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "true", 1);
+  EXPECT_TRUE(useFipsEndpoint(unsetConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "TRUE", 1);
+  EXPECT_TRUE(useFipsEndpoint(unsetConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "false", 1);
+  EXPECT_FALSE(useFipsEndpoint(unsetConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "maybe", 1);
+  VELOX_ASSERT_USER_THROW(
+      useFipsEndpoint(unsetConfig),
+      "Invalid AWS_USE_FIPS_ENDPOINT value: maybe");
+
+  // The config wins over the environment, and an invalid value is not read.
+  const S3Config disabledConfig(
+      "bucket",
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {"s3.use-fips", "false"}}));
+  EXPECT_FALSE(useFipsEndpoint(disabledConfig));
+  setenv("AWS_USE_FIPS_ENDPOINT", "false", 1);
+  const S3Config enabledConfig(
+      "bucket",
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {"s3.use-fips", "true"}}));
+  EXPECT_TRUE(useFipsEndpoint(enabledConfig));
+  unsetenv("AWS_USE_FIPS_ENDPOINT");
 }
 
 TEST(S3UtilTest, isIpExcludedFromProxy) {
