@@ -255,7 +255,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
           std::make_shared<const HiveInsertFileNameGenerator>(),
       const std::unordered_map<std::string, std::string>& storageParameters =
-          {});
+          {},
+      const bool inputSortedOnPartitionAndBucketKeys = false);
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -295,6 +296,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   bool ensureFiles() const {
     return ensureFiles_;
+  }
+
+  bool inputSortedOnPartitionAndBucketKeys() const {
+    return inputSortedOnPartitionAndBucketKeys_;
   }
 
   const std::shared_ptr<const FileNameGenerator>& fileNameGenerator() const {
@@ -346,6 +351,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::unordered_map<std::string, std::string> storageParameters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::vector<column_index_t> nonPartitionChannels_;
+  const bool inputSortedOnPartitionAndBucketKeys_;
 };
 
 /// JSON field names for the partition update object produced by each writer
