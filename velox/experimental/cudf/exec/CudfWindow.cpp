@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -241,12 +242,58 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
   return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
 }
 
+// Compute each partition's average once, then copy it back to every row.
+std::unique_ptr<cudf::column> computeFullPartitionAverage(
+    const cudf::table_view& partitionKeys,
+    cudf::column_view input,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  cudf::groupby::groupby grouper(
+      partitionKeys,
+      cudf::null_policy::INCLUDE,
+      cudf::sorted::YES,
+      std::vector<cudf::order>(
+          partitionKeys.num_columns(), cudf::order::ASCENDING),
+      std::vector<cudf::null_order>(
+          partitionKeys.num_columns(), cudf::null_order::BEFORE));
+  std::vector<cudf::groupby::aggregation_request> requests(1);
+  requests[0].values = input;
+  requests[0].aggregations.push_back(
+      cudf::make_mean_aggregation<cudf::groupby_aggregation>());
+  requests[0].aggregations.push_back(
+      cudf::make_count_aggregation<cudf::groupby_aggregation>(
+          cudf::null_policy::INCLUDE));
+  auto [keys, results] = grouper.aggregate(requests, stream, get_temp_mr());
+
+  // The presorted groupby returns groups in partition order. Repeat each mean
+  // for every row in its partition, including rows whose AVG input is null.
+  auto result = cudf::repeat(
+      cudf::table_view{{results[0].results[0]->view()}},
+      results[0].results[1]->view(),
+      stream,
+      mr);
+  return std::move(result->release()[0]);
+}
+
 bool containsCustomComparison(const TypePtr& type) {
   if (type->providesCustomComparison()) {
     return true;
   }
   for (uint32_t i = 0; i < type->size(); ++i) {
     if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ARRAY and MAP both map to cuDF lists, including when nested in structs.
+bool containsList(const TypePtr& type) {
+  if (type->isArray() || type->isMap()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    if (containsList(type->childAt(i))) {
       return true;
     }
   }
@@ -414,13 +461,6 @@ bool CudfWindow::canRunOnGPU(const core::WindowNode& windowNode) {
 bool CudfWindow::canRunOnGPU(
     const core::WindowNode& windowNode,
     std::string* reason) {
-  if (windowNode.sortingKeys().size() > 1) {
-    if (reason) {
-      *reason = "Multi-column ORDER BY requires a cuDF upgrade (follow-on PR)";
-    }
-    return false;
-  }
-
   for (const auto& key : windowNode.partitionKeys()) {
     if (containsCustomComparison(key->type())) {
       if (reason) {
@@ -455,6 +495,39 @@ bool CudfWindow::canRunOnGPU(
       if (reason) {
         *reason = fmt::format(
             "Unsupported window function: {}", func.functionCall->name());
+      }
+      return false;
+    }
+
+    // Keep the existing restriction on multi-column list-containing keys.
+    // For a single key, grouped rank scans and ungrouped rank() reject lists.
+    // Ungrouped row_number() uses a sequence, and ungrouped dense_rank()
+    // supports lists, so preserve those single-key paths.
+    const bool isRankFunction = baseName == "row_number" ||
+        baseName == "rank" || baseName == "dense_rank";
+    if (isRankFunction &&
+        (windowNode.sortingKeys().size() > 1 || baseName == "rank" ||
+         !windowNode.partitionKeys().empty())) {
+      for (const auto& key : windowNode.sortingKeys()) {
+        if (containsList(key->type())) {
+          if (reason) {
+            *reason = "Ranking with ARRAY or MAP sort keys is not supported";
+          }
+          return false;
+        }
+      }
+    }
+
+    // Without ORDER BY, grouped row_number() uses the first partition key as
+    // its values column. cuDF still validates that column's type even though
+    // this rank method does not inspect values for ties.
+    if (baseName == "row_number" && windowNode.sortingKeys().empty() &&
+        !windowNode.partitionKeys().empty() &&
+        containsList(windowNode.partitionKeys()[0]->type())) {
+      if (reason) {
+        *reason =
+            "ROW_NUMBER without ORDER BY with an ARRAY or MAP partition key "
+            "is not supported";
       }
       return false;
     }
@@ -566,13 +639,13 @@ bool CudfWindow::canRunOnGPU(
 
     const bool isFullPartition =
         isFullPartitionFrame(func, !windowNode.sortingKeys().empty());
-    const bool usesRollingFullPartitionPath =
-        !windowNode.partitionKeys().empty() ||
-        !windowNode.sortingKeys().empty();
-
-    if (baseName == "avg" && isFullPartition && usesRollingFullPartitionPath) {
+    // Full-partition AVG without partition keys uses the global reduction
+    // path, which also supports integer and REAL inputs, even with ORDER BY.
+    if (baseName == "avg" && isFullPartition &&
+        !windowNode.partitionKeys().empty() &&
+        !func.functionCall->inputs()[0]->type()->isDouble()) {
       if (reason) {
-        *reason = "Full-partition AVG requires optimized cuDF MEAN support";
+        *reason = "Partitioned full-partition AVG requires DOUBLE input";
       }
       return false;
     }
@@ -755,7 +828,23 @@ void CudfWindow::computeRankColumnsBatch(
   }
 
   const auto numRows = logicalRowCount_;
-  // Single-column ORDER BY only (multi-column rejected in canRunOnGPU).
+  // Rank accepts one input column. View multiple ORDER BY keys as a struct so
+  // peer matching uses the whole key, including nulls. The rows are already in
+  // the requested sort order.
+  cudf::column_view rankValues;
+  if (sortKeyIndices_.size() == 1) {
+    rankValues = sortedInput.column(sortKeyIndices_[0]);
+  } else if (sortKeyIndices_.size() > 1) {
+    auto sortKeys = sortedInput.select(sortKeyIndices_);
+    rankValues = cudf::column_view{
+        cudf::data_type{cudf::type_id::STRUCT},
+        numRows,
+        nullptr,
+        nullptr,
+        0,
+        0,
+        std::vector<cudf::column_view>{sortKeys.begin(), sortKeys.end()}};
+  }
   auto colOrder =
       sortKeyIndices_.empty() ? cudf::order::ASCENDING : sortOrders_[0];
   auto nullOrd =
@@ -774,12 +863,11 @@ void CudfWindow::computeRankColumnsBatch(
             cudf::sequence(numRows, oneScalar, oneScalar, stream, mr);
         continue;
       }
-      auto valuesCol = sortedInput.column(sortKeyIndices_[0]);
       auto method = toRankMethod(baseName);
       auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
           method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
       windowResultCols[funcIndex] = cudf::scan(
-          valuesCol,
+          rankValues,
           *agg,
           cudf::scan_type::INCLUSIVE,
           cudf::null_policy::INCLUDE,
@@ -803,7 +891,7 @@ void CudfWindow::computeRankColumnsBatch(
 
     cudf::groupby::scan_request request;
     if (!sortKeyIndices_.empty()) {
-      request.values = sortedInput.column(sortKeyIndices_[0]);
+      request.values = rankValues;
     } else {
       // row_number without ORDER BY: values column is unused for tie detection.
       request.values = sortedInput.column(partitionKeyIndices_[0]);
@@ -1141,8 +1229,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
       }
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());
-      if (isFullPartition && sortKeyIndices_.empty() &&
-          partKeys.num_columns() == 0) {
+      if (isFullPartition && partKeys.num_columns() == 0 &&
+          (sortKeyIndices_.empty() || baseName == "avg")) {
         windowResultCols[funcIndex] = computeGlobalAggregate(
             inputCol,
             baseName,
@@ -1151,6 +1239,9 @@ RowVectorPtr CudfWindow::doGetOutput() {
             logicalRowCount_,
             stream_,
             mr);
+      } else if (isFullPartition && baseName == "avg") {
+        windowResultCols[funcIndex] =
+            computeFullPartitionAverage(partKeys, inputCol, stream_, mr);
       } else if (
           auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
         addRangeRollingRequest(
@@ -1179,18 +1270,16 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
   if (!rangeRollingBatches.empty()) {
     ColumnOrView orderbyColHolder{cudf::column_view{}};
-    cudf::column_view orderbyCol;
-    cudf::order order = cudf::order::ASCENDING;
-    cudf::null_order nullOrder = cudf::null_order::BEFORE;
+    auto orderby = sortedView.select(sortKeyIndices_);
+    auto orders = sortOrders_;
+    auto nullOrders = nullOrders_;
     if (sortKeyIndices_.empty()) {
       auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
       orderbyColHolder =
           cudf::sequence(logicalRowCount_, oneScalar, oneScalar, stream_, mr);
-      orderbyCol = asView(orderbyColHolder);
-    } else {
-      orderbyCol = sortedView.column(sortKeyIndices_[0]);
-      order = sortOrders_[0];
-      nullOrder = nullOrders_[0];
+      orderby = cudf::table_view{{asView(orderbyColHolder)}};
+      orders = {cudf::order::ASCENDING};
+      nullOrders = {cudf::null_order::BEFORE};
     }
     for (auto& batch : rangeRollingBatches) {
       auto& pendingRequests = batch.requests;
@@ -1202,9 +1291,10 @@ RowVectorPtr CudfWindow::doGetOutput() {
       }
       auto batchResult = cudf::grouped_range_rolling_window(
           partKeys,
-          orderbyCol,
-          order,
-          nullOrder,
+          orderby,
+          cudf::host_span<cudf::order const>{orders.data(), orders.size()},
+          cudf::host_span<cudf::null_order const>{
+              nullOrders.data(), nullOrders.size()},
           batch.preceding,
           batch.following,
           cudf::host_span<cudf::rolling_request const>(
