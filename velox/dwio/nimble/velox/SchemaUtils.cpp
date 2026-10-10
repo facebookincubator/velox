@@ -792,15 +792,24 @@ std::shared_ptr<TypeBuilder> buildHybridFlatMapValueType(
 }
 
 // Builds selected HFM groups before later siblings so their descriptors are
-// allocated in final projected-schema order.
+// allocated in final projected-schema order. With no selected group, builds a
+// keyless Default group: a Hybrid FlatMap needs at least one group, and the
+// group carries the value type that the Velox Map type is derived from.
 std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
     SchemaBuilder& builder,
     const ProjectedHybridFlatMap& projectedHybridFlatMap) {
   NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
-  NIMBLE_CHECK(!projectedHybridFlatMap.groupIndices.empty());
   auto result = builder.createHybridFlatMapTypeBuilder(
       projectedHybridFlatMap.source->keyScalarKind(), /*projection=*/true);
   result->setAttributes(projectedHybridFlatMap.source->attributes());
+  if (projectedHybridFlatMap.groupIndices.empty()) {
+    result->addGroup(
+        HybridFlatMap::kDefaultGroupId,
+        /*groupKeys=*/{},
+        buildHybridFlatMapValueType(
+            builder, projectedHybridFlatMap.source->valueType()));
+    return result;
+  }
   for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
     const auto& group = projectedHybridFlatMap.source->groupAt(groupIndex);
     result->addGroup(
@@ -877,7 +886,8 @@ namespace {
 // Tracks the source children the projection touches. These are Row child
 // positions, FlatMap key positions, or Hybrid FlatMap group positions.
 // FlatMap subscripts whose key is not in the source go into
-// `missingChildren` below instead.
+// `missingChildren` below instead. Hybrid FlatMap subscripts whose key is in
+// no group select no group.
 using SelectedChildrenMap = folly::F14FastMap<const Type*, std::set<size_t>>;
 
 // Tracks the FlatMap subscript keys the projection requested that do NOT
@@ -918,7 +928,9 @@ void validateProjectedHybridFlatMapSchema(const Type& schema) {
 // Resolves a single subfield path against a source nimble schema, populating
 // selectedChildren for present Row children + present FlatMap keys (by
 // source index) and missingChildren for FlatMap keys absent from the source
-// (by name).
+// (by name). A Hybrid FlatMap key selects the index of the group containing
+// it; a key in no group leaves the column's group set unchanged, possibly
+// empty.
 void resolveSubfield(
     const Type* type,
     const velox::common::Subfield& subfield,
@@ -967,20 +979,16 @@ void resolveSubfield(
             path.size(),
             "Nested projection inside hybrid FlatMap key '{}' is not supported.",
             keyName);
-        const auto& hybridMap = current->asHybridFlatMap();
-        auto groupIndex = hybridMap.findGroup(keyName);
-        if (!groupIndex.has_value()) {
-          for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
-            if (hybridMap.groupAt(i).groupId ==
-                HybridFlatMap::kDefaultGroupId) {
-              groupIndex = i;
-              break;
-            }
-          }
+
+        // Default's keys list every key the payload stores in Default, so a
+        // key in no group is absent and selects nothing. The group set is
+        // created even when it stays empty, so a column whose requested keys
+        // are all absent projects as a keyless Default group.
+        auto& selectedGroups = selectedChildren[current];
+        const auto groupIndex = current->asHybridFlatMap().findGroup(keyName);
+        if (groupIndex.has_value()) {
+          selectedGroups.insert(*groupIndex);
         }
-        NIMBLE_CHECK(
-            groupIndex.has_value(), "Hybrid FlatMap Default group is missing.");
-        selectedChildren[current].insert(*groupIndex);
         return;
       }
 
@@ -1026,7 +1034,8 @@ void resolveSubfield(
 // stream descriptor the subtree contains.
 // The number of UINT32_MAX entries matches the slot count the velox-source
 // `buildProjectedNimbleType` would allocate for the corresponding synthetic
-// FlatMap value subtree.
+// FlatMap value subtree, or for the value type of a keyless Hybrid FlatMap
+// Default group.
 void emitPlaceholderStreamOffsets(
     const Type* valueType,
     std::vector<uint32_t>& projectedStreamOffsets,
@@ -1262,7 +1271,9 @@ void projectStreamOffsets(
 }
 
 // Projects only the resolved physical groups and compacts their descriptors
-// into the response-local stream namespace.
+// into the response-local stream namespace. With no resolved group, fills the
+// keyless Default group's slots with placeholders that map to no source
+// stream.
 void projectHybridFlatMapStreamOffsets(
     const ProjectedHybridFlatMap& projectedHybridFlatMap,
     std::vector<uint32_t>& projectedStreamOffsets,
@@ -1276,6 +1287,25 @@ void projectHybridFlatMapStreamOffsets(
       rowOrFlatMapNullStreams,
       hybridMap.nullsDescriptor().offset(),
       /*isRowOrFlatMapNullStream=*/true);
+  if (projectedHybridFlatMap.groupIndices.empty()) {
+    // Follows the builder's allocation order (value subtree, key presence,
+    // in-map) so later columns keep their slots.
+    emitPlaceholderStreamOffsets(
+        &hybridMap.valueType(),
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams);
+    appendProjectedStream(
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams,
+        UINT32_MAX, // Key-presence placeholder.
+        /*isRowOrFlatMapNullStream=*/true);
+    appendProjectedStream(
+        projectedStreamOffsets,
+        rowOrFlatMapNullStreams,
+        UINT32_MAX, // In-map placeholder.
+        /*isRowOrFlatMapNullStream=*/false);
+    return;
+  }
   for (const auto groupIndex : projectedHybridFlatMap.groupIndices) {
     const auto& sourceGroup = hybridMap.groupAt(groupIndex);
     projectStreamOffsets(
@@ -1337,10 +1367,10 @@ NimbleTypeProjection buildProjectedNimbleType(
   NimbleTypeProjection projection;
 
   // Resolve subfields against the source schema once. Real selections (Row
-  // children + present FlatMap keys) land in `selectedChildren` keyed by
-  // source index; FlatMap keys absent from the source go into
-  // `missingChildren` keyed by name. The offset walker merges the two per
-  // FlatMap node before emitting.
+  // children, present FlatMap keys and Hybrid FlatMap groups) land in
+  // `selectedChildren` keyed by source index; FlatMap keys absent from the
+  // source go into `missingChildren` keyed by name. The offset walker merges
+  // the two per FlatMap node before emitting.
   SelectedChildrenMap selectedChildren;
   MissingChildrenMap missingChildren;
   for (const auto& subfield : projectedSubfields) {
@@ -1369,7 +1399,7 @@ NimbleTypeProjection buildProjectedNimbleType(
     const auto selectedGroups = selectedChildren.find(child);
     NIMBLE_CHECK(
         selectedGroups != selectedChildren.end(),
-        "Hybrid FlatMap projection requires selected groups.");
+        "Hybrid FlatMap column was not resolved from projected subfields.");
     projectedHybridFlatMaps.emplace(
         columnIndex,
         ProjectedHybridFlatMap{

@@ -2171,9 +2171,11 @@ TEST_P(
              kRowsPerBatch, [keyBase](auto row) { return keyBase + row; }),
          vectorMaker_->mapVector<int32_t, int64_t>(maps)});
   };
+
+  // Key 7 is in no configured group, so the writer stores it in Default.
   const std::vector<RowVectorPtr> batches{
-      makeBatch(0, {{{1, 10}, {2, 20}}, {{1, 11}}}),
-      makeBatch(2, {{{1, 12}}, {{2, 23}}}),
+      makeBatch(0, {{{1, 10}, {2, 20}}, {{1, 11}, {7, 71}}}),
+      makeBatch(2, {{{1, 12}, {7, 72}}, {{2, 23}}}),
   };
 
   Serializer serializer{
@@ -2303,6 +2305,63 @@ TEST_P(
       {vectorMaker_->mapVector<int32_t, int64_t>(
           std::vector<std::vector<Entry>>{{{1, 11}}, {{1, 12}}})});
   expectVectorRows(output, expected);
+
+  // Key 42 is in no group, so the projection keeps a keyless Default group
+  // whose streams map to no source stream, and Default's key 7 stays out of the
+  // response. Projecting "key" keeps both stripes, which would otherwise carry
+  // no projected bytes.
+  {
+    std::vector<Subfield> absentSubfields;
+    absentSubfields.emplace_back("key");
+    absentSubfields.emplace_back("features[42]");
+    auto absentProjector = createProjector(absentSubfields);
+    const auto& absentMap = absentProjector->projectedNimbleType()
+                                ->asRow()
+                                .childAt(1)
+                                ->asHybridFlatMap();
+    ASSERT_EQ(absentMap.groupCount(), 1);
+    EXPECT_EQ(absentMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_TRUE(absentMap.groupAt(0).groupKeys.empty());
+
+    auto absentResult = absentProjector->projectStreams(request, options);
+    ASSERT_EQ(absentResult.responses.size(), 1);
+    ASSERT_EQ(absentResult.responses[0].slices.size(), batches.size());
+    std::vector<folly::IOBuf> absentOwned;
+    std::vector<std::string_view> absentBatches;
+    absentOwned.reserve(absentResult.responses[0].slices.size());
+    absentBatches.reserve(absentResult.responses[0].slices.size());
+    for (const auto& slice : absentResult.responses[0].slices) {
+      absentOwned.push_back(coalesceChunkSlice(slice));
+      absentBatches.emplace_back(
+          reinterpret_cast<const char*>(absentOwned.back().data()),
+          absentOwned.back().length());
+    }
+
+    // Decoding without subfields reads every projected group.
+    Deserializer wholeDeserializer{
+        absentProjector->projectedNimbleType(),
+        leafPool_.get(),
+        DeserializerOptions{}};
+    VectorPtr wholeOutput;
+    wholeDeserializer.deserialize(absentBatches, wholeOutput);
+    auto absentExpected = vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>({1, 2}),
+         vectorMaker_->mapVector<int32_t, int64_t>(
+             std::vector<std::vector<Entry>>{{}, {}})});
+    expectVectorRows(wholeOutput, absentExpected);
+  }
+
+  // With only the absent key projected, neither stripe has null maps, so every
+  // projected stream is empty and both stripes are dropped.
+  {
+    std::vector<Subfield> absentOnlySubfields;
+    absentOnlySubfields.emplace_back("features[42]");
+    auto absentOnlyResult =
+        createProjector(absentOnlySubfields)->projectStreams(request, options);
+    ASSERT_EQ(absentOnlyResult.responses.size(), 1);
+    EXPECT_TRUE(absentOnlyResult.responses[0].slices.empty());
+  }
 }
 
 TEST_P(
