@@ -42,6 +42,20 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     auto mapVector = maker_.mapVector<TKey, TValue>(mapData);
     auto flatMapVector = maker_.flatMapVectorNullable<TKey, TValue>(mapData);
     assertEqualVectors(mapVector, flatMapVector->toMapVector());
+    assertEqualVectors(
+        flatMapVector,
+        FlatMapVector::fromMapVector(*flatMapVector->toMapVector()));
+  }
+
+  template <typename TKey, typename TValue>
+  void testMapToFlatMap(
+      const std::vector<
+          std::optional<std::vector<std::pair<TKey, std::optional<TValue>>>>>&
+          mapData) {
+    auto mapVector = maker_.mapVector<TKey, TValue>(mapData);
+    auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
+    assertEqualVectors(mapVector, flatMapVector);
+    assertEqualVectors(mapVector, flatMapVector->toMapVector());
   }
 
   void testFlatMapCopy(
@@ -1489,6 +1503,35 @@ TEST_F(FlatMapVectorTest, toMapVector) {
       {{{101, 11}, {103, 13}, {105, std::nullopt}}},
       {{{101, 1}, {102, 2}, {103, 3}}},
   });
+}
+
+TEST_F(FlatMapVectorTest, fromMapVector) {
+  testMapToFlatMap<int64_t, int64_t>({});
+  testMapToFlatMap<int64_t, int64_t>({
+      {{{0, 0}}},
+  });
+  testMapToFlatMap<int32_t, StringView>({
+      {{{0, "0"}}},
+      {{{1, "1"}}},
+      {{{2, "2"}}},
+      {{{3, std::nullopt}}},
+  });
+  testMapToFlatMap<int64_t, int64_t>({
+      {{{101, 1}, {102, 2}, {103, 3}}},
+      {{{105, 0}, {106, 0}}},
+      {std::nullopt},
+      std::vector<std::pair<int64_t, std::optional<int64_t>>>{},
+      {{{101, 11}, {103, 13}, {105, std::nullopt}}},
+  });
+
+  // Complex keys: [1] and [2] in row 0, [1] in row 1.
+  auto mapVector = makeMapVector(
+      {0, 2},
+      makeArrayVector<int64_t>({{1}, {2}, {1}}),
+      makeFlatVector<int64_t>({10, 20, 30}));
+  auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
+  EXPECT_EQ(flatMapVector->numDistinctKeys(), 2);
+  assertEqualVectors(mapVector, flatMapVector);
 }
 
 TEST_F(FlatMapVectorTest, copyRanges) {

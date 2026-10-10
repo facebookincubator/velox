@@ -329,6 +329,13 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  /// Converts and copies `map` into a FlatMapVector, allocated from the same
+  /// memory pool. Each distinct key in `map` becomes a key channel.
+  ///
+  /// Like toMapVector(), this is an expensive operation that should be used
+  /// mostly for testing/validation purposes.
+  static std::shared_ptr<FlatMapVector> fromMapVector(const MapVector& map);
+
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
     // TODO: enable this after
     // https://github.com/facebookincubator/velox/issues/15485 is resolved to

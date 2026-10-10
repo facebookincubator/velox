@@ -766,6 +766,22 @@ void FlatMapVector::ensureWritable(const SelectivityVector& rows) {
   BaseVector::ensureWritable(rows);
 }
 
+FlatMapVectorPtr FlatMapVector::fromMapVector(const MapVector& map) {
+  // Start from a flat map with no keys.
+  auto flatMap = std::make_shared<FlatMapVector>(
+      map.pool(),
+      map.type(),
+      nullptr,
+      map.size(),
+      BaseVector::create(map.type()->asMap().keyType(), 0, map.pool()),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+
+  // Copy every row; copyRanges() adds each key the first time it appears.
+  flatMap->copy(&map, 0, 0, map.size());
+  return flatMap;
+}
+
 // This function will copy map value elements from the individual mapValues_
 // std::vector into a single flattened one that can be used by a MapVector.
 //
