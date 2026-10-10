@@ -30,6 +30,7 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 
@@ -71,6 +72,9 @@ void testIgnoreNullInputs(
     exec::test::DuckDbQueryRunner& duckDbQueryRunner,
     memory::MemoryPool* pool);
 
+// Returns makeInputWithNullRows() over 'sourceInput' with one column group per
+// aggregate, holding its non-grouping column arguments. Returns nullptr if
+// 'sourceInput' is empty or an aggregate has no such argument.
 RowVectorPtr makeNullInput(
     const std::vector<core::CallTypedExprPtr>& aggregateCalls,
     const std::vector<std::string>& groupingKeys,
@@ -1409,9 +1413,6 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
   return func;
 }
 
-// Copies every source row twice. Each even row has one non-grouping column
-// argument of every aggregate set to null in round-robin order, while each odd
-// row preserves the original input.
 RowVectorPtr makeNullInput(
     const std::vector<core::CallTypedExprPtr>& aggregateCalls,
     const std::vector<std::string>& groupingKeys,
@@ -1437,46 +1438,8 @@ RowVectorPtr makeNullInput(
     return nullptr;
   }
 
-  const auto size = 2 * sourceInput->size();
-  auto indices = allocateIndices(size, pool);
-  auto* rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t row = 0; row < size; ++row) {
-    rawIndices[row] = row / 2;
-  }
-
-  const auto& sourceType = sourceInput->type()->asRow();
-  auto names = sourceType.names();
-  auto types = sourceType.children();
-  std::vector<VectorPtr> children;
-  children.reserve(sourceInput->childrenSize());
-  for (size_t column = 0; column < sourceInput->childrenSize(); ++column) {
-    BufferPtr nulls;
-    for (vector_size_t row = 0; row < size; ++row) {
-      if (row % 2 == 0) {
-        const auto sourceRow = row / 2;
-        for (const auto& columnArguments : columnArgumentsPerAggregate) {
-          if (columnArguments[sourceRow % columnArguments.size()] ==
-              names[column]) {
-            if (!nulls) {
-              nulls = allocateNulls(size, pool, bits::kNotNull);
-            }
-            bits::setNull(nulls->asMutable<uint64_t>(), row);
-            break;
-          }
-        }
-      }
-    }
-    children.push_back(
-        BaseVector::wrapInDictionary(
-            nulls, indices, size, sourceInput->childAt(column)));
-  }
-
-  return std::make_shared<RowVector>(
-      pool,
-      ROW(std::move(names), std::move(types)),
-      nullptr,
-      size,
-      std::move(children));
+  return exec::test::makeInputWithNullRows(
+      sourceInput, columnArgumentsPerAggregate, pool);
 }
 
 void testIgnoreNullInputs(
