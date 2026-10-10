@@ -92,6 +92,7 @@ velox_add_library(
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
+  Pmod.h
   RaiseError.h
   Rand.h
   RandStr.h
