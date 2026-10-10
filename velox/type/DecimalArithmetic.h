@@ -82,9 +82,8 @@ static_assert(
     1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
         (int128_t)100);
 
-#ifdef __CUDACC__
-/// 10^0 through 10^kMaxLongDecimalPrecision for device code. A struct, because
-/// device code cannot call std::array::operator[].
+/// 10^0 through 10^kMaxLongDecimalPrecision as a plain array, the form both
+/// host and device code can index at run time.
 struct DecimalPowersOfTen {
   int128_t values[kMaxLongDecimalPrecision + 1];
 };
@@ -97,14 +96,17 @@ constexpr DecimalPowersOfTen makeDecimalPowersOfTen() {
   return table;
 }
 
-/// The device's copy of the powers-of-ten table, in global memory. The driver
-/// loads it once with its module, not on each launch. `static` gives every
-/// CUDA translation unit its own 624-byte copy, and is the one form that links
-/// correctly both with and without -rdc: a static __constant__ table reads
-/// zeros under -rdc, and an inline or extern one only links with it.
-static __device__ const DecimalPowersOfTen kDeviceDecimalPowersOfTen =
-    makeDecimalPowersOfTen();
-#endif
+/// The powers-of-ten table that DecimalArithmetic::powerOfTen() reads at run
+/// time on the host and on the device. It is a function-local static rather
+/// than a namespace-scope variable because nvcc gives device code no access to
+/// a host variable indexed at run time, and gives host code no access to a
+/// __device__ one; a static local inside a __host__ __device__ function is the
+/// one form both sides read, and each CUDA translation unit gets its own copy
+/// in global memory, loaded with the module rather than per call.
+VELOX_GPU_COMPATIBLE inline const DecimalPowersOfTen& decimalPowersOfTen() {
+  static constexpr DecimalPowersOfTen kTable = makeDecimalPowersOfTen();
+  return kTable;
+}
 
 } // namespace detail
 
@@ -115,18 +117,19 @@ struct DecimalArithmetic {
 
   /// 10^exponent. exponent must be <= kMaxLongPrecision.
   ///
-  /// Device code reads detail::kDeviceDecimalPowersOfTen, its own copy of the
-  /// table, because nvcc cannot index kPowersOfTen with a runtime value.
+  /// Reads the one table in detail::decimalPowersOfTen() on the host and on
+  /// the device. Under constant evaluation it computes the power instead, since
+  /// a function-local static is not usable in a constant expression.
   VELOX_GPU_COMPATIBLE static constexpr int128_t powerOfTen(uint8_t exponent) {
-#ifdef __CUDA_ARCH__
-    return detail::kDeviceDecimalPowersOfTen.values[exponent];
-#else
-    return kPowersOfTen[exponent];
-#endif
+    if (std::is_constant_evaluated()) {
+      return detail::decimalPowerOfTen(exponent);
+    }
+    return detail::decimalPowersOfTen().values[exponent];
   }
 
-  /// kPowersOfTen[i] == 10^i, derived from detail::decimalPowerOfTen() so the
-  /// literals are written once. Host-only: device code uses powerOfTen().
+  /// kPowersOfTen[i] == 10^i, derived from detail::decimalPowerOfTen() like
+  /// the table behind powerOfTen(), so the literals are written once. Kept as a
+  /// std::array for the existing host callers; device code uses powerOfTen().
   static constexpr std::array<int128_t, kMaxLongPrecision + 1> kPowersOfTen =
       [] {
         std::array<int128_t, kMaxLongPrecision + 1> table{};
