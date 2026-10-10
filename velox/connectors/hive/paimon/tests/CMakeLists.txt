@@ -13,6 +13,38 @@
 # limitations under the License.
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  add_executable(velox_hive_paimon_split_reader_test PaimonSplitReaderTest.cpp)
+  add_test(velox_hive_paimon_split_reader_test velox_hive_paimon_split_reader_test)
+
+  target_link_libraries(
+    velox_hive_paimon_split_reader_test
+    velox_hive_paimon_connector
+    velox_dwio_orc_reader
+    velox_exec_test_lib
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  if(VELOX_ENABLE_NIMBLE)
+    target_include_directories(
+      velox_hive_paimon_split_reader_test
+      BEFORE
+      PRIVATE "${PROJECT_SOURCE_DIR}/velox/external/fsst"
+    )
+    target_compile_definitions(
+      velox_hive_paimon_split_reader_test
+      PRIVATE VELOX_ENABLE_NIMBLE DISABLE_META_INTERNAL_COMPRESSOR=1
+    )
+    if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+      target_compile_definitions(
+        velox_hive_paimon_split_reader_test
+        PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      )
+    endif()
+    target_link_libraries(velox_hive_paimon_split_reader_test nimble_writer nimble_velox_selective)
+  endif()
+
   add_executable(velox_hive_paimon_split_test PaimonConnectorSplitTest.cpp)
   add_test(velox_hive_paimon_split_test velox_hive_paimon_split_test)
 

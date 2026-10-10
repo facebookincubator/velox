@@ -617,6 +617,11 @@ struct RuntimeStats {
   /// Merges one split's format-specific and per-column statistics.
   void mergeFrom(const SplitStats& split);
 
+  /// Adds counters and merges distributions from another snapshot. Keep
+  /// counters unconverted until all readers have been accumulated so their
+  /// exported metrics describe totals, not a distribution of reader totals.
+  void mergeFrom(const RuntimeStats& other);
+
   // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;
 };

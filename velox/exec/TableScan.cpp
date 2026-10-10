@@ -229,13 +229,14 @@ RowVectorPtr TableScan::getOutput() {
           std::string(TableScan::kDataSourceReadWallNanos),
           RuntimeCounter(ioTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
 
+      // A logical reader may make physical progress before blocking. Keep
+      // this progress visible even if the task is cancelled while waiting.
+      lockedStats->rawInputPositions = dataSource_->getCompletedRows();
+      lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
       if (!dataOptional.has_value()) {
         blockingReason_ = BlockingReason::kWaitForConnector;
         return nullptr;
       }
-
-      lockedStats->rawInputPositions = dataSource_->getCompletedRows();
-      lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
 
       RowVectorPtr data = std::move(dataOptional).value();
       // NOTE: even if we the scan output has been suppressed, we still need to

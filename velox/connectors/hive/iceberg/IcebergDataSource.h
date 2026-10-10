@@ -33,9 +33,8 @@ namespace facebook::velox::connector::hive::iceberg {
 /// wraps each batch into the changelog output schema
 /// (operation, ordinal, snapshotid, rowdata).
 ///
-/// The ChangelogScanContext (data column handles, projected schema, scan spec)
-/// is built once in the constructor and reused across all splits so that
-/// stats-based filter reordering and column adaptation accumulate.
+/// Changelog column demands are prepared once. Each split gets a fresh scan
+/// spec, with filter selectivity carried over from the previous split.
 class IcebergDataSource : public HiveDataSource {
  public:
   IcebergDataSource(
@@ -71,8 +70,8 @@ class IcebergDataSource : public HiveDataSource {
   /// (operation/ordinal/snapshotid/rowdata).
   std::shared_ptr<ColumnHandleMap> columnHandles_;
 
-  /// Changelog-only: scan state shared across splits (nullopt for regular
-  /// queries).
+  /// Changelog-only column demands and current physical scan spec (nullopt
+  /// for regular queries).
   std::optional<ChangelogScanContext> changelogScanContext_;
 
   /// Changelog-only: dynamic filters on the constant changelog columns
