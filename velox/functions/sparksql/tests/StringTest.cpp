@@ -608,6 +608,112 @@ TEST_F(StringTest, left) {
   EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
 }
 
+TEST_F(StringTest, right) {
+  const auto right = [&](const std::optional<std::string>& str,
+                         const std::optional<int32_t>& length) {
+    return evaluateOnce<std::string>("right(c0, c1)", str, length);
+  };
+
+  EXPECT_EQ(right(std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(right("example", std::nullopt), std::nullopt);
+  EXPECT_EQ(right(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(right("", 3), "");
+
+  EXPECT_EQ(right("example", -2), "");
+  EXPECT_EQ(right("example", 0), "");
+  EXPECT_EQ(right("example", 2), "le");
+  EXPECT_EQ(right("example", 7), "example");
+  EXPECT_EQ(right("example", 20), "example");
+  EXPECT_EQ(right("example", std::numeric_limits<int32_t>::min()), "");
+  EXPECT_EQ(right("example", std::numeric_limits<int32_t>::max()), "example");
+
+  EXPECT_EQ(right("ASCII", 3), "CII");
+  EXPECT_EQ(right("da\u6570\u636Eta", 3), "\u636Eta");
+  EXPECT_EQ(right("a\U0001F60Bb", 2), "\U0001F60Bb");
+
+  // Combining marks are separate code points, not grapheme clusters.
+  EXPECT_EQ(right("Cafe\u0301", 1), "\u0301");
+  EXPECT_EQ(right("Cafe\u0301", 2), "e\u0301");
+}
+
+TEST_F(StringTest, rightMalformedUtf8) {
+  const auto right = [&](const std::optional<std::string>& str,
+                         const std::optional<int32_t>& length) {
+    return evaluateOnce<std::string>("right(c0, c1)", str, length);
+  };
+
+  const std::string leadingContinuationBytes{
+      "\x80\x80"
+      "ab",
+      4};
+  const std::string interiorContinuationByte{
+      "a\x80"
+      "b",
+      3};
+  const std::string onlyContinuationBytes{"\x80\x80", 2};
+  const std::string disallowedLeadingBytes{
+      "a\xC0\xC1\xF5"
+      "b",
+      5};
+  const std::string invalidContinuationAfterLead{
+      "\xC2"
+      "ab",
+      3};
+
+  EXPECT_EQ(right(leadingContinuationBytes, 2), "ab");
+  EXPECT_EQ(
+      right(interiorContinuationByte, 2),
+      std::string(
+          "\x80"
+          "b",
+          2));
+  EXPECT_EQ(right(onlyContinuationBytes, 1), std::string("\x80", 1));
+  EXPECT_EQ(
+      right(disallowedLeadingBytes, 4),
+      std::string(
+          "\xC0\xC1\xF5"
+          "b",
+          4));
+  EXPECT_EQ(right(invalidContinuationAfterLead, 1), "b");
+  EXPECT_EQ(
+      right(invalidContinuationAfterLead, 2), invalidContinuationAfterLead);
+}
+
+TEST_F(StringTest, rightColumnAndConstantArguments) {
+  auto strings = makeNullableFlatVector<std::string>(
+      {"abcdef",
+       "a\U0001F60Bb",
+       "da\u6570\u636Eta",
+       "Cafe\u0301",
+       "",
+       std::nullopt});
+  auto lengths = makeNullableFlatVector<int32_t>(
+      {1, 2, 3, 2, std::numeric_limits<int32_t>::max(), 4});
+  auto data = makeRowVector({strings, lengths});
+
+  VectorPtr result = makeFlatVector<std::string>(
+      data->size(), [](vector_size_t /*row*/) { return "previous"; });
+  SelectivityVector rows(data->size());
+  auto actual =
+      evaluate<FlatVector<StringView>>("right(c0, c1)", data, rows, result);
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"f", "\U0001F60Bb", "\u636Eta", "e\u0301", "", std::nullopt}),
+      actual);
+
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"ef", "\U0001F60Bb", "ta", "e\u0301", "", std::nullopt}),
+      evaluate("right(c0, cast(2 as integer))", makeRowVector({strings})));
+
+  auto varyingLengths =
+      makeNullableFlatVector<int32_t>({-1, 0, 2, 6, 20, std::nullopt});
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"", "", "ef", "abcdef", "abcdef", std::nullopt}),
+      evaluate("right('abcdef', c0)", makeRowVector({varyingLengths})));
+}
+
 TEST_F(StringTest, lengthString) {
   const auto length = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("length(c0)", arg);

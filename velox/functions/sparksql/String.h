@@ -864,6 +864,83 @@ struct LeftFunction {
   }
 };
 
+/// Returns the rightmost characters from a string.
+template <typename T>
+struct RightFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<false>(result, input, length);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<true>(result, input, length);
+  }
+
+  /// Extracts the suffix using Spark's UTF-8 character-stepping semantics.
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    if (length <= 0 || input.empty()) {
+      result.setEmpty();
+      return;
+    }
+
+    const auto requestedLength = static_cast<size_t>(length);
+    size_t start = input.size();
+    if constexpr (isAscii) {
+      start -= std::min(input.size(), requestedLength);
+    } else {
+      const auto characterSize = [&](size_t position) {
+        const auto firstByte = static_cast<uint8_t>(input.data()[position]);
+        size_t size{1};
+        // Spark treats disallowed first bytes as single-byte characters.
+        if (firstByte >= 0xC2 && firstByte <= 0xDF) {
+          size = 2;
+        } else if (firstByte >= 0xE0 && firstByte <= 0xEF) {
+          size = 3;
+        } else if (firstByte >= 0xF0 && firstByte <= 0xF4) {
+          size = 4;
+        }
+        return std::min(size, input.size() - position);
+      };
+
+      size_t numCharacters{0};
+      for (size_t position = 0; position < input.size();
+           position += characterSize(position)) {
+        ++numCharacters;
+      }
+
+      if (requestedLength >= numCharacters) {
+        start = 0;
+      } else {
+        start = 0;
+        for (size_t numSkippedCharacters = numCharacters - requestedLength;
+             numSkippedCharacters > 0;
+             --numSkippedCharacters) {
+          start += characterSize(start);
+        }
+      }
+    }
+
+    result.setNoCopy(StringView(input.data() + start, input.size() - start));
+  }
+};
+
 /// translate(string, match, replace) -> varchar
 ///
 ///   Returns a new translated string. It translates the character in ``string``
