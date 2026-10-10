@@ -802,6 +802,184 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
   validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
 }
 
+TEST_P(SelectiveNimbleReaderTest, countStarReadsOnlyFooter) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(10'000)});
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  auto readFile = std::make_shared<velox::tests::utils::CountingReadFile>(file);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  auto metadataIoStats = std::make_shared<io::IoStatistics>();
+
+  dwio::common::ReaderOptions options(pool());
+  options.setFileSchema(asRowType(input->type()));
+  options.setScanSpec(scanSpec);
+  options.setMetadataIoStats(metadataIoStats);
+  options.setFooterSpeculativeIoSize(file.size());
+  options.setFilePreloadThreshold(file.size());
+  auto reader = SelectiveNimbleReaderFactory().createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      options);
+  EXPECT_EQ(readFile->numReads(), 0);
+
+  // FileSplitReader asks for the file schema before checking the row count.
+  EXPECT_EQ(*reader->rowType(), *input->type());
+  EXPECT_EQ(*(reader->typeWithId()->type()), *input->type());
+  EXPECT_EQ(readFile->numReads(), 0);
+  EXPECT_EQ(reader->numberOfRows(), input->size());
+  EXPECT_EQ(readFile->numReads(), 2);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  // FileSplitReader passes the adapted table schema for count(*), even though
+  // the empty ScanSpec proves that no columns are requested.
+  rowOptions.setRequestedType(asRowType(input->type()));
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  EXPECT_EQ(rowReader->nextReadSize(0), 0);
+  EXPECT_EQ(rowReader->nextRowNumber(), 0);
+  uint64_t rowsRead = 0;
+  VectorPtr result;
+  while (const auto scanned = rowReader->next(127, result)) {
+    rowsRead += scanned;
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result->size(), scanned);
+    EXPECT_EQ(result->type()->size(), 0);
+  }
+  EXPECT_EQ(rowsRead, input->size());
+  EXPECT_EQ(readFile->numReads(), 2);
+  EXPECT_LT(metadataIoStats->rawBytesRead(), file.size());
+
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.footerBufferOverread, 0);
+  EXPECT_EQ(stats.footerBufferUnderread, 0);
+  EXPECT_EQ(stats.processedRows, input->size());
+}
+
+TEST_P(SelectiveNimbleReaderTest, countStarDoesNotReadPhysicalSchema) {
+  auto input =
+      makeRowVector({"physical_name"}, {makeFlatIdentityVector<int64_t>(10)});
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  const auto tableSchema = ROW({"table_name"}, {VARCHAR()});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+
+  for (const auto mappingMode :
+       {dwio::common::ColumnMappingMode::kName,
+        dwio::common::ColumnMappingMode::kPosition}) {
+    auto readFile =
+        std::make_shared<velox::tests::utils::CountingReadFile>(file);
+    dwio::common::ReaderOptions options(pool());
+    options.setFileSchema(tableSchema);
+    options.setScanSpec(scanSpec);
+    options.setColumnMappingMode(mappingMode);
+    options.setFilePreloadThreshold(0);
+    auto reader = SelectiveNimbleReaderFactory().createReader(
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        options);
+
+    // No columns are projected, so the logical schema is sufficient. A
+    // fallback to the full reader still reconciles the physical schema.
+    EXPECT_EQ(*reader->rowType(), *tableSchema);
+    EXPECT_EQ(*(reader->typeWithId()->type()), *tableSchema);
+    EXPECT_EQ(readFile->numReads(), 0);
+  }
+}
+
+TEST_P(SelectiveNimbleReaderTest, countStarPartialSplitUsesStripeReader) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  auto readFile = std::make_shared<velox::tests::utils::CountingReadFile>(file);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+
+  dwio::common::ReaderOptions options(pool());
+  options.setFileSchema(asRowType(input->type()));
+  options.setScanSpec(scanSpec);
+  options.setFilePreloadThreshold(0);
+  auto reader = SelectiveNimbleReaderFactory().createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      options);
+  EXPECT_EQ(readFile->numReads(), 0);
+  EXPECT_EQ(reader->numberOfRows(), input->size());
+  EXPECT_EQ(readFile->numReads(), 2);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  rowOptions.setRequestedType(asRowType(input->type()));
+  rowOptions.range(1, 1);
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  VectorPtr result;
+  EXPECT_EQ(rowReader->next(100, result), 0);
+  EXPECT_GT(readFile->numReads(), 2);
+}
+
+TEST_P(
+    SelectiveNimbleReaderTest,
+    countStarCandidateWithProjectedColumnsUsesStripeReader) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  auto readFile = std::make_shared<velox::tests::utils::CountingReadFile>(file);
+  auto readerScanSpec = std::make_shared<common::ScanSpec>("root");
+
+  dwio::common::ReaderOptions options(pool());
+  options.setFileSchema(asRowType(input->type()));
+  options.setScanSpec(readerScanSpec);
+  options.setFilePreloadThreshold(0);
+  auto reader = SelectiveNimbleReaderFactory().createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      options);
+  EXPECT_EQ(readFile->numReads(), 0);
+
+  auto rowScanSpec = std::make_shared<common::ScanSpec>("root");
+  rowScanSpec->addAllChildFields(*input->type());
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(rowScanSpec);
+  rowOptions.setRequestedType(asRowType(input->type()));
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  EXPECT_GT(readFile->numReads(), 0);
+  validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, countStarStaysOnFullReaderAfterFallback) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  auto readFile = std::make_shared<velox::tests::utils::CountingReadFile>(file);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+
+  dwio::common::ReaderOptions options(pool());
+  options.setFileSchema(asRowType(input->type()));
+  options.setScanSpec(scanSpec);
+  options.setFilePreloadThreshold(0);
+  auto reader = SelectiveNimbleReaderFactory().createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      options);
+
+  dwio::common::RowReaderOptions indexOptions;
+  indexOptions.setScanSpec(scanSpec);
+  EXPECT_EQ(reader->createIndexReader(indexOptions), nullptr);
+  const auto readsAfterFallback = readFile->numReads();
+  EXPECT_GT(readsAfterFallback, 0);
+
+  // The fallback owns the buffered input now. Later calls must remain on that
+  // reader instead of trying to create the footer-only tablet.
+  EXPECT_EQ(reader->numberOfRows(), input->size());
+  EXPECT_EQ(readFile->numReads(), readsAfterFallback);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(scanSpec);
+  rowOptions.setRequestedType(asRowType(input->type()));
+  auto rowReader = reader->createRowReader(rowOptions);
+
+  uint64_t rowsRead = 0;
+  VectorPtr result = BaseVector::create(ROW({}, {}), 0, pool());
+  while (const auto scanned = rowReader->next(127, result)) {
+    rowsRead += scanned;
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result->type()->size(), 0);
+  }
+  EXPECT_EQ(rowsRead, input->size());
+}
+
 TEST_P(SelectiveNimbleReaderTest, denseWithNulls) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
