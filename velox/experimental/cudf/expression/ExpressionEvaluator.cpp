@@ -71,6 +71,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -3258,6 +3259,12 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->isFieldAccessKind() || expr->isDereferenceKind()) {
     return !expr->inputs().empty() && !expr->inputs()[0]->isInputKind() &&
         expr->inputs()[0]->type()->kind() == TypeKind::ROW;
+  }
+
+  // Column references above only pass the packed integer through; a cast or
+  // a registered operator would read it as a number.
+  if (hasCustomComparisonOperand(expr)) {
+    return false;
   }
 
   const auto opName = exprRegistryName(expr);
