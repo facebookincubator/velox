@@ -22,6 +22,13 @@ Binary Functions
 
     Computes the FNV-1a 64-bit hash of ``binary``.
 
+.. function:: from_base32(string) -> varbinary
+
+    Decodes binary data from the base32 encoded ``string`` using the
+    `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet.
+    Padding is optional on input. Throws a user error if ``string`` contains
+    characters outside the base32 alphabet or has an invalid length.
+
 .. function:: from_base64(string) -> varbinary
 
     Decodes a Base64-encoded ``string`` back into its original binary form.
@@ -139,6 +146,12 @@ Binary Functions
 .. function:: spooky_hash_v2_64(binary) -> varbinary
 
     Computes the 64-bit SpookyHashV2 hash of ``binary``.
+
+.. function:: to_base32(binary) -> varchar
+
+    Encodes ``binary`` into a base32 string representation using the
+    `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet,
+    with padding.
 
 .. function:: to_base64(binary) -> varchar
 
