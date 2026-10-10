@@ -174,6 +174,9 @@ class FlatMapVector : public BaseVector {
   /// Returns a vector containing a projection for a specific primitive key.
   /// This is an efficient operation in flat maps (zero-copy).
   ///
+  /// The projection has an entry for every row, including rows whose map does
+  /// not contain the key; callers must check isInMap() to tell them apart.
+  ///
   /// The key restrictions are the same as the ones listed above for
   /// `getKeyChannel()`.
   template <typename TKey>

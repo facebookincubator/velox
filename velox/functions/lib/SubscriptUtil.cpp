@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <type_traits>
 #include <utility>
 
@@ -185,68 +186,156 @@ VectorPtr applyMapTyped(
       true /*flattenIfRedundant*/);
 }
 
-/// Applies logic to vectors of FlatMapVector encoding. The implementation is
-/// far simpler than the regular map encoding because FlatMapVector already
-/// supports feature projection. This implementation will serve as a fast-path
-/// execution for now-wrapped vectors.
+// Returns a flat vector with the values of the flat vector `values` and
+// `nulls` as its nulls, sharing the buffers of `values`.
+template <TypeKind kKind>
+VectorPtr
+flatWithNulls(const BaseVector& values, BufferPtr nulls, vector_size_t size) {
+  using T = typename TypeTraits<kKind>::NativeType;
+  const auto& flat = *values.asUnchecked<FlatVector<T>>();
+  return std::make_shared<FlatVector<T>>(
+      flat.pool(),
+      flat.type(),
+      std::move(nulls),
+      size,
+      flat.values(),
+      std::vector<BufferPtr>(flat.stringBuffers()));
+}
+
+// Returns the map values of the key at 'channel' of an unwrapped 'flatMap',
+// with null rows where the map does not contain the key. An in-map bit is set
+// when the row contains the key, the same convention as a null bit for a
+// non-null row, so the in-map buffer can serve as nulls.
+VectorPtr maskWithInMap(
+    const FlatMapVector& flatMap,
+    column_index_t channel,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  const auto& values = flatMap.mapValuesAt(channel);
+  const auto* rawInMap = flatMap.rawInMapsAt(channel);
+
+  // The key is in every row: return its map values as they are.
+  if (rawInMap == nullptr) {
+    return values;
+  }
+
+  // Flat map values: share their buffers in a new flat vector with the in-map
+  // buffer as nulls (combined with their own nulls, if any).
+  if (values->isFlatEncoding()) {
+    BufferPtr nulls = flatMap.inMapsAt(channel);
+    if (values->rawNulls() != nullptr) {
+      nulls = allocateNulls(size, pool);
+      bits::andBits(
+          nulls->asMutable<uint64_t>(), values->rawNulls(), rawInMap, 0, size);
+    }
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+        flatWithNulls, values->typeKind(), *values, std::move(nulls), size);
+  }
+
+  // Other encodings: wrap the map values in a dictionary with the in-map buffer
+  // as nulls and identity indices.
+  BufferPtr indices = allocateIndices(size, pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::iota(rawIndices, rawIndices + size, 0);
+  return BaseVector::wrapInDictionary(
+      flatMap.inMapsAt(channel), std::move(indices), size, values);
+}
+
+// Returns the map values of the key at 'channel' wrapped in the indices of the
+// wrapped map in 'decodedMap', with nulls for null maps and for rows whose map
+// does not contain the key.
+VectorPtr wrapWithMapIndices(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const FlatMapVector& flatMap,
+    column_index_t channel,
+    memory::MemoryPool* pool) {
+  const auto* rawInMap = flatMap.rawInMapsAt(channel);
+  BufferPtr indices = allocateIndices(rows.end(), pool);
+  BufferPtr nulls = allocateNulls(rows.end(), pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  rows.applyToSelected([&](vector_size_t row) {
+    const auto index = decodedMap.index(row);
+    rawIndices[row] = index;
+    if (decodedMap.isNullAt(row) ||
+        (rawInMap != nullptr && !bits::isBitSet(rawInMap, index))) {
+      bits::setNull(rawNulls, row);
+    }
+  });
+  return BaseVector::wrapInDictionary(
+      std::move(nulls),
+      std::move(indices),
+      rows.end(),
+      flatMap.mapValuesAt(channel));
+}
+
+// Returns the result for a key that is the same in every row, looking it up
+// once.
+VectorPtr applyFlatMapConstantKey(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const FlatMapVector& flatMap,
+    const VectorPtr& key,
+    exec::EvalCtx& context) {
+  // A key the map does not have is null in every row.
+  const auto channel = flatMap.getKeyChannel(key, 0);
+  if (!channel.has_value()) {
+    return BaseVector::createNullConstant(
+        flatMap.valueType(), rows.end(), context.pool());
+  }
+
+  // Unwrapped map: the rows of the key's map values line up with the result.
+  if (decodedMap.isIdentityMapping()) {
+    return maskWithInMap(flatMap, channel.value(), rows.end(), context.pool());
+  }
+
+  // Wrapped map: each row reads the key's map values through the map indices.
+  return wrapWithMapIndices(
+      rows, decodedMap, flatMap, channel.value(), context.pool());
+}
+
+// Returns the result for a key that varies per row: copies the value of each
+// row from the map values of its key, or null if the row does not contain it.
+VectorPtr applyFlatMapPerRowKey(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const FlatMapVector& flatMap,
+    const VectorPtr& keys,
+    exec::EvalCtx& context) {
+  auto result =
+      BaseVector::create(flatMap.valueType(), rows.end(), context.pool());
+  rows.applyToSelected([&](vector_size_t row) {
+    const auto index = decodedMap.index(row);
+    const auto channel = flatMap.getKeyChannel(keys, row);
+    if (channel.has_value() && flatMap.isInMap(channel.value(), index)) {
+      result->copy(flatMap.mapValuesAt(channel.value()).get(), row, index, 1);
+    } else {
+      result->setNull(row, true);
+    }
+  });
+  return result;
+}
+
+// Applies logic to vectors of FlatMapVector encoding. The implementation is
+// far simpler than the regular map encoding because FlatMapVector already
+// supports feature projection. This implementation will serve as a fast-path
+// execution for now-wrapped vectors.
+//
+// A key's map values hold an entry for every row, including rows whose map
+// does not contain the key, so the result for those rows is masked using the
+// key's in-map buffer.
 VectorPtr applyFlatMap(
     const SelectivityVector& rows,
     const DecodedVector& decodedMap,
     const VectorPtr& elementAt,
     exec::EvalCtx& context) {
-  // Decode input flat map vector.
-  auto flatMap = decodedMap.base()->as<FlatMapVector>();
-
-  // Optimal use case: unwrapped vector and constant key. We can simply project
-  // the feature using the first value in the arg vector.
-  if (decodedMap.isIdentityMapping() && elementAt->isConstantEncoding()) {
-    if (auto projection = flatMap->projectKey(elementAt, 0)) {
-      return projection;
-    }
+  const auto& flatMap = *decodedMap.base()->as<FlatMapVector>();
+  if (elementAt->isConstantEncoding()) {
+    return applyFlatMapConstantKey(
+        rows, decodedMap, flatMap, elementAt, context);
   }
-
-  // Next base case: wrapped vector and constant key. In this scenario we just
-  // need to decode and simply project onto the first index again.
-  else if (elementAt->isConstantEncoding()) {
-    // Define nulls and indices buffers.
-    BufferPtr indices =
-        AlignedBuffer::allocate<vector_size_t>(rows.size(), flatMap->pool());
-    BufferPtr nulls = allocateNulls(rows.size(), flatMap->pool());
-    auto mutableIndices = indices->asMutable<vector_size_t>();
-    auto rawNulls = nulls->asMutable<uint64_t>();
-    for (int i = 0; i < decodedMap.size(); i++) {
-      mutableIndices[i] = decodedMap.indices()[i];
-      if (decodedMap.isNullAt(i)) {
-        bits::setNull(rawNulls, i, true);
-      }
-    }
-
-    if (auto projection = flatMap->projectKey(elementAt, 0)) {
-      // Wrap underlying projected feature stream. This will also help with
-      // memory pressure for large feature element vectors.
-      return BaseVector::wrapInDictionary(
-          std::move(nulls), indices, rows.end(), projection);
-    }
-  }
-
-  // In the case that elementAt is not constant, we will need to stitch together
-  // projected values from across our mapValues list.
-  else {
-    auto result =
-        BaseVector::create(flatMap->valueType(), rows.size(), context.pool());
-    rows.applyToSelected([&](vector_size_t row) {
-      if (auto projection = flatMap->projectKey(elementAt, row)) {
-        result->copy(projection.get(), row, decodedMap.indices()[row], 1);
-      } else {
-        result->setNull(row, true);
-      }
-    });
-    return result;
-  }
-
-  // Key doesn't exist, return null constant vector.
-  return BaseVector::createNullConstant(
-      flatMap->valueType(), rows.end(), context.pool());
+  return applyFlatMapPerRowKey(rows, decodedMap, flatMap, elementAt, context);
 }
 
 VectorPtr applyMapComplexType(
