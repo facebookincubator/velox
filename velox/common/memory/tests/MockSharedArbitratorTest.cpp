@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <re2/re2.h>
+#include <algorithm>
 #include <deque>
 #include <vector>
 #include "folly/synchronization/EventCount.h"
@@ -425,6 +426,7 @@ class MockSharedArbitrationTest : public testing::Test {
   }
 
   void TearDown() override {
+    setThreadLocalRunTimeStatWriter(nullptr);
     clearTasks();
   }
 
@@ -448,6 +450,7 @@ class MockSharedArbitrationTest : public testing::Test {
     std::function<void(MemoryPool&)> arbitrationStateCheckCb{nullptr};
 
     bool globalArtbitrationEnabled{true};
+    bool globalArbitrationBoundedVictimReclaim{false};
     uint64_t arbitrationTimeoutNs{5 * 60 * 1'000'000'000UL};
     bool globalArbitrationWithoutSpill{false};
     // Set the globalArbitrationAbortTimeRatio to be very small so that the
@@ -506,6 +509,9 @@ class MockSharedArbitrationTest : public testing::Test {
          folly::to<std::string>(arbitratorOptions.arbitrationTimeoutNs) + "ns"},
         {std::string(ExtraConfig::kGlobalArbitrationEnabled),
          folly::to<std::string>(arbitratorOptions.globalArtbitrationEnabled)},
+        {std::string(ExtraConfig::kGlobalArbitrationBoundedVictimReclaim),
+         folly::to<std::string>(
+             arbitratorOptions.globalArbitrationBoundedVictimReclaim)},
         {std::string(ExtraConfig::kGlobalArbitrationWithoutSpill),
          folly::to<std::string>(
              arbitratorOptions.globalArbitrationWithoutSpill)},
@@ -3580,6 +3586,159 @@ TEST_F(MockSharedArbitrationTest, minReclaimBytes) {
           taskContainer.testTask.expectedCapacityAfterReclaim);
     }
   }
+}
+
+TEST_F(MockSharedArbitrationTest, boundedGlobalVictimTargets) {
+  EXPECT_FALSE(
+      SharedArbitrator::ExtraConfig::globalArbitrationBoundedVictimReclaim({}));
+  constexpr uint64_t kCapacity = 256 * MB;
+  constexpr uint64_t kChunk = 8 * MB;
+  constexpr uint64_t kTarget = 7 * kChunk;
+
+  for (const bool bounded : {false, true}) {
+    SCOPED_TRACE(fmt::format("bounded: {}", bounded));
+    setupMemory(
+        {.memoryCapacity = kCapacity,
+         .globalArbitrationBoundedVictimReclaim = bounded});
+    auto* first = addMemoryOp();
+    auto* second = addMemoryOp();
+    for (auto* op : {first, second}) {
+      for (int i = 0; i < 5; ++i) {
+        op->allocate(kChunk);
+      }
+    }
+
+    std::unordered_set<uint64_t> reclaimedParticipants;
+    std::unordered_set<uint64_t> failedParticipants;
+    bool allParticipantsReclaimed{false};
+    test::SharedArbitratorTestHelper helper(arbitrator_);
+    const auto reclaimed = helper.reclaimUsedMemoryBySpill(
+        kTarget,
+        reclaimedParticipants,
+        failedParticipants,
+        allParticipantsReclaimed);
+    EXPECT_EQ(reclaimed, bounded ? kTarget : 10 * kChunk);
+    EXPECT_EQ(reclaimedParticipants.size(), 2);
+    EXPECT_TRUE(failedParticipants.empty());
+    EXPECT_EQ(allParticipantsReclaimed, !bounded);
+
+    std::vector<uint64_t> requests;
+    for (auto* op : {first, second}) {
+      const auto targets = op->reclaimer()->stats().reclaimTargetBytes;
+      ASSERT_EQ(targets.size(), 1);
+      requests.push_back(targets.front());
+    }
+    std::sort(requests.begin(), requests.end());
+    EXPECT_EQ(
+        requests,
+        bounded ? (std::vector<uint64_t>{2 * kChunk, 5 * kChunk})
+                : (std::vector<uint64_t>{5 * kChunk, 5 * kChunk}));
+    clearTasks();
+  }
+}
+
+TEST_F(MockSharedArbitrationTest, boundedVictimMayReleaseMoreThanRequested) {
+  constexpr uint64_t kChunk = 8 * MB;
+  setupMemory(
+      {.memoryCapacity = 256 * MB,
+       .globalArbitrationBoundedVictimReclaim = true});
+  auto* op = addMemoryOp();
+  op->allocate(kChunk);
+
+  std::unordered_set<uint64_t> reclaimedParticipants;
+  std::unordered_set<uint64_t> failedParticipants;
+  bool allParticipantsReclaimed{false};
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  // An operator may only be able to release whole allocations. The policy
+  // bounds its request, not the amount returned by the reclaimer.
+  EXPECT_EQ(
+      helper.reclaimUsedMemoryBySpill(
+          kChunk / 2,
+          reclaimedParticipants,
+          failedParticipants,
+          allParticipantsReclaimed),
+      kChunk);
+  const auto targets = op->reclaimer()->stats().reclaimTargetBytes;
+  ASSERT_EQ(targets.size(), 1);
+  EXPECT_EQ(targets.front(), kChunk / 2);
+  EXPECT_EQ(reclaimedParticipants.size(), 1);
+  EXPECT_TRUE(failedParticipants.empty());
+  EXPECT_FALSE(allParticipantsReclaimed);
+}
+
+TEST_F(MockSharedArbitrationTest, boundedGlobalVictimUnderReclaim) {
+  constexpr uint64_t kChunk = 8 * MB;
+  setupMemory(
+      {.memoryCapacity = 256 * MB,
+       .globalArbitrationBoundedVictimReclaim = true});
+  auto* blocked =
+      addMemoryOp(nullptr, true, [](MemoryPool*, uint64_t) { return false; });
+  for (int i = 0; i < 5; ++i) {
+    blocked->allocate(kChunk);
+  }
+  auto* fallback = addMemoryOp();
+  for (int i = 0; i < 4; ++i) {
+    fallback->allocate(kChunk);
+  }
+
+  std::unordered_set<uint64_t> reclaimedParticipants;
+  std::unordered_set<uint64_t> failedParticipants;
+  bool allParticipantsReclaimed{false};
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  EXPECT_EQ(
+      helper.reclaimUsedMemoryBySpill(
+          3 * kChunk,
+          reclaimedParticipants,
+          failedParticipants,
+          allParticipantsReclaimed),
+      0);
+  EXPECT_EQ(failedParticipants.size(), 1);
+  EXPECT_TRUE(fallback->reclaimer()->stats().reclaimTargetBytes.empty());
+
+  EXPECT_EQ(
+      helper.reclaimUsedMemoryBySpill(
+          3 * kChunk,
+          reclaimedParticipants,
+          failedParticipants,
+          allParticipantsReclaimed),
+      3 * kChunk);
+  const auto targets = fallback->reclaimer()->stats().reclaimTargetBytes;
+  ASSERT_EQ(targets.size(), 1);
+  EXPECT_EQ(targets.front(), 3 * kChunk);
+  EXPECT_EQ(failedParticipants.size(), 1);
+}
+
+TEST_F(MockSharedArbitrationTest, boundedGlobalVictimNoProgress) {
+  constexpr uint64_t kChunk = 8 * MB;
+  setupMemory(
+      {.memoryCapacity = 256 * MB,
+       .globalArbitrationBoundedVictimReclaim = true});
+  auto* blocked =
+      addMemoryOp(nullptr, true, [](MemoryPool*, uint64_t) { return false; });
+  for (int i = 0; i < 5; ++i) {
+    blocked->allocate(kChunk);
+  }
+
+  std::unordered_set<uint64_t> reclaimedParticipants;
+  std::unordered_set<uint64_t> failedParticipants;
+  bool allParticipantsReclaimed{false};
+  test::SharedArbitratorTestHelper helper(arbitrator_);
+  EXPECT_EQ(
+      helper.reclaimUsedMemoryBySpill(
+          3 * kChunk,
+          reclaimedParticipants,
+          failedParticipants,
+          allParticipantsReclaimed),
+      0);
+  EXPECT_EQ(failedParticipants.size(), 1);
+  EXPECT_EQ(
+      helper.reclaimUsedMemoryBySpill(
+          3 * kChunk,
+          reclaimedParticipants,
+          failedParticipants,
+          allParticipantsReclaimed),
+      0);
+  EXPECT_TRUE(allParticipantsReclaimed);
 }
 
 TEST_F(MockSharedArbitrationTest, globalArbitrationReclaimPct) {

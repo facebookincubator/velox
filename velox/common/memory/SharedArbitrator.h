@@ -222,6 +222,15 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static bool globalArbitrationEnabled(
         const std::unordered_map<std::string, std::string>& configs);
 
+    /// Limits each global spill victim's requested reclaim bytes to the
+    /// remaining global target. Disabled by default to retain the existing
+    /// requests for each victim's full reclaimable capacity.
+    static constexpr std::string_view kGlobalArbitrationBoundedVictimReclaim{
+        "global-arbitration-bounded-victim-reclaim"};
+    static constexpr bool kDefaultGlobalArbitrationBoundedVictimReclaim{false};
+    static bool globalArbitrationBoundedVictimReclaim(
+        const std::unordered_map<std::string, std::string>& configs);
+
     /// If not zero, specifies the minimum amount of memory to reclaim by global
     /// memory arbitration as percentage of total arbitrator memory capacity.
     static constexpr std::string_view kGlobalArbitrationMemoryReclaimPct{
@@ -465,8 +474,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // across multiple global arbitration runs.
   //
   // 'allParticipantsReclaimed' returns if all participants have been
-  // reclaimed by spilling so far. It is used by gllobal arbitration to decide
-  // if need to switch to abort to reclaim used memory in the next arbitration
+  // reclaimed by spilling so far. A partially assigned participant keeps it
+  // false when bounded victim reclaim is enabled. Global arbitration uses it
+  // to decide if it should switch to aborting to reclaim memory in the next
   // round. The function returns the actually reclaimed used capacity in bytes.
   //
   // NOTE: the function sorts participants based on their reclaimable used
@@ -638,6 +648,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   const double memoryReclaimThreadsHwMultiplier_;
   const bool globalArbitrationEnabled_;
   const uint32_t globalArbitrationMemoryReclaimPct_;
+  const bool globalArbitrationBoundedVictimReclaim_;
   const double globalArbitrationAbortTimeRatio_;
   const bool globalArbitrationWithoutSpill_;
 
