@@ -326,6 +326,92 @@ velox_add_cudf_test(
 )
 
 add_subdirectory(iceberg)
+
+# Host-only checks of the GpuExec type resolver and the GPU proxy types: POD
+# layout, equality, and type mappings.
+add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_types_test
+  COMMAND velox_cudf_gpu_types_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+
+# GPU SFI registry, on the host: the launchers are stand-ins that are never
+# invoked.
+add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_function_registry_test
+  COMMAND velox_cudf_gpu_function_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_registry_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+target_link_libraries(
+  velox_cudf_gpu_function_registry_test
+  velox_cudf_gpu_function_bridge
+  velox_functions_prestosql
+  GTest::gmock
+  gtest
+  gtest_main
+)
+
+# GPU SFI semantics, on the device. Uses the registrations' shadow include path
+# and --diag-error=20011, so it instantiates the same functions.
+add_executable(velox_cudf_gpu_function_semantics_test GpuFunctionSemanticsTest.cu)
+set_target_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_include_directories(
+  velox_cudf_gpu_function_semantics_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_function_semantics_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
+add_test(
+  NAME velox_cudf_gpu_function_semantics_test
+  COMMAND velox_cudf_gpu_function_semantics_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+
+# Compile-only test that each mechanism a Velox simple function needs on the
+# device, the gpu_shadows/ headers and the VELOX_GPU_COMPATIBLE annotations,
+# generates device code under nvcc with gpu_shadows/ ahead of the Velox source
+# root.
+add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+set_target_properties(
+  velox_cudf_gpu_shadow_compile_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION ON
+)
+target_include_directories(
+  velox_cudf_gpu_shadow_compile_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+# --diag-error=20011 makes calling a __host__ function from a __host__
+# __device__ one an error. nvcc otherwise only warns when the call sits in a
+# template instantiated for both, and the kernel computes garbage.
+target_compile_options(
+  velox_cudf_gpu_shadow_compile_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
