@@ -299,7 +299,8 @@ class FlatMapVector : public BaseVector {
       vector_size_t otherIndex,
       CompareFlags flags) const override;
 
-  /// Copy the ranges defined by `ranges` from source into `this`.
+  /// Copy the ranges defined by `ranges` from source into `this`. `source` may
+  /// be a FlatMapVector or a MapVector, under any wrapping.
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
@@ -352,6 +353,21 @@ class FlatMapVector : public BaseVector {
       const folly::Range<const BaseVector::CopyRange*>& ranges);
 
  private:
+  // Copies 'ranges' from an unwrapped flat map.
+  void copyFlatMapRanges(
+      const FlatMapVector* sourceFlatMap,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', a flat map under a dictionary or constant.
+  void copyWrappedFlatMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', whose wrapped vector is a MapVector.
+  void copyMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
   // Returns the in-map bits of 'channel' for writing. A key without an in-map
   // buffer is in every row, so a buffer allocated here starts with every bit
   // set.

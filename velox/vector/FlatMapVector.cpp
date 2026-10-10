@@ -580,13 +580,114 @@ void FlatMapVector::copyRanges(
     return;
   }
 
-  auto* sourceFlatMap = source->loadedVector()->as<FlatMapVector>();
-  if (sourceFlatMap == nullptr) {
-    VELOX_NYI(
-        "FlatMapVector::copyRanges expects a FlatMapVector, got {}.",
-        source->toString());
+  source = source->loadedVector();
+
+  // An UNKNOWN or null constant source may have no map under it, so check for
+  // it first.
+  if (detail::isAllNullVector(*source)) {
+    setNulls(mutableRawNulls(), ranges, true);
+    return;
   }
 
+  switch (source->wrappedVector()->encoding()) {
+    case VectorEncoding::Simple::MAP:
+      copyMapRanges(source, ranges);
+      return;
+    case VectorEncoding::Simple::FLAT_MAP:
+      if (const auto* sourceFlatMap = source->as<FlatMapVector>()) {
+        copyFlatMapRanges(sourceFlatMap, ranges);
+      } else {
+        copyWrappedFlatMapRanges(source, ranges);
+      }
+      return;
+    default:
+      VELOX_FAIL(
+          "FlatMapVector::copyRanges expects a map source, got {}.",
+          source->toString());
+  }
+}
+
+void FlatMapVector::copyWrappedFlatMapRanges(
+    const BaseVector* source,
+    const folly::Range<const CopyRange*>& ranges) {
+  // Translate the rows of the wrapper into rows of the flat map under it.
+  std::vector<CopyRange> leafRanges;
+  applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+    if (source->isNullAt(sourceIndex)) {
+      setNull(targetIndex, true);
+    } else {
+      leafRanges.push_back({source->wrappedIndex(sourceIndex), targetIndex, 1});
+    }
+  });
+  copyFlatMapRanges(
+      source->wrappedVector()->asUnchecked<FlatMapVector>(), leafRanges);
+}
+
+void FlatMapVector::copyMapRanges(
+    const BaseVector* source,
+    const folly::Range<const CopyRange*>& ranges) {
+  const auto* map = source->wrappedVector()->asUnchecked<MapVector>();
+  const auto& keys = map->mapKeys();
+
+  // The copied rows are overwritten, so every key starts out absent from them.
+  for (column_index_t channel = 0; channel < numDistinctKeys(); ++channel) {
+    auto* inMap = ensureInMapAt(channel);
+    applyToEachRange(ranges, [&](auto targetIndex, auto, auto count) {
+      bits::fillBits(inMap, targetIndex, targetIndex + count, false);
+    });
+  }
+
+  const bool setNotNulls = mayHaveNulls() || source->mayHaveNulls();
+
+  // Where each key's values come from in the map's values, per key channel.
+  std::vector<std::vector<CopyRange>> valueRanges(numDistinctKeys());
+
+  // First pass: mark each copied entry's key as present and record its value.
+  applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+    if (source->isNullAt(sourceIndex)) {
+      setNull(targetIndex, true);
+      return;
+    }
+    if (setNotNulls) {
+      setNull(targetIndex, false);
+    }
+
+    // Row in the map under any dictionary or constant wrapping.
+    const auto row = source->wrappedIndex(sourceIndex);
+    const auto offset = map->offsetAt(row);
+
+    // Each entry goes to the channel of its key.
+    for (auto entry = offset; entry < offset + map->sizeAt(row); ++entry) {
+      VELOX_CHECK(!keys->isNullAt(entry), "Map key cannot be null");
+      auto channel = getKeyChannel(keys, entry);
+
+      // A key this flat map lacks gets a new channel, absent from other rows.
+      if (!channel.has_value()) {
+        channel = numDistinctKeys();
+        appendDistinctKey(keys, entry);
+        inMapsAt(*channel, true) =
+            AlignedBuffer::allocate<bool>(size(), pool(), false);
+        mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+        valueRanges.emplace_back();
+      }
+
+      bits::setBit(mutableRawInMapsAt(*channel), targetIndex);
+      valueRanges[*channel].push_back({entry, targetIndex, 1});
+    }
+  });
+
+  // Second pass: copy the values into each key's vector.
+  for (column_index_t channel = 0; channel < valueRanges.size(); ++channel) {
+    if (!valueRanges[channel].empty()) {
+      mapValues_[channel]->copyRanges(
+          map->mapValues().get(), valueRanges[channel]);
+    }
+  }
+}
+
+void FlatMapVector::copyFlatMapRanges(
+    const FlatMapVector* sourceFlatMap,
+    const folly::Range<const CopyRange*>& ranges) {
   // If source may have nulls, copy top-level nulls from the ranges first.
   if (sourceFlatMap->mayHaveNulls()) {
     copyNulls(mutableRawNulls(), sourceFlatMap->rawNulls(), ranges);

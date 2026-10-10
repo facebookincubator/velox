@@ -2158,6 +2158,35 @@ TEST_P(ParameterizedExprTest, ifWithConstant) {
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
 }
 
+TEST_P(ParameterizedExprTest, ifMixesFlatMapAndMap) {
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{1, 11}},
+      {{1, 12}},
+  });
+  auto map = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{2, 21}},
+      {{2, 22}},
+  });
+  auto input =
+      makeRowVector({makeFlatVector<bool>({true, false, true}), flatMap, map});
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 21}},
+      {{1, 12}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c1, c2)", input));
+
+  expected = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{1, 11}},
+      {{2, 22}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c2, c1)", input));
+}
+
 // Make sure that switch do set nulls for rows that are not evaluated by the
 // switch due to a throw.
 TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
