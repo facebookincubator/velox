@@ -24,6 +24,10 @@
 
 namespace facebook::velox::ucx_exchange {
 
+enum class ExchangeCompression;
+
+struct PackedExchangePayload;
+
 /// This is the cudf equivalent of the PartitionedOutput operator for cudf.
 /// Instead of serializing and segmenting the partitioned data into an
 /// OutputBuffer, the UcxPartitionedOutput operator transfers entire
@@ -127,6 +131,16 @@ class UcxPartitionedOutput : public exec::Operator,
       cudf::table_view tableView,
       cuda::stream_ref stream);
 
+  // Packs one exchange payload. The default path is ordinary cuDF packing.
+  // FOR is fused into packing with the selected layout and 32 KiB tiles.
+  // Cascaded compresses ordinary packed input and retains it if not reduced.
+  std::unique_ptr<cudf::packed_columns> packForExchange(
+      cudf::table_view tableView,
+      cuda::stream_ref stream);
+
+  /// Records byte and auxiliary-count statistics for a compressed payload.
+  void recordCompressionStats(const PackedExchangePayload& payload);
+
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
   std::vector<column_index_t> partitionKeyIndices_;
   const size_t numPartitions_;
@@ -163,6 +177,9 @@ class UcxPartitionedOutput : public exec::Operator,
   int64_t pendingRows_{0};
   /// Configured row threshold for flushing (from QueryConfig).
   const int64_t targetRowsPerChunk_;
+
+  /// Codec applied while exchange output is materialized.
+  const ExchangeCompression compression_;
 };
 
 } // namespace facebook::velox::ucx_exchange

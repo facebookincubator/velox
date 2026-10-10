@@ -22,6 +22,7 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
 #include <folly/Synchronized.h>
@@ -30,6 +31,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
+#include <rmm/cuda_stream.hpp>
 #include <rmm/device_buffer.hpp>
 #include <algorithm>
 #include <chrono>
@@ -51,7 +53,10 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
+#include "velox/experimental/ucx-exchange/ExchangeCompression.h"
+#include "velox/experimental/ucx-exchange/ExchangeCompressionWire.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
 #include "velox/experimental/ucx-exchange/tests/SourceDriverMock.h"
@@ -66,6 +71,161 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
 
 namespace facebook::velox::ucx_exchange {
+
+namespace {
+
+TEST(ReceivedTableStorageTest, keepsPackedStorage) {
+  auto stream = cudf::get_default_stream();
+  auto input = makeTable(32, UcxTestData::kTestRowType, stream);
+  auto packed = cudf::pack(input->view(), stream);
+  stream.sync();
+  const auto bytes = packed.gpu_data->size();
+  auto view = cudf::unpack(packed);
+  const auto* columnData = view.column(0).head<uint8_t>();
+  auto storage = std::make_unique<cudf::packed_table>(
+      cudf::packed_table{view, std::move(packed)});
+  PackedTableWithStream received(std::move(storage), stream, 32);
+  EXPECT_FALSE(storage);
+  EXPECT_FALSE(received.table);
+  ASSERT_TRUE(received.packedTable);
+  EXPECT_EQ(received.tableView().column(0).head<uint8_t>(), columnData);
+  EXPECT_EQ(received.tableView().num_rows(), 32);
+  EXPECT_EQ(received.numRows, 32);
+  EXPECT_EQ(received.gpuDataSize(), bytes);
+}
+
+TEST(ReceivedTableStorageTest, takesOwningTableWithoutRepacking) {
+  auto stream = cudf::get_default_stream();
+  auto input = makeTable(32, UcxTestData::kTestRowType, stream);
+  stream.sync();
+  const auto* storage = input.get();
+  const auto* columnData = input->view().column(0).head<uint8_t>();
+  PackedTableWithStream received(std::move(input), stream, 1234, 32);
+  EXPECT_FALSE(input);
+  EXPECT_EQ(received.table.get(), storage);
+  EXPECT_FALSE(received.packedTable);
+  EXPECT_EQ(received.tableView().column(0).head<uint8_t>(), columnData);
+  EXPECT_EQ(received.numRows, 32);
+  EXPECT_EQ(received.gpuDataSize(), 1234);
+}
+
+TEST(ReceivedTableStorageTest, preservesProducerRowsForEmptyLayout) {
+  auto input = std::make_unique<cudf::table>();
+  PackedTableWithStream received(
+      std::move(input), cudf::get_default_stream(), 0, 7);
+  EXPECT_EQ(received.tableView().num_columns(), 0);
+  EXPECT_EQ(received.numRows, 7);
+  EXPECT_EQ(received.gpuDataSize(), 0);
+}
+
+TEST(ReceivedTableStorageTest, rejectsMissingStorage) {
+  PackedTableWithStream received;
+  EXPECT_EQ(received.gpuDataSize(), 0);
+  EXPECT_THROW((void)received.tableView(), VeloxRuntimeError);
+}
+
+#if __has_include(<cudf/detail/fused_for.hpp>)
+TEST(ReceivedTableStorageTest, restoresForPayloadOnConsumerStream) {
+  constexpr vector_size_t kRows = 65536;
+  rmm::cuda_stream producer;
+  rmm::cuda_stream consumer;
+  auto memoryResource = cudf::get_current_device_resource_ref();
+  std::vector<int32_t> values(kRows);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<int32_t>(i % 32) - 10;
+  }
+  auto column = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT32},
+      kRows,
+      cudf::mask_state::UNALLOCATED,
+      producer,
+      memoryResource);
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      column->mutable_view().data<int32_t>(),
+      values.data(),
+      values.size() * sizeof(int32_t),
+      cudaMemcpyHostToDevice,
+      producer.value()));
+  auto payload = packExchangePayload(
+      cudf::table_view{std::vector<cudf::column_view>{column->view()}},
+      ExchangeCompression::kFusedForByteAligned,
+      producer,
+      memoryResource,
+      memoryResource);
+  producer.synchronize();
+  ASSERT_EQ(payload.codec, ExchangePayloadCodec::kFusedFor);
+  const auto logicalBytes = payload.logicalDataSize;
+  auto received = detail::restoreReceivedTable(
+      std::move(payload.packed->metadata),
+      std::move(payload.packed->gpu_data),
+      consumer,
+      kRows);
+  ASSERT_TRUE(received->packedTable);
+  EXPECT_FALSE(received->table);
+  EXPECT_EQ(received->gpuDataSize(), logicalBytes);
+  EXPECT_EQ(received->numRows, kRows);
+  EXPECT_EQ(received->packedTable->data.gpu_data->stream(), consumer);
+  std::vector<int32_t> decoded(values.size());
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      decoded.data(),
+      received->tableView().column(0).data<int32_t>(),
+      decoded.size() * sizeof(int32_t),
+      cudaMemcpyDeviceToHost,
+      consumer.value()));
+  consumer.synchronize();
+  EXPECT_EQ(decoded, values);
+}
+
+TEST(ReceivedTableStorageTest, restoresTypedEmptyCommonForPayload) {
+  auto stream = cudf::get_default_stream();
+  auto memoryResource = cudf::get_current_device_resource_ref();
+  const auto type = cudf::data_type{cudf::type_id::INT32};
+  auto column = cudf::make_fixed_width_column(
+      type, 0, cudf::mask_state::UNALLOCATED, stream, memoryResource);
+  auto payload = packExchangePayload(
+      cudf::table_view{std::vector<cudf::column_view>{column->view()}},
+      ExchangeCompression::kFusedForByteAligned,
+      stream,
+      memoryResource,
+      memoryResource);
+  ASSERT_EQ(payload.codec, ExchangePayloadCodec::kFusedFor);
+  ASSERT_EQ(payload.auxiliaryCount, 0);
+  ASSERT_EQ(payload.logicalDataSize, 0);
+  ASSERT_EQ(payload.packed->gpu_data->size(), 0);
+  auto received = detail::restoreReceivedTable(
+      std::move(payload.packed->metadata),
+      std::move(payload.packed->gpu_data),
+      stream,
+      0);
+  ASSERT_TRUE(received->packedTable);
+  EXPECT_FALSE(received->table);
+  EXPECT_EQ(received->numRows, 0);
+  EXPECT_EQ(received->gpuDataSize(), 0);
+  ASSERT_EQ(received->tableView().num_columns(), 1);
+  EXPECT_EQ(received->tableView().num_rows(), 0);
+  EXPECT_EQ(received->tableView().column(0).type(), type);
+}
+
+TEST(ReceivedTableStorageTest, rejectsForSegmentCountOverflowBeforeDecode) {
+  auto stream = cudf::get_default_stream();
+  auto packed = cudf::pack(cudf::table_view{}, stream);
+  auto metadata = wrapExchangePayloadMetadata(
+      std::move(packed.metadata),
+      ExchangePayloadCodec::kFusedFor,
+      0,
+      std::numeric_limits<std::size_t>::max());
+  try {
+    (void)detail::restoreReceivedTable(
+        std::move(metadata), std::move(packed.gpu_data), stream, 0);
+    FAIL() << "Expected fused FOR descriptor size overflow";
+  } catch (const cudf::logic_error& error) {
+    EXPECT_THAT(
+        error.what(), testing::HasSubstr("fused FOR descriptor size overflow"));
+  }
+}
+#endif
+
+} // namespace
 
 struct ExchangeTestParams {
   int numSrcDrivers;

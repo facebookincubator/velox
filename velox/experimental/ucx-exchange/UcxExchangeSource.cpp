@@ -21,6 +21,7 @@
 #include <folly/Uri.h>
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/ucx-exchange/ExchangeCompression.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
 
@@ -50,6 +51,15 @@ receiverStateNames() {
   return kNames;
 }
 } // namespace
+
+PackedTableWithStreamPtr detail::restoreReceivedTable(
+    std::unique_ptr<std::vector<uint8_t>> metadata,
+    std::unique_ptr<rmm::device_buffer> data,
+    cuda::stream_ref stream,
+    vector_size_t numRows) {
+  return restoreExchangePayload(
+      std::move(metadata), std::move(data), stream, numRows);
+}
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(
     UcxExchangeSource,
@@ -605,20 +615,11 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
     metrics_.numPackedColumns_.addValue(1);
     metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
 
-    // Create packed_columns from the received metadata and data buffer
-    cudf::packed_columns packedCols(
-        std::move(ptr->metadata.cudfMetadata), std::move(ptr->dataBuf));
-
-    // Unpack to get the table_view and create a packed_table
-    cudf::table_view tableView = cudf::unpack(packedCols);
-    auto packedTable = std::make_unique<cudf::packed_table>(
-        cudf::packed_table{tableView, std::move(packedCols)});
-
-    // Bundle the packed_table with the stream that was used for allocation
-    // and the producer's row count, which the packed table cannot report for
-    // itself when it has no columns.
-    auto data = std::make_unique<PackedTableWithStream>(
-        std::move(packedTable), ptr->stream, ptr->metadata.numRows);
+    auto data = detail::restoreReceivedTable(
+        std::move(ptr->metadata.cudfMetadata),
+        std::move(ptr->dataBuf),
+        ptr->stream,
+        ptr->metadata.numRows);
 
     enqueue(std::move(data));
     setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
@@ -774,22 +775,14 @@ void UcxExchangeSource::onIntraNodeData(
 
   // Convert packed_columns to PackedTableWithStream for the queue.
   // Create packed_columns from the shared data.
-  cudf::packed_columns packedCols(
-      std::move(data->metadata), std::move(data->gpu_data));
-
-  // Unpack to get the table_view and create a packed_table
-  cudf::table_view tableView = cudf::unpack(packedCols);
-  auto packedTable = std::make_unique<cudf::packed_table>(
-      cudf::packed_table{tableView, std::move(packedCols)});
-
-  // Get a stream from the pool so downstream cuDF operations on this data
-  // run on a dedicated stream, not the default stream. The producer already
-  // synchronized before enqueuing, so the GPU data is ready. This matches
-  // the inter-node (UCX) receive path which also allocates a pool stream.
-  auto stream =
-      facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
-  auto tableWithStream = std::make_unique<PackedTableWithStream>(
-      std::move(packedTable), stream, numRows);
+  // The producer synchronizes before publishing, so the payload is ready on a
+  // new consumer stream.
+  auto consumerStream = cudf_velox::cudfGlobalStreamPool().get_stream();
+  auto tableWithStream = detail::restoreReceivedTable(
+      std::move(data->metadata),
+      std::move(data->gpu_data),
+      consumerStream,
+      numRows);
 
   enqueue(std::move(tableWithStream));
 
