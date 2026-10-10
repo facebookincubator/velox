@@ -70,7 +70,8 @@ class TableWriter : public Operator {
     if (FOLLY_LIKELY(dataSink_ != nullptr)) {
       const auto connectorStats = dataSink_->runtimeStats();
       for (const auto& [name, counter] : connectorStats) {
-        stats.runtimeStats[name] = RuntimeMetric(counter.value, counter.unit);
+        stats.runtimeStats[name] =
+            RuntimeMetric(counter.value, counter.unit, counter.aggregation);
       }
     }
 

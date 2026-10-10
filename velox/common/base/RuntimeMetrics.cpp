@@ -36,6 +36,10 @@ void RuntimeMetric::aggregate() {
 
 void RuntimeMetric::merge(const RuntimeCounter& value) {
   VELOX_CHECK_EQ(unit, value.unit, "Unit mismatch for runtime stat");
+  VELOX_CHECK_EQ(
+      aggregation,
+      value.aggregation,
+      "Aggregation policy mismatch for runtime stat");
   addValue(value.value);
 }
 
@@ -47,6 +51,7 @@ void RuntimeMetric::merge(const RuntimeMetric& other)
 #endif
 {
   VELOX_CHECK_EQ(unit, other.unit);
+  VELOX_CHECK_EQ(aggregation, other.aggregation);
   sum += other.sum;
   count += other.count;
   min = std::min(min, other.min);
