@@ -126,7 +126,8 @@ class GcsEmulator : public testing::Environment {
     ASSERT_TRUE(bucket.ok()) << "Failed to create bucket <" << bucketName_
                              << ">, status=" << bucket.status();
 
-    auto object = client.InsertObject(bucketName_, objectName_, kLoremIpsum);
+    auto object =
+        client.InsertObject(bucketName_, objectName_, std::string(kLoremIpsum));
     ASSERT_TRUE(object.ok()) << "Failed to create object <" << objectName_
                              << ">, status=" << object.status();
   }

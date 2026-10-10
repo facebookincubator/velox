@@ -314,6 +314,25 @@ TEST_F(GcsFileSystemTest, credentialsProvider) {
   }
 }
 
+TEST_F(GcsFileSystemTest, userAgent) {
+  for (const auto& userAgent :
+       {"custom-agent", "my-custom-engine-using-velox", "Velox-Engine"}) {
+    SCOPED_TRACE(userAgent);
+    std::unordered_map<std::string, std::string> configOverride = {
+        {connector::hive::HiveConfig::kGcsUserAgent, userAgent}};
+    auto hiveConfig = emulator_->hiveConfig(configOverride);
+
+    filesystems::GcsFileSystem gcfs(
+        emulator_->preexistingBucketName(), hiveConfig);
+    gcfs.initializeClient();
+    const auto gcsFile = gcsURI(
+        emulator_->preexistingBucketName(), emulator_->preexistingObjectName());
+    auto readFile = gcfs.openFileForRead(gcsFile);
+    EXPECT_EQ(readFile->size(), kLoremIpsum.length());
+    EXPECT_EQ(readFile->pread(0, readFile->size()), kLoremIpsum);
+  }
+}
+
 TEST_F(GcsFileSystemTest, defaultCacheKey) {
   registerGcsFileSystem();
   std::unordered_map<std::string, std::string> configWithoutEndpoint = {};
