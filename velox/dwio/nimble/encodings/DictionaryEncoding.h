@@ -15,12 +15,18 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <span>
+#include <utility>
+#include <vector>
 #include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -30,7 +36,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 
 // A dictionary encoded stream is comprised of two pieces: a mapping from the
 // n unique values in a stream to the integers [0, n) and the vector of indices
@@ -95,14 +100,18 @@ class DictionaryEncoding
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Estimates dictionary bytes, including configured ALP/ALPRD alphabet
+  /// candidates for floating-point logical types.
   static uint64_t estimateSize(
       uint64_t rowCount,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options = {}) {
+      const Encoding::Options& options = {},
+      std::span<const std::pair<EncodingType, float>>
+          alphabetEncodingReadFactors = {}) {
     // Estimate the two nested streams produced by Dictionary:
     //
-    //   alphabet: unique values. Floating-point alphabets may use ALP when
-    //     nested ALP selection is enabled.
+    //   alphabet: unique values, estimated as Trivial or FixedBitWidth, plus
+    //             configured ALP/ALPRD for floating-point logical types.
     //   indices: one dictionary index per row, estimated as FixedBitWidth.
     const auto& uniqueCounts = statistics.uniqueCounts().value();
     const uint64_t uniqueCount = uniqueCounts.size();
@@ -113,30 +122,8 @@ class DictionaryEncoding
             uniqueCount == 0 ? 0 : uniqueCount - 1,
             options);
 
-    uint64_t alphabetEncodingSize{};
-    if constexpr (isStringType<physicalType>()) {
-      // Get the total blob size for all (unique) strings.
-      alphabetEncodingSize = TrivialEncoding<std::string_view>::estimateSize(
-          uniqueCount,
-          uniqueCounts.uniqueStringBytes(),
-          statistics.min().size(),
-          statistics.max().size(),
-          options);
-    } else {
-      alphabetEncodingSize = std::min(
-          TrivialEncoding<physicalType>::estimateSize(uniqueCount),
-          FixedBitWidthEncoding<physicalType>::estimateSize(
-              uniqueCount, statistics.min(), statistics.max(), options));
-      // TODO: Consider PFOR after its statistics can be derived from unique
-      // values without rebuilding Statistics for every dictionary estimate.
-      if constexpr (isFloatingPointType<T>()) {
-        if (const auto alpEncodingSize =
-                detail::uniqueValuesNestedAlpSize<T>(uniqueCounts, options)) {
-          alphabetEncodingSize =
-              std::min(alphabetEncodingSize, *alpEncodingSize);
-        }
-      }
-    }
+    const auto alphabetEncodingSize =
+        estimateAlphabetSize(statistics, options, alphabetEncodingReadFactors);
     const uint64_t outerEncodingSize =
         EncodingPrefix::kFixedPrefixSize + sizeof(uint32_t);
     return outerEncodingSize + alphabetEncodingSize + indicesEncodingSize;
@@ -165,6 +152,66 @@ class DictionaryEncoding
   }
 
  private:
+  // Uses unique-value statistics so repeated input values do not skew sampling.
+  static uint64_t estimateAlphabetSize(
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          alphabetEncodingReadFactors) {
+    const auto& uniqueCounts = statistics.uniqueCounts().value();
+    const uint64_t uniqueCount = uniqueCounts.size();
+    if constexpr (isStringType<physicalType>()) {
+      return TrivialEncoding<std::string_view>::estimateSize(
+          uniqueCount,
+          uniqueCounts.uniqueStringBytes(),
+          statistics.min().size(),
+          statistics.max().size(),
+          options);
+    } else {
+      auto alphabetEncodingSize = std::min(
+          TrivialEncoding<physicalType>::estimateSize(uniqueCount),
+          FixedBitWidthEncoding<physicalType>::estimateSize(
+              uniqueCount, statistics.min(), statistics.max(), options));
+      if constexpr (isFloatingPointType<T>()) {
+        if (uniqueCount == 0) {
+          return alphabetEncodingSize;
+        }
+        std::vector<physicalType> sampledValues;
+        for (const auto& candidate : alphabetEncodingReadFactors) {
+          const auto encodingType = candidate.first;
+          if (encodingType != EncodingType::ALP &&
+              encodingType != EncodingType::ALPRD) {
+            continue;
+          }
+          if (sampledValues.empty()) {
+            NIMBLE_CHECK_LE(uniqueCount, std::numeric_limits<uint32_t>::max());
+            const auto sampleSize =
+                ALPEncoding<T>::estimateSampleSize(uniqueCount);
+            sampledValues.reserve(sampleSize);
+            for (const auto& [value, count] : uniqueCounts) {
+              sampledValues.push_back(value);
+              if (sampledValues.size() == sampleSize) {
+                break;
+              }
+            }
+          }
+          const auto estimate = encodingType == EncodingType::ALP
+              ? ALPEncoding<T>::estimateSizeFromSample(
+                    uniqueCount, sampledValues, options)
+              : ALPRDEncodingBase::estimateSize<physicalType>(
+                    sampledValues, static_cast<uint32_t>(uniqueCount), options);
+          if (estimate.has_value()) {
+            alphabetEncodingSize =
+                std::min(alphabetEncodingSize, estimate.value());
+          }
+        }
+      }
+      // TODO: Consider PFOR after its statistics can be derived from unique
+      // values without rebuilding Statistics for every dictionary estimate.
+      return alphabetEncodingSize;
+    }
+  }
+
   static std::string_view encodeAlphabet(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> alphabet,

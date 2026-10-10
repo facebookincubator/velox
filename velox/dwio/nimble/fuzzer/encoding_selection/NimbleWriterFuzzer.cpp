@@ -290,7 +290,6 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   options.chunkStatsMinAvgChunks = 0;
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
-  options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
   // encoding is actually exercised instead of rejected on size.
   options.fsstCompressionTargetRatio =

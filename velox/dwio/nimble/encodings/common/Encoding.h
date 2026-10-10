@@ -156,11 +156,6 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
-    /// Legacy experimental option for floating-point normalization and
-    /// policy-free nested ALP size estimates. Does not enable encoding
-    /// candidates; configure ALP explicitly in the selection policy.
-    bool allowNestedAlpSelection{false};
-
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///

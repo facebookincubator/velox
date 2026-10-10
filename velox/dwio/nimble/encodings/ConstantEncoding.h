@@ -51,7 +51,7 @@ class ConstantEncodingBase
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) {
-    if (!isConstant(values, statistics, options)) {
+    if (!isConstant(values, statistics)) {
       return std::nullopt;
     }
     const uint64_t outerEncodingSize =
@@ -170,7 +170,7 @@ class ConstantEncodingBase
       NIMBLE_INCOMPATIBLE_ENCODING("ConstantEncoding cannot be empty.");
     }
 
-    if (!isConstant(values, selection.statistics(), options)) {
+    if (!isConstant(values, selection.statistics())) {
       NIMBLE_INCOMPATIBLE_ENCODING("ConstantEncoding requires constant data.");
     }
 
@@ -189,12 +189,7 @@ class ConstantEncodingBase
         rowCount,
         useVarint,
         pos);
-    // Canonicalizing logically-equal floats is only valid under ALP (which
-    // encodes floats by logical value); otherwise store the exact bits.
-    encoding::write<physicalType>(
-        options.allowNestedAlpSelection ? canonicalValue(values.front())
-                                        : values.front(),
-        pos);
+    encoding::write<physicalType>(values.front(), pos);
     NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
     return {reserved, encodingSize};
   }
@@ -233,51 +228,10 @@ class ConstantEncodingBase
  protected:
   static bool isConstant(
       std::span<const physicalType> values,
-      const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Statistics<physicalType>& statistics) {
     NIMBLE_CHECK(
         !values.empty(), "ConstantEncoding requires non-empty values.");
-    if (values.size() == 1) {
-      return true;
-    }
-
-    // Statistics::isConstant() compares against the first value and stops at
-    // the first mismatch, so a stream that is not constant is settled almost
-    // immediately. Going through uniqueCounts() instead built a hash entry per
-    // value to answer the same question, which on a wide column was the single
-    // largest cost in encoding selection.
-    if (statistics.isConstant()) {
-      return true;
-    }
-
-    if constexpr (!isFloatingPointType<T>()) {
-      return false;
-    }
-
-    // Logical-equality constancy collapses physically-distinct but logically
-    // equal floats (only -0.0/+0.0; NaN is excluded since NaN != NaN) to a
-    // single canonical value. That is only sound when ALP is enabled, since ALP
-    // encodes floats by logical value. Without ALP, encodings must preserve the
-    // exact bits, so require physical (bit-exact) constancy.
-    if (!options.allowNestedAlpSelection) {
-      return false;
-    }
-    const auto logicalValue =
-        EncodingPhysicalType<T>::asEncodingLogicalType(values.front());
-    return std::all_of(values.begin(), values.end(), [&](physicalType value) {
-      return EncodingPhysicalType<T>::asEncodingLogicalType(value) ==
-          logicalValue;
-    });
-  }
-
-  static physicalType canonicalValue(physicalType value) {
-    if constexpr (!isFloatingPointType<T>()) {
-      return value;
-    }
-    // Floating-point constant selection uses logical equality; store the
-    // matching canonical physical value.
-    const auto logical = EncodingPhysicalType<T>::asEncodingLogicalType(value);
-    return EncodingPhysicalType<T>::asEncodingPhysicalType(logical);
+    return values.size() == 1 || statistics.isConstant();
   }
 
   physicalType value_;

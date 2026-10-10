@@ -36,15 +36,14 @@ larger encoding tree.
 
 Dictionary alphabets, RLE run values, and MainlyConstant uncommon values can
 select ALP or ALP_RD through their inherited or explicitly overridden candidates.
-Parent containers retain their existing heuristic estimates. Their value
-children select from the configured candidates when written, and ancestor
-encoding filters apply as usual.
+Dictionary and RLE estimates include configured ALP/ALP_RD value-child candidates
+using bounded sampling of float/double alphabets or run values. Value children
+select from the configured candidates when written, and ancestor encoding filters
+apply as usual.
 
-ALP and ALP_RD both require explicit candidate configuration. The legacy
-`allowNestedAlpSelection` option does not add ALP to nested candidates. Callers
-that relied on this option must add ALP to their nested candidate configuration.
-The option retains its existing floating-point normalization and policy-free
-estimation behavior.
+ALP and ALP_RD both require explicit candidate configuration. Constant encoding
+preserves floating-point bit patterns, including signed zero, regardless of the
+configured candidates.
 
 `AlpLike` denotes ALP and ALP_RD. The policy hook `hasAlpLikeCandidates()` reports
 whether configured candidates or replayed layouts include either encoding. This

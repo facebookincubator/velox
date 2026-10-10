@@ -158,6 +158,10 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
+    const auto& nestedEncodingReadFactors =
+        nestedEncodingReadFactorsOverride_.has_value()
+        ? nestedEncodingReadFactorsOverride_.value()
+        : candidateEncodingReadFactors_;
     float minCost = std::numeric_limits<float>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
     std::optional<uint64_t> selectedEstimatedSize;
@@ -167,7 +171,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const auto encodingType = entry.first;
       const auto estimatedSize =
           detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
+              encodingType,
+              values,
+              statistics,
+              options,
+              nestedEncodingReadFactors);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
