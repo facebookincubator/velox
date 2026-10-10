@@ -24,6 +24,7 @@
 #include <cuda/memory_resource>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 
@@ -40,6 +41,41 @@ extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
 /// mr_/output_mr_ increment the same counters that these read.
 extern std::optional<rmm::mr::statistics_resource_adaptor> statsMr_;
 extern std::optional<rmm::mr::statistics_resource_adaptor> outputStatsMr_;
+
+/// Selects resources on this thread; nested scopes restore the previous choice.
+/// Async work must propagate its resource explicitly to another host thread.
+class ScopedCudfMemoryResources {
+ public:
+  ScopedCudfMemoryResources(
+      rmm::device_async_resource_ref tempMr,
+      rmm::device_async_resource_ref outputMr);
+  ScopedCudfMemoryResources(
+      rmm::device_async_resource_ref tempMr,
+      rmm::device_async_resource_ref outputMr,
+      std::shared_ptr<void> owner);
+  ~ScopedCudfMemoryResources();
+
+  ScopedCudfMemoryResources(const ScopedCudfMemoryResources&) = delete;
+  ScopedCudfMemoryResources& operator=(const ScopedCudfMemoryResources&) =
+      delete;
+  ScopedCudfMemoryResources(ScopedCudfMemoryResources&&) = delete;
+  ScopedCudfMemoryResources& operator=(ScopedCudfMemoryResources&&) = delete;
+
+ private:
+  std::shared_ptr<void> previousOwner_;
+  std::optional<rmm::device_async_resource_ref> previousTempMr_;
+  std::optional<rmm::device_async_resource_ref> previousOutputMr_;
+};
+
+rmm::device_async_resource_ref get_temp_mr();
+std::shared_ptr<void> get_memory_resource_owner();
+
+/// Routes implicit cuDF temporaries through the active scope and retains their
+/// selected resource until deallocation, including deallocation on other
+/// threads.
+cuda::mr::any_resource<cuda::mr::device_accessible>
+createThreadLocalTemporaryMemoryResource(
+    cuda::mr::any_resource<cuda::mr::device_accessible> fallback);
 
 /// Returns the memory resource designated for output vector allocations.
 rmm::device_async_resource_ref get_output_mr();

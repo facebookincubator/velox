@@ -361,7 +361,11 @@ void registerCudf() {
   // cudfAllocatedBytes() can report live device memory.
   statsMr_.emplace(std::move(base));
   mr_ = statsMr_.value();
-  cudf::set_current_device_resource(mr_.value());
+  // Keep mr_ as the statistics-wrapped upstream. Scoped accounting resources
+  // delegate to it, so implicit temporaries and explicit outputs are counted
+  // once without recursively dispatching through the current resource.
+  cudf::set_current_device_resource(
+      createThreadLocalTemporaryMemoryResource(mr_.value()));
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {

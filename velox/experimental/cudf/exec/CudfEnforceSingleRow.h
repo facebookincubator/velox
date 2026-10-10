@@ -53,7 +53,7 @@ class CudfEnforceSingleRow : public CudfOperatorBase {
 
   bool isFinished() override;
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
