@@ -15,6 +15,7 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/NormalizeFloatingPoint.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -324,11 +325,19 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   /// If the rhs values passed to either array_intersect() or array_except()
   /// are constant (array literals) we create a set before instantiating the
   /// object and pass as a constructor parameter (constantSet).
+  ///
+  /// If 'normalizeFloatingPoint' is true, REAL and DOUBLE values in the output,
+  /// including nested ones, are returned in canonical form: -0.0 becomes 0.0
+  /// and every NaN becomes the canonical NaN. Spark needs this.
 
-  ArrayIntersectExceptFunction() = default;
+  explicit ArrayIntersectExceptFunction(bool normalizeFloatingPoint)
+      : normalizeFloatingPoint_(normalizeFloatingPoint) {}
 
-  explicit ArrayIntersectExceptFunction(SetWithNull<T> constantSet)
-      : constantSet_(std::move(constantSet)) {}
+  ArrayIntersectExceptFunction(
+      SetWithNull<T> constantSet,
+      bool normalizeFloatingPoint)
+      : constantSet_(std::move(constantSet)),
+        normalizeFloatingPoint_(normalizeFloatingPoint) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -446,6 +455,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     auto newElements = BaseVector::wrapInDictionary(
         newElementNulls, newIndices, indicesCursor, baseLeftArray->elements());
+    if (normalizeFloatingPoint_) {
+      newElements = normalizeFloatingPoint(newElements, pool);
+    }
     auto resultArray = std::make_shared<ArrayVector>(
         pool,
         outputType,
@@ -461,6 +473,8 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   // set generated from its elements, which is calculated only once, before
   // instantiating this object.
   std::optional<SetWithNull<T>> constantSet_;
+
+  const bool normalizeFloatingPoint_;
 }; // class ArrayIntersectExcept
 
 template <typename T>
@@ -607,7 +621,8 @@ SetWithNull<T> validateConstantVectorAndGenerateSet(
 
 template <bool isIntersect, typename SetEntryT>
 std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
-    const BaseVector* rhs) {
+    const BaseVector* rhs,
+    bool normalizeFloatingPoint) {
   // We don't optimize the case where lhs is a constant expression for
   // array_intersect() because that would make this function non-deterministic.
   // For example, a constant lhs would mean the constantSet is created based on
@@ -619,29 +634,35 @@ std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
   if (rhs != nullptr) {
     return std::make_shared<
         ArrayIntersectExceptFunction<isIntersect, SetEntryT>>(
-        validateConstantVectorAndGenerateSet<SetEntryT>(rhs));
+        validateConstantVectorAndGenerateSet<SetEntryT>(rhs),
+        normalizeFloatingPoint);
   } else {
     return std::make_shared<
-        ArrayIntersectExceptFunction<isIntersect, SetEntryT>>();
+        ArrayIntersectExceptFunction<isIntersect, SetEntryT>>(
+        normalizeFloatingPoint);
   }
 }
 
 template <bool isIntersect, TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const TypePtr& elementType) {
+    const TypePtr& elementType,
+    bool normalizeFloatingPoint) {
   VELOX_CHECK_EQ(inputArgs.size(), 2);
   const BaseVector* rhs = inputArgs[1].constantValue.get();
+  normalizeFloatingPoint =
+      normalizeFloatingPoint && containsFloatingPoint(*elementType);
 
   if (elementType->providesCustomComparison()) {
     return createTypedArraysIntersectExcept<isIntersect, WrappedVectorEntry>(
-        rhs);
+        rhs, normalizeFloatingPoint);
   } else {
     using T = std::conditional_t<
         TypeTraits<kind>::isPrimitiveType,
         typename TypeTraits<kind>::NativeType,
         WrappedVectorEntry>;
-    return createTypedArraysIntersectExcept<isIntersect, T>(rhs);
+    return createTypedArraysIntersectExcept<isIntersect, T>(
+        rhs, normalizeFloatingPoint);
   }
 }
 
@@ -659,10 +680,10 @@ std::shared_ptr<exec::VectorFunction> createArraysIntersectSingleParam(
   }
 }
 
-std::shared_ptr<exec::VectorFunction> createArrayIntersect(
+std::shared_ptr<exec::VectorFunction> createArrayIntersectImpl(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/) {
+    bool normalizeFloatingPoint) {
   if (inputArgs.size() == 1) {
     auto elementType = inputArgs.front().type->childAt(0)->childAt(0);
     return VELOX_DYNAMIC_TYPE_DISPATCH_WITH_UNKNOWN(
@@ -677,13 +698,33 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
       /* isIntersect */ true,
       elementType->kind(),
       inputArgs,
-      elementType);
+      elementType,
+      normalizeFloatingPoint);
 }
 
-std::shared_ptr<exec::VectorFunction> createArrayExcept(
+std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
+  return createArrayIntersectImpl(
+      name, inputArgs, /*normalizeFloatingPoint=*/false);
+}
+
+// Creates array_intersect that returns REAL and DOUBLE values in canonical
+// form.
+std::shared_ptr<exec::VectorFunction>
+createArrayIntersectNormalizingFloatingPoint(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return createArrayIntersectImpl(
+      name, inputArgs, /*normalizeFloatingPoint=*/true);
+}
+
+std::shared_ptr<exec::VectorFunction> createArrayExceptImpl(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    bool normalizeFloatingPoint) {
   validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
@@ -692,7 +733,25 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
       /* isIntersect */ false,
       elementType->kind(),
       inputArgs,
-      elementType);
+      elementType,
+      normalizeFloatingPoint);
+}
+
+std::shared_ptr<exec::VectorFunction> createArrayExcept(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return createArrayExceptImpl(
+      name, inputArgs, /*normalizeFloatingPoint=*/false);
+}
+
+// Creates array_except that returns REAL and DOUBLE values in canonical form.
+std::shared_ptr<exec::VectorFunction> createArrayExceptNormalizingFloatingPoint(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return createArrayExceptImpl(
+      name, inputArgs, /*normalizeFloatingPoint=*/true);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
@@ -784,4 +843,14 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_except,
     signatures("array(T)"),
     createArrayExcept);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_intersect_normalize_floating_point,
+    arrayIntersectSignatures(),
+    createArrayIntersectNormalizingFloatingPoint);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_except_normalize_floating_point,
+    signatures("array(T)"),
+    createArrayExceptNormalizingFloatingPoint);
 } // namespace facebook::velox::functions
