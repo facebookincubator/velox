@@ -18,6 +18,7 @@
 #include <glog/logging.h>
 #include <optional>
 #include <span>
+#include <utility>
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
@@ -82,6 +83,51 @@ struct EncodingSizeEstimation {
 
     NIMBLE_UNREACHABLE(
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
+  }
+
+  /// Projects a representative sample's statistics to a target entry count.
+  /// Returns nullopt when an estimator cannot perform that projection.
+  static std::optional<uint64_t> estimateProjectedSize(
+      const EncodingType encodingType,
+      const size_t entryCount,
+      const Statistics<physicalType>& sampleStatistics,
+      const Encoding::Options& options) {
+    if (encodingType == EncodingType::Varint ||
+        encodingType == EncodingType::BlockBitPacking) {
+      return std::nullopt;
+    }
+    return estimateSize(encodingType, entryCount, sampleStatistics, options);
+  }
+
+  /// Estimates the size and policy cost for an encoding candidate. Compound
+  /// encodings use scoreNestedChild to include the selected costs of their
+  /// immediate children; leaf encodings retain size-based scoring.
+  template <typename NestedChildScorer>
+  static std::optional<EncodingCandidateScore> estimateScore(
+      const EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      const double costFactor,
+      NestedChildScorer&& scoreNestedChild) {
+    if constexpr (isFloatingPointType<T>()) {
+      if (encodingType == EncodingType::ALPRD) {
+        return ALPRDEncoding<T>::estimateSelectionScore(
+            values,
+            options,
+            costFactor,
+            std::forward<NestedChildScorer>(scoreNestedChild));
+      }
+    }
+
+    const auto estimatedSize =
+        estimateSize(encodingType, values, statistics, options);
+    if (!estimatedSize.has_value()) {
+      return std::nullopt;
+    }
+    return EncodingCandidateScore{
+        estimatedSize.value(),
+        static_cast<double>(estimatedSize.value()) * costFactor};
   }
 
  private:

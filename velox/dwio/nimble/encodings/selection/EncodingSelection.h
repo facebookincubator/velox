@@ -96,6 +96,27 @@ struct EncodingSelectionResult {
   std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
 };
 
+/// A selection result plus the policy-specific cost used to choose it. A
+/// compound parent can use this to include an immediate child's selected cost.
+struct ScoredEncodingSelection {
+  /// Encoding chosen by the policy.
+  EncodingSelectionResult result;
+  /// Estimated serialized size before policy-specific weighting.
+  std::optional<uint64_t> estimatedSize;
+  /// Cost used by the policy to compare this selection with its alternatives.
+  std::optional<double> cost;
+};
+
+/// Estimated serialized size and fully policy-weighted cost for one encoding
+/// candidate. Compound encodings may include their selected children's costs;
+/// callers must not apply those child weights again.
+struct EncodingCandidateScore {
+  /// Estimated serialized size before policy-specific weighting.
+  uint64_t estimatedSize;
+  /// Fully weighted cost, including any immediate child costs.
+  double cost;
+};
+
 /// The EncodingSelection class is passed in to the encode() method of each
 /// encoding. It provides access to the current encoding selection details, and
 /// allows triggering nested necodings of nested data streams.
@@ -226,6 +247,22 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) = 0;
+
+  /// Returns the selected encoding together with its policy-specific score.
+  /// Policies that do not expose a score retain the selected size, allowing a
+  /// compound parent to fall back to an unweighted size estimate.
+  virtual ScoredEncodingSelection selectScored(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    auto result = select(values, statistics, options);
+    const auto estimatedSize = result.estimatedSize;
+    return {
+        .result = std::move(result),
+        .estimatedSize = estimatedSize,
+        .cost = std::nullopt,
+    };
+  }
 
   /// Same as the |select()| method above, but for nullable values.
   virtual EncodingSelectionResult selectNullable(
