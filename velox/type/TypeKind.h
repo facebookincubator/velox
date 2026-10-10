@@ -36,6 +36,8 @@ namespace facebook::velox {
 struct StringView;
 struct Timestamp;
 
+using int128_t = __int128_t;
+
 /// Simple enum with type category.
 enum class TypeKind : int8_t {
   BOOLEAN = 0,

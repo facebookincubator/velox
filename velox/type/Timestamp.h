@@ -161,8 +161,8 @@ struct Timestamp {
     // but seconds*1000 + nanos does, an example is Timestamp::minMillis().
 
     // If the final result does not fit in int64_t we throw.
-    int128_t result =
-        (int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
+    __int128_t result =
+        (__int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
     if (result < INT64_MIN || result > INT64_MAX) {
       VELOX_USER_FAIL(
           "Could not convert Timestamp({}, {}) to milliseconds",
@@ -188,7 +188,7 @@ struct Timestamp {
     // Timestamp(-9223372036855, 224'192'000).
 
     // If the final result does not fit in int64_t we throw.
-    int128_t result = static_cast<int128_t>(seconds_) * 1'000'000 +
+    __int128_t result = static_cast<__int128_t>(seconds_) * 1'000'000 +
         static_cast<int64_t>(nanos_ / 1'000);
     if (result < INT64_MIN || result > INT64_MAX) {
       VELOX_USER_FAIL(

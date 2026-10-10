@@ -146,10 +146,9 @@ TEST(Int128Test, numericLimits) {
 TEST(Int128Test, aliasesAndConstantMultiplication) {
   static_assert(
       std::is_same_v<TypeTraits<TypeKind::HUGEINT>::NativeType, int128_t>);
-#if defined(__SIZEOF_INT128__)
   static_assert(std::is_same_v<int128_t, __int128_t>);
   static_assert(std::is_same_v<uint128_t, __uint128_t>);
-#else
+#if !defined(__SIZEOF_INT128__)
   static_assert(std::is_same_v<int128_t, Int128>);
   static_assert(std::is_same_v<uint128_t, UInt128>);
 #endif

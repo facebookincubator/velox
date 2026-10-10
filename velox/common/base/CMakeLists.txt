@@ -27,6 +27,11 @@ velox_link_libraries(
 )
 
 include_directories(${FLEX_INCLUDE_DIRS})
+set(VELOX_INT128_HEADERS Int128.h)
+if(MSVC)
+  list(APPEND VELOX_INT128_HEADERS windows/Int128.h)
+endif()
+
 velox_add_library(
   velox_common_base
   AdmissionController.cpp
@@ -62,7 +67,7 @@ velox_add_library(
   Fs.h
   IOUtils.h
   IndexedPriorityQueue.h
-  Int128.h
+  ${VELOX_INT128_HEADERS}
   IoCounter.h
   Nulls.h
   PeriodicStatsReporter.h
