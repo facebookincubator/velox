@@ -321,12 +321,41 @@ typename HuffmanEncoding<T>::physicalType HuffmanEncoding<T>::decodeValue(
   NIMBLE_UNREACHABLE("Invalid Huffman row {}", row);
 }
 
+// Decodes the run in one forward pass over the bitstream, rather than calling
+// decodeValue per row: codes are variable length, so a row's bit offset is
+// only reachable by decoding forward from the nearest checkpoint, and doing
+// that once per row in the run would repeat the shared prefix each time.
 template <typename T>
 void HuffmanEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   NIMBLE_DCHECK_LE(currentRow_ + rowCount, this->rowCount_);
+  if (rowCount == 0) {
+    return;
+  }
   auto* output = static_cast<physicalType*>(buffer);
+
+  const uint32_t checkpoint = currentRow_ / kCheckpointStride;
+  uint32_t bitOffset = checkpoints_[checkpoint];
+  const uint32_t mask = (1u << tableLog_) - 1;
+
+  auto nextEntry = [&]() {
+    uint32_t bits = 0;
+    const uint32_t byteOffset = bitOffset >> 3;
+    const uint32_t available =
+        std::min<uint32_t>(4, bitstreamBytes_ - byteOffset);
+    std::memcpy(&bits, bitstream_ + byteOffset, available);
+    bits >>= bitOffset & 7;
+    const auto entry = decodeTable_[bits & mask];
+    NIMBLE_CHECK_GT(entry.bits, 0);
+    bitOffset += entry.bits;
+    return entry;
+  };
+
+  for (uint32_t row = checkpoint * kCheckpointStride; row < currentRow_;
+       ++row) {
+    nextEntry();
+  }
   for (uint32_t i = 0; i < rowCount; ++i) {
-    output[i] = decodeValue(currentRow_ + i);
+    output[i] = alphabet_[nextEntry().symbol];
   }
   currentRow_ += rowCount;
 }

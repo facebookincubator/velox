@@ -86,3 +86,21 @@ add_test(
   --view_fuzzer_iterations=2
   --view_fuzzer_max_rows=128
 )
+
+add_executable(nimble_selection_statistics_fuzzer_tests SelectionStatisticsFuzzerTest.cpp)
+
+target_link_libraries(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_encodings
+  nimble_common
+  gtest
+  gflags::gflags
+  glog::glog
+  Folly::folly
+)
+
+add_test(
+  nimble_selection_statistics_fuzzer_tests
+  nimble_selection_statistics_fuzzer_tests
+  --selection_fuzzer_iterations=2
+)

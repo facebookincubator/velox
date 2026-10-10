@@ -572,9 +572,15 @@ BlockBitPackingEncoding<T>::makeBlockInfo(
     uint32_t start,
     uint32_t count) {
   auto blockValues = values.subspan(start, count);
-  auto [minValue, maxValue] =
-      std::minmax_element(blockValues.begin(), blockValues.end());
-  const auto range = *maxValue - *minValue;
+  // Reduced by value rather than located with std::minmax_element, whose
+  // compare-and-branch per row mispredicts on unordered blocks.
+  physicalType minValue = blockValues[0];
+  physicalType maxValue = minValue;
+  for (const physicalType value : blockValues) {
+    minValue = std::min(minValue, value);
+    maxValue = std::max(maxValue, value);
+  }
+  const auto range = maxValue - minValue;
   const auto rawSize = count * sizeof(physicalType);
 
   const auto bitsRequired = range == 0 ? 0 : velox::bits::bitsRequired(range);
@@ -594,7 +600,7 @@ BlockBitPackingEncoding<T>::makeBlockInfo(
   }
 
   return {
-      *minValue,
+      minValue,
       static_cast<uint8_t>(bitsRequired),
       packedSize,
       start,

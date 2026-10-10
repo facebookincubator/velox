@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <limits>
+#include <random>
 #include <string>
 
 #include "velox/dwio/nimble/common/Types.h"
@@ -285,6 +286,73 @@ TEST_F(EncodingSizeEstimationTest, mainlyConstantOverPricedForDenseData) {
   // Priced as the flat other-values stream plus the is-common bitmap, so the
   // estimate exceeds the flat other-values alone.
   EXPECT_GT(mc.value(), std::min(fixedBitWidth.value(), trivial.value()));
+}
+
+// Selection skips estimating a candidate whose lower bound already costs as
+// much as the cheapest so far, so a bound above its estimate would change what
+// selection chooses. Held against the estimate on streams that give each term
+// of the bound a different binding constraint: near-unique, a dominant value at
+// either end of the range and in its middle, few distinct values spread wide,
+// and a skew of a few frequent values over many rare ones.
+TEST_F(EncodingSizeEstimationTest, sizeLowerBoundNeverExceedsEstimate) {
+  std::mt19937_64 rng(2'026);
+  const auto check = [&]<typename T>(
+                         const std::vector<T>& data, const std::string& name) {
+    using Est = detail::EncodingSizeEstimation<T>;
+    using Physical = typename TypeTraits<T>::physicalType;
+    const std::span<const Physical> values{
+        reinterpret_cast<const Physical*>(data.data()), data.size()};
+    const auto stats = Statistics<Physical>::create(values);
+    for (const auto encodingType :
+         {EncodingType::MainlyConstant, EncodingType::Dictionary}) {
+      SCOPED_TRACE(name + " " + std::string(toString(encodingType)));
+      const auto bound = Est::estimateSizeLowerBound(
+          encodingType, values, stats, defaultOptions_);
+      const auto estimate =
+          Est::estimateSize(encodingType, values, stats, defaultOptions_);
+      EXPECT_TRUE(bound.has_value());
+      if (bound.has_value() && estimate.has_value()) {
+        EXPECT_LE(bound.value(), estimate.value());
+      }
+    }
+  };
+  for (const size_t rows : {1'000, 70'000}) {
+    const auto suffix = " rows=" + std::to_string(rows);
+    std::vector<uint64_t> unique(rows);
+    for (auto& value : unique) {
+      value = rng();
+    }
+    check(unique, "near-unique" + suffix);
+
+    for (const uint64_t common :
+         {uint64_t{0}, uint64_t{1} << 40, ~uint64_t{0}}) {
+      std::vector<uint64_t> dominant(rows, common);
+      for (size_t i = 0; i < rows; i += 3) {
+        dominant[i] = rng() >> 1;
+      }
+      check(dominant, "dominant " + std::to_string(common) + suffix);
+    }
+
+    std::vector<uint32_t> spread(rows);
+    for (auto& value : spread) {
+      value = static_cast<uint32_t>(rng() % 5) * 1'000'000;
+    }
+    check(spread, "few spread" + suffix);
+
+    std::vector<uint32_t> skewed(rows);
+    for (size_t i = 0; i < rows; ++i) {
+      const uint64_t draw = rng();
+      skewed[i] = static_cast<uint32_t>(
+          (draw & 3) != 0 ? draw % 3 : (draw >> 8) % 400'000);
+    }
+    check(skewed, "skewed" + suffix);
+
+    std::vector<int32_t> negative(rows);
+    for (auto& value : negative) {
+      value = static_cast<int32_t>(rng());
+    }
+    check(negative, "signed" + suffix);
+  }
 }
 
 TEST_F(EncodingSizeEstimationTest, fixedBitWidthEstimateUsesExactBits) {

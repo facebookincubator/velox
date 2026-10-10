@@ -84,7 +84,89 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
+  /// A size estimateSize never quotes below for `encodingType`, for encodings
+  /// whose estimate counts the stream's distinct values but where a bound can
+  /// be had without counting them (MainlyConstant and Dictionary on a
+  /// too-wide-to-table integer stream). nullopt otherwise.
+  static std::optional<uint64_t> estimateSizeLowerBound(
+      const EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    if constexpr (
+        !isIntegralType<T>() || !isIntegralType<physicalType>() ||
+        isBoolType<physicalType>()) {
+      return std::nullopt;
+    } else {
+      if (encodingType != EncodingType::MainlyConstant &&
+          encodingType != EncodingType::Dictionary) {
+        return std::nullopt;
+      }
+      // Below this range Statistics counts distinct values in a table, which
+      // costs less than the pass the bound takes.
+      constexpr uint64_t kMinBoundedRange{65'536};
+      const uint64_t rowCount = values.size();
+      if (rowCount == 0 ||
+          static_cast<uint64_t>(statistics.max() - statistics.min()) <
+              kMinBoundedRange) {
+        return std::nullopt;
+      }
+      const uint64_t distinctLowerBound = statistics.distinctLowerBound();
+      if (encodingType == EncodingType::Dictionary) {
+        // Grows with the distinct count and reads nothing else of the counts.
+        return DictionaryEncoding<T>::estimateIntegralSize(
+            rowCount,
+            distinctLowerBound,
+            statistics.min(),
+            statistics.max(),
+            options);
+      }
+      return mainlyConstantSizeLowerBound(
+          values, statistics, distinctLowerBound, options);
+    }
+  }
+
  private:
+  // Lower bound for MainlyConstantEncodingBase::estimateSize with the common
+  // value unknown: with D distinct values, at least D - 1 rows are uncommon,
+  // and they span at least the smaller of max - (second smallest) and
+  // (second largest) - min. The other-values stream is priced at the cheaper
+  // of Trivial and FixedBitWidth over that span, which bounds any pricing of
+  // it over the uncommon values or over the whole stream's range.
+  static std::optional<uint64_t> mainlyConstantSizeLowerBound(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      uint64_t distinctLowerBound,
+      const Encoding::Options& options) {
+    // Three distinct values guarantee a second smallest and a second largest.
+    if (distinctLowerBound < 3) {
+      return std::nullopt;
+    }
+    const physicalType minValue = statistics.min();
+    const physicalType maxValue = statistics.max();
+    physicalType secondSmallest = maxValue;
+    physicalType secondLargest = minValue;
+    for (const physicalType value : values) {
+      secondSmallest =
+          std::min(secondSmallest, value == minValue ? maxValue : value);
+      secondLargest =
+          std::max(secondLargest, value == maxValue ? minValue : value);
+    }
+    const uint64_t uncommonRange = std::min<uint64_t>(
+        static_cast<uint64_t>(maxValue - secondSmallest),
+        static_cast<uint64_t>(secondLargest - minValue));
+    const uint64_t uncommonCount = distinctLowerBound - 1;
+    const uint64_t otherValuesSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(uncommonCount),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            uncommonCount, 0, uncommonRange, options));
+    const uint64_t isCommonEncodingSize =
+        SparseBoolEncoding::estimateSize(values.size(), uncommonCount, options);
+    const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
+        2 * sizeof(uint32_t) + sizeof(physicalType);
+    return outerEncodingSize + otherValuesSize + isCommonEncodingSize;
+  }
+
   static std::optional<uint64_t> estimateNumericSize(
       const EncodingType encodingType,
       const uint64_t entryCount,
