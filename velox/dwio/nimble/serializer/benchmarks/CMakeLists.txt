@@ -27,5 +27,5 @@ target_link_libraries(
   fmt::fmt
 )
 
-# StreamSlicerBenchmark.cpp includes fb_velox/common/Profiler.h, a Meta-internal
+# StreamSlicerBenchmark.cpp includes velox/common/fb/Profiler.h, a Meta-internal
 # header that is not part of the OSS export, so it has no OSS build.
