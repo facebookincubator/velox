@@ -560,11 +560,14 @@ class HashStringAllocator::InputStream : public ByteInputStream {
   }
 
   void seekp(std::streampos pos) final {
+    VELOX_CHECK_GE(
+        static_cast<int64_t>(pos), 0, "Seeking past start of stream");
     setHeader(begin_);
     skipImpl(pos);
   }
 
   void skip(int32_t size) final {
+    VELOX_CHECK_GE(size, 0, "Attempting to skip negative number of bytes");
     nextHeaderIfNeed();
     skipImpl(size);
   }
@@ -580,6 +583,7 @@ class HashStringAllocator::InputStream : public ByteInputStream {
   }
 
   void readBytes(uint8_t* bytes, int32_t size) final {
+    VELOX_CHECK_GE(size, 0, "Attempting to read negative number of bytes");
     nextHeaderIfNeed();
     for (;;) {
       auto available = range_.size - range_.position;
@@ -597,11 +601,12 @@ class HashStringAllocator::InputStream : public ByteInputStream {
   }
 
   std::string_view nextView(int64_t size) final {
+    VELOX_CHECK_GE(size, 0, "Attempting to view negative number of bytes");
     if (atEnd()) {
       return {};
     }
     nextHeaderIfNeed();
-    size = std::min(size, range_.size - range_.position);
+    size = std::min(size, static_cast<int64_t>(range_.size - range_.position));
     std::string_view result(
         reinterpret_cast<char*>(range_.buffer) + range_.position, size);
     range_.position += size;
