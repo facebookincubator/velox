@@ -511,10 +511,15 @@ class SpillPartition {
   /// more than numMaxMergeFiles files. This behavior is to avoid OOM problem
   /// when opening and reading too many files at the same time. If
   /// numMaxMergeFiles < 2, the merge way is unlimited.
+  ///
+  /// If 'initDistinctFiles' is specified, identifies the initial spill files of
+  /// a distinct aggregation. These files contain rows that have already been
+  /// emitted and must not be pre-merged with subsequently spilled input.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
       const common::SpillConfig& spillConfig,
       memory::MemoryPool* pool,
-      exec::SpillStats* spillStats);
+      exec::SpillStats* spillStats,
+      std::optional<size_t> initDistinctFiles = std::nullopt);
 
   std::string toString() const;
 
