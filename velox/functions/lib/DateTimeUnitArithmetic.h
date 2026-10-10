@@ -39,6 +39,11 @@ struct EpochTime {
   uint64_t nanos;
 };
 
+/// The range of Timestamp::getSeconds(), restated here because device code
+/// cannot include Timestamp.h. Arithmetic whose result leaves it fails.
+inline constexpr int64_t kMaxEpochSeconds = INT64_MAX / 1'000;
+inline constexpr int64_t kMinEpochSeconds = INT64_MIN / 1'000 - 1;
+
 /// Returns the number of days in 'month' (1 to 12) of 'year'.
 VELOX_GPU_COMPATIBLE inline int32_t daysInMonth(int64_t year, int32_t month) {
   // Function-local so that device code can index it with a runtime value.
@@ -66,12 +71,44 @@ VELOX_GPU_COMPATIBLE inline int64_t floorDivide(
   return value % divisor < 0 ? quotient - 1 : quotient;
 }
 
+// Fails unless 'seconds' is within the Timestamp range.
+VELOX_GPU_COMPATIBLE inline int64_t checkEpochSeconds(int64_t seconds) {
+  VELOX_USER_CHECK_GE(
+      seconds, kMinEpochSeconds, "Timestamp is out of range after arithmetic");
+  VELOX_USER_CHECK_LE(
+      seconds, kMaxEpochSeconds, "Timestamp is out of range after arithmetic");
+  return seconds;
+}
+
+// Returns 'seconds' + 'delta', failing when the sum leaves the Timestamp
+// range. The check runs before the addition so that it never overflows.
+VELOX_GPU_COMPATIBLE inline int64_t addSeconds(int64_t seconds, int64_t delta) {
+  const bool overflow = delta >= 0 ? seconds > kMaxEpochSeconds - delta
+                                   : seconds < kMinEpochSeconds - delta;
+  VELOX_USER_CHECK(
+      !overflow,
+      "Timestamp is out of range after arithmetic: {} seconds plus {} seconds",
+      seconds,
+      delta);
+  return seconds + delta;
+}
+
+// Returns 'high' - 'low' in seconds for 'low' <= 'high'.
+VELOX_GPU_COMPATIBLE inline int64_t subtractSeconds(int64_t high, int64_t low) {
+  VELOX_USER_CHECK(
+      low >= 0 || high <= INT64_MAX + low,
+      "Timestamp difference overflows: {} seconds minus {} seconds",
+      high,
+      low);
+  return high - low;
+}
+
 // Returns 'time' shifted by 'nanos', carrying whole seconds.
 VELOX_GPU_COMPATIBLE inline EpochTime addNanos(EpochTime time, int64_t nanos) {
   const int64_t total = static_cast<int64_t>(time.nanos) + nanos;
   const int64_t carry = floorDivide(total, kNanosecondsInSecond);
   return {
-      time.seconds + carry,
+      addSeconds(time.seconds, carry),
       static_cast<uint64_t>(total - carry * kNanosecondsInSecond),
   };
 }
@@ -90,7 +127,12 @@ VELOX_GPU_COMPATIBLE inline void addMonths(std::tm& dateTime, int64_t months) {
       (static_cast<int64_t>(dateTime.tm_year) + calendar::kTmYearBase) * 12 +
       dateTime.tm_mon + months;
   const int64_t year = floorDivide(totalMonths, 12);
-  dateTime.tm_year = static_cast<int>(year - calendar::kTmYearBase);
+  const int64_t tmYear = year - calendar::kTmYearBase;
+  VELOX_USER_CHECK_GE(
+      tmYear, INT32_MIN, "Year is out of range after arithmetic");
+  VELOX_USER_CHECK_LE(
+      tmYear, INT32_MAX, "Year is out of range after arithmetic");
+  dateTime.tm_year = static_cast<int>(tmYear);
   dateTime.tm_mon = static_cast<int>(totalMonths - year * 12);
   const int32_t lastDay = daysInMonth(year, dateTime.tm_mon + 1);
   if (dateTime.tm_mday > lastDay) {
@@ -114,7 +156,7 @@ VELOX_GPU_COMPATIBLE inline int64_t millisOfDay(
 /// unit and longer ones. Month, quarter and year arithmetic keeps the day of
 /// the month when the target month has it and otherwise moves to that month's
 /// last day: 2022-01-30 plus one month is 2022-02-28, and 2020-02-29 plus one
-/// year is 2021-02-28.
+/// year is 2021-02-28. Fails when the result does not fit in 32 bits.
 VELOX_GPU_COMPATIBLE inline int32_t
 addToDays(int32_t days, DateTimeUnit unit, int32_t value) {
   if (value == 0) {
@@ -138,14 +180,20 @@ addToDays(int32_t days, DateTimeUnit unit, int32_t value) {
       break;
     }
     default:
-      VELOX_UNREACHABLE();
+      VELOX_USER_FAIL(
+          "Unsupported unit for date arithmetic: {}", static_cast<int>(unit));
   }
+  VELOX_USER_CHECK_GE(
+      result, INT32_MIN, "Date is out of range after arithmetic");
+  VELOX_USER_CHECK_LE(
+      result, INT32_MAX, "Date is out of range after arithmetic");
   return static_cast<int32_t>(result);
 }
 
 /// Adds 'value' units to 'time'. Units shorter than a day shift by a fixed
 /// duration and keep the nanoseconds below that unit. Longer units keep the
-/// time of day and move the calendar date the way addToDays does.
+/// time of day and move the calendar date the way addToDays does. Fails when
+/// the result leaves the Timestamp range.
 VELOX_GPU_COMPATIBLE inline EpochTime
 addToEpochTime(EpochTime time, DateTimeUnit unit, int32_t value) {
   if (value == 0) {
@@ -157,25 +205,25 @@ addToEpochTime(EpochTime time, DateTimeUnit unit, int32_t value) {
     case DateTimeUnit::kMillisecond:
       return detail::addNanos(time, value * detail::kNanosecondsInMillisecond);
     case DateTimeUnit::kSecond:
-      return {time.seconds + value, time.nanos};
+      return {detail::addSeconds(time.seconds, value), time.nanos};
     case DateTimeUnit::kMinute:
       return {
-          time.seconds + value * kSecondsInMinute,
+          detail::addSeconds(time.seconds, value * kSecondsInMinute),
           time.nanos,
       };
     case DateTimeUnit::kHour:
       return {
-          time.seconds + value * kSecondsInHour,
+          detail::addSeconds(time.seconds, value * kSecondsInHour),
           time.nanos,
       };
     case DateTimeUnit::kDay:
       return {
-          time.seconds + value * kSecondsInDay,
+          detail::addSeconds(time.seconds, value * kSecondsInDay),
           time.nanos,
       };
     case DateTimeUnit::kWeek:
       return {
-          time.seconds + value * kDaysInWeek * kSecondsInDay,
+          detail::addSeconds(time.seconds, value * kDaysInWeek * kSecondsInDay),
           time.nanos,
       };
     case DateTimeUnit::kMonth:
@@ -184,10 +232,15 @@ addToEpochTime(EpochTime time, DateTimeUnit unit, int32_t value) {
       std::tm dateTime = getDateTimeUtc(time.seconds);
       detail::addMonths(
           dateTime, detail::monthsPerUnit(unit) * static_cast<int64_t>(value));
-      return {calendar::calendarUtcToEpoch(dateTime), time.nanos};
+      return {
+          detail::checkEpochSeconds(calendar::calendarUtcToEpoch(dateTime)),
+          time.nanos,
+      };
     }
     default:
-      VELOX_UNREACHABLE("Unsupported datetime unit");
+      VELOX_USER_FAIL(
+          "Unsupported unit for timestamp arithmetic: {}",
+          static_cast<int>(unit));
   }
 }
 
@@ -213,13 +266,21 @@ VELOX_GPU_COMPATIBLE inline int64_t diffEpochTime(
   const EpochTime low = forward ? from : to;
   const EpochTime high = forward ? to : from;
   const int64_t sign = forward ? 1 : -1;
-  const int64_t seconds = high.seconds - low.seconds;
+  const int64_t seconds = detail::subtractSeconds(high.seconds, low.seconds);
 
   if (unit == DateTimeUnit::kMicrosecond) {
     const int64_t micros =
         static_cast<int64_t>(high.nanos / detail::kNanosecondsInMicrosecond) -
         static_cast<int64_t>(low.nanos / detail::kNanosecondsInMicrosecond);
-    return sign * (seconds * detail::kMicrosecondsInSecond + micros);
+    VELOX_USER_CHECK_LE(
+        seconds,
+        INT64_MAX / detail::kMicrosecondsInSecond,
+        "Timestamp difference overflows in microseconds");
+    const int64_t wholeMicros = seconds * detail::kMicrosecondsInSecond;
+    VELOX_USER_CHECK(
+        micros <= 0 || wholeMicros <= INT64_MAX - micros,
+        "Timestamp difference overflows in microseconds");
+    return sign * (wholeMicros + micros);
   }
 
   const int64_t millis =
@@ -228,8 +289,17 @@ VELOX_GPU_COMPATIBLE inline int64_t diffEpochTime(
   // The last second counts only when 'high' reaches the millisecond of 'low'.
   const int64_t wholeSeconds = millis < 0 ? seconds - 1 : seconds;
   switch (unit) {
-    case DateTimeUnit::kMillisecond:
-      return sign * (seconds * detail::kMillisecondsInSecond + millis);
+    case DateTimeUnit::kMillisecond: {
+      VELOX_USER_CHECK_LE(
+          seconds,
+          INT64_MAX / detail::kMillisecondsInSecond,
+          "Timestamp difference overflows in milliseconds");
+      const int64_t wholeMillis = seconds * detail::kMillisecondsInSecond;
+      VELOX_USER_CHECK(
+          millis <= 0 || wholeMillis <= INT64_MAX - millis,
+          "Timestamp difference overflows in milliseconds");
+      return sign * (wholeMillis + millis);
+    }
     case DateTimeUnit::kSecond:
       return sign * wholeSeconds;
     case DateTimeUnit::kMinute:
@@ -264,9 +334,10 @@ VELOX_GPU_COMPATIBLE inline int64_t diffEpochTime(
     }
     return sign * years;
   }
-  if (unit != DateTimeUnit::kMonth && unit != DateTimeUnit::kQuarter) {
-    VELOX_UNREACHABLE();
-  }
+  VELOX_USER_CHECK(
+      unit == DateTimeUnit::kMonth || unit == DateTimeUnit::kQuarter,
+      "Unsupported unit for timestamp difference: {}",
+      static_cast<int>(unit));
   int64_t months = (highYear - lowYear) * 12 + highDate.tm_mon - lowDate.tm_mon;
   if (partialMonth) {
     --months;
@@ -334,7 +405,8 @@ VELOX_GPU_COMPATIBLE inline void adjustDateTime(
       dateTime.tm_sec = 0;
       break;
     default:
-      VELOX_UNREACHABLE();
+      VELOX_USER_FAIL(
+          "Unsupported unit for date truncation: {}", static_cast<int>(unit));
   }
 }
 
@@ -383,7 +455,9 @@ VELOX_GPU_COMPATIBLE inline EpochTime truncateEpochTime(
       return {calendar::calendarUtcToEpoch(dateTime), 0};
     }
     default:
-      VELOX_UNREACHABLE();
+      VELOX_USER_FAIL(
+          "Unsupported unit for timestamp truncation: {}",
+          static_cast<int>(unit));
   }
 }
 
