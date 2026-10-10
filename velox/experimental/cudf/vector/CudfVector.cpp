@@ -151,6 +151,7 @@ CudfVector::CudfVector(
   logDefaultStreamIfNeeded(stream_, "CudfVector(packed_table)");
   auto& packedPtr =
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
+  packedPtr->data.gpu_data->set_stream(stream_);
   tabView_ = packedPtr->table;
   // For packed table, flatSize is the size of the GPU data buffer
   flatSize_ = packedPtr->data.gpu_data->size();
@@ -169,7 +170,6 @@ std::unique_ptr<cudf::table> CudfVector::release() {
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   // Using same memory resource as packed_table
   auto mr = packedPtr->data.gpu_data->memory_resource();
-  packedPtr->data.gpu_data->set_stream(stream_);
   auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
   stream_.sync();
   // Clear the packed table since we've materialized

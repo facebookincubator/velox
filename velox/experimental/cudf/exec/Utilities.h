@@ -202,10 +202,9 @@ void streamsWaitForStream(
 /**
  * @brief Orders CudfVector deallocations after work on a target stream.
  *
- * Prefer rebinding owned table buffers to @p stream so stream-ordered memory
+ * Rebinds each input's device buffers to @p stream so stream-ordered memory
  * resources free the inputs after prior work on that stream. Falls back to an
- * event wait on @p inputStreams when an input cannot be rebound without
- * materializing, e.g. packed-table inputs or older cuDF builds.
+ * event wait on @p inputStreams when an input cannot be rebound.
  */
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
