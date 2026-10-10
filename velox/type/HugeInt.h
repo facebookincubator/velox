@@ -16,21 +16,19 @@
 #include <string>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Int128.h"
 #include "velox/type/StringView.h"
 
 #pragma once
 
 namespace facebook::velox {
 
-using int128_t = __int128_t;
-using uint128_t = __uint128_t;
-
 class HugeInt {
  public:
   static constexpr FOLLY_ALWAYS_INLINE int128_t
   build(uint64_t hi, uint64_t lo) {
     // GCC does not allow left shift negative value.
-    return (static_cast<__uint128_t>(hi) << 64) | lo;
+    return (static_cast<uint128_t>(hi) << 64) | lo;
   }
 
   static constexpr FOLLY_ALWAYS_INLINE uint64_t lower(int128_t value) {
@@ -59,5 +57,5 @@ class HugeInt {
 } // namespace facebook::velox
 
 namespace std {
-string to_string(__int128_t x);
+string to_string(facebook::velox::int128_t x);
 } // namespace std

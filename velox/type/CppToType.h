@@ -34,7 +34,7 @@ template <>
 struct CppToType<int128_t> : public CppToTypeBase<TypeKind::HUGEINT> {};
 
 template <>
-struct CppToType<__uint128_t> : public CppToTypeBase<TypeKind::HUGEINT> {};
+struct CppToType<uint128_t> : public CppToTypeBase<TypeKind::HUGEINT> {};
 
 template <>
 struct CppToType<int64_t> : public CppToTypeBase<TypeKind::BIGINT> {};

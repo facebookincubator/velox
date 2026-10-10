@@ -855,20 +855,29 @@ TEST_F(BitUtilTest, bswap128) {
   EXPECT_EQ(
       builtin_bswap128(HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       -248);
+  const auto value = HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210);
+  EXPECT_EQ(
+      builtin_bswap128(value),
+      HugeInt::build(0x1032547698BADCFE, 0xEFCDAB8967452301));
+  EXPECT_EQ(builtin_bswap128(builtin_bswap128(value)), value);
+  EXPECT_EQ(builtin_bswap128(0), 0);
+  EXPECT_EQ(builtin_bswap128(-1), -1);
 }
 
 TEST_F(BitUtilTest, countLeadingZeros) {
   EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
   EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(0), 128);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(UINT64_MAX), 64);
+  EXPECT_EQ(countLeadingZeros(uint128_t{1} << 64), 63);
+  EXPECT_EQ(countLeadingZeros(uint128_t{1} << 127), 0);
   EXPECT_EQ(
-      countLeadingZeros<__uint128_t>(
+      countLeadingZeros<uint128_t>(
           HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       4);
   EXPECT_EQ(
-      countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
+      countLeadingZeros<uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
 }
 
 TEST_F(BitUtilTest, storeBitsToByte) {

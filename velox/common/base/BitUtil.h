@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Int128.h"
 
 #include <folly/CPortability.h>
 
@@ -732,8 +733,17 @@ bool inline hasIntersection(
 
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
-  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
-  return std::countl_zero(word);
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, uint128_t>);
+#if defined(_MSC_VER) && !defined(__SIZEOF_INT128__)
+  if constexpr (std::is_same_v<T, uint128_t>) {
+    const auto high = static_cast<uint64_t>(word >> 64);
+    return high == 0 ? 64 + std::countl_zero(static_cast<uint64_t>(word))
+                     : std::countl_zero(high);
+  } else
+#endif
+  {
+    return std::countl_zero(word);
+  }
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
@@ -970,7 +980,12 @@ inline void padToAlignment(
 
 /// Returns value with the order of the bytes reversed; for example, 0xaabb
 /// becomes 0xbbaa. Byte here always means exactly 8 bits.
-inline __int128_t builtin_bswap128(__int128_t value) {
+inline int128_t builtin_bswap128(int128_t value) {
+#if defined(_MSC_VER) && !defined(__SIZEOF_INT128__)
+  return (static_cast<uint128_t>(_byteswap_uint64(static_cast<uint64_t>(value)))
+          << 64) |
+      _byteswap_uint64(static_cast<uint64_t>(value >> 64));
+#else
 #if defined __has_builtin
 #if __has_builtin(__builtin_bswap128)
 #define VELOX_HAS_BUILTIN_BSWAP_INT128 1
@@ -978,10 +993,11 @@ inline __int128_t builtin_bswap128(__int128_t value) {
 #endif
 #endif
 #if not VELOX_HAS_BUILTIN_BSWAP_INT128
-  return (static_cast<__uint128_t>(__builtin_bswap64(value)) << 64) |
+  return (static_cast<uint128_t>(__builtin_bswap64(value)) << 64) |
       __builtin_bswap64(value >> 64);
 #else
 #undef VELOX_HAS_BUILTIN_BSWAP_INT128
+#endif
 #endif
 }
 

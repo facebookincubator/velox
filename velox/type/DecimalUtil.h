@@ -379,7 +379,7 @@ class DecimalUtil : public DecimalArithmetic {
       int128_t lhs,
       int128_t rhs,
       bool isResultNegative) {
-    __uint128_t unsignedSum = (__uint128_t)lhs + (__uint128_t)rhs;
+    uint128_t unsignedSum = (uint128_t)lhs + (uint128_t)rhs;
     // Ignore overflow value.
     sum = (int128_t)unsignedSum & ~kOverflowMultiplier;
     sum = isResultNegative ? -sum : sum;
@@ -525,7 +525,7 @@ class DecimalUtil : public DecimalArithmetic {
     return status;
   }
 
-  static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+  static constexpr uint128_t kOverflowMultiplier = ((uint128_t)1 << 127);
 
   // Returns the abs value of input value.
   template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>

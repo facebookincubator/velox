@@ -28,14 +28,13 @@
 #include <string>
 
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Int128.h"
 
 namespace facebook::velox {
 
 /// Declarations suffice: TypeTraits only names these to form type aliases.
 struct StringView;
 struct Timestamp;
-
-using int128_t = __int128_t;
 
 /// Simple enum with type category.
 enum class TypeKind : int8_t {

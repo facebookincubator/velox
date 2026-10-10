@@ -62,6 +62,7 @@ velox_add_library(
   Fs.h
   IOUtils.h
   IndexedPriorityQueue.h
+  Int128.h
   IoCounter.h
   Nulls.h
   PeriodicStatsReporter.h
