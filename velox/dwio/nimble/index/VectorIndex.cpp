@@ -30,13 +30,17 @@
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
 #include <faiss/IndexScalarQuantizer.h>
+#include <faiss/impl/IDSelector.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <folly/synchronization/CallOnce.h>
+#include <omp.h>
 
 #include "velox/common/Casts.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/io/Options.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
@@ -46,6 +50,11 @@
 namespace facebook::nimble::index {
 
 namespace {
+
+// Mode 3 assigns whole queries, rather than query-list pairs, to OpenMP
+// workers. This preserves each query's ordered list scan for max_codes, but a
+// single-query batch remains single-threaded.
+constexpr int kIvfParallelModeQueries{3};
 
 // Deserializes one FAISS index from caller-owned zero-copy storage.
 std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
@@ -109,6 +118,53 @@ folly::Synchronized<std::monostate>& hnswSearchGuard() {
   return *guard;
 }
 
+// Adapts one Nimble row selection to FAISS.
+class FaissRowSelection {
+ public:
+  // Validates the selection and borrows bitmap data without copying it.
+  FaissRowSelection(
+      const VectorIndex::SearchConfig::RowSelection& rowSelection,
+      uint64_t numVectors) {
+    if (const auto bitmap = rowSelection.bitmap()) {
+      const auto expectedBitmapBytes = velox::bits::nbytes(numVectors);
+      NIMBLE_USER_CHECK_EQ(
+          bitmap->size(),
+          expectedBitmapBytes,
+          "Row selection bitmap size does not match the index");
+      selector_.emplace<faiss::IDSelectorBitmap>(
+          bitmap->size(), bitmap->data());
+      return;
+    }
+
+    const auto range = rowSelection.range();
+    if (!range.has_value()) {
+      return;
+    }
+    NIMBLE_USER_CHECK_LE(
+        range->startRow, range->endRow, "Row selection range must be ordered");
+    NIMBLE_USER_CHECK_LE(
+        range->endRow,
+        numVectors,
+        "Row selection range exceeds the index row count");
+    selector_.emplace<faiss::IDSelectorRange>(range->startRow, range->endRow);
+  }
+
+  // Applies the adapted selector to FAISS search parameters.
+  void applyTo(faiss::SearchParameters& searchParameters) {
+    if (auto* bitmap = std::get_if<faiss::IDSelectorBitmap>(&selector_)) {
+      searchParameters.sel = bitmap;
+    } else if (auto* range = std::get_if<faiss::IDSelectorRange>(&selector_)) {
+      searchParameters.sel = range;
+    }
+    // FAISS interprets a null selector as selecting every indexed row.
+  }
+
+ private:
+  // Owns one adapted selector and borrows bitmap storage when applicable.
+  std::variant<std::monostate, faiss::IDSelectorBitmap, faiss::IDSelectorRange>
+      selector_;
+};
+
 // Searches an HNSW index with request-local parameters.
 void searchHnswIndex(
     const faiss::IndexHNSW& index,
@@ -117,7 +173,8 @@ void searchHnswIndex(
     const float* queryVectors,
     faiss::idx_t maxNumNeighbors,
     float* scores,
-    faiss::idx_t* labels) {
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection) {
   NIMBLE_USER_CHECK_GT(
       hnswSearchDepth, 0, "HNSW search depth must be positive");
   const auto effectiveSearchDepth =
@@ -132,6 +189,7 @@ void searchHnswIndex(
       "Number of neighbors exceeds the HNSW limit");
   faiss::SearchParametersHNSW searchParameters;
   searchParameters.efSearch = static_cast<int>(effectiveSearchDepth);
+  rowSelection.applyTo(searchParameters);
   // FAISS updates process-global HNSW statistics during search.
   const auto hnswSearchLock = hnswSearchGuard().wlock();
   index.search(
@@ -148,15 +206,25 @@ void searchIvfIndex(
     const faiss::IndexIVF& index,
     faiss::idx_t numQueries,
     uint32_t requestedNumProbes,
+    uint64_t maxCodes,
+    bool ensureTopKFull,
     const float* queryVectors,
     faiss::idx_t maxNumNeighbors,
     float* scores,
-    faiss::idx_t* labels) {
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection) {
   const auto* quantizer =
       velox::checkedPointerCast<const faiss::IndexFlat>(index.quantizer);
   NIMBLE_USER_CHECK_GT(
       requestedNumProbes, 0, "Number of probed partitions must be positive");
   faiss::SearchParametersIVF searchParameters;
+  rowSelection.applyTo(searchParameters);
+  NIMBLE_USER_CHECK_LE(
+      maxCodes,
+      static_cast<uint64_t>(std::numeric_limits<size_t>::max()),
+      "Maximum scanned codes exceeds the FAISS limit");
+  searchParameters.max_codes = static_cast<size_t>(maxCodes);
+  searchParameters.ensure_topk_full = ensureTopKFull;
   const auto numProbes = static_cast<faiss::idx_t>(
       std::min(index.nlist, static_cast<size_t>(requestedNumProbes)));
   NIMBLE_CHECK_GT(numProbes, 0);
@@ -220,7 +288,8 @@ void searchFaissIndex(
     const float* queryVectors,
     faiss::idx_t maxNumNeighbors,
     float* scores,
-    faiss::idx_t* labels) {
+    faiss::idx_t* labels,
+    FaissRowSelection& rowSelection) {
   if (isIvfIndexType(indexType)) {
     NIMBLE_USER_CHECK(
         searchOptions.kind() == VectorIndex::SearchOptions::Kind::kIvf,
@@ -234,10 +303,13 @@ void searchFaissIndex(
         *ivfIndex,
         numQueries,
         ivfSearchOptions->numProbes,
+        ivfSearchOptions->maxCodes,
+        ivfSearchOptions->ensureTopKFull,
         queryVectors,
         maxNumNeighbors,
         scores,
-        labels);
+        labels,
+        rowSelection);
     return;
   }
 
@@ -256,7 +328,8 @@ void searchFaissIndex(
       queryVectors,
       maxNumNeighbors,
       scores,
-      labels);
+      labels,
+      rowSelection);
 }
 
 // Validates metadata before allocating or deserializing a FAISS index.
@@ -355,6 +428,40 @@ MetadataSection parseVectorIndexSection(
 
 } // namespace
 
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::all() {
+  return RowSelection{AllRows{}};
+}
+
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::fromBitmap(
+    std::span<const uint8_t> bitmap) {
+  return RowSelection{bitmap};
+}
+
+VectorIndex::SearchConfig::RowSelection
+VectorIndex::SearchConfig::RowSelection::fromRange(RowRange range) {
+  return RowSelection{range};
+}
+
+std::optional<std::span<const uint8_t>>
+VectorIndex::SearchConfig::RowSelection::bitmap() const {
+  if (const auto* bitmap = std::get_if<std::span<const uint8_t>>(&selection_)) {
+    return *bitmap;
+  }
+  return std::nullopt;
+}
+
+std::optional<RowRange> VectorIndex::SearchConfig::RowSelection::range() const {
+  if (const auto* range = std::get_if<RowRange>(&selection_)) {
+    return *range;
+  }
+  return std::nullopt;
+}
+
+VectorIndex::SearchConfig::RowSelection::RowSelection(Selection selection)
+    : selection_{std::move(selection)} {}
+
 // Owns the state required to create the index input on first use.
 struct VectorIndexDirectory::InputState {
   explicit InputState(const IndexLookup::Options& sourceOptions)
@@ -368,6 +475,7 @@ struct VectorIndexDirectory::InputState {
             .ioOptions = ioOptions.get(),
             .fileHandle = sourceOptions.fileHandle,
             .cache = sourceOptions.cache,
+            .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
         } {
@@ -513,6 +621,11 @@ VectorIndex::VectorIndex(
   NIMBLE_CHECK_FILE(
       checkIndexType(*faissIndex_, indexType_),
       "FAISS index type disagrees with its metadata");
+  if (isIvfIndexType(indexType_)) {
+    auto* ivfIndex =
+        velox::checkedPointerCast<faiss::IndexIVF>(faissIndex_.get());
+    ivfIndex->parallel_mode = kIvfParallelModeQueries;
+  }
 }
 
 VectorIndex::~VectorIndex() = default;
@@ -571,7 +684,22 @@ VectorIndex::SearchResults VectorIndex::search(
       config.searchOptions, "Search options must be set");
   NIMBLE_USER_CHECK_GT(
       config.numNeighbors, 0, "Number of neighbors must be positive");
+  NIMBLE_USER_CHECK_GT(
+      config.numSearchThreads, 0, "Number of search threads must be positive");
+  NIMBLE_USER_CHECK_LE(
+      config.numSearchThreads,
+      static_cast<uint32_t>(std::numeric_limits<int>::max()),
+      "Number of search threads exceeds the OpenMP limit");
+  const auto prevNumThreads = omp_get_max_threads();
+  // omp_set_num_threads updates the calling OpenMP task's nthreads-var ICV,
+  // so concurrent searches on other driver threads retain their own budgets.
+  omp_set_num_threads(static_cast<int>(config.numSearchThreads));
+  SCOPE_EXIT {
+    omp_set_num_threads(prevNumThreads);
+  };
   const auto numQueries = static_cast<faiss::idx_t>(config.numQueries);
+
+  FaissRowSelection rowSelection{config.rowSelection, numVectors_};
 
   std::vector<float> normalizedQueries;
   const auto* queryData = prepareQueryVectors(
@@ -592,7 +720,8 @@ VectorIndex::SearchResults VectorIndex::search(
       queryData,
       maxNumNeighbors,
       scores.data(),
-      labels.data());
+      labels.data(),
+      rowSelection);
 
   std::vector<size_t> resultOffsets(numQueries + 1, 0);
   for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
@@ -613,20 +742,18 @@ VectorIndex::SearchResults VectorIndex::search(
     const auto resultOffset = queryIndex * static_cast<size_t>(maxNumNeighbors);
     const auto numQueryResults =
         resultOffsets[queryIndex + 1] - resultOffsets[queryIndex];
-    for (size_t neighborIndex = 0; neighborIndex < numQueryResults;
-         ++neighborIndex) {
-      const auto resultIndex = resultOffset + neighborIndex;
+    for (size_t resultIndex = 0; resultIndex < numQueryResults; ++resultIndex) {
+      const auto flatResultIndex = resultOffset + resultIndex;
       NIMBLE_CHECK_FILE_GE(
-          labels[resultIndex], 0, "FAISS returned a negative row ID");
+          labels[flatResultIndex], 0, "FAISS returned a negative row ID");
       NIMBLE_CHECK_FILE_LT(
-          static_cast<uint64_t>(labels[resultIndex]),
+          static_cast<uint64_t>(labels[flatResultIndex]),
           numVectors_,
           "FAISS returned an out-of-range row ID");
-      results.push_back(
-          SearchResult{
-              .rowId = labels[resultIndex],
-              .score = scores[resultIndex],
-          });
+      results.push_back({
+          .rowId = labels[flatResultIndex],
+          .score = scores[flatResultIndex],
+      });
     }
   }
 

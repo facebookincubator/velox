@@ -126,6 +126,7 @@ target_link_libraries(
   velox_vector
   FAISS::faiss
   Folly::folly
+  OpenMP::OpenMP_CXX
 )
 
 if(NIMBLE_BUILD_TESTING)
