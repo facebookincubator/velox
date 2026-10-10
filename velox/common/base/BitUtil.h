@@ -251,7 +251,7 @@ forEachWord(int32_t begin, int32_t end, PartialWordFunc partialWordFunc) {
   int32_t firstIndex = begin / 64;
   int32_t lastIndex = (roundUp(end, 64) - 64) / 64;
   for (auto index = firstIndex; index <= lastIndex; ++index) {
-    uint64_t mask = ~0UL;
+    uint64_t mask = ~0ULL;
     if (index == firstIndex && begin != firstIndex * 64) {
       // We do not start at 64 bit boundary, and off the bits below start.
       mask = highMask((firstIndex + 1) * 64 - begin);
@@ -280,7 +280,7 @@ void forBatches(
     int32_t begin,
     int32_t end,
     Callable func) {
-  constexpr int64_t unitMask = kWidth == 64 ? ~0UL : lowMask(kWidth);
+  constexpr int64_t unitMask = kWidth == 64 ? ~0ULL : lowMask(kWidth);
   static_assert(kWidth <= 64 && 64 % kWidth == 0);
   bits::forEachWord(begin, end, [&](auto index, uint64_t mask) {
     uint64_t active = bits[index] & mask;
@@ -825,7 +825,8 @@ storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
   constexpr int32_t kBitSize = 8 * sizeof(T);
   auto rawAddress = reinterpret_cast<char*>(target) + (offset / 8);
   auto bitOffset = offset & 7;
-  uint64_t mask = (numBits == 64 ? ~0UL : ((1UL << numBits) - 1)) << bitOffset;
+  uint64_t mask = (numBits == 64 ? ~0ULL : ((1ULL << numBits) - 1))
+      << bitOffset;
   T current;
   std::memcpy(&current, rawAddress, sizeof(T));
   current = (current & ~mask) | (mask & (word << bitOffset));
