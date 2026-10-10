@@ -215,12 +215,16 @@ struct DivideFunctor {
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
     // Null stencil is applied on the host (bitmask_and); skip inactive rows
-    // instead of calling set_null (a device-wide atomic per row).
+    // instead of calling set_null (a device-wide atomic per row). Every row
+    // still gets a defined payload: the output buffer is not initialized and
+    // copy_if_else and the Arrow export read null slots.
     if (!isRowActive(nullMask, idx)) {
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     if (rhs.element<InT>(idx) == 0) {
       markError(localStatus, DecimalBinaryOpStatus::kDivisionByZero);
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -241,10 +245,12 @@ struct DivideLhsScalarFunctor {
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
     if (!isRowActive(nullMask, idx)) {
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     if (rhs.element<InColT>(idx) == 0) {
       markError(localStatus, DecimalBinaryOpStatus::kDivisionByZero);
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -262,10 +268,12 @@ struct DivideRhsScalarFunctor {
 
   __device__ void operator()(cudf::size_type idx, int32_t& localStatus) const {
     if (!isRowActive(nullMask, idx)) {
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     if (rhsValue == 0) {
       markError(localStatus, DecimalBinaryOpStatus::kDivisionByZero);
+      out.element<OutT>(idx) = OutT{0};
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -468,6 +476,23 @@ __int128_t getDecimalScalarValue(
   return static_cast<__int128_t>(dec.value(stream));
 }
 
+std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
+    cudf::data_type outputType,
+    cudf::size_type size,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto result = cudf::make_fixed_width_column(
+      outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
+  if (size > 0) {
+    CUDF_CUDA_TRY(cudaMemsetAsync(
+        result->mutable_view().head(),
+        0,
+        static_cast<std::size_t>(size) * cudf::size_of(outputType),
+        stream.get()));
+  }
+  return result;
+}
+
 } // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -642,6 +667,7 @@ struct DecimalBinaryColColFunctor {
 
   __device__ void operator()(int32_t idx, int32_t& localStatus) const {
     if (!isRowActive(nullMask, idx)) {
+      out[idx] = OutRep{0};
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -674,6 +700,7 @@ struct DecimalBinaryLhsScalarFunctor {
 
   __device__ void operator()(int32_t idx, int32_t& localStatus) const {
     if (!isRowActive(nullMask, idx)) {
+      out[idx] = OutRep{0};
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -706,6 +733,7 @@ struct DecimalBinaryRhsScalarFunctor {
 
   __device__ void operator()(int32_t idx, int32_t& localStatus) const {
     if (!isRowActive(nullMask, idx)) {
+      out[idx] = OutRep{0};
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -1009,9 +1037,9 @@ decimalBinaryOperationWithOverflow(
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
   if (!rhs.is_valid(stream)) {
-    auto result = cudf::make_fixed_width_column(
-        outputType, lhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
-    return {std::move(result), DecimalBinaryOpStatus::kOk};
+    return {
+        detail::makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr),
+        DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto result = cudf::make_fixed_width_column(
@@ -1038,9 +1066,9 @@ decimalBinaryOperationWithOverflow(
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
   if (!lhs.is_valid(stream)) {
-    auto result = cudf::make_fixed_width_column(
-        outputType, rhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
-    return {std::move(result), DecimalBinaryOpStatus::kOk};
+    return {
+        detail::makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr),
+        DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto result = cudf::make_fixed_width_column(
