@@ -33,8 +33,26 @@
 #include <string_view>
 #include <vector>
 
+// Fails the build when the CCCL in use lacks cuda::*_overflow. Without this, an
+// older CCCL would leave the device branch uncompiled and every test below
+// still passing.
+#ifndef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
+#error "cuda::*_overflow is unavailable, so the device branch is not compiled"
+#endif
+
 namespace facebook::velox {
 namespace {
+
+// nvcc evaluates these in its device pass as well as its host pass, so they pin
+// powerOfTen()'s constant-evaluation path to the same literals on both sides.
+static_assert(DecimalArithmetic::powerOfTen(0) == 1);
+static_assert(
+    DecimalArithmetic::powerOfTen(DecimalArithmetic::kMaxShortPrecision) ==
+    1'000'000'000'000'000'000);
+static_assert(
+    DecimalArithmetic::powerOfTen(DecimalArithmetic::kMaxLongPrecision) ==
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
+        (int128_t)100);
 
 template <typename T>
 struct Operands {
@@ -124,7 +142,7 @@ std::vector<Operands<T>> boundaries() {
   return {{7, 3}, {kMax, 1}, {kMin, -1}, {kMax, -1}, {kMin, 2}, {kMax, kMax}};
 }
 
-// The device's copy of the powers-of-ten table against the host's.
+// powerOfTen() on the device against the host's kPowersOfTen.
 struct PowerOfTen {
   static Outcome host(uint8_t exponent) {
     return {false, DecimalArithmetic::kPowersOfTen[exponent]};
