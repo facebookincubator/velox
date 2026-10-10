@@ -24,10 +24,13 @@ JSON Functions
     Casts ``jsonString`` to an ARRAY, MAP, or ROW type, with the output type
     determined by the expression. Returns NULL, if the input string is unparsable.
     Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
     or MAP, the element type of the array or the value type of the map must be one
     of these supported types, and for maps, the key type must be VARCHAR. Casting
-    to ROW supports only JSON objects.
+    to ROW supports only JSON objects. A TIMESTAMP is parsed from a string with the
+    same rules as ``CAST(VARCHAR AS TIMESTAMP)``, so a string without an explicit
+    time zone is interpreted in the session time zone; an integer is interpreted as
+    the number of seconds since the epoch.
     Note that since the result type can be inferred from the expression, in Velox we
     do not need to provide the ``schema`` parameter as required by Spark's from_json
     function. ::
@@ -38,6 +41,8 @@ JSON Functions
         SELECT from_json('{"a": 5.321E2}', 'a DECIMAL(7, 2)'); -- {'a'=532.10}
         SELECT from_json('{"a":"2021-7-1T"}', 'a DATE'); -- {'a'="2021-07-01"}
         SELECT from_json('{"a":"1"}', 'a DATE'); -- {'a'="1970-01-02"}
+        SELECT from_json('{"a":"2021-07-01T10:20:30"}', 'a TIMESTAMP'); -- {'a'=2021-07-01 10:20:30}
+        SELECT from_json('{"a":1625134830}', 'a TIMESTAMP'); -- {'a'=2021-07-01 10:20:30}
         SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
         SELECT from_json('{"a": 1, "b": 2}', 'MAP<STRING, INT>'); -- {'a'=1, 'b'=2}
         SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b INT>'); -- {'a'={b=1}}
