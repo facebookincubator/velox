@@ -68,6 +68,7 @@ UcxPartitionedOutput::UcxPartitionedOutput(
     int32_t operatorId,
     exec::DriverCtx* ctx,
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+    bool eagerFlush,
     const std::shared_ptr<UcxOutputQueueManager>& queueManager)
     : Operator(
           ctx,
@@ -86,7 +87,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       driverId_(ctx->driverId),
       targetRowsPerChunk_(ctx->queryConfig().get<int64_t>(
           CudfConfig::kUcxPartitionedOutputBatchRows,
-          CudfConfig::getInstance().partitionedOutputBatchRows)) {
+          CudfConfig::getInstance().partitionedOutputBatchRows)),
+      eagerFlush_(
+          eagerFlush || ctx->queryConfig().partitionedOutputEagerFlush()) {
   VELOX_CHECK_NOT_NULL(
       queueManager, "UcxPartitionedOutput requires an output queue manager");
   VELOX_CHECK(
@@ -129,7 +132,8 @@ void UcxPartitionedOutput::addInput(RowVectorPtr input) {
   pendingRows_ += cudfVector->size();
   pendingInputs_.push_back(std::move(cudfVector));
 
-  if (targetRowsPerChunk_ <= 0 || pendingRows_ >= targetRowsPerChunk_) {
+  if (eagerFlush_ || targetRowsPerChunk_ <= 0 ||
+      pendingRows_ >= targetRowsPerChunk_) {
     flushPending();
   }
 }
@@ -493,11 +497,11 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     cudf::fill_in_place(maskView, 0, 1, trueScalar, stream);
   }
 
-  // apply_boolean_mask keeps the true rows and apply_deletion_mask keeps the
+  // apply_retention_mask keeps the true rows and apply_deletion_mask keeps the
   // false ones, so the two results are an exact partition of the input: no row
   // is both replicated and routed, and none is dropped.
   const auto replicatedRows =
-      cudf::apply_boolean_mask(tableView, replicateMask->view(), stream, mr);
+      cudf::apply_retention_mask(tableView, replicateMask->view(), stream, mr);
   const auto routedRows =
       cudf::apply_deletion_mask(tableView, replicateMask->view(), stream, mr);
 

@@ -1,0 +1,437 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeClient.h"
+#include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
+#include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/VectorStream.h"
+
+#include <folly/ScopeGuard.h>
+#include <gtest/gtest.h>
+
+namespace facebook::velox::exec::test {
+namespace {
+
+using core::TransportKind;
+
+// Verifies that the cuDF registration path advertises the UCX transport in
+// ExchangeTransportRegistry and OutputTransportRegistry, that the registered
+// entries build the UCX operators paired with their own client and manager,
+// and that those operators are left in place by the cuDF driver adapter
+// machinery.
+class UcxTransportRegistrationTest : public OperatorTestBase {
+ protected:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    savedExchange_ = cudf_velox::CudfConfig::getInstance().exchange;
+  }
+
+  void TearDown() override {
+    if (cudf_velox::cudfIsRegistered()) {
+      cudf_velox::unregisterCudf();
+    }
+    cudf_velox::CudfConfig::getInstance().exchange = savedExchange_;
+    // Drop the UCX registrations and restore the built-in in-memory defaults so
+    // the next test starts from a known state.
+    ExchangeTransportRegistry::unregisterAll();
+    OutputTransportRegistry::unregisterAll();
+    OperatorTestBase::TearDown();
+  }
+
+  // Runs the cuDF registration path with UCX exchange configured on or off.
+  void registerCudfWithExchange(bool exchangeEnabled) {
+    cudf_velox::CudfConfig::getInstance().exchange = exchangeEnabled;
+    cudf_velox::registerCudf();
+  }
+
+  // Returns the plan fragment for an Exchange node reading over 'transport'.
+  core::PlanFragment makeExchangePlan(std::string_view transport) {
+    return PlanBuilder()
+        .exchange(
+            rowType_,
+            VectorSerde::kindName(VectorSerde::Kind::kPresto),
+            std::string{transport})
+        .planFragment();
+  }
+
+  // Returns the plan fragment for a PartitionedOutput node writing over
+  // 'transport'.
+  core::PlanFragment makePartitionedOutputPlan(std::string_view transport) {
+    auto vectors = makeRowVector(rowType_, 1);
+    return PlanBuilder()
+        .values({vectors})
+        .partitionedOutput(
+            {"c0"},
+            /*numPartitions=*/4,
+            /*outputLayout=*/{},
+            VectorSerde::kindName(VectorSerde::Kind::kPresto),
+            std::string{transport})
+        .planFragment();
+  }
+
+  std::shared_ptr<Task> makeTask(
+      const std::string& taskId,
+      core::PlanFragment fragment,
+      std::unordered_map<std::string, std::string> queryConfig) {
+    return Task::create(
+        taskId,
+        std::move(fragment),
+        /*destination=*/0,
+        core::QueryCtx::create(
+            nullptr, core::QueryConfig{std::move(queryConfig)}),
+        Task::ExecutionMode::kParallel);
+  }
+
+  // Returns a DriverCtx for driver 0 of 'task'.
+  std::shared_ptr<DriverCtx> makeDriverCtx(std::shared_ptr<Task> task) {
+    return std::make_shared<DriverCtx>(
+        std::move(task),
+        /*driverId=*/0,
+        /*pipelineId=*/0,
+        kUngroupedGroupId,
+        /*partitionId=*/0);
+  }
+
+  // Returns the client context Task passes to an exchange entry for 'task'.
+  ExchangeClientContext makeClientContext(const std::shared_ptr<Task>& task) {
+    return ExchangeClientContext{
+        .taskId = task->taskId(),
+        .destination = task->destination(),
+        .numberOfConsumers = 1,
+        .maxExchangeBufferSize = 1 << 20,
+        .minExchangeOutputBatchBytes = 0,
+        .pool = pool(),
+        .executor = executor_.get(),
+        .queryConfig = task->queryCtx()->queryConfig()};
+  }
+
+  RowTypePtr rowType_{ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}})};
+
+ private:
+  bool savedExchange_{false};
+};
+
+TEST_F(UcxTransportRegistrationTest, exchangeDisabledRegistersNoUcxTransport) {
+  registerCudfWithExchange(false);
+
+  const std::string ucx{TransportKind::kUcx};
+  EXPECT_EQ(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_EQ(OutputTransportRegistry::tryGet(ucx), nullptr);
+}
+
+TEST_F(UcxTransportRegistrationTest, exchangeEnabledRegistersUcxTransport) {
+  registerCudfWithExchange(true);
+
+  const std::string ucx{TransportKind::kUcx};
+  auto exchangeEntry = ExchangeTransportRegistry::tryGet(ucx);
+  ASSERT_NE(exchangeEntry, nullptr);
+  EXPECT_TRUE(static_cast<bool>(exchangeEntry->makeClient));
+  EXPECT_TRUE(static_cast<bool>(exchangeEntry->makeExchangeOperator));
+  // UCX supports merge exchange by receiving and then sorting on the GPU.
+  EXPECT_TRUE(static_cast<bool>(exchangeEntry->makeMergeExchangeOperator));
+
+  auto outputEntry = OutputTransportRegistry::tryGet(ucx);
+  ASSERT_NE(outputEntry, nullptr);
+  EXPECT_TRUE(static_cast<bool>(outputEntry->makeOutputOperator));
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
+          outputEntry->manager),
+      nullptr);
+}
+
+// kUcx relies on the cuDF memory resources and driver adapter, so a
+// registerCudf() that fails part way must not leave it resolvable, and must not
+// stand in the way of a later registerCudf().
+TEST_F(
+    UcxTransportRegistrationTest,
+    failedRegisterCudfPublishesNoUcxTransport) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto savedMemoryResource = config.memoryResource;
+  SCOPE_EXIT {
+    config.memoryResource = savedMemoryResource;
+  };
+  config.exchange = true;
+  config.memoryResource = "not-a-memory-resource";
+
+  VELOX_ASSERT_THROW(
+      cudf_velox::registerCudf(), "Unknown memory resource mode");
+  ASSERT_FALSE(cudf_velox::cudfIsRegistered());
+  const std::string ucx{TransportKind::kUcx};
+  EXPECT_EQ(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_EQ(OutputTransportRegistry::tryGet(ucx), nullptr);
+
+  config.memoryResource = savedMemoryResource;
+  cudf_velox::registerCudf();
+  EXPECT_NE(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_NE(OutputTransportRegistry::tryGet(ucx), nullptr);
+}
+
+// unregisterCudf() withdraws kUcx whatever CudfConfig::exchange says by then,
+// and leaves the in-memory transport in place.
+TEST_F(
+    UcxTransportRegistrationTest,
+    unregisterCudfRemovesUcxTransportAfterConfigChange) {
+  registerCudfWithExchange(true);
+  const std::string ucx{TransportKind::kUcx};
+  ASSERT_NE(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  ASSERT_NE(OutputTransportRegistry::tryGet(ucx), nullptr);
+
+  cudf_velox::CudfConfig::getInstance().exchange = false;
+  cudf_velox::unregisterCudf();
+
+  EXPECT_EQ(ExchangeTransportRegistry::tryGet(ucx), nullptr);
+  EXPECT_EQ(OutputTransportRegistry::tryGet(ucx), nullptr);
+  const std::string inMemory{TransportKind::kInMemory};
+  EXPECT_NE(ExchangeTransportRegistry::tryGet(inMemory), nullptr);
+  EXPECT_NE(OutputTransportRegistry::tryGet(inMemory), nullptr);
+}
+
+TEST_F(UcxTransportRegistrationTest, inMemoryTransportIsUnaffected) {
+  registerCudfWithExchange(true);
+
+  const std::string inMemory{TransportKind::kInMemory};
+  auto exchangeEntry = ExchangeTransportRegistry::tryGet(inMemory);
+  ASSERT_NE(exchangeEntry, nullptr);
+  // The stock in-memory transport still supports merge exchange.
+  EXPECT_TRUE(static_cast<bool>(exchangeEntry->makeMergeExchangeOperator));
+
+  auto outputEntry = OutputTransportRegistry::tryGet(inMemory);
+  ASSERT_NE(outputEntry, nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<DefaultOutputBufferManager>(
+          outputEntry->manager),
+      nullptr);
+}
+
+TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
+  registerCudfWithExchange(true);
+
+  auto plan = makeExchangePlan(TransportKind::kUcx);
+  auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
+  ASSERT_NE(exchangeNode, nullptr);
+  auto task =
+      makeTask("test-ucx-exchange-task", std::move(plan), /*queryConfig=*/{});
+  auto driverCtx = makeDriverCtx(task);
+
+  auto entry = ExchangeTransportRegistry::tryGet(
+      *task->queryCtx(), exchangeNode->transportKind());
+  ASSERT_NE(entry, nullptr);
+
+  auto clientContext = makeClientContext(task);
+  clientContext.numberOfConsumers = 2;
+  auto client = entry->makeClient(clientContext);
+  auto ucxClient =
+      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client);
+  ASSERT_NE(ucxClient, nullptr);
+
+  auto exchangeOperator =
+      entry->makeExchangeOperator(0, driverCtx.get(), exchangeNode, client);
+  auto* ucxExchange =
+      dynamic_cast<ucx_exchange::UcxExchange*>(exchangeOperator.get());
+  ASSERT_NE(ucxExchange, nullptr);
+
+  // The cuDF driver adapter must leave the registry-built operator in place and
+  // treat it as a GPU source, so that no conversion operator is spliced around
+  // it and it is not reported as a failed replacement.
+  auto& registry = cudf_velox::OperatorAdapterRegistry::getInstance();
+  const auto* adapter = registry.findAdapter(exchangeOperator.get());
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_TRUE(adapter->keepOperator());
+  const auto properties = adapter->properties(
+      exchangeOperator.get(), exchangeNode, driverCtx.get());
+  EXPECT_TRUE(properties.canRunOnGPU);
+  EXPECT_TRUE(properties.producesGpuOutput);
+  EXPECT_FALSE(properties.acceptsGpuInput);
+
+  // The factory must pass numberOfConsumers to the client's queue. Register
+  // both consumers as waiters while the queue is empty so that passing 1 would
+  // fail deterministically on the second call.
+  bool atEnd{false};
+  ContinueFuture firstFuture = ContinueFuture::makeEmpty();
+  ContinueFuture secondFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(ucxClient->next(0, &atEnd, &firstFuture), nullptr);
+  EXPECT_FALSE(atEnd);
+  EXPECT_EQ(ucxClient->next(1, &atEnd, &secondFuture), nullptr);
+  EXPECT_FALSE(atEnd);
+
+  exchangeOperator->close();
+  client->close();
+}
+
+TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxPartitionedOutput) {
+  registerCudfWithExchange(true);
+
+  auto plan = makePartitionedOutputPlan(TransportKind::kUcx);
+  auto outputNode =
+      std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+          plan.planNode);
+  ASSERT_NE(outputNode, nullptr);
+  auto task = makeTask(
+      "test-ucx-partitioned-output-task",
+      std::move(plan),
+      /*queryConfig=*/{});
+  auto driverCtx = makeDriverCtx(task);
+
+  auto entry = OutputTransportRegistry::tryGet(
+      *task->queryCtx(), outputNode->transportKind());
+  ASSERT_NE(entry, nullptr);
+
+  auto outputOperator = entry->makeOutputOperator(
+      0, driverCtx.get(), outputNode, /*eagerFlush=*/false);
+  auto* ucxOutput =
+      dynamic_cast<ucx_exchange::UcxPartitionedOutput*>(outputOperator.get());
+  ASSERT_NE(ucxOutput, nullptr);
+
+  auto& registry = cudf_velox::OperatorAdapterRegistry::getInstance();
+  const auto* adapter = registry.findAdapter(outputOperator.get());
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_TRUE(adapter->keepOperator());
+  const auto properties =
+      adapter->properties(outputOperator.get(), outputNode, driverCtx.get());
+  EXPECT_TRUE(properties.canRunOnGPU);
+  EXPECT_TRUE(properties.acceptsGpuInput);
+  EXPECT_FALSE(properties.producesGpuOutput);
+
+  outputOperator->close();
+}
+
+// Registration is process-wide, so a query that disables cuDF still resolves
+// kUcx. Both entries must reject it rather than build operators whose GPU
+// prerequisites the cuDF driver adapter will not have supplied.
+TEST_F(UcxTransportRegistrationTest, ucxEntriesRequireCudfEnabledForQuery) {
+  registerCudfWithExchange(true);
+
+  auto plan = makeExchangePlan(TransportKind::kUcx);
+  auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
+  ASSERT_NE(exchangeNode, nullptr);
+  auto task = makeTask(
+      "test-ucx-cudf-disabled-task",
+      std::move(plan),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "false"}});
+
+  auto entry = ExchangeTransportRegistry::tryGet(
+      *task->queryCtx(), exchangeNode->transportKind());
+  ASSERT_NE(entry, nullptr);
+
+  VELOX_ASSERT_USER_THROW(
+      entry->makeClient(makeClientContext(task)),
+      "The UCX exchange transport requires cuDF for this query");
+
+  auto outputPlan = makePartitionedOutputPlan(TransportKind::kUcx);
+  auto outputNode =
+      std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+          outputPlan.planNode);
+  ASSERT_NE(outputNode, nullptr);
+  auto outputTask = makeTask(
+      "test-ucx-cudf-disabled-output-task",
+      std::move(outputPlan),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "false"}});
+  auto outputDriverCtx = makeDriverCtx(outputTask);
+
+  auto outputEntry = OutputTransportRegistry::tryGet(
+      *outputTask->queryCtx(), outputNode->transportKind());
+  ASSERT_NE(outputEntry, nullptr);
+
+  VELOX_ASSERT_USER_THROW(
+      outputEntry->makeOutputOperator(
+          0, outputDriverCtx.get(), outputNode, /*eagerFlush=*/false),
+      "The UCX exchange transport requires cuDF for this query");
+}
+
+// When the query sets nothing, the check falls back to the process-wide
+// CudfConfig::enabled. That is the "disable globally, enable per query" setup,
+// in which the cuDF adapter skips conversion and this check is the only
+// safeguard.
+TEST_F(UcxTransportRegistrationTest, ucxEntryFollowsProcessWideCudfEnabled) {
+  registerCudfWithExchange(true);
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool savedEnabled = config.enabled;
+  SCOPE_EXIT {
+    config.enabled = savedEnabled;
+  };
+  config.enabled = false;
+
+  auto entry =
+      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+
+  auto unsetTask = makeTask(
+      "test-ucx-global-cudf-disabled-task",
+      makeExchangePlan(TransportKind::kUcx),
+      /*queryConfig=*/{});
+  VELOX_ASSERT_USER_THROW(
+      entry->makeClient(makeClientContext(unsetTask)),
+      "The UCX exchange transport requires cuDF for this query");
+
+  auto enabledTask = makeTask(
+      "test-ucx-query-cudf-enabled-task",
+      makeExchangePlan(TransportKind::kUcx),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "true"}});
+  auto client = entry->makeClient(makeClientContext(enabledTask));
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
+      nullptr);
+  client->close();
+}
+
+TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
+  registerCudfWithExchange(true);
+
+  auto plan = makeExchangePlan(TransportKind::kUcx);
+  auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
+  ASSERT_NE(exchangeNode, nullptr);
+  auto task =
+      makeTask("test-foreign-client-task", std::move(plan), /*queryConfig=*/{});
+  auto driverCtx = makeDriverCtx(task);
+
+  auto ucxEntry =
+      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kUcx});
+  ASSERT_NE(ucxEntry, nullptr);
+  auto inMemoryEntry =
+      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kInMemory});
+  ASSERT_NE(inMemoryEntry, nullptr);
+
+  // A client from another transport must not be accepted: the entry pairs the
+  // operator with the client its own factory produces.
+  auto foreignClient = inMemoryEntry->makeClient(makeClientContext(task));
+  ASSERT_NE(foreignClient, nullptr);
+  VELOX_ASSERT_THROW(
+      ucxEntry->makeExchangeOperator(
+          0, driverCtx.get(), exchangeNode, foreignClient),
+      "Exchange client was not created by this transport's client factory");
+
+  foreignClient->close();
+}
+
+} // namespace
+} // namespace facebook::velox::exec::test

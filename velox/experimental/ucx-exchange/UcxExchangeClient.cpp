@@ -20,20 +20,32 @@
 
 namespace facebook::velox::ucx_exchange {
 
+UcxExchangeClient::UcxExchangeClient(
+    std::string taskId,
+    int destination,
+    int32_t numberOfConsumers)
+    : taskId_{std::move(taskId)},
+      maxQueuedColumns_(kDefaultMaxQueuedColumns),
+      queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
+  VELOX_CHECK_GE(
+      destination, 0, "Exchange client destination must not be negative");
+}
+
 void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   std::shared_ptr<UcxExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(std::string{remoteTaskId}).second;
-    if (duplicate) {
+    const auto [remoteTaskIdIt, inserted] =
+        remoteTaskIds_.emplace(remoteTaskId);
+    if (!inserted) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
       return;
     }
 
     std::shared_ptr<UcxExchangeSource> source;
-    source = UcxExchangeSource::create(taskId_, remoteTaskId, queue_);
+    source = UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_);
 
     if (closed_) {
       toClose = std::move(source);
@@ -177,11 +189,11 @@ std::string UcxExchangeClient::toString() const {
 folly::dynamic UcxExchangeClient::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
-  obj["closed"] = closed_;
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
+    obj["closed"] = closed_;
     for (auto& source : sources_) {
       clientsObj[std::to_string(index++)] = source->toJson();
     }

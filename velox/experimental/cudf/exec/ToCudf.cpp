@@ -28,6 +28,9 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
@@ -389,10 +392,23 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Registered last, after the memory resources and driver adapter it relies
+  // on, so a registerCudf() that fails part way leaves no kUcx behind.
+  if (CudfConfig::getInstance().exchange) {
+    ucx_exchange::registerUcxTransports();
+  }
+#endif
+
   isCudfRegistered = true;
 }
 
 void unregisterCudf() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Unconditionally unregister the UCX transports, whether or not
+  // CudfConfig::exchange was set when registerCudf() ran.
+  ucx_exchange::unregisterUcxTransports();
+#endif
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();
