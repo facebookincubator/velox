@@ -21,6 +21,7 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   target_link_libraries(
     nimble_alprd_benchmark
+    velox_dwio_common
     nimble_encodings
     nimble_common
     Folly::follybenchmark

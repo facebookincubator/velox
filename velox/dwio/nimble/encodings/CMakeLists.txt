@@ -92,6 +92,7 @@ add_library(
   views/BlockBitPackingEncodingView.h
   views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
+  views/ALPRDEncodingView.h
   selection/Statistics.h
   selection/NestedAlpSizeEstimation.h
   selection/EncodingSizeEstimation.h

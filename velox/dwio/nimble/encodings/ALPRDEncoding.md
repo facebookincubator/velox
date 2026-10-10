@@ -13,8 +13,8 @@ does not contain ALP blocks or switch between the two algorithms internally.
 ## Scope and selection
 
 ALP_RD supports explicit layouts, opt-in automatic selection through the manual
-policy, ordinary Nimble file reads, and the generic visitor path. It has no
-encoding view yet.
+policy, ordinary Nimble file reads, bulk and generic visitor paths, encoded
+slices, and a FLOAT/DOUBLE encoding view.
 
 To enable automatic selection, add `ALPRD=<readFactor>` to the manual policy's
 candidate configuration. ALP_RD is absent from production default candidates.
@@ -303,8 +303,15 @@ their own allocation behavior.
 
 `skip` advances both main children and the exception cursor. `reset` restores
 them to the beginning. The generic visitor uses these same operations for
-correct filtering and selected-row reads. Optimized selective reading and
-encoding views can be added independently while retaining this format.
+filtering and selected-row reads. Dense visitors with at least 128 remaining
+rows use the existing bulk visitor machinery when its type, extraction and
+filter conditions permit. ALP_RD materializes contiguous non-null values in
+batches, including exception patches, then uses the framework's fixed-width
+filter/scatter operation. NULL row mapping stays in the surrounding reader.
+Sparse visitors, short batches and unsupported visitor modes retain the generic
+path; they do not decode gaps just to form a larger batch.
+
+### Encoded slices
 
 Slicing preserves the dictionary and split, slices both main children, keeps
 only exceptions in the requested range, and rebases their positions to zero.
@@ -312,6 +319,44 @@ It uses the shared exception loader to validate both exception streams without
 constructing a complete ALP_RD decoder. It omits both exception children when
 the slice has no exceptions. A slice must contain at least one row and stay
 within the original row range.
+
+The main children are sliced by row range; the exception children are sliced by
+their matching slot range. Exception positions use native child slicing followed
+by a `SliceEncoding` value delta. Where supported, the delta is folded into the
+child's baseline or copied values. Otherwise the existing wrapper applies it at
+decode time. There is no position-array re-encoding just to subtract the offset.
+The complete exception streams are still decoded and validated before range
+lookup; binary search does not replace ordering validation.
+
+Native slicing can keep complete touched runs or blocks inside a wrapper.
+If a child is already a `SliceEncoding`, ALP_RD composes another wrapper with
+the new row range and delta, retaining that child's bytes. Repeated slicing
+therefore remains readable but can retain bytes outside the final range and add
+wrapper overhead. Capturing such a result records its Slice child layout; it
+does not make Slice an ordinary writer-selectable encoding.
+
+### Random access views
+
+`ALPRDEncodingView<float/double>` implements scalar, indexed and range reads.
+It references the original encoded bytes, which the caller must keep alive.
+The two main streams use their existing typed views. Single-row reads locate
+exceptions by binary search; range reads batch the main streams and locate the
+first exception once. The typed view framework handles repeated and contiguous
+indices. Access does not depend on a sequential decoder cursor.
+
+The view keeps both validated exception arrays, using the caller's MemoryPool
+and buffer pool. Construction retains the decoder's complete exception checks
+and O(exceptionCount) allocation/work. Codes and low parts are checked when
+accessed, including at exception positions. Reusing a view amortizes construction;
+creating one per requested value does not avoid exception loading.
+
+Both main children must support views, including their nested layouts. A legal
+main child without a view, such as Varint or Slice, produces the existing
+unsupported-view error; it remains readable by the sequential decoder.
+Exception children are decoded during construction and need no view support.
+`supportsEncodingView(ALPRD)` reports top-level support, not the capability of
+every possible child tree. Nullable access uses the existing null-aware view
+API and non-null row mapping.
 
 ## Validation and benchmark
 
@@ -332,9 +377,13 @@ ALP_RD, including shared-prefix workloads and unmodified special values.
 `FloatingPointColumnReaderTest` and
 `ALPRDColumnReaderTest` verify real file reads, filters, NULLs, multiple chunks,
 and layout caching through both the native and legacy reader paths.
-`ReadWithVisitorTest` adds sparse input rows, selected and skipped exceptions,
+`ReadWithVisitorTest` adds dense and sparse input rows, selected and skipped exceptions,
 special IEEE bit patterns, NULL mapping, filtering, and filter-only reads across
-batches and chunks. `StreamSlicerTest` verifies exception rebasing for raw
+batches and chunks. It exercises the bulk cutoff, all-null batches and output
+continuation across chunks. `ALPRDEncodingViewTest` and the view fuzzer compare
+random/range reads with the decoder, including special bit patterns, nullable
+access and unsupported child layouts. Independent fixtures check view corruption
+handling and pool limits. `StreamSlicerTest` verifies exception rebasing for raw
 serialized streams and uncompressed or compressed tablet chunks.
 
 The `nimble_alprd_benchmark` target provides FLOAT/DOUBLE workloads with shared
@@ -348,6 +397,22 @@ Data generation/loading, encoded snapshot copying and caller output allocation
 are outside timing. Complete encoding includes training and child selection;
 construction-plus-decoding includes exception loading and destruction. Both
 decoding lifecycles are validated bit-for-bit before timing.
+
+`--read_profile` measures construction, materialization, dense visitors with
+automatic bulk dispatch or a forced generic path, 10%/1% selected rows, encoded
+slicing, and random/range access. It uses one encoded snapshot for every read
+operation. `--read_batch_size` controls visitor batches; `--range_rows` controls
+the slice and range-read size. Random access probes 128 indices per operation.
+`--profile_operation` restricts this mode to one operation for CPU profiling.
+The setup record on stderr includes the encoded checksum and child layout,
+retained decoder/view pool allocations, and sliced payload size. Pool figures
+exclude caller buffers and C++ objects allocated outside MemoryPool.
+
+Visitor timing includes output preparation and filtering. Slice timing includes
+its allocations and output serialization. View construction includes exception
+loading and destruction; random/range timings reuse an existing view. Input
+preparation and bit-level validation remain outside these measurements. These
+are single-thread encoding/visitor measurements, not end-to-end file scans.
 
 The `--selection_profile` mode compares a configured baseline candidate set
 against the same set with ALP_RD added. It reports serialized trees, estimated
