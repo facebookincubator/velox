@@ -635,6 +635,7 @@ class DynamicRowWriter {
         index,
         childrenVectors_->size());
 
+    childrenWriters_[index]->finalizeNull();
     (*childrenVectors_)[index]->setNull(offset_, true);
     needCommit_[index] = false;
   }

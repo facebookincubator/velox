@@ -19,42 +19,104 @@ be found in `this JSON introduction`_.
 JSON Functions
 --------------
 
-.. spark:function:: from_json(jsonString) -> array / map / row
+.. spark:function:: from_json(jsonString [, option...]) -> array / map / row
 
     Casts ``jsonString`` to an ARRAY, MAP, or ROW type, with the output type
-    determined by the expression. Returns NULL, if the input string is unparsable.
+    determined by the expression. In the default ``PERMISSIVE`` mode,
+    unparsable input returns NULL for ARRAY and MAP outputs and a ROW whose
+    fields are NULL for ROW outputs, except for an optional corrupt-record
+    column.
     Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
-    or MAP, the element type of the array or the value type of the map must be one
-    of these supported types, and for maps, the key type must be VARCHAR. Casting
-    to ROW supports only JSON objects.
-    Note that since the result type can be inferred from the expression, in Velox we
-    do not need to provide the ``schema`` parameter as required by Spark's from_json
-    function. ::
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, ARRAY, MAP and ROW. When
+    casting to ARRAY or MAP, the element type of the array or the value type of
+    the map must be one of these supported types, and for maps, the key type must
+    be VARCHAR. Casting to ROW supports only JSON objects.
+    Velox typed expressions carry the output type, so the schema is not a
+    runtime argument as it is in Spark. Conceptual examples are shown with the
+    expression output type on the left. ::
 
-        SELECT from_json('{"a": true}', 'a BOOLEAN'); -- {'a'=true}
-        SELECT from_json('{"a": 1}', 'a INT'); -- {'a'=1}
-        SELECT from_json('{"a": 1.0}', 'a DOUBLE'); -- {'a'=1.0}
-        SELECT from_json('{"a": 5.321E2}', 'a DECIMAL(7, 2)'); -- {'a'=532.10}
-        SELECT from_json('{"a":"2021-7-1T"}', 'a DATE'); -- {'a'="2021-07-01"}
-        SELECT from_json('{"a":"1"}', 'a DATE'); -- {'a'="1970-01-02"}
-        SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
-        SELECT from_json('{"a": 1, "b": 2}', 'MAP<STRING, INT>'); -- {'a'=1, 'b'=2}
-        SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b INT>'); -- {'a'={b=1}}
+        ROW(a BOOLEAN):             from_json('{"a": true}')              -- {'a'=true}
+        ROW(a INTEGER):             from_json('{"a": 1}')                 -- {'a'=1}
+        ROW(a DOUBLE):              from_json('{"a": 1.0}')               -- {'a'=1.0}
+        ROW(a DECIMAL(7, 2)):       from_json('{"a": 5.321E2}')           -- {'a'=532.10}
+        ROW(a DATE):                from_json('{"a":"2021-7-1T"}')         -- {'a'="2021-07-01"}
+        ROW(a TIMESTAMP):           from_json('{"a":"2021-07-01 12:34:56"}')
+        ARRAY(VARCHAR):             from_json('["name", "age", "id"]')     -- ['name', 'age', 'id']
+        MAP(VARCHAR, INTEGER):      from_json('{"a": 1, "b": 2}')         -- {'a'=1, 'b'=2}
+        ROW(a ROW(b INTEGER)):      from_json('{"a": {"b": 1}}')          -- {'a'={b=1}}
 
-    The current implementation has the following limitations.
+    Implemented Spark JSON options are ``allowNonNumericNumbers``, ``mode``
+    (``PERMISSIVE`` or ``FAILFAST``), ``columnNameOfCorruptRecord``,
+    ``dateFormat``, ``timestampFormat``, and ``timeZone``. Velox also accepts
+    ``sessionTimezone`` as an alias for ``timeZone`` and exposes
+    ``enablePartialResults`` and ``caseSensitiveFieldMatch``. The latter
+    enables exact-case field matching and last-value-wins duplicate-key
+    behavior. Integrations pass each option as a constant ``key=value`` string
+    argument. Null option arguments are rejected. Option names are
+    case-insensitive. Boolean option values must be ``true`` or ``false``
+    (case-insensitive).
 
-    * Does not support user provided options, for example, the Spark function below is not supported. ::
+    See `Spark's from_json documentation
+    <https://spark.apache.org/docs/latest/api/sql/index.html#from_json>`_ and
+    `Spark's JSON option documentation
+    <https://spark.apache.org/docs/latest/sql-data-sources-json.html#data-source-option>`_
+    for the canonical Spark interface and option definitions.
 
-        from_json('{"a":1}', 'a INT', map('option', 'value'))
+    ``allowNonNumericNumbers`` controls the special NaN and infinity tokens,
+    including their quoted spellings. It does not reject overflow of ordinary
+    JSON numbers: for example, ``1e400`` produces infinity even when the option
+    is false.
 
-    * Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.
+    ``DROPMALFORMED`` mode is not supported, matching Spark's ``from_json``
+    behavior. Mode names are case-insensitive. Unrecognized mode names use
+    ``PERMISSIVE`` behavior.
 
-    * Does not allow single quotes enclosed string, {'a':1}. NULL will be returned.
+    JSON integer values are accepted for TIMESTAMP fields as epoch seconds.
+    As in Spark, conversion to microseconds uses wrapping 64-bit arithmetic.
+    Timestamp strings without an explicit offset use the query session
+    timezone unless overridden by ``timeZone``. Local times in a daylight
+    saving gap shift forward by the gap length, and ambiguous local times use
+    the earlier offset. Unlike integer epoch seconds, timestamp strings must
+    fit in signed 64-bit microseconds after timezone conversion. Out-of-range
+    strings are field conversion failures.
 
-    * Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported. ::
+    Custom timestamp formats preserve up to six fractional-second digits under
+    the default formatter policy. When a pattern accepts more than six digits,
+    additional digits are truncated. The legacy formatter retains its
+    millisecond-based interpretation of fractional fields. Custom date and
+    timestamp patterns use the existing Velox formatter syntax, not the full
+    Spark ``java.time`` pattern grammar.
+    An explicitly empty format does not fall back to default string parsing.
+    Out-of-range numeric fields in custom patterns are rejected rather than
+    wrapping.
 
-        from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')
+    Empty input and input containing only JSON whitespace (space, tab, line
+    feed, or carriage return) return NULL in every mode. Other whitespace
+    characters are malformed JSON. A JSON ``null`` root follows malformed-record
+    handling, unlike a SQL NULL input, which returns NULL without an error.
+
+    ``columnNameOfCorruptRecord`` is ignored for non-ROW outputs and when the
+    named column is absent. When present, the column must be VARCHAR and JSON
+    input fields with the same name are ignored. An empty column name is
+    supported when explicitly configured. An empty ``timeZone`` option is
+    invalid.
+
+    Case-insensitive matching remains the default for backward compatibility.
+    In this mode, duplicate fields use first-non-null-wins behavior. Set
+    ``caseSensitiveFieldMatch=true`` for Spark-compatible exact-case and
+    last-value-wins behavior.
+    ``enablePartialResults`` defaults to true and preserves successfully
+    converted fields inside nested ROW values. When false, a conversion failure
+    collapses the containing nested ROW to NULL; successful siblings in the
+    root ROW remain available.
+
+    Except for the supported NaN and infinity tokens, parsing follows simdjson's
+    strict JSON syntax. Spark options that relax JSON syntax,
+    including ``allowSingleQuotes``, are accepted but cannot change parser
+    behavior. Inputs using unsupported syntax return the configured permissive
+    result or fail in ``FAILFAST`` mode.
+    Options that affect only file-source behavior or schema inference, such as
+    ``multiLine`` and ``samplingRatio``, are accepted as no-ops.
 
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 
