@@ -38,6 +38,7 @@ namespace facebook::velox::cudf_velox {
  * @param lhs Left-hand decimal operand column (DECIMAL64 or DECIMAL128).
  * @param rhs Right-hand decimal operand column (same type as lhs).
  * @param outputType Output decimal type including precision and scale.
+ * @param outputPrecision Output decimal precision.
  * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
  * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
  * @param stream CUDA stream for GPU execution.
@@ -48,6 +49,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -62,6 +64,7 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand scalar.
  * @param outputType Output decimal type including precision and scale.
+ * @param outputPrecision Output decimal precision.
  * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
  * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
  * @param stream CUDA stream for GPU execution.
@@ -72,6 +75,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -86,6 +90,7 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @param lhs Left-hand decimal operand scalar.
  * @param rhs Right-hand decimal operand column.
  * @param outputType Output decimal type including precision and scale.
+ * @param outputPrecision Output decimal precision.
  * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
  * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
  * @param stream CUDA stream for GPU execution.
@@ -96,6 +101,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
+    int32_t outputPrecision,
     int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);

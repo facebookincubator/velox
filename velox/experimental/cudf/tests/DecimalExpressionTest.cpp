@@ -2124,6 +2124,75 @@ TEST_F(CudfDecimalTest, decimalDivideNoFalseOverflowAtBoundary) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+// DECIMAL(5, 2) / DECIMAL(20, 0) returns DECIMAL(5, 2): the GPU divides in a
+// DECIMAL128 working type and narrows to the short output. Quotients at the
+// +/-99999 precision boundary must pass the output-precision check.
+TEST_F(CudfDecimalTest, decimalDivideShortResultLongDivisor) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {99999, -99999, 12345, 1, -1, std::nullopt, 99999},
+              DECIMAL(5, 2)),
+          makeNullableFlatVector<int128_t>(
+              {1, -1, 7, 2, 3, 1, DecimalUtil::kPowersOfTen[19]},
+              DECIMAL(20, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a / b AS result"})
+          .planNode());
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a / CAST('7' AS DECIMAL(20, 0)) AS result"})
+          .planNode());
+}
+
+// Presto result types always leave room for the quotient, so the divide is
+// built as a typed expression with a declared output narrower than the
+// quotient. Velox CPU rejects the mismatched return type, so this runs on the
+// GPU only. The long inputs make the GPU divide in DECIMAL128 and narrow to the
+// DECIMAL64 output: 123.45 / 1.00 = 123.45 fits DECIMAL(5, 2) but not
+// DECIMAL(4, 2).
+TEST_F(CudfDecimalTest, decimalDivideRejectsResultWiderThanOutputPrecision) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>({12345, -12345}, DECIMAL(20, 2)),
+          makeFlatVector<int128_t>({100, 100}, DECIMAL(20, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto makePlan = [&](const TypePtr& resultType) {
+    auto divide = std::make_shared<core::CallTypedExpr>(
+        resultType,
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(DECIMAL(20, 2), "a"),
+            std::make_shared<core::FieldAccessTypedExpr>(DECIMAL(20, 2), "b")},
+        "divide");
+    return exec::test::PlanBuilder()
+        .values(vectors)
+        .projectExpressions(std::vector<core::TypedExprPtr>{divide})
+        .planNode();
+  };
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(makePlan(DECIMAL(5, 2)))
+          .copyResults(pool());
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<int64_t>({12345, -12345}, DECIMAL(5, 2)),
+      result->childAt(0));
+
+  VELOX_ASSERT_USER_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(makePlan(DECIMAL(4, 2)))
+          .copyResults(pool()),
+      "Decimal overflow in divide");
+}
+
 // Exercises scalar-operand overflow on the GPU kernel paths (lhs and rhs).
 TEST_F(CudfDecimalTest, decimalScalarOverflow) {
   const auto nineE37 = 9 * DecimalUtil::kPowersOfTen[37];
