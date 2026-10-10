@@ -19,7 +19,9 @@
 #include <string>
 
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/StringView.h"
+#include "velox/type/TimestampCalendar.h"
 
 namespace folly {
 struct dynamic;
