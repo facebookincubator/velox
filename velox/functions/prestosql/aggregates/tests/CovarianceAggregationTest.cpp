@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -70,6 +71,19 @@ class CovarianceAggregationTest
     AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(sql);
   }
 };
+
+TEST_P(CovarianceAggregationTest, accumulatorAlignment) {
+  // RowContainer rounds the accumulator offset up to this alignment. The
+  // accumulators hold an int64_t count and doubles, so they need 8.
+  core::QueryConfig config{{}};
+  auto function = exec::Aggregate::create(
+      GetParam(),
+      core::AggregationNode::Step::kSingle,
+      {DOUBLE(), DOUBLE()},
+      DOUBLE(),
+      config);
+  EXPECT_EQ(function->accumulatorAlignmentSize(), 8);
+}
 
 TEST_P(CovarianceAggregationTest, doubleNoNulls) {
   vector_size_t size = 1'000;
