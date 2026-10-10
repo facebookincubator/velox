@@ -147,11 +147,7 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
     dataSink->close();
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(outputType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(outputType);
     exec::test::AssertQueryBuilder(plan)
         .splits(createSplitsForDirectory(dataPath))
         .assertResults(expected);
@@ -409,12 +405,7 @@ TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
       /*equalityFieldIds=*/{2});
 
   const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(tableSchema)
-                  .dataColumns(tableSchema)
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(tableSchema);
 
   // G_match is deleted; G_keep survives. Without the delete-side conversion the
   // delete key hashes as raw WKB while the base row hashes as internal bytes,
@@ -454,8 +445,8 @@ TEST_F(IcebergGeometryReadTest, geometryHashJoinWithDynamicFilterPushdown) {
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
-  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
-                  .startTableScan(test::kIcebergConnectorId)
+  test::IcebergPlanBuilder planBuilder(planNodeIdGenerator);
+  auto plan = planBuilder.startTableScan()
                   .outputType(ROW({"id", "geom"}, {BIGINT(), GEOMETRY()}))
                   .endTableScan()
                   .capturePlanNodeId(scanId)
@@ -1171,11 +1162,7 @@ TEST_F(IcebergGeometryReadTest, geometryParquetFileWrittenByAnotherEngine) {
     expected.emplace_back(toVeloxGeometry(wkt));
   }
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {GEOMETRY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(path))
       .assertResults(makeRowVector({"geom"}, {makeGeometryVector(expected)}));
@@ -1204,11 +1191,7 @@ TEST_F(IcebergGeometryReadTest, nonParquetGeometryIsRejected) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), {data});
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {GEOMETRY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   VELOX_ASSERT_THROW(
       exec::test::AssertQueryBuilder(plan)
           .splits(makeIcebergSplits(filePath->getPath()))
