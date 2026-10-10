@@ -86,3 +86,13 @@ target_link_libraries(
   velox_benchmark_builder
   velox_vector_test_lib
 )
+
+add_executable(velox_sparksql_benchmarks_size SizeBenchmark.cpp)
+target_link_libraries(
+  velox_sparksql_benchmarks_size
+  velox_functions_spark
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::folly
+  Folly::follybenchmark
+)
