@@ -2456,11 +2456,11 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   }
 
   // Read back from the tablet writer rather than from options, so the recorded
-  // flag cannot drift from what was actually written.
-  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+  // trailer cannot drift from what was actually written.
+  auto streamTrailerLayout = tabletWriter_->streamTrailerLayout();
 
   if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
-      !hasStreamChecksums) {
+      streamTrailerLayout.empty()) {
     return;
   }
 
@@ -2469,7 +2469,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          hasStreamChecksums}
+          /*hasStreamChecksums=*/false,
+          std::move(streamTrailerLayout)}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }

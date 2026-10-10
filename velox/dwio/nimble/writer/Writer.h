@@ -101,7 +101,8 @@ class Writer : public velox::dwio::common::Writer {
   ///
   /// Fails when the file carries no checkpoint section, or when 'type' and
   /// 'options' would lay streams out differently than the suspended file
-  /// did: the final footer holds a single schema that has to describe every
+  /// did, stream trailers included: the final footer holds a single schema,
+  /// and the properties a single trailer layout, that have to describe every
   /// stripe.
   ///
   /// Not implemented yet.

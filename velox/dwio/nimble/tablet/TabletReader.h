@@ -407,9 +407,9 @@ class TabletReader {
   }
 
   /// Returns the physical byte span of `stripe`, covering every stream it
-  /// holds. The writer records it as the bytes appended while writing the
-  /// stripe, so it stays correct for the last stripe, where no following
-  /// stripe offset bounds it.
+  /// holds and their trailers, if the file has any. The writer records it as
+  /// the bytes appended while writing the stripe, so it stays correct for the
+  /// last stripe, where no following stripe offset bounds it.
   uint32_t stripeSize(uint32_t stripe) const {
     NIMBLE_CHECK_LT(stripe, stripeCount_, "Stripe index out of bounds");
     return stripeSizes_[stripe];
@@ -426,10 +426,11 @@ class TabletReader {
   /// stream does not exist in this stripe. O(1) point read.
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
-  /// Returns the recorded checksum of `streamId` within `stripe`, or 0 when
-  /// the file carries no per-stream checksums. Gate on
-  /// properties().hasStreamChecksums() rather than on a non-zero result.
-  /// O(1) point read.
+  /// Returns the checksum of `streamId` within `stripe` from the stripe
+  /// group's checksum array, which only legacy files carry; 0 otherwise,
+  /// including when the file keeps checksums in stream trailers. Gate on
+  /// properties().hasStreamChecksums() rather than on a non-zero result. O(1)
+  /// point read.
   uint32_t streamChecksum(const StripeIdentifier& stripe, uint32_t streamId)
       const;
 
@@ -564,10 +565,10 @@ class TabletReader {
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 
-  // Enforces that a file whose properties record per-stream checksums has them
-  // in every non-empty stripe group. A group that violates this reads back as
-  // all-zero checksums, which verification would report as storage corruption
-  // rather than as the malformed file it is.
+  // Enforces that a file whose properties claim stripe-group checksum arrays
+  // has one in every non-empty stripe group. A group that violates this reads
+  // back as all-zero checksums, which verification would report as storage
+  // corruption rather than as the malformed file it is.
   void checkStreamChecksumsPresent(
       const StripeGroup& stripeGroup,
       uint32_t stripeGroupIndex) const;

@@ -41,7 +41,8 @@ table StripeGroup {
   stream_sizes:[uint32];
   /// Optional per-stream checksum of the stream's on-disk bytes, laid out
   /// stripe-major alongside stream_offsets / stream_sizes and of equal length.
-  /// Absent on files written without stream checksums.
+  /// Legacy: current writers put each stream's checksum in its trailer
+  /// (FileProperties.stream_trailer) and leave this absent.
   stream_checksums:[uint32];
 }
 
@@ -66,8 +67,9 @@ table StreamMajorStripeGroup {
   /// stream_count * stripe_count values, stream-major, so stream S of stripe T
   /// sits at S * stripe_count + T. A single blob rather than one per stream,
   /// because checksums are uniformly distributed and have no per-stream value
-  /// range for a tighter bit width to exploit. Absent on files written without
-  /// stream checksums.
+  /// range for a tighter bit width to exploit. Legacy: current writers put each
+  /// stream's checksum in its trailer (FileProperties.stream_trailer) and leave
+  /// this absent.
   stream_checksums:EncodedStream;
 }
 

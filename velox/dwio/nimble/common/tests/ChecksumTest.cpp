@@ -198,10 +198,11 @@ TEST(ChecksumTests, computeChecksum32MatchesNarrowedComputeChecksum) {
   EXPECT_EQ(narrow, static_cast<uint32_t>(wide ^ (wide >> 32)));
 }
 
-// Per-stream checksums are persisted in stripe-group metadata, so the value
-// this produces is on-disk format. Changing the algorithm or the 64->32
-// narrowing invalidates the checksums in every file already written; this
-// pins both so such a change cannot land unnoticed.
+// Per-stream checksums are persisted in stream trailers (and, in legacy files,
+// in stripe-group arrays), so the value this produces is on-disk format.
+// Changing the algorithm or the 64->32 narrowing invalidates the checksums in
+// every file already written; this pins both so such a change cannot land
+// unnoticed.
 TEST(ChecksumTests, xxh3NarrowingIsStableOnDisk) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
 
