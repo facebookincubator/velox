@@ -1138,7 +1138,7 @@ TEST_P(TabletTest, vectorIndex) {
       numCacheInsertionsBeforeLoad = cacheStats.numNew;
     }
 
-    const auto vectorIndex = tablet->vectorIndex("embedding");
+    auto vectorIndex = tablet->vectorIndex("embedding");
     if (!withVectorIndex) {
       EXPECT_EQ(vectorIndex, nullptr);
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesBeforeLoad);
@@ -1201,7 +1201,33 @@ TEST_P(TabletTest, vectorIndex) {
       EXPECT_EQ(warmCacheStats.numEntries, warmCacheStatsBeforeLoad.numEntries);
       EXPECT_EQ(warmCacheStats.numNew, warmCacheStatsBeforeLoad.numNew);
       EXPECT_GT(warmCacheStats.numHit, warmCacheStatsBeforeLoad.numHit);
+
+      nimble::TabletReader::Options boundedCacheOptions;
+      boundedCacheOptions.maxCacheEntrySize = 1;
+      const auto boundedCacheTablet =
+          createTabletReader(file, std::move(boundedCacheOptions));
+      const auto indexBytesBeforeBypass = indexIoStats_->rawBytesRead();
+      const auto indexCacheHitsBeforeBypass = indexIoStats_->ramHit().count();
+      ASSERT_NE(boundedCacheTablet->vectorIndex("embedding"), nullptr);
+      EXPECT_GT(indexIoStats_->rawBytesRead(), indexBytesBeforeBypass);
+      EXPECT_EQ(indexIoStats_->ramHit().count(), indexCacheHitsBeforeBypass);
     }
+
+    const std::weak_ptr<const nimble::index::VectorIndex> weakVectorIndex{
+        vectorIndex};
+    vectorIndex.reset();
+    EXPECT_TRUE(weakVectorIndex.expired());
+
+    nimble::TabletReader::Options pinnedOptions;
+    pinnedOptions.pinIndex = true;
+    const auto pinnedTablet =
+        createTabletReader(file, std::move(pinnedOptions));
+    auto pinnedVectorIndex = pinnedTablet->vectorIndex("embedding");
+    ASSERT_NE(pinnedVectorIndex, nullptr);
+    const std::weak_ptr<const nimble::index::VectorIndex> weakPinnedVectorIndex{
+        pinnedVectorIndex};
+    pinnedVectorIndex.reset();
+    EXPECT_FALSE(weakPinnedVectorIndex.expired());
   }
 }
 

@@ -475,6 +475,7 @@ struct VectorIndexDirectory::InputState {
             .ioOptions = ioOptions.get(),
             .fileHandle = sourceOptions.fileHandle,
             .cache = sourceOptions.cache,
+            .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
         } {

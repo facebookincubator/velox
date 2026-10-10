@@ -689,7 +689,7 @@ class TabletReader {
 
   // Describes available indexes without materializing their FAISS data.
   std::unique_ptr<index::VectorIndexDirectory> vectorIndexDirectory_;
-  // Keeps immutable indexes strongly cached for the reader lifetime.
+  // Caches immutable indexes according to the configured pinning policy.
   mutable MetadataCache<std::string, const index::VectorIndex>
       vectorIndexCache_;
 
