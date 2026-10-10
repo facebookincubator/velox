@@ -15,24 +15,33 @@
  */
 #pragma once
 
-#include <boost/algorithm/string/case_conv.hpp>
-#include <velox/type/Timestamp.h>
+#include <cstdint>
+#include <ctime>
+#include <optional>
+#include <string>
 #include <string_view>
-#include "velox/core/QueryConfig.h"
-#include "velox/expression/ComplexViewTypes.h"
+#include <vector>
+
+#include <folly/container/F14Map.h>
+
+#include "velox/common/base/Macros.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/DateTimeUnit.h"
+#include "velox/functions/lib/DateTimeUnitArithmetic.h"
+#include "velox/functions/lib/TimeUtilsCore.h"
+#include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+namespace facebook::velox::core {
+class QueryConfig;
+}
 
 namespace facebook::velox::functions {
 
-inline constexpr int64_t kSecondsInMinute = 60;
-inline constexpr int64_t kMinutesInHour = 60;
-inline constexpr int64_t kSecondsInHour = kSecondsInMinute * kMinutesInHour;
-inline constexpr int64_t kSecondsInDay = 86'400;
-inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
 /// Returns the configured session time zone, or GMT when it is unset.
@@ -42,75 +51,29 @@ FOLLY_ALWAYS_INLINE const tz::TimeZone* getSessionTimeZone(
                                      : tz::locateZone(sessionTimeZoneName);
 }
 
-FOLLY_ALWAYS_INLINE const tz::TimeZone* getSessionTimeZone(
-    const core::QueryConfig& config) {
-  return getSessionTimeZone(config.sessionTimezone());
-}
+/// Returns the session time zone of the query, or GMT when it is unset.
+const tz::TimeZone* getSessionTimeZone(const core::QueryConfig& config);
 
-FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
-    const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
+/// Returns the session time zone when the query adjusts timestamps to it, and
+/// null otherwise.
+const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config);
 
-FOLLY_ALWAYS_INLINE int64_t
+/// Returns the epoch seconds of 'timestamp' as seen in 'timeZone', or as
+/// stored when 'timeZone' is null.
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
 getSeconds(Timestamp timestamp, const tz::TimeZone* timeZone) {
   if (timeZone != nullptr) {
     timestamp.toTimezone(*timeZone);
-    return timestamp.getSeconds();
-  } else {
-    return timestamp.getSeconds();
   }
+  return timestamp.getSeconds();
 }
 
-FOLLY_ALWAYS_INLINE
-std::tm getDateTime(Timestamp timestamp, const tz::TimeZone* timeZone) {
-  int64_t seconds = getSeconds(timestamp, timeZone);
-  std::tm dateTime;
-  VELOX_USER_CHECK(
-      Timestamp::epochToCalendarUtc(seconds, dateTime),
-      "Timestamp is too large: {} seconds since epoch",
-      seconds);
-  return dateTime;
-}
-
-// days is the number of days since Epoch.
-FOLLY_ALWAYS_INLINE
-std::tm getDateTime(int32_t days) {
-  int64_t seconds = days * kSecondsInDay;
-  std::tm dateTime;
-  VELOX_USER_CHECK(
-      Timestamp::epochToCalendarUtc(seconds, dateTime),
-      "Date is too large: {} days",
-      days);
-  return dateTime;
-}
-
-FOLLY_ALWAYS_INLINE int getYear(const std::tm& time) {
-  // tm_year: years since 1900.
-  return 1900 + time.tm_year;
-}
-
-FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
-  // tm_mon: months since January – [0, 11].
-  return 1 + time.tm_mon;
-}
-
-FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
-  return time.tm_mday;
-}
-
-FOLLY_ALWAYS_INLINE int32_t getQuarter(const std::tm& time) {
-  return time.tm_mon / 3 + 1;
-}
-
-FOLLY_ALWAYS_INLINE int32_t getDayOfYear(const std::tm& time) {
-  return time.tm_yday + 1;
+/// Returns the broken-down time of 'timestamp' as seen in 'timeZone', or in
+/// UTC when 'timeZone' is null.
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE std::tm getDateTime(
+    Timestamp timestamp,
+    const tz::TimeZone* timeZone) {
+  return getDateTimeUtc(getSeconds(timestamp, timeZone));
 }
 
 FOLLY_ALWAYS_INLINE uint32_t getWeek(
@@ -156,14 +119,10 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
     bool allowMicro = false,
     bool allowAbbreviated = false);
 
-/// Adjusts the given date time object to the start of the specified date time
-/// unit (e.g., year, quarter, month, week, day, hour, minute).
-void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit);
-
 /// Returns timestamp with seconds adjusted to the nearest lower multiple of the
 /// specified interval. If the given seconds is negative and not an exact
 /// multiple of the interval, it adjusts further down.
-FOLLY_ALWAYS_INLINE Timestamp
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp
 adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   int64_t s = seconds / intervalSeconds;
   if (seconds < 0 && seconds % intervalSeconds) {
@@ -173,9 +132,48 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   return Timestamp(truncatedSeconds, 0);
 }
 
-// Returns timestamp truncated to the specified unit.
-Timestamp truncateTimestamp(
+/// Returns 'timestamp' truncated to the start of 'unit' as seen in 'timeZone',
+/// or in UTC when 'timeZone' is null.
+VELOX_GPU_COMPATIBLE inline Timestamp truncateTimestamp(
     Timestamp timestamp,
     DateTimeUnit unit,
-    const tz::TimeZone* timeZone);
+    const tz::TimeZone* timeZone) {
+  switch (unit) {
+    // Units up to a minute truncate the UTC value directly: time zone offsets
+    // and daylight saving shifts are whole minutes.
+    case DateTimeUnit::kMicrosecond:
+    case DateTimeUnit::kMillisecond:
+    case DateTimeUnit::kSecond:
+    case DateTimeUnit::kMinute: {
+      const auto truncated = truncateEpochTime(
+          {timestamp.getSeconds(), timestamp.getNanos()}, unit);
+      return Timestamp(truncated.seconds, truncated.nanos);
+    }
+
+    // Hour truncation has to handle the corner case of daylight savings time
+    // boundaries. Since conversions from local timezone to UTC may be
+    // ambiguous, we need to be carefull about the roundtrip of converting to
+    // local time and back. So what we do is to calculate the truncation delta
+    // in UTC, then applying it to the input timestamp.
+    case DateTimeUnit::kHour: {
+      const int64_t localSeconds = getSeconds(timestamp, timeZone);
+      const int64_t secondsDelta =
+          localSeconds - truncateEpochTime({localSeconds, 0}, unit).seconds;
+      return Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+    }
+
+    // For the truncations below, we may first need to convert to the local
+    // timestamp, truncate, then convert back to GMT.
+    default: {
+      const EpochTime local{
+          getSeconds(timestamp, timeZone), timestamp.getNanos()};
+      Timestamp result(truncateEpochTime(local, unit).seconds, 0);
+      if (timeZone != nullptr) {
+        result.toGMT(*timeZone);
+      }
+      return result;
+    }
+  }
+}
+
 } // namespace facebook::velox::functions
