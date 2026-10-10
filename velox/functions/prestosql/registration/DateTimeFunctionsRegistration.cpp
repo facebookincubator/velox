@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/TimeIntervalYearMonth.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
@@ -189,23 +190,11 @@ void registerSimpleFunctions(
 
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
-  exec::registerVectorFunction(
-      prefix + "plus",
-      TimeIntervalYearMonthVectorFunction::signaturesPlus(),
-      std::make_unique<TimeIntervalYearMonthVectorFunction>(),
-      {},
-      /*overwrite=*/true,
-      defaultOwner);
+  registerTimePlusIntervalYearMonth(prefix + "plus", defaultOwner);
 
   // Use optimized vector function for Time - IntervalYearMonth (identity
   // function). Only supports (time, interval), not (interval, time).
-  exec::registerVectorFunction(
-      prefix + "minus",
-      TimeIntervalYearMonthVectorFunction::signaturesMinus(),
-      std::make_unique<TimeIntervalYearMonthVectorFunction>(),
-      {},
-      /*overwrite=*/true,
-      defaultOwner);
+  registerTimeMinusIntervalYearMonth(prefix + "minus", defaultOwner);
 
   registerFunction<
       TimestampMinusFunction,
