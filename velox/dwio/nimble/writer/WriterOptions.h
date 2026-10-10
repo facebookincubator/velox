@@ -59,7 +59,6 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
-        .allowNestedAlpSelection = allowNestedAlpSelection,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -279,11 +278,6 @@ struct WriterOptions {
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
-
-  /// Legacy experimental option for floating-point normalization and
-  /// policy-free nested ALP size estimates. Does not enable encoding
-  /// candidates; configure ALP explicitly in the selection policy.
-  bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by

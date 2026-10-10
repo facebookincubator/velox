@@ -1007,8 +1007,6 @@ void testAlpE2EWriterSelection(
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
     nimble::WriterOptions options;
-    // Explicit child candidates control ALP selection with this option enabled.
-    options.allowNestedAlpSelection = true;
     using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
     std::optional<ReadFactors> nestedEncodingReadFactors;
     if (enableNestedAlp) {
@@ -1069,7 +1067,6 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const nimble::WriterOptions options;
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
-    EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1081,21 +1078,14 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
 
   for (const auto useExactBits : {false, true}) {
     SCOPED_TRACE(fmt::format("useExactBits={}", useExactBits));
-    for (const auto allowNestedAlpSelection : {false, true}) {
-      SCOPED_TRACE(
-          fmt::format("allowNestedAlpSelection={}", allowNestedAlpSelection));
-      nimble::WriterOptions options;
-      options.fsstCompressionTargetRatio = 0.42;
-      options.fixedBitWidthUseExactBits = useExactBits;
-      options.allowNestedAlpSelection = allowNestedAlpSelection;
+    nimble::WriterOptions options;
+    options.fsstCompressionTargetRatio = 0.42;
+    options.fixedBitWidthUseExactBits = useExactBits;
 
-      const auto encodingOptions = options.buildEncodingOptions();
+    const auto encodingOptions = options.buildEncodingOptions();
 
-      EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
-      EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
-      EXPECT_EQ(
-          encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
-    }
+    EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
+    EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
   }
 }
 
