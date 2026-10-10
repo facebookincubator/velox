@@ -35,21 +35,7 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
       Scratch& scratch,
       OutputStream* stream) override;
 
-  void estimateSerializedSize(
-      VectorPtr vector,
-      const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes,
-      Scratch& scratch) override {
-    estimateSerializedSizeImpl(vector, ranges, sizes, scratch);
-  }
-
  private:
-  void estimateSerializedSizeImpl(
-      const VectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes,
-      Scratch& scratch);
-
   memory::MemoryPool* const pool_;
   const std::unique_ptr<folly::compression::Codec> codec_;
   const PrestoVectorSerde::PrestoOptions opts_;
