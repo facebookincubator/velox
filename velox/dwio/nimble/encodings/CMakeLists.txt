@@ -47,14 +47,13 @@ add_library(
   subintsplit/CostModel.h
   subintsplit/EncodingConfig.h
   subintsplit/BitSection.h
+  subintsplit/CostModel.h
+  subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
   subintsplit/Format.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
-  subintsplit/SectionEncoder.h
-  subintsplit/SectionMetrics.cpp
   subintsplit/SectionMetrics.h
-  subintsplit/SectionTable.h
   subintsplit/SplitBoundaries.cpp
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
