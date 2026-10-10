@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 namespace facebook::nimble::test {
@@ -453,6 +454,37 @@ Vector<T> makeSnowflakeData(
   return data;
 }
 
+// Frames of `frameSize` rows that alternate at random between a narrow residual
+// (a base plus one random bit) and a full-width random residual. A fresh FOR
+// encode starts every frame byte-aligned; slicing such a stream from an
+// arbitrary row re-packs the frames, so a wide frame can then start part-way
+// through a byte behind a narrow one.
+template <typename T, typename RNG>
+Vector<T> makeNarrowAndWideFramesData(
+    velox::memory::MemoryPool& pool,
+    RNG& rng,
+    uint32_t rowCount,
+    uint32_t frameSize,
+    [[maybe_unused]] Buffer* buffer) {
+  Vector<T> data(&pool);
+  data.reserve(rowCount);
+  if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
+    using UintType = std::make_unsigned_t<T>;
+    const auto base = static_cast<UintType>(folly::Random::rand64(rng));
+    bool wide = folly::Random::oneIn(2, rng);
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      if (i % frameSize == 0 && i > 0 && folly::Random::oneIn(2, rng)) {
+        wide = !wide;
+      }
+      const auto bits = wide
+          ? static_cast<UintType>(folly::Random::rand64(rng))
+          : static_cast<UintType>(base + (folly::Random::rand32(rng) & 1));
+      data.push_back(static_cast<T>(bits));
+    }
+  }
+  return data;
+}
+
 // A stream stitched from contiguous runs of several base patterns, so its
 // statistics shift across the row range (regime shifts). Stresses samplers and
 // selectors on non-homogeneous data. Uses only the all-type generators so it
@@ -653,6 +685,7 @@ class EncodingFuzzer {
       verifyMaterializeChunked(rng, *encoding, data);
       encoding->reset();
       verifySkipAndMaterialize(rng, *encoding, data);
+      verifySlice(rng, encoded, data);
     }
   }
 
@@ -754,6 +787,20 @@ class EncodingFuzzer {
               *pool_, rng, rowCount, buffer_.get()));
     }
 
+    // FOR packs each 128-row frame at its own width; mixing 1-bit and
+    // full-width frames lets the slice pass start a wide frame mid-byte. The
+    // row count spans several frames whatever maxRows is.
+    if constexpr (Encoder<EncodingClass>::encodingType() == EncodingType::FOR) {
+      constexpr uint32_t kForFrameSize = 128;
+      datasets.push_back(
+          makeNarrowAndWideFramesData<T>(
+              *pool_,
+              rng,
+              std::max<uint32_t>(rowCount, 4 * kForFrameSize),
+              kForFrameSize,
+              buffer_.get()));
+    }
+
     if constexpr (std::is_floating_point_v<T>) {
       datasets.push_back(
           makeFloatingPointDecimalData<T>(
@@ -853,6 +900,54 @@ class EncodingFuzzer {
           verifyMaterializeVariableBlocks(*encoding, data);
           break;
       }
+    }
+
+    verifySlice(rng, encoded, data);
+  }
+
+  // Slices a random row range through EncodingFactory::slice, which re-packs
+  // natively where the encoding supports it and re-encodes otherwise, then
+  // decodes the slice with a fresh encoding and compares it to the source rows.
+  void verifySlice(
+      std::mt19937& rng,
+      std::string_view encoded,
+      const Vector<T>& expected) {
+    const auto rowCount = static_cast<uint32_t>(expected.size());
+    const uint32_t offset = folly::Random::rand32(rng) % rowCount;
+    const uint32_t length =
+        1 + folly::Random::rand32(rng) % (rowCount - offset);
+    SCOPED_TRACE(
+        ::testing::Message() << "slice offset=" << offset
+                             << " length=" << length << " of " << rowCount);
+
+    Buffer sliceBuffer(*pool_);
+    std::string_view sliced;
+    try {
+      sliced = EncodingFactory::slice(
+          encoded, offset, length, sliceBuffer, options_);
+    } catch (const NimbleUserError& e) {
+      // A slice the encoding cannot store natively is re-encoded with the same
+      // encoding, which may reject the sliced rows (Huffman needs two).
+      if (e.errorCode() == error_code::IncompatibleEncoding) {
+        return;
+      }
+      throw;
+    }
+
+    std::vector<velox::BufferPtr> stringBuffers;
+    auto stringBufferFactory = [&](uint32_t totalLength) {
+      auto& buf = stringBuffers.emplace_back(
+          velox::AlignedBuffer::allocate<char>(totalLength, pool_.get()));
+      return buf->template asMutable<void>();
+    };
+    auto slice =
+        EncodingFactory{options_}.create(*pool_, sliced, stringBufferFactory);
+    ASSERT_EQ(slice->rowCount(), length);
+
+    Vector<T> actual(pool_.get(), length);
+    slice->materialize(length, actual.data());
+    for (uint32_t i = 0; i < length; ++i) {
+      verifyEqual(expected[offset + i], actual[i], offset + i);
     }
   }
 
