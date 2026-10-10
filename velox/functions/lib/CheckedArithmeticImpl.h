@@ -18,38 +18,16 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 
-// Forwarding the definitions here so that codegen can still use functions in
-// this namespace.
+// Names the velox:: overloads, default typeName included, so codegen can keep
+// calling functions::checkedPlus(a, b) while code in nested namespaces finds
+// the originals without qualification.
 namespace facebook::velox::functions {
 
-template <typename T>
-T checkedPlus(const T& a, const T& b) {
-  return facebook::velox::checkedPlus(a, b);
-}
-
-template <typename T>
-T checkedMinus(const T& a, const T& b) {
-  return facebook::velox::checkedMinus(a, b);
-}
-
-template <typename T>
-T checkedMultiply(const T& a, const T& b) {
-  return facebook::velox::checkedMultiply(a, b);
-}
-
-template <typename T>
-T checkedDivide(const T& a, const T& b) {
-  return facebook::velox::checkedDivide(a, b);
-}
-
-template <typename T>
-T checkedModulus(const T& a, const T& b) {
-  return facebook::velox::checkedModulus(a, b);
-}
-
-template <typename T>
-T checkedNegate(const T& a) {
-  return facebook::velox::checkedNegate(a);
-}
+using facebook::velox::checkedDivide;
+using facebook::velox::checkedMinus;
+using facebook::velox::checkedModulus;
+using facebook::velox::checkedMultiply;
+using facebook::velox::checkedNegate;
+using facebook::velox::checkedPlus;
 
 } // namespace facebook::velox::functions

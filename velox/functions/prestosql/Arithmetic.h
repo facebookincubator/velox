@@ -272,13 +272,13 @@ template <typename TExec>
 struct DecimalAbsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<ShortDecimal<P1, S1>>& result,
       const arg_type<ShortDecimal<P1, S1>>& a) {
     result = (a < 0) ? -a : a;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<LongDecimal<P1, S1>>& result,
       const arg_type<LongDecimal<P1, S1>>& a) {
     result = (a < 0) ? -a : a;
