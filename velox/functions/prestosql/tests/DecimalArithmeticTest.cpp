@@ -15,8 +15,6 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-
-#include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
