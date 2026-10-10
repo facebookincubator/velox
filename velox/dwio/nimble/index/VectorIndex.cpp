@@ -34,8 +34,10 @@
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <folly/synchronization/CallOnce.h>
+#include <omp.h>
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/BitUtil.h"
@@ -48,6 +50,11 @@
 namespace facebook::nimble::index {
 
 namespace {
+
+// Mode 3 assigns whole queries, rather than query-list pairs, to OpenMP
+// workers. This preserves each query's ordered list scan for max_codes, but a
+// single-query batch remains single-threaded.
+constexpr int kIvfParallelModeQueries{3};
 
 // Deserializes one FAISS index from caller-owned zero-copy storage.
 std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
@@ -199,6 +206,8 @@ void searchIvfIndex(
     const faiss::IndexIVF& index,
     faiss::idx_t numQueries,
     uint32_t requestedNumProbes,
+    uint64_t maxCodes,
+    bool ensureTopKFull,
     const float* queryVectors,
     faiss::idx_t maxNumNeighbors,
     float* scores,
@@ -210,6 +219,12 @@ void searchIvfIndex(
       requestedNumProbes, 0, "Number of probed partitions must be positive");
   faiss::SearchParametersIVF searchParameters;
   rowSelection.applyTo(searchParameters);
+  NIMBLE_USER_CHECK_LE(
+      maxCodes,
+      static_cast<uint64_t>(std::numeric_limits<size_t>::max()),
+      "Maximum scanned codes exceeds the FAISS limit");
+  searchParameters.max_codes = static_cast<size_t>(maxCodes);
+  searchParameters.ensure_topk_full = ensureTopKFull;
   const auto numProbes = static_cast<faiss::idx_t>(
       std::min(index.nlist, static_cast<size_t>(requestedNumProbes)));
   NIMBLE_CHECK_GT(numProbes, 0);
@@ -288,6 +303,8 @@ void searchFaissIndex(
         *ivfIndex,
         numQueries,
         ivfSearchOptions->numProbes,
+        ivfSearchOptions->maxCodes,
+        ivfSearchOptions->ensureTopKFull,
         queryVectors,
         maxNumNeighbors,
         scores,
@@ -603,6 +620,11 @@ VectorIndex::VectorIndex(
   NIMBLE_CHECK_FILE(
       checkIndexType(*faissIndex_, indexType_),
       "FAISS index type disagrees with its metadata");
+  if (isIvfIndexType(indexType_)) {
+    auto* ivfIndex =
+        velox::checkedPointerCast<faiss::IndexIVF>(faissIndex_.get());
+    ivfIndex->parallel_mode = kIvfParallelModeQueries;
+  }
 }
 
 VectorIndex::~VectorIndex() = default;
@@ -661,6 +683,19 @@ VectorIndex::SearchResults VectorIndex::search(
       config.searchOptions, "Search options must be set");
   NIMBLE_USER_CHECK_GT(
       config.numNeighbors, 0, "Number of neighbors must be positive");
+  NIMBLE_USER_CHECK_GT(
+      config.numSearchThreads, 0, "Number of search threads must be positive");
+  NIMBLE_USER_CHECK_LE(
+      config.numSearchThreads,
+      static_cast<uint32_t>(std::numeric_limits<int>::max()),
+      "Number of search threads exceeds the OpenMP limit");
+  const auto prevNumThreads = omp_get_max_threads();
+  // omp_set_num_threads updates the calling OpenMP task's nthreads-var ICV,
+  // so concurrent searches on other driver threads retain their own budgets.
+  omp_set_num_threads(static_cast<int>(config.numSearchThreads));
+  SCOPE_EXIT {
+    omp_set_num_threads(prevNumThreads);
+  };
   const auto numQueries = static_cast<faiss::idx_t>(config.numQueries);
 
   FaissRowSelection rowSelection{config.rowSelection, numVectors_};
