@@ -19,6 +19,7 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
+#include "velox/functions/sparksql/Murmur3Hash.h"
 #include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/vector/FlatVector.h"
@@ -426,19 +427,8 @@ class Murmur3Hash final : public Murmur3Hash32Base {
         input == -0. ? 0 : *reinterpret_cast<uint64_t*>(&input), seed);
   }
 
-  // Spark also has an hashUnsafeBytes2 function, but it was not used at the
-  // time of implementation.
   static uint32_t hashBytes(const StringView& input, uint32_t seed) {
-    const char* i = input.data();
-    const char* const end = input.data() + input.size();
-    uint32_t h1 = seed;
-    for (; i <= end - 4; i += 4) {
-      h1 = mixH1(h1, mixK1(*reinterpret_cast<const uint32_t*>(i)));
-    }
-    for (; i != end; ++i) {
-      h1 = mixH1(h1, mixK1(*i));
-    }
-    return fmix(h1, input.size());
+    return SparkMurmur3Hash::hashBytes(input, seed);
   }
 
   static uint32_t hashLongDecimal(int128_t input, uint32_t seed) {

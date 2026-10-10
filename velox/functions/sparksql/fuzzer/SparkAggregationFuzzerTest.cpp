@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#include <boost/random/uniform_int_distribution.hpp>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <array>
+#include <optional>
 #include <unordered_set>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -50,6 +53,59 @@ DEFINE_string(
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
+
+namespace {
+
+// Generates valid query-wide constant parameters for count_min_sketch.
+class CountMinSketchInputGenerator final
+    : public facebook::velox::exec::test::InputGenerator {
+ public:
+  std::vector<facebook::velox::VectorPtr> generate(
+      const std::vector<facebook::velox::TypePtr>& types,
+      facebook::velox::VectorFuzzer& fuzzer,
+      facebook::velox::FuzzerGenerator& rng,
+      facebook::velox::memory::MemoryPool* pool) override {
+    VELOX_CHECK_EQ(types.size(), 4);
+
+    if (!epsilon_.has_value()) {
+      static constexpr std::array<double, 3> kEpsilons{0.1, 0.2, 0.5};
+      static constexpr std::array<double, 3> kConfidences{0.5, 0.75, 0.95};
+      epsilon_ = kEpsilons[boost::random::uniform_int_distribution<uint32_t>(
+          0, static_cast<uint32_t>(kEpsilons.size() - 1))(rng)];
+      confidence_ =
+          kConfidences[boost::random::uniform_int_distribution<uint32_t>(
+              0, static_cast<uint32_t>(kConfidences.size() - 1))(rng)];
+      seed_ =
+          boost::random::uniform_int_distribution<int32_t>(-1'000, 1'000)(rng);
+    }
+
+    const auto size = fuzzer.getOptions().vectorSize;
+    const auto seed = types[3]->isInteger()
+        ? facebook::velox::variant(seed_.value())
+        : facebook::velox::variant(static_cast<int64_t>(seed_.value()));
+    return {
+        fuzzer.fuzz(types[0], size),
+        facebook::velox::BaseVector::createConstant(
+            types[1], epsilon_.value(), size, pool),
+        facebook::velox::BaseVector::createConstant(
+            types[2], confidence_.value(), size, pool),
+        facebook::velox::BaseVector::createConstant(types[3], seed, size, pool),
+    };
+  }
+
+  void reset() override {
+    epsilon_.reset();
+    confidence_.reset();
+    seed_.reset();
+  }
+
+ private:
+  std::optional<double> epsilon_;
+  std::optional<double> confidence_;
+  std::optional<int32_t> seed_;
+};
+
+} // namespace
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -153,6 +209,9 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  options.customInputGenerators = {
+      {"count_min_sketch", std::make_shared<CountMinSketchInputGenerator>()},
+  };
   options.orderableGroupKeys = true;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;

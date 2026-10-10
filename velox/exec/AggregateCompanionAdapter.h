@@ -38,6 +38,13 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isReducing() const override final;
 
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override final;
+
+  bool requiresRawInputMetadata() const override final;
+
+  void setRawInputMetadata(const std::vector<VectorPtr>& args) override final;
+
   void destroy(folly::Range<char**> groups) override final;
 
   void initializeNewGroups(

@@ -171,6 +171,38 @@ TEST_F(SparkQueryRunnerTest, toSql) {
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
+
+  data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeConstant<double>(0.5, 3),
+      makeConstant<double>(0.75, 3),
+      makeConstant<int64_t>(42, 3),
+  });
+  plan = exec::test::PlanBuilder()
+             .values({data})
+             .project({"c0", "c1", "c2", "c3"})
+             .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
+             .planNode();
+  EXPECT_EQ(
+      queryRunner->toSql(plan),
+      "SELECT count_min_sketch(c0, DOUBLE '0.5', DOUBLE '0.75', 42) as a0 "
+      "FROM (SELECT c0 as c0, c1 as c1, c2 as c2, c3 as c3 FROM (t_0))");
+
+  auto otherData = makeRowVector({
+      makeFlatVector<int64_t>({4, 5, 6}),
+      makeConstant<double>(0.2, 3),
+      makeConstant<double>(0.75, 3),
+      makeConstant<int64_t>(42, 3),
+  });
+  plan = exec::test::PlanBuilder()
+             .values({data, otherData})
+             .project({"c0", "c1", "c2", "c3"})
+             .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
+             .planNode();
+  EXPECT_EQ(
+      queryRunner->toSql(plan),
+      "SELECT count_min_sketch(c0, c1, DOUBLE '0.75', 42) as a0 "
+      "FROM (SELECT c0 as c0, c1 as c1, c2 as c2, c3 as c3 FROM (t_0))");
 }
 
 } // namespace
