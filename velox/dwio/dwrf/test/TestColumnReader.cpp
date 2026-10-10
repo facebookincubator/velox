@@ -1292,6 +1292,100 @@ TEST_P(TestColumnReader, testIntDictBoundary) {
   }
 }
 
+// A missing dictionary stream must fail the
+// query with a clear error instead of segfaulting on the first lookup.
+// Selective-reader only; the non-selective path has its own validation.
+TEST_P(TestColumnReader, testIntDictMissingDictionary) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+  proto::ColumnEncoding dictEncoding;
+  dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
+  dictEncoding.set_dictionarysize(100);
+  EXPECT_CALL(streams_, getEncodingProxy(1))
+      .WillRepeatedly(Return(&dictEncoding));
+
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  char data[1024];
+  data[0] = static_cast<char>(0x9C); // rle literal, -100
+  std::vector<uint64_t> v{0, 1, 2};
+  size_t size = writeVuLongs(data + 1, v);
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(data, size + 1)));
+  EXPECT_CALL(
+      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+      .WillRepeatedly(Return(
+          [&](BufferPtr& buffer, MemoryPool* /*pool*/) { buffer = nullptr; }));
+
+  auto rowType = HiveTypeParser().parse("struct<myInt:int>");
+  buildReader(rowType);
+  VectorPtr batch = newBatch(rowType);
+  // The struct reader loads children lazily; next() alone never reads the
+  // dictionary column. Force the child load like testIntDictBoundary does via
+  // getOnlyChild, and expect the missing-dictionary error from
+  // ensureInitialized instead of a segfault.
+  selectiveColumnReader_->next(3, batch, nullptr);
+  VELOX_ASSERT_THROW(
+      getOnlyChild<FlatVector<int32_t>>(batch), "dictionary is missing");
+}
+
+// A truncated dictionary stream decodes to a short buffer while the footer
+// advertises the full size. Same expectation: clean query failure.
+TEST_P(TestColumnReader, testIntDictTruncatedDictionary) {
+  if (!useSelectiveReader()) {
+    return;
+  }
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+  proto::ColumnEncoding dictEncoding;
+  dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
+  dictEncoding.set_dictionarysize(100);
+  EXPECT_CALL(streams_, getEncodingProxy(1))
+      .WillRepeatedly(Return(&dictEncoding));
+
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  char data[1024];
+  data[0] = static_cast<char>(0x9C); // rle literal, -100
+  std::vector<uint64_t> v{0, 1, 2};
+  size_t size = writeVuLongs(data + 1, v);
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(data, size + 1)));
+  EXPECT_CALL(
+      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+      .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
+        buffer = sequence<int32_t>(pool, 0, 10);
+      }));
+
+  auto rowType = HiveTypeParser().parse("struct<myInt:int>");
+  buildReader(rowType);
+  VectorPtr batch = newBatch(rowType);
+  // Force the lazy child load (see testIntDictMissingDictionary); the
+  // truncated dictionary must fail cleanly in ensureInitialized.
+  selectiveColumnReader_->next(3, batch, nullptr);
+  VELOX_ASSERT_THROW(
+      getOnlyChild<FlatVector<int32_t>>(batch), "holds 40 bytes");
+}
+
 TEST_P(StringReaderTests, testDictionaryWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
