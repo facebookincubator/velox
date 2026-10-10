@@ -174,6 +174,49 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
 }
 
+TEST_F(StringTest, convOverflow) {
+  const auto conv = [&](const std::optional<std::string>& str,
+                        const std::optional<int32_t>& fromBase,
+                        const std::optional<int32_t>& toBase) {
+    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
+  };
+  const auto setAnsiEnabled = [&](bool enabled) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          enabled ? "true" : "false"}});
+  };
+
+  // An input that exceeds the unsigned 64-bit range becomes -1 (all bits
+  // set) when ANSI mode is disabled.
+  setAnsiEnabled(false);
+  EXPECT_EQ(conv("18446744073709551616", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("-18446744073709551616", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("18446744073709551616", 10, -10), "-1");
+  EXPECT_EQ(conv("zzzzzzzzzzzzzz", 36, 10), "18446744073709551615");
+
+  // It throws when ANSI mode is enabled.
+  setAnsiEnabled(true);
+  VELOX_ASSERT_USER_THROW(
+      conv("18446744073709551616", 10, 16), "Overflow in function conv()");
+  VELOX_ASSERT_USER_THROW(
+      conv("-18446744073709551616", 10, 16), "Overflow in function conv()");
+  VELOX_ASSERT_USER_THROW(
+      conv("18446744073709551616", 10, -10), "Overflow in function conv()");
+  VELOX_ASSERT_USER_THROW(
+      conv("zzzzzzzzzzzzzz", 36, 10), "Overflow in function conv()");
+
+  // Values within the unsigned 64-bit range don't throw, including those that
+  // wrap around when converted to a signed number.
+  EXPECT_EQ(conv("18446744073709551615", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(
+      conv("9223372036854775808", 10, -2),
+      "-1000000000000000000000000000000000000000000000000000000000000000");
+  EXPECT_EQ(
+      conv("-9223372036854775809", 10, -2),
+      "-111111111111111111111111111111111111111111111111111111111111111");
+  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
+}
+
 TEST_F(StringTest, levenshtein) {
   const auto levenshtein = [&](const std::optional<std::string>& left,
                                const std::optional<std::string>& right,
