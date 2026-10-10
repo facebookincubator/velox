@@ -59,6 +59,10 @@ struct NimbleWriterOptions : public dwio::common::WriterOptions {
   folly::F14FastMap<uint32_t, std::vector<std::pair<std::string, std::string>>>
       schemaAttributes;
 
+  std::shared_ptr<dwio::common::WriterOptions> clone() const override {
+    return deepCopyInto(std::make_shared<NimbleWriterOptions>(*this));
+  }
+
   void processConfigs(
       const velox::config::ConfigBase& connectorConfig,
       const velox::config::ConfigBase& session) override;
