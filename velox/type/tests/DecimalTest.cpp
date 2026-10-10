@@ -896,5 +896,22 @@ TEST(DecimalTest, castFromStringNegativeExponent) {
       0,
       std::vector<int128_t>{1, 0, 1, 0, 1, 0, -1, 0, 1, 0, 0, 1, 1, 0});
 }
+
+TEST(DecimalTest, absValueOfMinimum) {
+  // The signed minimum has no positive counterpart, so the magnitude must be
+  // formed without negating the signed value.
+  static_assert(
+      DecimalArithmetic::absValue<int64_t>(
+          std::numeric_limits<int64_t>::min()) == uint64_t{1} << 63);
+  static_assert(
+      DecimalArithmetic::absValue<int128_t>(
+          std::numeric_limits<int128_t>::min()) ==
+      static_cast<__uint128_t>(1) << 127);
+  static_assert(DecimalArithmetic::absValue<int64_t>(-7) == 7);
+  static_assert(DecimalArithmetic::absValue<int64_t>(7) == 7);
+  static_assert(DecimalArithmetic::absValue<int128_t>(-7) == 7);
+  static_assert(DecimalArithmetic::absValue<int128_t>(7) == 7);
+}
+
 } // namespace
 } // namespace facebook::velox
