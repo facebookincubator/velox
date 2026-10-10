@@ -80,6 +80,11 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
   return std::nullopt;
 }
 
+// The device-compatible arithmetic restates the Timestamp bounds; keep the two
+// in step.
+static_assert(kMaxEpochSeconds == Timestamp::kMaxSeconds);
+static_assert(kMinEpochSeconds == Timestamp::kMinSeconds);
+
 Timestamp truncateTimestamp(
     Timestamp timestamp,
     DateTimeUnit unit,
