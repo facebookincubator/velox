@@ -633,14 +633,18 @@ class HashTable : public BaseHashTable {
 
   ~HashTable() override = default;
 
+  /// 'dependentTypes' are non-key columns carried in each row, neither hashed
+  /// nor compared. An aggregation stores its state in 'accumulators' and
+  /// usually needs none.
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<Accumulator>& accumulators,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      const std::vector<TypePtr>& dependentTypes = {}) {
     return std::make_unique<HashTable>(
         std::move(hashers),
         accumulators,
-        std::vector<TypePtr>{},
+        dependentTypes,
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
