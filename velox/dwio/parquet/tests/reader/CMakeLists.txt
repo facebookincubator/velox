@@ -83,6 +83,7 @@ add_executable(
   ParquetReaderBenchmarkTest.cpp
   BloomFilterTest.cpp
   MetadataTest.cpp
+  TimestampWithTimeZoneTest.cpp
 )
 add_test(
   NAME velox_dwio_parquet_reader_test
