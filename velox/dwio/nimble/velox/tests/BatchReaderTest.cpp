@@ -5693,6 +5693,25 @@ TEST_P(BatchReaderTest, stringKeyFlatMapAsMapEncoding) {
   }
 }
 
+class CollectingMetricsLogger final : public nimble::MetricsLogger {
+ public:
+  void logStripeRead(const nimble::StripeReadMetrics& metrics) const override {
+    stripeReads.push_back(metrics);
+  }
+
+  mutable std::vector<nimble::StripeReadMetrics> stripeReads;
+};
+
+class ThrowingMetricsLogger final : public nimble::MetricsLogger {
+ public:
+  void logStripeRead(const nimble::StripeReadMetrics& metrics) const override {
+    stripeReads.push_back(metrics);
+    throw std::runtime_error("test metrics failure");
+  }
+
+  mutable std::vector<nimble::StripeReadMetrics> stripeReads;
+};
+
 class TestNimbleReaderFactory {
  public:
   TestNimbleReaderFactory(
@@ -6171,6 +6190,78 @@ TEST_P(BatchReaderTest, readerSkipSingleStripeTest) {
     velox::VectorPtr result;
     EXPECT_FALSE(reader.next(1, result));
   }
+}
+
+TEST_P(BatchReaderTest, stripeReadMetricsTrackUniqueDecodedRows) {
+  auto vectors = createSkipSeekVectors(*leafPool_, {10, 10});
+  nimble::WriterOptions writerOptions;
+  writerOptions.dictionaryArrayColumns.insert("dictionaryArray");
+
+  TestNimbleReaderFactory readerFactory(
+      *leafPool_, *rootPool_, vectors, writerOptions);
+  auto metricsLogger = std::make_shared<CollectingMetricsLogger>();
+  {
+    auto reader = readerFactory.createReader(
+        nimble::BatchReadParams{.metricsLogger = metricsLogger});
+    velox::VectorPtr result;
+
+    EXPECT_EQ(reader.seekToRow(1), 1);
+    ASSERT_TRUE(reader.next(3, result));
+    EXPECT_EQ(reader.seekToRow(2), 2);
+    ASSERT_TRUE(reader.next(4, result));
+    EXPECT_TRUE(metricsLogger->stripeReads.empty());
+
+    // Loading stripe 1 retires stripe 0. Its decoded ranges [1, 4) and
+    // [2, 6) overlap and therefore represent five unique physical rows.
+    EXPECT_EQ(reader.seekToRow(10), 10);
+    ASSERT_EQ(metricsLogger->stripeReads.size(), 1);
+    const auto& firstStripe = metricsLogger->stripeReads.front();
+    EXPECT_EQ(firstStripe.stripeIndex, 0);
+    EXPECT_EQ(firstStripe.rowsInStripe, 10);
+    EXPECT_EQ(firstStripe.uniqueRowsDecoded, 5);
+    EXPECT_GT(firstStripe.streamCount, 0);
+    EXPECT_GT(firstStripe.totalStreamSize, 0);
+    EXPECT_EQ(
+        firstStripe.estimatedUnusedStreamSize,
+        firstStripe.totalStreamSize * 5 / 10);
+
+    ASSERT_TRUE(reader.next(2, result));
+  }
+
+  // Destroying the reader retires the final loaded stripe.
+  ASSERT_EQ(metricsLogger->stripeReads.size(), 2);
+  const auto& secondStripe = metricsLogger->stripeReads.back();
+  EXPECT_EQ(secondStripe.stripeIndex, 1);
+  EXPECT_EQ(secondStripe.rowsInStripe, 10);
+  EXPECT_EQ(secondStripe.uniqueRowsDecoded, 2);
+  EXPECT_EQ(
+      secondStripe.estimatedUnusedStreamSize,
+      secondStripe.totalStreamSize * 8 / 10);
+}
+
+TEST_P(BatchReaderTest, stripeReadMetricsFailureDoesNotAffectReads) {
+  auto vectors = createSkipSeekVectors(*leafPool_, {10, 10});
+  nimble::WriterOptions writerOptions;
+  writerOptions.dictionaryArrayColumns.insert("dictionaryArray");
+
+  TestNimbleReaderFactory readerFactory(
+      *leafPool_, *rootPool_, vectors, writerOptions);
+  auto metricsLogger = std::make_shared<ThrowingMetricsLogger>();
+  {
+    auto reader = readerFactory.createReader(
+        nimble::BatchReadParams{.metricsLogger = metricsLogger});
+    velox::VectorPtr result;
+
+    ASSERT_TRUE(reader.next(3, result));
+    EXPECT_NO_THROW({ EXPECT_EQ(reader.seekToRow(10), 10); });
+    ASSERT_TRUE(reader.next(2, result));
+  }
+
+  ASSERT_EQ(metricsLogger->stripeReads.size(), 2);
+  EXPECT_EQ(metricsLogger->stripeReads[0].stripeIndex, 0);
+  EXPECT_EQ(metricsLogger->stripeReads[0].uniqueRowsDecoded, 3);
+  EXPECT_EQ(metricsLogger->stripeReads[1].stripeIndex, 1);
+  EXPECT_EQ(metricsLogger->stripeReads[1].uniqueRowsDecoded, 2);
 }
 
 TEST_P(BatchReaderTest, readerSeekSingleStripeTest) {
