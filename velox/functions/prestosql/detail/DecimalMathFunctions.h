@@ -15,9 +15,11 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <vector>
+
 #include "velox/functions/Macros.h"
-#include "velox/functions/prestosql/ArithmeticImpl.h"
-#include "velox/type/DecimalUtil.h"
+#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::detail {
 
@@ -44,7 +46,7 @@ struct DecimalPlusFunction {
   }
 
   template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b)
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
       __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -53,14 +55,14 @@ struct DecimalPlusFunction {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (__builtin_mul_overflow(
-            a, DecimalUtil::kPowersOfTen[aRescale_], &aRescaled) ||
-        __builtin_mul_overflow(
-            b, DecimalUtil::kPowersOfTen[bRescale_], &bRescaled)) {
+    if (mulWithOverflow(
+            a, DecimalArithmetic::powerOfTen(aRescale_), &aRescaled) ||
+        mulWithOverflow(
+            b, DecimalArithmetic::powerOfTen(bRescale_), &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} + {}", a, b);
     }
     out = checkedPlus<R>(R(aRescaled), R(bRescaled));
-    DecimalUtil::valueInRange(out);
+    DecimalArithmetic::valueInRange(out);
   }
 
  private:
@@ -70,8 +72,8 @@ struct DecimalPlusFunction {
     return std::max(0, toScale - fromScale);
   }
 
-  uint8_t aRescale_;
-  uint8_t bRescale_;
+  uint8_t aRescale_{0};
+  uint8_t bRescale_{0};
 };
 
 /// Presto decimal subtraction, rescaling and overflowing as
@@ -95,7 +97,7 @@ struct DecimalMinusFunction {
   }
 
   template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b)
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
       __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -104,14 +106,14 @@ struct DecimalMinusFunction {
   {
     int128_t aRescaled;
     int128_t bRescaled;
-    if (__builtin_mul_overflow(
-            a, DecimalUtil::kPowersOfTen[aRescale_], &aRescaled) ||
-        __builtin_mul_overflow(
-            b, DecimalUtil::kPowersOfTen[bRescale_], &bRescaled)) {
+    if (mulWithOverflow(
+            a, DecimalArithmetic::powerOfTen(aRescale_), &aRescaled) ||
+        mulWithOverflow(
+            b, DecimalArithmetic::powerOfTen(bRescale_), &bRescaled)) {
       VELOX_ARITHMETIC_ERROR("Decimal overflow: {} - {}", a, b);
     }
     out = checkedMinus<R>(R(aRescaled), R(bRescaled));
-    DecimalUtil::valueInRange(out);
+    DecimalArithmetic::valueInRange(out);
   }
 
  private:
@@ -121,8 +123,8 @@ struct DecimalMinusFunction {
     return std::max(0, toScale - fromScale);
   }
 
-  uint8_t aRescale_;
-  uint8_t bRescale_;
+  uint8_t aRescale_{0};
+  uint8_t bRescale_{0};
 };
 
 /// Presto decimal multiplication. The result scale is the sum of the
@@ -133,9 +135,9 @@ struct DecimalMultiplyFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b) {
     out = checkedMultiply<R>(checkedMultiply<R>(R(a), R(b)), R(1));
-    DecimalUtil::valueInRange(out);
+    DecimalArithmetic::valueInRange(out);
   }
 };
 
@@ -159,17 +161,18 @@ struct DecimalDivideFunction {
     auto rScale = std::max(aScale, bScale);
     aRescale_ = rScale - aScale + bScale;
     VELOX_USER_CHECK_LE(
-        aRescale_, LongDecimalType::kMaxPrecision, "Decimal overflow");
+        aRescale_, DecimalArithmetic::kMaxLongPrecision, "Decimal overflow");
   }
 
   template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
-    DecimalUtil::divideWithRoundUp<R, A, B>(out, a, b, false, aRescale_, 0);
-    DecimalUtil::valueInRange(out);
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b) {
+    DecimalArithmetic::divideWithRoundUp<R, A, B>(
+        out, a, b, false, aRescale_, 0);
+    DecimalArithmetic::valueInRange(out);
   }
 
  private:
-  uint8_t aRescale_;
+  uint8_t aRescale_{0};
 };
 
 /// Presto decimal modulus. Rescales both arguments to the larger of the two
@@ -194,7 +197,7 @@ struct DecimalModulusFunction {
   }
 
   template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, const B& b) {
     VELOX_USER_CHECK_NE(b, 0, "Modulus by zero");
     int remainderSign = 1;
     R unsignedDividendRescaled(a);
@@ -204,7 +207,7 @@ struct DecimalModulusFunction {
     }
     unsignedDividendRescaled = checkedMultiply<R>(
         unsignedDividendRescaled,
-        R(DecimalUtil::kPowersOfTen[aRescale_]),
+        R(DecimalArithmetic::powerOfTen(aRescale_)),
         "Decimal");
 
     R unsignedDivisorRescaled(b);
@@ -213,7 +216,7 @@ struct DecimalModulusFunction {
     }
     unsignedDivisorRescaled = checkedMultiply<B>(
         unsignedDivisorRescaled,
-        R(DecimalUtil::kPowersOfTen[bRescale_]),
+        R(DecimalArithmetic::powerOfTen(bRescale_)),
         "Decimal");
 
     R remainder = unsignedDividendRescaled % unsignedDivisorRescaled;
@@ -221,8 +224,8 @@ struct DecimalModulusFunction {
   }
 
  private:
-  uint8_t aRescale_;
-  uint8_t bRescale_;
+  uint8_t aRescale_{0};
+  uint8_t bRescale_{0};
 };
 
 /// Presto decimal round, with an optional count of fractional digits to
@@ -253,13 +256,13 @@ struct DecimalRoundFunction {
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a) {
-    DecimalUtil::divideWithRoundUp<R, A, int128_t>(
-        out, a, DecimalUtil::kPowersOfTen[scale_], false, 0, 0);
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a) {
+    DecimalArithmetic::divideWithRoundUp<R, A, int128_t>(
+        out, a, DecimalArithmetic::powerOfTen(scale_), false, 0, 0);
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a, int32_t n) {
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a, int32_t n) {
     if (a == 0 || precision_ - scale_ + n <= 0) {
       out = 0;
       return;
@@ -268,15 +271,15 @@ struct DecimalRoundFunction {
       out = a;
       return;
     }
-    auto reScaleFactor = DecimalUtil::kPowersOfTen[scale_ - n];
-    DecimalUtil::divideWithRoundUp<R, A, int128_t>(
+    auto reScaleFactor = DecimalArithmetic::powerOfTen(scale_ - n);
+    DecimalArithmetic::divideWithRoundUp<R, A, int128_t>(
         out, a, reScaleFactor, false, 0, 0);
     out *= reScaleFactor;
   }
 
  private:
-  uint8_t precision_;
-  uint8_t scale_;
+  uint8_t precision_{0};
+  uint8_t scale_{0};
 };
 
 /// Presto decimal floor. The result type has scale 0, so the whole fraction
@@ -295,15 +298,15 @@ struct DecimalFloorFunction {
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a) {
-    const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a) {
+    const auto rescaleFactor = DecimalArithmetic::powerOfTen(scale_);
     // Round rowards -INF.
     const auto increment = (a % rescaleFactor) < 0 ? -1 : 0;
     out = a / rescaleFactor + increment;
   }
 
  private:
-  uint8_t scale_;
+  uint8_t scale_{0};
 };
 
 /// Presto decimal ceil, the +INF counterpart of DecimalFloorFunction.
@@ -320,15 +323,15 @@ struct DecimalCeilFunction {
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a) {
-    const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a) {
+    const auto rescaleFactor = DecimalArithmetic::powerOfTen(scale_);
     // Round towards +INF.
     const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
     out = a / rescaleFactor + increment;
   }
 
  private:
-  uint8_t scale_;
+  uint8_t scale_{0};
 };
 
 /// Presto decimal truncate, with an optional count of fractional digits to
@@ -358,28 +361,28 @@ struct DecimalTruncateFunction {
   }
 
   template <typename R, typename A>
-  void call(R& out, const A& a) {
+  VELOX_GPU_COMPATIBLE void call(R& out, const A& a) {
     if UNLIKELY (scale_ == 0 || a == 0) {
       out = a;
     } else {
-      out = a / DecimalUtil::kPowersOfTen[scale_];
+      out = a / DecimalArithmetic::powerOfTen(scale_);
     }
   }
 
   template <typename A>
-  void call(A& out, const A& a, int32_t n) {
+  VELOX_GPU_COMPATIBLE void call(A& out, const A& a, int32_t n) {
     if UNLIKELY (a == 0 || (n + precision_ - scale_) <= 0) {
       out = 0;
     } else if UNLIKELY (scale_ <= n) {
       out = a;
     } else {
-      out = a - (a % DecimalUtil::kPowersOfTen[scale_ - n]);
+      out = a - (a % DecimalArithmetic::powerOfTen(scale_ - n));
     }
   }
 
  private:
-  uint8_t precision_;
-  uint8_t scale_;
+  uint8_t precision_{0};
+  uint8_t scale_{0};
 };
 
 } // namespace facebook::velox::functions::detail
