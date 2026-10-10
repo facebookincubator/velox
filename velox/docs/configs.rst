@@ -1168,6 +1168,14 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

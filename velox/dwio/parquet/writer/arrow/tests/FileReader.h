@@ -32,6 +32,10 @@
 namespace facebook::velox::parquet::arrow {
 
 class ColumnReader;
+namespace internal {
+class RecordReader;
+}
+
 class FileMetaData;
 class PageIndexReader;
 class BloomFilterReader;
@@ -58,6 +62,10 @@ class PARQUET_EXPORT RowGroupReader {
   // Construct a ColumnReader for the indicated row group-relative.
   // Column. Ownership is shared with the RowGroupReader.
   std::shared_ptr<ColumnReader> column(int i);
+
+  // Construct a RecordReader for the indicated column of the row group.
+  // Ownership is shared with the RowGroupReader.
+  std::shared_ptr<internal::RecordReader> recordReader(int i);
 
   // Construct a ColumnReader, trying to enable exposed encoding.
   //
