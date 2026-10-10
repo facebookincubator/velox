@@ -126,6 +126,26 @@ struct DecimalArithmetic {
     return value < powerOfTen(precision) && value > -powerOfTen(precision);
   }
 
+  /// Divides by a positive divisor using HALF_EVEN rounding.
+  FOLLY_ALWAYS_INLINE static int128_t divideWithRoundHalfEven(
+      int128_t value,
+      int128_t divisor) {
+    VELOX_DCHECK_GT(divisor, 0);
+    const int128_t quotient = value / divisor;
+    const int128_t remainder = value % divisor;
+    if (remainder == 0) {
+      return quotient;
+    }
+
+    const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
+    const int128_t remainderComplement = divisor - absoluteRemainder;
+    if (absoluteRemainder > remainderComplement ||
+        (absoluteRemainder == remainderComplement && quotient % 2 != 0)) {
+      return quotient + (value < 0 ? -1 : 1);
+    }
+    return quotient;
+  }
+
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
@@ -150,7 +170,9 @@ struct DecimalArithmetic {
         unsignedDividendRescaled, R(powerOfTen(aRescale)), "Decimal");
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
-    if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
+    const B remainderAsDivisorType = static_cast<B>(remainder);
+    if (!noRoundUp &&
+        remainderAsDivisorType >= unsignedDivisor - remainderAsDivisorType) {
       ++quotient;
     }
     r = quotient * resultSign;

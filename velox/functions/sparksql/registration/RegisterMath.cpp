@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Arithmetic.h"
+#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Factorial.h"
@@ -54,6 +55,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
+  registerBRoundFunctions(prefix);
   registerFunction<ToHexBigintFunction, Varchar, int64_t>({prefix + "hex"});
   registerFunction<ToHexVarcharFunction, Varchar, Varchar>({prefix + "hex"});
   registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>(
