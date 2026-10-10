@@ -53,11 +53,57 @@ cudf::detail::fused_for_options fusedForOptions(
       "Fused FOR exchange compression is not available in this build");
 }
 
-PackedExchangePayload makeRawPayload(cudf::packed_columns packed) {
+PackedExchangePayload makePayload(
+    cudf::packed_columns packed,
+    ExchangeCompression compression,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref temporaryMemoryResource,
+    rmm::device_async_resource_ref outputMemoryResource) {
   const auto logicalDataSize = packed.gpu_data->size();
-  return PackedExchangePayload{
+  PackedExchangePayload raw{
       std::make_unique<cudf::packed_columns>(std::move(packed)),
       ExchangePayloadCodec::kNone,
+      logicalDataSize,
+      0};
+  if (compression != ExchangeCompression::kCascaded || logicalDataSize == 0) {
+    return raw;
+  }
+
+  auto options = cudf::experimental::pack_options{};
+  options.compression = cudf::experimental::pack_compression::cascaded;
+  auto plan = cudf::experimental::make_pack_plan_builder(
+                  *raw.packed,
+                  options,
+                  stream,
+                  cudf::memory_resources{
+                      temporaryMemoryResource, temporaryMemoryResource})
+                  .build();
+  const auto sizes = plan.sizes();
+  VELOX_CHECK_EQ(sizes.uncompressed_payload_bytes, logicalDataSize);
+  auto output = std::make_unique<rmm::device_buffer>(
+      sizes.payload_bytes, stream, outputMemoryResource);
+  auto result = cudf::experimental::pack_into(
+      plan,
+      std::span<uint8_t>{static_cast<uint8_t*>(output->data()), output->size()},
+      cudf::memory_resources{temporaryMemoryResource, temporaryMemoryResource});
+  VELOX_CHECK_LE(result.payload_bytes, output->size());
+
+  // The plan completes its reads before returning. Retain the ordinary packed
+  // payload when compression does not reduce the bytes sent.
+  if (result.payload_bytes >= logicalDataSize) {
+    return raw;
+  }
+
+  output->resize(result.payload_bytes, stream);
+  auto metadata = wrapExchangePayloadMetadata(
+      std::make_unique<std::vector<uint8_t>>(std::move(result.metadata)),
+      ExchangePayloadCodec::kCascaded,
+      logicalDataSize,
+      0);
+  return PackedExchangePayload{
+      std::make_unique<cudf::packed_columns>(
+          std::move(metadata), std::move(output)),
+      ExchangePayloadCodec::kCascaded,
       logicalDataSize,
       0};
 }
@@ -81,58 +127,6 @@ PackedExchangePayload makeFusedForPayload(
 }
 #endif
 
-PackedExchangePayload compressCascaded(
-    PackedExchangePayload raw,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref temporaryMemoryResource,
-    rmm::device_async_resource_ref outputMemoryResource) {
-  VELOX_CHECK_NOT_NULL(raw.packed);
-  VELOX_CHECK(raw.codec == ExchangePayloadCodec::kNone);
-  VELOX_CHECK_NOT_NULL(raw.packed->metadata);
-  VELOX_CHECK_NOT_NULL(raw.packed->gpu_data);
-  if (raw.logicalDataSize == 0) {
-    return raw;
-  }
-
-  auto options = cudf::experimental::pack_options{};
-  options.compression = cudf::experimental::pack_compression::cascaded;
-  auto plan = cudf::experimental::make_pack_plan_builder(
-                  *raw.packed,
-                  options,
-                  stream,
-                  cudf::memory_resources{
-                      temporaryMemoryResource, temporaryMemoryResource})
-                  .build();
-  const auto sizes = plan.sizes();
-  VELOX_CHECK_EQ(sizes.uncompressed_payload_bytes, raw.logicalDataSize);
-  auto output = std::make_unique<rmm::device_buffer>(
-      sizes.payload_bytes, stream, outputMemoryResource);
-  auto result = cudf::experimental::pack_into(
-      plan,
-      std::span<uint8_t>{static_cast<uint8_t*>(output->data()), output->size()},
-      cudf::memory_resources{temporaryMemoryResource, temporaryMemoryResource});
-  VELOX_CHECK_LE(result.payload_bytes, output->size());
-
-  // The plan completes its reads before returning. Retain the ordinary packed
-  // payload when compression does not reduce the bytes sent.
-  if (result.payload_bytes >= raw.logicalDataSize) {
-    return raw;
-  }
-
-  output->resize(result.payload_bytes, stream);
-  auto metadata = wrapExchangePayloadMetadata(
-      std::make_unique<std::vector<uint8_t>>(std::move(result.metadata)),
-      ExchangePayloadCodec::kCascaded,
-      raw.logicalDataSize,
-      0);
-  return PackedExchangePayload{
-      std::make_unique<cudf::packed_columns>(
-          std::move(metadata), std::move(output)),
-      ExchangePayloadCodec::kCascaded,
-      raw.logicalDataSize,
-      0};
-}
-
 std::unique_ptr<PackedTableWithStream> retainPackedPayload(
     std::unique_ptr<std::vector<uint8_t>> metadata,
     std::unique_ptr<rmm::device_buffer> data,
@@ -152,28 +146,20 @@ std::unique_ptr<PackedTableWithStream> retainPackedPayload(
 
 } // namespace
 
-bool fusedForAvailable() {
-  return VELOX_UCX_HAS_FUSED_FOR;
-}
-
 ExchangeCompression parseExchangeCompression(std::string_view value) {
   if (value == "none") {
     return ExchangeCompression::kNone;
   }
-  if (value == "fused-for-bitpacked") {
-    VELOX_USER_CHECK(
-        fusedForAvailable(),
-        "Fused FOR exchange compression is not available in this build");
-    return ExchangeCompression::kFusedForBitpacked;
-  }
-  if (value == "fused-for-byte-aligned") {
-    VELOX_USER_CHECK(
-        fusedForAvailable(),
-        "Fused FOR exchange compression is not available in this build");
-    return ExchangeCompression::kFusedForByteAligned;
-  }
   if (value == "cascaded") {
     return ExchangeCompression::kCascaded;
+  }
+  if (value == "fused-for-bitpacked" || value == "fused-for-byte-aligned") {
+    VELOX_USER_CHECK(
+        VELOX_UCX_HAS_FUSED_FOR,
+        "Fused FOR exchange compression is not available in this build");
+    return value == "fused-for-bitpacked"
+        ? ExchangeCompression::kFusedForBitpacked
+        : ExchangeCompression::kFusedForByteAligned;
   }
   VELOX_USER_FAIL(
       "Unsupported cuDF exchange compression '{}'. Expected none, "
@@ -188,15 +174,20 @@ PackedExchangePayload packExchangePayload(
     rmm::device_async_resource_ref temporaryMemoryResource,
     rmm::device_async_resource_ref outputMemoryResource) {
   if (input.num_columns() == 0) {
-    return makeRawPayload(cudf::pack(input, stream, outputMemoryResource));
+    return makePayload(
+        cudf::pack(input, stream, outputMemoryResource),
+        ExchangeCompression::kNone,
+        stream,
+        temporaryMemoryResource,
+        outputMemoryResource);
   }
 
   switch (compression) {
     case ExchangeCompression::kNone:
-      return makeRawPayload(cudf::pack(input, stream, outputMemoryResource));
     case ExchangeCompression::kCascaded:
-      return compressCascaded(
-          makeRawPayload(cudf::pack(input, stream, outputMemoryResource)),
+      return makePayload(
+          cudf::pack(input, stream, outputMemoryResource),
+          compression,
           stream,
           temporaryMemoryResource,
           outputMemoryResource);
@@ -245,23 +236,22 @@ std::vector<PackedExchangePayload> splitExchangePayloads(
 #endif
   }
 
+  VELOX_CHECK(
+      compression == ExchangeCompression::kNone ||
+          compression == ExchangeCompression::kCascaded,
+      "Unsupported exchange compression mode");
+
   auto packed =
       cudf::contiguous_split(input, splits, stream, outputMemoryResource);
   std::vector<PackedExchangePayload> result;
   result.reserve(packed.size());
   for (auto& partition : packed) {
-    auto payload = makeRawPayload(
-        cudf::packed_columns(
-            std::move(partition.data.metadata),
-            std::move(partition.data.gpu_data)));
-    if (compression == ExchangeCompression::kCascaded) {
-      payload = compressCascaded(
-          std::move(payload),
-          stream,
-          temporaryMemoryResource,
-          outputMemoryResource);
-    }
-    result.push_back(std::move(payload));
+    result.push_back(makePayload(
+        std::move(partition.data),
+        compression,
+        stream,
+        temporaryMemoryResource,
+        outputMemoryResource));
   }
   return result;
 }

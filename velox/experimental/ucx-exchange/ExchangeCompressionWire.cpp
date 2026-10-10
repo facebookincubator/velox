@@ -43,17 +43,25 @@ void appendScalar(std::vector<uint8_t>& output, T value) {
   std::memcpy(output.data() + position, &value, sizeof(T));
 }
 
+// The caller verifies that the complete fixed-size header is present.
 template <typename T>
-T readScalar(const uint8_t*& current, const uint8_t* end) {
+T readScalar(const uint8_t*& current) {
   static_assert(std::is_trivially_copyable_v<T>);
-  VELOX_CHECK_LE(
-      sizeof(T),
-      static_cast<std::size_t>(end - current),
-      "Truncated exchange compression metadata envelope");
   T value;
   std::memcpy(&value, current, sizeof(T));
   current += sizeof(T);
   return value;
+}
+
+void checkEnvelopeCodec(ExchangePayloadCodec codec, uint64_t auxiliaryCount) {
+  VELOX_CHECK(
+      codec == ExchangePayloadCodec::kFusedFor ||
+          codec == ExchangePayloadCodec::kCascaded,
+      "Unsupported exchange payload codec: {}",
+      static_cast<uint8_t>(codec));
+  VELOX_CHECK(
+      codec != ExchangePayloadCodec::kCascaded || auxiliaryCount == 0,
+      "Cascaded cannot carry an auxiliary segment count");
 }
 
 } // namespace
@@ -64,13 +72,7 @@ std::unique_ptr<std::vector<uint8_t>> wrapExchangePayloadMetadata(
     std::size_t logicalDataSize,
     std::size_t auxiliaryCount) {
   VELOX_CHECK_NOT_NULL(cudfMetadata);
-  VELOX_CHECK(
-      codec == ExchangePayloadCodec::kFusedFor ||
-          codec == ExchangePayloadCodec::kCascaded,
-      "Unsupported exchange payload codec");
-  VELOX_CHECK(
-      codec != ExchangePayloadCodec::kCascaded || auxiliaryCount == 0,
-      "Cascaded cannot carry an auxiliary segment count");
+  checkEnvelopeCodec(codec, auxiliaryCount);
   VELOX_CHECK_LE(
       cudfMetadata->size(),
       std::numeric_limits<std::size_t>::max() - kHeaderSize,
@@ -103,21 +105,19 @@ ExchangePayloadMetadata unwrapExchangePayloadMetadata(
       "Truncated exchange compression metadata envelope");
   const auto* current = metadata->data() + kMagic.size();
   const auto* end = metadata->data() + metadata->size();
-  const auto version = readScalar<uint16_t>(current, end);
-  const auto headerSize = readScalar<uint16_t>(current, end);
-  const auto codecValue = readScalar<uint8_t>(current, end);
-  const auto logicalDataSize = readScalar<uint64_t>(current, end);
-  const auto auxiliaryCount = readScalar<uint64_t>(current, end);
-  const auto cudfMetadataSize = readScalar<uint64_t>(current, end);
+  const auto version = readScalar<uint16_t>(current);
+  const auto headerSize = readScalar<uint16_t>(current);
+  const auto codecValue = readScalar<uint8_t>(current);
+  const auto logicalDataSize = readScalar<uint64_t>(current);
+  const auto auxiliaryCount = readScalar<uint64_t>(current);
+  const auto cudfMetadataSize = readScalar<uint64_t>(current);
 
   VELOX_CHECK_EQ(
       version, kVersion, "Unsupported exchange compression metadata version");
   VELOX_CHECK_EQ(
       headerSize, kHeaderSize, "Invalid exchange compression header size");
-  VELOX_CHECK(
-      codecValue == static_cast<uint8_t>(ExchangePayloadCodec::kFusedFor) ||
-          codecValue == static_cast<uint8_t>(ExchangePayloadCodec::kCascaded),
-      "Unsupported exchange payload codec");
+  const auto codec = static_cast<ExchangePayloadCodec>(codecValue);
+  checkEnvelopeCodec(codec, auxiliaryCount);
   VELOX_CHECK_LE(
       logicalDataSize,
       std::numeric_limits<std::size_t>::max(),
@@ -126,16 +126,11 @@ ExchangePayloadMetadata unwrapExchangePayloadMetadata(
       auxiliaryCount,
       std::numeric_limits<std::size_t>::max(),
       "Exchange auxiliary count exceeds size_t");
-  VELOX_CHECK(
-      codecValue != static_cast<uint8_t>(ExchangePayloadCodec::kCascaded) ||
-          auxiliaryCount == 0,
-      "Cascaded cannot carry an auxiliary segment count");
   VELOX_CHECK_EQ(
       cudfMetadataSize,
       static_cast<uint64_t>(end - current),
       "Invalid exchange cuDF metadata size");
 
-  const auto codec = static_cast<ExchangePayloadCodec>(codecValue);
   auto cudfMetadata = std::make_unique<std::vector<uint8_t>>(
       current, current + static_cast<std::size_t>(cudfMetadataSize));
   return ExchangePayloadMetadata{

@@ -55,9 +55,6 @@ struct PackedExchangePayload {
   std::size_t auxiliaryCount{0};
 };
 
-/// Returns true when the linked cuDF build provides fused FOR packing.
-bool fusedForAvailable();
-
 /// Parses a configured compression mode and rejects unavailable or unknown
 /// values with a user error.
 ExchangeCompression parseExchangeCompression(std::string_view value);

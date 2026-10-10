@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/ExchangeCompression.h"
-#include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
@@ -27,9 +27,12 @@
 #define VELOX_UCX_TEST_HAS_FUSED_FOR 0
 #endif
 #include <cudf/table/table.hpp>
+#include <cudf/utilities/error.hpp>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <rmm/cuda_stream.hpp>
 #include <cstring>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -104,19 +107,7 @@ class ExchangeCompressionTest : public testing::Test {
     const auto rows = static_cast<vector_size_t>(values.size());
     std::vector<std::unique_ptr<cudf::column>> columns;
     if (!emptyLayout) {
-      auto column = cudf::make_fixed_width_column(
-          cudf::data_type{cudf::type_id::INT32},
-          rows,
-          cudf::mask_state::UNALLOCATED,
-          stream_,
-          cudf::get_current_device_resource_ref());
-      CUDF_CUDA_TRY(cudaMemcpyAsync(
-          column->mutable_view().data<int32_t>(),
-          values.data(),
-          values.size() * sizeof(int32_t),
-          cudaMemcpyHostToDevice,
-          stream_.value()));
-      columns.push_back(std::move(column));
+      columns.push_back(makeColumn(values, stream_));
     }
     auto table = std::make_unique<cudf::table>(std::move(columns));
     CUDF_CUDA_TRY(cudaStreamSynchronize(stream_.value()));
@@ -152,13 +143,31 @@ class ExchangeCompressionTest : public testing::Test {
   }
 
   PackedTableWithStreamPtr restore(Packet& packet, cuda::stream_ref stream) {
-    auto received = detail::restoreReceivedTable(
+    auto received = restoreExchangePayload(
         std::move(packet.data->metadata),
         std::move(packet.data->gpu_data),
         stream,
         packet.rows);
     packet.data.reset(); // Returned storage must not depend on the wire owner.
     return received;
+  }
+
+  static std::unique_ptr<cudf::column> makeColumn(
+      const std::vector<int32_t>& values,
+      cuda::stream_ref stream) {
+    auto column = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::INT32},
+        static_cast<cudf::size_type>(values.size()),
+        cudf::mask_state::UNALLOCATED,
+        stream,
+        cudf::get_current_device_resource_ref());
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        column->mutable_view().data<int32_t>(),
+        values.data(),
+        values.size() * sizeof(int32_t),
+        cudaMemcpyHostToDevice,
+        stream.get()));
+    return column;
   }
 
   static std::vector<int32_t> readColumn(
@@ -289,7 +298,6 @@ TEST(ExchangeCompressionConfigTest, parsesSupportedSelectorNames) {
   for (const auto& [name, mode] : modes) {
     EXPECT_EQ(parseExchangeCompression(name), mode);
   }
-  EXPECT_EQ(fusedForAvailable(), VELOX_UCX_TEST_HAS_FUSED_FOR != 0);
 #if !VELOX_UCX_TEST_HAS_FUSED_FOR
   EXPECT_THROW(parseExchangeCompression("fused-for-bitpacked"), VeloxUserError);
   EXPECT_THROW(
@@ -401,6 +409,42 @@ TEST_F(ExchangeCompressionTest, emptyLayoutKeepsProducerRowsAndRawStorage) {
   }
 }
 
+TEST_F(ExchangeCompressionTest, unevenSplitSkipsEmptyDestinations) {
+  std::vector<const char*> modes{"none", "cascaded"};
+#if VELOX_UCX_TEST_HAS_FUSED_FOR
+  modes.push_back("fused-for-bitpacked");
+  modes.push_back("fused-for-byte-aligned");
+#endif
+  auto values = forValues();
+  values.push_back(7);
+  for (const auto* mode : modes) {
+    SCOPED_TRACE(mode);
+    const Config config{{CudfConfig::kUcxExchangeCompression, mode}};
+
+    // One row over three destinations leaves the first two empty.
+    auto single = produce({7}, config, 3);
+    ASSERT_EQ(single.size(), 1);
+    EXPECT_EQ(single[0].destination, 2);
+    EXPECT_EQ(single[0].rows, 1);
+    auto received = restore(single[0], stream_);
+    EXPECT_EQ(
+        readColumn(received->tableView().column(0), stream_),
+        std::vector<int32_t>{7});
+
+    auto packets = produce(values, config, 3);
+    std::vector<vector_size_t> rows;
+    std::vector<int32_t> restored;
+    for (auto& packet : packets) {
+      rows.push_back(packet.rows);
+      auto table = restore(packet, stream_);
+      const auto column = readColumn(table->tableView().column(0), stream_);
+      restored.insert(restored.end(), column.begin(), column.end());
+    }
+    EXPECT_THAT(rows, testing::ElementsAre(21845, 21846, 21846));
+    EXPECT_EQ(restored, values);
+  }
+}
+
 #if VELOX_UCX_TEST_HAS_FUSED_FOR
 TEST_F(ExchangeCompressionTest, fusedForEnvelopeUsesDirectDecoder) {
   const std::vector<int32_t> values(65536, 7);
@@ -416,6 +460,83 @@ TEST_F(ExchangeCompressionTest, fusedForEnvelopeUsesDirectDecoder) {
   ASSERT_TRUE(received->packedTable);
   EXPECT_FALSE(received->table);
   EXPECT_EQ(readColumn(received->tableView().column(0), stream_), values);
+}
+
+TEST_F(ExchangeCompressionTest, restoresFusedForPayloadOnConsumerStream) {
+  const auto values = forValues();
+  const auto numRows = static_cast<vector_size_t>(values.size());
+  rmm::cuda_stream producer;
+  rmm::cuda_stream consumer;
+  const auto memoryResource = cudf::get_current_device_resource_ref();
+  auto column = makeColumn(values, producer);
+  auto payload = packExchangePayload(
+      cudf::table_view{std::vector<cudf::column_view>{column->view()}},
+      ExchangeCompression::kFusedForByteAligned,
+      producer,
+      memoryResource,
+      memoryResource);
+  producer.synchronize();
+  ASSERT_EQ(payload.codec, ExchangePayloadCodec::kFusedFor);
+  const auto logicalDataSize = payload.logicalDataSize;
+  auto received = restoreExchangePayload(
+      std::move(payload.packed->metadata),
+      std::move(payload.packed->gpu_data),
+      consumer,
+      numRows);
+  ASSERT_TRUE(received->packedTable);
+  EXPECT_FALSE(received->table);
+  EXPECT_EQ(received->gpuDataSize(), logicalDataSize);
+  EXPECT_EQ(received->numRows, numRows);
+  EXPECT_EQ(received->packedTable->data.gpu_data->stream(), consumer);
+  EXPECT_EQ(readColumn(received->tableView().column(0), consumer), values);
+}
+
+TEST_F(ExchangeCompressionTest, restoresTypedEmptyFusedForPayload) {
+  const auto memoryResource = cudf::get_current_device_resource_ref();
+  auto column = makeColumn({}, stream_);
+  auto payload = packExchangePayload(
+      cudf::table_view{std::vector<cudf::column_view>{column->view()}},
+      ExchangeCompression::kFusedForByteAligned,
+      stream_,
+      memoryResource,
+      memoryResource);
+  ASSERT_EQ(payload.codec, ExchangePayloadCodec::kFusedFor);
+  ASSERT_EQ(payload.auxiliaryCount, 0);
+  ASSERT_EQ(payload.logicalDataSize, 0);
+  ASSERT_EQ(payload.packed->gpu_data->size(), 0);
+  auto received = restoreExchangePayload(
+      std::move(payload.packed->metadata),
+      std::move(payload.packed->gpu_data),
+      stream_,
+      0);
+  ASSERT_TRUE(received->packedTable);
+  EXPECT_FALSE(received->table);
+  EXPECT_EQ(received->numRows, 0);
+  EXPECT_EQ(received->gpuDataSize(), 0);
+  ASSERT_EQ(received->tableView().num_columns(), 1);
+  EXPECT_EQ(received->tableView().num_rows(), 0);
+  EXPECT_EQ(
+      received->tableView().column(0).type(),
+      cudf::data_type{cudf::type_id::INT32});
+}
+
+TEST_F(
+    ExchangeCompressionTest,
+    rejectsFusedForSegmentCountOverflowBeforeDecode) {
+  auto packed = cudf::pack(cudf::table_view{}, stream_);
+  auto metadata = wrapExchangePayloadMetadata(
+      std::move(packed.metadata),
+      ExchangePayloadCodec::kFusedFor,
+      0,
+      std::numeric_limits<std::size_t>::max());
+  try {
+    (void)restoreExchangePayload(
+        std::move(metadata), std::move(packed.gpu_data), stream_, 0);
+    FAIL() << "Expected fused FOR descriptor size overflow";
+  } catch (const cudf::logic_error& error) {
+    EXPECT_THAT(
+        error.what(), testing::HasSubstr("fused FOR descriptor size overflow"));
+  }
 }
 #endif
 

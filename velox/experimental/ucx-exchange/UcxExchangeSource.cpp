@@ -52,15 +52,6 @@ receiverStateNames() {
 }
 } // namespace
 
-PackedTableWithStreamPtr detail::restoreReceivedTable(
-    std::unique_ptr<std::vector<uint8_t>> metadata,
-    std::unique_ptr<rmm::device_buffer> data,
-    cuda::stream_ref stream,
-    vector_size_t numRows) {
-  return restoreExchangePayload(
-      std::move(metadata), std::move(data), stream, numRows);
-}
-
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(
     UcxExchangeSource,
     ReceiverState,
@@ -615,7 +606,7 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
     metrics_.numPackedColumns_.addValue(1);
     metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
 
-    auto data = detail::restoreReceivedTable(
+    auto data = restoreExchangePayload(
         std::move(ptr->metadata.cudfMetadata),
         std::move(ptr->dataBuf),
         ptr->stream,
@@ -778,7 +769,7 @@ void UcxExchangeSource::onIntraNodeData(
   // The producer synchronizes before publishing, so the payload is ready on a
   // new consumer stream.
   auto consumerStream = cudf_velox::cudfGlobalStreamPool().get_stream();
-  auto tableWithStream = detail::restoreReceivedTable(
+  auto tableWithStream = restoreExchangePayload(
       std::move(data->metadata),
       std::move(data->gpu_data),
       consumerStream,
