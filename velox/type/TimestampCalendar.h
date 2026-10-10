@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <ctime>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
 #include "velox/type/FastDate.h"
 
@@ -49,6 +50,7 @@ VELOX_GPU_COMPATIBLE inline bool isLeap(int64_t year) {
 /// between two results is meaningful.
 VELOX_GPU_COMPATIBLE inline int64_t leapThroughEndOf(int64_t year) {
   year += kLeapYearOffset;
+  VELOX_DCHECK_GE(year, 0);
   return year / 4 - year / 100 + year / 400;
 }
 
@@ -116,10 +118,10 @@ VELOX_GPU_COMPATIBLE inline int64_t calendarUtcToEpoch(const std::tm& tm) {
   // would wrap before the result reached the int64_t.
   int64_t year = tm.tm_year + static_cast<int64_t>(kTmYearBase);
   int64_t month = tm.tm_mon;
-  if (month > 11) {
+  if (month > 11) [[unlikely]] {
     year += month / 12;
     month %= 12;
-  } else if (month < 0) {
+  } else if (month < 0) [[unlikely]] {
     const auto yearsDiff = (-month + 11) / 12;
     year -= yearsDiff;
     month += 12 * yearsDiff;
