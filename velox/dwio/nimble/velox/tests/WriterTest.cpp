@@ -5114,7 +5114,7 @@ TEST_F(WriterTest, rawSizeWritten) {
           }),
       });
 
-  // Test with enableVectorizedStats = false (default, uses kStatsSection)
+  // Test with enableVectorizedStats = false (uses kStatsSection).
   {
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -5143,7 +5143,8 @@ TEST_F(WriterTest, rawSizeWritten) {
     ASSERT_EQ(expectedRawSize, rawSize);
   }
 
-  // Test with enableVectorizedStats = true (uses kVectorizedStatsSection)
+  // Vectorized stats augment the legacy raw-size section used by metadata
+  // collectors.
   {
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -5158,17 +5159,29 @@ TEST_F(WriterTest, rawSizeWritten) {
     nimble::TabletReader::Options readerOptions =
         makeTestTabletOptions(leafPool_.get());
     readerOptions.preloadOptionalSections = {
+        std::string(facebook::nimble::kStatsSection),
         std::string(facebook::nimble::kVectorizedStatsSection)};
     auto tablet = facebook::nimble::TabletReader::create(
         vecStatsReadFile, leafPool_.get(), readerOptions);
-    auto statsSection =
+    auto legacyStatsSection =
         tablet->loadOptionalSection(readerOptions.preloadOptionalSections[0]);
+    ASSERT_TRUE(legacyStatsSection.has_value());
+    auto legacyRawSize = flatbuffers::GetRoot<nimble::serialization::Stats>(
+                             legacyStatsSection->content().data())
+                             ->raw_size();
+    ASSERT_EQ(expectedRawSize, legacyRawSize);
+
+    auto statsSection =
+        tablet->loadOptionalSection(readerOptions.preloadOptionalSections[1]);
     ASSERT_TRUE(statsSection.has_value());
 
     // Use VectorizedFileStats to deserialize the stats payload
     auto fileStats = nimble::VectorizedFileStats::deserialize(
         statsSection->content(), *leafPool_);
-    ASSERT_NE(fileStats, nullptr);
+    if (fileStats == nullptr) {
+      ADD_FAILURE() << "Expected vectorized file stats section";
+      return;
+    }
 
     // Convert to column statistics using schema and nimbleType
     auto nimbleType = nimble::convertToNimbleType(*vector->type());

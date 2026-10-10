@@ -2286,6 +2286,13 @@ void Writer::writeColumnStats() {
         context_->columnStats().front()->getLogicalSize());
   }
 
+  flatbuffers::FlatBufferBuilder builder;
+  builder.Finish(serialization::CreateStats(builder, context_->fileRawSize()));
+  tabletWriter_->writeOptionalSection(
+      std::string(kStatsSection),
+      {reinterpret_cast<const char*>(builder.GetBufferPointer()),
+       builder.GetSize()});
+
   if (context_->options().enableVectorizedStats) {
     VectorizedFileStats::Options statsOptions{
         .stringStatsLengthLimit =
@@ -2303,14 +2310,6 @@ void Writer::writeColumnStats() {
           std::string(kStripeStatsSection),
           stripeStats.serialize(stripeStatsBuffer));
     }
-  } else {
-    flatbuffers::FlatBufferBuilder builder;
-    builder.Finish(
-        serialization::CreateStats(builder, context_->fileRawSize()));
-    tabletWriter_->writeOptionalSection(
-        std::string(kStatsSection),
-        {reinterpret_cast<const char*>(builder.GetBufferPointer()),
-         builder.GetSize()});
   }
 }
 
