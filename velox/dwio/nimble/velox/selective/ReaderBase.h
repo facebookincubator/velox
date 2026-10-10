@@ -48,6 +48,12 @@ class ReaderBase {
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
       const velox::dwio::common::ReaderOptions& options);
 
+  /// Creates a ReaderBase by completing an existing footer-only tablet.
+  static std::shared_ptr<ReaderBase> create(
+      std::unique_ptr<velox::dwio::common::BufferedInput> input,
+      std::shared_ptr<TabletReader> tablet,
+      const velox::dwio::common::ReaderOptions& options);
+
   /// Creates a ReaderBase sharing a cached TabletReader and pre-loaded
   /// schemas. The tablet's metadata (footer, stripes, ClusterIndex) is shared
   /// across all ReaderBase instances using the same tablet. Each ReaderBase
