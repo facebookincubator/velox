@@ -36,7 +36,7 @@ class DenseHlls {
   /// 1 byte for index bit length, index bit length must be in [4,16]
   /// 1 byte for baseline value
   /// 2^(n-1) bytes for buckets, values in buckets must be in [0,63]
-  /// 2 bytes for # overflow buckets
+  /// 2 bytes for # overflow buckets, must be non-negative
   /// 3 * #overflow buckets bytes for overflow buckets/values
   /// More information here:
   /// https://engineering.fb.com/2018/12/13/data-infrastructure/hyperloglog/

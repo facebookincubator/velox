@@ -109,6 +109,31 @@ bool SparseHlls::canDeserialize(const char* input) {
   return *reinterpret_cast<const int8_t*>(input) == kPrestoSparseV2;
 }
 
+bool SparseHlls::canDeserialize(const char* input, int size) {
+  // Version, index bit length and number of entries.
+  static constexpr int kHeaderSize = 4;
+  if (size < kHeaderSize) {
+    return false;
+  }
+
+  common::InputByteStream stream(input);
+  if (stream.read<int8_t>() != kPrestoSparseV2) {
+    return false;
+  }
+
+  const auto indexBitLength = stream.read<int8_t>();
+  if (indexBitLength < 4 || indexBitLength > 16) {
+    return false;
+  }
+
+  const auto numEntries = stream.read<int16_t>();
+  if (numEntries < 0) {
+    return false;
+  }
+
+  return size >= kHeaderSize + numEntries * 4;
+}
+
 int8_t SparseHlls::deserializeIndexBitLength(const char* input) {
   common::InputByteStream stream(input);
   stream.read<int8_t>(); // Skip version
