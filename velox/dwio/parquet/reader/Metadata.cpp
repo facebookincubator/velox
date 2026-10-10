@@ -651,6 +651,10 @@ std::string FileMetaDataPtr::keyValueMetadataValue(
   VELOX_FAIL("Input key {} is not in the key value metadata", key);
 }
 
+bool FileMetaDataPtr::hasCreatedBy() const {
+  return thriftFileMetaDataPtr(ptr_)->created_by().has_value();
+}
+
 std::string FileMetaDataPtr::createdBy() const {
   return apache::thrift::can_throw(*thriftFileMetaDataPtr(ptr_)->created_by());
 }
