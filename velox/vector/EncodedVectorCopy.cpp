@@ -940,16 +940,7 @@ void copyIntoFlatMapMutable(
   for (column_index_t i = 0; i < startingNumDistinctKeys; ++i) {
     if (source.getKeyChannel(targetFlatMap->distinctKeys(), i) ==
         std::nullopt) {
-      auto& targetInMapsBuffer = targetFlatMap->inMapsAt(i, true);
-      if (targetInMapsBuffer == nullptr) {
-        targetInMapsBuffer =
-            AlignedBuffer::allocate<bool>(size, options.pool, false);
-      }
-      if (targetInMapsBuffer->isView()) {
-        targetInMapsBuffer =
-            AlignedBuffer::copy(options.pool, targetInMapsBuffer);
-      }
-      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+      auto* targetInMaps = targetFlatMap->ensureInMapAt(i);
 
       applyToEachRange(
           ranges, [targetInMaps](auto targetIndex, auto, auto count) {
@@ -1012,6 +1003,35 @@ void copyIntoFlatMapImmutable(
   copyIntoFlatMapMutable(options, source, ranges, target);
 }
 
+// Converts the copied rows of a map source to a new flat map, then copies that
+// into 'target'. The flat map path writes into the parts of 'target' that may
+// be wrapped or shared without making the whole target writable first.
+void copyMapIntoFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    VectorPtr& target,
+    bool targetMutable) {
+  std::vector<BaseVector::CopyRange> toFlatMapRanges;
+  std::vector<BaseVector::CopyRange> flatMapRanges;
+  vector_size_t numRows{0};
+  for (const auto& range : ranges) {
+    toFlatMapRanges.push_back({range.sourceIndex, numRows, range.count});
+    flatMapRanges.push_back({numRows, range.targetIndex, range.count});
+    numRows += range.count;
+  }
+  VectorPtr flatMap = std::make_shared<FlatMapVector>(
+      options.pool,
+      source->type(),
+      nullptr,
+      numRows,
+      nullptr,
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  flatMap->copyRanges(source.get(), toFlatMapRanges);
+  copyImpl(options, flatMap, flatMapRanges, target, targetMutable);
+}
+
 void copyIntoFlatMap(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
@@ -1021,7 +1041,7 @@ void copyIntoFlatMap(
     VectorPtr& target,
     bool targetMutable) {
   if (decodedSource.isIdentityMapping()) {
-    auto& flatMapSource = *source->asUnchecked<FlatMapVector>();
+    auto& flatMapSource = *sourceBase->asUnchecked<FlatMapVector>();
     if (targetMutable) {
       copyIntoFlatMapMutable(options, flatMapSource, ranges, target);
     } else {
@@ -1180,10 +1200,11 @@ void copyIntoExisting(
       copyIntoFlat(options, source, ranges, target, targetMutable);
       break;
     case VectorEncoding::Simple::MAP:
-      VELOX_CHECK_NE(
-          sourceBase->encoding(),
-          VectorEncoding::Simple::FLAT_MAP,
-          "Cannot copy FlatMapVector into MapVector.");
+      // copyRanges copies between the two map encodings.
+      if (sourceBase->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        copyIntoFlat(options, source, ranges, target, targetMutable);
+        break;
+      }
       [[fallthrough]];
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
@@ -1191,6 +1212,10 @@ void copyIntoExisting(
           options, decodedSource, sourceBase, ranges, target, targetMutable);
       break;
     case VectorEncoding::Simple::FLAT_MAP:
+      if (sourceBase->encoding() == VectorEncoding::Simple::MAP) {
+        copyMapIntoFlatMap(options, source, ranges, target, targetMutable);
+        break;
+      }
       copyIntoFlatMap(
           options,
           source,
@@ -1215,13 +1240,17 @@ void copyImpl(
     const folly::Range<const BaseVector::CopyRange*>& ranges,
     VectorPtr& target,
     bool targetMutable) {
-  if (ranges.empty()) {
+  // An empty source, such as the base of a dictionary whose rows are all null,
+  // comes with ranges that copy no rows.
+  if (ranges.empty() || source->size() == 0) {
+    for (const auto& range : ranges) {
+      VELOX_CHECK_EQ(range.count, 0);
+    }
     if (!target) {
       target = BaseVector::createEmptyLike(source.get(), 0, options.pool);
     }
     return;
   }
-  VELOX_CHECK_GT(source->size(), 0);
   DecodedVector decodedSource;
   auto sourceBase = decodedSource.decodeAndGetBase(source);
   if (target) {

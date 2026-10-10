@@ -537,7 +537,7 @@ void FlatMapVector::copyInMapRanges(
     const folly::Range<const BaseVector::CopyRange*>& ranges) {
   // This means that the key being copied exists in all maps from both source
   // and target; nothing to update.
-  if (sourceInMaps == nullptr && mutableRawInMapsAt(targetChannel) == nullptr) {
+  if (sourceInMaps == nullptr && rawInMapsAt(targetChannel) == nullptr) {
     return;
   }
 
@@ -569,6 +569,8 @@ uint64_t* FlatMapVector::ensureInMapAt(column_index_t channel) {
   auto& inMap = inMapsAt(channel, /*resize=*/true);
   if (inMap == nullptr) {
     inMap = AlignedBuffer::allocate<bool>(size(), pool(), true);
+  } else if (!inMap->isMutable()) {
+    inMap = AlignedBuffer::copy(pool(), inMap);
   }
   return inMap->asMutable<uint64_t>();
 }
