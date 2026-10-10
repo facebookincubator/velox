@@ -188,17 +188,14 @@ class TypedEncodingView : public EncodingView {
     readPhysical(offset, length, static_cast<physicalType*>(output));
   }
 
+  // Delegates to readPhysicalRanges so a view can decode across ranges in one
+  // pass instead of probing each row individually.
   uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& /*setNull*/,
       void* output) const override {
     const auto numRows = this->checkReadRanges(ranges);
-    auto* typedOutput = static_cast<physicalType*>(output);
-    uint32_t outputOffset{0};
-    for (const auto& range : ranges) {
-      readPhysical(range.startRow, range.numRows(), typedOutput + outputOffset);
-      outputOffset += range.numRows();
-    }
+    readPhysicalRanges(ranges, static_cast<physicalType*>(output));
     return numRows;
   }
 
@@ -263,6 +260,22 @@ class TypedEncodingView : public EncodingView {
       }
 
       output[outputOffset++] = readPhysicalAt(firstIndex);
+    }
+  }
+
+  // Default per-range read; an encoding whose point read is not cheap
+  // relative to its bulk decode should override this to plan across ranges.
+  virtual void readPhysicalRanges(
+      std::span<const RowRange> ranges,
+      physicalType* output) const {
+    for (const auto& range : ranges) {
+      const uint32_t length = range.numRows();
+      if (length == 1) {
+        *output = readPhysicalAt(range.startRow);
+      } else {
+        readPhysical(range.startRow, length, output);
+      }
+      output += length;
     }
   }
 
