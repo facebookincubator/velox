@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/Likely.h>
+
 #include <cstdint>
 #include <ctime>
 
@@ -118,10 +120,10 @@ VELOX_GPU_COMPATIBLE inline int64_t calendarUtcToEpoch(const std::tm& tm) {
   // would wrap before the result reached the int64_t.
   int64_t year = tm.tm_year + static_cast<int64_t>(kTmYearBase);
   int64_t month = tm.tm_mon;
-  if (month > 11) [[unlikely]] {
+  if (FOLLY_UNLIKELY(month > 11)) {
     year += month / 12;
     month %= 12;
-  } else if (month < 0) [[unlikely]] {
+  } else if (FOLLY_UNLIKELY(month < 0)) {
     const auto yearsDiff = (-month + 11) / 12;
     year -= yearsDiff;
     month += 12 * yearsDiff;

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/CPortability.h>
+
 #include <cstdint>
 #include <ctime>
 
@@ -41,7 +43,8 @@ inline constexpr int64_t kDaysInWeek = 7;
 
 /// Broken-down UTC time for an epoch-second count. Device code has no
 /// wide-range fallback; the fast path covers roughly three million years.
-VELOX_GPU_COMPATIBLE inline std::tm getDateTimeUtc(int64_t seconds) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE std::tm getDateTimeUtc(
+    int64_t seconds) {
   std::tm dateTime{};
 #ifdef __CUDACC__
   const bool converted = calendar::epochToCalendarUtc(seconds, dateTime);
@@ -54,7 +57,7 @@ VELOX_GPU_COMPATIBLE inline std::tm getDateTimeUtc(int64_t seconds) {
 }
 
 /// Broken-down UTC time for a count of days since the epoch.
-VELOX_GPU_COMPATIBLE inline std::tm getDateTime(int32_t days) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE std::tm getDateTime(int32_t days) {
   const int64_t seconds = days * kSecondsInDay;
   std::tm dateTime{};
 #ifdef __CUDACC__
@@ -66,25 +69,27 @@ VELOX_GPU_COMPATIBLE inline std::tm getDateTime(int32_t days) {
   return dateTime;
 }
 
-VELOX_GPU_COMPATIBLE inline int getYear(const std::tm& time) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int getYear(const std::tm& time) {
   // tm_year: years since 1900.
   return 1900 + time.tm_year;
 }
 
-VELOX_GPU_COMPATIBLE inline int getMonth(const std::tm& time) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
   // tm_mon: months since January – [0, 11].
   return 1 + time.tm_mon;
 }
 
-VELOX_GPU_COMPATIBLE inline int getDay(const std::tm& time) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
   return time.tm_mday;
 }
 
-VELOX_GPU_COMPATIBLE inline int32_t getQuarter(const std::tm& time) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
+getQuarter(const std::tm& time) {
   return time.tm_mon / 3 + 1;
 }
 
-VELOX_GPU_COMPATIBLE inline int32_t getDayOfYear(const std::tm& time) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
+getDayOfYear(const std::tm& time) {
   return time.tm_yday + 1;
 }
 
