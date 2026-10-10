@@ -148,18 +148,20 @@ struct DecimalArithmetic {
   static constexpr int128_t kShortDecimalMax =
       detail::decimalPowerOfTen(kMaxShortPrecision) - 1;
 
-  /// Magnitude of a decimal's unscaled value, as an unsigned type. Lives here
-  /// rather than on DecimalUtil so that callers need not reach the runtime type
-  /// system; DecimalUtil::absValue still resolves through inheritance.
+  /// Magnitude of a decimal's unscaled value, as an unsigned type. Widens to
+  /// unsigned before negating, since negating the signed minimum is undefined.
+  /// Lives here rather than on DecimalUtil so that callers need not reach the
+  /// runtime type system; DecimalUtil::absValue still resolves through
+  /// inheritance.
   template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static uint64_t absValue(int64_t a) {
-    return a < 0 ? static_cast<uint64_t>(-a) : static_cast<uint64_t>(a);
+    return a < 0 ? -static_cast<uint64_t>(a) : static_cast<uint64_t>(a);
   }
 
   template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static __uint128_t absValue(
       int128_t a) {
-    return a < 0 ? static_cast<__uint128_t>(-a) : static_cast<__uint128_t>(a);
+    return a < 0 ? -static_cast<__uint128_t>(a) : static_cast<__uint128_t>(a);
   }
 
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static void valueInRange(
