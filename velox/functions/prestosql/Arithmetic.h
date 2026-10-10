@@ -23,8 +23,10 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <system_error>
 #include <type_traits>
+#include <vector>
 
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
@@ -298,10 +300,26 @@ struct NegateFunction {
 template <typename T>
 struct RoundFunction {
   template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const TInput* /*number*/,
+      const int32_t* decimals) {
+    if (decimals != nullptr) {
+      scaleFactor_ = std::pow(10, *decimals);
+    }
+  }
+
+  template <typename TInput>
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const int32_t b = 0) {
-    result = round(a, b);
+    result = round(a, b, scaleFactor_);
   }
+
+ private:
+  // 10^decimals when 'decimals' is a constant. Saves round() a pow() per row
+  // in the common constant case.
+  std::optional<double> scaleFactor_;
 };
 
 template <typename T>

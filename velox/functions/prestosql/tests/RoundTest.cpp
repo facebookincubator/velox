@@ -122,6 +122,64 @@ TEST_F(RoundTest, roundWithDecimal) {
   runRoundWithDecimalTest<int8_t>(testRoundWithDecIntegralData<int8_t>());
 }
 
+// A literal digits argument reaches initialize(), which computes the scale
+// factor once; a digits column computes it per row. The two paths must agree,
+// including where the factor overflows to infinity or underflows to zero.
+TEST_F(RoundTest, roundWithConstantDecimals) {
+  const std::vector<int32_t> allDigits = {
+      0, 1, 2, 4, 10, -1, -3, 309, 400, -324, -400};
+  auto check = [&](const auto& values) {
+    using T = typename std::decay_t<decltype(values)>::value_type;
+    for (const auto digits : allDigits) {
+      SCOPED_TRACE(fmt::format("{} digits={}", typeid(T).name(), digits));
+      auto input = makeRowVector(
+          {makeFlatVector<T>(values),
+           makeFlatVector<int32_t>(
+               values.size(), [&](auto) { return digits; })});
+      auto perRow = evaluate("round(c0, c1)", input);
+      auto constant = evaluate(
+          fmt::format("round(c0, cast({} as integer))", digits), input);
+      test::assertEqualVectors(perRow, constant);
+    }
+  };
+  check(
+      std::vector<double>{
+          0.0,
+          1.5,
+          2.675,
+          -2.675,
+          123456.789,
+          17592186044415.0,
+          17592186044416.0,
+          1e300,
+          std::numeric_limits<double>::max(),
+          std::numeric_limits<double>::lowest(),
+          std::numeric_limits<double>::infinity(),
+          -std::numeric_limits<double>::infinity(),
+          std::numeric_limits<double>::quiet_NaN()});
+  check(
+      std::vector<float>{
+          0.0f,
+          1.5f,
+          2.675f,
+          -2.675f,
+          123456.789f,
+          1e30f,
+          std::numeric_limits<float>::max(),
+          std::numeric_limits<float>::lowest(),
+          std::numeric_limits<float>::infinity(),
+          -std::numeric_limits<float>::infinity(),
+          std::numeric_limits<float>::quiet_NaN()});
+  check(
+      std::vector<int64_t>{
+          0,
+          1,
+          -1,
+          12345,
+          std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<int64_t>::min()});
+}
+
 TEST_F(RoundTest, roundWithDecimalLargeNumbers) {
   for (int32_t i = 0; i < 64; ++i) {
     runRoundWithDecimalTest<double>({
