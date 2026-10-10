@@ -83,6 +83,7 @@ add_library(
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
+  views/FsstEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
   views/EncodingViewUtils.h

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -39,6 +40,7 @@
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
@@ -85,6 +87,19 @@ std::string encodeWithSelection(
       makeDefaultPolicy(TypeTraits<T>::dataType)};
   Buffer buffer{*benchmarkPool()};
   auto encoded = EncodingT::encode(selection, values, buffer, options);
+  return {encoded.data(), encoded.size()};
+}
+
+std::string encodeFsstString(const Vector<std::string_view>& data) {
+  auto values = std::span<const std::string_view>{data.data(), data.size()};
+  auto selection = EncodingSelection<std::string_view>{
+      EncodingSelectionResult{.encodingType = EncodingType::Fsst},
+      Statistics<std::string_view>::create(values),
+      makeDefaultPolicy(DataType::String)};
+  Buffer buffer{*benchmarkPool()};
+  const Encoding::Options options{
+      .fsstCompressionTargetRatio = std::numeric_limits<double>::max()};
+  const auto encoded = FsstEncoding::encode(selection, values, buffer, options);
   return {encoded.data(), encoded.size()};
 }
 
@@ -808,6 +823,43 @@ BENCHMARK(View_TrivialStringEager_Clustered130, iters) {
     view = createEncodingView(encoded, benchmarkPool().get());
   }
   readPositionsWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(View_FsstString_Sorted130, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::vector<uint32_t> positions;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    positions = sortedRandomPositions(kRows);
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readPositionsWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(BatchView_FsstString_Sorted130, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::vector<uint32_t> positions;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    positions = sortedRandomPositions(kRows);
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readPositionsBatchWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(RangeView_FsstString_Range1024, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readRangesWithView<std::string_view>(*view, iters);
 }
 
 VIEW_BENCHMARK(

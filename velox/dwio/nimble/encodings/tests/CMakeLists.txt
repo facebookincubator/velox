@@ -54,6 +54,7 @@ add_executable(
   EncodingTypeDispatchTest.cpp
   FixedBitWidthEncodingViewTest.cpp
   FsstEncodingTest.cpp
+  FsstEncodingViewTest.cpp
   HuffmanEncodingTest.cpp
   HuffmanEncodingViewTest.cpp
   FOREncodingViewTest.cpp
