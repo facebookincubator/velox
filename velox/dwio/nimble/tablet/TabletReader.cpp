@@ -1053,9 +1053,9 @@ void TabletReader::checkStreamChecksumsPresent(
     const StripeGroup& stripeGroup,
     uint32_t stripeGroupIndex) const {
   if (!properties_.hasStreamChecksums()) {
-    // The file claims no checksums, so there is nothing to enforce. A group
-    // that carries an array anyway is inert: no reader resolves a checksum
-    // implementation for such a file, so the array is never read.
+    // The file claims no checksum arrays, so there is nothing to enforce. A
+    // group that carries one anyway is inert: readers look for the arrays only
+    // when the properties claim them.
     return;
   }
   if (stripeGroup.streamCount() == 0) {
@@ -1064,7 +1064,7 @@ void TabletReader::checkStreamChecksumsPresent(
   }
   NIMBLE_CHECK_FILE(
       stripeGroup.hasStreamChecksums(),
-      "File properties record per-stream checksums, but stripe group {} carries none.",
+      "File properties claim stripe-group checksum arrays, but stripe group {} carries none.",
       stripeGroupIndex);
 }
 

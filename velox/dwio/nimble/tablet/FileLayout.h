@@ -38,6 +38,10 @@ namespace facebook::nimble {
 /// |  +-------------------------------------------------------------+  |
 /// |  | Stream 0 | Stream 1 | Stream 2 | ... | Stream N             |  |
 /// |  +-------------------------------------------------------------+  |
+/// |  In files with stream trailers (FileProperties.stream_trailer),   |
+/// |  each non-empty stream is followed by a trailer outside its       |
+/// |  recorded size; duplicates share the original's trailer:          |
+/// |  | Stream 0 | T | Stream 1 | T | ...                              |
 /// +-------------------------------------------------------------------+
 /// |  Stripe 1 Streams (belongs to Stripe Group 0)                     |
 /// +-------------------------------------------------------------------+
@@ -45,8 +49,8 @@ namespace facebook::nimble {
 /// +-------------------------------------------------------------------+
 /// |  Stripe M Streams (last stripe in Stripe Group 0)                 |
 /// +===================================================================+
-/// |  Stripe Group 0 Metadata (stream_offsets, stream_sizes, and       |
-/// |                           stream_checksums when enabled)          |
+/// |  Stripe Group 0 Metadata (stream_offsets, stream_sizes, and, in   |
+/// |                           legacy files, stream_checksums)         |
 /// +-------------------------------------------------------------------+
 /// |  Index Group 0 Metadata (if indexing enabled, written immediately |
 /// |                          after its corresponding stripe group)    |
@@ -144,7 +148,8 @@ struct FileLayout {
   struct StripeInfo {
     /// Offset from start of file to first byte of stripe data.
     uint64_t offset{0};
-    /// Total size of stripe data in bytes (sum of all stream sizes).
+    /// Total size of stripe data in bytes: its streams, plus their trailers,
+    /// if any.
     uint64_t size{0};
     /// Index of the stripe group this stripe belongs to.
     uint32_t stripeGroupIndex{0};

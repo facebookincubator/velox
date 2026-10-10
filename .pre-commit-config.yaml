@@ -28,7 +28,11 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        # identify tags *.nimble as Nim package files (text), but Velox's
+        # .nimble files are binary Nimble test data.
+        exclude_types: [nimble]
       - id: end-of-file-fixer
+        exclude_types: [nimble]
       - id: check-added-large-files
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
