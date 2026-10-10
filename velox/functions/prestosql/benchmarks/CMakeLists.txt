@@ -66,6 +66,7 @@ target_link_libraries(
   velox_functions_prestosql_benchmarks_string_ascii_utf_functions
   ${BENCHMARK_DEPENDENCIES}
   velox_common_fuzzer_util
+  velox_functions_benchmark_util
 )
 
 add_executable(velox_functions_prestosql_benchmarks_not NotBenchmark.cpp)
