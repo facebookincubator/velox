@@ -134,6 +134,11 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
         generateLazyChildren_(generateLazyChildren),
         rows_(pool_) {}
 
+  /// True if top-level children without filters are produced as LazyVectors.
+  bool generateLazyChildren() const {
+    return generateLazyChildren_;
+  }
+
   bool hasDeletion() const final {
     return hasDeletion_;
   }
