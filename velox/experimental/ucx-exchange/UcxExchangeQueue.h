@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <cudf/table/table.hpp>
 #include <atomic>
 #include <cinttypes>
 #include <cuda/stream>
@@ -26,14 +27,15 @@
 
 namespace facebook::velox::ucx_exchange {
 
-/// Struct that bundles a packed_table with the CUDA stream that was used
-/// to allocate its memory. This allows the receiver to reuse the same stream
-/// for subsequent operations on the data.
+/// Bundles received cuDF storage with its consumer stream. Raw and fused FOR
+/// remain packed. A materializer can instead return an owning table.
 struct PackedTableWithStream {
+  std::unique_ptr<cudf::table> table;
   std::unique_ptr<cudf::packed_table> packedTable;
   cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  size_t logicalDataBytes{0};
 
-  /// Logical rows in 'packedTable', as reported by the producer. Authoritative:
+  /// Logical rows reported by the producer. Authoritative:
   /// cudf::table_view::num_rows() derives the count from the columns and so
   /// returns 0 for a table with none, which is what an exchange fragment with
   /// an empty output layout sends. 32-bit because a cuDF table cannot hold more
@@ -42,14 +44,30 @@ struct PackedTableWithStream {
 
   PackedTableWithStream() = default;
   PackedTableWithStream(
-      std::unique_ptr<cudf::packed_table>&& table,
-      cuda::stream_ref s,
+      std::unique_ptr<cudf::packed_table>&& receivedPackedTable,
+      cuda::stream_ref consumerStream,
       vector_size_t numRows)
-      : packedTable(std::move(table)), stream(s), numRows(numRows) {}
+      : packedTable(std::move(receivedPackedTable)),
+        stream(consumerStream),
+        logicalDataBytes(packedTable ? packedTable->data.gpu_data->size() : 0),
+        numRows(numRows) {}
 
-  /// Returns the size of the GPU data buffer, or 0 if packedTable is null.
+  PackedTableWithStream(
+      std::unique_ptr<cudf::table>&& materializedTable,
+      cuda::stream_ref consumerStream,
+      size_t logicalDataBytes,
+      vector_size_t numRows)
+      : table(std::move(materializedTable)),
+        stream(consumerStream),
+        logicalDataBytes(logicalDataBytes),
+        numRows(numRows) {}
+
+  /// Returns a view over whichever storage representation is present.
+  cudf::table_view tableView() const;
+
+  /// Returns logical uncompressed bytes, not live allocation capacity.
   size_t gpuDataSize() const {
-    return packedTable ? packedTable->data.gpu_data->size() : 0;
+    return logicalDataBytes;
   }
 };
 

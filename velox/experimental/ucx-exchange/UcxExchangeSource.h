@@ -38,6 +38,20 @@
 
 namespace facebook::velox::ucx_exchange {
 
+namespace detail {
+
+/// Consumes a payload that is ready on stream, after the route's existing
+/// handoff. Cascaded returns independent owning columns. Raw and fused FOR
+/// payloads retain packed storage. This does not select streams or change
+/// transport readiness.
+PackedTableWithStreamPtr restoreReceivedTable(
+    std::unique_ptr<std::vector<uint8_t>> metadata,
+    std::unique_ptr<rmm::device_buffer> data,
+    cuda::stream_ref stream,
+    vector_size_t numRows);
+
+} // namespace detail
+
 struct UcxExchangeMetrics {
   UcxExchangeMetrics()
       : numPackedColumns_(RuntimeMetric(RuntimeCounter::Unit::kNone)),

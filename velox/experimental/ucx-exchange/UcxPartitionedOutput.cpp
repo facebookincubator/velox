@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+#include "velox/experimental/ucx-exchange/ExchangeCompression.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/concatenate.hpp>
@@ -86,7 +87,10 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       driverId_(ctx->driverId),
       targetRowsPerChunk_(ctx->queryConfig().get<int64_t>(
           CudfConfig::kUcxPartitionedOutputBatchRows,
-          CudfConfig::getInstance().partitionedOutputBatchRows)) {
+          CudfConfig::getInstance().partitionedOutputBatchRows)),
+      compression_(parseExchangeCompression(ctx->queryConfig().get<std::string>(
+          CudfConfig::kUcxExchangeCompression,
+          CudfConfig::getInstance().exchangeCompression))) {
   VELOX_CHECK_NOT_NULL(
       queueManager, "UcxPartitionedOutput requires an output queue manager");
   VELOX_CHECK(
@@ -106,6 +110,47 @@ UcxPartitionedOutput::UcxPartitionedOutput(
   if (inNames != outNames) {
     getRemapping(inNames, outNames, remap_);
   }
+}
+
+void UcxPartitionedOutput::recordCompressionStats(
+    const PackedExchangePayload& payload) {
+  if (payload.codec == ExchangePayloadCodec::kNone) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(payload.packed);
+  VELOX_CHECK_NOT_NULL(payload.packed->gpu_data);
+  const auto wireBytes = payload.packed->gpu_data->size();
+  const auto maxCounter =
+      static_cast<std::size_t>(std::numeric_limits<int64_t>::max());
+  VELOX_CHECK_LE(payload.logicalDataSize, maxCounter);
+  VELOX_CHECK_LE(wireBytes, maxCounter);
+  VELOX_CHECK_LE(payload.auxiliaryCount, maxCounter);
+
+  auto lockedStats = stats_.wlock();
+  lockedStats->addRuntimeStat(
+      "exchangeCompressedLogicalBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(payload.logicalDataSize),
+          RuntimeCounter::Unit::kBytes));
+  lockedStats->addRuntimeStat(
+      "exchangeCompressedWireBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(wireBytes), RuntimeCounter::Unit::kBytes));
+  if (payload.auxiliaryCount > 0) {
+    lockedStats->addRuntimeStat(
+        "exchangeCompressionAuxiliaryCount",
+        RuntimeCounter(static_cast<int64_t>(payload.auxiliaryCount)));
+  }
+}
+
+std::unique_ptr<cudf::packed_columns> UcxPartitionedOutput::packForExchange(
+    cudf::table_view tableView,
+    cuda::stream_ref stream) {
+  auto payload = packExchangePayload(
+      tableView, compression_, stream, get_temp_mr(), get_output_mr());
+  recordCompressionStats(payload);
+  return std::move(payload.packed);
 }
 
 void UcxPartitionedOutput::addInput(RowVectorPtr input) {
@@ -223,10 +268,8 @@ void UcxPartitionedOutput::flushPending() {
         partitionAndEnqueue(tableView, numRows, stream);
       }
     } else if (numRows > 0) {
-      auto packedCols = cudf::pack(tableView, stream, get_output_mr());
+      auto packedColsPtr = packForExchange(tableView, stream);
       stream.sync();
-      auto packedColsPtr = std::make_unique<cudf::packed_columns>(
-          std::move(packedCols.metadata), std::move(packedCols.gpu_data));
       queueManager->enqueue(
           this->taskId(), 0, std::move(packedColsPtr), numRows);
     }
@@ -371,7 +414,6 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
     return;
   }
 
-  auto mr = get_output_mr();
   // Same boundaries equalPartition() computes, so the split is identical to the
   // column-bearing case and the rows still add up to numRows.
   // The products are formed in 64 bits: numRows * (destination + 1) overflows
@@ -395,9 +437,7 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
     if (rowsPerDestination[destination] == 0) {
       continue;
     }
-    auto packed = cudf::pack(tableView, stream, mr);
-    perDestination[destination] = std::make_unique<cudf::packed_columns>(
-        std::move(packed.metadata), std::move(packed.gpu_data));
+    perDestination[destination] = packForExchange(tableView, stream);
   }
   // UCX is not stream aware, so the packs must be complete before enqueueing.
   stream.sync();
@@ -522,14 +562,10 @@ void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
     return;
   }
 
-  auto mr = get_output_mr();
   std::vector<std::unique_ptr<cudf::packed_columns>> perDestination;
   perDestination.reserve(numPartitions_);
   for (size_t destination = 0; destination < numPartitions_; ++destination) {
-    auto packed = cudf::pack(tableView, stream, mr);
-    perDestination.push_back(
-        std::make_unique<cudf::packed_columns>(
-            std::move(packed.metadata), std::move(packed.gpu_data)));
+    perDestination.push_back(packForExchange(tableView, stream));
   }
   // UCX is not stream aware, so the packs must be complete before enqueueing.
   stream.sync();
@@ -597,34 +633,35 @@ void UcxPartitionedOutput::splitAndEnqueue(
   // table, which the loop below would index out of bounds. Such payloads are
   // routed to equalPartitionRowCountOnly instead and never arrive here.
   VELOX_CHECK_GT(tableView.num_columns(), 0);
-  auto contiguousTables =
-      cudf::contiguous_split(tableView, offsets, stream, get_output_mr());
-
-  // Synchronize the stream to ensure CUDA operations complete before enqueuing.
-  // UCXX/UCX is not stream-aware, so without syncing, data could be sent before
-  // the GPU kernels have finished writing to the buffers.
-  stream.sync();
-
   VELOX_CHECK_EQ(
       offsets.size() + 1, numPartitions_, "mismatch in numPartitions_");
+
+  auto partitions = splitExchangePayloads(
+      tableView, offsets, compression_, stream, get_temp_mr(), get_output_mr());
+
+  // UCXX/UCX is not stream-aware, so all codec work must finish before the
+  // payload is enqueued for transfer.
+  stream.sync();
+  VELOX_CHECK_EQ(partitions.size(), numPartitions_);
+
   auto queueManager = sharedQueueManager();
-  for (int i = 0; i < numPartitions_; ++i) {
-    auto const& partitionTable = contiguousTables[i];
-    if (partitionTable.table.num_rows() == 0) {
-      // Skip empty partitions.
+  cudf::size_type rowStart = 0;
+  for (size_t destination = 0; destination < numPartitions_; ++destination) {
+    const auto rowEnd = destination < offsets.size() ? offsets[destination]
+                                                     : tableView.num_rows();
+    const auto numRows = rowEnd - rowStart;
+    rowStart = rowEnd;
+    if (numRows == 0) {
       continue;
     }
 
-    auto packedColsPtr = std::make_unique<cudf::packed_columns>(
-        std::move(contiguousTables[i].data.metadata),
-        std::move(contiguousTables[i].data.gpu_data));
-
-    // enqueue partition data on Ucx Output Buffer
+    auto& payload = partitions[destination];
+    recordCompressionStats(payload);
     queueManager->enqueue(
         this->taskId(),
-        i,
-        std::move(packedColsPtr),
-        partitionTable.table.num_rows());
+        static_cast<int>(destination),
+        std::move(payload.packed),
+        static_cast<vector_size_t>(numRows));
   }
 }
 

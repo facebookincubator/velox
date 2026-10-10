@@ -168,13 +168,12 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
-  // Get the packed_table and stream from the PackedTableWithStream
   PackedTableWithStream& data = *currentData_;
   // The producer's count, not table.num_rows(): a packed table with no columns
   // reports zero rows however many it holds, which is what an exchange
   // fragment with an empty output layout sends.
   const auto numRows = data.numRows;
-  const auto& tableView = data.packedTable->table;
+  const auto tableView = data.tableView();
   VELOX_CHECK(
       tableView.num_columns() == 0 || tableView.num_rows() == numRows,
       "Row count from the exchange disagrees with the received table: {} vs. {}",
@@ -191,10 +190,14 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
-  // Use the stream that was allocated in UcxExchangeSource::onMetadata
-  // and the packed_table constructor of CudfVector to avoid copying data.
-  auto result = std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, numRows, std::move(data.packedTable), data.stream);
+  std::shared_ptr<cudf_velox::CudfVector> result;
+  if (data.table) {
+    result = std::make_shared<cudf_velox::CudfVector>(
+        pool(), outputType_, numRows, std::move(data.table), data.stream);
+  } else {
+    result = std::make_shared<cudf_velox::CudfVector>(
+        pool(), outputType_, numRows, std::move(data.packedTable), data.stream);
+  }
 
   recordInputStats(gpuDataSize, result);
   // free the memory owned by PackedTableWithStream and set it to nullptr;
