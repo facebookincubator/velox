@@ -16,30 +16,17 @@
 
 #pragma once
 
-#include <folly/CPortability.h>
-#include "velox/common/base/Int128.h"
+#if defined(__SIZEOF_INT128__)
 
 namespace facebook::velox {
-
-// Copied from format.h of fmt.
-FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
-  int count = 1;
-  for (;;) {
-    if (n < 10) {
-      return count;
-    }
-    if (n < 100) {
-      return count + 1;
-    }
-    if (n < 1000) {
-      return count + 2;
-    }
-    if (n < 10000) {
-      return count + 3;
-    }
-    n /= 10000u;
-    count += 4;
-  }
-}
-
+using int128_t = __int128_t;
+using uint128_t = __uint128_t;
 } // namespace facebook::velox
+
+#elif defined(_MSC_VER)
+
+#include "velox/common/base/windows/Int128.h"
+
+#else
+#error "128-bit integers require native compiler support or MSVC."
+#endif

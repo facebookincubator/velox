@@ -28,6 +28,7 @@
 #include <string>
 
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Int128.h"
 
 namespace facebook::velox {
 
