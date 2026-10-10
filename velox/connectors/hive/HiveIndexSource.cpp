@@ -1537,10 +1537,6 @@ RowVectorPtr HiveIndexSource::projectOutput(
     vector_size_t numRows,
     const BufferPtr& remainingIndices,
     const RowVectorPtr& rowVector) {
-  if (outputType_->size() == 0) {
-    return exec::wrap(numRows, remainingIndices, rowVector);
-  }
-
   std::vector<VectorPtr> outputColumns;
   outputColumns.reserve(outputType_->size());
   for (int i = 0; i < outputType_->size(); ++i) {
