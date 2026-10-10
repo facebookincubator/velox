@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -21,6 +22,71 @@
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
+class RoundTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename T>
+  std::optional<T> round(
+      const std::optional<T>& value,
+      const std::optional<int32_t>& scale) {
+    return evaluateOnce<T>("round(c0, c1)", value, scale);
+  }
+
+  template <typename T>
+  std::optional<T> round(const std::optional<T>& value) {
+    return evaluateOnce<T>("round(c0)", value);
+  }
+};
+
+TEST_F(RoundTest, finiteInputsDoNotProduceNonFiniteResults) {
+  EXPECT_EQ(round<double>(-3.5, 308), -3.5);
+
+  const auto doubleMinimum = std::numeric_limits<double>::denorm_min();
+  EXPECT_EQ(round<double>(doubleMinimum, 309), doubleMinimum);
+  EXPECT_EQ(
+      round<double>(doubleMinimum, std::numeric_limits<int32_t>::max()),
+      doubleMinimum);
+  EXPECT_EQ(round<double>(1.0, std::numeric_limits<int32_t>::min()), 0.0);
+
+  const auto floatMinimum = std::numeric_limits<float>::denorm_min();
+  EXPECT_EQ(round<float>(floatMinimum, 309), floatMinimum);
+  EXPECT_EQ(round<float>(-3.5F, 308), -3.5F);
+
+  const auto floatMaximum = std::numeric_limits<float>::max();
+  EXPECT_EQ(round<float>(floatMaximum, -35), floatMaximum);
+  EXPECT_EQ(round<float>(-floatMaximum, -35), -floatMaximum);
+}
+
+TEST_F(RoundTest, ordinaryValues) {
+  EXPECT_EQ(round<double>(2.5), 3.0);
+  EXPECT_EQ(round<double>(-2.5), -3.0);
+  EXPECT_EQ(round<float>(1.5F), 2.0F);
+  EXPECT_EQ(round<double>(1.234, 2), 1.23);
+  EXPECT_EQ(round<double>(125.0, -1), 130.0);
+  EXPECT_EQ(round<double>(17'592'186'044'416.25, 1), 17'592'186'044'416.3);
+}
+
+TEST_F(RoundTest, canonicalZero) {
+  const auto unaryResult = round<double>(-0.0);
+  ASSERT_TRUE(unaryResult.has_value());
+  EXPECT_FALSE(std::signbit(unaryResult.value()));
+
+  for (const auto scale : {-40, -1, 0, 1, 308, 309}) {
+    const auto result = round<double>(-0.0, scale);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), 0.0);
+    EXPECT_FALSE(std::signbit(result.value()));
+  }
+}
+
+TEST_F(RoundTest, nonFiniteInputs) {
+  const auto infinity = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(round<double>(infinity, 2), infinity);
+  EXPECT_EQ(round<double>(-infinity, 2), -infinity);
+  EXPECT_TRUE(
+      std::isnan(
+          round<double>(std::numeric_limits<double>::quiet_NaN(), 2).value()));
+}
 
 class PmodTest : public SparkFunctionBaseTest {
  protected:

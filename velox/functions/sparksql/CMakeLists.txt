@@ -46,6 +46,7 @@ velox_add_library(
   LeastGreatest.cpp
   Map.cpp
   RegexFunctions.cpp
+  Round.cpp
   Size.cpp
   String.cpp
   TimestampUtils.cpp
@@ -97,6 +98,7 @@ velox_add_library(
   RandStr.h
   ReadSidePaddingFunction.h
   RegexFunctions.h
+  Round.h
   SimpleComparisonMatcher.h
   Size.h
   SparkPartitionId.h
