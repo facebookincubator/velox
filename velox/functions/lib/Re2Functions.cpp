@@ -35,7 +35,9 @@ re2::StringPiece toStringPiece(const T& s) {
 
 namespace detail {
 
-Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
+Expected<RE2*> ReCache::tryFindOrCompile(
+    const StringView& pattern,
+    ReCache::PatternTransform transform) {
   const auto key = std::string(pattern);
 
   auto reIt = cache_.find(key);
@@ -48,7 +50,16 @@ Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
         Status::UserError("Max number of regex reached"));
   }
 
-  auto re = std::make_unique<RE2>(toStringPiece(pattern), RE2::Quiet);
+  // Only reached on a cache miss, so any transform runs once per distinct
+  // pattern rather than once per row. Without a transform the pattern is
+  // compiled in place, avoiding a copy on the path shared with Presto.
+  std::unique_ptr<RE2> re;
+  if (transform) {
+    const auto compiled = transform(pattern);
+    re = std::make_unique<RE2>(toStringPiece(StringView(compiled)), RE2::Quiet);
+  } else {
+    re = std::make_unique<RE2>(toStringPiece(pattern), RE2::Quiet);
+  }
   if (!re->ok()) {
     return folly::makeUnexpected(
         Status::UserError("invalid regular expression:{}", re->error()));
@@ -60,10 +71,23 @@ Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
   return it->second.get();
 }
 
+Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
+  return tryFindOrCompile(pattern, nullptr);
+}
+
 RE2* ReCache::findOrCompile(const StringView& pattern) {
   return tryFindOrCompile(pattern).thenOrThrow(
       folly::identity,
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+}
+
+RE2* ReCache::findOrCompile(
+    const StringView& pattern,
+    ReCache::PatternTransform transform) {
+  return tryFindOrCompile(pattern, transform)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
 }
 
 } // namespace detail
