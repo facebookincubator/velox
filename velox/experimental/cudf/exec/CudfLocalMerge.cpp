@@ -191,7 +191,7 @@ RowVectorPtr CudfLocalMerge::mergeSources() {
   }
 
   std::vector<cudf::table_view> tableViews;
-  std::vector<rmm::cuda_stream_view> inputStreams;
+  std::vector<cuda::stream_ref> inputStreams;
   std::vector<CudfVectorPtr> inputs;
   tableViews.reserve(numBatches);
   inputStreams.reserve(numBatches);

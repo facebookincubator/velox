@@ -80,7 +80,7 @@ void ASTExpression::close() {
 
 ColumnOrView ASTExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   auto precomputedColumns = precomputeSubexpressions(

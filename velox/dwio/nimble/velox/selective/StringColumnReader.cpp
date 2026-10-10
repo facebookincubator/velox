@@ -24,6 +24,7 @@
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
 #include "velox/dwio/nimble/velox/selective/NimbleData.h"
+#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/vector/DictionaryVector.h"
 
 namespace facebook::nimble {
@@ -422,6 +423,16 @@ bool StringColumnReader::readWithDictionary(
   });
 
   const auto endReadRow = rows.back() + 1;
+  // Check 1: An indexed skip reached EOF. This is valid only when the requested
+  // range is all null and therefore needs no value encoding.
+  if (decoder_.currentEncoding() == nullptr) {
+    NIMBLE_CHECK(
+        allNull_, "No encoding is available for a non-null string read");
+    abandonDictionaryEncoding(endReadRow);
+    return false;
+  }
+
+  // Check 2:
   // Check convertibility once, on that chunk. Only a genuinely non-dictionary
   // encoding (e.g. Trivial) fails it. When it is not convertible, no dictionary
   // indices were materialized; re-type the value buffer to StringView
@@ -430,6 +441,7 @@ bool StringColumnReader::readWithDictionary(
   // in this case — that would advance the null/in-map decoders a second time
   // and corrupt flatmap reads.
   if (!decoder_.dictionaryConvertible()) {
+    fuzzer::updateStringDictionaryEncodingAbandoned();
     abandonDictionaryEncoding(endReadRow);
     return false;
   }
@@ -517,6 +529,7 @@ bool StringColumnReader::readWithDictionary(
   }
 
   if (!abandonDictionary) {
+    fuzzer::updateStringDictionaryEncodingPreserved();
     readOffset_ += endReadRow;
     return true;
   }
@@ -526,6 +539,7 @@ bool StringColumnReader::readWithDictionary(
   // (filterDictionaryIndices above ran for this path too). readOffset_ already
   // points at the chunk boundary (set by readDictionaryIndices), so read()
   // resumes the flat read there and slices the remaining rows past it.
+  fuzzer::updateStringDictionaryEncodingAbandoned();
   abandonDictionaryEncoding(endReadRow);
   return false;
 }

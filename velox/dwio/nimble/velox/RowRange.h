@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
 
 #include <fmt/format.h>
 #include <folly/hash/Hash.h>

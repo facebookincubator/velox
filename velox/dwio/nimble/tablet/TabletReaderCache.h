@@ -35,19 +35,21 @@
 
 namespace facebook::nimble {
 
-/// One cached tablet: the TabletReader, its deserialized schemas, and the IO
-/// statistics the reader writes its own metadata and index reads into.
+/// One tablet built by TabletReaderCache: the TabletReader, its deserialized
+/// schemas, and the IO statistics the reader writes its own metadata and index
+/// reads into.
 ///
 /// Those statistics live here because the cache replaces the caller's
-/// ReaderOptions on the miss path, so a caller can otherwise never observe
-/// footer, stripe-group or cluster-index IO -- only the stripe data it reads
-/// through its own DataInput.
+/// ReaderOptions whenever it builds an entry, so a caller can otherwise never
+/// observe footer, stripe-group or cluster-index IO -- only the stripe data it
+/// reads through its own DataInput.
 ///
 /// Non-copyable and handed out by shared_ptr, so exactly one instance exists
-/// per cached file however many readers hold it. `onRelease` fires exactly
-/// once, when the cache and every holder have let go. It fires for entries
-/// that never entered the cache too: when insertion fails, CachedFactory hands
-/// back an owning pointer instead, and destruction still runs.
+/// per cached file however many readers hold it; TabletReaderCache::create()
+/// builds a separate instance on every call. `onRelease` fires exactly once,
+/// when the cache and every holder have let go. It fires for entries that never
+/// entered the cache too: those create() builds, and those CachedFactory hands
+/// back as an owning pointer when insertion fails.
 ///
 /// Holding `tablet()` alone does NOT keep the entry alive, and the tablet has
 /// its own reference to the statistics below -- so a consumer outliving the
@@ -124,7 +126,8 @@ class CachedTabletReader {
 /// No entry may outlive the cache. Each TabletReader frees its metadata
 /// buffers back to a memory pool the cache owns, so destroying the cache while
 /// an entry is still held is a use-after-free. The process-wide instance is
-/// never destroyed, which is why this holds in production.
+/// destroyed at exit along with the other folly singletons, so readers must
+/// release their entries before then.
 class TabletReaderCache {
  public:
   struct Options {
@@ -142,12 +145,11 @@ class TabletReaderCache {
     /// (e.g., parallel metadata loading).
     std::shared_ptr<folly::Executor> executor;
 
-    /// Observe the lifetime of each cached tablet, which is the only way to
-    /// reach the metadata and index IO it does. onCreate runs once the entry
-    /// exists; onRelease once it is gone -- evicted, or dropped by its last
-    /// holder if it never made it into the cache. Both default to unset, in
-    /// which case that IO stays unobservable as before, and both must be set
-    /// together.
+    /// Observe the lifetime of each tablet this cache builds, cached or from
+    /// create(); that is the only way to reach the metadata and index IO it
+    /// does. onCreate runs once the entry exists; onRelease once the cache and
+    /// every holder have let go. Both default to unset, which leaves that IO
+    /// unobservable, and both must be set together.
     ///
     /// A throw from onCreate propagates to the caller. A throw from onRelease
     /// cannot: it is invoked from a destructor, so it is logged and swallowed.
@@ -166,7 +168,7 @@ class TabletReaderCache {
     }
   };
 
-  /// Properties passed to the generator on cache miss.
+  /// What the generator builds an entry from, on a cache miss or in create().
   struct Properties {
     std::shared_ptr<velox::ReadFile> readFile;
     TabletReader::Options tabletOptions;
@@ -182,15 +184,31 @@ class TabletReaderCache {
       const std::shared_ptr<velox::ReadFile>& readFile,
       const TabletReader::Options& tabletOptions);
 
+  /// Creates an entry for `readFile` that is never inserted into the cache: it
+  /// does not reuse or replace a cached entry for the same filename, get()
+  /// never returns it, and it counts toward neither maxEntries nor stats(). It
+  /// is built the way a cache miss builds one -- on a sharded system pool, with
+  /// this cache's executor and lifetime observers. Use it when the entry must
+  /// not be shared by filename, e.g. because `readFile` holds state that
+  /// belongs to its caller. The caller holds the only reference. Like a cached
+  /// entry, it must not outlive the cache, whose pools its metadata buffers
+  /// return to.
+  std::shared_ptr<CachedTabletReader> create(
+      const std::shared_ptr<velox::ReadFile>& readFile,
+      const TabletReader::Options& tabletOptions) const;
+
   /// Returns cache statistics (hits, misses, evictions, etc.).
   velox::SimpleLRUCacheStats stats();
 
-  /// Initializes the process-wide TabletReaderCache singleton. Must be called
-  /// once before getInstance(). Throws if called more than once.
+  /// Sets the options of the process-wide TabletReaderCache singleton, which
+  /// the first getInstance() creates. Must be called once before
+  /// getInstance(). Throws if called more than once or if the options are
+  /// invalid.
   static void initialize(const Options& options);
 
-  /// Returns the process-wide TabletReaderCache singleton. Must call
-  /// initialize() first.
+  /// Returns the process-wide TabletReaderCache singleton, creating it on the
+  /// first call. Must call initialize() first. Throws after folly has
+  /// destroyed its singletons, which it does at exit.
   static TabletReaderCache& getInstance();
 
   /// Resets the singleton to uninitialized state. Test-only.
@@ -212,6 +230,11 @@ class TabletReaderCache {
         const std::string& filename,
         const Properties* properties,
         void* stats);
+
+    // Builds an entry. `filename` only picks the pool shard.
+    std::shared_ptr<CachedTabletReader> create(
+        const std::string& filename,
+        const Properties& properties) const;
 
    private:
     const std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools_;
@@ -244,8 +267,15 @@ class TabletReaderCache {
       void,
       Sizer>;
 
-  static Factory createFactory(const Options& opts);
+  static Generator createGenerator(const Options& options);
 
+  static Factory createFactory(
+      const Options& options,
+      const Generator& generator);
+
+  // Serves create(). The factory runs its own copy: both draw from the same
+  // pools and executor, and each holds a copy of the observers.
+  const Generator generator_;
   Factory factory_;
 };
 

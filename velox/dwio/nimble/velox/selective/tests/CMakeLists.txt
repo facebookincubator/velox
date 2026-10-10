@@ -21,8 +21,10 @@ add_executable(
   # E2EFilterTest.cpp
   # E2EIndexTest.cpp
   FlatMapColumnReaderTest.cpp
+  FloatingPointColumnReaderTest.cpp
   NimbleDataTest.cpp
   NullColumnReaderTest.cpp
+  ReadWithVisitorTest.cpp
   ScalarColumnReaderTest.cpp
   SelectiveNimbleReaderTest.cpp
   StringColumnReaderTest.cpp

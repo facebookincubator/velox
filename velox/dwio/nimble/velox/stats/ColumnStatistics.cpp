@@ -533,20 +533,15 @@ void StringStatisticsCollector::addValues(std::span<std::string_view> values) {
   if (values.empty()) {
     return;
   }
-  uint64_t logicalSize{0};
-  for (const auto& value : values) {
-    logicalSize += value.size();
-  }
+  // findMinMaxAndTotalSize returns views into the writer's value stream, which
+  // is recycled per stripe. Assign rather than construct so a monotonic column
+  // reuses the capacity it already has.
+  const auto minMax = findMinMaxAndTotalSize(values);
 
   // Adding once per batch is equivalent: every override is additive.
-  addLogicalSize(logicalSize);
+  addLogicalSize(minMax.totalSize);
 
   auto* stats = stringStats();
-
-  // findMinMax returns views into the writer's value stream, which is recycled
-  // per stripe. Assign rather than construct so a monotonic column reuses the
-  // capacity it already has.
-  const auto minMax = findMinMax(values);
   if (!stats->min_.has_value()) {
     stats->min_.emplace(minMax.min);
   } else if (minMax.min < *stats->min_) {

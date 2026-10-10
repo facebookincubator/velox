@@ -688,12 +688,16 @@ FOLLY_ALWAYS_INLINE const LongDecimalType& Type::asLongDecimal() const {
   return dynamic_cast<const LongDecimalType&>(*this);
 }
 
+// dynamic_cast is expensive on hot paths such as Presto serialization.
+// Checking kind_ first skips it for every type that cannot be a decimal.
 FOLLY_ALWAYS_INLINE bool Type::isShortDecimal() const {
-  return dynamic_cast<const ShortDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::BIGINT &&
+      dynamic_cast<const ShortDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isLongDecimal() const {
-  return dynamic_cast<const LongDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::HUGEINT &&
+      dynamic_cast<const LongDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isDecimal() const {
@@ -1816,12 +1820,35 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
     }                                                                \
   }()
 
+#define VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_WITH_UNKNOWN(           \
+    TEMPLATE_FUNC, T, typeKind, ...)                                 \
+  [&]() {                                                            \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {        \
+      return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::UNKNOWN>( \
+          __VA_ARGS__);                                              \
+    } else {                                                         \
+      return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(                   \
+          TEMPLATE_FUNC, T, typeKind, __VA_ARGS__);                  \
+    }                                                                \
+  }()
+
 #define VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(TEMPLATE_FUNC, typeKind, ...)   \
   [&]() {                                                                      \
     if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else {                                                                   \
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
+          TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
+    }                                                                          \
+  }()
+
+#define VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(                       \
+    TEMPLATE_FUNC, typeKind, ...)                                              \
+  [&]() {                                                                      \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
@@ -1892,6 +1919,16 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
 
 #define VELOX_DYNAMIC_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...) \
   VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(TEMPLATE_FUNC, , typeKind, __VA_ARGS__)
+
+#define VELOX_DYNAMIC_TYPE_DISPATCH_WITH_UNKNOWN(TEMPLATE_FUNC, typeKind, ...) \
+  [&]() {                                                                      \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
+    } else {                                                                   \
+      return VELOX_DYNAMIC_TYPE_DISPATCH(                                      \
+          TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
+    }                                                                          \
+  }()
 
 #define VELOX_DYNAMIC_TYPE_DISPATCH_ALL(TEMPLATE_FUNC, typeKind, ...)          \
   [&]() {                                                                      \
@@ -2325,7 +2362,19 @@ std::string stringifyTruncatedElementList(
 
 } // namespace facebook::velox
 
+// std::hash specialization for UnknownValue is required so that
+// folly::F14FastMap<UnknownValue, ...> (used by IndexedPriorityQueue) compiles.
+// Without this, VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL would need explicit
+// UNKNOWN exclusions in every callsite.
 namespace std {
+template <>
+struct hash<::facebook::velox::UnknownValue> {
+  size_t operator()(
+      const ::facebook::velox::UnknownValue& /* value */) const noexcept {
+    return 0;
+  }
+};
+
 template <>
 struct hash<facebook::velox::Type> {
   size_t operator()(const facebook::velox::Type& type) const noexcept {

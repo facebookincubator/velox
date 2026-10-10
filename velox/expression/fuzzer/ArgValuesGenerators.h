@@ -205,6 +205,8 @@ class SetDigestArgValuesGenerator : public ArgValuesGenerator {
  private:
   std::string functionName_;
 };
+
+#ifdef VELOX_ENABLE_GEO
 /// Generates valid S2 cell ID arguments for s2_cell_* functions.
 /// Picks random face, position, and level to construct valid cell IDs via
 /// S2CellOp::cellIdFromFacePositionLevel. Also constrains the level
@@ -225,6 +227,22 @@ class S2CellIdArgValuesGenerator : public ArgValuesGenerator {
 class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
  public:
   ~S2CellTokenArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+#endif // VELOX_ENABLE_GEO
+
+/// Generates arguments for inverse_f_cdf. Reads each argument from an input
+/// column, with degrees of freedom in [0, 1e6] and p in [0, 1]. Boost's F
+/// quantile slows down sharply once both degrees of freedom are large: with
+/// both at 1e30 a single row takes over a minute in a debug build.
+class InverseFCdfArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~InverseFCdfArgValuesGenerator() override = default;
 
   std::vector<core::TypedExprPtr> generate(
       const CallableSignature& signature,

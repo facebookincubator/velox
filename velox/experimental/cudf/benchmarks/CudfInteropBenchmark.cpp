@@ -39,7 +39,7 @@ class CudfInteropBenchmark {
     BaseVector::flattenVector(flatData);
     auto cudfTable = with_arrow::toCudfTable(
         std::static_pointer_cast<RowVector>(flatData), pool_.get(), stream, mr);
-    stream.synchronize();
+    stream.sync();
     VELOX_CHECK_NOT_NULL(cudfTable);
     VELOX_CHECK_EQ(cudfTable->num_rows(), flatData->size());
     return cudfTable;
@@ -50,7 +50,7 @@ class CudfInteropBenchmark {
       const RowTypePtr& rowType) {
     auto veloxData = with_arrow::toVeloxColumn(
         cudfTable->view(), pool_.get(), rowType, stream, mr);
-    stream.synchronize();
+    stream.sync();
     VELOX_CHECK_NOT_NULL(veloxData);
     VELOX_CHECK_EQ(veloxData->size(), cudfTable->num_rows());
   }
@@ -69,7 +69,7 @@ class CudfInteropBenchmark {
     auto mr = cudf::get_current_device_resource_ref();
     auto cudfTable = with_arrow::toCudfTable(
         std::static_pointer_cast<RowVector>(flatData), pool_.get(), stream, mr);
-    stream.synchronize();
+    stream.sync();
     VELOX_CHECK_NOT_NULL(cudfTable);
     VELOX_CHECK_EQ(cudfTable->num_rows(), flatData->size());
     return cudfTable;
@@ -80,7 +80,7 @@ class CudfInteropBenchmark {
       const RowTypePtr& rowType) {
     auto veloxData = with_arrow::toVeloxColumn(
         cudfTable->view(), pool_.get(), rowType, stream, mr);
-    stream.synchronize();
+    stream.sync();
     VELOX_CHECK_NOT_NULL(veloxData);
     VELOX_CHECK_EQ(veloxData->size(), cudfTable->num_rows());
   }
@@ -124,7 +124,7 @@ class CudfInteropBenchmark {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
-  rmm::cuda_stream_view stream = cudf::get_default_stream();
+  cuda::stream_ref stream = cudf::get_default_stream();
   rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref();
 };
 

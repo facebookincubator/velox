@@ -177,9 +177,10 @@ StructColumnReader::StructColumnReader(
           fileType,
           params,
           scanSpec) {
-  auto& childSpecs = scanSpec_->stableChildren();
+  const auto stableChildren = scanSpec_->stableChildren();
+  const auto& childSpecs = *stableChildren;
   for (auto i = 0; i < childSpecs.size(); ++i) {
-    auto childSpec = childSpecs[i];
+    const auto& childSpec = childSpecs[i];
     if (childSpec->isConstant() || isChildMissing(*childSpec)) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;
@@ -222,17 +223,19 @@ void StructColumnReader::applyMissingFieldPolicy(
     return;
   }
 
-  auto& childSpecs = scanSpec_->stableChildren();
+  const auto stableChildren = scanSpec_->stableChildren();
+  const auto& childSpecs = *stableChildren;
   if (childSpecs.empty()) {
     nullStructForMissingFields_ = true;
     return;
   }
 
-  if (std::all_of(childSpecs.begin(), childSpecs.end(), [&](auto* childSpec) {
-        return childSpec->columnType() ==
-            common::ScanSpec::ColumnType::kRegular &&
-            isChildMissing(*childSpec);
-      })) {
+  if (std::all_of(
+          childSpecs.begin(), childSpecs.end(), [&](const auto& childSpec) {
+            return childSpec->columnType() ==
+                common::ScanSpec::ColumnType::kRegular &&
+                isChildMissing(*childSpec);
+          })) {
     nullStructForMissingFields_ = true;
   }
 }

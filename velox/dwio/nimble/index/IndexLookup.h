@@ -16,18 +16,23 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <typeinfo>
 #include <vector>
 
 #include <fmt/format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/serializers/KeyEncoder.h"
 
@@ -119,25 +124,43 @@ class IndexLookup {
     };
 
     /// Options for controlling lookup behavior.
+    ///
+    /// An index that accepts parameters beyond these derives from Options and
+    /// recovers the derived type with checkedLookupOptions(), the same way an
+    /// index extends IndexConfig. An index handed options it does not
+    /// recognize must reject the request, so that a dropped parameter
+    /// surfaces as an error rather than as a silently unfiltered result.
     struct Options {
+      Options() = default;
+      explicit Options(RowRange rowRange) : rowRange{rowRange} {}
+      virtual ~Options() = default;
+
       /// Limit results to this file-level row range. Rows outside this range
       /// are excluded from the result. When set, the index only searches
       /// within the specified range. When not set, the entire file is searched.
       std::optional<RowRange> rowRange;
+
+     protected:
+      Options(const Options&) = default;
+      Options(Options&&) = default;
     };
+
+    /// Shared no-op options, used when a request carries none. Returning a
+    /// reference to this keeps options() total, so callers never null check.
+    static const std::shared_ptr<const Options>& defaultOptions();
 
     /// Creates a point lookup request for exact key matching.
     static LookupRequest pointLookup(
         std::vector<std::string> encodedKeys,
-        Options options = {}) {
-      return LookupRequest(std::move(encodedKeys), options);
+        std::shared_ptr<const Options> options = nullptr) {
+      return LookupRequest(std::move(encodedKeys), std::move(options));
     }
 
     /// Creates a range scan request with exclusive upper bounds.
     static LookupRequest rangeScan(
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds,
-        Options options = {}) {
-      return LookupRequest(std::move(keyBounds), options);
+        std::shared_ptr<const Options> options = nullptr) {
+      return LookupRequest(std::move(keyBounds), std::move(options));
     }
 
     Mode mode() const {
@@ -164,25 +187,27 @@ class IndexLookup {
     }
 
     const Options& options() const {
-      return options_;
+      return options_ != nullptr ? *options_ : *defaultOptions();
     }
 
    private:
     // Point lookup constructor.
-    LookupRequest(std::vector<std::string> keys, Options options)
+    LookupRequest(
+        std::vector<std::string> keys,
+        std::shared_ptr<const Options> options)
         : mode_{Mode::PointLookup},
           pointKeys_{std::move(keys)},
-          options_{options} {
+          options_{std::move(options)} {
       NIMBLE_CHECK(!pointKeys_.empty());
     }
 
     // Range scan constructor.
     LookupRequest(
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds,
-        Options options)
+        std::shared_ptr<const Options> options)
         : mode_{Mode::RangeScan},
           rangeBounds_{std::move(keyBounds)},
-          options_{options} {
+          options_{std::move(options)} {
       NIMBLE_CHECK(!rangeBounds_.empty());
     }
 
@@ -191,10 +216,18 @@ class IndexLookup {
     const std::vector<std::string> pointKeys_;
     // Range scan: key bounds with lower/upper.
     const std::vector<velox::serializer::EncodedKeyBounds> rangeBounds_;
-    const Options options_;
+    const std::shared_ptr<const Options> options_;
   };
 
   using LookupOptions = LookupRequest::Options;
+
+  /// Recovers the index-specific options a request carries. Throws when the
+  /// request does not carry options of type T.
+  template <typename T>
+  static const T& checkedLookupOptions(const LookupOptions& options) {
+    static_assert(std::is_base_of_v<LookupOptions, T>);
+    return *velox::checkedPointerCast<const T>(&options);
+  }
 
   /// Batch lookup result. Stores a flat array of RowRanges with
   /// per-key offsets for O(1) access via operator[].
@@ -261,6 +294,14 @@ class IndexLookup {
   /// Not all index types support this — the default throws.
   virtual std::string keyAtRow(uint32_t /*row*/) const {
     NIMBLE_NOT_IMPLEMENTED("keyAtRow is not supported by this index type");
+  }
+
+  /// Returns a cursor over the encoded keys of the rows in 'rows', which
+  /// must be within the index. Scanning callers should prefer this to a
+  /// keyAtRow() loop.
+  virtual std::unique_ptr<KeyCursor> keyCursor(RowRange /*rows*/) const {
+    NIMBLE_NOT_IMPLEMENTED(
+        "keyCursor is not supported by index type {}", toString(type_));
   }
 
   /// Returns runtime statistics accumulated during lookups.

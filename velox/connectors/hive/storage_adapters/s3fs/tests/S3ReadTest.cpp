@@ -43,7 +43,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     filesystems::registerS3FileSystem();
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector =
-        factory.newConnector(kHiveConnectorId, minioServer_->s3Config());
+        factory.newConnector(kHiveConnectorId, siloServer_->s3Config());
     connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
     parquet::registerParquetReaderFactory();
@@ -63,14 +63,24 @@ TEST_F(S3ReadTest, s3ReadTest) {
       "velox/connectors/hive/storage_adapters/s3fs/tests",
       "../../../../../dwio/parquet/tests/examples/int.parquet");
   const char* bucketName = "data";
-  const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
-  minioServer_->addBucket(bucketName);
+  addBucket(bucketName);
+  const auto s3File = s3URI(bucketName, "int.parquet");
   std::ifstream src(sourceFile, std::ios::binary);
-  std::ofstream dest(destinationFile, std::ios::binary);
-  // Copy source file to destination bucket.
-  dest << src.rdbuf();
-  ASSERT_GT(dest.tellp(), 0) << "Unable to copy from source " << sourceFile;
-  dest.close();
+  const std::string content(
+      (std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+  ASSERT_GT(content.size(), 0) << "Unable to read source " << sourceFile;
+  src.close();
+
+  // Upload the source file to the S3 bucket via the S3 API; the server
+  // only serves objects it stores.
+  auto s3Config = siloServer_->s3Config();
+  {
+    // Upload via the S3 API; getFileSystem initializes S3 on first creation.
+    auto s3fs = filesystems::getFileSystem(s3File, s3Config);
+    auto writeFile = s3fs->openFileForWrite(s3File, {{}, pool(), std::nullopt});
+    writeFile->append(content);
+    writeFile->close();
+  }
 
   // Read the parquet file via the S3 bucket.
   auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});

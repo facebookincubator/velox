@@ -26,7 +26,7 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <cstddef>
 #include <memory>
@@ -51,26 +51,22 @@ struct CudfJoinOutputLayout {
       const RowTypePtr& outputType,
       core::JoinType joinType);
 
-  /// Places cols[i] at the output position of probe/build projection i.
-  /// cols must hold exactly the gathered columns of that side, in projection
-  /// order (e.g. the result of gathering a select() of that side's input).
-  void scatterProbeColumns(
+  /// Places gatheredCols[i] at the output position of projection i.
+  void scatterGatheredProbeColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
-      std::vector<std::unique_ptr<cudf::column>>& cols) const;
-  void scatterBuildColumns(
+      std::vector<std::unique_ptr<cudf::column>>& gatheredCols) const;
+  void scatterGatheredBuildColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
-      std::vector<std::unique_ptr<cudf::column>>& cols) const;
+      std::vector<std::unique_ptr<cudf::column>>& gatheredCols) const;
 
-  /// Places cols[srcOffset + inputChannel] at the output position of each
-  /// probe/build projection. Use when cols is a combined table of both
-  /// sides' input columns (e.g. [probe inputs..., build inputs...]).
-  void scatterProbeColumns(
+  /// Places inputCols[srcOffset + inputChannel] at each output position.
+  void scatterProbeInputColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
-      std::vector<std::unique_ptr<cudf::column>>& cols,
+      std::vector<std::unique_ptr<cudf::column>>& inputCols,
       std::size_t srcOffset) const;
-  void scatterBuildColumns(
+  void scatterBuildInputColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
-      std::vector<std::unique_ptr<cudf::column>>& cols,
+      std::vector<std::unique_ptr<cudf::column>>& inputCols,
       std::size_t srcOffset) const;
 
   /// Fills this side's output positions with all-null columns of numRows
@@ -79,11 +75,11 @@ struct CudfJoinOutputLayout {
   void fillNullProbeColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream) const;
+      cuda::stream_ref stream) const;
   void fillNullBuildColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream) const;
+      cuda::stream_ref stream) const;
 
   /// Read-only access to the probe-side projections, for call sites that
   /// copy from column_views instead of moving gathered columns.
@@ -91,15 +87,21 @@ struct CudfJoinOutputLayout {
     return probeProjections_;
   }
 
-  /// Probe/build input column indices derived from the projections, in
-  /// projection order, for cudf table_view::select().
-  std::vector<cudf::size_type> probeColumnIndices;
-  std::vector<cudf::size_type> buildColumnIndices;
+  /// Probe/build input column indices in projection order.
+  const std::vector<cudf::size_type>& probeColumnIndices() const {
+    return probeColumnIndices_;
+  }
+
+  const std::vector<cudf::size_type>& buildColumnIndices() const {
+    return buildColumnIndices_;
+  }
 
  private:
   // Source of truth for the input-to-output mapping of each side.
   std::vector<exec::IdentityProjection> probeProjections_;
   std::vector<exec::IdentityProjection> buildProjections_;
+  std::vector<cudf::size_type> probeColumnIndices_;
+  std::vector<cudf::size_type> buildColumnIndices_;
   // Kept for the null-fill column dtypes.
   RowTypePtr probeType_;
   RowTypePtr buildType_;

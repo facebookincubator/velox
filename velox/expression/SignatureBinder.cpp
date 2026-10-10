@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string.hpp>
+#include <limits>
 #include <optional>
 
 #include "velox/expression/SignatureBinder.h"
@@ -115,6 +116,33 @@ bool checkNamedRowField(
   return true;
 }
 
+// The coercion that takes 'actualType' to 'boundType', the type a variable
+// resolved to across every argument sharing it.
+//
+// Two DECIMALs of different precision or scale are different types that share
+// a name, which the coercer reports as interchangeable at no cost. Reaching
+// the bound type still means rescaling the value, so say so here.
+std::optional<Coercion> coerceToBoundType(
+    const TypeCoercer& coercer,
+    const TypePtr& actualType,
+    const TypePtr& boundType) {
+  if (actualType->isDecimal() && boundType->isDecimal() &&
+      !actualType->equivalent(*boundType)) {
+    return Coercion{.type = boundType, .cost = 1};
+  }
+  return coercer.coerce(actualType, boundType);
+}
+
+// Returns true for a parameterized type whose parameters are all integers,
+// such as DECIMAL(p, s).
+bool hasOnlyLongLiterals(const Type& type) {
+  const auto& parameters = type.parameters();
+  return !parameters.empty() &&
+      std::ranges::all_of(parameters, [](const auto& parameter) {
+        return parameter.kind == TypeParameterKind::kLongLiteral;
+      });
+}
+
 } // namespace
 
 bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
@@ -189,7 +217,8 @@ bool SignatureBinder::tryBind(
           }
 
           for (auto i = numFormalArgs; i < numActualTypes; i++) {
-            if (auto coercion = coercer_.coerce(actualTypes_[i], firstType)) {
+            if (auto coercion =
+                    coerceToBoundType(coercer_, actualTypes_[i], firstType)) {
               if (coercion->cost > 0) {
                 coercions[i] = Coercion{firstType, coercion->cost};
               }
@@ -287,7 +316,8 @@ std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
     VELOX_CHECK(bindingIt != typeVariablesBindings_.end());
 
     const auto& boundType = bindingIt->second;
-    const auto availableCoercion = coercer_.coerce(actualType, boundType);
+    const auto availableCoercion =
+        coerceToBoundType(coercer_, actualType, boundType);
     VELOX_CHECK(availableCoercion.has_value());
 
     if (availableCoercion->cost > 0) {
@@ -375,8 +405,22 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
 
   const auto& params = typeSignature.parameters();
 
+  // A scalar of another type coerces to the target its rule stores, so the
+  // parameters to bind are the target's.
+  TypePtr boundType = actualType;
+  if (!params.empty() &&
+      !boost::algorithm::iequals(baseName, actualType->name())) {
+    const auto coercion =
+        coercer_.coerce(actualType, boost::algorithm::to_upper_copy(baseName));
+    if (coercion) {
+      boundType = coercion->type;
+    } else if (!actualType->isUnknown()) {
+      return false;
+    }
+  }
+
   // Bind the type variables to UNKNOWN so the parameterized formal resolves.
-  if (actualType->isUnknown()) {
+  if (boundType->isUnknown()) {
     for (const auto& param : params) {
       if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
         return false;
@@ -385,12 +429,16 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
     return true;
   }
 
-  if (params.size() != actualType->parameters().size()) {
+  if (params.size() != boundType->parameters().size()) {
     return false;
   }
 
+  if (hasOnlyLongLiterals(*boundType)) {
+    return tryBindToCommonType(typeSignature, boundType);
+  }
+
   for (auto i = 0; i < params.size(); i++) {
-    const auto& actualParameter = actualType->parameters()[i];
+    const auto& actualParameter = boundType->parameters()[i];
     if (actualParameter.kind == TypeParameterKind::kType) {
       if (!tryBindVariablesWithCoercion(params[i], actualParameter.type)) {
         return false;
@@ -398,6 +446,45 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
     }
   }
 
+  return true;
+}
+
+// TODO: Make binding order-independent when formals share only some literal
+// variables, such as DECIMAL(p, s) and DECIMAL(p, t). An unbound variable
+// prevents resolving the current common type, so a later argument can
+// overwrite a shared binding.
+bool SignatureBinderBase::tryBindToCommonType(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& candidateType) {
+  TypePtr commonType = candidateType;
+  if (const auto boundType = SignatureBinder::tryResolveType(
+          typeSignature,
+          variables(),
+          typeVariablesBindings_,
+          integerVariablesBindings_,
+          longEnumVariablesBindings_,
+          varcharEnumVariablesBindings_)) {
+    commonType = coercer_.leastCommonSuperType(boundType, candidateType);
+    if (!commonType ||
+        !boost::algorithm::iequals(
+            commonType->name(), typeSignature.baseName())) {
+      return false;
+    }
+  }
+
+  const auto& params = typeSignature.parameters();
+  for (auto i = 0; i < params.size(); i++) {
+    const auto& name = params[i].baseName();
+    const auto value = commonType->parameters()[i].longLiteral.value();
+    if (value < std::numeric_limits<int>::min() ||
+        value > std::numeric_limits<int>::max()) {
+      return false;
+    }
+    integerVariablesBindings_.erase(name);
+    if (!checkOrSetIntegerParameter(name, static_cast<int>(value))) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -414,6 +501,36 @@ bool SignatureBinderBase::tryBind(
   if (auto result = checkSetTypeVariable(
           typeSignature, actualType, allowCoercion, coercion)) {
     return result.value();
+  }
+
+  // A formal such as DECIMAL(p, s), whose variables the coercion pass bound to
+  // the common type of the arguments, takes an argument that the type holds
+  // every value of.
+  if (allowCoercion && !typeSignature.parameters().empty() &&
+      !typeSignature.isHomogeneousRow()) {
+    const auto boundType = SignatureBinder::tryResolveType(
+        typeSignature,
+        variables(),
+        typeVariablesBindings_,
+        integerVariablesBindings_,
+        longEnumVariablesBindings_,
+        varcharEnumVariablesBindings_);
+    if (boundType && hasOnlyLongLiterals(*boundType)) {
+      const auto commonType =
+          coercer_.leastCommonSuperType(actualType, boundType);
+      if (!commonType || !commonType->equivalent(*boundType)) {
+        return false;
+      }
+      const auto availableCoercion =
+          coerceToBoundType(coercer_, actualType, boundType);
+      if (!availableCoercion) {
+        return false;
+      }
+      if (availableCoercion->cost > 0) {
+        coercion = availableCoercion.value();
+      }
+      return true;
+    }
   }
 
   // Type is not a variable.

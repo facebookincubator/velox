@@ -84,7 +84,7 @@ class CudfMarkDistinct : public CudfOperatorBase {
   std::unique_ptr<cudf::filtered_join> seenFilter_;
 
   /// Stream on which the current seenKeys_ and seenFilter_ state was built.
-  std::optional<rmm::cuda_stream_view> seenStateStream_;
+  std::optional<cuda::stream_ref> seenStateStream_;
 
   /// Reusable event for ordering state lifetime across input streams.
   std::unique_ptr<CudaEvent> cudaEvent_;

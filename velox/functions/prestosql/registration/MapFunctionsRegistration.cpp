@@ -41,310 +41,356 @@ namespace facebook::velox::functions {
 
 namespace {
 template <typename T>
-void registerRemapKeysPrimitive(const std::string& prefix) {
+void registerRemapKeysPrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<RemapKeysPrimitiveFunction, T>,
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
       Array<T>,
-      Array<T>>({prefix + "remap_keys"});
+      Array<T>>({prefix + "remap_keys"}, true, defaultOwner);
 }
 
-void registerRemapKeys(const std::string& prefix) {
-  registerRemapKeysPrimitive<bool>(prefix);
-  registerRemapKeysPrimitive<int8_t>(prefix);
-  registerRemapKeysPrimitive<int16_t>(prefix);
-  registerRemapKeysPrimitive<int32_t>(prefix);
-  registerRemapKeysPrimitive<int64_t>(prefix);
-  registerRemapKeysPrimitive<float>(prefix);
-  registerRemapKeysPrimitive<double>(prefix);
-  registerRemapKeysPrimitive<Timestamp>(prefix);
-  registerRemapKeysPrimitive<Date>(prefix);
+void registerRemapKeys(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerRemapKeysPrimitive<bool>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<int8_t>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<int16_t>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<int32_t>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<int64_t>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<float>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<double>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<Timestamp>(prefix, defaultOwner);
+  registerRemapKeysPrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       RemapKeysVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>,
-      Array<Varchar>>({prefix + "remap_keys"});
+      Array<Varchar>>({prefix + "remap_keys"}, {}, true, defaultOwner);
 
   registerFunction<
       RemapKeysFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>,
-      Array<Generic<T1>>>({prefix + "remap_keys"});
+      Array<Generic<T1>>>({prefix + "remap_keys"}, {}, true, defaultOwner);
 }
 
 template <typename T>
-void registerMapIntersectPrimitive(const std::string& prefix) {
+void registerMapIntersectPrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapIntersectPrimitiveFunction, T>,
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_intersect"});
+      Array<T>>({prefix + "map_intersect"}, true, defaultOwner);
 }
 
-void registerMapIntersect(const std::string& prefix) {
-  registerMapIntersectPrimitive<bool>(prefix);
-  registerMapIntersectPrimitive<int8_t>(prefix);
-  registerMapIntersectPrimitive<int16_t>(prefix);
-  registerMapIntersectPrimitive<int32_t>(prefix);
-  registerMapIntersectPrimitive<int64_t>(prefix);
-  registerMapIntersectPrimitive<float>(prefix);
-  registerMapIntersectPrimitive<double>(prefix);
-  registerMapIntersectPrimitive<Timestamp>(prefix);
-  registerMapIntersectPrimitive<Date>(prefix);
+void registerMapIntersect(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerMapIntersectPrimitive<bool>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<int8_t>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<int16_t>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<int32_t>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<int64_t>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<float>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<double>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<Timestamp>(prefix, defaultOwner);
+  registerMapIntersectPrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       MapIntersectVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_intersect"});
+      Array<Varchar>>({prefix + "map_intersect"}, {}, true, defaultOwner);
 }
 
 template <typename T>
-void registerMapExceptPrimitive(const std::string& prefix) {
+void registerMapExceptPrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapExceptPrimitiveFunction, T>,
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_except"});
+      Array<T>>({prefix + "map_except"}, true, defaultOwner);
 }
 
-void registerMapExcept(const std::string& prefix) {
-  registerMapExceptPrimitive<bool>(prefix);
-  registerMapExceptPrimitive<int8_t>(prefix);
-  registerMapExceptPrimitive<int16_t>(prefix);
-  registerMapExceptPrimitive<int32_t>(prefix);
-  registerMapExceptPrimitive<int64_t>(prefix);
-  registerMapExceptPrimitive<float>(prefix);
-  registerMapExceptPrimitive<double>(prefix);
-  registerMapExceptPrimitive<Timestamp>(prefix);
-  registerMapExceptPrimitive<Date>(prefix);
+void registerMapExcept(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerMapExceptPrimitive<bool>(prefix, defaultOwner);
+  registerMapExceptPrimitive<int8_t>(prefix, defaultOwner);
+  registerMapExceptPrimitive<int16_t>(prefix, defaultOwner);
+  registerMapExceptPrimitive<int32_t>(prefix, defaultOwner);
+  registerMapExceptPrimitive<int64_t>(prefix, defaultOwner);
+  registerMapExceptPrimitive<float>(prefix, defaultOwner);
+  registerMapExceptPrimitive<double>(prefix, defaultOwner);
+  registerMapExceptPrimitive<Timestamp>(prefix, defaultOwner);
+  registerMapExceptPrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       MapExceptVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_except"});
+      Array<Varchar>>({prefix + "map_except"}, {}, true, defaultOwner);
 }
 
 template <typename T>
-void registerMapKeysOverlapPrimitive(const std::string& prefix) {
+void registerMapKeysOverlapPrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapKeysOverlapPrimitiveFunction, T>,
       bool,
       Map<T, Generic<T1>>,
-      Array<T>>({prefix + "map_keys_overlap"});
+      Array<T>>({prefix + "map_keys_overlap"}, true, defaultOwner);
 }
 
-void registerMapKeysOverlap(const std::string& prefix) {
-  registerMapKeysOverlapPrimitive<bool>(prefix);
-  registerMapKeysOverlapPrimitive<int8_t>(prefix);
-  registerMapKeysOverlapPrimitive<int16_t>(prefix);
-  registerMapKeysOverlapPrimitive<int32_t>(prefix);
-  registerMapKeysOverlapPrimitive<int64_t>(prefix);
-  registerMapKeysOverlapPrimitive<float>(prefix);
-  registerMapKeysOverlapPrimitive<double>(prefix);
-  registerMapKeysOverlapPrimitive<Timestamp>(prefix);
-  registerMapKeysOverlapPrimitive<Date>(prefix);
+void registerMapKeysOverlap(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerMapKeysOverlapPrimitive<bool>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<int8_t>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<int16_t>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<int32_t>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<int64_t>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<float>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<double>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<Timestamp>(prefix, defaultOwner);
+  registerMapKeysOverlapPrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       MapKeysOverlapVarcharFunction,
       bool,
       Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({prefix + "map_keys_overlap"});
+      Array<Varchar>>({prefix + "map_keys_overlap"}, {}, true, defaultOwner);
 
   registerFunction<
       MapKeysOverlapFunction,
       bool,
       Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_keys_overlap"});
+      Array<Generic<T1>>>(
+      {prefix + "map_keys_overlap"}, {}, true, defaultOwner);
 }
 
 template <typename Key>
-void registerMapAppendPrimitive(const std::string& prefix) {
+void registerMapAppendPrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapAppendPrimitiveFunction, Key>,
       Map<Key, Generic<T1>>,
       Map<Key, Generic<T1>>,
       Array<Key>,
-      Array<Generic<T1>>>({prefix + "map_append"});
+      Array<Generic<T1>>>({prefix + "map_append"}, true, defaultOwner);
 }
 
-void registerMapAppend(const std::string& prefix) {
-  registerMapAppendPrimitive<bool>(prefix);
-  registerMapAppendPrimitive<int8_t>(prefix);
-  registerMapAppendPrimitive<int16_t>(prefix);
-  registerMapAppendPrimitive<int32_t>(prefix);
-  registerMapAppendPrimitive<int64_t>(prefix);
-  registerMapAppendPrimitive<float>(prefix);
-  registerMapAppendPrimitive<double>(prefix);
-  registerMapAppendPrimitive<Timestamp>(prefix);
-  registerMapAppendPrimitive<Date>(prefix);
+void registerMapAppend(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerMapAppendPrimitive<bool>(prefix, defaultOwner);
+  registerMapAppendPrimitive<int8_t>(prefix, defaultOwner);
+  registerMapAppendPrimitive<int16_t>(prefix, defaultOwner);
+  registerMapAppendPrimitive<int32_t>(prefix, defaultOwner);
+  registerMapAppendPrimitive<int64_t>(prefix, defaultOwner);
+  registerMapAppendPrimitive<float>(prefix, defaultOwner);
+  registerMapAppendPrimitive<double>(prefix, defaultOwner);
+  registerMapAppendPrimitive<Timestamp>(prefix, defaultOwner);
+  registerMapAppendPrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       MapAppendVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>,
-      Array<Generic<T1>>>({prefix + "map_append"});
+      Array<Generic<T1>>>({prefix + "map_append"}, {}, true, defaultOwner);
 
   registerFunction<
       MapAppendFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>,
-      Array<Generic<T2>>>({prefix + "map_append"});
+      Array<Generic<T2>>>({prefix + "map_append"}, {}, true, defaultOwner);
 }
 
 template <typename Key>
-void registerMapUpdatePrimitive(const std::string& prefix) {
+void registerMapUpdatePrimitive(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapUpdatePrimitiveFunction, Key>,
       Map<Key, Generic<T1>>,
       Map<Key, Generic<T1>>,
       Array<Key>,
-      Array<Generic<T1>>>({prefix + "map_update"});
+      Array<Generic<T1>>>({prefix + "map_update"}, true, defaultOwner);
 }
 
-void registerMapUpdate(const std::string& prefix) {
-  registerMapUpdatePrimitive<bool>(prefix);
-  registerMapUpdatePrimitive<int8_t>(prefix);
-  registerMapUpdatePrimitive<int16_t>(prefix);
-  registerMapUpdatePrimitive<int32_t>(prefix);
-  registerMapUpdatePrimitive<int64_t>(prefix);
-  registerMapUpdatePrimitive<float>(prefix);
-  registerMapUpdatePrimitive<double>(prefix);
-  registerMapUpdatePrimitive<Timestamp>(prefix);
-  registerMapUpdatePrimitive<Date>(prefix);
+void registerMapUpdate(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerMapUpdatePrimitive<bool>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<int8_t>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<int16_t>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<int32_t>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<int64_t>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<float>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<double>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<Timestamp>(prefix, defaultOwner);
+  registerMapUpdatePrimitive<Date>(prefix, defaultOwner);
 
   registerFunction<
       MapUpdateVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>,
-      Array<Generic<T1>>>({prefix + "map_update"});
+      Array<Generic<T1>>>({prefix + "map_update"}, {}, true, defaultOwner);
 
   registerFunction<
       MapUpdateFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>,
-      Array<Generic<T2>>>({prefix + "map_update"});
+      Array<Generic<T2>>>({prefix + "map_update"}, {}, true, defaultOwner);
 }
 
-void registerMapRemoveNullValues(const std::string& prefix) {
+void registerMapRemoveNullValues(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       MapRemoveNullValues,
       Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>>({prefix + "map_remove_null_values"});
+      Map<Generic<T1>, Generic<T2>>>(
+      {prefix + "map_remove_null_values"}, {}, true, defaultOwner);
 }
 
-void registerMapKeyExists(const std::string& prefix) {
+void registerMapKeyExists(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       MapKeyExists,
       bool,
       Map<Generic<T1>, Generic<T2>>,
-      Generic<T1>>({prefix + "map_key_exists"});
+      Generic<T1>>({prefix + "map_key_exists"}, {}, true, defaultOwner);
 }
 
 } // namespace
 
-void registerMapFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_transform_values, prefix + "transform_values");
-  registerMapFunction(prefix + "map", false /*allowDuplicateKeys*/);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
+void registerMapFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_filter, prefix + "map_filter", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_transform_keys, prefix + "transform_keys", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_transform_values, prefix + "transform_values", defaultOwner);
+  registerMapFunction(
+      prefix + "map", false /*allowDuplicateKeys*/, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_entries, prefix + "map_entries", defaultOwner);
   registerMapFromEntriesFunction(
-      prefix + "map_from_entries", /*throwForNull=*/true);
+      prefix + "map_from_entries", /*throwForNull=*/true, defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_keys, prefix + "map_keys", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_values, prefix + "map_values", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_zip_with, prefix + "map_zip_with", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_all_keys_match, prefix + "all_keys_match");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_any_keys_match, prefix + "any_keys_match");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_no_keys_match, prefix + "no_keys_match");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_all_keys_match, prefix + "all_keys_match", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_any_keys_match, prefix + "any_keys_match", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_no_keys_match, prefix + "no_keys_match", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_any_values_match, prefix + "any_values_match");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_no_values_match, prefix + "no_values_match");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_any_values_match, prefix + "any_values_match", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_no_values_match, prefix + "no_values_match", defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_values_all_match, prefix + "map_values_all_match");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_values_any_match, prefix + "map_values_any_match");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_values_none_match, prefix + "map_values_none_match");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_values_all_match, prefix + "map_values_all_match", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_values_any_match, prefix + "map_values_any_match", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_values_none_match,
+      prefix + "map_values_none_match",
+      defaultOwner);
 
-  registerMapConcatFunction(prefix + "map_concat");
+  registerMapConcatFunction(prefix + "map_concat", defaultOwner);
 
   registerFunction<
       MultimapFromEntriesFunction,
       Map<Generic<T1>, Array<Generic<T2>>>,
-      Array<Row<Generic<T1>, Generic<T2>>>>({prefix + "multimap_from_entries"});
+      Array<Row<Generic<T1>, Generic<T2>>>>(
+      {prefix + "multimap_from_entries"}, {}, true, defaultOwner);
 
   registerFunction<
       MapTopNFunction,
       Map<Orderable<T1>, Orderable<T2>>,
       Map<Orderable<T1>, Orderable<T2>>,
-      int64_t>({prefix + "map_top_n"});
+      int64_t>({prefix + "map_top_n"}, {}, true, defaultOwner);
 
   registerFunction<
       MapTopNKeysFunction,
       Array<Orderable<T1>>,
       Map<Orderable<T1>, Generic<T2>>,
-      int64_t>({prefix + "map_top_n_keys"});
+      int64_t>({prefix + "map_top_n_keys"}, {}, true, defaultOwner);
 
   registerFunction<
       MapKeysByTopNValuesFunction,
       Array<Orderable<T1>>,
       Map<Orderable<T1>, Orderable<T2>>,
-      int64_t>({prefix + "map_keys_by_top_n_values"});
+      int64_t>({prefix + "map_keys_by_top_n_values"}, {}, true, defaultOwner);
 
   registerFunction<
       MapTopNValuesFunction,
       Array<Orderable<T2>>,
       Map<Orderable<T1>, Orderable<T2>>,
-      int64_t>({prefix + "map_top_n_values"});
+      int64_t>({prefix + "map_top_n_values"}, {}, true, defaultOwner);
 
-  registerMapSubset(prefix + "map_subset");
+  registerMapSubset(prefix + "map_subset", defaultOwner);
 
-  registerRemapKeys(prefix);
+  registerRemapKeys(prefix, defaultOwner);
 
-  registerMapIntersect(prefix);
+  registerMapIntersect(prefix, defaultOwner);
 
-  registerMapExcept(prefix);
+  registerMapExcept(prefix, defaultOwner);
 
-  registerMapKeysOverlap(prefix);
+  registerMapKeysOverlap(prefix, defaultOwner);
 
-  registerMapAppend(prefix);
+  registerMapAppend(prefix, defaultOwner);
 
-  registerMapUpdate(prefix);
+  registerMapUpdate(prefix, defaultOwner);
 
-  registerMapRemoveNullValues(prefix);
+  registerMapRemoveNullValues(prefix, defaultOwner);
 
-  registerMapKeyExists(prefix);
+  registerMapKeyExists(prefix, defaultOwner);
 
   registerFunction<
       MapNormalizeFunction,
       Map<Varchar, double>,
-      Map<Varchar, double>>({prefix + "map_normalize"});
+      Map<Varchar, double>>({prefix + "map_normalize"}, {}, true, defaultOwner);
 
   // Register map_values_in_range for various key/value type combinations
   // Helper lambda to reduce registration boilerplate
-  auto registerMapValuesInRange = [&prefix]<typename K, typename V>() {
+  auto registerMapValuesInRange = [&prefix,
+                                   defaultOwner]<typename K, typename V>() {
     registerFunction<
         ParameterBinder<MapValuesInRangeFunction, K, V>,
         Map<K, V>,
         Map<K, V>,
         V,
-        V>({prefix + "map_values_in_range"});
+        V>({prefix + "map_values_in_range"}, true, defaultOwner);
   };
 
   registerMapValuesInRange.template operator()<int64_t, int64_t>();
@@ -363,24 +409,25 @@ void registerMapFunctions(const std::string& prefix) {
       Map<Generic<T1>, double>,
       Map<Generic<T1>, double>,
       double,
-      double>({prefix + "map_values_in_range"});
+      double>({prefix + "map_values_in_range"}, {}, true, defaultOwner);
 
   registerFunction<
       MapTrimValuesFunction,
       Map<Generic<T1>, Array<Generic<T2>>>,
       Map<Generic<T1>, Array<Generic<T2>>>,
-      int64_t>({prefix + "map_trim_values"});
+      int64_t>({prefix + "map_trim_values"}, {}, true, defaultOwner);
 
   // Register map_subset_key_in_range for primitive key types.
   // Boolean keys are intentionally not supported because element_at on the
   // two possible keys provides the same functionality.
-  auto registerMapSubsetKeyInRangePrimitive = [&prefix]<typename K>() {
+  auto registerMapSubsetKeyInRangePrimitive = [&prefix,
+                                               defaultOwner]<typename K>() {
     registerFunction<
         ParameterBinder<MapSubsetKeyInRangeFunction, K>,
         Map<K, Generic<T1>>,
         Map<K, Generic<T1>>,
         K,
-        K>({prefix + "map_subset_key_in_range"});
+        K>({prefix + "map_subset_key_in_range"}, true, defaultOwner);
   };
 
   registerMapSubsetKeyInRangePrimitive.template operator()<int8_t>();
@@ -397,19 +444,22 @@ void registerMapFunctions(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Varchar,
-      Varchar>({prefix + "map_subset_key_in_range"});
+      Varchar>({prefix + "map_subset_key_in_range"}, {}, true, defaultOwner);
 
   registerFunction<
       MapSubsetKeyInRangeGenericFunction,
       Map<Orderable<T1>, Generic<T2>>,
       Map<Orderable<T1>, Generic<T2>>,
       Orderable<T1>,
-      Orderable<T1>>({prefix + "map_subset_key_in_range"});
+      Orderable<T1>>(
+      {prefix + "map_subset_key_in_range"}, {}, true, defaultOwner);
 }
 
 void registerMapAllowingDuplicates(
     const std::string& name,
-    const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_allow_duplicates, prefix + name);
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_allow_duplicates, prefix + name, defaultOwner);
 }
 } // namespace facebook::velox::functions

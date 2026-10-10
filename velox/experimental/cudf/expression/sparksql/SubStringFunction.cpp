@@ -100,7 +100,7 @@ class SubStringFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
         !inputColumns.empty(),
@@ -272,7 +272,7 @@ class SubStringFunction : public CudfFunction {
 
   static std::unique_ptr<cudf::column> makeWideIndexColumn(
       cudf::column_view indexColumn,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto casted = cudf::cast(
         indexColumn, cudf::data_type{cudf::type_to_id<int64_t>()}, stream, mr);
@@ -288,7 +288,7 @@ class SubStringFunction : public CudfFunction {
 
   static std::unique_ptr<cudf::column> makeIndexColumn(
       cudf::column_view indexColumn,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto casted = cudf::cast(
         indexColumn,
@@ -308,7 +308,7 @@ class SubStringFunction : public CudfFunction {
   static std::unique_ptr<cudf::column> makeInputLengthColumn64(
       cudf::size_type inputLength,
       cudf::size_type rowCount,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     cudf::numeric_scalar<int64_t> inputLengthScalar(
         inputLength, true, stream, mr);
@@ -319,7 +319,7 @@ class SubStringFunction : public CudfFunction {
   static std::unique_ptr<cudf::column> clampStopColumn(
       cudf::column_view stopColumn,
       cudf::column_view inputLengthColumn64,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
     cudf::numeric_scalar<int64_t> noUpperBound(0, false, stream, mr);
@@ -352,7 +352,7 @@ class SubStringFunction : public CudfFunction {
       cudf::column_view preLengthStartColumn64,
       WideLength const& length64,
       cudf::column_view inputLengthColumn64,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto unclampedStop = cudf::binary_operation(
         preLengthStartColumn64,
@@ -369,7 +369,7 @@ class SubStringFunction : public CudfFunction {
       cudf::column_view preLengthStartColumn64,
       cudf::size_type length,
       cudf::column_view inputLengthColumn64,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     cudf::numeric_scalar<int64_t> length64(length, true, stream, mr);
     return makeStopColumnFromWideInputs(
@@ -380,7 +380,7 @@ class SubStringFunction : public CudfFunction {
       cudf::column_view preLengthStartColumn64,
       cudf::column_view lengthColumn64,
       cudf::column_view inputLengthColumn64,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     return makeStopColumnFromWideInputs(
         preLengthStartColumn64,
@@ -393,7 +393,7 @@ class SubStringFunction : public CudfFunction {
   static StartColumns makeStartColumns(
       cudf::column_view startColumn,
       cudf::column_view inputLengthColumn64,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto startValues = makeWideIndexColumn(startColumn, stream, mr);
     cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
@@ -470,7 +470,7 @@ class SubStringFunction : public CudfFunction {
       cudf::column_view inputLengthColumn64,
       int32_t rawStartValue,
       cudf::size_type rowCount,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
     if (rawStartValue > 0) {
@@ -496,7 +496,7 @@ class SubStringFunction : public CudfFunction {
       cudf::column_view inputLengthColumn64,
       int32_t rawStartValue,
       cudf::size_type rowCount,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     if (rawStartValue > 0) {
       cudf::numeric_scalar<cudf::size_type> adjustedStart(

@@ -61,23 +61,29 @@ OperatorCtx::createConnectorQueryCtx(
     memory::MemoryPool* connectorPool,
     const common::SpillConfig* spillConfig) const {
   const auto& task = driverCtx_->task;
-  auto connectorQueryCtx = std::make_shared<connector::ConnectorQueryCtx>(
-      pool_,
-      connectorPool,
-      task->queryCtx()->connectorSessionProperties(connectorId),
-      spillConfig,
-      driverCtx_->prefixSortConfig(),
-      std::make_unique<SimpleExpressionEvaluator>(
-          execCtx()->queryCtx(), execCtx()->pool()),
-      task->queryCtx()->cache(),
-      task->queryCtx()->queryId(),
-      taskId(),
-      planNodeId,
-      driverCtx_->driverId,
-      driverCtx_->queryConfig().sessionTimezone(),
-      driverCtx_->queryConfig().adjustTimestampToTimezone(),
-      task->getCancellationToken(),
-      task->queryCtx()->fsTokenProvider());
+  std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx =
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(pool_)
+          .connectorPool(connectorPool)
+          .sessionProperties(
+              task->queryCtx()->connectorSessionProperties(connectorId))
+          .spillConfig(spillConfig)
+          .prefixSortConfig(driverCtx_->prefixSortConfig())
+          .expressionEvaluator(
+              std::make_unique<SimpleExpressionEvaluator>(
+                  execCtx()->queryCtx(), execCtx()->pool()))
+          .asyncDataCache(task->queryCtx()->cache())
+          .queryId(task->queryCtx()->queryId())
+          .taskId(taskId())
+          .planNodeId(planNodeId)
+          .driverId(driverCtx_->driverId)
+          .sessionTimezone(driverCtx_->queryConfig().sessionTimezone())
+          .adjustTimestampToTimezone(
+              driverCtx_->queryConfig().adjustTimestampToTimezone())
+          .cancellationToken(task->getCancellationToken())
+          .tokenProvider(task->queryCtx()->fsTokenProvider())
+          .customPools(customPools_)
+          .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
   connectorQueryCtx->setRowSizeTrackingMode(
@@ -124,7 +130,7 @@ void Operator::maybeSetTracer() {
   const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
 
   if (traceCtx && traceCtx->shouldTrace(*this)) {
-    if (dynamic_cast<SourceOperator*>(this) != nullptr) {
+    if (is<SourceOperator>()) {
       splitTracer_ = traceCtx->createSplitTracer(*this);
     } else {
       inputTracer_ = traceCtx->createInputTracer(*this);
@@ -255,6 +261,31 @@ const std::string& OperatorCtx::taskId() const {
   return driverCtx_->task->taskId();
 }
 
+int32_t OperatorCtx::numPeers() const {
+  const auto numDrivers = driverCtx_->task->numDrivers(driverCtx_->driver);
+  VELOX_DCHECK_GT(numDrivers, 0);
+  return numDrivers - 1;
+}
+
+bool OperatorCtx::allPeersFinished(
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Operator>>& peerOperators) const {
+  std::vector<std::shared_ptr<Driver>> peerDrivers;
+  if (!driverCtx_->task->allPeersFinished(
+          planNodeId_, driverCtx_->driver, future, promises, peerDrivers)) {
+    return false;
+  }
+
+  peerOperators.reserve(peerDrivers.size());
+  for (const auto& peerDriver : peerDrivers) {
+    auto* peerOperator = peerDriver->findOperator(operatorId_);
+    VELOX_CHECK_EQ(peerOperator->operatorType(), operatorType_);
+    peerOperators.emplace_back(peerDriver, peerOperator);
+  }
+  return true;
+}
+
 static bool isSequence(
     const vector_size_t* numbers,
     vector_size_t start,
@@ -319,6 +350,7 @@ OperatorStats Operator::stats(bool clear) {
   }
 
   stats.memoryStats = MemoryStats::memStatsFromPool(pool());
+  stats.planNodeBoundary = planNodeBoundary();
   return stats;
 }
 

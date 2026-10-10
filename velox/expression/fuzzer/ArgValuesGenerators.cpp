@@ -16,6 +16,8 @@
 
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
 
+#include <cmath>
+
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/core/Expressions.h"
@@ -640,6 +642,8 @@ std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
   }
   return inputExpressions;
 }
+
+#ifdef VELOX_ENABLE_GEO
 namespace {
 
 // Generates a random valid S2 cell ID.
@@ -700,6 +704,42 @@ std::vector<core::TypedExprPtr> S2CellTokenArgValuesGenerator::generate(
   inputExpressions[0] =
       std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(token));
 
+  return inputExpressions;
+}
+#endif // VELOX_ENABLE_GEO
+
+std::vector<core::TypedExprPtr> InverseFCdfArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 3);
+  populateInputTypesAndNames(signature, state);
+
+  // Draw the upper bound of the degrees of freedom from the powers of ten up
+  // to 1e6. A single uniform range up to 1e6 would almost never produce the
+  // small values that real queries use.
+  const auto maxDegreesOfFreedom = std::pow(10.0, rand<int32_t>(rng, 0, 6));
+  const std::vector<double> maxValues{
+      maxDegreesOfFreedom,
+      maxDegreesOfFreedom,
+      1.0,
+  };
+
+  const auto firstColumn = state.inputRowNames_.size() - signature.args.size();
+  std::vector<core::TypedExprPtr> inputExpressions;
+  for (size_t i = 0; i < signature.args.size(); ++i) {
+    state.customInputGenerators_.emplace_back(
+        std::make_shared<RangeConstrainedGenerator<double>>(
+            rand<uint32_t>(rng),
+            signature.args[i],
+            options.nullRatio,
+            0.0,
+            maxValues[i]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[i], state.inputRowNames_[firstColumn + i]));
+  }
   return inputExpressions;
 }
 

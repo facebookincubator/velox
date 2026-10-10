@@ -42,6 +42,7 @@ class ToCudfSelectionTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions(
         cudf_velox::CudfConfig::getInstance().functionNamePrefix);
@@ -171,6 +172,123 @@ TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
+  auto testFallback = [&](const VectorPtr& values, const VectorPtr& expected) {
+    SCOPED_TRACE(values->type()->toString());
+    auto input = makeRowVector(
+        {"id", "value"}, {makeFlatVector<int32_t>({1, -1}), values});
+    auto plan = PlanBuilder().values({input}).filter("id > 0").planNode();
+
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .config("cudf.enabled", true)
+                      .copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(
+        makeRowVector(
+            {"id", "value"}, {makeFlatVector<int32_t>({1}), expected}),
+        result);
+    EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+    EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  };
+
+  testFallback(
+      makeFlatVector<int32_t>({12, 24}, INTERVAL_YEAR_MONTH()),
+      makeFlatVector<int32_t>({12}, INTERVAL_YEAR_MONTH()));
+  testFallback(
+      makeFlatVector<int64_t>({1, 2}, TIME()),
+      makeFlatVector<int64_t>({1}, TIME()));
+  testFallback(
+      makeFlatVector<int64_t>({1, 2}, TIME_MICRO_UTC()),
+      makeFlatVector<int64_t>({1}, TIME_MICRO_UTC()));
+}
+
+TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<int64_t>({0, 3'661'000, std::nullopt}, TIME())});
+  auto plan =
+      PlanBuilder().values({input}).project({"cast(c0 as varchar)"}).planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector({makeNullableFlatVector<std::string>(
+      {"00:00:00.000", "01:01:01.000", std::nullopt})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+  EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+  EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+}
+
+TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({2, 1}),
+       makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"k"})
+                  .rowNumber({})
+                  .orderBy({"k ASC"}, false)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector(
+      {"k", "row_number"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({2, 1})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto stats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(stats.count("RowNumber"), 1);
+  EXPECT_EQ(stats.count("OrderBy"), 1);
+  EXPECT_EQ(stats.count("CudfFromVelox"), 0);
+  EXPECT_EQ(stats.count("CudfOrderBy"), 0);
+}
+
+TEST_F(ToCudfSelectionTest, unsupportedTypeBeforeLocalBoundary) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({2, 1}),
+       makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
+  auto other = makeRowVector({"k"}, {makeFlatVector<int64_t>({3})});
+  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2, 3})});
+
+  for (bool merge : {false, true}) {
+    SCOPED_TRACE(merge ? "LocalMerge" : "LocalPartition");
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<core::PlanNodePtr> sources{
+        PlanBuilder(planNodeIdGenerator)
+            .values({input})
+            .project({"k"})
+            .orderBy({"k"}, true)
+            .planNode(),
+        PlanBuilder(planNodeIdGenerator)
+            .values({other})
+            .orderBy({"k"}, true)
+            .planNode()};
+
+    PlanBuilder builder(planNodeIdGenerator);
+    if (merge) {
+      builder.localMerge({"k"}, sources);
+    } else {
+      builder.localPartition({}, sources);
+    }
+    auto plan = builder.orderBy({"k"}, false).planNode();
+
+    AssertQueryBuilder(plan)
+        .config("cudf.enabled", true)
+        .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+        .maxDrivers(2)
+        .assertResults(expected);
+  }
+}
+
 TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   auto input = makeRowVector(
       {"amount", "event_ts"},
@@ -288,6 +406,79 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
       .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
       .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '-', '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceEmptySearchFallsBack) {
+  // The empty-search semantics differ from cudf::strings::replace, so the empty
+  // constant search is declined and evaluated on CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '', 'x') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceColumnSearchFallsBack) {
+  // A column-valued search does not match the constant-argument signature and
+  // falls back to CPU.
+  auto input = makeRowVector(
+      {"s", "search"},
+      {makeFlatVector<std::string>({"a-b-c", "abc", "x-y"}),
+       makeFlatVector<std::string>({"-", "b", "y"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, search, '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
+  // A null constant search is offloaded (not declined), so ReplaceFunction's
+  // all-null branch runs on the GPU rather than the call being folded to a null
+  // constant upstream. Guards that the hand-written null path is actually live.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, CAST(NULL AS VARCHAR), 'x') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));

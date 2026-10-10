@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -37,8 +38,10 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
 
 namespace facebook::nimble {
 
@@ -94,6 +97,9 @@ auto encodingTypeDispatchString(Encoding& encoding, F f) {
       return f(static_cast<RLEEncoding<std::string_view>&>(encoding));
     case EncodingType::Dictionary:
       return f(static_cast<DictionaryEncoding<std::string_view>&>(encoding));
+    case EncodingType::SharedDictionary:
+      return f(
+          static_cast<SharedDictionaryEncoding<std::string_view>&>(encoding));
     case EncodingType::Nullable:
       return f(static_cast<NullableEncoding<std::string_view>&>(encoding));
     case EncodingType::Constant:
@@ -173,6 +179,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       NIMBLE_UNREACHABLE(
           "EliasFano encoding only supports integral data types, got {}.",
           encoding.dataType());
+    case EncodingType::ALPRD:
+      if constexpr (isFloatingPointType<T>()) {
+        return f(static_cast<ALPRDEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNSUPPORTED(
+          "ALPRD encoding only supports float and double data types, got {}.",
+          encoding.dataType());
     case EncodingType::ALP:
       if constexpr (isFloatingPointType<T>()) {
         return f(static_cast<ALPEncoding<T>&>(encoding));
@@ -202,6 +215,14 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
+          encoding.dataType());
+    case EncodingType::SubIntSplit:
+      if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return f(static_cast<SubIntSplitEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNREACHABLE(
+          "SubIntSplit encoding only supports 32- and 64-bit numeric data "
           "types, got {}.",
           encoding.dataType());
     case EncodingType::Huffman:

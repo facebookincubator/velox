@@ -86,6 +86,12 @@ class TabletReaderTestHelper {
     return tabletReader_->chunkStatsCache_.hasCacheEntry(groupIndex);
   }
 
+  /// Returns the compression type of the specified chunk stats group.
+  CompressionType chunkStatsGroupCompressionType(uint32_t groupIndex) const {
+    return tabletReader_->chunkStats_->groupMetadata(groupIndex)
+        .compressionType();
+  }
+
   /// Returns true if the first chunk stats group is cached and it's the only
   /// one. This is useful for verifying that when the chunk stats is covered by
   /// footer IO, the first chunk stats group is pre-populated in the cache

@@ -91,6 +91,12 @@ class FixedBitWidthEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  // TODO: If compressed sorted-position sub-streams become common in
+  // production or profiling shows the per-slice EncodingView allocation and
+  // virtual dispatch measurable on partial-stripe reads, add an FBW-specific
+  // fast path that shares a decompressed payload between the value-range
+  // binary search and the slice extraction. Skipped for now because
+  // production writers do not compress sorted-position sub-streams today.
   static std::string_view slice(
       std::string_view encoded,
       uint32_t offset,
@@ -163,14 +169,14 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
         pool,
         compressionType,
         DataType::Undefined,
-        {pos, static_cast<size_t>(data.end() - pos)},
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
         options.decompressCounter(),
         options.bufferPool);
     fixedBitArray_ = FixedBitArray{
         {uncompressedData_->as<char>(), uncompressedData_->size()}, bitWidth_};
   } else {
-    fixedBitArray_ =
-        FixedBitArray{{pos, static_cast<size_t>(data.end() - pos)}, bitWidth_};
+    fixedBitArray_ = FixedBitArray{
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)}, bitWidth_};
   }
 }
 
@@ -313,37 +319,8 @@ void FixedBitWidthEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation,
-  // and hook forwarding. For non-hook paths, values points to the reader's
-  // output buffer (rawValues). For hooks, values stays as the local decode
-  // buffer since hook.addValue() consumes values without writing to the reader.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 
@@ -434,7 +411,8 @@ std::string_view FixedBitWidthEncoding<T>::slice(
 
   velox::BufferPtr uncompressed;
   std::string_view packedData{
-      sourcePos, static_cast<size_t>(encoded.end() - sourcePos)};
+      sourcePos,
+      static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)};
   if (sourceCompressionType != CompressionType::Uncompressed) {
     uncompressed = Compression::uncompress(
         buffer.getMemoryPool(),
@@ -463,13 +441,17 @@ std::string_view FixedBitWidthEncoding<T>::slice(
   encoding::write(baseline, pos);
   encoding::writeChar(bitWidth, pos);
 
-  if (packedBytes > 0) {
-    std::memset(pos, 0, packedBytes);
+  // FixedBitArray::bufferSize() always adds slop bytes, so the payload is never
+  // empty even at zero bit width. Zeroing keeps the slop deterministic; the bit
+  // copy is skipped at zero bit width because there is nothing to copy and
+  // copyPackedBits() rejects a zero bit count.
+  std::memset(pos, 0, packedBytes);
+  if (bitWidth > 0) {
     const auto sourceBitOffset = static_cast<uint64_t>(offset) * bitWidth;
     const auto sliceBits = static_cast<uint64_t>(length) * bitWidth;
     encoding::copyPackedBits(packedData, sourceBitOffset, sliceBits, pos);
-    pos += packedBytes;
   }
+  pos += packedBytes;
 
   NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
   return {reserved, encodingSize};

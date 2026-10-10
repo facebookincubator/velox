@@ -232,10 +232,6 @@ void ArbitrationParticipant::startArbitration(ArbitrationOperation* op) {
     }
   }
 
-  TestValue::adjust(
-      "facebook::velox::memory::ArbitrationParticipant::startArbitration",
-      this);
-
   if (waitPromise.valid()) {
     waitPromise.wait();
   }

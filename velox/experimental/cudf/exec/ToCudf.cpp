@@ -19,15 +19,18 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
+#include "velox/common/base/Exceptions.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -91,6 +94,7 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Cached operator properties including adapter pointer.
   struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
+    core::PlanNodePtr planNode;
   };
 
   auto getOperatorProperties =
@@ -98,12 +102,10 @@ bool CompileState::compile(bool allowCpuFallback) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
-        if (adapter) {
-          auto planNode = resolveOperatorPlanNode(op);
-          if (planNode) {
-            static_cast<OperatorAdapter::Properties&>(props) =
-                adapter->properties(op, planNode, ctx);
-          }
+        props.planNode = resolveOperatorPlanNode(op);
+        if (adapter && props.planNode) {
+          static_cast<OperatorAdapter::Properties&>(props) =
+              adapter->properties(op, props.planNode, ctx);
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -111,6 +113,13 @@ bool CompileState::compile(bool allowCpuFallback) {
           props.canRunOnGPU = true;
           props.acceptsGpuInput = true;
           props.producesGpuOutput = true;
+        }
+        // Reject operators whose output types cannot be represented in cuDF.
+        if (props.planNode &&
+            !isTypeSupportedByCudf(props.planNode->outputType())) {
+          props.canRunOnGPU = false;
+          props.acceptsGpuInput = false;
+          props.producesGpuOutput = false;
         }
         return props;
       };
@@ -124,6 +133,13 @@ bool CompileState::compile(bool allowCpuFallback) {
       getOperatorProperties);
 
   int32_t operatorsOffset = 0;
+  // When an operator's input types are unsupported by cuDF, all subsequent
+  // operators in the pipeline must also stay on CPU.
+  // TODO: This is conservative — once set, it never resets, so a later
+  // operator whose inputs drop the unsupported column will still stay on CPU.
+  // Resuming GPU once types are supported again requires coordinated backend
+  // selection across joins and local exchanges.
+  bool skipGpuReplacement = false;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replaceOp;
@@ -143,12 +159,24 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto id = oper->operatorId();
 
-    auto planNode = resolveOperatorPlanNode(oper);
+    const auto& planNode = thisOpProps.planNode;
 
-    if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
-      replaceOp.push_back(
-          std::make_unique<CudfFromVelox>(
-              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+    if (!skipGpuReplacement and previousOperatorIsNotGpu and
+        thisOpProps.acceptsGpuInput and planNode) {
+      // Check that the previous operator's output types can be converted to
+      // cuDF.  If not, skip both the CudfFromVelox insertion and the current
+      // operator's GPU replacement so the whole pipeline stays on CPU.
+      const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
+      if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
+        replaceOp.push_back(
+            std::make_unique<CudfFromVelox>(
+                id,
+                planNode->outputType(),
+                ctx,
+                planNode->id() + "-from-velox"));
+      } else {
+        skipGpuReplacement = true;
+      }
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -170,22 +198,30 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      if (keepOperator == 0) {
-        if (planNode && thisOpProps.canRunOnGPU) {
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-          isPureCpuOperator = false;
-        } else {
-          // This is the CPU fallback case.
-          isPureCpuOperator = true;
+      const bool canUseGpuPath =
+          planNode && thisOpProps.canRunOnGPU && !skipGpuReplacement;
+      if (canUseGpuPath) {
+        // canRunOnGPU() controls whether createReplacements() is called;
+        // keepOperator() determines whether returned operators replace or
+        // follow the original.
+        auto replacements =
+            adapter->createReplacements(oper, planNode, ctx, id);
+        // A replacing adapter must produce an operator. Check before appending
+        // an output conversion, which could make the result appear non-empty.
+        VELOX_CHECK(
+            keepOperator != 0 || !replacements.empty(),
+            "Adapter replaced an operator with nothing: {}",
+            adapter->name());
+        for (auto& r : replacements) {
+          replaceOp.push_back(std::move(r));
         }
+      }
+
+      if (keepOperator == 0) {
+        // Only a declined GPU path requires CPU fallback.
+        isPureCpuOperator = !canUseGpuPath;
       } else {
-        // adapter is present and keepOperator is 1, so this is GPU compatible
-        // operator. so this CPU operators is allowed even if fallback is
-        // disabled.
+        // A kept operator is valid with or without appended operators.
         isPureCpuOperator = false;
       }
     } else {
@@ -198,7 +234,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       }
     }
 
-    if (thisOpProps.producesGpuOutput and
+    if (thisOpProps.producesGpuOutput and !skipGpuReplacement and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
           std::make_unique<CudfToVelox>(
@@ -269,23 +305,20 @@ bool CompileState::compile(bool allowCpuFallback) {
 }
 
 struct CudfDriverAdapter {
-  CudfDriverAdapter(bool allowCpuFallback)
-      : allowCpuFallback_{allowCpuFallback} {}
-
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(
+    const auto& queryConfig = driver.driverCtx()->queryConfig();
+    const auto allowCpuFallback = queryConfig.get<bool>(
+        CudfConfig::kCudfAllowCpuFallback,
+        CudfConfig::getInstance().allowCpuFallback);
+    if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allowCpuFallback_) {
+        allowCpuFallback) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(allowCpuFallback_);
-    return res;
+    return state.compile(allowCpuFallback);
   }
-
- private:
-  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
@@ -309,16 +342,33 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
+  // Record this context's device so worker threads can bind it later (see
+  // ensureCudaContextForThread()).
+  int contextDevice = -1;
+  cudaGetDevice(&contextDevice);
+  VELOX_CHECK_GE(contextDevice, 0, "Failed to get current CUDA device ordinal");
+  setCudfContextDevice(contextDevice);
+
+  // Read the device before anything derives a default from it. The context
+  // exists by this point, and every memory-related default below is a size that
+  // only means something relative to the device it will live on.
+  initializeGpuCapabilities(contextDevice);
+
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
+  auto base = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr);
-  mr_ = std::move(mr);
+  // Wrap the device resource in a statistics adaptor so that
+  // cudfAllocatedBytes() can report live device memory.
+  statsMr_.emplace(std::move(base));
+  mr_ = statsMr_.value();
+  cudf::set_current_device_resource(mr_.value());
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
-        outputMrMode, CudfConfig::getInstance().memoryPercent);
+    outputStatsMr_.emplace(
+        cudf_velox::createMemoryResource(
+            outputMrMode, CudfConfig::getInstance().memoryPercent));
+    output_mr_ = outputStatsMr_.value();
   } else {
     output_mr_ = mr_;
   }
@@ -327,7 +377,7 @@ void registerCudf() {
       std::make_unique<CudfHashJoinBridgeTranslator>());
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
-  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
+  CudfDriverAdapter cda;
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
 
@@ -343,8 +393,14 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  // Reset the any_resource copies before the adaptors they were copied from,
+  // so that the wrapped upstream resources are released here.
   output_mr_.reset();
   mr_.reset();
+  outputStatsMr_.reset();
+  statsMr_.reset();
+  // Undo registerCudf()'s operator adapter registration.
+  OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
@@ -380,8 +436,22 @@ void CudfConfig::initialize(
     outputMemoryResource = config[kCudfOutputMr];
   }
   if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
-    batchSizeMinThreshold =
+    const auto targetRows =
         folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+    VELOX_USER_CHECK_GT(
+        targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+    batchSizeMinThreshold = targetRows;
+  }
+  if (config.find(kCudfBatchSizeMinBytes) != config.end()) {
+    // tryTo so that a negative or malformed value is a user error, not a
+    // folly::ConversionError.
+    const auto& value = config[kCudfBatchSizeMinBytes];
+    const auto targetBytes = folly::tryTo<uint64_t>(value);
+    VELOX_USER_CHECK(
+        targetBytes.hasValue() && targetBytes.value() > 0,
+        "cuDF BatchConcat minimum byte target must be a positive integer: {}",
+        value);
+    batchSizeMinBytes = targetBytes.value();
   }
   if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
     batchSizeMaxThreshold =

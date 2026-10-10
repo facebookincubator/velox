@@ -76,7 +76,7 @@ int32_t checkedScaleValue(int64_t value, int32_t scale) {
 void checkValueRange(
     cudf::column_view valueCol,
     cudf::column_view dateCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   constexpr auto kMin = std::numeric_limits<int32_t>::min();
   constexpr auto kMax = std::numeric_limits<int32_t>::max();
@@ -125,7 +125,7 @@ std::unique_ptr<cudf::column> scaleToInt32(
     cudf::column_view valueCol,
     cudf::column_view dateCol,
     int32_t scale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   checkValueRange(valueCol, dateCol, stream, mr);
 
@@ -198,7 +198,7 @@ DateAddFunction::DateAddFunction(
 
 ColumnOrView DateAddFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   // Walk the non-literal inputs in argument order. Constants were captured at
   // construction time and never appear in inputColumns, so the first slot
@@ -235,7 +235,7 @@ ColumnOrView DateAddFunction::eval(
 ColumnOrView DateAddFunction::evalDayBased(
     cudf::column_view dateCol,
     std::optional<cudf::column_view> valueCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   const auto outType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
   const auto scale = unitScale(unit_);
@@ -263,7 +263,7 @@ ColumnOrView DateAddFunction::evalDayBased(
 ColumnOrView DateAddFunction::evalMonthBased(
     cudf::column_view dateCol,
     std::optional<cudf::column_view> valueCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   const auto scale = unitScale(unit_);
 

@@ -60,12 +60,219 @@ bool isSupportedInElementKind(TypeKind kind) {
       kind == TypeKind::BIGINT;
 }
 
+enum class ComparisonKind { kEq, kNeq, kLt, kLte, kGt, kGte };
+
+std::optional<ComparisonKind> comparisonKind(std::string_view name) {
+  if (name == "eq") {
+    return ComparisonKind::kEq;
+  }
+  if (name == "neq") {
+    return ComparisonKind::kNeq;
+  }
+  if (name == "lt") {
+    return ComparisonKind::kLt;
+  }
+  if (name == "lte") {
+    return ComparisonKind::kLte;
+  }
+  if (name == "gt") {
+    return ComparisonKind::kGt;
+  }
+  if (name == "gte") {
+    return ComparisonKind::kGte;
+  }
+  return std::nullopt;
+}
+
+ComparisonKind negateComparison(ComparisonKind comparison) {
+  switch (comparison) {
+    case ComparisonKind::kEq:
+      return ComparisonKind::kNeq;
+    case ComparisonKind::kNeq:
+      return ComparisonKind::kEq;
+    case ComparisonKind::kLt:
+      return ComparisonKind::kGte;
+    case ComparisonKind::kLte:
+      return ComparisonKind::kGt;
+    case ComparisonKind::kGt:
+      return ComparisonKind::kLte;
+    case ComparisonKind::kGte:
+      return ComparisonKind::kLt;
+  }
+  VELOX_UNREACHABLE();
+}
+
+ComparisonKind flipComparison(ComparisonKind comparison) {
+  switch (comparison) {
+    case ComparisonKind::kEq:
+    case ComparisonKind::kNeq:
+      return comparison;
+    case ComparisonKind::kLt:
+      return ComparisonKind::kGt;
+    case ComparisonKind::kLte:
+      return ComparisonKind::kGte;
+    case ComparisonKind::kGt:
+      return ComparisonKind::kLt;
+    case ComparisonKind::kGte:
+      return ComparisonKind::kLte;
+  }
+  VELOX_UNREACHABLE();
+}
+
+bool isPrimitiveIntegralType(const Type* type) {
+  static const Type* const kTinyint = TINYINT().get();
+  static const Type* const kSmallint = SMALLINT().get();
+  static const Type* const kInteger = INTEGER().get();
+  static const Type* const kBigint = BIGINT().get();
+  return type == kTinyint || type == kSmallint || type == kInteger ||
+      type == kBigint;
+}
+
+std::optional<int64_t> integralConstant(
+    const VectorPtr& value,
+    const Type* expectedType) {
+  if (expectedType == nullptr) {
+    return std::nullopt;
+  }
+  if (value->type().get() != expectedType) {
+    return std::nullopt;
+  }
+  const auto expectedKind = expectedType->kind();
+  if (expectedKind == TypeKind::TINYINT) {
+    return singleValue<TypeTraits<TypeKind::TINYINT>::NativeType>(value);
+  }
+  if (expectedKind == TypeKind::SMALLINT) {
+    return singleValue<TypeTraits<TypeKind::SMALLINT>::NativeType>(value);
+  }
+  if (expectedKind == TypeKind::INTEGER) {
+    return singleValue<TypeTraits<TypeKind::INTEGER>::NativeType>(value);
+  }
+  VELOX_CHECK_EQ(expectedKind, TypeKind::BIGINT);
+  return singleValue<TypeTraits<TypeKind::BIGINT>::NativeType>(value);
+}
+
+std::unique_ptr<common::Filter> makeIntegralComparisonFilter(
+    ComparisonKind comparison,
+    int64_t value,
+    const Type* sourceType) {
+  VELOX_CHECK_NOT_NULL(sourceType);
+  const auto numBits = sourceType->cppSizeInBytes() * 8;
+  const auto max = numBits == 64 ? std::numeric_limits<int64_t>::max()
+                                 : (int64_t{1} << (numBits - 1)) - 1;
+  const auto min = -max - 1;
+  // The preimage of a comparison with an out-of-range constant contains
+  // either every non-null source value or none of them.
+  if (value < min) {
+    switch (comparison) {
+      case ComparisonKind::kNeq:
+      case ComparisonKind::kGt:
+      case ComparisonKind::kGte:
+        return isNotNull();
+      case ComparisonKind::kEq:
+      case ComparisonKind::kLt:
+      case ComparisonKind::kLte:
+        return std::make_unique<common::AlwaysFalse>();
+    }
+  }
+  if (value > max) {
+    switch (comparison) {
+      case ComparisonKind::kNeq:
+      case ComparisonKind::kLt:
+      case ComparisonKind::kLte:
+        return isNotNull();
+      case ComparisonKind::kEq:
+      case ComparisonKind::kGt:
+      case ComparisonKind::kGte:
+        return std::make_unique<common::AlwaysFalse>();
+    }
+  }
+
+  switch (comparison) {
+    case ComparisonKind::kEq:
+      return equal(value);
+    case ComparisonKind::kNeq:
+      return bigintOr(lessThan(value), greaterThan(value));
+    case ComparisonKind::kLt:
+      return lessThan(value);
+    case ComparisonKind::kLte:
+      return lessThanOrEqual(value);
+    case ComparisonKind::kGt:
+      return greaterThan(value);
+    case ComparisonKind::kGte:
+      return greaterThanOrEqual(value);
+  }
+  VELOX_UNREACHABLE();
+}
+
+struct IntegralWideningCast {
+  const core::ITypedExpr* sourceExpr;
+  const Type* sourceType;
+  const Type* targetType;
+};
+
+std::optional<IntegralWideningCast> unwrapIntegralWideningCast(
+    const core::ITypedExpr* expr) {
+  if (expr == nullptr) {
+    return std::nullopt;
+  }
+  const auto* targetType = expr->type().get();
+  if (targetType == nullptr || !isPrimitiveIntegralType(targetType)) {
+    return std::nullopt;
+  }
+  const core::ITypedExpr* sourceExpr = expr;
+  const Type* sourceType = targetType;
+  bool foundCast = false;
+  // A widening integral cast chain is lossless and order-preserving, so the
+  // comparison can be expressed exactly in the source column domain.
+  while (const auto* cast =
+             dynamic_cast<const core::CastTypedExpr*>(sourceExpr)) {
+    const auto* castSourceType = cast->inputs()[0]->type().get();
+    const auto* castTargetType = cast->type().get();
+    if (cast->isTryCast() || castSourceType == nullptr ||
+        castTargetType == nullptr || !isPrimitiveIntegralType(castSourceType) ||
+        !isPrimitiveIntegralType(castTargetType) ||
+        castSourceType->cppSizeInBytes() >= castTargetType->cppSizeInBytes()) {
+      return std::nullopt;
+    }
+    foundCast = true;
+    sourceExpr = cast->inputs()[0].get();
+    sourceType = castSourceType;
+  }
+  if (!foundCast || sourceExpr == nullptr) {
+    return std::nullopt;
+  }
+  return IntegralWideningCast{sourceExpr, sourceType, targetType};
+}
+
+std::unique_ptr<common::Filter> makeIntegralWideningCastFilter(
+    const IntegralWideningCast& cast,
+    const core::TypedExprPtr& valueExpr,
+    ComparisonKind comparison,
+    core::ExpressionEvaluator* evaluator) {
+  auto constant = toConstant(valueExpr, evaluator);
+  if (constant == nullptr) {
+    return nullptr;
+  }
+  if (constant->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  auto value = integralConstant(constant, cast.targetType);
+  if (!value.has_value()) {
+    return nullptr;
+  }
+  return makeIntegralComparisonFilter(comparison, *value, cast.sourceType);
+}
+
 bool isBigintRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintRange);
 }
 
 bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintMultiRange);
+}
+
+bool isNegatedBigintRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kNegatedBigintRange);
 }
 
 bool isBytesValues(const std::unique_ptr<common::Filter>& filter) {
@@ -264,6 +471,22 @@ std::shared_ptr<ExprToSubfieldFilterParser>
     ExprToSubfieldFilterParser::parser_ =
         std::make_shared<PrestoExprToSubfieldFilterParser>();
 
+std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+ExprToSubfieldFilterParser::leafToSubfieldFilter(
+    const core::ITypedExpr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated) {
+  common::Subfield subfield;
+  if (expr.type()->isBoolean() && toSubfield(&expr, subfield)) {
+    return std::make_pair(std::move(subfield), boolEqual(!negated));
+  }
+
+  if (auto* call = dynamic_cast<const core::CallTypedExpr*>(&expr)) {
+    return leafCallToSubfieldFilter(*call, evaluator, negated);
+  }
+  return std::nullopt;
+}
+
 // static
 bool ExprToSubfieldFilterParser::toSubfield(
     const core::ITypedExpr* field,
@@ -340,12 +563,10 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
     }
     VELOX_CHECK(isBigintRange(lessThanFilter));
     VELOX_CHECK(isBigintRange(greaterThanFilter));
-
-    std::vector<std::unique_ptr<common::BigintRange>> filters;
-    filters.emplace_back(asBigintRange(lessThanFilter));
-    filters.emplace_back(asBigintRange(greaterThanFilter));
-    return std::make_unique<common::BigintMultiRange>(
-        std::move(filters), false);
+    const auto excluded =
+        lessThanFilter->as<common::BigintRange>()->upper() + 1;
+    return std::make_unique<common::NegatedBigintRange>(
+        excluded, excluded, false);
   }
 
   if (typeKind == TypeKind::HUGEINT) {
@@ -781,7 +1002,7 @@ std::unique_ptr<common::Filter> mergeOverlappingDisjuncts(
   }
 
   if (newRanges.size() == 1) {
-    return std::move(newRanges.front());
+    return newRanges.front()->clone(nullAllowed);
   }
 
   return toMultiRange(newRanges, nullAllowed);
@@ -808,7 +1029,8 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
   }
 
   if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
-        return isBigintRange(filter) || isBigintMultiRange(filter);
+        return isBigintRange(filter) || isBigintMultiRange(filter) ||
+            isNegatedBigintRange(filter);
       })) {
     return nullptr;
   }
@@ -819,12 +1041,35 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
   for (auto& filter : disjuncts) {
     if (isBigintRange(filter)) {
       ranges.emplace_back(asBigintRange(filter));
-    } else {
+    } else if (isBigintMultiRange(filter)) {
       for (const auto& range :
            filter->as<common::BigintMultiRange>()->ranges()) {
         ranges.emplace_back(std::make_unique<common::BigintRange>(*range));
       }
+    } else {
+      const auto* negatedRange = filter->as<common::NegatedBigintRange>();
+      if (negatedRange->lower() > std::numeric_limits<int64_t>::min()) {
+        ranges.emplace_back(
+            std::make_unique<common::BigintRange>(
+                std::numeric_limits<int64_t>::min(),
+                negatedRange->lower() - 1,
+                false));
+      }
+      if (negatedRange->upper() < std::numeric_limits<int64_t>::max()) {
+        ranges.emplace_back(
+            std::make_unique<common::BigintRange>(
+                negatedRange->upper() + 1,
+                std::numeric_limits<int64_t>::max(),
+                false));
+      }
     }
+  }
+
+  if (ranges.empty()) {
+    if (nullAllowed) {
+      return isNull();
+    }
+    return std::make_unique<common::AlwaysFalse>();
   }
 
   std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
@@ -949,6 +1194,55 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
     std::vector<std::unique_ptr<common::Filter>> disjuncts) {
   VELOX_CHECK_GE(disjuncts.size(), 2);
 
+  if (std::any_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kAlwaysTrue);
+      })) {
+    return alwaysTrue();
+  }
+
+  disjuncts.erase(
+      std::remove_if(
+          disjuncts.begin(),
+          disjuncts.end(),
+          [](const auto& filter) {
+            return filter->is(common::FilterKind::kAlwaysFalse);
+          }),
+      disjuncts.end());
+  if (disjuncts.empty()) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  if (disjuncts.size() == 1) {
+    return std::move(disjuncts.front());
+  }
+
+  const auto firstNotNull =
+      std::find_if(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kIsNotNull);
+      });
+  if (firstNotNull != disjuncts.end()) {
+    if (std::any_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+          return filter->testNull();
+        })) {
+      return alwaysTrue();
+    }
+    return isNotNull();
+  }
+
+  const auto firstNull = std::remove_if(
+      disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return filter->is(common::FilterKind::kIsNull);
+      });
+  if (firstNull != disjuncts.end()) {
+    disjuncts.erase(firstNull, disjuncts.end());
+    if (disjuncts.empty()) {
+      return isNull();
+    }
+    if (disjuncts.size() == 1) {
+      return disjuncts.front()->clone(true);
+    }
+    disjuncts.front() = disjuncts.front()->clone(true);
+  }
+
   if (auto merged = tryMergeBigintRanges(disjuncts)) {
     return merged;
   }
@@ -993,47 +1287,71 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
   }
 
   const auto* leftSide = call.inputs()[0].get();
+  VELOX_CHECK_NOT_NULL(leftSide);
 
   common::Subfield subfield;
-  if (call.name() == "eq") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
-                            : makeEqualFilter(call.inputs()[1], evaluator);
+  if (auto kind = comparisonKind(call.name())) {
+    if (negated) {
+      *kind = negateComparison(*kind);
+    }
 
-      return combine(subfield, filter);
+    auto makeComparisonFilter = [&](ComparisonKind comparison,
+                                    const core::TypedExprPtr& valueExpr) {
+      switch (comparison) {
+        case ComparisonKind::kEq:
+          return makeEqualFilter(valueExpr, evaluator);
+        case ComparisonKind::kNeq:
+          return makeNotEqualFilter(valueExpr, evaluator);
+        case ComparisonKind::kLt:
+          return makeLessThanFilter(valueExpr, evaluator);
+        case ComparisonKind::kLte:
+          return makeLessThanOrEqualFilter(valueExpr, evaluator);
+        case ComparisonKind::kGt:
+          return makeGreaterThanFilter(valueExpr, evaluator);
+        case ComparisonKind::kGte:
+          return makeGreaterThanOrEqualFilter(valueExpr, evaluator);
+      }
+      VELOX_UNREACHABLE();
+    };
+
+    auto extractThroughIntegralWideningCast =
+        [&](const core::ITypedExpr* fieldExpr,
+            const core::TypedExprPtr& valueExpr,
+            ComparisonKind comparison)
+        -> std::optional<
+            std::pair<common::Subfield, std::unique_ptr<common::Filter>>> {
+      auto cast = unwrapIntegralWideningCast(fieldExpr);
+      if (!cast.has_value()) {
+        return std::nullopt;
+      }
+
+      if (cast->sourceExpr == nullptr) {
+        return std::nullopt;
+      }
+      common::Subfield castSubfield;
+      if (!toSubfield(cast->sourceExpr, castSubfield)) {
+        return std::nullopt;
+      }
+      auto filter = makeIntegralWideningCastFilter(
+          *cast, valueExpr, comparison, evaluator);
+      if (filter == nullptr) {
+        return std::nullopt;
+      }
+      return std::make_pair(std::move(castSubfield), std::move(filter));
+    };
+
+    if (auto result = extractThroughIntegralWideningCast(
+            leftSide, call.inputs()[1], *kind)) {
+      return result;
     }
-  } else if (call.name() == "neq") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = negated ? makeEqualFilter(call.inputs()[1], evaluator)
-                            : makeNotEqualFilter(call.inputs()[1], evaluator);
-      return combine(subfield, filter);
+    const auto* rightSide = call.inputs()[1].get();
+    VELOX_CHECK_NOT_NULL(rightSide);
+    if (auto result = extractThroughIntegralWideningCast(
+            rightSide, call.inputs()[0], flipComparison(*kind))) {
+      return result;
     }
-  } else if (call.name() == "lte") {
     if (toSubfield(leftSide, subfield)) {
-      auto filter = negated
-          ? makeGreaterThanFilter(call.inputs()[1], evaluator)
-          : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
-      return combine(subfield, filter);
-    }
-  } else if (call.name() == "lt") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = negated
-          ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
-          : makeLessThanFilter(call.inputs()[1], evaluator);
-      return combine(subfield, filter);
-    }
-  } else if (call.name() == "gte") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = negated
-          ? makeLessThanFilter(call.inputs()[1], evaluator)
-          : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
-      return combine(subfield, filter);
-    }
-  } else if (call.name() == "gt") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = negated
-          ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
-          : makeGreaterThanFilter(call.inputs()[1], evaluator);
+      auto filter = makeComparisonFilter(*kind, call.inputs()[1]);
       return combine(subfield, filter);
     }
   } else if (call.name() == "between") {

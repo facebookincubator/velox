@@ -211,7 +211,7 @@ Array Functions
         SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
         SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
 
-.. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
+.. spark:function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
     Returns the merge of the given arrays, element-wise into a single array of rows.
     The M-th element of the N-th argument will be the N-th field of the M-th output element.
@@ -307,14 +307,18 @@ Array Functions
         SELECT shuffle(array(0, 0, 0), 0); -- [0, 0, 0]
         SELECT shuffle(array(1, NULL, 1, NULL, 2), 0); -- [2, 1, NULL, NULL, 1]
 
-.. spark:function:: size(array(E), legacySizeOfNull) -> integer
+.. spark:function:: size(array(E), legacySizeOfNull) -> integer (ANSI compliant)
 
-    Returns the size of the array. Returns null for null input if `legacySizeOfNull`
-    is set to false. Otherwise, returns -1 for null input. ::
+    Returns the size of the array. Returns null for null input if ``legacySizeOfNull``
+    is false. Otherwise, returns -1 for null input. The ``legacySizeOfNull`` argument
+    reflects Spark's ``spark.sql.legacy.sizeOfNull`` configuration combined with ANSI
+    mode (``spark.sql.legacy.sizeOfNull`` AND NOT ``spark.sql.ansi.enabled``): it is
+    true only when Spark ANSI mode is disabled and ``spark.sql.legacy.sizeOfNull`` is
+    true, so under Spark ANSI mode null input always returns null. ::
 
         SELECT size(array(1, 2, 3), true); -- 3
-        SELECT size(NULL, true); -- -1
-        SELECT size(NULL, false); -- NULL
+        SELECT size(NULL, true); -- -1 (Spark ANSI mode disabled)
+        SELECT size(NULL, false); -- NULL (e.g. Spark ANSI mode enabled)
 
 .. spark:function:: slice(array(E), start, length) -> array(E)
 
