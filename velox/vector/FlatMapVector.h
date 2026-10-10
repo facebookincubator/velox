@@ -343,6 +343,11 @@ class FlatMapVector : public BaseVector {
       const VectorPtr& sourceDistinctKeys,
       column_index_t sourceChannel);
 
+  /// Returns the in-map bits of the key at `channel` for writing. A key without
+  /// an in-map buffer is in every row, so a buffer allocated here starts with
+  /// every bit set. A buffer that is a view or shared is copied first.
+  uint64_t* ensureInMapAt(column_index_t channel);
+
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in
   /// `ranges`.
@@ -370,11 +375,6 @@ class FlatMapVector : public BaseVector {
   void copyMapRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges);
-
-  // Returns the in-map bits of 'channel' for writing. A key without an in-map
-  // buffer is in every row, so a buffer allocated here starts with every bit
-  // set.
-  uint64_t* ensureInMapAt(column_index_t channel);
 
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 
