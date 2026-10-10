@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -29,6 +30,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/type/Filter.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
@@ -44,9 +46,12 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
+
+#include <folly/lang/Bits.h>
 
 #include <algorithm>
 #include <limits>
@@ -181,7 +186,8 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    const cudf::ast::expression* subfieldFilterAst)
+    const cudf::ast::expression* subfieldFilterAst,
+    const common::SubfieldFilters* dynamicFilters)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
           std::nullopt,
@@ -215,6 +221,16 @@ CudfSplitReader::CudfSplitReader(
     }
   }
   VELOX_DCHECK_EQ(readColumnNames_.size(), readColumnTypes_.size());
+  if (dynamicFilters) {
+    const auto filterRowType = ROW(readColumnNames_, readColumnTypes_);
+    for (const auto& [field, filter] : *dynamicFilters) {
+      auto name = field.toString();
+      const auto type = filterRowType->findChild(name);
+      VELOX_CHECK_NOT_NULL(type);
+      readerDynamicFilters_.emplace_back(
+          std::move(name), veloxToCudfDataType(type), filter);
+    }
+  }
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 
@@ -506,6 +522,8 @@ void CudfSplitReader::resetSplit() {
   dataSource_.reset();
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
+  dynamicRowGroups_.clear();
+  dynamicFiltersSatisfied_ = false;
   hasSplitSpecificPushdownFilter_ = false;
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
@@ -697,6 +715,8 @@ void CudfSplitReader::fileMetaDatas() {
       1,
       "CudfSplitReader failed to read any parquet metadatas");
 
+  filterDynamicRowGroups();
+
   if (pushdownFilterBuilder_) {
     VELOX_CHECK_EQ(
         fileMetaData_.size(),
@@ -707,6 +727,110 @@ void CudfSplitReader::fileMetaDatas() {
         pushdownFilterExpr_,
         "Split-specific pushdown filter builder must return an expression");
     hasSplitSpecificPushdownFilter_ = true;
+  }
+}
+
+void CudfSplitReader::filterDynamicRowGroups() {
+  if (readerDynamicFilters_.empty()) {
+    return;
+  }
+  const auto& metadata = fileMetaData_.front();
+  const auto& schema = metadata.schema;
+  const auto& columns = schema.front().children_idx;
+  dynamicRowGroups_.assign(metadata.row_groups.size(), true);
+  std::vector<bool> allRowsMatch(metadata.row_groups.size(), true);
+  for (const auto& [name, type, filter] : readerDynamicFilters_) {
+    const auto column =
+        std::find_if(columns.begin(), columns.end(), [&](auto index) {
+          return schema[index].name == name;
+        });
+    const auto matches = [&] {
+      if (column == columns.end() || !cudf::is_integral(type) ||
+          !cudf::is_signed(type)) {
+        return false;
+      }
+      const auto& field = schema[*column];
+      if (field.max_repetition_level != 0 || !field.children_idx.empty()) {
+        return false;
+      }
+      const auto width = cudf::size_of(type) * 8;
+      if (field.logical_type.has_value()) {
+        return field.logical_type->is_signed() &&
+            field.logical_type->bit_width() == width;
+      }
+      using ParquetType = cudf::io::parquet::Type;
+      return (field.type == ParquetType::INT32 && width == 32) ||
+          (field.type == ParquetType::INT64 && width == 64);
+    }();
+    if (!matches) {
+      dynamicRowGroups_.clear();
+      return;
+    }
+    for (size_t groupIndex = 0; groupIndex < metadata.row_groups.size();
+         ++groupIndex) {
+      if (!dynamicRowGroups_[groupIndex]) {
+        continue;
+      }
+      const auto& group = metadata.row_groups[groupIndex];
+      if (filter->kind() == common::FilterKind::kAlwaysFalse) {
+        dynamicRowGroups_[groupIndex] = false;
+        continue;
+      }
+      const auto chunk = std::find_if(
+          group.columns.begin(), group.columns.end(), [&](const auto& c) {
+            return c.meta_data.path_in_schema.size() == 1 &&
+                c.meta_data.path_in_schema.front() == name;
+          });
+      if (chunk == group.columns.end() ||
+          filter->kind() != common::FilterKind::kBigintRange) {
+        allRowsMatch[groupIndex] = false;
+        continue;
+      }
+      const auto& stats = chunk->meta_data.statistics;
+      if (stats.null_count.has_value() && *stats.null_count == group.num_rows) {
+        dynamicRowGroups_[groupIndex] = filter->testNull();
+        continue;
+      }
+      const auto& lower =
+          stats.min_value.has_value() ? stats.min_value : stats.min;
+      const auto& upper =
+          stats.max_value.has_value() ? stats.max_value : stats.max;
+      using ParquetType = cudf::io::parquet::Type;
+      const auto width = chunk->meta_data.type == ParquetType::INT32 ? 4
+          : chunk->meta_data.type == ParquetType::INT64              ? 8
+                                                                     : 0;
+      if (width == 0 || !lower || !upper || lower->size() != width ||
+          upper->size() != width) {
+        allRowsMatch[groupIndex] = false;
+        continue;
+      }
+      const auto decode = [width](const auto& bytes) -> int64_t {
+        return width == 4
+            ? folly::Endian::little(folly::loadUnaligned<int32_t>(bytes.data()))
+            : folly::Endian::little(
+                  folly::loadUnaligned<int64_t>(bytes.data()));
+      };
+      const auto minimum = decode(*lower);
+      const auto maximum = decode(*upper);
+      if (minimum > maximum) {
+        allRowsMatch[groupIndex] = false;
+        continue;
+      }
+      const auto& range = static_cast<const common::BigintRange&>(*filter);
+      const bool hasNulls = stats.null_count.value_or(1) != 0;
+      dynamicRowGroups_[groupIndex] =
+          range.testInt64Range(minimum, maximum, hasNulls);
+      allRowsMatch[groupIndex] = allRowsMatch[groupIndex] &&
+          range.lower() <= minimum && range.upper() >= maximum &&
+          (!hasNulls || range.testNull());
+    }
+  }
+  dynamicFiltersSatisfied_ = true;
+  for (size_t i = 0; i < dynamicRowGroups_.size(); ++i) {
+    if (dynamicRowGroups_[i] && !allRowsMatch[i]) {
+      dynamicFiltersSatisfied_ = false;
+      break;
+    }
   }
 }
 
@@ -782,6 +906,13 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
         rowGroupIndices, readerOptions_, stream_);
   }
 
+  if (!dynamicRowGroups_.empty()) {
+    for (auto& groups : rowGroupIndices) {
+      std::erase_if(
+          groups, [&](auto group) { return !dynamicRowGroups_[group]; });
+    }
+  }
+
   const auto numRowGroups = std::accumulate(
       rowGroupIndices.begin(),
       rowGroupIndices.end(),
@@ -789,6 +920,10 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
       [](auto sum, const auto& sourceRowGroups) {
         return sum + sourceRowGroups.size();
       });
+  auto selectedRowGroups = numRowGroups;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cudf_velox::connector::hive::CudfSplitReader::selectedRowGroups",
+      &selectedRowGroups);
 
   // No row groups to read.
   if (numRowGroups == 0) {

@@ -430,6 +430,10 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
   auto mr = get_temp_mr();
 
   switch (filter.kind()) {
+    case common::FilterKind::kAlwaysFalse: {
+      return createAlwaysFalseExpr(columnRef, tree);
+    }
+
     case common::FilterKind::kBigintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
       auto result = VELOX_DYNAMIC_TYPE_DISPATCH(

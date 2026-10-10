@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfIntegerMembership.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -32,9 +33,11 @@
 #include "velox/type/Type.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column.hpp>
 
 #include <mutex>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -61,12 +64,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   void setFromDataSource(std::unique_ptr<DataSource> source) override;
 
   void addDynamicFilter(
-      column_index_t /*outputChannel*/,
-      const std::shared_ptr<facebook::velox::common::Filter>& /*filter*/)
-      override {
-    VELOX_NYI(
-        "Dynamic filters not yet implemented by cudf::CudfHiveConnector.");
-  }
+      column_index_t outputChannel,
+      const std::shared_ptr<facebook::velox::common::Filter>& filter) override;
 
   std::optional<RowVectorPtr> next(
       uint64_t size,
@@ -159,6 +158,49 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter.
   common::SubfieldFilters subfieldFilters_;
+
+  // Holds an exact integer filter and its lazily copied device values.
+  struct DynamicIntegerFilter {
+    // Sorted host values for reader bounds and device representation.
+    std::vector<int64_t> values;
+
+    // Preserves SQL filter semantics for null probe values.
+    bool nullAllowed;
+
+    // Avoids repeated uploads; stores input-width values or UINT32 bitmap
+    // words.
+    std::unique_ptr<cudf::column> deviceValues;
+
+    // The CPU bitmask filter's exact representation, copied once to
+    // deviceValues.
+    std::vector<uint32_t> bitmap{};
+    int64_t bitmapMinimum{0};
+
+    // Sparse filters retain one hash table across decoded batches.
+    std::unique_ptr<CudfIntegerHashSet> hashSet{};
+  };
+
+  // Tracks columns whose storage types must match accepted dynamic filters.
+  std::unordered_set<column_index_t> dynamicFilterChannels_;
+
+  // Keeps ranges and other merged filters by physical subfield.
+  common::SubfieldFilters dynamicFilters_;
+
+  // Keeps exact integer filters indexed by their output channel.
+  std::unordered_map<column_index_t, DynamicIntegerFilter>
+      dynamicIntegerFilters_;
+
+  // Owns all AST nodes referenced by 'dynamicFilterExpr_'.
+  std::unique_ptr<cudf::ast::tree> dynamicFilterTree_;
+
+  // Owns all scalars referenced by 'dynamicFilterExpr_'.
+  std::vector<std::unique_ptr<cudf::scalar>> dynamicFilterScalars_;
+
+  // Points to the AST used for filter kinds without a direct integer path.
+  const cudf::ast::expression* dynamicFilterExpr_{nullptr};
+
+  // No dynamic filter has changed since this data source created its reader.
+  bool readerFiltersCurrent_{false};
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive
