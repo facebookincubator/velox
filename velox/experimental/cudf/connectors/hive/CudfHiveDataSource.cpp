@@ -124,17 +124,30 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
-  // TODO: ConnectorQueryCtx does not expose the session QueryCtx, only an
-  // ExpressionEvaluator, so constant folding here runs against a transient
-  // QueryCtx with default query config rather than the session's. Passing the
-  // real session QueryCtx (e.g. by exposing it on ConnectorQueryCtx) should be
-  // figured out later. A local QueryCtx is required because
-  // expression::optimize constant-folds through exec::ExprSet, whose
-  // constructor dereferences the QueryCtx unconditionally; a null QueryCtx
-  // would crash.
-  auto optimizeQueryCtx = core::QueryCtx::create();
+  // ConnectorQueryCtx exposes no session QueryConfig, only the session time
+  // zone and whether to apply it, so folding, and the initialize() of the
+  // evaluators built from the folded filter, run against a local QueryCtx
+  // carrying those two settings and defaults for the rest. Folding touches
+  // only deterministic functions, so start_time, read by current_date, now and
+  // localtime, cannot change a fold; a setting left at its default here, such
+  // as the rendering of TIMESTAMP WITH TIME ZONE as VARCHAR, would.
+  // TODO: Fold through the session's evaluator once expression::optimize has
+  // an ExpressionEvaluator overload (facebookincubator/velox#17898), and take
+  // the config createCudfExpression needs from ConnectorQueryCtx once it
+  // exposes it (facebookincubator/velox#19476).
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
+  // An empty time zone is not a valid setting; leaving it unset means UTC.
+  if (!connectorQueryCtx->sessionTimezone().empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone,
+        connectorQueryCtx->sessionTimezone());
+  }
+  optimizeQueryCtx_ = core::QueryCtx::create(
+      nullptr, core::QueryConfig{std::move(sessionSettings)});
   optimizedRemainingFilter_ = remainingFilter
-      ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
+      ? expression::optimize(remainingFilter, optimizeQueryCtx_.get(), pool_)
       : nullptr;
   if (const auto constantFilter =
           std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
@@ -171,7 +184,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     // directly.
     auto const remainingFilterType = getTableRowType();
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_,
+        remainingFilterType,
+        pool_,
+        optimizeQueryCtx_->queryConfig());
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant

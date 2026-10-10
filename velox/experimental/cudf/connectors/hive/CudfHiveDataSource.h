@@ -104,6 +104,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
+  // Carries the session settings the remaining filter is folded and compiled
+  // against. Kept for the data source's lifetime: createCudfExpression borrows
+  // its config, and an evaluator may hold on to it.
+  std::shared_ptr<core::QueryCtx> optimizeQueryCtx_;
+
   // Columns to read.
   std::vector<std::string> readColumnNames_;
 
