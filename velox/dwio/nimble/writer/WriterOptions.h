@@ -235,6 +235,17 @@ struct WriterOptions {
   std::optional<std::vector<std::tuple<size_t, std::vector<int64_t>>>>
       featureReordering{};
 
+  /// Optional column reordering config: names of top-level columns, in the
+  /// order their streams should lead each stripe. Columns read together end up
+  /// adjacent on disk, so a reader fetching them can merge their reads into
+  /// fewer IOs. Unlisted columns follow in schema order, and unknown names are
+  /// ignored.
+  ///
+  /// A listed flat map that also has a featureReordering entry moves only its
+  /// ordered features to the listed position; its other features stay with
+  /// the unlisted streams. See DefaultLayoutPlanner for the full order.
+  std::optional<std::vector<std::string>> columnReordering{};
+
   /// Optional captured encoding layout tree.
   /// Encoding layout tree is overlayed on the writer tree and the captured
   /// encodings are attempted to be used first, before resolving to perform an

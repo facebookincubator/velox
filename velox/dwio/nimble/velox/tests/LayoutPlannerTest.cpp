@@ -416,6 +416,169 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMapDynamicFeatures) {
   testStreamLayout(rng, planner, std::move(streams), std::move(expected));
 }
 
+TEST(DefaultLayoutPlannerTests, reorderColumns) {
+  auto seed = folly::Random::rand32();
+  LOG(INFO) << "seed: " << seed;
+  std::mt19937 rng(seed);
+
+  nimble::SchemaBuilder builder;
+
+  nimble::test::FlatMapChildAdder fm;
+
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({
+          {"c1", NIMBLE_TINYINT()},
+          {"c2", NIMBLE_FLATMAP(Int8, NIMBLE_TINYINT(), fm)},
+          {"c3", NIMBLE_ARRAY(NIMBLE_TINYINT())},
+          {"c4", NIMBLE_TINYINT()},
+      }));
+
+  fm.addChild("2");
+  fm.addChild("5");
+
+  auto namedTypes = getNamedTypes(*builder.root());
+
+  // An unknown name is skipped and a repeated name keeps its first position.
+  nimble::LayoutPlannerOptions options;
+  options.columnOrder = {"c4", "missing", "c2", "c4"};
+  nimble::DefaultLayoutPlanner planner{&builder, std::move(options)};
+
+  std::vector<nimble::Stream> streams;
+  streams.reserve(namedTypes.size());
+  for (auto i = 0; i < namedTypes.size(); ++i) {
+    streams.push_back(
+        nimble::Stream{
+            std::get<0>(namedTypes[i]),
+            {{.content = {std::get<1>(namedTypes[i])}}}});
+  }
+
+  std::vector<std::string> expected{
+      // Row should always be first
+      "r",
+      // Followed by column order. A flat map without a feature order moves
+      // with all of its features.
+      "r.c4(3).s",
+      "r.c2(1).f",
+      "r.c2(1).f.2(0).im",
+      "r.c2(1).f.2(0).s",
+      "r.c2(1).f.5(1).im",
+      "r.c2(1).f.5(1).s",
+      // From here, streams follow schema order
+      "r.c1(0).s",
+      "r.c3(2).a",
+      "r.c3(2).a.s",
+  };
+
+  testStreamLayout(rng, planner, std::move(streams), std::move(expected));
+}
+
+TEST(DefaultLayoutPlannerTests, reorderColumnsWithFeatureOrder) {
+  auto seed = folly::Random::rand32();
+  LOG(INFO) << "seed: " << seed;
+  std::mt19937 rng(seed);
+
+  nimble::SchemaBuilder builder;
+
+  nimble::test::FlatMapChildAdder fm1;
+  nimble::test::FlatMapChildAdder fm2;
+
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({
+          {"c1", NIMBLE_TINYINT()},
+          {"c2", NIMBLE_FLATMAP(Int8, NIMBLE_TINYINT(), fm1)},
+          {"c3", NIMBLE_TINYINT()},
+          {"c4", NIMBLE_FLATMAP(Int8, NIMBLE_TINYINT(), fm2)},
+      }));
+
+  fm1.addChild("2");
+  fm1.addChild("5");
+  fm1.addChild("42");
+  fm2.addChild("2");
+  fm2.addChild("5");
+
+  auto namedTypes = getNamedTypes(*builder.root());
+
+  nimble::LayoutPlannerOptions options;
+  options.flatMapFeatureOrder = {{1, {42, 2}}, {3, {5}}};
+  options.columnOrder = {"c3", "c2"};
+  nimble::DefaultLayoutPlanner planner{&builder, std::move(options)};
+
+  std::vector<nimble::Stream> streams;
+  streams.reserve(namedTypes.size());
+  for (auto i = 0; i < namedTypes.size(); ++i) {
+    streams.push_back(
+        nimble::Stream{
+            std::get<0>(namedTypes[i]),
+            {{.content = {std::get<1>(namedTypes[i])}}}});
+  }
+
+  std::vector<std::string> expected{
+      // Row should always be first
+      "r",
+      // Followed by column order. c2 has a feature order, so only its ordered
+      // features move here.
+      "r.c3(2).s",
+      "r.c2(1).f",
+      "r.c2(1).f.42(2).im",
+      "r.c2(1).f.42(2).s",
+      "r.c2(1).f.2(0).im",
+      "r.c2(1).f.2(0).s",
+      // Followed by feature order for the flat map the column order left out
+      "r.c4(3).f",
+      "r.c4(3).f.5(1).im",
+      "r.c4(3).f.5(1).s",
+      // From here, streams follow schema order
+      "r.c1(0).s",
+      "r.c2(1).f.5(1).im",
+      "r.c2(1).f.5(1).s",
+      "r.c4(3).f.2(0).im",
+      "r.c4(3).f.2(0).s",
+  };
+
+  testStreamLayout(rng, planner, std::move(streams), std::move(expected));
+}
+
+// The planner caches resolved column ordinals across stripes. A row declared
+// with more children than it has so far must re-resolve once it gains one, so
+// a name unknown at first takes effect once its column exists.
+TEST(DefaultLayoutPlannerTests, reorderColumnsAfterRowGainsColumn) {
+  nimble::SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(/*childrenCount=*/3);
+  root->addChild(
+      "c1", builder.createScalarTypeBuilder(nimble::ScalarKind::Int8));
+  root->addChild(
+      "c2", builder.createScalarTypeBuilder(nimble::ScalarKind::Int8));
+
+  nimble::LayoutPlannerOptions options;
+  options.columnOrder = {"c3", "c2"};
+  nimble::DefaultLayoutPlanner planner{&builder, std::move(options)};
+  auto layoutNames = [&]() {
+    const auto namedTypes = getNamedTypes(*builder.root());
+    std::vector<nimble::Stream> streams;
+    streams.reserve(namedTypes.size());
+    for (const auto& [offset, name] : namedTypes) {
+      streams.push_back(nimble::Stream{offset, {{.content = {name}}}});
+    }
+    std::vector<std::string> names;
+    names.reserve(streams.size());
+    for (const auto& stream : planner.getLayout(std::move(streams))) {
+      names.emplace_back(stream.chunks[0].content[0]);
+    }
+    return names;
+  };
+
+  EXPECT_THAT(
+      layoutNames(), ::testing::ElementsAre("r", "r.c2(1).s", "r.c1(0).s"));
+
+  root->addChild(
+      "c3", builder.createScalarTypeBuilder(nimble::ScalarKind::Int8));
+  EXPECT_THAT(
+      layoutNames(),
+      ::testing::ElementsAre("r", "r.c3(2).s", "r.c2(1).s", "r.c1(0).s"));
+}
+
 TEST(DefaultLayoutPlannerTests, noFeatureReordering) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;

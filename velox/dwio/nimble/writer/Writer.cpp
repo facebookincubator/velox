@@ -1986,6 +1986,25 @@ std::vector<Writer::DenseIndexWriter> Writer::createDenseIndexWriters(
   return writers;
 }
 
+namespace {
+
+// Combines the independent feature and column priorities for each stripe.
+std::unique_ptr<LayoutPlanner> createLayoutPlanner(
+    const SchemaBuilder& schemaBuilder,
+    const WriterOptions& options) {
+  LayoutPlannerOptions plannerOptions;
+  if (options.featureReordering.has_value()) {
+    plannerOptions.flatMapFeatureOrder = *options.featureReordering;
+  }
+  if (options.columnReordering.has_value()) {
+    plannerOptions.columnOrder = *options.columnReordering;
+  }
+  return std::make_unique<DefaultLayoutPlanner>(
+      &schemaBuilder, std::move(plannerOptions));
+}
+
+} // namespace
+
 Writer::Writer(
     const velox::TypePtr& type,
     std::unique_ptr<velox::WriteFile> file,
@@ -2052,9 +2071,9 @@ Writer::Writer(
       tabletWriter_{TabletWriter::create(
           file_.get(),
           *encodingMemoryPool_,
-          {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
-               &context_->schemaBuilder(),
-               context_->options().featureReordering),
+          {.layoutPlanner = createLayoutPlanner(
+               context_->schemaBuilder(),
+               context_->options()),
            .metadataFlushThreshold =
                context_->options().metadataFlushThreshold.value_or(
                    kMetadataFlushThreshold),

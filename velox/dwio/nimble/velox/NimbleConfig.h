@@ -233,6 +233,15 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> FEATURE_ORDERING_OVERRIDE;
 
+  /// Orders top-level columns on disk so columns read together are physically
+  /// adjacent. Comma-separated top-level ordinals in the write input schema,
+  /// leading column first.
+  ///
+  /// Overrides WriterOptions::columnReordering when set; leaves it alone when
+  /// unset, so a caller that resolved an order elsewhere keeps it.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<const std::vector<uint32_t>> COLUMN_ORDERING_OVERRIDE;
+
   /// Compresses stripe-group metadata only when it exceeds this many bytes.
   /// Unset leaves the writer's own threshold; UINT32_MAX disables metadata
   /// compression outright.
