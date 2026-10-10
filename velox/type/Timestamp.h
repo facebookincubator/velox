@@ -322,10 +322,7 @@ struct Timestamp {
   ///
   /// This function is guaranteed to give same result as std::timegm when it is
   /// successful.
-  VELOX_GPU_COMPATIBLE static int64_t calendarUtcToEpoch(const std::tm& tm) {
-    static_assert(sizeof(decltype(tm.tm_year)) == 4);
-    return calendar::calendarUtcToEpoch(tm);
-  }
+  static int64_t calendarUtcToEpoch(const std::tm& tm);
 
   /// Truncates a Timestamp value to the specified precision.
   static Timestamp truncate(Timestamp ts, TimestampPrecision precision) {

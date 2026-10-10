@@ -47,12 +47,16 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE std::tm getDateTimeUtc(
     int64_t seconds) {
   std::tm dateTime{};
 #ifdef __CUDACC__
-  const bool converted = calendar::epochToCalendarUtc(seconds, dateTime);
-#else
-  const bool converted = Timestamp::epochToCalendarUtc(seconds, dateTime);
-#endif
   VELOX_USER_CHECK(
-      converted, "Timestamp is too large: {} seconds since epoch", seconds);
+      calendar::epochToCalendarUtc(seconds, dateTime),
+      "Timestamp is too large: {} seconds since epoch",
+      seconds);
+#else
+  VELOX_USER_CHECK(
+      Timestamp::epochToCalendarUtc(seconds, dateTime),
+      "Timestamp is too large: {} seconds since epoch",
+      seconds);
+#endif
   return dateTime;
 }
 
@@ -61,11 +65,16 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE std::tm getDateTime(int32_t days) {
   const int64_t seconds = days * kSecondsInDay;
   std::tm dateTime{};
 #ifdef __CUDACC__
-  const bool converted = calendar::epochToCalendarUtc(seconds, dateTime);
+  VELOX_USER_CHECK(
+      calendar::epochToCalendarUtc(seconds, dateTime),
+      "Date is too large: {} days",
+      days);
 #else
-  const bool converted = Timestamp::epochToCalendarUtc(seconds, dateTime);
+  VELOX_USER_CHECK(
+      Timestamp::epochToCalendarUtc(seconds, dateTime),
+      "Date is too large: {} days",
+      days);
 #endif
-  VELOX_USER_CHECK(converted, "Date is too large: {} days", days);
   return dateTime;
 }
 

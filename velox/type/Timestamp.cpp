@@ -138,6 +138,12 @@ bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
   return WideRangeDateConversion::epochToCalendarUtc(epoch, tm);
 }
 
+// static
+int64_t Timestamp::calendarUtcToEpoch(const std::tm& tm) {
+  static_assert(sizeof(decltype(tm.tm_year)) == 4);
+  return calendar::calendarUtcToEpoch(tm);
+}
+
 StringView Timestamp::tmToStringView(
     const std::tm& tmValue,
     uint64_t nanos,

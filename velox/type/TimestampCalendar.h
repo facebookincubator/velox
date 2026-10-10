@@ -88,7 +88,8 @@ VELOX_GPU_COMPATIBLE inline bool epochToCalendarUtc(
     remainder += kSecondsPerDay;
     --days;
   }
-  if (days < fast_date::kRataDieMin || days > fast_date::kRataDieMax) {
+  if (FOLLY_UNLIKELY(
+          days < fast_date::kRataDieMin || days > fast_date::kRataDieMax)) {
     return false;
   }
   tm.tm_hour = remainder / kSecondsPerHour;
