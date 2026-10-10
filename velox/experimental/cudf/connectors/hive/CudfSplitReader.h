@@ -35,7 +35,6 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
-#include <functional>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -77,18 +76,20 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
-      const cudf::io::parquet::FileMetaData&)>;
+  /// Resets the previous split, acquires a stream and reads the Parquet footer.
+  /// Must be called before fileMetadata(), setPushdownFilter() or
+  /// prepareSplit().
+  void prepareSplitMetadata();
 
-  /// Sets a builder for a split-specific pushdown filter. The builder is
-  /// invoked after the Parquet footer is read and before reader options are
-  /// configured. The returned expression must remain alive while the split is
-  /// being read.
-  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
-    pushdownFilterBuilder_ = std::move(builder);
-  }
+  /// Returns the Parquet footer loaded by prepareSplitMetadata().
+  const cudf::io::parquet::FileMetaData& fileMetadata() const;
 
-  /// Prepare the split: open cudf reader, set up data source and options.
+  /// Sets the split-specific pushdown filter. The expression must remain alive
+  /// while the split is being read.
+  void setPushdownFilter(const cudf::ast::expression* filter);
+
+  /// Finishes preparing the split after prepareSplitMetadata(): opens the cuDF
+  /// reader and sets up its options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
@@ -120,7 +121,7 @@ class CudfSplitReader : public NvtxHelper {
   virtual void resetSplit();
 
  protected:
-  // Performs split-specific setup after base reader state is reset.
+  // Performs split-specific setup after the Parquet footer is loaded.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
   // Returns whether the split is skipped.
@@ -265,8 +266,9 @@ class CudfSplitReader : public NvtxHelper {
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
-  PushdownFilterBuilder pushdownFilterBuilder_;
   bool hasSplitSpecificPushdownFilter_{false};
+  bool metadataPrepared_{false};
+  bool splitPrepared_{false};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

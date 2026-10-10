@@ -116,6 +116,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Cached combined AST filter expression compiled from 'subfieldFilters_',
   // owned by 'subfieldTree_'.
   const cudf::ast::expression* subfieldFilterAst_{nullptr};
+  // Whether any subfield filter targets a decimal column. If so, addSplit()
+  // rebuilds the pushdown AST against each split's Parquet decimal types.
+  bool hasDecimalSubfieldFilter_{false};
 
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
@@ -152,9 +155,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
 
-  // Expression evaluator for subfield filter.
+  // Logical and split-specific physical AST storage for subfield filters.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
+  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
+  cudf::ast::tree pushdownFilterTree_;
 
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter.

@@ -47,17 +47,13 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
  protected:
   void prepareSplitInternal(
-      dwio::common::RuntimeStats& /*runtimeStats*/) override {
-    fileMetaDatas();
-    // Metadata caching must not rebuild the filter during one preparation.
-    fileMetaDatas();
-  }
+      dwio::common::RuntimeStats& /*runtimeStats*/) override {}
 };
 
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
                                 CudfHiveConnectorTestBase {};
 
-TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
+TEST_F(CudfSplitReaderTest, setsPushdownFilterForEachSplitPreparation) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto dataFile = common::testutil::TempFilePath::create();
   writeToFile(
@@ -105,36 +101,24 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  size_t builderCalls = 0;
-  std::vector<size_t> schemaSizes;
-  reader.setPushdownFilterBuilder(
-      [&](const cudf::io::parquet::FileMetaData& metadata) {
-        schemaSizes.push_back(metadata.schema.size());
-        return builderCalls++ == 0
-            ? static_cast<cudf::ast::expression const*>(&firstSplitFilter)
-            : static_cast<cudf::ast::expression const*>(&secondSplitFilter);
-      });
-
-  // Installing a builder does not change the filter until split metadata is
-  // available.
-  EXPECT_EQ(reader.splitFilter(), &logicalFilter);
-  EXPECT_FALSE(reader.hasSplitFilter());
-
   dwio::common::RuntimeStats runtimeStats;
+  reader.prepareSplitMetadata();
+  EXPECT_GT(reader.fileMetadata().schema.size(), 1);
+  reader.setPushdownFilter(&firstSplitFilter);
   reader.prepareSplit(runtimeStats);
-  EXPECT_EQ(builderCalls, 1);
-  ASSERT_EQ(schemaSizes.size(), 1);
-  EXPECT_GT(schemaSizes.front(), 1);
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
   EXPECT_EQ(reader.splitFilter(), &firstSplitFilter);
   EXPECT_TRUE(reader.hasSplitFilter());
 
-  // Preparing again resets the previous split filter and rebuilds it from the
-  // footer without replacing the logical filter.
+  // Preparing metadata again resets the previous split filter without
+  // replacing the logical filter.
+  reader.prepareSplitMetadata();
+  EXPECT_GT(reader.fileMetadata().schema.size(), 1);
+  EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
+  EXPECT_EQ(reader.splitFilter(), &logicalFilter);
+  EXPECT_FALSE(reader.hasSplitFilter());
+  reader.setPushdownFilter(&secondSplitFilter);
   reader.prepareSplit(runtimeStats);
-  EXPECT_EQ(builderCalls, 2);
-  ASSERT_EQ(schemaSizes.size(), 2);
-  EXPECT_GT(schemaSizes.back(), 1);
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
   EXPECT_EQ(reader.splitFilter(), &secondSplitFilter);
   EXPECT_TRUE(reader.hasSplitFilter());
