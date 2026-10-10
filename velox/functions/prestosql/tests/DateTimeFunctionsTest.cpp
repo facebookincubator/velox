@@ -1039,6 +1039,10 @@ TEST_F(DateTimeFunctionsTest, timestampMinusIntervalYearMonth) {
   EXPECT_EQ("2000-02-29 04:05:06", minus("2000-03-30 04:05:06", 1));
   EXPECT_EQ("2000-01-29 04:05:06", minus("2000-02-29 04:05:06", 1));
 
+  // Timestamps before the epoch with a time of day.
+  EXPECT_EQ("1969-11-30 12:00:00", minus("1969-12-30 12:00:00", 1));
+  EXPECT_EQ("1969-02-28 12:00:00", minus("1969-03-30 12:00:00", 1));
+
   // Check if it does the right thing if we cross daylight saving boundaries.
   setQueryTimeZone("America/Los_Angeles");
   EXPECT_EQ("2024-01-01 00:00:00", minus("2024-07-01 00:00:00", 6));
@@ -1080,10 +1084,18 @@ TEST_F(DateTimeFunctionsTest, timestampPlusIntervalYearMonth) {
   EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-31 04:05:06", 1));
   EXPECT_EQ("2000-02-29 04:05:06", plus("2000-01-29 04:05:06", 1));
 
+  // Timestamps before the epoch with a time of day.
+  EXPECT_EQ("1969-12-30 12:00:00", plus("1969-11-30 12:00:00", 1));
+  EXPECT_EQ("1969-02-28 12:00:00", plus("1969-01-30 12:00:00", 1));
+
   // Check if it does the right thing if we cross daylight saving boundaries.
   setQueryTimeZone("America/Los_Angeles");
   EXPECT_EQ("2025-01-01 00:00:00", plus("2024-07-01 00:00:00", 6));
   EXPECT_EQ("2024-07-01 00:00:00", plus("2024-01-01 00:00:00", 6));
+
+  // The arithmetic runs on the local wall clock: 1969-11-30 20:00 in Los
+  // Angeles is 1969-12-01 04:00 UTC, and the local day is the one that counts.
+  EXPECT_EQ("1969-12-30 20:00:00", plus("1969-11-30 20:00:00", 1));
 }
 
 TEST_F(DateTimeFunctionsTest, plusMinusTimestampIntervalDayTime) {
@@ -3072,6 +3084,21 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
           1,
           Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
 
+  // Timestamps before the epoch keep the calendar day of their local time,
+  // so the month arithmetic starts from November 30, not December 1.
+  EXPECT_EQ(
+      parseTimestamp("1969-12-30 12:00:00"),
+      dateAdd("month", 1, parseTimestamp("1969-11-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-02-28 12:00:00"),
+      dateAdd("month", 1, parseTimestamp("1969-01-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-05-28 12:00:00"),
+      dateAdd("quarter", 1, parseTimestamp("1969-02-28 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1968-02-28 12:00:00"),
+      dateAdd("year", -1, parseTimestamp("1969-02-28 12:00:00")));
+
   // Test for daylight saving. Daylight saving in US starts at 2021-03-14
   // 02:00:00 PST.
   // When adjust_timestamp_to_timezone is off, no Daylight saving occurs
@@ -3353,6 +3380,12 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
                 {StringView{inputTimestamp}})})));
   };
 
+  // Calendar units before the epoch convert to local time first, so the
+  // month arithmetic starts from the local November 30, not December 1.
+  evaluateDateAddFromStrings(
+      "month", 1, "1969-11-30+20:00:00-08:00", "1969-12-30+20:00:00-08:00");
+  evaluateDateAddFromStrings(
+      "month", 1, "1969-01-30+20:00:00-08:00", "1969-02-28+20:00:00-08:00");
   evaluateDateAddFromStrings(
       "second", 3, "1972-05-20+23:01:02+14:00", "1972-05-20+23:01:05+14:00");
   evaluateDateAddFromStrings(
