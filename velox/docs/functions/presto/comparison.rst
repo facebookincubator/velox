@@ -8,6 +8,8 @@ Comparison Functions
     inclusive. Supports TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE,
     REAL, VARCHAR, DATE types. The types of all arguments must be
     the same.
+    If a bound is NULL, returns false when the comparison with the other
+    bound is false; otherwise returns NULL. A NULL x returns NULL.
 
 .. function:: distinct_from(x, y) -> boolean
 
