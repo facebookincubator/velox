@@ -28,7 +28,19 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
+Driver::Driver() = default;
+
 Driver::~Driver() = default;
+
+// static
+std::shared_ptr<Driver> Driver::testingCreate(std::unique_ptr<DriverCtx> ctx) {
+  auto* driver = new Driver();
+  if (ctx != nullptr) {
+    ctx->driver = driver;
+    driver->ctx_ = std::move(ctx);
+  }
+  return std::shared_ptr<Driver>(driver);
+}
 
 namespace {
 

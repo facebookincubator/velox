@@ -89,4 +89,12 @@ target_link_libraries(
   velox_aggregates
 )
 
+# QueryAssertions.cpp uses DuckDB directly to compute expected results. The
+# vendored DuckDB headers do not compile as C++23 (constexpr ~unique_ptr over an
+# incomplete duckdb::QueryNode), so build this one source as C++20. The trailing
+# -std wins over the target's C++23 flag; the rest of velox_exec_test_lib stays
+# C++23. QueryAssertions.h itself no longer includes <duckdb.hpp>, so its many
+# includers remain C++23.
+set_source_files_properties(QueryAssertions.cpp PROPERTIES COMPILE_OPTIONS -std=gnu++20)
+
 velox_add_library(velox_temp_path INTERFACE HEADERS TempDirectoryPath.h TempFilePath.h)

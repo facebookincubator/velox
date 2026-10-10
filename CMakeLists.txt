@@ -13,7 +13,7 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
@@ -505,12 +505,17 @@ if(ENABLE_ALL_WARNINGS)
     endif()
   endif()
 
+  # -Wno-deprecated-declarations: C++23 deprecates std::aligned_storage,
+  # std::aligned_union and other facilities that third-party dependencies
+  # (e.g. folly) still use. With -Werror these deprecations would break the
+  # build, so silence them.
   set(
     KNOWN_WARNINGS
     "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
+       -Wno-deprecated-declarations \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
   )
 
