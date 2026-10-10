@@ -113,10 +113,23 @@ StripeStreamsImpl createAndLoadStripeStreams(
     std::shared_ptr<StripeReadState> readState,
     const ColumnSelector& selector) {
   TestProvider indexProvider;
+  auto projectedNodes = std::make_shared<facebook::velox::BitSet>(0);
+  std::function<void(const TypeWithId&)> addProjectedNodes =
+      [&](const TypeWithId& node) {
+        if (!selector.shouldReadNode(node.id())) {
+          return;
+        }
+        projectedNodes->insert(node.id());
+        for (const auto& child : node.getChildren()) {
+          if (child) {
+            addProjectedNodes(*child);
+          }
+        }
+      };
+  addProjectedNodes(*readState->readerBase->schemaWithId());
   StripeStreamsImpl streams{
       readState,
-      &selector,
-      nullptr,
+      projectedNodes,
       RowReaderOptions{},
       0,
       StripeStreamsImpl::kUnknownStripeRows,
@@ -402,10 +415,8 @@ TEST_P(StripeStreamFormatTypeTest, zeroLength) {
   StripeReaderBase stripeReader{readerBase};
 
   TestProvider indexProvider;
-  ColumnSelector cs{std::dynamic_pointer_cast<const RowType>(type)};
   StripeStreamsImpl streams{
       stripeReadState,
-      &cs,
       nullptr,
       RowReaderOptions{},
       0,
@@ -681,12 +692,15 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
   auto stripeReadState =
       std::make_shared<StripeReadState>(readerBase, std::move(stripeMetadata));
   StripeReaderBase stripeReader{readerBase};
-  ColumnSelector selector{readerBase->schema(), {1, 2, 4}, true};
+  auto projectedNodes = std::make_shared<facebook::velox::BitSet>(0);
+  projectedNodes->insert(0);
+  projectedNodes->insert(1);
+  projectedNodes->insert(2);
+  projectedNodes->insert(4);
   TestProvider provider;
   StripeStreamsImpl streams{
       stripeReadState,
-      &selector,
-      nullptr,
+      projectedNodes,
       RowReaderOptions{},
       0,
       StripeStreamsImpl::kUnknownStripeRows,
@@ -767,17 +781,14 @@ TEST_F(StripeStreamTest, schemaMismatch) {
   auto stripeReadState =
       std::make_shared<StripeReadState>(readerBase, std::move(stripeMetadata));
   StripeReaderBase stripeReader{readerBase};
-  // now, we read the file as if schema has changed
-  auto schema =
-      HiveTypeParser().parse("struct<a:struct<a1:int,a2:int>,b:int,c:int>");
-  // only project b and c. Node id of b and c in the new schema is 4, 5
-  ColumnSelector selector{
-      std::dynamic_pointer_cast<const RowType>(schema), {4, 5}, true};
+  auto projectedNodes = std::make_shared<facebook::velox::BitSet>(0);
+  projectedNodes->insert(0);
+  projectedNodes->insert(3);
+  projectedNodes->insert(4);
   TestProvider provider;
   StripeStreamsImpl streams{
       stripeReadState,
-      &selector,
-      nullptr,
+      projectedNodes,
       RowReaderOptions{},
       0,
       StripeStreamsImpl::kUnknownStripeRows,
@@ -822,11 +833,6 @@ class TestStripeStreams : public StripeStreamsBase {
         si.encodingKey().sequence(),
         static_cast<proto::Stream_Kind>(si.kind()),
         throwIfNotFound));
-  }
-
-  const facebook::velox::dwio::common::ColumnSelector& getColumnSelector()
-      const override {
-    VELOX_UNSUPPORTED();
   }
 
   const facebook::velox::tz::TimeZone* sessionTimezone() const override {
