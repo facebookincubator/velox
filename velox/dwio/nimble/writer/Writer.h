@@ -142,6 +142,17 @@ class Writer : public velox::dwio::common::Writer {
     /// Sequential — no wall time needed.
     static constexpr std::string_view kEncodingSelectionCpuNanos =
         "nimble.encodingSelectionCpuNanos";
+    /// Number of chunks that replayed a layout captured by the
+    /// encoding-selection cache. Denominator for the fallback count below;
+    /// excludes replays of an externally supplied EncodingLayoutTree.
+    static constexpr std::string_view kEncodingSelectionCacheReplayCount =
+        "nimble.encodingSelectionCacheReplayCount";
+    /// Number of those replays that failed and paid a full selection cascade
+    /// anyway. A high ratio against the replay count means the cached layout
+    /// does not generalize across chunks, so the cache is costing a wasted
+    /// encode attempt per chunk instead of saving a selection.
+    static constexpr std::string_view kEncodingSelectionCacheFallbackCount =
+        "nimble.encodingSelectionCacheFallbackCount";
     /// Rows per stripe distribution. One value is recorded per stripe, so its
     /// `count` is the number of stripes written and no separate stripe counter
     /// is published.

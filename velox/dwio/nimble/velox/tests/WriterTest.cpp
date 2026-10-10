@@ -6009,6 +6009,8 @@ TEST_F(WriterTest, runtimeStatsPublishesEveryCounter) {
           ::testing::Key("nimble.encodingCpuNanos"),
           ::testing::Key("nimble.encodingWallNanos"),
           ::testing::Key("nimble.encodingSelectionCpuNanos"),
+          ::testing::Key("nimble.encodingSelectionCacheReplayCount"),
+          ::testing::Key("nimble.encodingSelectionCacheFallbackCount"),
           ::testing::Key("nimble.rowsPerStripe"),
           ::testing::Key("nimble.chunkSizeBytes"),
           ::testing::Key("nimble.duplicateStreamCount"),
@@ -7208,6 +7210,98 @@ DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutReplayRetry) {
     EXPECT_EQ(replayCount, 1);
     EXPECT_EQ(
         fullSelectionCount, 2); // chunk 0 seed (ok) + chunk 1 retry (threw)
+  }
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutFallbackStats) {
+  // encodingSelectionCacheReplayCount / ...FallbackCount report how often a
+  // cached layout was replayed and how often that replay failed and paid a
+  // full selection anyway. The fallback count is only interpretable against
+  // the replay count, so both are asserted together.
+  velox::common::testutil::TestValue::enable();
+
+  const auto type = velox::ROW({{"c0", velox::BIGINT()}});
+  // Two non-nullable chunks: chunk 0 seeds the cache, chunk 1 replays it.
+  const auto batches = bigintBatches(makeDivergentInt64Chunks(
+      /*chunkCount=*/2, /*rowsPerChunk=*/1000, /*seed=*/0xC0FFEE));
+
+  auto runScenario = [&](bool enableEncodingSelectionCache,
+                         std::function<void(const bool*)> onEncode) {
+    SCOPED_TESTVALUE_SET("facebook::nimble::encode", std::move(onEncode));
+    nimble::WriterOptions options;
+    options.enableEncodingSelectionCache = enableEncodingSelectionCache;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          /*flushLambda=*/[](auto&) { return false; },
+          /*chunkLambda=*/[](auto&) { return true; });
+    };
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        type, std::move(writeFile), *rootPool_, std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+    return writer.runtimeStats();
+  };
+  using NimbleStats = nimble::Writer::RuntimeStats;
+
+  // A replay that succeeds is counted, but is not a fallback.
+  {
+    const auto stats = runScenario(
+        /*enableEncodingSelectionCache=*/true, [](const bool*) {});
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheReplayCount)
+            .sum,
+        1);
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheFallbackCount)
+            .sum,
+        0);
+  }
+
+  // A replay forced to throw falls back to a fresh selection, and is counted
+  // as both a replay and a fallback.
+  {
+    const auto stats = runScenario(
+        /*enableEncodingSelectionCache=*/true,
+        [](const bool* hasEncodingLayout) {
+          if (*hasEncodingLayout) {
+            throw std::runtime_error("injected replay failure");
+          }
+        });
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheReplayCount)
+            .sum,
+        1);
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheFallbackCount)
+            .sum,
+        1);
+  }
+
+  // With the cache off nothing is ever replayed, so both counters stay zero --
+  // this is what distinguishes "cache never engaged" from "cache never missed".
+  {
+    const auto stats = runScenario(
+        /*enableEncodingSelectionCache=*/false, [](const bool*) {});
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheReplayCount)
+            .sum,
+        0);
+    EXPECT_EQ(
+        nimble::runtimeStat(
+            stats, NimbleStats::kEncodingSelectionCacheFallbackCount)
+            .sum,
+        0);
   }
 }
 
