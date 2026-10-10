@@ -25,6 +25,7 @@ add_executable(
   LambdaFunctionUtilTest.cpp
   MakeRowFromMapTest.cpp
   MapConcatTest.cpp
+  NormalizeFloatingPointTest.cpp
   QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp

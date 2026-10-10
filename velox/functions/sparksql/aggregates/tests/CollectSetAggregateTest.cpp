@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/functions/lib/NormalizeFloatingPoint.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/registration/Register.h"
@@ -82,7 +84,7 @@ TEST_F(CollectSetAggregateTest, global) {
       {"spark_array_sort(a0)"},
       {expected});
 
-  // NaN inputs are treated as distinct values.
+  // NaN inputs are equal to each other.
   data = makeRowVector({
       makeFlatVector<double>(
           {1,
@@ -93,10 +95,7 @@ TEST_F(CollectSetAggregateTest, global) {
 
   expected = makeRowVector({
       makeArrayVector<double>({
-          {1,
-           std::numeric_limits<double>::quiet_NaN(),
-           std::nan("1"),
-           std::nan("2")},
+          {1, std::numeric_limits<double>::quiet_NaN()},
       }),
   });
 
@@ -106,6 +105,89 @@ TEST_F(CollectSetAggregateTest, global) {
       {"collect_set(c0, true)"},
       {"spark_array_sort(a0)"},
       {expected});
+}
+
+// -0.0 and 0.0 are equal, and so are all NaNs. The result has 0.0 and the
+// canonical NaN, also for values nested in arrays and structs (SPARK-57298).
+TEST_F(CollectSetAggregateTest, floatingPoint) {
+  const double kNaN = std::numeric_limits<double>::quiet_NaN();
+  const double kNegativeNaN = -kNaN;
+  const float kFloatNaN = std::numeric_limits<float>::quiet_NaN();
+
+  auto doubles = makeRowVector({
+      makeFlatVector<double>(
+          {-0.0, 1.0, kNaN, 0.0, std::nan("1"), kNegativeNaN, -0.0}),
+  });
+  testAggregations(
+      {doubles},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {makeRowVector({makeArrayVector<double>({{0.0, 1.0, kNaN}})})});
+
+  auto floats = makeRowVector({
+      makeFlatVector<float>({-0.0f, kFloatNaN, 0.0f, std::nanf("1")}),
+  });
+  testAggregations(
+      {floats},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {makeRowVector({makeArrayVector<float>({{0.0f, kFloatNaN}})})});
+
+  // [-0.0], [0.0], [NaN], [NaN]
+  auto arrays = makeRowVector({
+      makeArrayVector<double>({{-0.0}, {0.0}, {kNaN}, {std::nan("1")}}),
+  });
+  testAggregations(
+      {arrays},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {makeRowVector({
+          makeArrayVector({0}, makeArrayVector<double>({{0.0}, {kNaN}})),
+      })});
+
+  // {-0.0, 1}, {0.0, 1}, {-0.0, 2}
+  auto structs = makeRowVector({
+      makeRowVector({
+          makeFlatVector<double>({-0.0, 0.0, -0.0}),
+          makeFlatVector<int32_t>({1, 1, 2}),
+      }),
+  });
+  testAggregations(
+      {structs},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {makeRowVector({
+          makeArrayVector(
+              {0},
+              makeRowVector({
+                  makeFlatVector<double>({0.0, 0.0}),
+                  makeFlatVector<int32_t>({1, 2}),
+              })),
+      })});
+
+  // The results above compare -0.0 and 0.0 as equal. Check the bits: the
+  // result is unchanged by normalizeFloatingPoint() only if every value is
+  // already in canonical form.
+  for (const auto& data : {doubles, floats, arrays, structs}) {
+    auto single = exec::test::PlanBuilder()
+                      .values({data})
+                      .singleAggregation({}, {"collect_set(c0)"})
+                      .planNode();
+    auto partialFinal = exec::test::PlanBuilder()
+                            .values({data, data})
+                            .partialAggregation({}, {"collect_set(c0)"})
+                            .finalAggregation()
+                            .planNode();
+    for (const auto& plan : {single, partialFinal}) {
+      auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      EXPECT_EQ(normalizeFloatingPoint(result, pool()), result)
+          << result->toString(0, 1, "\n", true);
+    }
+  }
 }
 
 TEST_F(CollectSetAggregateTest, noInputRow) {

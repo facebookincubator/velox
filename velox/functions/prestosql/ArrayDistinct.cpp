@@ -17,6 +17,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/NormalizeFloatingPoint.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -89,10 +90,17 @@ struct ValueSet<ComplexType> {
 /// First a new vector is created containing the indices of the elements
 /// which will be present in the output, and wrapped into a DictionaryVector.
 /// Next the `lengths` and `offsets` vectors that control where output arrays
-/// start and end are wrapped into the output ArrayVector.template <typename T>
+/// start and end are wrapped into the output ArrayVector.
+///
+/// If 'normalizeFloatingPoint' is true, REAL and DOUBLE values in the output,
+/// including nested ones, are returned in canonical form: -0.0 becomes 0.0
+/// and every NaN becomes the canonical NaN. Spark needs this.
 template <typename T, bool useCustomComparison = false>
 class ArrayDistinctFunction : public exec::VectorFunction {
  public:
+  explicit ArrayDistinctFunction(bool normalizeFloatingPoint = false)
+      : normalizeFloatingPoint_(normalizeFloatingPoint) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -191,6 +199,9 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     newIndices->setSize(indicesCursor * sizeof(vector_size_t));
     auto newElements =
         BaseVector::transpose(newIndices, std::move(elementsVector));
+    if (normalizeFloatingPoint_) {
+      newElements = normalizeFloatingPoint(newElements, pool);
+    }
 
     return std::make_shared<ArrayVector>(
         pool,
@@ -202,6 +213,8 @@ class ArrayDistinctFunction : public exec::VectorFunction {
         std::move(newElements),
         0);
   }
+
+  const bool normalizeFloatingPoint_;
 };
 
 template <>
@@ -272,16 +285,44 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
 template <TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const TypePtr& elementType) {
+    const TypePtr& elementType,
+    bool normalizeFloatingPoint) {
   VELOX_CHECK_EQ(inputArgs.size(), 1);
 
   using T = typename TypeTraits<kind>::NativeType;
 
   if (elementType->providesCustomComparison()) {
-    return std::make_shared<ArrayDistinctFunction<T, true>>();
+    return std::make_shared<ArrayDistinctFunction<T, true>>(
+        normalizeFloatingPoint);
   } else {
-    return std::make_shared<ArrayDistinctFunction<T, false>>();
+    return std::make_shared<ArrayDistinctFunction<T, false>>(
+        normalizeFloatingPoint);
   }
+}
+
+std::shared_ptr<exec::VectorFunction> createArrayDistinct(
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    bool normalizeFloatingPoint) {
+  validateType(inputArgs);
+  auto elementType = inputArgs.front().type->childAt(0);
+  if (elementType->isUnknown()) {
+    return std::make_shared<ArrayDistinctFunction<UnknownType>>();
+  }
+
+  normalizeFloatingPoint =
+      normalizeFloatingPoint && containsFloatingPoint(*elementType);
+
+  if (elementType->isArray() || elementType->isMap() || elementType->isRow()) {
+    return std::make_shared<ArrayDistinctFunction<ComplexType>>(
+        normalizeFloatingPoint);
+  }
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
+      createTyped,
+      elementType->kind(),
+      inputArgs,
+      elementType,
+      normalizeFloatingPoint);
 }
 
 // Create function.
@@ -289,18 +330,15 @@ std::shared_ptr<exec::VectorFunction> create(
     const std::string& /* name */,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  validateType(inputArgs);
-  auto elementType = inputArgs.front().type->childAt(0);
-  if (elementType->isUnknown()) {
-    return std::make_shared<ArrayDistinctFunction<UnknownType>>();
-  }
+  return createArrayDistinct(inputArgs, /*normalizeFloatingPoint=*/false);
+}
 
-  if (elementType->isArray() || elementType->isMap() || elementType->isRow()) {
-    return std::make_shared<ArrayDistinctFunction<ComplexType>>();
-  }
-
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
-      createTyped, elementType->kind(), inputArgs, elementType);
+// Creates array_distinct that returns REAL and DOUBLE values in canonical form.
+std::shared_ptr<exec::VectorFunction> createNormalizingFloatingPoint(
+    const std::string& /* name */,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
+  return createArrayDistinct(inputArgs, /*normalizeFloatingPoint=*/true);
 }
 
 // Define function signature.
@@ -322,5 +360,10 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_distinct,
     signatures(),
     create);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_distinct_normalize_floating_point,
+    signatures(),
+    createNormalizingFloatingPoint);
 
 } // namespace facebook::velox::functions
