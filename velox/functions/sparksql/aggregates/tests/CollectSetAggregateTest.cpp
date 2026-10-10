@@ -465,5 +465,30 @@ TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
       {expected});
 }
 
+// collect_set used as a window function also respects the constant
+// ignoreNulls argument.
+TEST_F(CollectSetAggregateTest, respectNullsWindow) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 2, std::nullopt, 1}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({data})
+                  .window({"collect_set(c0, false) over ()"})
+                  .project({"spark_array_sort(w0)"})
+                  .planNode();
+  std::vector<std::vector<std::optional<int32_t>>> withNulls(
+      5, {1, 2, std::nullopt});
+  assertQuery(plan, makeRowVector({makeNullableArrayVector(withNulls)}));
+
+  plan = exec::test::PlanBuilder()
+             .values({data})
+             .window({"collect_set(c0, true) over ()"})
+             .project({"spark_array_sort(w0)"})
+             .planNode();
+  std::vector<std::vector<int32_t>> withoutNulls(5, {1, 2});
+  assertQuery(plan, makeRowVector({makeArrayVector(withoutNulls)}));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test
