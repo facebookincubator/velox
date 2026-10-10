@@ -46,6 +46,8 @@ class AzuriteServer {
 
   std::string fileURI() const;
 
+  std::string readSasToken() const;
+
   std::string container() const {
     return container_;
   }

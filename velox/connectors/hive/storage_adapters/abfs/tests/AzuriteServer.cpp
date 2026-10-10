@@ -18,6 +18,8 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
+#include <azure/storage/blobs/blob_sas_builder.hpp>
+
 namespace facebook::velox::filesystems {
 
 std::string AzuriteServer::URI() const {
@@ -28,6 +30,19 @@ std::string AzuriteServer::URI() const {
 std::string AzuriteServer::fileURI() const {
   return fmt::format(
       "abfs://{}@{}.dfs.core.windows.net/{}", container_, account_, file_);
+}
+
+std::string AzuriteServer::readSasToken() const {
+  Azure::Storage::Sas::BlobSasBuilder builder{};
+  builder.Protocol = Azure::Storage::Sas::SasProtocol::HttpsAndHttp;
+  builder.BlobContainerName = container_;
+  builder.BlobName = file_;
+  builder.Resource = Azure::Storage::Sas::BlobSasResource::Blob;
+  builder.ExpiresOn =
+      Azure::DateTime(std::chrono::system_clock::now() + std::chrono::hours(1));
+  builder.SetPermissions(Azure::Storage::Sas::BlobSasPermissions::Read);
+  const Azure::Storage::StorageSharedKeyCredential credential(account_, key_);
+  return builder.GenerateSasToken(credential);
 }
 
 // Return the hiveConfig for the Azurite instance.

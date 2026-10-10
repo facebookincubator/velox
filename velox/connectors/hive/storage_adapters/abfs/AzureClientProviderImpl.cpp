@@ -94,6 +94,21 @@ SharedKeyAzureClientProvider::getReadFileClient(
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 
+std::unique_ptr<AzureBlobClient>
+SharedKeyAzureClientProvider::getReadFileClientWithOptions(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config,
+    const Azure::Storage::Blobs::BlobClientOptions& options) {
+  init(abfsPath, config);
+  auto client =
+      std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
+          connectionString_,
+          abfsPath->fileSystem(),
+          abfsPath->filePath(),
+          options));
+  return std::make_unique<BlobClientWrapper>(std::move(client));
+}
+
 std::unique_ptr<AzureDataLakeFileClient>
 SharedKeyAzureClientProvider::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
@@ -201,12 +216,42 @@ void OAuthAzureClientProvider::init(
       options);
 }
 
+namespace {
+
+std::string fixedSasBlobUrl(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  if (!config.valueExists(kAzureBlobEndpoint)) {
+    return abfsPath->getUrl(true);
+  }
+  auto endpoint = config.get<std::string>(kAzureBlobEndpoint).value();
+  while (!endpoint.empty() && endpoint.back() == '/') {
+    endpoint.pop_back();
+  }
+  return fmt::format(
+      "{}/{}/{}", endpoint, abfsPath->fileSystem(), abfsPath->filePath());
+}
+
+} // namespace
+
 std::unique_ptr<AzureBlobClient> FixedSasAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
   init(abfsPath, config);
-  const auto url = abfsPath->getUrl(true);
+  const auto url = fixedSasBlobUrl(abfsPath, config);
   auto client = std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
+  return std::make_unique<BlobClientWrapper>(std::move(client));
+}
+
+std::unique_ptr<AzureBlobClient>
+FixedSasAzureClientProvider::getReadFileClientWithOptions(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config,
+    const Azure::Storage::Blobs::BlobClientOptions& options) {
+  init(abfsPath, config);
+  const auto url = fixedSasBlobUrl(abfsPath, config);
+  auto client =
+      std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_), options);
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 

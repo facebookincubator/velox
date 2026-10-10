@@ -1,0 +1,34 @@
+Stage 4 cooperative retry backoff stack
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Test: AbfsAsyncRuntimeTest.AzureRetryPolicyYieldsToUnrelatedRequest
+Breakpoint: AbfsAsyncRuntime.cpp:567 at the fiber Baton timed_wait call
+
+Representative sanitized frames
+#0  AbfsAsyncRuntime::RuntimeState::waitForRetryDelay at AbfsAsyncRuntime.cpp:567
+#1  AbfsAsyncRuntime::waitForRetryDelay at AbfsAsyncRuntime.cpp:1039
+#2  Azure retry delay callback at AbfsAsyncRuntimeTest.cpp
+#3  std::function delay callback dispatch
+#4  std::function delay callback dispatch
+#5  std::function delay callback dispatch
+#6  Azure::Core::Http::Policies::_internal::RetryPolicy::Send
+#7  Azure::Core::Http::_internal::HttpPipeline::Send
+#8  AbfsAsyncRuntimeTest.AzureRetryPolicyYieldsToUnrelatedRequest task
+#9  folly::Function task dispatch
+#10 folly::Function task dispatch
+#11 AbfsAsyncRuntime::RuntimeState::submit task wrapper
+#12 folly::Function request dispatch
+#13 folly::Function request dispatch
+#14 AbfsAsyncRuntime::RuntimeState::dispatch fiber task
+#15 folly::Function fiber dispatch
+#16 folly::Function fiber dispatch
+#17 folly::fibers::Fiber::fiberFunc
+#18 folly::fibers::Fiber constructor task
+#19 folly::Function fiber dispatch
+#20 folly::Function fiber dispatch
+#21 folly::fibers::FiberImpl::fiberFunc
+
+Verdict
+- The real Azure retry path reaches the ABFS cooperative Baton timer.
+- No std::this_thread::sleep_for frame appears in the captured retry stack.
+- Unrelated sleep_for symbols linked by tests or other SDK paths are not on this runtime stack.
