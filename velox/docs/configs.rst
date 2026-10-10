@@ -1503,6 +1503,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.array_sort.reject_null_comparator_keys
+     - bool
+     - true
+     - If true, :spark:func:`array_sort` with a comparator lambda throws a user error when the
+       rewritten sort key is NULL for an array with two or more elements, because ordering NULL
+       keys independently does not preserve Spark's pairwise comparator semantics. If false,
+       NULL sort keys are placed at the end of the array, which may differ from Spark.
    * - spark.decimal_to_float_high_precision_cast_enabled
      - bool
      - false

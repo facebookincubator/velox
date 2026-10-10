@@ -15,6 +15,7 @@
  */
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
@@ -27,14 +28,16 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
   }
 
   VELOX_CHECK_EQ(inputArgs.size(), 1);
-  // Nulls are considered largest.
+  // Top-level nulls are largest, but nested nulls are smallest.
   return facebook::velox::functions::makeArraySort(
       name,
       inputArgs,
       config,
-      true /*ascending*/,
-      false /*nullsFirst*/,
-      false /*throwOnNestedNull*/);
+      {.ascending = true,
+       .nullsFirst = false,
+       .nestedNullsFirst = true,
+       .throwOnNestedNull = false,
+       .stable = true});
 }
 
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
@@ -45,6 +48,36 @@ std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
   return makeArraySortLambdaFunction(name, inputArgs, config, false, false);
 }
 
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorAsc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeArraySortLambdaFunction(
+      name,
+      inputArgs,
+      config,
+      {.ascending = true,
+       .throwOnNestedNull = false,
+       .rejectNullSortKeys =
+           SparkQueryConfig{config}.arraySortRejectNullComparatorKeys(),
+       .skipLambdaForTrivialArrays = true});
+}
+
+std::shared_ptr<exec::VectorFunction> makeArraySortComparatorDesc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeArraySortLambdaFunction(
+      name,
+      inputArgs,
+      config,
+      {.ascending = false,
+       .throwOnNestedNull = false,
+       .rejectNullSortKeys =
+           SparkQueryConfig{config}.arraySortRejectNullComparatorKeys(),
+       .skipLambdaForTrivialArrays = true});
+}
+
 // Signatures:
 //   array_sort_desc(array(T), function(T,U)) -> array(T)
 std::vector<std::shared_ptr<exec::FunctionSignature>>
@@ -52,6 +85,22 @@ arraySortDescSignatures() {
   return {
       exec::FunctionSignatureBuilder()
           .orderableTypeVariable("T")
+          .orderableTypeVariable("U")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .constantArgumentType("function(T,U)")
+          .build(),
+  };
+}
+
+// Signatures:
+//   $internal$array_sort_comparator(array(T), function(T,U)) -> array(T)
+//   $internal$array_sort_comparator_desc(array(T), function(T,U)) -> array(T)
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arraySortComparatorSignatures() {
+  return {
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
           .orderableTypeVariable("U")
           .returnType("array(T)")
           .argumentType("array(T)")
@@ -97,15 +146,17 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
     }
     ascending = boolVector->as<ConstantVector<bool>>()->valueAt(0);
   }
-  // Nulls are considered smallest.
+  // Nulls are smallest when ascending and largest when descending.
   bool nullsFirst = ascending;
   return facebook::velox::functions::makeArraySort(
       name,
       inputArgs,
       config,
-      ascending /*ascending*/,
-      nullsFirst /*nullsFirst*/,
-      false /*throwOnNestedNull*/);
+      {.ascending = ascending,
+       .nullsFirst = nullsFirst,
+       .nestedNullsFirst = nullsFirst,
+       .throwOnNestedNull = false,
+       .stable = true});
 }
 
 } // namespace facebook::velox::functions::sparksql

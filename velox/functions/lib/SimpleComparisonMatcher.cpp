@@ -16,12 +16,61 @@
 
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions {
+namespace {
+
+// Returns false if 'name' is a registered non-deterministic function, or is
+// neither a registered function nor a special form. Special forms (if, switch,
+// cast, coalesce, etc.) are deterministic given deterministic inputs.
+bool isDeterministicCall(const std::string& name) {
+  const auto simpleFunctions =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(name);
+  const auto vectorMetadata = exec::getVectorFunctionMetadata(name);
+  if (simpleFunctions.empty() && !vectorMetadata.has_value()) {
+    return exec::specialFormRegistry().getSpecialForm(name) != nullptr;
+  }
+
+  for (const auto& [metadata, _] : simpleFunctions) {
+    if (!metadata.deterministic) {
+      return false;
+    }
+  }
+  return !vectorMetadata.has_value() || vectorMetadata->deterministic;
+}
+
+bool isDeterministicTransform(const core::TypedExprPtr& expr) {
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expr)) {
+    return isDeterministicTransform(lambda->body());
+  }
+
+  if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    if (!isDeterministicCall(call->name())) {
+      return false;
+    }
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (!isDeterministicTransform(input)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 bool Matcher::allMatch(
     const std::vector<core::TypedExprPtr>& exprs,
     std::vector<std::shared_ptr<Matcher>>& matchers) {
+  if (exprs.size() != matchers.size()) {
+    return false;
+  }
+
   for (auto i = 0; i < exprs.size(); ++i) {
     if (!matchers[i]->match(exprs[i])) {
       return false;
@@ -54,7 +103,6 @@ bool ComparisonMatcher::match(const core::TypedExprPtr& expr) {
 }
 
 bool AnySingleInputMatcher::match(const core::TypedExprPtr& expr) {
-  // Check if 'expr' depends on a single column.
   std::unordered_set<core::FieldAccessTypedExprPtr> inputs;
   collectInputs(expr, inputs);
 
@@ -83,13 +131,67 @@ void AnySingleInputMatcher::collectInputs(
   }
 }
 
-bool ComparisonConstantMatcher::match(const core::TypedExprPtr& expr) {
-  if (auto constant = asConstant(expr.get())) {
-    auto v = constant.value();
-    if (v == 0 || v == 1 || v == -1) {
-      *value_ = v;
+bool AnySingleLambdaInputMatcher::match(const core::TypedExprPtr& expr) {
+  // Captured fields are allowed, but the expression must depend on exactly one
+  // of the lambda arguments.
+  std::unordered_set<core::FieldAccessTypedExprPtr> inputs;
+  if (!collectInputs(expr, inputs)) {
+    return false;
+  }
+
+  core::FieldAccessTypedExprPtr lambdaInput;
+  for (const auto& input : inputs) {
+    if (!lambdaInputs_.contains(input->name())) {
+      continue;
+    }
+    if (lambdaInput != nullptr && lambdaInput->name() != input->name()) {
+      return false;
+    }
+    lambdaInput = input;
+  }
+
+  if (lambdaInput == nullptr) {
+    return false;
+  }
+
+  *expr_ = expr;
+  *input_ = std::move(lambdaInput);
+  return true;
+}
+
+bool AnySingleLambdaInputMatcher::collectInputs(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) const {
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expr)) {
+    for (const auto& name : lambda->signature()->names()) {
+      if (lambdaInputs_.contains(name)) {
+        return false;
+      }
+    }
+    return collectInputs(lambda->body(), inputs);
+  }
+
+  if (auto field =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    if (field->isInputColumn()) {
+      inputs.insert(field);
       return true;
     }
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (!collectInputs(input, inputs)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ComparisonConstantMatcher::match(const core::TypedExprPtr& expr) {
+  if (auto constant = asConstant(expr.get())) {
+    *value_ = constant.value();
+    return true;
   }
   return false;
 }
@@ -138,20 +240,34 @@ bool SimpleComparisonChecker::isLessThen(
 
 std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
     const std::string& prefix,
-    const core::LambdaTypedExpr& expr) {
+    const core::LambdaTypedExpr& expr,
+    bool supportsArbitraryComparatorResults) {
   // First, check the shape of the expression.
   // if (x(a) < y(b), c1, if (u(c) > v(d), c2, c3))
   core::FieldAccessTypedExprPtr a, b, c, d;
   core::TypedExprPtr x, y, u, v;
   std::string op1, op2;
-  int64_t c1, c2, c3;
+  int64_t c1{0};
+  int64_t c2{0};
+  int64_t c3{0};
+
+  const auto left = expr.signature()->nameOf(0);
+  const auto right = expr.signature()->nameOf(1);
+  const std::unordered_set<std::string> lambdaInputs{left, right};
 
   auto matcher = ifelse(
-      comparison(prefix, anySingleInput(&x, &a), anySingleInput(&y, &b), &op1),
+      comparison(
+          prefix,
+          anySingleInput(&x, &a, lambdaInputs),
+          anySingleInput(&y, &b, lambdaInputs),
+          &op1),
       comparisonConstant(&c1),
       ifelse(
           comparison(
-              prefix, anySingleInput(&u, &c), anySingleInput(&v, &d), &op2),
+              prefix,
+              anySingleInput(&u, &c, lambdaInputs),
+              anySingleInput(&v, &d, lambdaInputs),
+              &op2),
           comparisonConstant(&c2),
           comparisonConstant(&c3)));
 
@@ -159,9 +275,26 @@ std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
     return std::nullopt;
   }
 
-  // Verify that a != b, c != d.
-  if (a == b || c == d) {
+  const auto usesBothLambdaArguments =
+      [&](const core::FieldAccessTypedExprPtr& first,
+          const core::FieldAccessTypedExprPtr& second) {
+        return (first->name() == left && second->name() == right) ||
+            (first->name() == right && second->name() == left);
+      };
+
+  if (left == right || !usesBothLambdaArguments(a, b) ||
+      !usesBothLambdaArguments(c, d)) {
     return std::nullopt;
+  }
+
+  if (!supportsArbitraryComparatorResults) {
+    const auto isNormalizedResult = [](int64_t result) {
+      return result == -1 || result == 0 || result == 1;
+    };
+    if (!isNormalizedResult(c1) || !isNormalizedResult(c2) ||
+        !isNormalizedResult(c3)) {
+      return std::nullopt;
+    }
   }
 
   // Verify that x, y, u, v are the same (except for input column).
@@ -176,36 +309,40 @@ std::optional<SimpleComparison> SimpleComparisonChecker::isSimpleComparison(
     return std::nullopt;
   }
 
-  // Verify all constants are different.
-  if (c1 == c2 || c2 == c3 || c1 == c3) {
-    return std::nullopt;
-  }
-
   const auto eq = eqName(prefix);
+  const bool op1IsEquality = op1 == eq;
+  const bool op2IsEquality = op2 == eq;
+  const auto haveOppositeSigns = [](int64_t leftResult, int64_t rightResult) {
+    return (leftResult < 0 && rightResult > 0) ||
+        (leftResult > 0 && rightResult < 0);
+  };
 
-  // Verify that equality comparisons return zero.
-  // if (x(a) = y(a), 0,..) is good. if (x(a) = y(a), 1,..) is not good.
-  // Also, verify that non-equality comparisons return non-zero.
-  // if (x(a) < y(a), 1,..) is good. if (x(a) < y(a), 0,..) is not good.
-  if ((op1 == eq && c1 != 0) || (op1 != eq && c1 == 0)) {
+  if (op1IsEquality && op2IsEquality) {
     return std::nullopt;
   }
-
-  if ((op2 == eq && c2 != 0) || (op2 != eq && c2 == 0)) {
-    return std::nullopt;
-  }
-
-  const auto left = expr.signature()->nameOf(0);
 
   const auto transform = a->name() == left ? x : y;
+  if (!isDeterministicTransform(transform)) {
+    return std::nullopt;
+  }
 
-  if (op1 == eq) {
+  if (op1IsEquality) {
     // if (x(a) = y(b), 0,...)
+    if (c1 != 0 || !haveOppositeSigns(c2, c3)) {
+      return std::nullopt;
+    }
     return {{transform, isLessThen(prefix, op2, c, c2, left)}};
   }
 
-  if (op2 == eq) {
+  if (op2IsEquality) {
+    if (c2 != 0 || !haveOppositeSigns(c1, c3)) {
+      return std::nullopt;
+    }
     return {{transform, isLessThen(prefix, op1, a, c1, left)}};
+  }
+
+  if (c3 != 0 || !haveOppositeSigns(c1, c2)) {
+    return std::nullopt;
   }
 
   // Make sure op1 and op2 are aligned.
