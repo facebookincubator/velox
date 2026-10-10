@@ -59,12 +59,17 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 }
 
 struct BarrierState {
-  int32_t numRequested;
+  /// Tracks the number of peers that have entered the current barrier round.
+  uint32_t numRequested{0};
+  /// Tracks the number of non-retired peers expected in the current round.
+  uint32_t numPeers{0};
+  /// Identifies the pipeline that owns the current barrier round.
+  std::optional<uint32_t> pipelineId;
+  /// Holds drivers waiting at the current barrier round.
   std::vector<std::shared_ptr<Driver>> drivers;
-  /// Promises given to non-last peer drivers that the last driver will collect
-  /// all hashtables from the peers and assembles them into one (HashBuilder
-  /// operator does that). After the last drier done its work, the promises are
-  /// fulfilled and the non-last drivers can continue.
+  /// Promises given to non-last peer drivers. After the last driver completes
+  /// the barrier's coordinated work, the promises are fulfilled and the
+  /// non-last drivers can continue.
   std::vector<ContinuePromise> allPeersFinishedPromises;
 };
 
@@ -211,6 +216,10 @@ struct SplitGroupState {
       customBridges;
   /// Holds states for Task::allPeersFinished.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
+  /// Tracks the number of operators that won't participate in future barriers,
+  /// keyed by plan node ID and pipeline ID.
+  std::unordered_map<core::PlanNodeId, std::unordered_map<uint32_t, uint32_t>>
+      retiredBarrierPeers;
 
   /// Map of merge sources keyed on LocalMergeNode plan node ID.
   std::
@@ -250,6 +259,7 @@ struct SplitGroupState {
       bridges.clear();
       customBridges.clear();
       barriers.clear();
+      retiredBarrierPeers.clear();
     }
     localMergeSources.clear();
     mergeJoinSources.clear();
