@@ -18,8 +18,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <folly/Range.h>
@@ -82,12 +86,48 @@ class VectorIndex {
       return Kind::kHnsw;
     }
 
-    /// Sets the HNSW candidate-list size.
+    /// Sets the HNSW candidate-list size. Filtered searches may require a
+    /// larger depth because FAISS applies row eligibility to result admission,
+    /// while graph traversal still visits ineligible rows.
     const uint32_t searchDepth;
   };
 
   /// Configures one or more nearest-neighbor queries.
   struct SearchConfig {
+    /// Identifies rows that may participate in nearest-neighbor search.
+    ///
+    /// Bitmap storage must remain valid and immutable until search returns.
+    class RowSelection {
+     public:
+      /// Selects every indexed row.
+      static RowSelection all();
+
+      /// Creates a selection from an LSB-first bitmap. Bit i selects row i
+      /// covered by the index and is stored in byte i / 8. The bitmap must
+      /// contain ceil(numVectors() / 8) bytes.
+      static RowSelection fromBitmap(std::span<const uint8_t> bitmap);
+
+      /// Creates a selection from a half-open index-local row range.
+      static RowSelection fromRange(RowRange range);
+
+      /// Returns the bitmap when this selection uses one.
+      std::optional<std::span<const uint8_t>> bitmap() const;
+
+      /// Returns the range when this selection uses one.
+      std::optional<RowRange> range() const;
+
+     private:
+      struct AllRows {};
+
+      using Selection =
+          std::variant<AllRows, std::span<const uint8_t>, RowRange>;
+
+      explicit RowSelection(Selection selection);
+
+      // Stores exactly one supported row selection.
+      Selection selection_;
+    };
+
     /// Sets the number of vectors in 'queryVectors'.
     uint32_t numQueries;
 
@@ -99,6 +139,10 @@ class VectorIndex {
 
     /// Configures the selected index implementation.
     std::shared_ptr<const SearchOptions> searchOptions;
+
+    /// Restricts every query to the same set of eligible indexed rows. All
+    /// indexed rows are eligible by default.
+    RowSelection rowSelection{RowSelection::all()};
   };
 
   /// Identifies one nearest-neighbor match and its metric-specific score.
