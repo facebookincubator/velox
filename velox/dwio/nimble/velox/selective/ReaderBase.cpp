@@ -155,6 +155,28 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
 
 std::shared_ptr<ReaderBase> ReaderBase::create(
     std::unique_ptr<velox::dwio::common::BufferedInput> input,
+    std::shared_ptr<TabletReader> tablet,
+    const velox::dwio::common::ReaderOptions& options) {
+  NIMBLE_CHECK_NOT_NULL(tablet);
+  tablet->loadRemainingMetadata(TabletReader::configureOptions(options));
+
+  auto* pool = &options.memoryPool();
+  const auto nimbleSchema = loadSchema(*tablet);
+  auto fileSchema =
+      asRowType(getFileSchema(options, convertToVeloxType(*nimbleSchema)));
+
+  return std::shared_ptr<ReaderBase>(new ReaderBase(
+      std::move(input),
+      std::move(tablet),
+      options.randomSkip(),
+      options.scanSpec(),
+      nimbleSchema,
+      std::move(fileSchema),
+      pool));
+}
+
+std::shared_ptr<ReaderBase> ReaderBase::create(
+    std::unique_ptr<velox::dwio::common::BufferedInput> input,
     const std::shared_ptr<CachedTabletReader>& cachedTablet,
     const velox::dwio::common::ReaderOptions& options) {
   NIMBLE_CHECK_NOT_NULL(cachedTablet);
