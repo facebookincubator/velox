@@ -139,7 +139,21 @@ Mathematical Functions
     When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
     rounds up to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    precision raise a user error regardless of ANSI mode; ``try`` catches
+    errors per row.
+
+    Shares scale validation and result typing with :spark:func:`decimal_round`.
+    The full INTEGER scale range is supported with widened scale arithmetic,
+    without clamping or constructing enormous powers of ten.
+    For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
+    When the quantum is outside the result precision, positive nonzero inputs
+    raise an error; negative inputs and zero return zero.
+
+    A typed NULL scale returns NULL without evaluating the runtime decimal
+    child; its result type uses scale zero. This follows Spark's shared
+    RoundBase evaluator, but Spark 4.1.1's SQL ceil/floor function builder
+    rejects NULL scales before reaching that evaluator. Acceptance here is a
+    native special-form contract, not SQL registry parity.
 
     **Result type rules:**
 
@@ -154,7 +168,9 @@ Mathematical Functions
       The result scale is always 0. ``|n| + 1`` digits are needed because rounding
       to the nearest 10^|n| can produce a value one digit wider.
 
-    See `Spark's RoundBase.dataType <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+    See https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala.
+    Extreme scales follow the mathematical native contract rather than JVM
+    resource exceptions or overflowing INTEGER metadata arithmetic.
 
     Examples (type annotations for clarity, not executable SQL)::
 
@@ -184,8 +200,10 @@ Mathematical Functions
 
     When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
     rounds down to the nearest hundred). When ``scale`` >= the input
-    scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    scale, returns the value unchanged. Shares the scale validation, NULL-scale
+    handling and row-local overflow errors of :spark:func:`decimal_ceil`.
+    When the quantum is outside the result precision, negative nonzero inputs
+    raise an error; positive inputs and zero return zero.
 
     **Result type rules:**
 

@@ -274,11 +274,24 @@ Decimal Special Forms
 
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
-    Returns ``decimal`` rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
-    ``scale`` is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
-    When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
+    Rounds ``decimal`` to a new scale using HALF_UP rounding: exact halfway
+    cases round away from zero.
+    ``scale`` defaults to zero and must be a constant INTEGER expression, or
+    NULL. The full INTEGER scale range is supported without clamping. A null
+    scale returns null without evaluating the decimal child; its resolved
+    output type is the same as for scale zero.
+    The expression must supply the resolved decimal result type, which is
+    validated against Spark's precision and scale rules below.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
+    If a negative scale causes the rounded value to exceed decimal precision
+    38, evaluation raises a user error regardless of ANSI mode. ``try`` catches
+    that error per row.
+    Dropping more than 38 digits returns zero; dropping exactly 38 digits can
+    still round away from zero and overflow.
+    Extreme-scale arithmetic is mathematical, not an emulation of JVM
+    BigInteger resource limits or INTEGER negation overflow. This domain is
+    not a claim of matching Spark's extreme-scale exceptions or result types.
 
     ::
 
@@ -309,7 +322,7 @@ Decimal Special Forms
     ::
 
         SELECT round(cast (85.681 as DECIMAL(5, 3)), 1); -- decimal 85.7
-        SELECT round(cast (85.681 as DECIMAL(5, 3)), 999); -- decimal 85.681
+        SELECT round(cast (85.681 as DECIMAL(5, 3)), 400); -- decimal 85.681
         SELECT round(cast (0.1234567890123456789 as DECIMAL(19, 19)), 14); -- decimal 0.12345678901235
 
 .. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
