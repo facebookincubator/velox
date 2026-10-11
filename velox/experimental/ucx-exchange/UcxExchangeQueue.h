@@ -29,9 +29,9 @@ namespace facebook::velox::ucx_exchange {
 
 /// Struct that bundles received cuDF table storage with the CUDA stream that
 /// was used to allocate its memory. This allows the receiver to reuse the same
-/// stream for subsequent GPU operations. Uncompressed and fused FOR payloads
-/// retain a cudf::packed_table. Cascaded decompression produces an owning
-/// cudf::table.
+/// stream for subsequent GPU operations. The table is stored either as a
+/// cudf::packed_table or as an owning cudf::table, depending on how the
+/// received payload was restored.
 struct PackedTableWithStream {
   std::unique_ptr<cudf::table> table;
   std::unique_ptr<cudf::packed_table> packedTable;

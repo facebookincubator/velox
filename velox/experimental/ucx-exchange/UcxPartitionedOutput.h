@@ -132,15 +132,13 @@ class UcxPartitionedOutput : public exec::Operator,
       cuda::stream_ref stream);
 
   // Packs one table for transfer using the compression mode selected for this
-  // query. With no compression, this returns normal cudf::packed_columns.
-  // Fused FOR transforms and packs 32 KiB tiles in one operation. Cascaded
-  // returns normal packed data when compression does not make it smaller.
+  // query and records its compression statistics.
   std::unique_ptr<cudf::packed_columns> packForExchange(
       cudf::table_view tableView,
       cuda::stream_ref stream);
 
-  /// Records the uncompressed bytes, transferred bytes, and fused FOR segment
-  /// count for a compressed payload.
+  // Records the uncompressed and transmitted bytes of a payload when this
+  // operator compresses its output, plus its auxiliary count when it has one.
   void recordCompressionStats(const PackedExchangePayload& payload);
 
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
@@ -180,7 +178,7 @@ class UcxPartitionedOutput : public exec::Operator,
   /// Configured row threshold for flushing (from QueryConfig).
   const int64_t targetRowsPerChunk_;
 
-  /// Compression mode selected for this query's exchange output.
+  // Compression mode selected for this query's exchange output.
   const ExchangeCompression compression_;
 };
 

@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -62,7 +61,8 @@ void checkEnvelopeCodec(ExchangePayloadCodec codec, uint64_t auxiliaryCount) {
       static_cast<uint8_t>(codec));
   VELOX_CHECK(
       codec != ExchangePayloadCodec::kCascaded || auxiliaryCount == 0,
-      "Cascaded cannot carry an auxiliary segment count");
+      "Cascaded cannot carry an auxiliary segment count: {}",
+      auxiliaryCount);
 }
 
 } // namespace
@@ -74,10 +74,6 @@ std::unique_ptr<std::vector<uint8_t>> wrapExchangePayloadMetadata(
     std::size_t auxiliaryCount) {
   VELOX_CHECK_NOT_NULL(cudfMetadata);
   checkEnvelopeCodec(codec, auxiliaryCount);
-  VELOX_CHECK_LE(
-      cudfMetadata->size(),
-      std::numeric_limits<std::size_t>::max() - kHeaderSize,
-      "Exchange compression metadata envelope size overflow");
 
   auto output = std::make_unique<std::vector<uint8_t>>();
   output->reserve(kHeaderSize + cudfMetadata->size());
@@ -119,14 +115,6 @@ ExchangePayloadMetadata unwrapExchangePayloadMetadata(
       headerSize, kHeaderSize, "Invalid exchange compression header size");
   const auto codec = static_cast<ExchangePayloadCodec>(codecValue);
   checkEnvelopeCodec(codec, auxiliaryCount);
-  VELOX_CHECK_LE(
-      logicalDataSize,
-      std::numeric_limits<std::size_t>::max(),
-      "Exchange logical payload size exceeds size_t");
-  VELOX_CHECK_LE(
-      auxiliaryCount,
-      std::numeric_limits<std::size_t>::max(),
-      "Exchange auxiliary count exceeds size_t");
   VELOX_CHECK_EQ(
       cudfMetadataSize,
       static_cast<uint64_t>(end - current),

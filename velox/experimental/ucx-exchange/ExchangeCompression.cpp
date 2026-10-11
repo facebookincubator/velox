@@ -32,14 +32,14 @@
 namespace facebook::velox::ucx_exchange {
 namespace {
 
+constexpr std::string_view kFusedForUnavailable{
+    "Fused FOR exchange compression is not available in this build"};
+
 #if VELOX_UCX_HAS_FUSED_FOR
 constexpr std::size_t kFusedForTileBytes = 32 * 1024;
 
 cudf::detail::fused_for_options fusedForOptions(
     ExchangeCompression compression) {
-  VELOX_CHECK(
-      compression == ExchangeCompression::kFusedForBitpacked ||
-      compression == ExchangeCompression::kFusedForByteAligned);
   return cudf::detail::fused_for_options{
       kFusedForTileBytes,
       compression == ExchangeCompression::kFusedForBitpacked
@@ -49,8 +49,7 @@ cudf::detail::fused_for_options fusedForOptions(
 #endif
 
 [[noreturn]] void fusedForUnavailable() {
-  VELOX_UNSUPPORTED(
-      "Fused FOR exchange compression is not available in this build");
+  VELOX_UNSUPPORTED(kFusedForUnavailable);
 }
 
 PackedExchangePayload makePayload(
@@ -59,6 +58,8 @@ PackedExchangePayload makePayload(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref temporaryMemoryResource,
     rmm::device_async_resource_ref outputMemoryResource) {
+  VELOX_CHECK_NOT_NULL(packed.metadata);
+  VELOX_CHECK_NOT_NULL(packed.gpu_data);
   const auto logicalDataSize = packed.gpu_data->size();
   PackedExchangePayload raw{
       std::make_unique<cudf::packed_columns>(std::move(packed)),
@@ -111,6 +112,7 @@ PackedExchangePayload makePayload(
 #if VELOX_UCX_HAS_FUSED_FOR
 PackedExchangePayload makeFusedForPayload(
     cudf::detail::fused_for_packed_columns packed) {
+  VELOX_CHECK_NOT_NULL(packed.wire_data);
   const auto logicalDataSize = packed.logical_data_size;
   const auto segmentCount = packed.segment_count;
   auto metadata = wrapExchangePayloadMetadata(
@@ -131,7 +133,9 @@ std::unique_ptr<PackedTableWithStream> retainPackedPayload(
     std::unique_ptr<std::vector<uint8_t>> metadata,
     std::unique_ptr<rmm::device_buffer> data,
     cuda::stream_ref stream,
-    int32_t numRows) {
+    vector_size_t numRows) {
+  VELOX_CHECK_NOT_NULL(metadata);
+  VELOX_CHECK_NOT_NULL(data);
   auto packedColumns =
       cudf::packed_columns(std::move(metadata), std::move(data));
   auto tableView = cudf::unpack(packedColumns);
@@ -154,9 +158,7 @@ ExchangeCompression parseExchangeCompression(std::string_view value) {
     return ExchangeCompression::kCascaded;
   }
   if (value == "fused-for-bitpacked" || value == "fused-for-byte-aligned") {
-    VELOX_USER_CHECK(
-        VELOX_UCX_HAS_FUSED_FOR,
-        "Fused FOR exchange compression is not available in this build");
+    VELOX_USER_CHECK(VELOX_UCX_HAS_FUSED_FOR, kFusedForUnavailable);
     return value == "fused-for-bitpacked"
         ? ExchangeCompression::kFusedForBitpacked
         : ExchangeCompression::kFusedForByteAligned;
@@ -173,21 +175,16 @@ PackedExchangePayload packExchangePayload(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref temporaryMemoryResource,
     rmm::device_async_resource_ref outputMemoryResource) {
-  if (input.num_columns() == 0) {
-    return makePayload(
-        cudf::pack(input, stream, outputMemoryResource),
-        ExchangeCompression::kNone,
-        stream,
-        temporaryMemoryResource,
-        outputMemoryResource);
-  }
-
-  switch (compression) {
+  // A table without columns has no data to compress, and fused FOR needs at
+  // least one column.
+  const auto effectiveCompression =
+      input.num_columns() == 0 ? ExchangeCompression::kNone : compression;
+  switch (effectiveCompression) {
     case ExchangeCompression::kNone:
     case ExchangeCompression::kCascaded:
       return makePayload(
           cudf::pack(input, stream, outputMemoryResource),
-          compression,
+          effectiveCompression,
           stream,
           temporaryMemoryResource,
           outputMemoryResource);
@@ -199,12 +196,12 @@ PackedExchangePayload packExchangePayload(
               input,
               stream,
               outputMemoryResource,
-              fusedForOptions(compression)));
+              fusedForOptions(effectiveCompression)));
 #else
       fusedForUnavailable();
 #endif
   }
-  VELOX_FAIL("Unsupported exchange compression mode");
+  VELOX_UNREACHABLE();
 }
 
 std::vector<PackedExchangePayload> splitExchangePayloads(
@@ -260,21 +257,21 @@ std::unique_ptr<PackedTableWithStream> restoreExchangePayload(
     std::unique_ptr<std::vector<uint8_t>> metadata,
     std::unique_ptr<rmm::device_buffer> data,
     cuda::stream_ref stream,
-    int32_t numRows) {
+    vector_size_t numRows) {
   auto envelope = unwrapExchangePayloadMetadata(std::move(metadata));
   switch (envelope.codec) {
     case ExchangePayloadCodec::kNone:
       return retainPackedPayload(
           std::move(envelope.cudfMetadata), std::move(data), stream, numRows);
     case ExchangePayloadCodec::kCascaded: {
+      // 'data' may have been allocated on the producer's stream. Free it on
+      // 'stream' so the release is ordered after materialize() reads it.
+      data->set_stream(stream);
       auto memoryResource = data->memory_resource();
       auto packed = cudf::experimental::packed_data_view{
           *envelope.cudfMetadata,
           std::span<uint8_t const>{
               static_cast<uint8_t const*>(data->data()), data->size()}};
-      // materialize() finishes reading the metadata and compressed data before
-      // it returns, so both input buffers only need to remain alive for this
-      // call.
       auto table = cudf::experimental::materialize(
           packed,
           stream,
@@ -304,7 +301,7 @@ std::unique_ptr<PackedTableWithStream> restoreExchangePayload(
       fusedForUnavailable();
 #endif
   }
-  VELOX_FAIL("Unsupported exchange payload codec");
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::ucx_exchange

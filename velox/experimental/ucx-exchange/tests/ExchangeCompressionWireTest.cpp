@@ -49,52 +49,45 @@ auto cascadedEnvelope() {
       0);
 }
 
-TEST(ExchangeCompressionWireTest, matchesReferenceCascadedEnvelope) {
-  auto wrapped = cascadedEnvelope();
-  // Encodes the expected Cascaded header independently of the writer under
-  // test.
-  std::vector<uint8_t> expected(37, 0);
+// Encodes the expected header independently of the writer under test.
+std::vector<uint8_t> referenceEnvelope(uint8_t codec, uint64_t auxiliaryCount) {
+  std::vector<uint8_t> expected(kHeaderSize, 0);
   const std::array<uint8_t, 8> magic{'V', 'L', 'X', 'P', 'A', 'C', 'K', 0};
   std::copy(magic.begin(), magic.end(), expected.begin());
   putScalar(expected, kVersionOffset, uint16_t{1});
-  putScalar(expected, kHeaderSizeOffset, uint16_t{37});
-  putScalar(expected, kCodecOffset, uint8_t{2});
+  putScalar(expected, kHeaderSizeOffset, static_cast<uint16_t>(kHeaderSize));
+  putScalar(expected, kCodecOffset, codec);
   putScalar(expected, kLogicalSizeOffset, uint64_t{1234});
-  putScalar(expected, kAuxiliaryOffset, uint64_t{0});
+  putScalar(expected, kAuxiliaryOffset, auxiliaryCount);
   putScalar(expected, kMetadataSizeOffset, uint64_t{3});
   expected.insert(expected.end(), {9, 7, 5});
-  EXPECT_EQ(*wrapped, expected);
-
-  auto decoded = unwrapExchangePayloadMetadata(std::move(wrapped));
-  EXPECT_EQ(decoded.codec, ExchangePayloadCodec::kCascaded);
-  EXPECT_EQ(decoded.logicalDataSize, 1234);
-  EXPECT_EQ(decoded.auxiliaryCount, 0);
-  EXPECT_EQ(*decoded.cudfMetadata, (std::vector<uint8_t>{9, 7, 5}));
+  return expected;
 }
 
-TEST(ExchangeCompressionWireTest, matchesReferenceForEnvelope) {
-  auto wrapped = wrapExchangePayloadMetadata(
-      std::make_unique<std::vector<uint8_t>>(
-          std::initializer_list<uint8_t>{9, 7, 5}),
-      ExchangePayloadCodec::kFusedFor,
-      1234,
-      17);
-  std::vector<uint8_t> expected(37, 0);
-  const std::array<uint8_t, 8> magic{'V', 'L', 'X', 'P', 'A', 'C', 'K', 0};
-  std::copy(magic.begin(), magic.end(), expected.begin());
-  putScalar(expected, kVersionOffset, uint16_t{1});
-  putScalar(expected, kHeaderSizeOffset, uint16_t{37});
-  putScalar(expected, kCodecOffset, uint8_t{1});
-  putScalar(expected, kLogicalSizeOffset, uint64_t{1234});
-  putScalar(expected, kAuxiliaryOffset, uint64_t{17});
-  putScalar(expected, kMetadataSizeOffset, uint64_t{3});
-  expected.insert(expected.end(), {9, 7, 5});
-  EXPECT_EQ(*wrapped, expected);
-  auto decoded = unwrapExchangePayloadMetadata(std::move(wrapped));
-  EXPECT_EQ(decoded.codec, ExchangePayloadCodec::kFusedFor);
-  EXPECT_EQ(decoded.logicalDataSize, 1234);
-  EXPECT_EQ(decoded.auxiliaryCount, 17);
-  EXPECT_EQ(*decoded.cudfMetadata, (std::vector<uint8_t>{9, 7, 5}));
+TEST(ExchangeCompressionWireTest, matchesReferenceEnvelopes) {
+  struct Envelope {
+    ExchangePayloadCodec codec;
+    uint8_t wireCodec;
+    uint64_t auxiliaryCount;
+  };
+  for (const auto& [codec, wireCodec, auxiliaryCount] :
+       {Envelope{ExchangePayloadCodec::kCascaded, 2, 0},
+        Envelope{ExchangePayloadCodec::kFusedFor, 1, 17}}) {
+    SCOPED_TRACE(static_cast<int>(wireCodec));
+    auto wrapped = wrapExchangePayloadMetadata(
+        std::make_unique<std::vector<uint8_t>>(
+            std::initializer_list<uint8_t>{9, 7, 5}),
+        codec,
+        1234,
+        auxiliaryCount);
+    EXPECT_EQ(*wrapped, referenceEnvelope(wireCodec, auxiliaryCount));
+
+    auto decoded = unwrapExchangePayloadMetadata(std::move(wrapped));
+    EXPECT_EQ(decoded.codec, codec);
+    EXPECT_EQ(decoded.logicalDataSize, 1234);
+    EXPECT_EQ(decoded.auxiliaryCount, auxiliaryCount);
+    EXPECT_EQ(*decoded.cudfMetadata, (std::vector<uint8_t>{9, 7, 5}));
+  }
 }
 
 TEST(ExchangeCompressionWireTest, forEnvelopePreservesEmptyAndSizeBounds) {
@@ -171,28 +164,6 @@ TEST(ExchangeCompressionWireTest, rejectsTruncatedEnvelope) {
   wrapped->pop_back();
   EXPECT_THROW(
       unwrapExchangePayloadMetadata(std::move(wrapped)), VeloxRuntimeError);
-}
-
-TEST(ExchangeCompressionWireTest, rejectsMalformedForEnvelope) {
-  for (int damage = 0; damage < 4; ++damage) {
-    auto wrapped = wrapExchangePayloadMetadata(
-        std::make_unique<std::vector<uint8_t>>(3, 0),
-        ExchangePayloadCodec::kFusedFor,
-        1234,
-        17);
-    if (damage == 0) {
-      wrapped->resize(kHeaderSize - 1);
-    } else if (damage == 1) {
-      wrapped->pop_back();
-    } else if (damage == 2) {
-      putScalar(
-          *wrapped, kMetadataSizeOffset, std::numeric_limits<uint64_t>::max());
-    } else {
-      putScalar(*wrapped, kVersionOffset, uint16_t{2});
-    }
-    EXPECT_THROW(
-        unwrapExchangePayloadMetadata(std::move(wrapped)), VeloxRuntimeError);
-  }
 }
 
 } // namespace

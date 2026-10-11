@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/ucx-exchange/ExchangeCompressionWire.h"
+#include "velox/vector/TypeAliases.h"
 
 #include <cudf/contiguous_split.hpp>
 
@@ -90,6 +91,6 @@ std::unique_ptr<PackedTableWithStream> restoreExchangePayload(
     std::unique_ptr<std::vector<uint8_t>> metadata,
     std::unique_ptr<rmm::device_buffer> data,
     cuda::stream_ref stream,
-    int32_t numRows);
+    vector_size_t numRows);
 
 } // namespace facebook::velox::ucx_exchange

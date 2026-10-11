@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/ExchangeCompression.h"
+#include "velox/vector/VectorStream.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/concatenate.hpp>
@@ -114,29 +115,23 @@ UcxPartitionedOutput::UcxPartitionedOutput(
 
 void UcxPartitionedOutput::recordCompressionStats(
     const PackedExchangePayload& payload) {
-  if (payload.codec == ExchangePayloadCodec::kNone) {
+  if (compression_ == ExchangeCompression::kNone) {
     return;
   }
 
-  VELOX_CHECK_NOT_NULL(payload.packed);
-  VELOX_CHECK_NOT_NULL(payload.packed->gpu_data);
-  const auto wireBytes = payload.packed->gpu_data->size();
-  const auto maxCounter =
-      static_cast<std::size_t>(std::numeric_limits<int64_t>::max());
-  VELOX_CHECK_LE(payload.logicalDataSize, maxCounter);
-  VELOX_CHECK_LE(wireBytes, maxCounter);
-  VELOX_CHECK_LE(payload.auxiliaryCount, maxCounter);
-
+  // A payload sent uncompressed because compression did not reduce its size
+  // still counts, so the ratio of the two counters reflects the bytes sent.
   auto lockedStats = stats_.wlock();
   lockedStats->addRuntimeStat(
-      "exchangeCompressedLogicalBytes",
+      std::string(IterativeVectorSerializer::kCompressionInputBytes),
       RuntimeCounter(
           static_cast<int64_t>(payload.logicalDataSize),
           RuntimeCounter::Unit::kBytes));
   lockedStats->addRuntimeStat(
-      "exchangeCompressedWireBytes",
+      std::string(IterativeVectorSerializer::kCompressedBytes),
       RuntimeCounter(
-          static_cast<int64_t>(wireBytes), RuntimeCounter::Unit::kBytes));
+          static_cast<int64_t>(payload.packed->gpu_data->size()),
+          RuntimeCounter::Unit::kBytes));
   if (payload.auxiliaryCount > 0) {
     lockedStats->addRuntimeStat(
         "exchangeCompressionAuxiliaryCount",

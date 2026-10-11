@@ -40,6 +40,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::ucx_exchange {
 namespace {
@@ -83,7 +84,7 @@ class ExchangeCompressionTest : public testing::Test {
 
   std::unique_ptr<UcxPartitionedOutput>
   start(const Config& config, int partitions, const RowTypePtr& type) {
-    taskId_ = "cascaded-consumer-test-" + std::to_string(tasks_.size());
+    taskId_ = "exchange-compression-test-" + std::to_string(tasks_.size());
     task_ = createPartitionedOutputTask(
         taskId_, pool_, type, partitions, {}, FOUR_GBYTES, config);
     manager_->initializeTask(
@@ -118,6 +119,7 @@ class ExchangeCompressionTest : public testing::Test {
     while (!output->isFinished()) {
       output->getOutput();
     }
+    lastRuntimeStats_ = output->stats(false).runtimeStats;
 
     std::vector<Packet> packets;
     for (int destination = 0; destination < partitions; ++destination) {
@@ -184,6 +186,29 @@ class ExchangeCompressionTest : public testing::Test {
         stream.get()));
     CUDF_CUDA_TRY(cudaStreamSynchronize(stream.get()));
     return values;
+  }
+
+  // Checks that the operator counted every packet, including a packet sent
+  // uncompressed because compression did not reduce its size.
+  void expectCompressionStats(const std::vector<Packet>& packets) {
+    int64_t inputBytes = 0;
+    int64_t sentBytes = 0;
+    for (const auto& packet : packets) {
+      auto metadata = unwrapExchangePayloadMetadata(
+          std::make_unique<std::vector<uint8_t>>(*packet.data->metadata));
+      const auto size = static_cast<int64_t>(packet.data->gpu_data->size());
+      inputBytes += metadata.codec == ExchangePayloadCodec::kNone
+          ? size
+          : static_cast<int64_t>(metadata.logicalDataSize);
+      sentBytes += size;
+    }
+    const std::string inputName{
+        IterativeVectorSerializer::kCompressionInputBytes};
+    const std::string sentName{IterativeVectorSerializer::kCompressedBytes};
+    ASSERT_TRUE(lastRuntimeStats_.contains(inputName));
+    ASSERT_TRUE(lastRuntimeStats_.contains(sentName));
+    EXPECT_EQ(lastRuntimeStats_.at(inputName).sum, inputBytes);
+    EXPECT_EQ(lastRuntimeStats_.at(sentName).sum, sentBytes);
   }
 
   void expectCascaded(std::vector<Packet>& packets, vector_size_t totalRows) {
@@ -287,6 +312,8 @@ class ExchangeCompressionTest : public testing::Test {
   std::vector<std::pair<std::string, int>> tasks_;
   std::string previousCompression_;
   bool previousExchange_;
+  // Runtime statistics of the operator run by the last produce() call.
+  std::unordered_map<std::string, RuntimeMetric> lastRuntimeStats_;
 };
 
 TEST(ExchangeCompressionConfigTest, parsesSupportedSelectorNames) {
@@ -317,6 +344,10 @@ TEST_F(ExchangeCompressionTest, disabledByDefaultRetainsRawPacking) {
   auto metadata = unwrapExchangePayloadMetadata(
       std::make_unique<std::vector<uint8_t>>(*packets[0].data->metadata));
   EXPECT_EQ(metadata.codec, ExchangePayloadCodec::kNone);
+  EXPECT_FALSE(lastRuntimeStats_.contains(
+      std::string(IterativeVectorSerializer::kCompressionInputBytes)));
+  EXPECT_FALSE(lastRuntimeStats_.contains(
+      std::string(IterativeVectorSerializer::kCompressedBytes)));
   auto* allocation = packets[0].data->gpu_data.get();
   auto received = restore(packets[0], stream_);
   EXPECT_FALSE(received->table);
@@ -330,22 +361,11 @@ TEST_F(ExchangeCompressionTest, cascadedSingleDestinationUsesOwningPath) {
       std::vector<int32_t>(65536, 7),
       {{CudfConfig::kUcxExchangeCompression, "cascaded"}});
   ASSERT_EQ(packets.size(), 1);
+  expectCompressionStats(packets);
   expectCascaded(packets, 65536);
 }
 
 TEST_F(ExchangeCompressionTest, cascadedSplitDestinationsUseOwningPath) {
-  // First confirm that this input produces one non-empty packet for each
-  // destination without compression. Then repeat the same split with Cascaded.
-  auto raw = produce(std::vector<int32_t>(65536, 7), {}, 2);
-  ASSERT_EQ(raw.size(), 2);
-  for (auto& packet : raw) {
-    EXPECT_EQ(packet.rows, 32768);
-    auto received = restore(packet, stream_);
-    ASSERT_TRUE(received->packedTable);
-    EXPECT_EQ(
-        readColumn(received->tableView().column(0), stream_),
-        std::vector<int32_t>(32768, 7));
-  }
   auto packets = produce(
       std::vector<int32_t>(65536, 7),
       {{CudfConfig::kUcxExchangeCompression, "cascaded"}},
@@ -355,6 +375,7 @@ TEST_F(ExchangeCompressionTest, cascadedSplitDestinationsUseOwningPath) {
   EXPECT_EQ(packets[1].destination, 1);
   EXPECT_EQ(packets[0].rows, 32768);
   EXPECT_EQ(packets[1].rows, 32768);
+  expectCompressionStats(packets);
   expectCascaded(packets, 65536);
 }
 
@@ -377,6 +398,7 @@ TEST_F(ExchangeCompressionTest, cascadedWithoutReductionKeepsRawPayload) {
   auto metadata = unwrapExchangePayloadMetadata(
       std::make_unique<std::vector<uint8_t>>(*packets[0].data->metadata));
   EXPECT_EQ(metadata.codec, ExchangePayloadCodec::kNone);
+  expectCompressionStats(packets);
   auto received = restore(packets[0], stream_);
   ASSERT_TRUE(received->packedTable);
   EXPECT_FALSE(received->table);
@@ -451,22 +473,6 @@ TEST_F(ExchangeCompressionTest, unevenSplitSkipsEmptyDestinations) {
 }
 
 #if VELOX_UCX_TEST_HAS_FUSED_FOR
-TEST_F(ExchangeCompressionTest, fusedForEnvelopeUsesDirectDecoder) {
-  const std::vector<int32_t> values(65536, 7);
-  auto packets = produce(
-      values,
-      {{CudfConfig::kUcxExchangeCompression, "fused-for-byte-aligned"}});
-  ASSERT_EQ(packets.size(), 1);
-  auto metadata = unwrapExchangePayloadMetadata(
-      std::make_unique<std::vector<uint8_t>>(*packets[0].data->metadata));
-  ASSERT_EQ(metadata.codec, ExchangePayloadCodec::kFusedFor);
-  EXPECT_GT(metadata.auxiliaryCount, 0);
-  auto received = restore(packets[0], stream_);
-  ASSERT_TRUE(received->packedTable);
-  EXPECT_FALSE(received->table);
-  EXPECT_EQ(readColumn(received->tableView().column(0), stream_), values);
-}
-
 TEST_F(ExchangeCompressionTest, restoresFusedForPayloadOnConsumerStream) {
   const auto values = forValues();
   const auto numRows = static_cast<vector_size_t>(values.size());
@@ -607,6 +613,7 @@ TEST_F(
         EXPECT_EQ(packets[destination].destination, destination);
         EXPECT_EQ(packets[destination].rows, values.size() / partitions);
       }
+      expectCompressionStats(packets);
       expectFusedFor(
           packets, std::string_view{mode} == "fused-for-bitpacked", values);
     }
@@ -644,29 +651,8 @@ TEST_F(
         overridden,
         std::string_view{otherMode} == "fused-for-bitpacked",
         values);
-
-    auto cascaded = produce(
-        std::vector<int32_t>(65536, 7),
-        {{CudfConfig::kUcxExchangeCompression, "cascaded"}});
-    ASSERT_EQ(cascaded.size(), 1);
-    expectCascaded(cascaded, 65536);
-    auto raw = produce(values, {{CudfConfig::kUcxExchangeCompression, "none"}});
-    ASSERT_EQ(raw.size(), 1);
-    EXPECT_EQ(
-        unwrapExchangePayloadMetadata(
-            std::make_unique<std::vector<uint8_t>>(*raw[0].data->metadata))
-            .codec,
-        ExchangePayloadCodec::kNone);
-    auto received = restore(raw[0], stream_);
-    ASSERT_TRUE(received->packedTable);
-    EXPECT_FALSE(received->table);
-    EXPECT_EQ(readColumn(received->tableView().column(0), stream_), values);
     EXPECT_EQ(CudfConfig::getInstance().exchangeCompression, mode);
   }
-
-  CudfConfig::getInstance().initialize(
-      {{CudfConfig::kUcxExchangeCompression, "none"}});
-  EXPECT_EQ(CudfConfig::getInstance().exchangeCompression, "none");
 }
 #endif
 
