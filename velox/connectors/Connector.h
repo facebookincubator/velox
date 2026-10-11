@@ -782,6 +782,20 @@ class ConnectorQueryCtx {
     rowSizeTrackingEnabled_ = value;
   }
 
+  /// Returns the session's query config, or nullptr when the context was
+  /// built without one. A connector that compiles expressions itself, rather
+  /// than through expressionEvaluator(), reads it for constant folding and for
+  /// the settings a simple function's initialize() resolves. Owned by the
+  /// QueryCtx of the task that built this context, which outlives every data
+  /// source and data sink created from it.
+  const core::QueryConfig* queryConfig() const {
+    return queryConfig_;
+  }
+
+  void setQueryConfig(const core::QueryConfig* queryConfig) {
+    queryConfig_ = queryConfig;
+  }
+
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
@@ -815,6 +829,7 @@ class ConnectorQueryCtx {
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+  const core::QueryConfig* queryConfig_{nullptr};
 };
 
 class Connector;
