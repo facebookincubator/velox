@@ -77,7 +77,7 @@ struct __save {
 struct __rule {
   date::year __from;
   date::year __to;
-  date::month __month;
+  date::month __in;
   facebook::velox::tzdb::__on __on;
   facebook::velox::tzdb::__at __at;
   facebook::velox::tzdb::__save __save;
@@ -115,7 +115,7 @@ struct __continuation {
   // Parts of the UNTIL, the optional parts are default initialized
   //    optional<year> __until_;
   date::year __year = date::year::min();
-  date::month __month{date::January};
+  date::month __in{date::January};
   facebook::velox::tzdb::__on __on{date::day{1}};
   facebook::velox::tzdb::__at __at{
       std::chrono::seconds{0},

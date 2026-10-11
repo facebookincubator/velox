@@ -124,49 +124,35 @@ struct VeloxCheckFailStringType<std::string> {
   using type = const std::string&;
 };
 
-// MSVC needs noreturn repeated on extern templates to match the primary
-// template.
-#ifdef _MSC_VER
-#define VELOX_EXTERN_NORETURN_TEMPLATE extern template __declspec(noreturn)
-#else
-#define VELOX_EXTERN_NORETURN_TEMPLATE extern template
-#endif
-
 // Declare explicit instantiations of veloxCheckFail for the given
 // exceptionType. Just like normal function declarations (prototypes),
 // this allows the compiler to assume that they are defined elsewhere
 // and simply insert a function call for the linker to fix up, rather
 // than emitting a definition of these templates into every
 // translation unit they are used in.
-#define DECLARE_CHECK_FAIL_TEMPLATES(exception_type)      \
-  namespace detail {                                      \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, CompileTimeEmptyString>( \
-      const VeloxCheckFailArgs& args,                     \
-      CompileTimeEmptyString);                            \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, const char*>(            \
-      const VeloxCheckFailArgs& args,                     \
-      const char*);                                       \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, const std::string&>(     \
-      const VeloxCheckFailArgs& args,                     \
-      const std::string&);                                \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, CompileTimeEmptyString>( \
-      const VeloxCheckFailArgs& args,                     \
-      CompileTimeEmptyString,                             \
-      CompileTimeStringLiteral);                          \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, const char*>(            \
-      const VeloxCheckFailArgs& args,                     \
-      const char*,                                        \
-      CompileTimeStringLiteral);                          \
-  VELOX_EXTERN_NORETURN_TEMPLATE void                     \
-  veloxCheckFail<exception_type, const std::string&>(     \
-      const VeloxCheckFailArgs& args,                     \
-      const std::string&,                                 \
-      CompileTimeStringLiteral);                          \
+#define DECLARE_CHECK_FAIL_TEMPLATES(exception_type)                           \
+  namespace detail {                                                           \
+  extern template void veloxCheckFail<exception_type, CompileTimeEmptyString>( \
+      const VeloxCheckFailArgs& args,                                          \
+      CompileTimeEmptyString);                                                 \
+  extern template void veloxCheckFail<exception_type, const char*>(            \
+      const VeloxCheckFailArgs& args,                                          \
+      const char*);                                                            \
+  extern template void veloxCheckFail<exception_type, const std::string&>(     \
+      const VeloxCheckFailArgs& args,                                          \
+      const std::string&);                                                     \
+  extern template void veloxCheckFail<exception_type, CompileTimeEmptyString>( \
+      const VeloxCheckFailArgs& args,                                          \
+      CompileTimeEmptyString,                                                  \
+      CompileTimeStringLiteral);                                               \
+  extern template void veloxCheckFail<exception_type, const char*>(            \
+      const VeloxCheckFailArgs& args,                                          \
+      const char*,                                                             \
+      CompileTimeStringLiteral);                                               \
+  extern template void veloxCheckFail<exception_type, const std::string&>(     \
+      const VeloxCheckFailArgs& args,                                          \
+      const std::string&,                                                      \
+      CompileTimeStringLiteral);                                               \
   } // namespace detail
 
 // Definitions corresponding to DECLARE_CHECK_FAIL_TEMPLATES. Should

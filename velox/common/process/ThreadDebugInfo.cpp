@@ -17,7 +17,6 @@
 #include "velox/common/process/ThreadDebugInfo.h"
 
 #include <folly/debugging/symbolizer/SignalHandler.h>
-#include <folly/portability/Unistd.h>
 #include <glog/logging.h>
 
 namespace facebook::velox::process {
@@ -30,7 +29,6 @@ thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;
 thread_local bool fatalSignalProcessed = false;
 
 static void printCurrentQueryId() {
-  using folly::fileops::write;
   const ThreadDebugInfo* info = GetThreadDebugInfo();
   if (info == nullptr) {
     const char* msg =

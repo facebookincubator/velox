@@ -117,7 +117,6 @@ class MallocAllocator : public MemoryAllocator {
 
   void* allocateZeroFilledWithoutRetry(uint64_t bytes) override;
 
-#ifndef _WIN32
   /// Attempts in-place reallocation via ::realloc(). Returns nullptr when
   /// ::realloc() cannot satisfy the request, in which case the caller falls
   /// back to allocate + memcpy + free. Preconditions for using ::realloc():
@@ -136,7 +135,6 @@ class MallocAllocator : public MemoryAllocator {
       uint64_t oldSize,
       uint64_t newSize,
       uint16_t alignment) override;
-#endif
 
   // Increments current usage and check current 'allocatedBytes_' counter to
   // make sure current usage does not go above 'capacity_'. If it goes above

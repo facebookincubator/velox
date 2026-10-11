@@ -508,13 +508,6 @@ void SimpleVector<StringView>::validate(
     const VectorValidateOptions& options) const;
 
 template <>
-FOLLY_ALWAYS_INLINE int SimpleVector<ComplexType>::comparePrimitiveAsc(
-    const ComplexType&,
-    const ComplexType&) {
-  VELOX_UNREACHABLE("Complex values must be compared through their vectors");
-}
-
-template <>
 inline std::optional<int32_t> SimpleVector<ComplexType>::compare(
     const BaseVector* other,
     vector_size_t index,

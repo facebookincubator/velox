@@ -1,2 +1,0 @@
-# Dependency patches are applied to LF source archives, including on Windows.
-CMake/resolve_dependency_modules/**/*.patch text eol=lf

@@ -16,9 +16,8 @@
 
 #include "velox/common/memory/MemoryAllocator.h"
 
-#include <folly/portability/SysMman.h>
-#include <folly/portability/SysResource.h>
-#include <folly/portability/SysTime.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -522,7 +521,8 @@ void MemoryAllocator::getTracingHooks(
   auto state = std::make_shared<TraceState>();
   init = [state, allocator, ioVolume]() {
     getrusage(RUSAGE_SELF, &state->rusage);
-    gettimeofday(&state->tv, nullptr);
+    struct timezone tz;
+    gettimeofday(&state->tv, &tz);
     state->allocatorStats = allocator->stats();
     state->ioTotal = ioVolume ? ioVolume() : 0;
   };
@@ -534,7 +534,8 @@ void MemoryAllocator::getTracingHooks(
     auto m = allocator->stats() - state->allocatorStats;
     float flt = rusage.ru_minflt - state->rusage.ru_minflt;
     struct timeval tv;
-    gettimeofday(&tv, nullptr);
+    struct timezone tz;
+    gettimeofday(&tv, &tz);
     float elapsed = elapsedUsec(tv, state->tv);
     int64_t io = 0;
     if (ioVolume) {

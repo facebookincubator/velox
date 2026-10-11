@@ -17,16 +17,13 @@
 #include "velox/common/process/ProcessBase.h"
 
 #include <limits.h>
-#include <system_error>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <folly/CpuId.h>
 #include <folly/FileUtil.h>
 #include <folly/String.h>
-#include <folly/io/FsUtil.h>
-#include <folly/portability/Stdlib.h>
-#include <folly/portability/Time.h>
-#include <folly/portability/Unistd.h>
-#include <folly/portability/Windows.h>
 #include <gflags/gflags.h>
 #include <xsimd/xsimd.hpp>
 
@@ -44,9 +41,6 @@ namespace process {
  * Current executable's name.
  */
 std::string getAppName() {
-#ifdef _WIN32
-  return folly::fs::executable_path().string();
-#else
   const char* result = getenv("_");
   if (result) {
     return result;
@@ -64,22 +58,12 @@ std::string getAppName() {
   }
 
   return "";
-#endif
 }
 
 /**
  * This machine's name.
  */
 std::string getHostName() {
-#ifdef _WIN32
-  char hostbuf[HOST_NAME_MAX + 1]{};
-  DWORD size = sizeof(hostbuf);
-  if (!GetComputerNameExA(ComputerNameDnsHostname, hostbuf, &size)) {
-    throw std::system_error(
-        GetLastError(), std::system_category(), "GetComputerNameExA");
-  }
-  return std::string(hostbuf, size);
-#else
   char hostbuf[_POSIX_HOST_NAME_MAX + 1] = {0};
   if (gethostname(hostbuf, _POSIX_HOST_NAME_MAX + 1) < 0) {
     return "";
@@ -90,7 +74,6 @@ std::string getHostName() {
     hostbuf[_POSIX_HOST_NAME_MAX] = '\0';
     return hostbuf;
   }
-#endif
 }
 
 /**
@@ -111,12 +94,8 @@ pthread_t getThreadId() {
  * Get current working directory.
  */
 std::string getCurrentDirectory() {
-#ifdef _WIN32
-  return folly::fs::current_path().string();
-#else
   char buf[PATH_MAX];
   return getcwd(buf, PATH_MAX);
-#endif
 }
 
 uint64_t threadCpuNanos() {

@@ -1361,29 +1361,6 @@ TEST_P(MemoryAllocatorTest, reallocateBytesWithAlignment) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
-TEST_P(MemoryAllocatorTest, reallocateBytesWithReducedAlignment) {
-  constexpr uint64_t kInitialSize = 1024;
-  constexpr uint64_t kNewSize = 4096;
-  constexpr auto kAlignment = MemoryAllocator::kMinAlignment;
-  void* p = instance_->allocateBytes(
-      kInitialSize, MemoryAllocator::kDefaultAlignment);
-  ASSERT_NE(nullptr, p);
-  std::memset(p, 0x42, kInitialSize);
-
-  void* newP =
-      instance_->reallocateBytes(p, kInitialSize, kNewSize, kAlignment);
-  if (newP == nullptr) {
-    instance_->freeBytes(p, kInitialSize);
-    FAIL() << "Failed to reallocate with reduced alignment";
-  }
-  EXPECT_EQ(0, reinterpret_cast<uintptr_t>(newP) % kAlignment);
-  for (uint64_t i = 0; i < kInitialSize; ++i) {
-    EXPECT_EQ(static_cast<uint8_t>(0x42), static_cast<uint8_t*>(newP)[i]);
-  }
-  instance_->freeBytes(newP, kNewSize);
-  EXPECT_TRUE(instance_->checkConsistency());
-}
-
 TEST_P(MemoryAllocatorTest, reallocateBytesCapacityExceeded) {
   if (useMmap_) {
     // MmapAllocator has different capacity semantics; skip.

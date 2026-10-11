@@ -123,7 +123,7 @@ class DecimalUtil : public DecimalArithmetic {
               "Decimal scale difference is too large: {} vs max {}.",
               scaleDifference,
               LongDecimalType::kMaxPrecision));
-      isOverflow = multiplyOverflow(
+      isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
@@ -159,7 +159,7 @@ class DecimalUtil : public DecimalArithmetic {
   inline static std::optional<TOutput>
   rescaleInt(TInput inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
-    bool isOverflow = multiplyOverflow(
+    bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
     if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
@@ -224,13 +224,13 @@ class DecimalUtil : public DecimalArithmetic {
     // LONG_DOUBLE_MAX.
     long double scaledValue = std::round(
         (long double)value * DecimalUtil::kPowersOfTen[fractionDigits]);
-    const auto result = tryToWithInt128<TOutput>(scaledValue);
+    const auto result = folly::tryTo<TOutput>(scaledValue);
     if (result.hasError()) {
       return Status::UserError("Result overflows.");
     }
     TOutput rescaledValue = result.value();
     if (scale > fractionDigits) {
-      bool isOverflow = multiplyOverflow(
+      bool isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scale - fractionDigits],
           &rescaledValue);

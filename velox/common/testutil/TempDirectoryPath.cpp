@@ -16,7 +16,6 @@
 
 #include "velox/common/testutil/TempDirectoryPath.h"
 
-#include <folly/portability/Stdlib.h>
 #include "boost/filesystem.hpp"
 
 namespace facebook::velox::common::testutil {
@@ -37,9 +36,8 @@ TempDirectoryPath::~TempDirectoryPath() {
 }
 
 std::string TempDirectoryPath::createTempDirectory() {
-  auto tempPath =
-      (boost::filesystem::temp_directory_path() / "velox_test_XXXXXX").string();
-  const char* tempDirectoryPath = ::mkdtemp(tempPath.data());
+  char tempPath[] = "/tmp/velox_test_XXXXXX";
+  const char* tempDirectoryPath = ::mkdtemp(tempPath);
   VELOX_CHECK_NOT_NULL(tempDirectoryPath, "Cannot open temp directory");
   return tempDirectoryPath;
 }

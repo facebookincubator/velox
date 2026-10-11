@@ -15,9 +15,6 @@
  */
 
 #include <numeric>
-#ifdef _MSC_VER
-#include <folly/portability/Builtins.h>
-#endif
 
 #if XSIMD_WITH_NEON
 namespace xsimd::types {
@@ -162,15 +159,13 @@ struct BitMask<T, A, 4> {
 
 #if XSIMD_WITH_AVX
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::avx&) {
-    return _mm256_movemask_ps(
-        xsimd::bit_cast<xsimd::batch_bool<float, A>>(mask).data);
+    return _mm256_movemask_ps(reinterpret_cast<__m256>(mask.data));
   }
 #endif
 
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
-    return _mm_movemask_ps(
-        xsimd::bit_cast<xsimd::batch_bool<float, A>>(mask).data);
+    return _mm_movemask_ps(reinterpret_cast<__m128>(mask.data));
   }
 #endif
 
@@ -199,15 +194,13 @@ struct BitMask<T, A, 8> {
 
 #if XSIMD_WITH_AVX
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::avx&) {
-    return _mm256_movemask_pd(
-        xsimd::bit_cast<xsimd::batch_bool<double, A>>(mask).data);
+    return _mm256_movemask_pd(reinterpret_cast<__m256d>(mask.data));
   }
 #endif
 
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
-    return _mm_movemask_pd(
-        xsimd::bit_cast<xsimd::batch_bool<double, A>>(mask).data);
+    return _mm_movemask_pd(reinterpret_cast<__m128d>(mask.data));
   }
 #endif
 
@@ -355,10 +348,7 @@ inline xsimd::batch_bool<float, xsimd::default_arch> leadingMask(
   resolved in future GCC versions.
   */
 
-#if defined(_MSC_VER)
-  return xsimd::bit_cast<xsimd::batch_bool<float, xsimd::default_arch>>(
-      leadingMask32[i]);
-#elif XSIMD_WITH_SVE && defined(__GNUC__) && !defined(__clang__)
+#if XSIMD_WITH_SVE && defined(__GNUC__) && !defined(__clang__)
   return xsimd::batch_bool<float, xsimd::default_arch>(leadingMask32[i].data);
 #else
   return reinterpret_cast<
@@ -386,10 +376,7 @@ inline xsimd::batch_bool<double, xsimd::default_arch> leadingMask(
   resolved in future GCC versions.
   */
 
-#if defined(_MSC_VER)
-  return xsimd::bit_cast<xsimd::batch_bool<double, xsimd::default_arch>>(
-      leadingMask64[i]);
-#elif XSIMD_WITH_SVE && defined(__GNUC__) && !defined(__clang__)
+#if XSIMD_WITH_SVE && defined(__GNUC__) && !defined(__clang__)
   return xsimd::batch_bool<double, xsimd::default_arch>(leadingMask64[i].data);
 #else
   return reinterpret_cast<
@@ -1450,12 +1437,12 @@ struct Crc32<uint64_t, A> {
 
 template <typename T, typename A>
 xsimd::batch<T, A> iota(const A&) {
-  static const auto kMemo = [] {
+  static const auto kMemo = ({
     constexpr int N = xsimd::batch<T, A>::size;
     T tmp[N];
     std::iota(tmp, tmp + N, 0);
-    return xsimd::load_unaligned(tmp);
-  }();
+    xsimd::load_unaligned(tmp);
+  });
   return kMemo;
 }
 

@@ -186,7 +186,7 @@ class LocalFileSystem : public FileSystem {
     const std::filesystem::path folder{directoryPath};
     std::vector<std::string> filePaths;
     for (auto const& entry : std::filesystem::directory_iterator{folder}) {
-      filePaths.push_back(entry.path().string());
+      filePaths.push_back(entry.path());
     }
     return filePaths;
   }
@@ -233,14 +233,7 @@ class LocalFileSystem : public FileSystem {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
     return [](std::string_view filePath) {
-      if (filePath.starts_with('/') || filePath.starts_with(kFileScheme)) {
-        return true;
-      }
-#ifdef _WIN32
-      return std::filesystem::path(filePath).is_absolute();
-#else
-      return false;
-#endif
+      return filePath.starts_with('/') || filePath.starts_with(kFileScheme);
     };
   }
 

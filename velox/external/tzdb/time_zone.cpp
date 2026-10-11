@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <map>
 #include <optional>
-#include <stdexcept>
 
 #include "velox/external/date/date.h"
 #include "velox/external/date/tz.h"
@@ -113,7 +112,7 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
 
         case 'z': {
           if (__continuation.__format.size() != 2)
-            throw std::runtime_error(
+            std::__throw_runtime_error(
                 fmt::format(
                     "corrupt tzdb FORMAT field: %z should be the entire contents, instead contains '{}'",
                     __continuation.__format)
@@ -137,7 +136,7 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
         } break;
 
         default:
-          throw std::runtime_error(
+          std::__throw_runtime_error(
               fmt::format(
                   "corrupt tzdb FORMAT field: invalid sequence '%{}' found, expected %s or %z",
                   __c)
@@ -156,7 +155,7 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
     } else if (__c == '+' || __c == '-' || std::isalnum(__c)) {
       __result.push_back(__c);
     } else {
-      throw std::runtime_error(
+      std::__throw_runtime_error(
           fmt::format(
               "corrupt tzdb FORMAT field: invalid character '{}' found, expected +, -, or an alphanumeric value",
               __c)
@@ -165,11 +164,11 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
   }
 
   if (__shift)
-    throw std::runtime_error(
+    std::__throw_runtime_error(
         "corrupt tzdb FORMAT field: input ended with the start of the escape sequence '%'");
 
   if (__result.empty())
-    throw std::runtime_error("corrupt tzdb FORMAT field: result is empty");
+    std::__throw_runtime_error("corrupt tzdb FORMAT field: result is empty");
 
   return __result;
 }
@@ -250,7 +249,7 @@ struct False : std::bool_constant<false> {};
     return date::sys_seconds::max();
 
   date::year_month_day __ymd = __to_year_month_day(
-      __continuation.__year, __continuation.__month, __continuation.__on);
+      __continuation.__year, __continuation.__in, __continuation.__on);
   return __to_sys_seconds(__ymd, __at_to_sys_seconds(__continuation));
 }
 
@@ -320,7 +319,7 @@ class __named_rule_until {
     const __rule& __rule,
     date::year __year) {
   date::year_month_day __ymd =
-      __to_year_month_day(__year, __rule.__month, __rule.__on);
+      __to_year_month_day(__year, __rule.__in, __rule.__on);
 
   std::chrono::seconds __at = __at_to_seconds(__stdoff, __rule);
   return __to_sys_seconds(__ymd, __at);
@@ -337,7 +336,7 @@ class __named_rule_until {
     const std::string& __rule_name) {
   auto __result = __binary_find(__rules_db, __rule_name);
   if (__result == std::end(__rules_db))
-    throw std::runtime_error(
+    std::__throw_runtime_error(
         ("corrupt tzdb: rule '" + __rule_name + " 'does not exist").c_str());
 
   return __result->second;
@@ -367,7 +366,7 @@ class __named_rule_until {
     return __rule.__letters;
   }
 
-  throw std::runtime_error("corrupt tzdb: rule has zero entries");
+  std::__throw_runtime_error("corrupt tzdb: rule has zero entries");
 }
 
 // Determines the information based on the continuation and the rules.
@@ -445,7 +444,7 @@ class __named_rule_until {
     const __rule& __rule,
     date::year __year) {
   date::year_month_day __ymd =
-      __to_year_month_day(__year, __rule.__month, __rule.__on);
+      __to_year_month_day(__year, __rule.__in, __rule.__on);
 
   std::chrono::seconds __at = __at_to_seconds(__stdoff, __save, __rule);
   return __to_sys_seconds(__ymd, __at);
@@ -1176,7 +1175,7 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
   if (__valid_result)
     return *__result;
 
-  throw std::runtime_error("tzdb: corrupt db");
+  std::__throw_runtime_error("tzdb: corrupt db");
 }
 
 [[nodiscard]] sys_info time_zone::__get_info(date::sys_seconds __time) const {

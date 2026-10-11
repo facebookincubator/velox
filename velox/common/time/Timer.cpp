@@ -16,7 +16,7 @@
 
 #include "velox/common/time/Timer.h"
 
-#include <folly/portability/SysResource.h>
+#include <sys/resource.h>
 
 #include "velox/common/testutil/ScopedTestTime.h"
 #include "velox/common/time/CpuWallTimer.h"

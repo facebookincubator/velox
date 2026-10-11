@@ -19,7 +19,6 @@
 #include <string>
 
 #include "velox/common/base/CheckedArithmetic.h"
-#include "velox/common/base/Int128.h"
 #include "velox/type/StringView.h"
 
 namespace folly {

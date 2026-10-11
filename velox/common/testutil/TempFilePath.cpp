@@ -16,17 +16,13 @@
 
 #include "velox/common/testutil/TempFilePath.h"
 
-#include <boost/filesystem.hpp>
-#include <folly/portability/Stdlib.h>
-#include <folly/portability/Unistd.h>
-
 namespace facebook::velox::common::testutil {
 
 TempFilePath::~TempFilePath() {
+  ::unlink(tempPath_.c_str());
   if (fd_ != -1) {
     ::close(fd_);
   }
-  ::unlink(tempPath_.c_str());
 }
 
 std::shared_ptr<TempFilePath> TempFilePath::create(bool enableFaultInjection) {
@@ -35,9 +31,8 @@ std::shared_ptr<TempFilePath> TempFilePath::create(bool enableFaultInjection) {
 }
 
 std::string TempFilePath::createTempFile(TempFilePath* tempFilePath) {
-  auto path =
-      (boost::filesystem::temp_directory_path() / "velox_test_XXXXXX").string();
-  tempFilePath->fd_ = ::mkstemp(path.data());
+  char path[] = "/tmp/velox_test_XXXXXX";
+  tempFilePath->fd_ = ::mkstemp(path);
   if (tempFilePath->fd_ == -1) {
     VELOX_FAIL("Cannot open temp file: {}", folly::errnoStr(errno));
   }

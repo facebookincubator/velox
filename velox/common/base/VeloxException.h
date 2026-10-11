@@ -52,113 +52,101 @@ class ExceptionContextProperties {
 };
 
 namespace error_source {
+using namespace folly::string_literals;
 
 /// Errors where the root cause of the problem is either because of bad input
 /// or an unsupported pattern of use are classified with source USER. Examples
 /// of errors in this category include syntax errors, unavailable names or
 /// objects.
-inline constexpr auto kErrorSourceUser = folly::makeFixedString("USER");
+inline constexpr auto kErrorSourceUser = "USER"_fs;
 
 /// Errors where the root cause of the problem is an unexpected internal state
 /// in the system.
-inline constexpr auto kErrorSourceRuntime = folly::makeFixedString("RUNTIME");
+inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
 
 /// Errors where the root cause of the problem is some unreliable aspect of the
 /// system are classified with source SYSTEM.
-inline constexpr auto kErrorSourceSystem = folly::makeFixedString("SYSTEM");
+inline constexpr auto kErrorSourceSystem = "SYSTEM"_fs;
 
 /// Errors where the root cause of the problem is some external dependency (e.g.
 /// storage)
-inline constexpr auto kErrorSourceExternal = folly::makeFixedString("EXTERNAL");
+inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
 } // namespace error_source
 
 namespace error_code {
+using namespace folly::string_literals;
 
 ///====================== User Error Codes ======================:
 
 /// A generic user error code
-inline constexpr auto kGenericUserError =
-    folly::makeFixedString("GENERIC_USER_ERROR");
+inline constexpr auto kGenericUserError = "GENERIC_USER_ERROR"_fs;
 
 /// An error raised when an argument verification fails
-inline constexpr auto kInvalidArgument =
-    folly::makeFixedString("INVALID_ARGUMENT");
+inline constexpr auto kInvalidArgument = "INVALID_ARGUMENT"_fs;
 
 /// An error raised when a requested operation is not supported.
-inline constexpr auto kUnsupported = folly::makeFixedString("UNSUPPORTED");
+inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
 
 /// Arithmetic errors - underflow, overflow, divide by zero etc.
-inline constexpr auto kArithmeticError =
-    folly::makeFixedString("ARITHMETIC_ERROR");
+inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
 
 /// An error raised when types are not compatible
-inline constexpr auto kSchemaMismatch =
-    folly::makeFixedString("SCHEMA_MISMATCH");
+inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
 
 ///====================== Runtime Error Codes ======================:
 
 /// An error raised when the current state of a component is invalid.
-inline constexpr auto kInvalidState = folly::makeFixedString("INVALID_STATE");
+inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
 
 /// An error raised when unreachable code point was executed.
-inline constexpr auto kUnreachableCode =
-    folly::makeFixedString("UNREACHABLE_CODE");
+inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
 
 /// An error raised when a requested operation is not yet supported.
-inline constexpr auto kNotImplemented =
-    folly::makeFixedString("NOT_IMPLEMENTED");
+inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 
 /// An error raised when memory pool exceeds limits.
-inline constexpr auto kMemCapExceeded =
-    folly::makeFixedString("MEM_CAP_EXCEEDED");
+inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 
 /// An error raised when memory request failed due to arbitration failures. This
 /// is normally caused by insufficient global memory resource.
-inline constexpr auto kMemArbitrationFailure =
-    folly::makeFixedString("MEM_ARBITRATION_FAILURE");
+inline constexpr auto kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE"_fs;
 
 /// An error raised when memory pool is aborted.
-inline constexpr auto kMemAborted = folly::makeFixedString("MEM_ABORTED");
+inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
 
 /// An error raised when memory arbitration times out.
-inline constexpr auto kMemArbitrationTimeout =
-    folly::makeFixedString("MEM_ARBITRATION_TIMEOUT");
+inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
 
 /// Error caused by memory allocation failure (inclusive of allocator memory cap
 /// exceeded).
-inline constexpr auto kMemAllocError =
-    folly::makeFixedString("MEM_ALLOC_ERROR");
+inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
 
 /// Error caused by failing to allocate cache buffer space for IO.
-inline constexpr auto kNoCacheSpace = folly::makeFixedString("NO_CACHE_SPACE");
+inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
 /// An error raised when spill bytes exceeds limits.
-inline constexpr auto kSpillLimitExceeded =
-    folly::makeFixedString("SPILL_LIMIT_EXCEEDED");
+inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
 
 /// An error raised to indicate any general failure happened during spilling.
-inline constexpr auto kGenericSpillFailure =
-    folly::makeFixedString("GENERIC_SPILL_FAILURE");
+inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
 
 /// An error raised when trace bytes exceeds limits.
-inline constexpr auto kTraceLimitExceeded =
-    folly::makeFixedString("TRACE_LIMIT_EXCEEDED");
+inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;
 
 /// Errors indicating file read corruptions.
-inline constexpr auto kFileCorruption =
-    folly::makeFixedString("FILE_CORRUPTION");
+inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
 
 /// Errors indicating file not found.
-inline constexpr auto kFileNotFound = folly::makeFixedString("FILE_NOT_FOUND");
+inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 
 /// We do not know how to classify it yet.
-inline constexpr auto kUnknown = folly::makeFixedString("UNKNOWN");
+inline constexpr auto kUnknown = "UNKNOWN"_fs;
 
 /// VeloxRuntimeErrors due to unsupported input values such as unicode input to
 /// cast-varchar-to-integer. This kind of errors is allowed in expression
 /// fuzzer.
 inline constexpr auto kUnsupportedInputUncatchable =
-    folly::makeFixedString("UNSUPPORTED_INPUT_UNCATCHABLE");
+    "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
 } // namespace error_code
 
 class VeloxException : public std::exception {

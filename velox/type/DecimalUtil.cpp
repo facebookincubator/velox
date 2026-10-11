@@ -236,7 +236,7 @@ parseDecimalComponents(const char* s, size_t size, DecimalComponents& out) {
 Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
   // Parse the whole digits.
   if (decimalComponents.wholeDigits.size() > 0) {
-    const auto tryValue = tryToWithInt128<int128_t>(std::string_view(
+    const auto tryValue = folly::tryTo<int128_t>(std::string_view(
         decimalComponents.wholeDigits.data(),
         decimalComponents.wholeDigits.size()));
     if (tryValue.hasError()) {
@@ -249,16 +249,16 @@ Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
   if (decimalComponents.fractionalDigits.size() > 0) {
     const auto length = decimalComponents.fractionalDigits.size();
     bool overflow =
-        multiplyOverflow(out, DecimalUtil::kPowersOfTen[length], &out);
+        __builtin_mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
     if (overflow) {
       return Status::UserError("Value too large.");
     }
-    const auto tryValue = tryToWithInt128<int128_t>(
+    const auto tryValue = folly::tryTo<int128_t>(
         std::string_view(decimalComponents.fractionalDigits.data(), length));
     if (tryValue.hasError()) {
       return Status::UserError("Value too large.");
     }
-    overflow = addOverflow(out, tryValue.value(), &out);
+    overflow = __builtin_add_overflow(out, tryValue.value(), &out);
     VELOX_DCHECK(!overflow);
   }
   return Status::OK();
@@ -330,7 +330,7 @@ Status DecimalUtil::parseStringToDecimalComponents(
   VELOX_RETURN_NOT_OK(parseHugeInt(decimalComponents, out));
 
   if (roundUp) {
-    bool overflow = addOverflow(out, 1, &out);
+    bool overflow = __builtin_add_overflow(out, 1, &out);
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");
     }
@@ -345,7 +345,7 @@ Status DecimalUtil::parseStringToDecimalComponents(
     }
 
     bool overflow =
-        multiplyOverflow(out, kPowersOfTen[-parsedScale + toScale], &out);
+        __builtin_mul_overflow(out, kPowersOfTen[-parsedScale + toScale], &out);
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");
     }

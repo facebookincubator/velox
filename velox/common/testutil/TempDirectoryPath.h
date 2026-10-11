@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unistd.h>
+#include <cstdlib>
 #include <memory>
 #include <string>
 

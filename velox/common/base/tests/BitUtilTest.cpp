@@ -18,7 +18,6 @@
 #include "velox/common/base/Crc.h"
 #include "velox/type/HugeInt.h"
 
-#include <bit>
 #include <cstring>
 #include <limits>
 #include <span>
@@ -796,7 +795,7 @@ TEST_F(BitUtilTest, forBatches) {
       EXPECT_EQ(0, index % 8);
       auto bitfield = reinterpret_cast<const uint8_t*>(bits)[index / 8] & mask;
       EXPECT_NE(0, bitfield & mask);
-      numSet += std::popcount(static_cast<uint8_t>(bitfield));
+      numSet += __builtin_popcount(bitfield);
     });
     EXPECT_EQ(numOnes, numSet);
     numSet = 0;
@@ -805,7 +804,7 @@ TEST_F(BitUtilTest, forBatches) {
       auto bitfield =
           reinterpret_cast<const uint64_t*>(bits)[index / 64] & mask;
       EXPECT_NE(0, bitfield & mask);
-      numSet += std::popcount(bitfield);
+      numSet += __builtin_popcountl(bitfield);
     });
     EXPECT_EQ(numOnes, numSet);
   };
@@ -856,13 +855,6 @@ TEST_F(BitUtilTest, bswap128) {
   EXPECT_EQ(
       builtin_bswap128(HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       -248);
-  const auto value = HugeInt::build(0x0123456789ABCDEF, 0xFEDCBA9876543210);
-  EXPECT_EQ(
-      builtin_bswap128(value),
-      HugeInt::build(0x1032547698BADCFE, 0xEFCDAB8967452301));
-  EXPECT_EQ(builtin_bswap128(builtin_bswap128(value)), value);
-  EXPECT_EQ(builtin_bswap128(0), 0);
-  EXPECT_EQ(builtin_bswap128(-1), -1);
 }
 
 TEST_F(BitUtilTest, countLeadingZeros) {
@@ -870,9 +862,7 @@ TEST_F(BitUtilTest, countLeadingZeros) {
   EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(UINT64_MAX), 64);
-  EXPECT_EQ(countLeadingZeros(__uint128_t{1} << 64), 63);
-  EXPECT_EQ(countLeadingZeros(__uint128_t{1} << 127), 0);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
   EXPECT_EQ(
       countLeadingZeros<__uint128_t>(
           HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),

@@ -23,7 +23,6 @@
 #include "velox/type/Filter.h"
 
 #include "velox/common/EnumDefine.h"
-#include "velox/common/base/CheckedArithmetic.h"
 
 namespace facebook::velox::common {
 
@@ -1080,7 +1079,7 @@ std::unique_ptr<Filter> createBigintValuesFilter(
   // If bitmap would have more than 4 words per set bit, we prefer a
   // hash table. If bitmap fits in under 32 words, we use bitmap anyhow.
   int64_t range;
-  bool overflow = subtractOverflow(max, min, &range);
+  bool overflow = __builtin_sub_overflow(max, min, &range);
   if (LIKELY(!overflow)) {
     // all accepted/rejected values form one contiguous block
     if (static_cast<uint64_t>(range) + 1 == values.size()) {
@@ -2401,7 +2400,7 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       // If the hash table or bitmask generated is not small enough to fit in
       // cache, we would rather not merging it.
       int64_t range;
-      if (subtractOverflow(filter->upper(), filter->lower(), &range) ||
+      if (__builtin_sub_overflow(filter->upper(), filter->lower(), &range) ||
           range > 100'000) {
         return other->clone();
       }

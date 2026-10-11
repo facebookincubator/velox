@@ -29,6 +29,7 @@
 #ifdef linux
 #include <linux/fs.h>
 #endif // linux
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <numeric>

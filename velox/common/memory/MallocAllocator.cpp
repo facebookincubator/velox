@@ -15,11 +15,10 @@
  */
 
 #include "velox/common/memory/MallocAllocator.h"
-#include <folly/Memory.h>
 #include <folly/system/HardwareConcurrency.h>
 #include "velox/common/memory/Memory.h"
 
-#include <folly/portability/SysMman.h>
+#include <sys/mman.h>
 
 namespace facebook::velox::memory {
 MallocAllocator::MallocAllocator(const Options& options)
@@ -239,7 +238,7 @@ void* MallocAllocator::dispatchAllocateContiguous(size_t maxBytes) {
     return nullptr;
   }
   if (mallocContiguousEnabled_) {
-    return folly::aligned_malloc(maxBytes, AllocationTraits::kPageSize);
+    return ::aligned_alloc(AllocationTraits::kPageSize, maxBytes);
   }
   // TODO: add handling of MAP_FAILED.
   return ::mmap(
@@ -253,7 +252,7 @@ void* MallocAllocator::dispatchAllocateContiguous(size_t maxBytes) {
 
 void MallocAllocator::dispatchFreeContiguous(ContiguousAllocation& allocation) {
   if (mallocContiguousEnabled_) {
-    folly::aligned_free(allocation.data());
+    ::free(allocation.data());
   } else {
     useHugePages(allocation, false);
     if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
@@ -308,14 +307,8 @@ void* MallocAllocator::allocateBytesWithoutRetry(
         bytes,
         alignment);
   }
-#ifdef _WIN32
-  // freeBytes has no alignment argument, so all Windows byte allocations must
-  // use the same allocation family.
-  void* result = folly::aligned_malloc(bytes, alignment);
-#else
   void* result = (alignment > kMinAlignment) ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
-#endif
   if (FOLLY_UNLIKELY(result == nullptr)) {
     VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << succinctBytes(bytes)
                          << " with " << alignment << " alignment";
@@ -334,14 +327,7 @@ void* MallocAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
     setAllocatorFailureMessage(errorMsg);
     return nullptr;
   }
-#ifdef _WIN32
-  void* result = folly::aligned_malloc(bytes, kMinAlignment);
-  if (result != nullptr) {
-    std::memset(result, 0, bytes);
-  }
-#else
   void* result = std::calloc(1, bytes);
-#endif
   if (FOLLY_UNLIKELY(result == nullptr)) {
     VELOX_MEM_LOG(ERROR) << "Failed to allocateZeroFilled "
                          << succinctBytes(bytes);
@@ -349,9 +335,6 @@ void* MallocAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
   return result;
 }
 
-// Windows uses the base allocate/copy/free path: _aligned_realloc requires the
-// original alignment, which cannot be recovered from this interface.
-#ifndef _WIN32
 void* MallocAllocator::reallocateBytesWithoutRetry(
     void* p,
     uint64_t oldSize,
@@ -406,10 +389,9 @@ void* MallocAllocator::reallocateBytesWithoutRetry(
   }
   return result;
 }
-#endif
 
 void MallocAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
-  folly::aligned_free(p);
+  ::free(p); // NOLINT
   decrementUsage(bytes);
 }
 

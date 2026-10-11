@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Windows / MSVC vector build, including its required dependencies.
+# Windows / MSVC smoke build of the existing status library.
 # Configure and build failures remain failures; no fork-specific patches are applied.
-name: Windows Vector Build
+name: Windows Build
 
 on:
   pull_request: {}
@@ -29,13 +29,18 @@ concurrency:
 
 jobs:
   windows-build:
-    name: windows-2022-vector-release
+    name: windows-2022-status-release
     runs-on: windows-2022
     timeout-minutes: 360
     defaults:
       run:
         shell: pwsh
     steps:
+      - name: Preserve dependency patch line endings
+        run: |
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,9 +73,9 @@ jobs:
         run: |
           $conda = Join-Path $env:CONDA "Scripts\conda.exe"
           $prefix = Join-Path $env:RUNNER_TEMP "velox-system-deps"
-          # Only prerequisites without bundled recipes come from Conda.
+          # Use the upstream ICU version without a custom Windows source build.
           & $conda create --yes --no-default-packages --prefix $prefix `
-            --override-channels --channel conda-forge openssl libevent "double-conversion>=3.1.5" `
+            --override-channels --channel conda-forge openssl libevent "double-conversion>=3.1.5" "icu=72.1" `
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-system-deps.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $conda list --prefix $prefix --explicit |
@@ -88,6 +93,7 @@ jobs:
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
             -DCMAKE_VS_GLOBALS=VcpkgEnabled=false `
             -DVELOX_DEPENDENCY_SOURCE=BUNDLED `
+            -DICU_SOURCE=SYSTEM `
             -DCMAKE_PREFIX_PATH="$env:VELOX_SYSTEM_PREFIX" `
             -DOPENSSL_ROOT_DIR="$env:VELOX_SYSTEM_PREFIX" `
             -DFLEX_INCLUDE_DIR="$env:FLEX_INCLUDE_DIR" `
@@ -106,9 +112,9 @@ jobs:
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-configure.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build vector and dependencies
+      - name: Build status library and dependencies
         run: |
-          cmake --build _build/release --config Release --target velox_vector --parallel 4 `
+          cmake --build _build/release --config Release --target velox_status --parallel 4 `
             -- /nologo /verbosity:minimal `
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-build.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -117,7 +123,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-vector-release-logs
+          name: windows-status-release-logs
           path: |
             ${{ runner.temp }}\velox-tools.log
             ${{ runner.temp }}\velox-system-deps.log

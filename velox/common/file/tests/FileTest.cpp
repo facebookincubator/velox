@@ -22,16 +22,6 @@
 
 #include "gtest/gtest.h"
 
-#ifdef _WIN32
-#include <folly/portability/Windows.h>
-#include <winioctl.h>
-#include <atomic>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <thread>
-#endif
-
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 using facebook::velox::common::Region;
@@ -39,202 +29,7 @@ using namespace facebook::velox::tests::utils;
 
 constexpr int kOneMB = 1 << 20;
 
-#ifdef _WIN32
-TEST(LocalFileWindowsTest, binaryAndAppend) {
-  const auto dir = TempDirectoryPath::create();
-  const auto folder = std::filesystem::path(dir->getPath()) / "nested";
-  const auto path = (folder / "data").string();
-  std::string data{'\0', '\r', '\n', '\x1a', '\xff'};
-  LocalWriteFile file(path, true);
-  file.append(data);
-  auto chain = folly::IOBuf::copyBuffer(data);
-  chain->appendToChain(folly::IOBuf::copyBuffer(data));
-  file.append(std::move(chain));
-  std::string expected = data + data + data;
-  std::string replacement = "xy";
-  file.write({{replacement.data(), replacement.size()}}, 1, 2);
-  expected.replace(1, 2, replacement);
-  file.append("end");
-  expected += "end";
-  file.write(
-      {{replacement.data(), replacement.size()}}, expected.size() + 2, 2);
-  expected.append(2, '\0');
-  expected += replacement;
-  file.append("extended");
-  expected += "extended";
-  file.flush();
-  EXPECT_EQ(file.size(), expected.size());
-  file.close();
-
-  std::ifstream input(path, std::ios::binary);
-  const std::string diskData(
-      (std::istreambuf_iterator<char>(input)),
-      std::istreambuf_iterator<char>());
-  EXPECT_EQ(diskData, expected);
-  input.close();
-
-  filesystems::registerLocalFileSystem();
-  const auto fs = filesystems::getFileSystem(path, nullptr);
-  EXPECT_EQ(fs->list(folder.string()), std::vector<std::string>{path});
-  const auto read = fs->openFileForRead(path);
-  EXPECT_EQ(read->pread(0, expected.size()), expected);
-  uint64_t alignment = 0;
-  EXPECT_FALSE(read->directIo(alignment));
-  EXPECT_EQ(alignment, 1);
-}
-
-TEST(LocalFileWindowsTest, largeSparseOffsets) {
-  const auto dir = TempDirectoryPath::create();
-  const auto path = std::filesystem::path(dir->getPath()) / "sparse";
-  LocalWriteFile file(path.string());
-  const auto handle = ::CreateFileW(
-      path.c_str(),
-      GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL,
-      nullptr);
-  ASSERT_NE(handle, INVALID_HANDLE_VALUE);
-  DWORD returned = 0;
-  const auto sparse = ::DeviceIoControl(
-      handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr);
-  const auto error = ::GetLastError();
-  ::CloseHandle(handle);
-  ASSERT_TRUE(sparse) << error;
-
-  constexpr int64_t kOffset = (int64_t{1} << 32) + 19;
-  std::string data = "tail\r\n\x1a";
-  file.truncate(kOffset + 32);
-  file.write({{data.data(), data.size()}}, kOffset, data.size());
-  file.truncate(kOffset + data.size());
-  file.append("end");
-  file.close();
-  data += "end";
-  {
-    LocalReadFile read(path.string());
-    EXPECT_EQ(read.size(), kOffset + data.size());
-    std::string buffer(data.size(), '\0');
-    EXPECT_EQ(read.pread(kOffset, buffer.size(), buffer.data()), data);
-    buffer.assign(data.size(), '\0');
-    EXPECT_EQ(
-        read.preadv(
-            kOffset,
-            {{buffer.data(), 2}, {buffer.data() + 2, buffer.size() - 2}}),
-        data.size());
-    EXPECT_EQ(buffer, data);
-    char zero = 'x';
-    EXPECT_EQ(read.pread(kOffset - 1, 1, &zero), std::string_view("\0", 1));
-  }
-  {
-    LocalWriteFile reopened(path.string(), false, false);
-    EXPECT_EQ(reopened.size(), kOffset + data.size());
-    reopened.append("open");
-    EXPECT_EQ(reopened.size(), kOffset + data.size() + 4);
-    reopened.truncate(kOffset + 1);
-    reopened.append("after");
-    EXPECT_EQ(reopened.size(), kOffset + 6);
-  }
-  LocalReadFile read(path.string());
-  char buffer[6];
-  EXPECT_EQ(read.pread(kOffset, sizeof(buffer), buffer), "tafter");
-}
-
-TEST(LocalFileWindowsTest, concurrentScalarAndVectorReads) {
-  const auto dir = TempDirectoryPath::create();
-  const auto path =
-      (std::filesystem::path(dir->getPath()) / "concurrent").string();
-  {
-    LocalWriteFile file(path);
-    for (int i = 0; i < 32; ++i) {
-      file.append(std::string(256, 'a' + i));
-    }
-  }
-  LocalReadFile read(path);
-  std::atomic<int> errors{0};
-  std::vector<std::thread> threads;
-  for (int thread = 0; thread < 8; ++thread) {
-    threads.emplace_back([&, thread] {
-      try {
-        for (int i = 0; i < 256; ++i) {
-          const auto record = (i + thread * 7) % 32;
-          const auto offset = record * 256;
-          std::string buffer(128, '\0');
-          if ((i + thread) % 2 == 0) {
-            read.pread(offset, buffer.size(), buffer.data());
-          } else {
-            const auto bytes = read.preadv(
-                offset,
-                {{buffer.data(), 64}, {nullptr, 32}, {buffer.data() + 64, 64}});
-            if (bytes != 160) {
-              ++errors;
-            }
-          }
-          if (buffer != std::string(128, 'a' + record)) {
-            ++errors;
-          }
-        }
-      } catch (const std::exception&) {
-        ++errors;
-      }
-    });
-  }
-  for (auto& thread : threads) {
-    thread.join();
-  }
-  EXPECT_EQ(errors, 0);
-}
-
-TEST(LocalFileWindowsTest, failuresAndShortReads) {
-  const auto dir = TempDirectoryPath::create();
-  const auto path = (std::filesystem::path(dir->getPath()) / "data").string();
-  EXPECT_THROW((LocalReadFile{path}), VeloxRuntimeError);
-  EXPECT_THROW((LocalReadFile{path, nullptr, false}), VeloxRuntimeError);
-  EXPECT_THROW((LocalWriteFile{path, false, true, false}), VeloxRuntimeError);
-  EXPECT_FALSE(std::filesystem::exists(path));
-  LocalWriteFile file(path);
-  EXPECT_THROW((LocalWriteFile{path}), VeloxRuntimeError);
-  file.append("abcd");
-  EXPECT_THROW(file.truncate(-1), VeloxRuntimeError);
-  std::string data = "ef";
-  const std::vector<iovec> iovecs{{data.data(), data.size()}};
-  EXPECT_THROW(file.write(iovecs, -1, 2), VeloxRuntimeError);
-  EXPECT_THROW(file.write(iovecs, 0, -1), VeloxRuntimeError);
-  EXPECT_THROW(
-      file.write(iovecs, std::numeric_limits<int64_t>::max(), 2),
-      VeloxRuntimeError);
-  EXPECT_THROW(file.write({{nullptr, 1}}, 0, 1), VeloxRuntimeError);
-  EXPECT_THROW(
-      file.write({{data.data(), data.size()}, {nullptr, 1}}, 0, 3),
-      VeloxRuntimeError);
-  EXPECT_NO_THROW(file.write({{nullptr, 0}}, 0, 0));
-  file.close();
-  EXPECT_THROW(file.append("closed"), VeloxRuntimeError);
-  EXPECT_THROW(file.write(iovecs, 0, 2), VeloxRuntimeError);
-  EXPECT_THROW(file.truncate(0), VeloxRuntimeError);
-  EXPECT_THROW(file.flush(), VeloxRuntimeError);
-  file.close();
-
-  LocalReadFile read(path);
-  char buffer[4]{};
-  EXPECT_THROW(read.pread(0, 1, nullptr), VeloxRuntimeError);
-  EXPECT_TRUE(read.pread(0, 0, nullptr).empty());
-  EXPECT_THROW(read.pread(3, 2, buffer), VeloxRuntimeError);
-  EXPECT_THROW(
-      read.pread(std::numeric_limits<uint64_t>::max(), 1, buffer),
-      VeloxRuntimeError);
-  EXPECT_THROW(
-      read.pread(0, std::numeric_limits<uint64_t>::max(), buffer),
-      VeloxRuntimeError);
-  std::fill(std::begin(buffer), std::end(buffer), '?');
-  EXPECT_EQ(read.preadv(3, {{buffer, 2}, {buffer + 2, 2}}), 1);
-  EXPECT_EQ(std::string_view(buffer, 4), "d???");
-  EXPECT_EQ(read.preadv(4, {{buffer, 4}}), 0);
-  EXPECT_EQ(read.pread(0, 4, buffer), "abcd");
-}
-#endif
-
-void writeData(facebook::velox::WriteFile* writeFile, bool useIOBuf = false) {
+void writeData(WriteFile* writeFile, bool useIOBuf = false) {
   if (useIOBuf) {
     std::unique_ptr<folly::IOBuf> buf = folly::IOBuf::copyBuffer("aaaaa");
     buf->appendToChain(folly::IOBuf::copyBuffer("bbbbb"));
@@ -263,7 +58,7 @@ TEST(FileIoContextTest, defaultCacheableIsFalse) {
 }
 
 void readData(
-    facebook::velox::ReadFile* readFile,
+    ReadFile* readFile,
     bool checkFileSize = true,
     bool testReadAsync = false) {
   if (checkFileSize) {
@@ -273,9 +68,8 @@ void readData(
   ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &buffer1), "ddddd");
   char buffer2[10];
   ASSERT_EQ(readFile->pread(0, 10, &buffer2), "aaaaabbbbb");
-  std::vector<char> buffer3(kOneMB);
-  ASSERT_EQ(
-      readFile->pread(10, kOneMB, buffer3.data()), std::string(kOneMB, 'c'));
+  char buffer3[kOneMB];
+  ASSERT_EQ(readFile->pread(10, kOneMB, &buffer3), std::string(kOneMB, 'c'));
   if (checkFileSize) {
     ASSERT_EQ(readFile->size(), 15 + kOneMB);
   }
@@ -428,12 +222,12 @@ class FaultyFsTest : public ::testing::Test {
     fs_->clearFileFaultInjections();
   }
 
-  void writeData(facebook::velox::WriteFile* file) {
+  void writeData(WriteFile* file) {
     file->append(std::string_view(buffer_));
     file->flush();
   }
 
-  void readData(facebook::velox::ReadFile* file, bool useReadv = false) {
+  void readData(ReadFile* file, bool useReadv = false) {
     std::vector<char> readBuf(buffer_.size());
     if (!useReadv) {
       file->pread(0, buffer_.size(), readBuf.data());
@@ -496,7 +290,6 @@ TEST_F(FaultyFsTest, fileReadErrorInjection) {
   auto readFile = fs_->openFileForRead(readFilePath_, {});
   VELOX_ASSERT_THROW(readData(readFile.get(), true), "InjectedFaultFileError");
   VELOX_ASSERT_THROW(readData(readFile.get(), false), "InjectedFaultFileError");
-  readFile.reset();
   fs_->remove(readFilePath_);
 }
 
@@ -647,7 +440,6 @@ TEST_F(FaultyFsTest, fileWriteErrorInjection) {
   {
     auto writeFile = fs_->openFileForWrite(writeFilePath_, {});
     VELOX_ASSERT_THROW(writeFile->append("hello"), "InjectedFaultFileError");
-    writeFile->close();
     fs_->remove(writeFilePath_);
   }
   // Set error for all kinds of operations.
@@ -655,7 +447,6 @@ TEST_F(FaultyFsTest, fileWriteErrorInjection) {
   {
     auto writeFile = fs_->openFileForWrite(writeFilePath_, {});
     VELOX_ASSERT_THROW(writeFile->append("hello"), "InjectedFaultFileError");
-    writeFile->close();
     fs_->remove(writeFilePath_);
   }
 }
@@ -672,7 +463,6 @@ TEST_F(FaultyFsTest, fileWriteDelayInjection) {
       writeFile->append("hello");
     }
     ASSERT_GE(readDurationUs, injectDelay);
-    writeFile->close();
     fs_->remove(writeFilePath_);
   }
 }
@@ -701,7 +491,6 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     char buffer[5];
     ASSERT_EQ(readFile->size(), 5);
     ASSERT_EQ(readFile->pread(0, 5, &buffer), "hello");
-    readFile.reset();
     fs_->remove(path1);
   }
   {
@@ -712,7 +501,6 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     char buffer[10];
     ASSERT_EQ(readFile->size(), 10);
     ASSERT_EQ(readFile->pread(0, 10, &buffer), "Error data");
-    readFile.reset();
     fs_->remove(path2);
   }
 
@@ -737,7 +525,6 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     char buffer[5];
     ASSERT_EQ(readFile->size(), 5);
     ASSERT_EQ(readFile->pread(0, 5, &buffer), "hello");
-    readFile.reset();
     fs_->remove(path1);
   }
   {
@@ -746,7 +533,6 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     writeFile->close();
     auto readFile = fs_->openFileForRead(path2, {});
     ASSERT_EQ(readFile->size(), 0);
-    readFile.reset();
     fs_->remove(path2);
   }
 }
