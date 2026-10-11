@@ -470,14 +470,17 @@ String Functions
     Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
     each entry into key/value with ``keyValueDelimiter``.
     ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
-    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
-    when duplicate map keys are found for single row's result, consistent with Spark's default
-    behavior. ::
+    character. Allows ``keyValueDelimiter`` not found when splitting an entry, in which case the
+    whole entry is the key and the value is NULL. When a key is repeated within a single row's
+    result, the behavior depends on the ``throw_exception_on_duplicate_map_keys`` configuration
+    property: if true, throws; otherwise the last value wins and the key keeps the position of its
+    first occurrence. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
+        SELECT str_to_map('a:1,b:2,a:3', ',', ':'); -- {"a":"3","b":"2"} (throws if the property is true)
 
 .. spark:function:: substring(string, start) -> varchar
 
