@@ -529,6 +529,7 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_core
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
