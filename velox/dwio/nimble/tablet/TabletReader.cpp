@@ -219,6 +219,7 @@ TabletReader::TabletReader(
             .ioOptions = &ioOptions_,
             .fileHandle = cacheEnabled ? options.fileHandle : nullptr,
             .cache = cacheEnabled ? options.cache : nullptr,
+            .maxCacheEntrySize = options.maxCacheEntrySize,
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
@@ -250,7 +251,7 @@ TabletReader::TabletReader(
           [this](const std::string& columnName) {
             return loadVectorIndex(columnName);
           },
-          /*pinEntries=*/true},
+          options.pinIndex},
       chunkStatsCache_{
           [this](uint32_t stripeGroupIndex) {
             return loadChunkStatsGroup(stripeGroupIndex);
