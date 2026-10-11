@@ -22,9 +22,11 @@
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputTransportRegistry.h"
@@ -778,6 +780,287 @@ TEST_F(UcxOutputQueueManagerTest, broadcastEndMarkerToLateDestination) {
   fetch(taskId, 1);
   fetchEndMarker(taskId, 1);
 
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, broadcastReaderArrivesBeforeBufferUpdate) {
+  for (bool hasData : {false, true}) {
+    for (bool atEnd : {false, true}) {
+      SCOPED_TRACE(fmt::format("hasData={} atEnd={}", hasData, atEnd));
+      const std::string taskId = "broadcastPendingReader";
+      initializeTask(
+          taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+      if (hasData) {
+        enqueue(taskId, 0, 10);
+      }
+      if (atEnd) {
+        noMoreData(taskId);
+      }
+      int dataCount{0};
+      int endCount{0};
+      auto receive = [&](std::shared_ptr<cudf::packed_columns> data,
+                         vector_size_t rows,
+                         std::vector<int64_t>) {
+        // Re-enter the manager and queue to detect notifications under locks.
+        EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+        if (data) {
+          ++dataCount;
+          EXPECT_EQ(rows, 10);
+        } else {
+          ++endCount;
+          EXPECT_EQ(rows, 0);
+        }
+      };
+      const auto bytes = queueManager_->stats(taskId)->bufferedBytes;
+      queueManager_->getData(taskId, 1, receive);
+      EXPECT_EQ(dataCount, 0);
+      EXPECT_EQ(endCount, 0);
+      EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+
+      queueManager_->updateOutputBuffers(taskId, 2, false);
+      EXPECT_EQ(dataCount, hasData ? 1 : 0);
+      EXPECT_EQ(endCount, !hasData && atEnd ? 1 : 0);
+      if (hasData) {
+        queueManager_->getData(taskId, 1, receive);
+      }
+      if (!atEnd) {
+        EXPECT_EQ(endCount, 0);
+        noMoreData(taskId);
+      }
+      EXPECT_EQ(endCount, 1);
+      queueManager_->updateOutputBuffers(taskId, 2, true);
+      queueManager_->deleteResults(taskId, 0);
+      queueManager_->deleteResults(taskId, 1);
+      EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+      EXPECT_TRUE(queueManager_->isFinished(taskId));
+      queueManager_->removeTask(taskId);
+    }
+  }
+}
+
+TEST_F(UcxOutputQueueManagerTest, broadcastEndsReaderAfterFinalBuffers) {
+  const std::string taskId = "broadcastReaderAfterFinalBuffers";
+  initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  queueManager_->updateOutputBuffers(taskId, 1, true);
+  bool receivedEnd{false};
+  queueManager_->getData(taskId, 1, receiveEndMarker(1, receivedEnd));
+  EXPECT_TRUE(receivedEnd);
+  EXPECT_TRUE(queueManager_->updateOutputBuffers(taskId, 1, true));
+  VELOX_ASSERT_THROW(
+      queueManager_->updateOutputBuffers(taskId, 2, true),
+      "Cannot add broadcast destinations after no more output buffers");
+  queueManager_->deleteResults(taskId, 1);
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, broadcastLargeDestinationBothArrivalOrders) {
+  for (bool readerFirst : {false, true}) {
+    SCOPED_TRACE(readerFirst);
+    const std::string taskId = "broadcastLargeDestination";
+    constexpr int kDestination = 4096;
+    initializeTask(
+        taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+    enqueue(taskId, 0, 10);
+    noMoreData(taskId);
+    bool receivedData{false};
+    if (readerFirst) {
+      queueManager_->getData(
+          taskId, kDestination, receiveData(kDestination, receivedData));
+      EXPECT_FALSE(receivedData);
+      queueManager_->updateOutputBuffers(taskId, 2, false);
+      EXPECT_FALSE(receivedData);
+    }
+    queueManager_->updateOutputBuffers(taskId, kDestination + 1, true);
+    if (!readerFirst) {
+      queueManager_->getData(
+          taskId, kDestination, receiveData(kDestination, receivedData));
+    }
+    EXPECT_TRUE(receivedData);
+    fetchEndMarker(taskId, kDestination);
+    for (int destination = 0; destination < kDestination; ++destination) {
+      queueManager_->deleteResults(taskId, destination);
+    }
+    EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+    EXPECT_TRUE(queueManager_->isFinished(taskId));
+    queueManager_->removeTask(taskId);
+  }
+}
+
+TEST_F(UcxOutputQueueManagerTest, unpublishedReadersDoNotAmplifyBackpressure) {
+  const std::string taskId = "broadcastSparseReaders";
+  auto page = makePackedColumns(10);
+  const auto pageBytes = page->gpu_data->size();
+  ASSERT_GT(pageBytes, 0);
+  // One queued page fits; a phantom destination would block the producer.
+  initializeTask(
+      taskId,
+      1,
+      1,
+      true,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      pageBytes * 2);
+  int endCount{0};
+  for (int destination : {5, 4095, std::numeric_limits<int>::max()}) {
+    queueManager_->getData(
+        taskId,
+        destination,
+        [&](std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t rows,
+            std::vector<int64_t> remaining) {
+          EXPECT_EQ(data, nullptr);
+          EXPECT_EQ(rows, 0);
+          EXPECT_TRUE(remaining.empty());
+          EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+          ++endCount;
+        });
+  }
+  EXPECT_EQ(endCount, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  queueManager_->updateOutputBuffers(taskId, 1, false);
+  EXPECT_EQ(endCount, 0);
+  queueManager_->enqueue(taskId, 0, std::move(page), 10);
+  EXPECT_EQ(endCount, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, pageBytes);
+  EXPECT_DOUBLE_EQ(*queueManager_->getUtilization(taskId), 0.5);
+  ContinueFuture future;
+  EXPECT_FALSE(queueManager_->checkBlocked(taskId, &future));
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+  EXPECT_EQ(endCount, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  queueManager_->updateOutputBuffers(taskId, 1, true);
+  EXPECT_EQ(endCount, 3);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+  EXPECT_EQ(endCount, 3);
+}
+
+TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
+  for (auto kind :
+       {core::PartitionedOutputNode::Kind::kPartitioned,
+        core::PartitionedOutputNode::Kind::kBroadcast}) {
+    const std::string taskId = "pendingBeforeInit";
+    queueManager_->removeTask(taskId);
+    bool receivedData{false};
+    queueManager_->getData(taskId, 0, receiveData(0, receivedData));
+    int endCount{0};
+    queueManager_->getData(
+        taskId,
+        std::numeric_limits<int>::max(),
+        [&](std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t,
+            std::vector<int64_t>) {
+          EXPECT_EQ(data, nullptr);
+          EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+          ++endCount;
+        });
+    EXPECT_FALSE(queueManager_->isFinished(taskId));
+    initializeTask(taskId, 1, 1, false, kind);
+    EXPECT_EQ(
+        endCount,
+        kind == core::PartitionedOutputNode::Kind::kPartitioned ? 1 : 0);
+    enqueue(taskId, 0, 10);
+    EXPECT_TRUE(receivedData);
+    queueManager_->updateOutputBuffers(taskId, 1, true);
+    EXPECT_EQ(endCount, 1);
+    noMoreData(taskId);
+    fetchEndMarker(taskId, 0);
+    EXPECT_TRUE(queueManager_->isFinished(taskId));
+    queueManager_->removeTask(taskId);
+  }
+}
+
+TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedReader) {
+  const std::string taskId = "deletedPendingReader";
+  initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 10);
+  bool receivedEnd{false};
+  queueManager_->getData(taskId, 1, receiveEndMarker(1, receivedEnd));
+  EXPECT_FALSE(receivedEnd);
+  queueManager_->deleteResults(taskId, 1);
+  EXPECT_TRUE(receivedEnd);
+  const auto bytes = queueManager_->stats(taskId)->bufferedBytes;
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+  bool retryEnd{false};
+  queueManager_->getData(taskId, 1, receiveEndMarker(1, retryEnd));
+  EXPECT_TRUE(retryEnd);
+  noMoreData(taskId);
+  queueManager_->deleteResults(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedDestinationBeforeGetData) {
+  const std::string taskId = "deletedUnpublishedDestination";
+  initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 10);
+  const auto pageBytes = queueManager_->stats(taskId)->bufferedBytes;
+  queueManager_->deleteResults(taskId, -1);
+  queueManager_->deleteResults(taskId, 2);
+  bool receivedEnd{false};
+  queueManager_->getData(taskId, 2, receiveEndMarker(2, receivedEnd));
+  EXPECT_TRUE(receivedEnd);
+  queueManager_->updateOutputBuffers(taskId, 3, true);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 2 * pageBytes);
+  noMoreData(taskId);
+  for (int destination : {0, 1}) {
+    fetch(taskId, destination);
+    fetchEndMarker(taskId, destination);
+  }
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
+  const std::string taskId = "terminatedPendingReader";
+  auto task = initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  auto queue = std::make_shared<UcxOutputQueue>(
+      task, 1, 1, core::PartitionedOutputNode::Kind::kBroadcast);
+  int endCount{0};
+  queue->getData(
+      std::numeric_limits<int>::max(),
+      [&](std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t,
+          std::vector<int64_t>) {
+        EXPECT_EQ(data, nullptr);
+        // A racing reader must not register another pending callback.
+        bool receivedEnd{false};
+        queue->getData(2, receiveEndMarker(2, receivedEnd));
+        EXPECT_TRUE(receivedEnd);
+        ++endCount;
+      });
+  EXPECT_EQ(endCount, 0);
+  queue->terminate();
+  queue->terminate();
+  EXPECT_EQ(endCount, 1);
+  bool receivedEnd{false};
+  queue->getData(0, receiveEndMarker(0, receivedEnd));
+  EXPECT_TRUE(receivedEnd);
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, invalidReaderDestinations) {
+  const std::string taskId = "invalidReaderDestinations";
+  initializeTask(taskId, 1, 1);
+  for (int destination : {-1, 1, std::numeric_limits<int>::max()}) {
+    bool receivedEnd{false};
+    queueManager_->getData(
+        taskId, destination, receiveEndMarker(destination, receivedEnd));
+    EXPECT_TRUE(receivedEnd);
+    queueManager_->deleteResults(taskId, destination);
+  }
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
 }
