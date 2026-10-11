@@ -272,11 +272,11 @@ class VectorIndex {
   // Bounds valid row IDs returned by FAISS.
   const uint64_t numVectors_;
 
-  // Keeps zero-copy FAISS views valid for this index's lifetime.
-  const std::shared_ptr<const void> indexData_;
-
   // Remains immutable so concurrent searches only read shared state.
   const std::unique_ptr<faiss::Index> faissIndex_;
+
+  // Keeps zero-copy FAISS views valid for index types that use them.
+  std::shared_ptr<const void> indexData_;
 };
 
 /// Describes the vector indexes in a Nimble file without loading their data.
