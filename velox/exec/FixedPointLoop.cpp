@@ -178,6 +178,11 @@ FixedPointLoop::FixedPointLoop(
       options_.iterationMaxDrivers,
       1,
       "FixedPointOptions::iterationMaxDrivers must be at least 1");
+  // The trailing sub-task reuses this fragment, so each split group would
+  // re-read the whole output state.
+  VELOX_USER_CHECK(
+      !owner_->planFragment().isGroupedExecution(),
+      "A fixed point does not support grouped execution");
   // Trailing nodes are present when the fragment root is not the
   // FixedPointNode.
   hasTrailing_ = owner_->planFragment().planNode.get() != node_.get();
