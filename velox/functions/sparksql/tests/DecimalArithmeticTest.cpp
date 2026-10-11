@@ -521,11 +521,11 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
       assertEqualVectors(
           makeFlatVector<int64_t>({0, 1}, DECIMAL(1, 0)),
           evaluate(
-              fmt::format(
-                  "if(c0 < 0, cast(0 as decimal(1, 0)), {})", expression),
+              fmt::format("if(c2, cast(0 as decimal(1, 0)), {})", expression),
               makeRowVector(
                   {makeFlatVector<int64_t>({-1, 1}, DECIMAL(1, 0)),
-                   makeFlatVector<int64_t>({100, 3}, DECIMAL(3, 0))})));
+                   makeFlatVector<int64_t>({100, 3}, DECIMAL(3, 0)),
+                   makeFlatVector<bool>({true, false})})));
     }
   }
 }
