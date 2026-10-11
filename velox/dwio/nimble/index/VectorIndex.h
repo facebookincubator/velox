@@ -60,14 +60,20 @@ class VectorIndex {
     virtual ~SearchOptions() = default;
 
     virtual Kind kind() const = 0;
-
-   protected:
-    SearchOptions() = default;
   };
 
   /// Configures IVF-specific search behavior.
   struct IvfSearchOptions final : SearchOptions {
-    explicit IvfSearchOptions(uint32_t _numProbes) : numProbes{_numProbes} {}
+    explicit IvfSearchOptions(uint32_t _numProbes)
+        : IvfSearchOptions{_numProbes, 0, false} {}
+
+    IvfSearchOptions(
+        uint32_t _numProbes,
+        uint64_t _maxCodes,
+        bool _ensureTopKFull)
+        : numProbes{_numProbes},
+          maxCodes{_maxCodes},
+          ensureTopKFull{_ensureTopKFull} {}
 
     Kind kind() const override {
       return Kind::kIvf;
@@ -75,6 +81,12 @@ class VectorIndex {
 
     /// Sets the number of coarse partitions to probe.
     const uint32_t numProbes;
+
+    /// Limits distance computations per query. Zero allows unlimited scans.
+    const uint64_t maxCodes;
+
+    /// Allows scans beyond maxCodes until FAISS can fill the requested Top-K.
+    const bool ensureTopKFull;
   };
 
   /// Configures HNSW-specific search behavior.
@@ -136,6 +148,11 @@ class VectorIndex {
 
     /// Sets the maximum number of nearest neighbors returned per query.
     uint32_t numNeighbors{10};
+
+    /// Limits FAISS OpenMP parallelism across queries in this batch. A value
+    /// above one does not accelerate a single-query batch. Keep this at one
+    /// when the caller already parallelizes independent searches.
+    uint32_t numSearchThreads{1};
 
     /// Configures the selected index implementation.
     std::shared_ptr<const SearchOptions> searchOptions;

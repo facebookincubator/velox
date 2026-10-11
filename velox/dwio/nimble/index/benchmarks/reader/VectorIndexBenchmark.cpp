@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <faiss/IndexFlat.h>
@@ -102,6 +104,18 @@ DEFINE_uint32(
     vector_index_num_threads,
     1,
     "Number of OpenMP threads available to FAISS.");
+DEFINE_uint64(
+    vector_index_max_codes,
+    0,
+    "Maximum distance computations per IVF query; zero is unlimited.");
+DEFINE_bool(
+    vector_index_ensure_topk_full,
+    false,
+    "Allow IVF searches to exceed max_codes until Top-K can be filled.");
+DEFINE_uint32(
+    vector_index_concurrent_requests,
+    1,
+    "Number of concurrent callers issuing independent search batches.");
 DEFINE_string(
     vector_index_workload,
     "all",
@@ -137,6 +151,14 @@ struct BenchmarkOptions {
   uint32_t numProbes;
   // Sets the HNSW candidate-list size used while traversing the graph.
   uint32_t hnswSearchDepth;
+  // Limits FAISS OpenMP parallelism for each search operation.
+  uint32_t numSearchThreads;
+  // Limits distance computations per IVF query; zero allows unlimited scans.
+  uint64_t maxCodes;
+  // Allows IVF scans beyond maxCodes until Top-K can be filled.
+  bool ensureTopKFull;
+  // Sets the number of callers searching the same immutable index.
+  uint32_t concurrentRequests;
   // Selects the deterministic synthetic-data stream.
   int64_t dataSeed;
   // Sets the minimum measured duration of each workload.
@@ -287,6 +309,62 @@ TimedResult runForDuration(
   return result;
 }
 
+template <typename Operation>
+TimedResult runConcurrentForDuration(
+    uint32_t benchmarkSeconds,
+    uint32_t numQueriesPerOperation,
+    uint32_t numWorkers,
+    Operation&& operation) {
+  struct WorkerResult {
+    uint64_t numOperations{0};
+    std::vector<uint64_t> operationWallNanos;
+  };
+
+  std::vector<WorkerResult> workerResults(numWorkers);
+  std::atomic_bool start{false};
+  std::chrono::steady_clock::time_point deadline;
+  std::vector<std::thread> workers;
+  workers.reserve(numWorkers);
+  for (uint32_t worker = 0; worker < numWorkers; ++worker) {
+    workers.emplace_back([&, worker]() {
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      auto& workerResult = workerResults[worker];
+      do {
+        const auto operationStart = std::chrono::steady_clock::now();
+        operation(workerResult.numOperations);
+        workerResult.operationWallNanos.push_back(
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - operationStart)
+                    .count()));
+        ++workerResult.numOperations;
+      } while (std::chrono::steady_clock::now() < deadline);
+    });
+  }
+
+  TimedResult result;
+  {
+    velox::ProcessCpuWallTimer timer{result.timing};
+    deadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds{benchmarkSeconds};
+    start.store(true, std::memory_order_release);
+    for (auto& worker : workers) {
+      worker.join();
+    }
+  }
+  for (const auto& workerResult : workerResults) {
+    result.numOperations += workerResult.numOperations;
+    result.operationWallNanos.insert(
+        result.operationWallNanos.end(),
+        workerResult.operationWallNanos.begin(),
+        workerResult.operationWallNanos.end());
+  }
+  result.numQueries = result.numOperations * numQueriesPerOperation;
+  return result;
+}
+
 // Drives deterministic vector-index write, load, search, and quality workloads.
 class VectorIndexBenchmark {
  public:
@@ -310,7 +388,7 @@ class VectorIndexBenchmark {
     if (shouldRun("write")) {
       printOperationResult(
           "Vector index build + serialize + destroy",
-          runForDuration(
+          runTimed(
               options_.benchmarkSeconds, 0, [this](uint64_t /* operation */) {
                 const auto written = writeIndex(input_);
                 folly::doNotOptimizeAway(written.indexData.data());
@@ -320,7 +398,7 @@ class VectorIndexBenchmark {
     if (shouldRun("load")) {
       printOperationResult(
           "Resident load + destroy",
-          runForDuration(
+          runTimed(
               options_.benchmarkSeconds, 0, [this](uint64_t /* operation */) {
                 const auto index = directory_->load(kColumnName);
                 folly::doNotOptimizeAway(index.get());
@@ -329,7 +407,7 @@ class VectorIndexBenchmark {
     if (shouldRun("reload_and_search")) {
       printQueryResult(
           "Resident E2E (reload + batched search + destroy)",
-          runForDuration(
+          runTimed(
               options_.benchmarkSeconds,
               options_.numQueries,
               [this](uint64_t /* operation */) {
@@ -341,7 +419,7 @@ class VectorIndexBenchmark {
       const auto index = directory_->load(kColumnName);
       printQueryResult(
           "Same-object warm search",
-          runForDuration(
+          runTimed(
               options_.benchmarkSeconds,
               options_.numQueries,
               [this, &index](uint64_t /* operation */) { searchAll(*index); }));
@@ -368,7 +446,8 @@ class VectorIndexBenchmark {
     fmt::print(
         "Nimble vector index: type={}, vectors={}, dimensions={}, "
         "metric={}, {}, queries={}, neighbors={}, data=faiss_smooth, seed={}, "
-        "serialized={} B, workload={}, omp_threads={}, "
+        "serialized={} B, workload={}, concurrent_requests={}, "
+        "omp_threads={}, max_codes={}, ensure_topk_full={}, "
         "filter_selectivity={:.4f}, allowed_rows={}\n",
         FLAGS_vector_index_type,
         options_.numVectors,
@@ -380,12 +459,34 @@ class VectorIndexBenchmark {
         options_.dataSeed,
         index_.indexData.size(),
         options_.workload,
+        options_.concurrentRequests,
         FLAGS_vector_index_num_threads,
+        options_.maxCodes == 0 ? "unlimited"
+                               : fmt::to_string(options_.maxCodes),
+        options_.ensureTopKFull,
         options_.filterSelectivity,
         allowedRows_.numRows);
   }
 
  private:
+  template <typename Operation>
+  TimedResult runTimed(
+      uint32_t benchmarkSeconds,
+      uint32_t numQueriesPerOperation,
+      Operation&& operation) const {
+    if (options_.concurrentRequests == 1) {
+      return runForDuration(
+          benchmarkSeconds,
+          numQueriesPerOperation,
+          std::forward<Operation>(operation));
+    }
+    return runConcurrentForDuration(
+        benchmarkSeconds,
+        numQueriesPerOperation,
+        options_.concurrentRequests,
+        std::forward<Operation>(operation));
+  }
+
   uint32_t effectiveNumNeighbors() const {
     return static_cast<uint32_t>(std::min<uint64_t>(
         options_.numNeighbors,
@@ -544,12 +645,15 @@ class VectorIndexBenchmark {
     } else {
       searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
           options_.numProbes == 0 ? std::numeric_limits<uint32_t>::max()
-                                  : options_.numProbes);
+                                  : options_.numProbes,
+          options_.maxCodes,
+          options_.ensureTopKFull);
     }
     return {
         .numQueries = options_.numQueries,
         .queryVectors = queries,
         .numNeighbors = effectiveNumNeighbors(),
+        .numSearchThreads = options_.numSearchThreads,
         .searchOptions = std::move(searchOptions),
         .rowSelection = rowSelection(),
     };
@@ -730,6 +834,7 @@ int main(int argc, char** argv) {
   VELOX_USER_CHECK_GT(FLAGS_vector_index_hnsw_search_depth, 0);
   VELOX_USER_CHECK_GT(FLAGS_vector_index_benchmark_seconds, 0);
   VELOX_USER_CHECK_GT(FLAGS_vector_index_num_threads, 0);
+  VELOX_USER_CHECK_GT(FLAGS_vector_index_concurrent_requests, 0);
   VELOX_USER_CHECK_GT(FLAGS_vector_index_filter_selectivity, 0.0);
   VELOX_USER_CHECK_LE(FLAGS_vector_index_filter_selectivity, 1.0);
   VELOX_USER_CHECK(
@@ -765,6 +870,10 @@ int main(int argc, char** argv) {
       .numNeighbors = FLAGS_vector_index_num_neighbors,
       .numProbes = FLAGS_vector_index_num_probes,
       .hnswSearchDepth = FLAGS_vector_index_hnsw_search_depth,
+      .numSearchThreads = FLAGS_vector_index_num_threads,
+      .maxCodes = FLAGS_vector_index_max_codes,
+      .ensureTopKFull = FLAGS_vector_index_ensure_topk_full,
+      .concurrentRequests = FLAGS_vector_index_concurrent_requests,
       .dataSeed = FLAGS_vector_index_data_seed,
       .benchmarkSeconds = FLAGS_vector_index_benchmark_seconds,
       .workload = FLAGS_vector_index_workload,
