@@ -168,6 +168,8 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
+  // Get the received table and the CUDA stream that was used to allocate its
+  // memory.
   PackedTableWithStream& data = *currentData_;
   // The producer's count, not table.num_rows(): a packed table with no columns
   // reports zero rows however many it holds, which is what an exchange
@@ -190,6 +192,8 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
+  // Move the received table into CudfVector and reuse its CUDA stream. Both
+  // constructors transfer ownership without copying the GPU data.
   std::shared_ptr<cudf_velox::CudfVector> result;
   if (data.table) {
     result = std::make_shared<cudf_velox::CudfVector>(

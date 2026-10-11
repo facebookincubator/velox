@@ -43,7 +43,8 @@ void appendScalar(std::vector<uint8_t>& output, T value) {
   std::memcpy(output.data() + position, &value, sizeof(T));
 }
 
-// The caller verifies that the complete fixed-size header is present.
+// unwrapExchangePayloadMetadata() checks that the complete fixed-size header
+// is present before calling this function.
 template <typename T>
 T readScalar(const uint8_t*& current) {
   static_assert(std::is_trivially_copyable_v<T>);

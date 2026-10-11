@@ -148,7 +148,9 @@ class ExchangeCompressionTest : public testing::Test {
         std::move(packet.data->gpu_data),
         stream,
         packet.rows);
-    packet.data.reset(); // Returned storage must not depend on the wire owner.
+    // The reconstructed table must remain valid after the received buffers are
+    // destroyed.
+    packet.data.reset();
     return received;
   }
 
@@ -192,8 +194,8 @@ class ExchangeCompressionTest : public testing::Test {
           std::make_unique<std::vector<uint8_t>>(*packet.data->metadata));
       ASSERT_EQ(decoded.codec, ExchangePayloadCodec::kCascaded);
       EXPECT_LT(packet.data->gpu_data->size(), decoded.logicalDataSize);
-      // resize must change the transmitted size, not just metadata. Retained
-      // allocation capacity is not the payload size and is not sent.
+      // The transmitted byte count follows the buffer's size, not its retained
+      // allocation capacity.
       EXPECT_LT(
           packet.data->gpu_data->size(), packet.data->gpu_data->capacity());
       auto received = restore(packet, consumer);
@@ -211,8 +213,10 @@ class ExchangeCompressionTest : public testing::Test {
   }
 
   static std::vector<int32_t> forValues() {
-    // Every 32 KiB INT32 tile spans exactly five bits, including both halves
-    // of the round-robin split. This distinguishes layouts and tile sizes.
+    // Each 32 KiB tile has values from -10 through 21, so FOR needs exactly
+    // five bits per value. The row count also divides evenly between two
+    // destinations. These properties let the tests detect the wrong layout or
+    // tile size.
     std::vector<int32_t> values(65536);
     for (size_t i = 0; i < values.size(); ++i) {
       values[i] = static_cast<int32_t>(i % 32) - 10;
@@ -330,8 +334,8 @@ TEST_F(ExchangeCompressionTest, cascadedSingleDestinationUsesOwningPath) {
 }
 
 TEST_F(ExchangeCompressionTest, cascadedSplitDestinationsUseOwningPath) {
-  // Establish that the fixture actually produces both destinations without
-  // compression before checking the new codec path.
+  // First confirm that this input produces one non-empty packet for each
+  // destination without compression. Then repeat the same split with Cascaded.
   auto raw = produce(std::vector<int32_t>(65536, 7), {}, 2);
   ASSERT_EQ(raw.size(), 2);
   for (auto& packet : raw) {
@@ -355,9 +359,10 @@ TEST_F(ExchangeCompressionTest, cascadedSplitDestinationsUseOwningPath) {
 }
 
 TEST_F(ExchangeCompressionTest, cascadedWithoutReductionKeepsRawPayload) {
-  // Deterministic full-width values do not leave Cascaded enough redundancy
-  // to offset its framing. This exercises the global no-gain fallback without
-  // depending on the codec's exact header size.
+  // These deterministic pseudo-random values use the full 32-bit range. The
+  // Cascaded result, including its metadata, is therefore not smaller than the
+  // input. This verifies that the original data is sent without depending on
+  // the exact metadata size.
   std::vector<int32_t> values(65536);
   uint32_t state = 0x9e3779b9;
   for (auto& value : values) {
@@ -575,8 +580,8 @@ TEST_F(ExchangeCompressionTest, processDefaultSupportsQueryOverride) {
       std::make_unique<std::vector<uint8_t>>(*raw[0].data->metadata));
   EXPECT_EQ(metadata.codec, ExchangePayloadCodec::kNone);
 #if VELOX_UCX_TEST_HAS_FUSED_FOR
-  // A query chooses one codec, so FOR overrides Cascaded instead of
-  // conflicting.
+  // This query selects fused FOR and therefore overrides the process default
+  // of Cascaded. The two modes are not combined.
   auto fused = produce(
       forValues(),
       {{CudfConfig::kUcxExchangeCompression, "fused-for-bitpacked"}});

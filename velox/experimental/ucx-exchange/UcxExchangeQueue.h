@@ -27,15 +27,19 @@
 
 namespace facebook::velox::ucx_exchange {
 
-/// Bundles received cuDF storage with its consumer stream. Raw and fused FOR
-/// remain packed. A materializer can instead return an owning table.
+/// Struct that bundles received cuDF table storage with the CUDA stream that
+/// was used to allocate its memory. This allows the receiver to reuse the same
+/// stream for subsequent GPU operations. Uncompressed and fused FOR payloads
+/// retain a cudf::packed_table. Cascaded decompression produces an owning
+/// cudf::table.
 struct PackedTableWithStream {
   std::unique_ptr<cudf::table> table;
   std::unique_ptr<cudf::packed_table> packedTable;
   cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   size_t logicalDataBytes{0};
 
-  /// Logical rows reported by the producer. Authoritative:
+  /// Logical rows in the received table, as reported by the producer. This is
+  /// authoritative because
   /// cudf::table_view::num_rows() derives the count from the columns and so
   /// returns 0 for a table with none, which is what an exchange fragment with
   /// an empty output layout sends. 32-bit because a cuDF table cannot hold more
@@ -62,10 +66,13 @@ struct PackedTableWithStream {
         logicalDataBytes(logicalDataBytes),
         numRows(numRows) {}
 
-  /// Returns a view over whichever storage representation is present.
+  /// Returns a view of the received table, whether it is stored as a
+  /// cudf::packed_table or an owning cudf::table.
   cudf::table_view tableView() const;
 
-  /// Returns logical uncompressed bytes, not live allocation capacity.
+  /// Returns the uncompressed packed data size used for exchange input
+  /// statistics and queue accounting. This can differ from the allocation size
+  /// after decompression.
   size_t gpuDataSize() const {
     return logicalDataBytes;
   }

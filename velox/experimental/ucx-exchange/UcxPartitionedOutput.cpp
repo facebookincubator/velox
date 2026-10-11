@@ -639,8 +639,9 @@ void UcxPartitionedOutput::splitAndEnqueue(
   auto partitions = splitExchangePayloads(
       tableView, offsets, compression_, stream, get_temp_mr(), get_output_mr());
 
-  // UCXX/UCX is not stream-aware, so all codec work must finish before the
-  // payload is enqueued for transfer.
+  // Synchronize before enqueueing. UCXX/UCX is not stream-aware and could
+  // otherwise transfer a payload before the split or compression kernels have
+  // finished writing it.
   stream.sync();
   VELOX_CHECK_EQ(partitions.size(), numPartitions_);
 
@@ -652,6 +653,7 @@ void UcxPartitionedOutput::splitAndEnqueue(
     const auto numRows = rowEnd - rowStart;
     rowStart = rowEnd;
     if (numRows == 0) {
+      // Do not enqueue a destination with no rows.
       continue;
     }
 

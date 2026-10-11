@@ -65,7 +65,7 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
-  /// Exchange codec. Defaults to none. A query may override the process choice.
+  /// Query configuration key for selecting UCX exchange compression.
   static constexpr const char* kUcxExchangeCompression{
       "cudf.exchange_compression"};
   /// Query session configs for the cuDF Operators.
@@ -124,8 +124,8 @@ struct CudfConfig {
   /// disable accumulation.
   int64_t partitionedOutputBatchRows{10'000};
 
-  /// Default exchange compression codec. A query-session property can
-  /// override this value.
+  /// Compression mode used by UCX exchange output unless a query overrides it
+  /// with kUcxExchangeCompression.
   std::string exchangeCompression{"none"};
 
   /// Memory resource for cuDF.

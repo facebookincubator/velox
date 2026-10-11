@@ -606,6 +606,8 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
     metrics_.numPackedColumns_.addValue(1);
     metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
 
+    // Reconstruct the table on the stream used for the receive. Retain the
+    // producer's row count because a table with no columns cannot report it.
     auto data = restoreExchangePayload(
         std::move(ptr->metadata.cudfMetadata),
         std::move(ptr->dataBuf),
@@ -764,10 +766,10 @@ void UcxExchangeSource::onIntraNodeData(
   metrics_.numPackedColumns_.addValue(1);
   metrics_.totalBytes_.addValue(data->gpu_data->size());
 
-  // Convert packed_columns to PackedTableWithStream for the queue.
-  // Create packed_columns from the shared data.
-  // The producer synchronizes before publishing, so the payload is ready on a
-  // new consumer stream.
+  // Use a stream from the pool so decompression and later cuDF operations do
+  // not run on the default stream. The producer synchronized before publishing,
+  // so the received data is ready. The inter-node receive path likewise keeps
+  // its receive stream with the table.
   auto consumerStream = cudf_velox::cudfGlobalStreamPool().get_stream();
   auto tableWithStream = restoreExchangePayload(
       std::move(data->metadata),

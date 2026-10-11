@@ -35,9 +35,9 @@ namespace facebook::velox::ucx_exchange {
 
 struct PackedTableWithStream;
 
-/// Selects the one compression codec used by an exchange output operator.
-/// Fused FOR exposes two layouts as separate configuration values, but both
-/// values use the same codec on the wire.
+/// Compression mode used by one exchange output operator. The two fused
+/// frame-of-reference (FOR) modes store transformed integers differently, but
+/// both are identified as kFusedFor in the metadata sent to the receiver.
 enum class ExchangeCompression {
   kNone,
   kFusedForBitpacked,
@@ -45,22 +45,25 @@ enum class ExchangeCompression {
   kCascaded,
 };
 
-/// Owns one packed exchange payload and describes the codec actually used.
-/// Cascaded may retain an ordinary raw payload when compression does not reduce
-/// its size, so `codec` can be kNone even when Cascaded was selected.
+/// Contains the cuDF metadata and GPU data to send, together with the codec the
+/// receiver must use. If Cascaded does not make the data smaller, `codec` is
+/// kNone and `packed` contains the original uncompressed data.
 struct PackedExchangePayload {
   std::unique_ptr<cudf::packed_columns> packed;
   ExchangePayloadCodec codec{ExchangePayloadCodec::kNone};
+  /// Size of the packed GPU data before compression.
   std::size_t logicalDataSize{0};
+  /// Number of fused FOR segments. Zero for other codecs.
   std::size_t auxiliaryCount{0};
 };
 
-/// Parses a configured compression mode and rejects unavailable or unknown
-/// values with a user error.
+/// Converts a configuration value to a compression mode. Throws a user error
+/// for an unknown mode or when fused FOR is not available in this build.
 ExchangeCompression parseExchangeCompression(std::string_view value);
 
-/// Packs one table with the selected codec. The codec choice is exclusive and
-/// fixed for this call. The result carries the codec that was actually used.
+/// Packs one table for transfer using `compression`. The returned `codec`
+/// tells the receiver how to decode the data. Cascaded may return kNone when
+/// its compressed output is not smaller than the original packed data.
 PackedExchangePayload packExchangePayload(
     cudf::table_view input,
     ExchangeCompression compression,
@@ -68,9 +71,9 @@ PackedExchangePayload packExchangePayload(
     rmm::device_async_resource_ref temporaryMemoryResource,
     rmm::device_async_resource_ref outputMemoryResource);
 
-/// Splits and packs one table with the selected codec. Fused FOR combines the
-/// split and transform. Other modes split first and optionally compress each
-/// ordinary packed partition. The result order matches the split order.
+/// Splits `input` at the requested row offsets and packs each result using
+/// `compression`. Fused FOR splits and compresses in one cuDF operation. Other
+/// modes split first. Results remain in the same order as the requested ranges.
 std::vector<PackedExchangePayload> splitExchangePayloads(
     cudf::table_view input,
     const std::vector<cudf::size_type>& splits,
@@ -79,9 +82,10 @@ std::vector<PackedExchangePayload> splitExchangePayloads(
     rmm::device_async_resource_ref temporaryMemoryResource,
     rmm::device_async_resource_ref outputMemoryResource);
 
-/// Restores one received payload according to the single codec recorded in its
-/// metadata. Raw and fused FOR payloads retain packed storage. Cascaded returns
-/// an owning table.
+/// Reconstructs a received table using the codec stored in `metadata`.
+/// Uncompressed and fused FOR data remain in packed cuDF storage. Cascaded
+/// decompression returns an owning cudf::table. The result retains `stream`
+/// and the row count reported by the producer.
 std::unique_ptr<PackedTableWithStream> restoreExchangePayload(
     std::unique_ptr<std::vector<uint8_t>> metadata,
     std::unique_ptr<rmm::device_buffer> data,

@@ -23,30 +23,35 @@
 
 namespace facebook::velox::ucx_exchange {
 
-/// Identifies the encoding of an exchange payload.
+/// Tells the receiver how to decode the GPU data in an exchange payload.
 enum class ExchangePayloadCodec : uint8_t {
   kNone = 0,
   kFusedFor = 1,
   kCascaded = 2,
 };
 
-/// Owns the cuDF metadata and compression metadata for an exchange payload.
+/// Metadata needed to reconstruct a received exchange payload. `cudfMetadata`
+/// contains the original cuDF metadata after the compression header is removed.
 struct ExchangePayloadMetadata {
   std::unique_ptr<std::vector<uint8_t>> cudfMetadata;
   ExchangePayloadCodec codec{ExchangePayloadCodec::kNone};
+  /// Size of the packed GPU data before compression.
   std::size_t logicalDataSize{0};
-  std::size_t auxiliaryCount{0}; // FOR segment count, zero for Cascaded.
+  /// Number of fused FOR segments. Zero for other codecs.
+  std::size_t auxiliaryCount{0};
 };
 
-/// Adds compression metadata to serialized cuDF metadata.
+/// Prepends the codec, uncompressed byte count, and number of fused FOR
+/// segments to serialized cuDF metadata. The segment count is zero for
+/// Cascaded. This is used only for compressed payloads.
 std::unique_ptr<std::vector<uint8_t>> wrapExchangePayloadMetadata(
     std::unique_ptr<std::vector<uint8_t>> cudfMetadata,
     ExchangePayloadCodec codec,
     std::size_t logicalDataSize,
     std::size_t auxiliaryCount);
 
-/// Parses compression metadata, or returns unwrapped cuDF metadata for a raw
-/// payload.
+/// Removes and parses the compression header. If `metadata` has no compression
+/// header, returns it unchanged with codec kNone.
 ExchangePayloadMetadata unwrapExchangePayloadMetadata(
     std::unique_ptr<std::vector<uint8_t>> metadata);
 

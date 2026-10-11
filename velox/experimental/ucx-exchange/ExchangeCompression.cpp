@@ -88,8 +88,8 @@ PackedExchangePayload makePayload(
       cudf::memory_resources{temporaryMemoryResource, temporaryMemoryResource});
   VELOX_CHECK_LE(result.payload_bytes, output->size());
 
-  // The plan completes its reads before returning. Retain the ordinary packed
-  // payload when compression does not reduce the bytes sent.
+  // pack_into() finishes reading the original packed data before it returns.
+  // If the compressed data is not smaller, send the original data instead.
   if (result.payload_bytes >= logicalDataSize) {
     return raw;
   }
@@ -138,8 +138,8 @@ std::unique_ptr<PackedTableWithStream> retainPackedPayload(
   auto packedTable = std::make_unique<cudf::packed_table>(
       cudf::packed_table{tableView, std::move(packedColumns)});
 
-  // Keep the storage and its consumer stream together. The producer's row
-  // count is authoritative because a columnless packed table reports zero.
+  // Keep the packed table with the CUDA stream used for later GPU operations.
+  // Use the producer's row count because a table with no columns reports zero.
   return std::make_unique<PackedTableWithStream>(
       std::move(packedTable), stream, numRows);
 }
@@ -272,9 +272,9 @@ std::unique_ptr<PackedTableWithStream> restoreExchangePayload(
           *envelope.cudfMetadata,
           std::span<uint8_t const>{
               static_cast<uint8_t const*>(data->data()), data->size()}};
-      // Materialize synchronizes before returning, including on the
-      // already-ready same-worker path, so both borrowed buffers remain alive
-      // until then.
+      // materialize() finishes reading the metadata and compressed data before
+      // it returns, so both input buffers only need to remain alive for this
+      // call.
       auto table = cudf::experimental::materialize(
           packed,
           stream,
