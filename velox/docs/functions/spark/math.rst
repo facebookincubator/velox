@@ -426,6 +426,23 @@ Mathematical Functions
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
 
+    Omitting ``d`` is equivalent to ``d = 0``. For integral inputs, nonnegative
+    ``d`` returns ``x`` unchanged. Negative ``d`` rounds to a multiple of
+    ``10^(-d)``, with halfway values rounded away from zero. Integral overflow
+    raises an error when ``spark.ansi_enabled`` is true; otherwise the result
+    wraps to the input type's two's-complement representation.
+
+    Integral inputs accept every INTEGER scale, including a scale column.
+    Column scales are a native extension: Spark 4.1 requires a foldable scale
+    expression, which need not be a literal.
+
+    Extreme-scale behavior is not fully compatible with Spark 4.1. For BIGINT
+    input ``25`` and scale ``-2147483648``, Velox returns zero whereas Spark's
+    interpreted and generated evaluators throw. At scale ``2147483647``, Velox
+    and Spark's generated evaluator return ``25``, but Spark's interpreted
+    evaluator throws. Velox does not reproduce JVM BigDecimal/BigInteger
+    scale and resource limits.
+
 .. spark:function:: sec(x) -> double
 
     Returns the secant of ``x``.
