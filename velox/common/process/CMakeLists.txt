@@ -31,7 +31,7 @@ velox_add_library(
 velox_link_libraries(
   velox_process
   PUBLIC velox_file velox_flag_definitions Folly::folly
-  PRIVATE fmt::fmt gflags::gflags
+  PRIVATE Boost::filesystem fmt::fmt gflags::gflags xsimd
 )
 
 # Profiler need not be part of the core Velox library

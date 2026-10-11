@@ -1,0 +1,128 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Windows / MSVC vector build, including its required dependencies.
+# Configure and build failures remain failures; no fork-specific patches are applied.
+name: Windows Vector Build
+
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-build:
+    name: windows-2022-vector-release
+    runs-on: windows-2022
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Report build environment
+        run: |
+          git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install WinFlexBison
+        run: |
+          choco install winflexbison3 --no-progress -y 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\velox-tools.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $flexHeader = Get-ChildItem "$env:ChocolateyInstall\lib\winflexbison3" -Recurse -Filter FlexLexer.h |
+            Select-Object -First 1
+          if (-not $flexHeader) {
+            throw "WinFlexBison did not install the required FlexLexer.h header."
+          }
+          $flex = (Get-Command win_flex.exe -ErrorAction Stop).Source
+          $bison = (Get-Command win_bison.exe -ErrorAction Stop).Source
+          "FLEX_INCLUDE_DIR=$($flexHeader.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FLEX_EXECUTABLE=$flex" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "BISON_EXECUTABLE=$bison" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install system libraries
+        run: |
+          $conda = Join-Path $env:CONDA "Scripts\conda.exe"
+          $prefix = Join-Path $env:RUNNER_TEMP "velox-system-deps"
+          # Only prerequisites without bundled recipes come from Conda.
+          & $conda create --yes --no-default-packages --prefix $prefix `
+            --override-channels --channel conda-forge openssl libevent "double-conversion>=3.1.5" `
+            2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-system-deps.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $conda list --prefix $prefix --explicit |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\velox-system-deps-explicit.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Do not activate Conda: main's dependency recipes remain in control.
+          "VELOX_SYSTEM_PREFIX=$prefix\Library" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$prefix\Library\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Configure
+        run: |
+          cmake -S . -B _build/release -G "Visual Studio 17 2022" -A x64 -T v143 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_STANDARD=20 `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+            -DCMAKE_VS_GLOBALS=VcpkgEnabled=false `
+            -DVELOX_DEPENDENCY_SOURCE=BUNDLED `
+            -DCMAKE_PREFIX_PATH="$env:VELOX_SYSTEM_PREFIX" `
+            -DOPENSSL_ROOT_DIR="$env:VELOX_SYSTEM_PREFIX" `
+            -DFLEX_INCLUDE_DIR="$env:FLEX_INCLUDE_DIR" `
+            -DFLEX_EXECUTABLE="$env:FLEX_EXECUTABLE" `
+            -DBISON_EXECUTABLE="$env:BISON_EXECUTABLE" `
+            -DVELOX_BUILD_STATIC=ON -DVELOX_BUILD_SHARED=OFF -DVELOX_MONO_LIBRARY=OFF `
+            -DVELOX_BUILD_TESTING=OFF -DVELOX_BUILD_RUNNER=OFF `
+            -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_EXAMPLES=OFF `
+            -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF -DVELOX_ENABLE_HDFS=OFF -DVELOX_ENABLE_ABFS=OFF `
+            -DVELOX_ENABLE_GEO=OFF -DVELOX_ENABLE_HIVE_CONNECTOR=OFF `
+            -DVELOX_ENABLE_PARQUET=OFF -DVELOX_ENABLE_TPCH_CONNECTOR=OFF -DVELOX_ENABLE_TPCDS_CONNECTOR=OFF `
+            -DVELOX_ENABLE_ARROW=OFF -DVELOX_ENABLE_PRESTO_FUNCTIONS=OFF `
+            -DVELOX_ENABLE_SPARK_FUNCTIONS=OFF -DVELOX_ENABLE_ICEBERG_FUNCTIONS=OFF `
+            -DVELOX_ENABLE_EXEC=OFF -DVELOX_ENABLE_EXPRESSION=OFF `
+            -DVELOX_ENABLE_DUCKDB=OFF -DVELOX_ENABLE_PARSE=OFF `
+            2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-configure.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build vector and dependencies
+        run: |
+          cmake --build _build/release --config Release --target velox_vector --parallel 4 `
+            -- /nologo /verbosity:minimal `
+            2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-build.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload build logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-vector-release-logs
+          path: |
+            ${{ runner.temp }}\velox-tools.log
+            ${{ runner.temp }}\velox-system-deps.log
+            ${{ runner.temp }}\velox-system-deps-explicit.txt
+            ${{ runner.temp }}\velox-configure.log
+            ${{ runner.temp }}\velox-build.log
+            _build/release/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 7

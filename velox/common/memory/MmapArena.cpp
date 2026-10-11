@@ -16,7 +16,7 @@
 
 #include "velox/common/memory/MmapArena.h"
 
-#include <sys/mman.h>
+#include <folly/portability/SysMman.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 

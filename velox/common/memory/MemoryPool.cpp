@@ -1568,6 +1568,10 @@ void MemoryPoolImpl::handleAllocationFailure(
     const std::string& failureMessage) {
   if (coreOnAllocationFailureEnabled_) {
     VELOX_MEM_LOG(ERROR) << failureMessage;
+#ifdef _WIN32
+    // Windows has no SIGBUS; retain the fatal diagnostic through SIGABRT.
+    raise(SIGABRT);
+#else
     // SIGBUS is one of the standard signals in Linux that triggers a core
     // dump Normally it is raised by the operating system when a misaligned
     // memory access occurs. On x86 and aarch64 misaligned access is allowed
@@ -1575,6 +1579,7 @@ void MemoryPoolImpl::handleAllocationFailure(
     // signal other than SIGABRT makes it easier to distinguish an allocation
     // failure from any other crash
     raise(SIGBUS);
+#endif
   }
 
   VELOX_MEM_ALLOC_ERROR(failureMessage);

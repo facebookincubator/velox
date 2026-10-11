@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/CPortability.h>
+#include "velox/common/base/Int128.h"
 
 namespace facebook::velox {
 

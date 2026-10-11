@@ -41,4 +41,17 @@ TEST_F(FsTest, createDirectory) {
   EXPECT_FALSE(fs::exists(rootPath.c_str()));
 }
 
+TEST_F(FsTest, temporaryPaths) {
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  const auto file = generateTempFilePath(path.c_str(), "file");
+  ASSERT_TRUE(file.has_value());
+  EXPECT_TRUE(fs::is_regular_file(*file));
+  EXPECT_TRUE(fs::remove(*file));
+
+  const auto folder = generateTempFolderPath(path.c_str(), "folder");
+  ASSERT_TRUE(folder.has_value());
+  EXPECT_TRUE(fs::is_directory(*folder));
+}
+
 } // namespace facebook::velox::common

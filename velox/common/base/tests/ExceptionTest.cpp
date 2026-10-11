@@ -66,9 +66,21 @@ void verifyVeloxException(
     std::function<void()> f,
     const std::string& messagePrefix) {
   verifyException<VeloxException>(f, [&messagePrefix](const auto& e) {
-    EXPECT_TRUE(std::string_view{e.what()}.starts_with(messagePrefix))
+    auto expectedPrefix = messagePrefix;
+#ifdef _MSC_VER
+    constexpr std::string_view kLambdaFunction = "Function: operator()\n";
+    if (const auto pos = expectedPrefix.find(kLambdaFunction);
+        pos != std::string::npos) {
+      ASSERT_NE(e.function(), nullptr);
+      const std::string_view function = e.function();
+      EXPECT_TRUE(function.ends_with("::operator ()"));
+      expectedPrefix.replace(
+          pos, kLambdaFunction.size(), fmt::format("Function: {}\n", function));
+    }
+#endif
+    EXPECT_TRUE(std::string_view{e.what()}.starts_with(expectedPrefix))
         << "\nException message prefix mismatch.\n\nExpected prefix: "
-        << messagePrefix << "\n\nActual message: " << e.what();
+        << expectedPrefix << "\n\nActual message: " << e.what();
   });
 }
 
@@ -1148,20 +1160,22 @@ TEST(ExceptionTest, messageTemplate) {
   using testing::StrEq;
   using testing::Throws;
 
-  auto noMsg = [] { VELOX_FAIL(); };
+  auto noMsg = []() -> int { VELOX_FAIL(); };
   EXPECT_THAT(
       noMsg,
       Throws<VeloxException>(
           Property(&VeloxException::messageTemplate, StrEq(""))));
 
-  auto plainMsg = [] { VELOX_FAIL("Something went wrong"); };
+  auto plainMsg = []() -> const std::string& {
+    VELOX_FAIL("Something went wrong");
+  };
   EXPECT_THAT(
       plainMsg,
       Throws<VeloxException>(Property(
           &VeloxException::messageTemplate, StrEq("Something went wrong"))));
 
   // message() is interpolated, messageTemplate() is not.
-  auto fmtMsg = [] { VELOX_FAIL("Error: {} vs {}", 42, 99); };
+  auto fmtMsg = []() -> int64_t { VELOX_FAIL("Error: {} vs {}", 42, 99); };
   EXPECT_THAT(
       fmtMsg,
       Throws<VeloxException>(Property(

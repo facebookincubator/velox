@@ -262,8 +262,9 @@ std::string normalizeTimeZone(const std::string& originalZoneId) {
 template <typename TDuration>
 void validateRangeImpl(time_point<TDuration> timePoint) {
   using namespace velox::date;
-  static constexpr auto kMinYear = year::min();
-  static constexpr auto kMaxYear = year::max();
+  // Avoid an MSVC frontend crash on static constexpr year objects.
+  constexpr auto kMinYear = year::min();
+  constexpr auto kMaxYear = year::max();
 
   if (timePoint.time_since_epoch() <
           std::chrono::seconds(std::numeric_limits<int64_t>::min() / 1000) ||

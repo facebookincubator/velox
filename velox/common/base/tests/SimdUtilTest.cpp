@@ -362,11 +362,13 @@ TEST_F(SimdUtilTest, misc) {
         simd::leadingMask<int32_t>(i) ==
         simd::fromBitMask<int32_t>((1 << i) - 1));
     EXPECT_EQ(simd::allSetBitMask<int32_t>(), compare);
+    EXPECT_EQ((1 << i) - 1, simd::toBitMask(simd::leadingMask<float>(i)));
     if (i < xsimd::batch<int64_t>::size) {
       compare = simd::toBitMask(
           simd::leadingMask<int64_t>(i) ==
           simd::fromBitMask<int64_t>((1 << i) - 1));
       EXPECT_EQ(simd::allSetBitMask<int64_t>(), compare);
+      EXPECT_EQ((1 << i) - 1, simd::toBitMask(simd::leadingMask<double>(i)));
     }
   }
 

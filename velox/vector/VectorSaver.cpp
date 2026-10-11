@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/vector/VectorSaver.h"
+#include <folly/portability/Stdlib.h>
 #include <fstream>
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"

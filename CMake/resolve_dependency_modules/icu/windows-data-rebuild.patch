@@ -1,0 +1,37 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+--- a/source/data/makedata.mak
++++ b/source/data/makedata.mak
+@@ -425,8 +425,11 @@
+ #  2005-may-05 Removed Unicode properties files (unorm.icu, uprops.icu, ucase.icu, ubidi.icu)
+ #  from data build. See Jitterbug 4497. (makedata.mak revision 1.117)
+ #
++# Repackage after stubdata replaces the shared DLL output.
++ICU_FORCE_DATA_PACKAGING:
++
+ !IFDEF ICUDATA_SOURCE_ARCHIVE
+-"$(ICU_LIB_TARGET)" : $(COMMON_ICUDATA_DEPENDENCIES) "$(ICUDATA_SOURCE_ARCHIVE)"
++"$(ICU_LIB_TARGET)" : ICU_FORCE_DATA_PACKAGING $(COMMON_ICUDATA_DEPENDENCIES) "$(ICUDATA_SOURCE_ARCHIVE)"
+ 	@echo Building icu data from $(ICUDATA_SOURCE_ARCHIVE)
+ 	cd "$(ICUBLD_PKG)"
+ 	"$(ICUPBIN)\icupkg" -x * --list "$(ICUDATA_SOURCE_ARCHIVE)" > "$(ICUTMP)\icudata.lst"
+@@ -436,7 +439,7 @@
+ 	copy "$(ICUTMP)\$(ICUPKG).dat" "$(ICUOUT)\$(U_ICUDATA_NAME)$(U_ICUDATA_ENDIAN_SUFFIX).dat"
+ 	-@erase "$(ICUTMP)\$(ICUPKG).dat"
+ !ELSE
+-"$(ICU_LIB_TARGET)" : $(COMMON_ICUDATA_DEPENDENCIES) $(COREDATA_TS)
++"$(ICU_LIB_TARGET)" : ICU_FORCE_DATA_PACKAGING $(COMMON_ICUDATA_DEPENDENCIES) $(COREDATA_TS)
+ 	@echo Building ICU data from scratch
+ 	cd "$(ICUBLD_PKG)"
+ 	"$(ICUPBIN)\pkgdata" $(COMMON_ICUDATA_ARGUMENTS) $(ICUTMP)\icudata.lst

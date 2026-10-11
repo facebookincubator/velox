@@ -32,6 +32,10 @@ message(STATUS "Building ICU4C from source")
 
 ProcessorCount(NUM_JOBS)
 velox_set_with_default(NUM_JOBS NUM_THREADS ${NUM_JOBS})
+if(MSVC)
+  include(${CMAKE_CURRENT_LIST_DIR}/icu/Windows.cmake)
+  return()
+endif()
 find_program(MAKE_PROGRAM make REQUIRED)
 
 set(ICU_CFG --disable-tests --disable-samples)

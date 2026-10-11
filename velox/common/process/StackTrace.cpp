@@ -25,12 +25,14 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 
 #include <fmt/format.h>
 #include <folly/Indestructible.h>
 #include <folly/String.h>
 #include <folly/debugging/symbolizer/StackTrace.h>
+#include <folly/portability/Windows.h>
 
 #include "velox/common/process/ProcessBase.h"
 
@@ -130,7 +132,11 @@ std::string StackTrace::log(
   msg += "Host: " + getHostName();
   msg += "\nProcessID: " + pid;
   msg += "\nThreadID: " +
+#ifdef _WIN32
+      folly::to<std::string>(GetCurrentThreadId());
+#else
       folly::to<std::string>(reinterpret_cast<uintptr_t>(getThreadId()));
+#endif
   msg += "\nName: " + getAppName();
   msg += "\nType: ";
   if (errorType) {
@@ -142,7 +148,9 @@ std::string StackTrace::log(
   msg += toString();
   msg += "\n";
 
-  std::string tracefn = "/tmp/stacktrace." + pid + ".log";
+  const auto tracefn =
+      (std::filesystem::temp_directory_path() / ("stacktrace." + pid + ".log"))
+          .string();
   std::ofstream f(tracefn.c_str());
   if (f) {
     f << msg;

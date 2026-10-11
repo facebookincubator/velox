@@ -16,8 +16,9 @@
 
 #include "velox/common/memory/MmapAllocator.h"
 
-#include <sys/mman.h>
-#include <unistd.h>
+#include <folly/Memory.h>
+#include <folly/portability/SysMman.h>
+#include <folly/portability/Unistd.h>
 
 #include <cerrno>
 
@@ -540,8 +541,12 @@ void* MmapAllocator::allocateBytesWithoutRetry(
   alignmentCheck(bytes, alignment);
 
   if (useMalloc(bytes)) {
+#ifdef _WIN32
+    auto* result = folly::aligned_malloc(bytes, alignment);
+#else
     auto* result = alignment > kMinAlignment ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
+#endif
     if (FOLLY_UNLIKELY(result == nullptr)) {
       VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << bytes
                            << " bytes with " << alignment << " alignment";
@@ -580,7 +585,7 @@ void* MmapAllocator::allocateBytesWithoutRetry(
 
 void MmapAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
   if (useMalloc(bytes)) {
-    ::free(p); // NOLINT
+    folly::aligned_free(p);
     numMallocBytes_ -= bytes;
     return;
   }

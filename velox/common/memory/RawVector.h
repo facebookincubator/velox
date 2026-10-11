@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Memory.h>
 #include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
@@ -223,7 +224,8 @@ class raw_vector {
       buffer =
           reinterpret_cast<uint8_t*>(pool_->allocate(bytes, simd::kPadding));
     } else {
-      buffer = reinterpret_cast<uint8_t*>(aligned_alloc(simd::kPadding, bytes));
+      buffer = reinterpret_cast<uint8_t*>(
+          folly::aligned_malloc(bytes, simd::kPadding));
     }
     // Clear the word below the pointer so that we do not get read of
     // uninitialized when reading a partial word that extends below
@@ -245,7 +247,7 @@ class raw_vector {
     if (pool_ != nullptr) {
       pool_->free(buffer, bufferSize(capacity_));
     } else {
-      ::free(buffer);
+      folly::aligned_free(buffer);
     }
     data_ = nullptr;
   }
@@ -262,7 +264,7 @@ class raw_vector {
         if (pool_ != nullptr) {
           pool_->free(newBuffer, bufferSize(newCapacity));
         } else {
-          ::free(newBuffer);
+          folly::aligned_free(newBuffer);
         }
         throw;
       }

@@ -59,3 +59,13 @@
 
  # Generate a pkg-config file so that downstream projects that don't use
  # CMake can depend on folly using pkg-config.
+--- a/folly/FixedString.h
++++ b/folly/FixedString.h
+@@ -2848,6 +2848,6 @@
+ #ifndef NO_FIXED_STR_UDL
+ #define FOLLY_DEFINE_FIXED_STRING_UDL(N)                     \
+-  constexpr FixedString<N> operator""_fs##N(                 \
++  constexpr FixedString<N> operator"" _fs##N(                \
+       const char* that, std::size_t count) noexcept(false) { \
+     return {that, count};                                    \
+   }                                                          \

@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <pthread.h>
-#include <sys/types.h>
+#include <folly/portability/PThread.h>
+#include <folly/portability/SysTypes.h>
 #include <cstdint>
 #include <string>
 #include <vector>

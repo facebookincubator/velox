@@ -32,7 +32,7 @@ velox_resolve_dependency_url(FOLLY)
 message(STATUS "Building Folly from source")
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
-  set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
+  set(glog_patch ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
   # Together with the patch applied above prevents folly from test compiling a
   # snippet to find the right namespace (which would fail because gflags isn't
   # built yet)
@@ -52,10 +52,13 @@ FetchContent_Declare(
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 
-# Enable INT128 support
-set(FOLLY_HAVE_INT128_T ON)
+# Let Folly probe for native 128-bit integers when using MSVC.
+if(NOT MSVC)
+  set(FOLLY_HAVE_INT128_T ON)
+endif()
 
 FetchContent_MakeAvailable(folly)
+target_link_libraries(folly_deps INTERFACE Boost::headers)
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog::glog gflags::gflags fmt::fmt)

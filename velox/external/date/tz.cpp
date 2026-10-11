@@ -31,6 +31,8 @@
 
 #include "velox/external/date/tz.h"
 
+#include <bit>
+
 namespace facebook::velox::date {
 CONSTDATA auto min_year = date::year::min();
 CONSTDATA auto max_year = date::year::max();
@@ -40,12 +42,7 @@ CONSTDATA auto max_day = date::December/31;
 
 CONSTCD14 const sys_seconds min_seconds = date::sys_days(min_year/min_day);
 
-enum class endian
-{
-    native = __BYTE_ORDER__,
-    little = __ORDER_LITTLE_ENDIAN__,
-    big    = __ORDER_BIG_ENDIAN__
-};
+using endian = std::endian;
 
 inline
 std::uint32_t

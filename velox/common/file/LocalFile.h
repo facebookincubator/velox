@@ -18,15 +18,20 @@
 
 #include "velox/common/file/File.h"
 
+#ifdef _WIN32
+#include <mutex>
+#endif
+
 namespace facebook::velox {
 
 /// Current implementation for the local version is quite simple (e.g. no
 /// internal arenaing), as local disk writes are expected to be cheap. Local
-/// files match against any filepath starting with '/'.
+/// files match absolute paths and paths starting with 'file:'.
 class LocalReadFile final : public ReadFile {
  public:
   /// Opens 'path' for reading. 'executor', when set, backs the asynchronous
-  /// preadvAsync(). When 'bufferIo' is false the file is opened with O_DIRECT.
+  /// preadvAsync(). When 'bufferIo' is false the file is opened with O_DIRECT
+  /// on Linux. Unbuffered I/O is not supported on Windows.
   /// 'useIoUring' enables positioned preadv() batches through a per-thread
   /// io_uring reader. It is valid only when 'bufferIo' is false.
   explicit LocalReadFile(
@@ -95,8 +100,12 @@ class LocalReadFile final : public ReadFile {
   const bool useIoUring_{false};
   const std::string path_;
   const int32_t fd_;
-  const long size_;
+  const int64_t size_;
   const uint64_t readAlignment_;
+#ifdef _WIN32
+  // Windows positional reads temporarily change the shared file position.
+  mutable std::mutex readMutex_;
+#endif
 };
 
 class LocalWriteFile final : public WriteFile {

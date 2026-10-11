@@ -27,6 +27,11 @@ velox_link_libraries(
 )
 
 include_directories(${FLEX_INCLUDE_DIRS})
+set(VELOX_COMMON_BASE_PLATFORM_HEADERS)
+if(MSVC)
+  list(APPEND VELOX_COMMON_BASE_PLATFORM_HEADERS windows/CheckedArithmetic.h windows/Int128.h)
+endif()
+
 velox_add_library(
   velox_common_base
   AdmissionController.cpp
@@ -62,6 +67,7 @@ velox_add_library(
   Fs.h
   IOUtils.h
   IndexedPriorityQueue.h
+  Int128.h
   IoCounter.h
   Nulls.h
   PeriodicStatsReporter.h
@@ -84,6 +90,7 @@ velox_add_library(
   SuccinctPrinter.h
   TreeOfLosers.h
   XxHashInline.h
+  ${VELOX_COMMON_BASE_PLATFORM_HEADERS}
 )
 
 velox_link_libraries(

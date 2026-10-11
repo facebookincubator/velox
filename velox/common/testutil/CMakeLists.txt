@@ -28,7 +28,11 @@ velox_add_library(
   TestValue.h
 )
 
-velox_link_libraries(velox_test_util PUBLIC velox_exception Folly::folly PRIVATE glog::glog)
+velox_link_libraries(
+  velox_test_util
+  PUBLIC velox_exception Folly::folly
+  PRIVATE Boost::filesystem glog::glog
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

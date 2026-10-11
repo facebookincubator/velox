@@ -28,6 +28,13 @@
 #include <string>
 
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Int128.h"
+
+#ifdef _WIN32
+#include <folly/portability/Windows.h>
+// Windows GDI defines OPAQUE as a macro, conflicting with the type names.
+#undef OPAQUE
+#endif
 
 namespace facebook::velox {
 

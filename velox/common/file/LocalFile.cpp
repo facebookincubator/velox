@@ -19,27 +19,33 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/IoUringReader.h"
 
-#include <fcntl.h>
-#include <unistd.h>
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
 #include <glog/logging.h>
 
 #include <folly/Conv.h>
+#include <folly/portability/Fcntl.h>
+#include <folly/portability/SysStat.h>
 #include <folly/portability/SysUio.h>
+#include <folly/portability/Unistd.h>
 
 #include "velox/common/memory/Allocation.h"
 
 #ifdef linux
 #include <linux/fs.h>
-#endif // linux
 #include <sys/ioctl.h>
-#include <sys/stat.h>
+#endif // linux
+
+#ifdef _WIN32
+#include <folly/portability/Windows.h>
+#include <io.h>
+#endif
 
 namespace facebook::velox {
 
@@ -51,14 +57,84 @@ namespace facebook::velox {
 
 namespace {
 
+#ifdef _WIN32
+// The caller serializes reads on a shared descriptor. Unlike Folly's preadv
+// emulation, this keeps offsets 64-bit and bounds each CRT call to INT_MAX.
+int64_t positionedIo(
+    int32_t fd,
+    const iovec* iovecs,
+    size_t count,
+    uint64_t offset,
+    bool write) {
+  constexpr auto kMaxOffset = std::numeric_limits<int64_t>::max();
+  if (offset > kMaxOffset) {
+    errno = EINVAL;
+    return -1;
+  }
+  uint64_t length = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (iovecs[i].iov_len > 0 && iovecs[i].iov_base == nullptr) {
+      errno = EFAULT;
+      return -1;
+    }
+    if (iovecs[i].iov_len > kMaxOffset - offset - length) {
+      errno = EINVAL;
+      return -1;
+    }
+    length += iovecs[i].iov_len;
+  }
+
+  const auto originalOffset = ::_lseeki64(fd, 0, SEEK_CUR);
+  if (originalOffset < 0 || ::_lseeki64(fd, offset, SEEK_SET) < 0) {
+    return -1;
+  }
+  int64_t total = 0;
+  bool done = false;
+  for (size_t i = 0; i < count && !done; ++i) {
+    auto* data = static_cast<char*>(iovecs[i].iov_base);
+    auto remaining = iovecs[i].iov_len;
+    while (remaining > 0) {
+      const auto chunk = static_cast<unsigned int>(
+          std::min<size_t>(remaining, std::numeric_limits<int>::max()));
+      const auto result =
+          write ? ::_write(fd, data, chunk) : ::_read(fd, data, chunk);
+      if (result < 0) {
+        total = -1;
+        done = true;
+        break;
+      }
+      total += result;
+      if (result < chunk) {
+        done = true;
+        break;
+      }
+      data += result;
+      remaining -= result;
+    }
+  }
+  const auto savedErrno = errno;
+  if (::_lseeki64(fd, originalOffset, SEEK_SET) < 0) {
+    if (total < 0) {
+      errno = savedErrno;
+    }
+    return -1;
+  }
+  errno = savedErrno;
+  return total;
+}
+#endif
+
 int32_t openReadFile(const std::string& path, bool directIo) {
+#ifdef _WIN32
+  VELOX_CHECK(!directIo, "LocalFile direct I/O is not supported on Windows");
+#endif
   int32_t flags = O_RDONLY;
 #ifdef linux
   if (directIo) {
     flags |= O_DIRECT;
   }
 #endif // linux
-  const auto fd = open(path.c_str(), flags);
+  const auto fd = folly::fileops::open(path.c_str(), flags);
   if (fd < 0) {
     if (errno == ENOENT) {
       VELOX_FILE_NOT_FOUND_ERROR("No such file or directory: {}", path);
@@ -72,15 +148,24 @@ int32_t openReadFile(const std::string& path, bool directIo) {
   return fd;
 }
 
-long fileSize(int32_t fd, std::string_view path) {
+int64_t fileSize(int32_t fd, std::string_view path) {
+#ifdef _WIN32
+  const auto ret = ::_lseeki64(fd, 0, SEEK_END);
+#else
   const off_t ret = lseek(fd, 0, SEEK_END);
+#endif
+  const auto savedErrno = errno;
+  if (ret < 0) {
+    // The constructor cannot close the descriptor if size initialization fails.
+    folly::fileops::close(fd);
+  }
   VELOX_CHECK_GE(
       ret,
       0,
-      "fseek failure in LocalReadFile constructor, {} {} {}.",
+      "fseek failure in LocalFile constructor, {} {} {}.",
       ret,
       path,
-      folly::errnoStr(errno));
+      folly::errnoStr(savedErrno));
   return ret;
 }
 
@@ -185,7 +270,7 @@ LocalReadFile::LocalReadFile(
       readAlignment_{getReadAlignment(fd_, directIo_)} {}
 
 LocalReadFile::~LocalReadFile() {
-  const int ret = close(fd_);
+  const int ret = folly::fileops::close(fd_);
   if (ret < 0) {
     LOG(WARNING) << "close failure in LocalReadFile destructor: " << ret << ", "
                  << folly::errnoStr(errno);
@@ -204,11 +289,16 @@ bool LocalReadFile::directIo(uint64_t& alignment) const {
 void LocalReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
     const {
   bytesRead_ += length;
+#ifdef _WIN32
+  std::lock_guard<std::mutex> lock(readMutex_);
+  const iovec buffer{pos, length};
+  const auto bytesRead = positionedIo(fd_, &buffer, 1, offset, false);
+#else
   auto bytesRead = ::pread(fd_, pos, length, offset);
+#endif
   const int savedErrno = errno;
-  VELOX_CHECK_EQ(
-      bytesRead,
-      length,
+  VELOX_CHECK(
+      bytesRead >= 0 && static_cast<uint64_t>(bytesRead) == length,
       "fread failure in LocalReadFile::PReadInternal, {} vs {}: {}, path={}, fd={}, offset={}, length={}, buffer={}, directIo={}, readAlignment={}",
       bytesRead,
       length,
@@ -243,8 +333,14 @@ uint64_t LocalReadFile::preadv(
   iovecs.reserve(buffers.size());
 
   auto readvFunc = [&]() -> ssize_t {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lock(readMutex_);
+    const auto bytesRead =
+        positionedIo(fd_, iovecs.data(), iovecs.size(), offset, false);
+#else
     const auto bytesRead =
         folly::preadv(fd_, iovecs.data(), iovecs.size(), offset);
+#endif
     if (bytesRead < 0) {
       LOG(ERROR) << "preadv failed with error: " << folly::errnoStr(errno);
     } else {
@@ -261,7 +357,7 @@ uint64_t LocalReadFile::preadv(
       while (skipSize) {
         auto bytes = std::min<size_t>(droppedBytes.size(), skipSize);
 
-        if (iovecs.size() >= IOV_MAX) {
+        if (iovecs.size() >= folly::kIovMax) {
           ssize_t bytesRead{0};
           RETURN_IF_ERROR(readvFunc(), bytesRead);
         }
@@ -270,7 +366,7 @@ uint64_t LocalReadFile::preadv(
         skipSize -= bytes;
       }
     } else {
-      if (iovecs.size() >= IOV_MAX) {
+      if (iovecs.size() >= folly::kIovMax) {
         ssize_t bytesRead{0};
         RETURN_IF_ERROR(readvFunc(), bytesRead);
       }
@@ -344,10 +440,13 @@ LocalWriteFile::LocalWriteFile(
     bool shouldThrowOnFileAlreadyExists,
     bool bufferIo)
     : path_(path) {
+#ifdef _WIN32
+  VELOX_CHECK(bufferIo, "LocalFile direct I/O is not supported on Windows");
+#endif
   const auto dir = fs::path(path_).parent_path();
   if (shouldCreateParentDirectories && !fs::exists(dir)) {
     VELOX_CHECK(
-        common::generateFileDirectory(dir.c_str()),
+        common::generateFileDirectory(dir.string().c_str()),
         "Failed to generate file directory");
   }
 
@@ -372,7 +471,7 @@ LocalWriteFile::LocalWriteFile(
   std::unique_ptr<char[]> buf(new char[path_.size() + 1]);
   buf[path_.size()] = 0;
   ::memcpy(buf.get(), path_.data(), path_.size());
-  fd_ = open(buf.get(), flags, mode);
+  fd_ = folly::fileops::open(buf.get(), flags, mode);
   VELOX_CHECK_GE(
       fd_,
       0,
@@ -380,15 +479,7 @@ LocalWriteFile::LocalWriteFile(
       path_,
       folly::errnoStr(errno));
 
-  const off_t ret = lseek(fd_, 0, SEEK_END);
-  VELOX_CHECK_GE(
-      ret,
-      0,
-      "fseek failure in LocalWriteFile constructor, {} {} {}.",
-      ret,
-      path_,
-      folly::errnoStr(errno));
-  size_ = ret;
+  size_ = fileSize(fd_, path_);
 }
 
 LocalWriteFile::~LocalWriteFile() {
@@ -403,10 +494,14 @@ LocalWriteFile::~LocalWriteFile() {
 
 void LocalWriteFile::append(std::string_view data) {
   checkNotClosed(closed_);
-  const uint64_t bytesWritten = ::write(fd_, data.data(), data.size());
-  VELOX_CHECK_EQ(
-      bytesWritten,
-      data.size(),
+#ifdef _WIN32
+  const iovec buffer{const_cast<char*>(data.data()), data.size()};
+  const auto bytesWritten = positionedIo(fd_, &buffer, 1, size_, true);
+#else
+  const auto bytesWritten = ::write(fd_, data.data(), data.size());
+#endif
+  VELOX_CHECK(
+      bytesWritten >= 0 && static_cast<uint64_t>(bytesWritten) == data.size(),
       "fwrite failure in LocalWriteFile::append, {} vs {}: {}",
       bytesWritten,
       data.size(),
@@ -419,10 +514,18 @@ void LocalWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
   uint64_t totalBytesWritten{0};
   for (auto rangeIter = data->begin(); rangeIter != data->end(); ++rangeIter) {
     const auto bytesToWrite = rangeIter->size();
-    const uint64_t bytesWritten =
+#ifdef _WIN32
+    const iovec buffer{
+        const_cast<uint8_t*>(rangeIter->data()), rangeIter->size()};
+    const auto bytesWritten =
+        positionedIo(fd_, &buffer, 1, size_ + totalBytesWritten, true);
+#else
+    const auto bytesWritten =
         ::write(fd_, rangeIter->data(), rangeIter->size());
+#endif
     totalBytesWritten += bytesWritten;
-    if (bytesWritten != bytesToWrite) {
+    if (bytesWritten < 0 ||
+        static_cast<uint64_t>(bytesWritten) != bytesToWrite) {
       VELOX_FAIL(
           "fwrite failure in LocalWriteFile::append, {} vs {}: {}",
           bytesWritten,
@@ -446,8 +549,14 @@ void LocalWriteFile::write(
     int64_t length) {
   checkNotClosed(closed_);
   VELOX_CHECK_GE(offset, 0, "Offset cannot be negative.");
+  VELOX_CHECK_GE(length, 0, "Length cannot be negative.");
+#ifdef _WIN32
+  const auto bytesWritten =
+      positionedIo(fd_, iovecs.data(), iovecs.size(), offset, true);
+#else
   const auto bytesWritten = ::pwritev(
       fd_, iovecs.data(), static_cast<ssize_t>(iovecs.size()), offset);
+#endif
   VELOX_CHECK_EQ(
       bytesWritten,
       length,
@@ -460,6 +569,27 @@ void LocalWriteFile::write(
 void LocalWriteFile::truncate(int64_t newSize) {
   checkNotClosed(closed_);
   VELOX_CHECK_GE(newSize, 0, "New size cannot be negative.");
+#ifdef _WIN32
+  const auto originalOffset = ::_lseeki64(fd_, 0, SEEK_CUR);
+  VELOX_CHECK_GE(originalOffset, 0, "Cannot get file position for truncate");
+  VELOX_CHECK_GE(
+      ::_lseeki64(fd_, newSize, SEEK_SET),
+      0,
+      "fseek failed in LocalWriteFile::truncate: {}.",
+      folly::errnoStr(errno));
+  // Set the logical length without writing zeros through a potentially large
+  // sparse extent, as _chsize_s does when extending a file.
+  const auto success =
+      ::SetEndOfFile(reinterpret_cast<HANDLE>(::_get_osfhandle(fd_)));
+  const auto error = ::GetLastError();
+  if (!success) {
+    ::_lseeki64(fd_, originalOffset, SEEK_SET);
+  }
+  VELOX_CHECK(
+      success,
+      "ftruncate failed in LocalWriteFile::truncate: Windows error {}.",
+      error);
+#else
   const auto ret = ::ftruncate(fd_, newSize);
   VELOX_CHECK_EQ(
       ret,
@@ -468,12 +598,17 @@ void LocalWriteFile::truncate(int64_t newSize) {
       folly::errnoStr(errno));
   // Reposition the file offset to the end of the file for append().
   ::lseek(fd_, newSize, SEEK_SET);
+#endif
   size_ = newSize;
 }
 
 void LocalWriteFile::flush() {
   checkNotClosed(closed_);
+#ifdef _WIN32
+  const auto ret = ::_commit(fd_);
+#else
   const auto ret = ::fsync(fd_);
+#endif
   VELOX_CHECK_EQ(
       ret,
       0,
@@ -515,7 +650,7 @@ std::unordered_map<std::string, std::string> LocalWriteFile::getAttributes()
 
 void LocalWriteFile::close() {
   if (!closed_) {
-    const auto ret = ::close(fd_);
+    const auto ret = folly::fileops::close(fd_);
     VELOX_CHECK_EQ(
         ret,
         0,

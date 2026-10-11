@@ -22,6 +22,7 @@
 #include <cctype>
 #include <string>
 #include <type_traits>
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/CppToType.h"
@@ -138,7 +139,7 @@ namespace detail {
 
 template <typename T, typename F>
 Expected<T> callFollyTo(const F& v) {
-  const auto result = folly::tryTo<T>(v);
+  const auto result = tryToWithInt128<T>(v);
   if (result.hasError()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -363,7 +364,7 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const bool& v) {
-    return folly::to<T>(v);
+    return T(v ? 1 : 0);
   }
 
   struct LimitType {

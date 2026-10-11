@@ -17,6 +17,8 @@
 #include "velox/common/base/Fs.h"
 
 #include <fmt/format.h>
+#include <folly/File.h>
+#include <folly/portability/Stdlib.h>
 #include <glog/logging.h>
 
 namespace facebook::velox::common {
@@ -42,6 +44,7 @@ std::optional<std::string> generateTempFilePath(
   if (fd == -1) {
     return std::nullopt;
   }
+  const folly::File file(fd, true);
   return path;
 }
 

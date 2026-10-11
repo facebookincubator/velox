@@ -9,10 +9,13 @@
 // For information see https://libcxx.llvm.org/DesignDocs/TimeZone.html
 
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <fmt/format.h>
@@ -60,11 +63,18 @@ std::string __libcpp_tzdb_directory() {
   // First, check for the TZDIR environment variable.
   // If set, it takes precedence over standard system paths.
   if (auto tzdir = getenv("TZDIR")) {
+#ifdef _WIN32
+    if (stat(tzdir, &sb) == 0 && (sb.st_mode & _S_IFMT) == _S_IFDIR) {
+#else
     if (stat(tzdir, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+#endif
         return tzdir;
     }
   }
-#if !defined(__APPLE__)
+#if defined(_WIN32)
+  throw runtime_error(
+      "discover_tz_dir failed: set TZDIR to an IANA time zone database directory");
+#elif !defined(__APPLE__)
   CONSTDATA auto tz_dir_default = "/usr/share/zoneinfo";
   CONSTDATA auto tz_dir_buildroot = "/usr/share/zoneinfo/uclibc";
 
@@ -111,7 +121,7 @@ static void __skip_optional_whitespace(std::istream& __input) {
 
 static void __skip_mandatory_whitespace(std::istream& __input) {
   if (!__is_whitespace(__input.get()))
-    std::__throw_runtime_error("corrupt tzdb: expected whitespace");
+    throw std::runtime_error("corrupt tzdb: expected whitespace");
 
   __skip_optional_whitespace(__input);
 }
@@ -144,7 +154,7 @@ static void __matches(std::istream& __input, char __expected) {
   }
   char __c = __input.get();
   if (std::tolower(__c) != __expected)
-    std::__throw_runtime_error(
+    throw std::runtime_error(
         (std::string("corrupt tzdb: expected character '") + __expected +
          "', got '" + __c + "' instead")
             .c_str());
@@ -157,7 +167,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
     }
     char __actual = __input.get();
     if (std::tolower(__actual) != __c)
-      std::__throw_runtime_error(
+      throw std::runtime_error(
           (std::string("corrupt tzdb: expected character '") + __c +
            "' from string '" + std::string(__expected) + "', got '" + __actual +
            "' instead")
@@ -177,7 +187,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
         [[fallthrough]];
       case std::istream::traits_type::eof():
         if (__result.empty())
-          std::__throw_runtime_error("corrupt tzdb: expected a string");
+          throw std::runtime_error("corrupt tzdb: expected a string");
 
         return __result;
 
@@ -193,10 +203,10 @@ static void __matches(std::istream& __input, std::string_view __expected) {
   int64_t __result = __input.get();
   if (__leading_zero_allowed) {
     if (__result < '0' || __result > '9')
-      std::__throw_runtime_error("corrupt tzdb: expected a digit");
+      throw std::runtime_error("corrupt tzdb: expected a digit");
   } else {
     if (__result < '1' || __result > '9')
-      std::__throw_runtime_error("corrupt tzdb: expected a non-zero digit");
+      throw std::runtime_error("corrupt tzdb: expected a non-zero digit");
   }
   __result -= '0';
   while (true) {
@@ -215,7 +225,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
     // the range is large enough for the bilions of years. Limiting that
     // range slightly to make the code easier is not an issue.
     if (__result > (std::numeric_limits<int64_t>::max() / 16))
-      std::__throw_runtime_error("corrupt tzdb: integral too large");
+      throw std::runtime_error("corrupt tzdb: integral too large");
 
     __result *= 10;
     __result += __input.get() - '0';
@@ -229,7 +239,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
 [[nodiscard]] static date::day __parse_day(std::istream& __input) {
   unsigned __result = __parse_integral(__input, false);
   if (__result > 31)
-    std::__throw_runtime_error("corrupt tzdb day: value too large");
+    throw std::runtime_error("corrupt tzdb day: value too large");
   return date::day{__result};
 }
 
@@ -272,7 +282,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
       return date::Wednesday;
   }
 
-  std::__throw_runtime_error("corrupt tzdb weekday: invalid name");
+  throw std::runtime_error("corrupt tzdb weekday: invalid name");
 }
 
 [[nodiscard]] static date::month __parse_month(std::istream& __input) {
@@ -341,7 +351,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
       __skip(__input, "eptember");
       return date::September;
   }
-  std::__throw_runtime_error("corrupt tzdb month: invalid name");
+  throw std::runtime_error("corrupt tzdb month: invalid name");
 }
 
 [[nodiscard]] static date::year __parse_year_value(std::istream& __input) {
@@ -352,10 +362,10 @@ static void __matches(std::istream& __input, std::string_view __expected) {
   int64_t __result = __parse_integral(__input, true);
   if (__result > static_cast<int64_t>(date::year::max())) {
     if (__negative)
-      std::__throw_runtime_error(
+      throw std::runtime_error(
           "corrupt tzdb year: year is less than the minimum");
 
-    std::__throw_runtime_error(
+    throw std::runtime_error(
         "corrupt tzdb year: year is greater than the maximum");
   }
 
@@ -383,7 +393,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
       return date::year::max();
   }
 
-  std::__throw_runtime_error("corrupt tzdb year: expected 'min' or 'max'");
+  throw std::runtime_error("corrupt tzdb year: expected 'min' or 'max'");
 }
 
 //===----------------------------------------------------------------------===//
@@ -412,7 +422,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
       __matches(__input, '=');
       return __constrained_weekday::__le;
   }
-  std::__throw_runtime_error("corrupt tzdb on: expected '>=' or '<='");
+  throw std::runtime_error("corrupt tzdb on: expected '>=' or '<='");
 }
 
 [[nodiscard]] static facebook::velox::tzdb::__on __parse_on(
@@ -572,7 +582,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
     const auto&  rule_name = std::get<std::string>(__result.__rules);
     const auto rules = __binary_find(__rules, rule_name);
     if (rules == std::end(__rules))
-      std::__throw_runtime_error(
+      throw std::runtime_error(
           (fmt::format("corrupt tzdb: rule '{}' does not exist", rule_name)).c_str());
     size_t numForeverRules = 0;
     std::pair<std::vector<__rule>::const_iterator, std::vector<__rule>::const_iterator>& foreverRules = __result.__forever_rules;
@@ -608,7 +618,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
 
   if (__is_eol(__input.peek()))
     return __result;
-  __result.__in = __parse_month(__input);
+  __result.__month = __parse_month(__input);
   __skip_optional_whitespace(__input);
 
   if (__is_eol(__input.peek()))
@@ -685,7 +695,7 @@ static void __parse_rule(
   __skip_mandatory_whitespace(__input);
   __matches(__input, '-');
   __skip_mandatory_whitespace(__input);
-  __rule.__in = __parse_month(__input);
+  __rule.__month = __parse_month(__input);
   __skip_mandatory_whitespace(__input);
   __rule.__on = __parse_on(__input);
   __skip_mandatory_whitespace(__input);
@@ -788,7 +798,7 @@ static void __parse_tzdata_record_type(
           // Only z (Zones) have continuation lines.
           // When parsing z, any token not matched by the earlier cases is invalid.
           // (continuations are consumed inside __parse_zone)
-          std::__throw_runtime_error("corrupt tzdb: unexpected input");
+          throw std::runtime_error("corrupt tzdb: unexpected input");
         } else {
           __skip_line(__input);
         }
@@ -902,7 +912,7 @@ void __init_tzdb(tzdb& __tzdb, __rules_storage_type& __rules) {
 #ifdef _WIN32
 [[nodiscard]] static const time_zone* __current_zone_windows(const tzdb& tzdb) {
   // TODO TZDB Implement this on Windows.
-  std::__throw_runtime_error("unknown time zone");
+  throw std::runtime_error("unknown time zone");
 }
 #else // ifdef _WIN32
 [[nodiscard]] static const time_zone* __current_zone_posix(const tzdb& tzdb) {
@@ -935,11 +945,11 @@ void __init_tzdb(tzdb& __tzdb, __rules_storage_type& __rules) {
 
   std::filesystem::path __path = "/etc/localtime";
   if (!std::filesystem::exists(__path))
-    std::__throw_runtime_error(
+    throw std::runtime_error(
         "tzdb: the symlink '/etc/localtime' does not exist");
 
   if (!std::filesystem::is_symlink(__path))
-    std::__throw_runtime_error(
+    throw std::runtime_error(
         "tzdb: the path '/etc/localtime' is not a symlink");
 
   std::filesystem::path __tz = std::filesystem::read_symlink(__path);
@@ -952,7 +962,7 @@ void __init_tzdb(tzdb& __tzdb, __rules_storage_type& __rules) {
   if (const time_zone* __result = tzdb.__locate_zone(__name))
     return __result;
 
-  std::__throw_runtime_error(
+  throw std::runtime_error(
       ("tzdb: the time zone '" + __name + "' is not found in the database")
           .c_str());
 }

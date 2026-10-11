@@ -35,7 +35,7 @@ class RawVectorTest : public testing::WithParamInterface<TestParam>,
  protected:
   void SetUp() override {
     if (GetParam().useMemoryPool) {
-      constexpr uint64_t kMaxMappedMemory = 5UL << 30; // 5GB
+      constexpr uint64_t kMaxMappedMemory = 5ULL << 30; // 5GB
       memory::MemoryManager::Options options;
       options.allocatorCapacity = kMaxMappedMemory;
       options.useMmapAllocator = false;
