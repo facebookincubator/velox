@@ -7,8 +7,8 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_scoped_registry_test ScopedRegistryTest.cpp)
@@ -21,4 +21,25 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   Folly::folly
+)
+
+add_executable(velox_text_field_parser_test TextFieldParserTest.cpp)
+add_test(velox_text_field_parser_test velox_text_field_parser_test)
+
+target_link_libraries(
+  velox_text_field_parser_test
+  velox_common_text_field_parser
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(velox_delimited_text_parser_test DelimitedTextParserTest.cpp)
+add_test(velox_delimited_text_parser_test velox_delimited_text_parser_test)
+
+target_link_libraries(
+  velox_delimited_text_parser_test
+  velox_common_text_field_parser
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
 )

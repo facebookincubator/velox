@@ -13,34 +13,12 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_functions_spark_specialforms
-  AtLeastNNonNulls.cpp
-  DecimalRound.cpp
-  FromCsv.cpp
-  FromJson.cpp
-  GetArrayStructFields.cpp
-  GetStructField.cpp
-  MakeDecimal.cpp
-  SparkCastExpr.cpp
-  SparkCastHooks.cpp
+  velox_common_text_field_parser
+  DelimitedTextParser.cpp
+  TextFieldParser.cpp
   HEADERS
-  AtLeastNNonNulls.h
-  DecimalRound.h
-  FromCsv.h
-  FromJson.h
-  GetArrayStructFields.h
-  GetStructField.h
-  MakeDecimal.h
-  SparkCastExpr.h
-  SparkCastHooks.h
+  DelimitedTextParser.h
+  TextFieldParser.h
 )
 
-velox_link_libraries(
-  velox_functions_spark_specialforms
-  fmt::fmt
-  velox_common_text_field_parser
-  velox_spark_query_config
-  velox_functions_lib
-  velox_functions_json
-  velox_expression
-)
+velox_link_libraries(velox_common_text_field_parser velox_encode velox_type Boost::headers)

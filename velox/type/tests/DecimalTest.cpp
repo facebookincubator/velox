@@ -693,6 +693,14 @@ TEST(DecimalTest, castFromString) {
        12345678912345,
        12345678912346});
 
+  testCastFromString<int64_t>(
+      {"4.5e-2", "0.045", "5e-2", "0.05"}, 10, 1, {0, 0, 1, 1});
+  testCastFromString<int64_t>(
+      std::vector<std::string>{"0.0000000000000000000000000000000000000001e40"},
+      10,
+      2,
+      std::vector<int64_t>{100});
+
   const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
   const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
   testCastFromString<int128_t>(
@@ -740,6 +748,12 @@ TEST(DecimalTest, castFromStringError) {
 
   // Exponent > LongDecimalType::kMaxPrecision.
   testCastFromString<int128_t>("1.23e67", 38, 0, "Value too large.");
+  testCastFromString<int128_t>(
+      "1e9999999999",
+      38,
+      0,
+      "Value is not a number. Exponent is out of range.");
+  testCastFromString<int128_t>("1e-2147483648", 38, 0, "Value too large.");
 
   // Forcing the scale to be zero overflows.
   testCastFromString<int128_t>("20908.23e35", 38, 0, "Value too large.");
