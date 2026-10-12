@@ -92,21 +92,11 @@ TEST_F(MapConcatTest, basic) {
 
   auto result =
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 
   result =
       evaluate<MapVector>("map_concat(c1, c0)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 }
 
 TEST_F(MapConcatTest, nullKeys) {
@@ -175,12 +165,7 @@ TEST_F(MapConcatTest, nullKeys) {
 
   auto result = evaluate<MapVector>(
       "map_concat_empty_nulls(c0, c1)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 }
 
 TEST_F(MapConcatTest, nullMapValue) {
@@ -209,12 +194,7 @@ TEST_F(MapConcatTest, nullMapValue) {
 
   auto result =
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), expectedMap->size());
-  for (vector_size_t i = 0; i < result->size(); i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 }
 
 TEST_F(MapConcatTest, duplicateKeys) {
@@ -232,33 +212,18 @@ TEST_F(MapConcatTest, duplicateKeys) {
 
   auto result =
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 
   std::map<std::string, int32_t> ba = concat(b, a);
   expectedMap = makeMapVector(size, ba);
 
   result =
       evaluate<MapVector>("map_concat(c1, c0)", makeRowVector({aMap, bMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(expectedMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expectedMap, result);
 
   result =
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, aMap}));
-  ASSERT_EQ(result->size(), size);
-  for (vector_size_t i = 0; i < size; i++) {
-    ASSERT_TRUE(aMap->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(aMap, result);
 }
 
 TEST_F(MapConcatTest, partiallyPopulated) {
@@ -326,5 +291,5 @@ TEST_F(MapConcatTest, unknownType) {
       VectorTestBase::makeMapVector<UnknownValue, UnknownValue>({{}});
   auto result = evaluate(
       "map_concat(c0, c1)", makeRowVector({emptyMapVector, emptyMapVector}));
-  facebook::velox::test::assertEqualVectors(expectedMap, result);
+  test::assertEqualVectors(expectedMap, result);
 }

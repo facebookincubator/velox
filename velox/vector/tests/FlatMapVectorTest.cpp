@@ -73,16 +73,7 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     // Validate that the updated flat map matches the expectation.
     auto expectedFlatMap =
         makeFlatMapVectorFromJson<int64_t, int32_t>(expectedData);
-    EXPECT_EQ(baseFlatMap->size(), expectedFlatMap->size());
-
-    for (vector_size_t i = 0; i < baseFlatMap->size(); ++i) {
-      EXPECT_EQ(
-          baseFlatMap->compare(
-              expectedFlatMap.get(), i, i, CompareFlags{.equalsOnly = true}),
-          0)
-          << "Failed at index " << i << ":\n  " << baseFlatMap->toString(i)
-          << "\nvs.\n  " << expectedFlatMap->toString(i);
-    }
+    assertEqualVectors(expectedFlatMap, baseFlatMap);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{
