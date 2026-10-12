@@ -40,6 +40,7 @@ velox_add_library(
   Elt.cpp
   FilterFunction.cpp
   FormatNumber.cpp
+  FormatString.cpp
   GetJsonObject.cpp
   Hash.cpp
   In.cpp
@@ -80,6 +81,7 @@ velox_add_library(
   Elt.h
   Factorial.h
   FormatNumber.h
+  FormatString.h
   GetJsonObject.h
   Hash.h
   In.h
