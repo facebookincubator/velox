@@ -2300,8 +2300,7 @@ TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
-// A column with the UNKNOWN annotation is read as UNKNOWN when UNKNOWN is
-// requested, and as its physical type when another type is requested. All
+// A column with the UNKNOWN annotation can be read as any requested type. All
 // values are null.
 TEST_F(ParquetReaderTest, readNullTypeAsRequestedType) {
   constexpr vector_size_t kRows = 7;
@@ -2333,13 +2332,16 @@ TEST_F(ParquetReaderTest, readNullTypeAsRequestedType) {
   // The writer stores UNKNOWN as INT32 with the UNKNOWN annotation.
   auto* sink = write(makeData(UNKNOWN()));
 
-  for (const TypePtr& type : std::vector<TypePtr>{UNKNOWN(), INTEGER()}) {
+  for (const TypePtr& type :
+       std::vector<TypePtr>{UNKNOWN(), INTEGER(), BOOLEAN(), VARCHAR()}) {
     SCOPED_TRACE(type->toString());
     const auto requestedType = makeType(type);
     auto readerOptions = makeDefaultReaderOptions();
     readerOptions.setFileSchema(requestedType);
     auto reader = createReaderInMemory(*sink, readerOptions);
-    EXPECT_EQ(reader->rowType()->toString(), requestedType->toString());
+    // The file schema keeps UNKNOWN. The column reader returns nulls of the
+    // requested type.
+    EXPECT_EQ(reader->rowType()->toString(), makeType(UNKNOWN())->toString());
 
     auto rowReaderOpts = makeRowReaderOpts(requestedType);
     rowReaderOpts.setScanSpec(makeScanSpec(requestedType));
@@ -2347,13 +2349,6 @@ TEST_F(ParquetReaderTest, readNullTypeAsRequestedType) {
     assertReadWithReaderAndExpected(
         requestedType, *rowReader, makeData(type), *leafPool_);
   }
-
-  // A type that does not match the physical type is still rejected.
-  auto readerOptions = makeDefaultReaderOptions();
-  readerOptions.setFileSchema(makeType(VARCHAR()));
-  VELOX_ASSERT_THROW(
-      createReaderInMemory(*sink, readerOptions),
-      "is not allowed for requested type VARCHAR for file column 'unknown'");
 }
 
 TEST_F(ParquetReaderTest, timestampFilters) {
