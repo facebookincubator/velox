@@ -16,9 +16,9 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <bit>
 
+#include "folly/ScopeGuard.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
@@ -83,7 +83,7 @@ class ALPRDEncodingView final : public TypedEncodingView<T>,
     return patch(value, position - begin);
   }
 
-  // Batches main-stream reads and locates the first exception only once.
+  // Reads each main stream once and patches exceptions in the requested range.
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     this->checkReadRange(offset, length);
@@ -97,24 +97,21 @@ class ALPRDEncodingView final : public TypedEncodingView<T>,
           std::lower_bound(begin, begin + exceptionPositions_.size(), offset) -
           begin;
     }
-    // Child reads overwrite the used prefix before it is inspected.
-    std::array<uint16_t, 256> codes;
-    while (length != 0) {
-      const auto count = std::min<uint32_t>(length, codes.size());
-      codes_->read(offset, count, codes.data());
-      rightParts_->read(offset, count, output);
-      for (uint32_t i = 0; i < count; ++i) {
-        output[i] = decode(codes[i], output[i]);
-      }
-      while (exceptionIndex < exceptionPositions_.size() &&
-             exceptionPositions_[exceptionIndex] < offset + count) {
-        const auto index = exceptionPositions_[exceptionIndex] - offset;
-        output[index] = patch(output[index], exceptionIndex);
-        ++exceptionIndex;
-      }
-      offset += count;
-      length -= count;
-      output += count;
+    auto codes = this->template getVectorBuffer<uint16_t>();
+    SCOPE_EXIT {
+      this->releaseVectorBuffer(codes);
+    };
+    codes.resize(length);
+    codes_->read(offset, length, codes.data());
+    rightParts_->read(offset, length, output);
+    for (uint32_t i = 0; i < length; ++i) {
+      output[i] = decode(codes[i], output[i]);
+    }
+    while (exceptionIndex < exceptionPositions_.size() &&
+           exceptionPositions_[exceptionIndex] < offset + length) {
+      const auto index = exceptionPositions_[exceptionIndex] - offset;
+      output[index] = patch(output[index], exceptionIndex);
+      ++exceptionIndex;
     }
   }
 
