@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
@@ -38,6 +39,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
+#include "velox/dwio/nimble/velox/RowRange.h"
 
 DEFINE_uint32(
     view_fuzzer_iterations,
@@ -174,6 +176,23 @@ std::vector<uint32_t> makeProbeRows(std::mt19937& rng, uint32_t rowCount) {
   return rows;
 }
 
+// Ordered, disjoint row ranges: sometimes a few long ones, sometimes many
+// short ones with small or no gaps between them.
+std::vector<RowRange> makeRowRanges(std::mt19937& rng, uint32_t rowCount) {
+  const bool shortRanges = folly::Random::oneIn(2, rng);
+  const uint32_t maxLength = shortRanges ? 8 : 1'024;
+  const uint32_t maxGap = shortRanges ? 4 : 2'048;
+  std::vector<RowRange> ranges;
+  uint32_t row = folly::Random::rand32(rng) % std::min<uint32_t>(rowCount, 64);
+  while (row < rowCount && ranges.size() < 256) {
+    const uint32_t end =
+        std::min(rowCount, row + 1 + folly::Random::rand32(rng) % maxLength);
+    ranges.emplace_back(row, end);
+    row = end + folly::Random::rand32(rng) % (maxGap + 1);
+  }
+  return ranges;
+}
+
 template <typename EncodingClass>
 void runEncodingViewFuzzer(
     uint32_t iterations,
@@ -257,6 +276,22 @@ void runEncodingViewFuzzer(
         view->read(rangeOffset, rangeLength, contiguous.data());
         for (uint32_t i = 0; i < rangeLength; ++i) {
           expectEqual(data[rangeOffset + i], contiguous[i], rangeOffset + i);
+        }
+
+        const auto ranges = makeRowRanges(rng, data.size());
+        uint32_t rangeRows{0};
+        for (const auto& range : ranges) {
+          rangeRows += range.numRows();
+        }
+        Vector<T> ranged(pool.get(), rangeRows);
+        const auto numRead =
+            view->read(ranges, [](uint32_t /*outputIndex*/) {}, ranged.data());
+        EXPECT_EQ(numRead, rangeRows);
+        uint32_t outputIndex{0};
+        for (const auto& range : ranges) {
+          for (uint32_t row = range.startRow; row < range.endRow; ++row) {
+            expectEqual(data[row], ranged[outputIndex++], row);
+          }
         }
       }
     }
@@ -503,4 +538,12 @@ TYPED_TEST(AlpEncodingViewFuzzerTest, readAtMatchesMaterialize) {
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
       FLAGS_view_fuzzer_seed);
+}
+
+// Defines main() through folly::Init, as NimbleWriterFuzzerTest does, so the
+// flags above are parsed; gtest_main would leave them at their defaults.
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  folly::Init init(&argc, &argv);
+  return RUN_ALL_TESTS();
 }
