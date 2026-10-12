@@ -34,12 +34,15 @@ message(STATUS "Building Folly from source")
 set(folly_patches ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch)
 if(WIN32)
   list(APPEND folly_patches ${CMAKE_CURRENT_LIST_DIR}/folly-windows.patch)
+  if(NOT gflags_SOURCE STREQUAL "BUNDLED")
+    list(PREPEND folly_patches --exclude=CMake/folly-deps.cmake)
+  endif()
 endif()
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
   if(WIN32)
-    set(glog_patch ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog-windows.patch)
+    set(glog_patch "")
   endif()
   # Together with the patch applied above prevents folly from test compiling a
   # snippet to find the right namespace (which would fail because gflags isn't
