@@ -73,6 +73,7 @@ add_library(
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
+  views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
   views/SparseBoolEncodingView.h
@@ -83,6 +84,7 @@ add_library(
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
+  views/FsstEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
   views/EncodingViewUtils.h

@@ -55,7 +55,8 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::SimdForBitpack,
       nimble::EncodingType::BitRangeSplit,
       nimble::EncodingType::BlockBitPacking,
-      nimble::EncodingType::SubIntSplit};
+      nimble::EncodingType::SubIntSplit,
+      nimble::EncodingType::Fsst};
   for (const auto encodingType : supportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     EXPECT_TRUE(nimble::supportsEncodingView(encodingType));
@@ -69,7 +70,6 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::Delta,
       nimble::EncodingType::Prefix,
       nimble::EncodingType::FrequencyPartition,
-      nimble::EncodingType::Fsst,
       nimble::EncodingType::SharedDictionary};
   for (const auto encodingType : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
@@ -343,7 +343,6 @@ TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
           {nimble::EncodingType::Delta, nimble::DataType::Int32},
           {nimble::EncodingType::Prefix, nimble::DataType::String},
           {nimble::EncodingType::FrequencyPartition, nimble::DataType::Uint32},
-          {nimble::EncodingType::Fsst, nimble::DataType::String},
       };
 
   const nimble::Encoding::Options options;
