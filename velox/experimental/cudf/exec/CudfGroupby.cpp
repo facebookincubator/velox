@@ -1573,10 +1573,9 @@ void CudfGroupby::computePartialGroupbyIncrementally(CudfVectorPtr tbl) {
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
-    // Release before the re-aggregation so the copied-from state is not part
-    // of the peak. getConcatenatedTable does not clear the caller's vector, so
-    // both references have to be dropped.
-    tablesToConcat.clear();
+    // getConcatenatedTable consumed tablesToConcat; drop the last reference
+    // too, before the re-aggregation, so the copied-from state is not part of
+    // the peak.
     bufferedResult_.reset();
 
     // Now we have to groupby again but this time with intermediate aggregators.
@@ -1665,7 +1664,6 @@ void CudfGroupby::computeSingleGroupbyIncrementally(CudfVectorPtr tbl) {
         partialOutputStream,
         get_temp_mr());
     // Same as the partial path.
-    tablesToConcat.clear();
     bufferedResult_.reset();
 
     auto compactedOutput = doGroupByAggregation(

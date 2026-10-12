@@ -44,8 +44,9 @@ namespace facebook::velox::cudf_velox {
  * The input tables are consumed and deallocated when the function returns.
  * If the input vector is empty, returns an empty table matching tableType.
  *
- * @param tables Input vector of CudfVectors to concatenate (consumed during
- * operation)
+ * @param tables Input vector of CudfVectors to concatenate. Taken by value so
+ * that the caller's vector is left empty and the inputs are released when this
+ * function returns.
  * @param tableType Velox type representation for creating empty tables when
  * needed
  * @param stream CUDA stream for concatenation and memory management
@@ -53,7 +54,7 @@ namespace facebook::velox::cudf_velox {
  * @return Single concatenated table
  */
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -86,7 +87,7 @@ namespace facebook::velox::cudf_velox {
  */
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
