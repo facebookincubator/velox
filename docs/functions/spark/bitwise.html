@@ -104,6 +104,15 @@ Invalid ‘pos’ values result in an error.</p>
 <dd><p>Returns x bitwise right shifted by n bits. Supported types for ‘x’ are INTEGER and BIGINT.</p>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="shiftrightunsigned">
+<span class="sig-name descname"><span class="pre">shiftrightunsigned</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftrightunsigned" title="Link to this definition">¶</a></dt>
+<dd><p>Returns x bitwise unsigned (logical) right shifted by n bits, filling
+vacated high bits with zeros. Only the low 5 bits for INTEGER or 6 bits
+for BIGINT of n are used as the shift distance. Supported types for ‘x’
+are INTEGER and BIGINT; ‘n’ is INTEGER.</p>
+</dd></dl>
+
 </section>
 
 
@@ -125,6 +134,7 @@ Invalid ‘pos’ values result in an error.</p>
 <li><a class="reference internal" href="#bit_get"><code class="docutils literal notranslate"><span class="pre">bit_get()</span></code></a></li>
 <li><a class="reference internal" href="#shiftleft"><code class="docutils literal notranslate"><span class="pre">shiftleft()</span></code></a></li>
 <li><a class="reference internal" href="#shiftright"><code class="docutils literal notranslate"><span class="pre">shiftright()</span></code></a></li>
+<li><a class="reference internal" href="#shiftrightunsigned"><code class="docutils literal notranslate"><span class="pre">shiftrightunsigned()</span></code></a></li>
 </ul>
 </li>
 </ul>
