@@ -37,7 +37,6 @@ add_library(
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
   CudfWindow.cpp
-  CustomComparison.cpp
   DebugUtil.cpp
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp

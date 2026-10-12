@@ -36,7 +36,6 @@
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
-#include "velox/experimental/cudf/exec/CustomComparison.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -378,8 +377,8 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (keysUseCustomComparison(joinPlanNode->leftKeys()) ||
-        keysUseCustomComparison(joinPlanNode->rightKeys())) {
+    if (containsCustomComparison(joinPlanNode->leftKeys()) ||
+        containsCustomComparison(joinPlanNode->rightKeys())) {
       LOG_FALLBACK(
           "HashJoin key type provides a custom comparison, PlanNode id: {}",
           planNode->id());
@@ -530,7 +529,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (exprUsesCustomComparison(joinPlanNode->joinCondition())) {
+      if (containsCustomComparison(joinPlanNode->joinCondition())) {
         LOG_FALLBACK(
             "NestedLoopJoin condition uses a custom comparison type, PlanNode id: {}",
             planNode->id());
@@ -652,7 +651,7 @@ class OrderByAdapter : public OperatorAdapter {
     if (!orderByNode) {
       return false;
     }
-    if (keysUseCustomComparison(orderByNode->sortingKeys())) {
+    if (containsCustomComparison(orderByNode->sortingKeys())) {
       LOG_FALLBACK(
           "OrderBy sorting key type provides a custom comparison, PlanNode id: {}",
           planNode->id());
@@ -701,7 +700,7 @@ class TopNAdapter : public OperatorAdapter {
     if (!topNNode) {
       return false;
     }
-    if (keysUseCustomComparison(topNNode->sortingKeys())) {
+    if (containsCustomComparison(topNNode->sortingKeys())) {
       LOG_FALLBACK(
           "TopN sorting key type provides a custom comparison, PlanNode id: {}",
           planNode->id());
@@ -750,8 +749,8 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    if (keysUseCustomComparison(node->partitionKeys()) ||
-        keysUseCustomComparison(node->sortingKeys())) {
+    if (containsCustomComparison(node->partitionKeys()) ||
+        containsCustomComparison(node->sortingKeys())) {
       LOG_FALLBACK(
           "TopNRowNumber key type provides a custom comparison, PlanNode id: {}",
           planNode->id());
@@ -1042,7 +1041,7 @@ class MarkDistinctAdapter : public OperatorAdapter {
     if (!markDistinctNode) {
       return false;
     }
-    if (keysUseCustomComparison(markDistinctNode->distinctKeys())) {
+    if (containsCustomComparison(markDistinctNode->distinctKeys())) {
       LOG_FALLBACK(
           "MarkDistinct key type provides a custom comparison, PlanNode id: {}",
           planNode->id());
@@ -1127,7 +1126,7 @@ std::shared_ptr<const core::LocalMergeNode> gpuLocalMergeNode(
   auto localMergeNode =
       std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
   if (localMergeNode &&
-      keysUseCustomComparison(localMergeNode->sortingKeys())) {
+      containsCustomComparison(localMergeNode->sortingKeys())) {
     LOG_FALLBACK(
         "LocalMerge sorting key type provides a custom comparison, PlanNode id: {}",
         planNode->id());

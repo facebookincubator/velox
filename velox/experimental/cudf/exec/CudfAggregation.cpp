@@ -18,7 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
-#include "velox/experimental/cudf/exec/CustomComparison.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -514,7 +514,7 @@ bool canGroupingKeysBeEvaluatedByCudf(
     const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  if (keysUseCustomComparison(groupingKeys)) {
+  if (containsCustomComparison(groupingKeys)) {
     return false;
   }
 
