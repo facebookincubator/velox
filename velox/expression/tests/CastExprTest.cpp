@@ -2003,6 +2003,10 @@ TEST_F(CastExprTest, varcharToDecimal) {
            -300},
           DECIMAL(12, 2)));
 
+  testCast(
+      makeFlatVector<StringView>({"4.5e-2", "0.045", "5e-2", "0.05"}),
+      makeFlatVector<int64_t>({0, 0, 1, 1}, DECIMAL(10, 1)));
+
   // Truncates the fractional digits with exponent.
   testCast(
       makeFlatVector<StringView>(

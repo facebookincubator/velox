@@ -78,6 +78,7 @@ TEST(PartitionValueTest, outOfRangeNarrowInteger) {
 TEST(PartitionValueTest, decimalTypes) {
   EXPECT_EQ(
       toVariant("12.34", DECIMAL(10, 2)).value<TypeKind::BIGINT>(), 1'234);
+  EXPECT_EQ(toVariant("4.5e-2", DECIMAL(10, 1)).value<TypeKind::BIGINT>(), 0);
   EXPECT_EQ(
       toVariant("12345678901234567890.12", DECIMAL(25, 2))
           .value<TypeKind::HUGEINT>(),

@@ -16,10 +16,10 @@
 
 #include "velox/dwio/text/reader/TextReader.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <string>
 
-#include "velox/common/encode/Base64.h"
+#include "velox/common/text/DelimitedTextParser.h"
+#include "velox/common/text/TextFieldParser.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
@@ -130,11 +130,7 @@ FileContents::FileContents(
       pool{pool},
       fileLength{0},
       compression{CompressionKind::CompressionKind_NONE},
-      compressionOptions{},
-      needsEscape{} {
-  needsEscape.fill(false);
-  needsEscape.at(0) = true;
-}
+      compressionOptions{} {}
 
 TextRowReader::TextRowReader(
     std::shared_ptr<FileContents> fileContents,
@@ -156,9 +152,7 @@ TextRowReader::TextRowReader(
       depth_{0},
       unreadIdx_{0},
       limit_{opts.limit()},
-      fileLength_{getStreamLength()},
-      varBinBuf_{
-          std::make_shared<dwio::common::DataBuffer<char>>(contents_->pool)} {
+      fileLength_{getStreamLength()} {
   // Seek to first line at or after the specified region.
   if (contents_->compression == CompressionKind::CompressionKind_NONE) {
     // TODO: Inconsistent row skipping behavior (kept for Presto compatibility)
@@ -477,57 +471,64 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
     return emptyString;
   }
 
-  bool wasEscaped = false;
+  bool wasEscaped{false};
   th.ownedString_.clear();
+  detail::DelimitedTextScanner scanner(
+      DelimitedTextOptions{
+          .delimiter = '\0',
+          .escape = th.contents_->serDeOptions.isEscaped
+              ? std::optional<char>{static_cast<char>(
+                    th.contents_->serDeOptions.escapeChar)}
+              : std::nullopt,
+          .quote = '\0',
+      },
+      /*decodeEscapedNewlines=*/true);
 
-  // Processing has to be done character by characater instad of chunk by chunk.
+  // Processing has to be done character by character instead of chunk by chunk.
   // This is to avoid edge case handling if escape character(s) are cut off at
   // the end of the chunk.
   while (true) {
-    auto v = th.getByteOptimized(delim);
+    th.setNone(delim);
+    auto v = th.getByteUncheckedOptimized(delim);
     if (!th.isNone(delim)) {
       break;
     }
 
-    if (th.contents_->serDeOptions.isEscaped &&
-        v == th.contents_->serDeOptions.escapeChar) {
-      wasEscaped = true;
-      th.ownedString_.append(1, static_cast<char>(v));
-      v = th.getByteUncheckedOptimized(delim);
-      if (!th.isNone(delim)) {
-        break;
+    if (!scanner.isEscaping()) {
+      if (v == '\r') {
+        v = th.getByteUncheckedOptimized<true>(
+            delim); // always returns '\n' in this case
+        if (!th.isNone(delim)) {
+          break;
+        }
       }
+      delim = th.getDelimType(v);
     }
-    th.ownedString_.append(1, static_cast<char>(v));
+
+    const auto action =
+        scanner.consumeUnquotedRaw(static_cast<char>(v), !th.isNone(delim));
+    if (action == detail::DelimitedTextScanAction::kDelimiter) {
+      break;
+    }
+    if (action == detail::DelimitedTextScanAction::kSkip) {
+      wasEscaped = true;
+      th.setNone(delim);
+    }
+    th.ownedString_.push_back(static_cast<char>(v));
   }
 
-  if (th.ownedString_ == th.contents_->serDeOptions.nullString) {
+  if (DelimitedTextParser::isNullField(
+          th.ownedString_, th.contents_->serDeOptions.nullString)) {
     isNull = true;
     return emptyString;
   }
 
   if (wasEscaped) {
-    // We need to copy the data byte by byte only if there is at least one
-    // escaped byte.
-    uint64_t j = 0;
-    for (uint64_t i = 0; i < th.ownedString_.length(); i++) {
-      if (th.ownedString_[i] == th.contents_->serDeOptions.escapeChar &&
-          i < th.ownedString_.length() - 1) {
-        // Check if it's '\r' or '\n'.
-        i++;
-        if (th.ownedString_[i] == 'r') {
-          th.ownedString_[j++] = '\r';
-        } else if (th.ownedString_[i] == 'n') {
-          th.ownedString_[j++] = '\n';
-        } else {
-          // Keep the next byte.
-          th.ownedString_[j++] = th.ownedString_[i];
-        }
-      } else {
-        th.ownedString_[j++] = th.ownedString_[i];
-      }
-    }
-    th.ownedString_.resize(j);
+    DelimitedTextParser::unescapeField(
+        th.ownedString_,
+        std::optional<char>{
+            static_cast<char>(th.contents_->serDeOptions.escapeChar)},
+        /*decodeEscapedNewlines=*/true);
   }
 
   return th.ownedString_;
@@ -751,51 +752,13 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
-  char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  auto parsed = TextFieldParser::parseNarrowInteger<T>(std::string_view(str));
+  if (!parsed.has_value()) {
     isNull = true;
     return 0;
   }
-
-  int64_t v = 0;
-  unsigned long long scanPos = 0;
-  errno = 0;
-  auto scanCount = sscanf(str.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
-  if (scanCount != 1 || errno == ERANGE) {
-    isNull = true;
-    return 0;
-  }
-  if (scanPos < str.size()) {
-    // Check if the string is a valid decimal.
-    for (uint64_t i = scanPos; i < str.size(); i++) {
-      if (i == scanPos && str[i] == '.') {
-        continue;
-      }
-      if (str[i] >= '0' && str[i] <= '9') {
-        continue;
-      }
-      isNull = true;
-      return 0;
-    }
-  }
-
-  if (!std::is_same<T, int64_t>::value) {
-    if (static_cast<int64_t>(static_cast<T>(v)) != v) {
-      isNull = true;
-      return 0;
-    }
-  }
-  return static_cast<T>(v);
+  return *parsed;
 }
-
-namespace {
-
-static constexpr std::string_view kTrueStringView{"TRUE"};
-static constexpr std::string_view kFalseStringView{"FALSE"};
-
-} // namespace
 
 bool TextRowReader::getBoolean(
     TextRowReader& th,
@@ -808,87 +771,13 @@ bool TextRowReader::getBoolean(
   if (isNull) {
     return false;
   }
-  if (str.compare(kTrueStringView) == 0) {
-    return true;
-  }
-  if (str.compare(kFalseStringView) == 0) {
+  auto parsed = TextFieldParser::parseBoolean(std::string_view(str));
+  if (!parsed.has_value()) {
+    isNull = true;
     return false;
   }
-
-  switch (str.size()) {
-    case 4:
-      if (boost::algorithm::iequals(str, kTrueStringView)) {
-        return true;
-      }
-      break;
-    case 5:
-      if (boost::algorithm::iequals(str, kFalseStringView)) {
-        return false;
-      }
-      break;
-    default:
-      break;
-  }
-
-  isNull = true;
-  return false;
+  return *parsed;
 }
-
-namespace {
-
-static constexpr std::string_view kNaNStringView{"NaN"};
-static constexpr std::string_view kInfinityStringView{"Infinity"};
-static constexpr std::string_view kShortInfinityStringView{"Inf"};
-static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
-static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
-
-bool unacceptableFloatingPoint(std::string& s) {
-  for (int i = 0; i < s.size(); ++i) {
-    char c = s.data()[i];
-    if (!(std::isalpha(c) || c == '-')) {
-      return false;
-    }
-  }
-
-  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
-
-  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
-  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
-
-  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
-  bool isShortNegInf =
-      boost::algorithm::iequals(s, kShortNegInfinityStringView);
-
-  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
-}
-
-void trimStringInPlace(std::string& s) {
-  const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  size_t start = 0;
-  size_t end = s.size();
-
-  // Find first non-whitespace character
-  while (start < end && !isNotSpace(s[start])) {
-    ++start;
-  }
-
-  // If the string is all whitespace
-  if (start == end) {
-    s.clear();
-    return;
-  }
-
-  // Find last non-whitespace character
-  size_t last = end - 1;
-  while (last > start && !isNotSpace(s[last])) {
-    --last;
-  }
-
-  // Erase leading and trailing whitespace
-  s = s.substr(start, last - start + 1);
-}
-
-} // namespace
 
 float TextRowReader::getFloat(
     TextRowReader& th,
@@ -902,28 +791,13 @@ float TextRowReader::getFloat(
     return 0;
   }
 
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  if (unacceptableFloatingPoint(str)) {
+  const auto parsed =
+      TextFieldParser::parseFloatingPoint<float>(std::string_view(str));
+  if (!parsed.has_value()) {
     isNull = true;
     return 0.0;
   }
-
-  float v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
+  return *parsed;
 }
 
 double
@@ -937,31 +811,13 @@ TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0.0;
   }
 
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  // Filter out values from non-warehouse sources which
-  // other readers translate to null. Warehouse
-  // readers require upper-case values.
-  if (unacceptableFloatingPoint(str)) {
+  const auto parsed =
+      TextFieldParser::parseFloatingPoint<double>(std::string_view(str));
+  if (!parsed.has_value()) {
     isNull = true;
     return 0.0;
   }
-
-  double v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
+  return *parsed;
 }
 
 /// TODO: Reconsider error handling strategy for malformed data
@@ -993,7 +849,10 @@ void TextRowReader::readElement(
                 data,
                 insertionRow,
                 [](const std::string& s) -> std::optional<int32_t> {
-                  return DATE()->toDays(s);
+                  return TextFieldParser::parseDate(s).thenOrThrow(
+                      folly::identity, [&](const Status& status) {
+                        VELOX_USER_FAIL("{}", status.message());
+                      });
                 });
           } else {
             putValue<int32_t, int32_t>(
@@ -1020,13 +879,10 @@ void TextRowReader::readElement(
             data,
             insertionRow,
             [precision, scale](const std::string& s) -> std::optional<int64_t> {
-              int64_t v = 0;
-              const auto status = DecimalUtil::castFromString(
-                  StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
-                  v);
-              return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
+              const auto result =
+                  TextFieldParser::parseDecimal<int64_t>(s, precision, scale);
+              return result.hasValue() ? std::optional<int64_t>(result.value())
+                                       : std::nullopt;
             });
       } else {
         putValue<int64_t, int64_t>(
@@ -1046,13 +902,10 @@ void TextRowReader::readElement(
             insertionRow,
             [precision,
              scale](const std::string& s) -> std::optional<int128_t> {
-              int128_t v = 0;
-              const auto status = DecimalUtil::castFromString(
-                  StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
-                  v);
-              return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
+              const auto result =
+                  TextFieldParser::parseDecimal<int128_t>(s, precision, scale);
+              return result.hasValue() ? std::optional<int128_t>(result.value())
+                                       : std::nullopt;
             });
       } else {
         setValueFromString<int128_t>(
@@ -1104,41 +957,12 @@ void TextRowReader::readElement(
         return;
       }
 
-      // Allocate a blob buffer
-      size_t len = str.size();
-      const auto blen = encoding::Base64::calculateDecodedSize(str.data(), len);
-      varBinBuf_->resize(blen.value_or(0));
-
-      // decode from base64 to the blob buffer.
-      Status status = encoding::Base64::decode(
-          str.data(), str.size(), varBinBuf_->data(), blen.value_or(0));
-
-      if (status.code() == StatusCode::kOK) {
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(blen.value())));
-      } else {
-        // Not valid base64:  just copy as-is for compatibility.
-        //
-        // Note that some warehouse file have simply binary data
-        // in what should be a base64-encoded field, and which
-        // may result in extra rows.  Other readers behave as
-        // below, so this provides compatibility, even if  all
-        // readers should really reject these files.
-        varBinBuf_->resize(str.size());
-
-        VELOX_CHECK_NOT_NULL(str.data());
-
-        len = str.size();
-        memcpy(varBinBuf_->data(), str.data(), str.size());
-
-        // Use StringView, set(vector_size_t idx, T value) fails because
-        // strlen(varBinBuf_->data()) is undefined due to lack of null
-        // terminator
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(str.size())));
-      }
+      TextFieldParser::parseVarbinary(str, varbinaryString_);
+      flatVector->set(
+          insertionRow,
+          StringView(
+              varbinaryString_.data(),
+              static_cast<int32_t>(varbinaryString_.size())));
 
       if (isNull) {
         flatVector->setNull(insertionRow, true);
@@ -1452,12 +1276,11 @@ void TextRowReader::readElement(
         isNull = true;
         flatVector->setNull(insertionRow, true);
       } else {
-        auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
-            [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
-        ts.toGMT(Timestamp::defaultTimezone());
-        flatVector->set(
-            insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
+        auto timestamp = TextFieldParser::parseTimestamp(s).thenOrThrow(
+            folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
+        flatVector->set(insertionRow, timestamp);
       }
 
       break;
@@ -1582,12 +1405,6 @@ TextReader::TextReader(
 
   // Set the SerDe options.
   contents_->serDeOptions = options_.serDeOptions();
-  if (contents_->serDeOptions.isEscaped) {
-    for (auto delim : contents_->serDeOptions.separators) {
-      contents_->needsEscape.at(delim) = true;
-    }
-    contents_->needsEscape.at(contents_->serDeOptions.escapeChar) = true;
-  }
 
   // Validate SerDe options.
   VELOX_CHECK(

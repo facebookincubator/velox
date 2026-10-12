@@ -504,11 +504,26 @@ class DecimalUtil : public DecimalArithmetic {
       int32_t toPrecision,
       int32_t toScale,
       T& decimalValue) {
+    std::string normalized;
+    bool isZero{false};
+    VELOX_RETURN_NOT_OK(normalizeScientificNotation(
+        s, toPrecision, toScale, normalized, isZero));
+    if (isZero) {
+      decimalValue = 0;
+      return Status::OK();
+    }
+
+    StringView input = s;
+    if (!normalized.empty()) {
+      input = StringView(
+          normalized.data(), static_cast<int32_t>(normalized.size()));
+    }
+
     int32_t parsedPrecision = 0;
     int32_t parsedScale = 0;
     int128_t out = 0;
     VELOX_RETURN_NOT_OK(parseStringToDecimalComponents(
-        s, toScale, parsedPrecision, parsedScale, out));
+        input, toScale, parsedPrecision, parsedScale, out));
 
     const auto status = rescaleWithRoundUp<int128_t, T>(
         out,
@@ -540,6 +555,15 @@ class DecimalUtil : public DecimalArithmetic {
   }
 
  private:
+  // Expands valid scientific notation into fixed-point text so that rounding
+  // happens exactly once in rescaleWithRoundUp.
+  static Status normalizeScientificNotation(
+      const StringView& input,
+      int32_t precision,
+      int32_t scale,
+      std::string& normalized,
+      bool& isZero);
+
   // Parses the string view to decimal components, which contains the
   // unscaled value, precision, and scale. The parsed precision and scale are
   // returned through the reference parameters. The unscaled value is returned

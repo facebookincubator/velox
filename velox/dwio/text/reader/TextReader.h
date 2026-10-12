@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <array>
 #include <limits>
 #include <string>
 
@@ -55,7 +54,6 @@ struct FileContents {
   CompressionKind compression;
   dwio::common::compression::CompressionOptions compressionOptions;
   SerDeOptions serDeOptions;
-  std::array<bool, 128> needsEscape;
 };
 
 using DelimType = uint8_t;
@@ -231,7 +229,7 @@ class TextRowReader : public dwio::common::RowReader {
   uint64_t limit_; // lowest offset not in the range
   uint64_t fileLength_;
   std::string ownedString_;
-  std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
+  std::string varbinaryString_;
 };
 
 } // namespace facebook::velox::text

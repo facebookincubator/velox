@@ -27,6 +27,7 @@ configuration. Otherwise, it simply follows Spark's semantics in ANSI OFF mode.
     functions/spark/conversion
     functions/spark/url
     functions/spark/json
+    functions/spark/csv
 
 Here is a list of all scalar and aggregate Spark functions available in Velox.
 Function names link to function descriptions. Check out coverage maps

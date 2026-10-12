@@ -258,6 +258,16 @@ TEST_F(FromJsonTest, basicShortDecimal) {
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
+TEST_F(FromJsonTest, scientificDecimalRoundsOnce) {
+  auto expected = makeFlatVector<int64_t>({0, 0, 1, 1}, DECIMAL(10, 1));
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": 4.5e-2})",
+       R"({"a": 0.045})",
+       R"({"a": 5e-2})",
+       R"({"a": 0.05})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
 TEST_F(FromJsonTest, basicLongDecimal) {
   auto expected = makeNullableFlatVector<int128_t>(
       {53210000,

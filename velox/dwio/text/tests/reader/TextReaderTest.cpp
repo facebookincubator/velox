@@ -22,6 +22,9 @@
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <folly/ScopeGuard.h>
+#include <locale.h>
+
 extern int daylight;
 extern long timezone;
 
@@ -184,6 +187,288 @@ TEST_F(TextReaderTest, basic) {
     EXPECT_TRUE(result->equalValueAt(expected.get(), i, 9 + i));
   }
   ASSERT_EQ(rowReader->next(10, result), 0);
+}
+
+TEST_F(TextReaderTest, sharedDelimitedScanner) {
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append(
+        "hello\\\tworld\tvalue\n"
+        "\\N\ttext\\nline\n");
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", VARCHAR()}, {"b", VARCHAR()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(
+      dwio::common::SerDeOptions('\t', '|', '#', '\\', true));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  auto* row = result->as<RowVector>();
+  auto* a = row->childAt(0)->asFlatVector<StringView>();
+  auto* b = row->childAt(1)->asFlatVector<StringView>();
+  EXPECT_EQ(a->valueAt(0).str(), "hello\tworld");
+  EXPECT_EQ(b->valueAt(0).str(), "value");
+  EXPECT_TRUE(a->isNullAt(1));
+  EXPECT_EQ(b->valueAt(1).str(), "text\nline");
+}
+
+TEST_F(TextReaderTest, delimiterTakesPrecedenceOverEscape) {
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append("a\\b\n");
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", VARCHAR()}, {"b", VARCHAR()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(
+      dwio::common::SerDeOptions('\\', '|', '#', '\\', true));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  auto* row = result->as<RowVector>();
+  EXPECT_EQ(row->childAt(0)->asFlatVector<StringView>()->valueAt(0).str(), "a");
+  EXPECT_EQ(row->childAt(1)->asFlatVector<StringView>()->valueAt(0).str(), "b");
+}
+
+TEST_F(TextReaderTest, nullByteEscapeCharacter) {
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append(std::string("a\0\tb\tc\n", 7));
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", VARCHAR()}, {"b", VARCHAR()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(
+      dwio::common::SerDeOptions('\t', '|', '#', '\0', true));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  auto* row = result->as<RowVector>();
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0).str(), "a\tb");
+  EXPECT_EQ(row->childAt(1)->asFlatVector<StringView>()->valueAt(0).str(), "c");
+}
+
+TEST_F(TextReaderTest, highByteEscapeCharacter) {
+  auto textFile = TempFilePath::create();
+  {
+    std::string input{"a"};
+    input.push_back(static_cast<char>(0xFE));
+    input.append("\tb\tc\n");
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append(input);
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", VARCHAR()}, {"b", VARCHAR()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(
+      dwio::common::SerDeOptions('\t', '|', '#', 0xFE, true));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  auto* row = result->as<RowVector>();
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0).str(), "a\tb");
+  EXPECT_EQ(row->childAt(1)->asFlatVector<StringView>()->valueAt(0).str(), "c");
+}
+
+TEST_F(TextReaderTest, physicalEofWithoutTrailingNewline) {
+  const auto readSingleRow = [&](std::string_view contents,
+                                 const RowTypePtr& type) {
+    auto textFile = TempFilePath::create();
+    {
+      auto writeFile =
+          std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+      writeFile->append(contents);
+      writeFile->close();
+    }
+
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setFileSchema(type);
+    readerOptions.setSerDeOptions(
+        dwio::common::SerDeOptions('\t', '|', '#', '\\', true));
+
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    auto reader = factory->createReader(std::move(input), readerOptions);
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*type, rowReaderOptions);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr result;
+    EXPECT_EQ(rowReader->next(1, result), 1);
+    return result;
+  };
+
+  auto result =
+      readSingleRow("value\t42", ROW({{"a", VARCHAR()}, {"b", INTEGER()}}));
+  ASSERT_NE(result, nullptr);
+  auto* row = result->as<RowVector>();
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<StringView>()->valueAt(0).str(), "value");
+  EXPECT_EQ(row->childAt(1)->asFlatVector<int32_t>()->valueAt(0), 42);
+
+  result = readSingleRow("dangling\\", ROW({{"a", VARCHAR()}}));
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(
+      result->as<RowVector>()
+          ->childAt(0)
+          ->asFlatVector<StringView>()
+          ->valueAt(0)
+          .str(),
+      "dangling\\");
+}
+
+TEST_F(TextReaderTest, scientificDecimalRoundingAndExponentOverflow) {
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append("4.5e-2\t1e9999999999\n0.045\t5e-2\n");
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", DECIMAL(10, 1)}, {"b", DECIMAL(10, 1)}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(
+      dwio::common::SerDeOptions('\t', '|', '#', '\\', true));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  auto* row = result->as<RowVector>();
+  auto* a = row->childAt(0)->asFlatVector<int64_t>();
+  auto* b = row->childAt(1)->asFlatVector<int64_t>();
+  EXPECT_EQ(a->valueAt(0), 0);
+  EXPECT_TRUE(b->isNullAt(0));
+  EXPECT_EQ(a->valueAt(1), 0);
+  EXPECT_EQ(b->valueAt(1), 1);
+}
+
+TEST_F(TextReaderTest, floatingPointUsesCNumericLocale) {
+  locale_t commaLocale{nullptr};
+  for (const char* localeName :
+       {"de_DE.UTF-8", "fr_FR.UTF-8", "es_ES.UTF-8", "it_IT.UTF-8"}) {
+    commaLocale = newlocale(LC_NUMERIC_MASK, localeName, nullptr);
+    if (commaLocale != nullptr) {
+      break;
+    }
+  }
+  if (commaLocale == nullptr) {
+    GTEST_SKIP() << "No comma-decimal locale is installed.";
+  }
+
+  const locale_t previousLocale = uselocale(commaLocale);
+  SCOPE_EXIT {
+    uselocale(previousLocale);
+    freelocale(commaLocale);
+  };
+  ASSERT_NE(previousLocale, nullptr);
+
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append("1.5\n");
+    writeFile->close();
+  }
+
+  const auto type = ROW({{"a", DOUBLE()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setFileSchema(type);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  EXPECT_EQ(
+      result->as<RowVector>()->childAt(0)->asFlatVector<double>()->valueAt(0),
+      1.5);
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {

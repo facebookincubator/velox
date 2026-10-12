@@ -265,6 +265,132 @@ Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
 }
 } // namespace
 
+Status DecimalUtil::normalizeScientificNotation(
+    const StringView& input,
+    int32_t precision,
+    int32_t scale,
+    std::string& normalized,
+    bool& isZero) {
+  normalized.clear();
+  isZero = false;
+
+  std::string_view text(input.data(), input.size());
+  const auto exponentPosition = text.find_first_of("eE");
+  if (exponentPosition == std::string_view::npos) {
+    return Status::OK();
+  }
+
+  auto exponentText = text.substr(exponentPosition + 1);
+  bool negativeExponent{false};
+  if (!exponentText.empty() &&
+      (exponentText.front() == '+' || exponentText.front() == '-')) {
+    negativeExponent = exponentText.front() == '-';
+    exponentText.remove_prefix(1);
+  }
+  if (exponentText.empty()) {
+    return Status::OK();
+  }
+
+  uint64_t exponentMagnitude{0};
+  const auto [exponentEnd, exponentError] = std::from_chars(
+      exponentText.data(),
+      exponentText.data() + exponentText.size(),
+      exponentMagnitude);
+  if (exponentError == std::errc::invalid_argument ||
+      exponentEnd != exponentText.data() + exponentText.size()) {
+    return Status::OK();
+  }
+  const uint64_t maxExponentMagnitude = negativeExponent
+      ? static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) + 1
+      : static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+  if (exponentError == std::errc::result_out_of_range ||
+      exponentMagnitude > maxExponentMagnitude) {
+    return Status::UserError(
+        "Value is not a number. Exponent is out of range.");
+  }
+
+  auto mantissa = text.substr(0, exponentPosition);
+  bool negative{false};
+  if (!mantissa.empty() &&
+      (mantissa.front() == '+' || mantissa.front() == '-')) {
+    negative = mantissa.front() == '-';
+    mantissa.remove_prefix(1);
+  }
+
+  std::string digits;
+  digits.reserve(mantissa.size());
+  bool sawDecimalPoint{false};
+  size_t numFractionDigits{0};
+  for (const char character : mantissa) {
+    if (character == '.') {
+      if (sawDecimalPoint) {
+        return Status::OK();
+      }
+      sawDecimalPoint = true;
+    } else if (character >= '0' && character <= '9') {
+      digits.push_back(character);
+      if (sawDecimalPoint) {
+        ++numFractionDigits;
+      }
+    } else {
+      return Status::OK();
+    }
+  }
+  if (digits.empty()) {
+    return Status::OK();
+  }
+
+  const int64_t exponent = negativeExponent
+      ? -static_cast<int64_t>(exponentMagnitude)
+      : static_cast<int64_t>(exponentMagnitude);
+  const int64_t decimalScale =
+      static_cast<int64_t>(numFractionDigits) - exponent;
+  if (decimalScale < std::numeric_limits<int32_t>::min() ||
+      decimalScale > std::numeric_limits<int32_t>::max()) {
+    return Status::UserError("Value too large.");
+  }
+
+  const auto firstNonZero = digits.find_first_not_of('0');
+  if (firstNonZero == std::string::npos) {
+    isZero = true;
+    return Status::OK();
+  }
+  digits.erase(0, firstNonZero);
+
+  if (negative) {
+    normalized.push_back('-');
+  }
+  if (decimalScale <= 0) {
+    const auto numTrailingZeros = static_cast<uint64_t>(-decimalScale);
+    if (numTrailingZeros > static_cast<uint64_t>(precision) ||
+        digits.size() > static_cast<uint64_t>(precision) - numTrailingZeros) {
+      return Status::UserError("Value too large.");
+    }
+    normalized.append(digits);
+    normalized.append(numTrailingZeros, '0');
+  } else if (static_cast<uint64_t>(decimalScale) >= digits.size()) {
+    const auto numLeadingZeros =
+        static_cast<uint64_t>(decimalScale) - digits.size();
+    if (numLeadingZeros > static_cast<uint64_t>(scale)) {
+      isZero = true;
+      normalized.clear();
+      return Status::OK();
+    }
+    normalized.append("0.");
+    normalized.append(numLeadingZeros, '0');
+    normalized.append(digits);
+  } else {
+    const auto numIntegerDigits = digits.size() - decimalScale;
+    if (numIntegerDigits > static_cast<uint64_t>(precision)) {
+      return Status::UserError("Value too large.");
+    }
+    normalized.append(digits.data(), numIntegerDigits);
+    normalized.push_back('.');
+    normalized.append(digits.data() + numIntegerDigits, decimalScale);
+  }
+  return Status::OK();
+}
+
 Status DecimalUtil::parseStringToDecimalComponents(
     const StringView& s,
     int32_t toScale,
