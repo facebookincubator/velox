@@ -289,6 +289,16 @@ SplitSelection SplitSelector<PhysicalType>::select() {
 
 } // namespace
 
+uint64_t ALPRDEncodingBase::estimateContainerSize(
+    const Parameters& parameters,
+    uint32_t numRows,
+    uint32_t numExceptions,
+    const std::array<uint64_t, 4>& childSizes,
+    const Encoding::Options& options) {
+  return splitSize(
+      parameters.dictionarySize, numRows, numExceptions, childSizes, options);
+}
+
 template <typename PhysicalType>
 ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
     std::span<const PhysicalType> values,
@@ -298,6 +308,38 @@ ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters(
       values, static_cast<uint32_t>(values.size()), options}
       .select()
       .parameters;
+}
+
+template <typename PhysicalType>
+ALPRDEncodingBase::Children<PhysicalType> ALPRDEncodingBase::decomposeChildren(
+    std::span<const PhysicalType> values,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+  NIMBLE_CHECK(!values.empty(), "Cannot decompose empty ALPRD input.");
+  Children<PhysicalType> result;
+  result.parameters = selectParameters(values, options);
+  result.rowCount = static_cast<uint32_t>(values.size());
+  const auto numSamples =
+      std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+  NIMBLE_CHECK_GT(numSamples, 0);
+  std::vector<uint32_t> sampledRows(numSamples);
+  for (uint32_t i = 0; i < numSamples; ++i) {
+    sampledRows[i] = detail::NestedAlpSizeEstimation::sampledRowIndex(
+        i, numSamples, result.rowCount);
+  }
+  decompose(
+      values,
+      result.parameters,
+      sampledRows,
+      result.codes,
+      result.rightParts,
+      result.exceptionPositions,
+      result.exceptionHighParts);
+  result.exceptionCount = static_cast<uint32_t>(
+      (uint64_t{result.exceptionPositions.size()} * result.rowCount +
+       numSamples - 1) /
+      numSamples);
+  return result;
 }
 
 template <typename PhysicalType>
@@ -317,6 +359,14 @@ template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
     uint32_t>(std::span<const uint32_t>, const Encoding::Options&);
 template ALPRDEncodingBase::Parameters ALPRDEncodingBase::selectParameters<
     uint64_t>(std::span<const uint64_t>, const Encoding::Options&);
+template ALPRDEncodingBase::Children<uint32_t>
+ALPRDEncodingBase::decomposeChildren<uint32_t>(
+    std::span<const uint32_t>,
+    const Encoding::Options&);
+template ALPRDEncodingBase::Children<uint64_t>
+ALPRDEncodingBase::decomposeChildren<uint64_t>(
+    std::span<const uint64_t>,
+    const Encoding::Options&);
 template std::optional<uint64_t> ALPRDEncodingBase::estimateSize<uint32_t>(
     std::span<const uint32_t>,
     uint32_t,

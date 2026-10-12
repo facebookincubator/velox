@@ -95,6 +95,72 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
+  /// Projects a representative sample's statistics to a target entry count.
+  /// Returns nullopt when an estimator cannot perform that projection.
+  static std::optional<uint64_t> estimateProjectedSize(
+      const EncodingType encodingType,
+      const size_t entryCount,
+      const Statistics<physicalType>& sampleStatistics,
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          nestedEncodingReadFactors = {}) {
+    // Projection is opt-in. A new estimator must explicitly establish that
+    // representative sample statistics remain meaningful at entryCount.
+    if (encodingType == EncodingType::Trivial) {
+      if constexpr (isStringType<physicalType>()) {
+        return std::nullopt;
+      }
+      return estimateSize(
+          encodingType,
+          entryCount,
+          sampleStatistics,
+          options,
+          nestedEncodingReadFactors);
+    }
+    if (encodingType == EncodingType::FixedBitWidth ||
+        encodingType == EncodingType::SimdForBitpack) {
+      return estimateSize(
+          encodingType,
+          entryCount,
+          sampleStatistics,
+          options,
+          nestedEncodingReadFactors);
+    }
+    return std::nullopt;
+  }
+
+  /// Estimates the size and policy cost for an encoding candidate. Compound
+  /// encodings use scoreNestedChild to include the selected costs of their
+  /// immediate children; leaf encodings retain size-based scoring.
+  template <typename NestedChildScorer>
+  static std::optional<EncodingCandidateScore> estimateScore(
+      const EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>> nestedEncodingReadFactors,
+      const double costFactor,
+      NestedChildScorer&& scoreNestedChild) {
+    if constexpr (isFloatingPointType<T>()) {
+      if (encodingType == EncodingType::ALPRD) {
+        return ALPRDEncoding<T>::estimateSelectionScore(
+            values,
+            options,
+            costFactor,
+            std::forward<NestedChildScorer>(scoreNestedChild));
+      }
+    }
+
+    const auto estimatedSize = estimateSize(
+        encodingType, values, statistics, options, nestedEncodingReadFactors);
+    if (!estimatedSize.has_value()) {
+      return std::nullopt;
+    }
+    return EncodingCandidateScore{
+        estimatedSize.value(),
+        static_cast<double>(estimatedSize.value()) * costFactor};
+  }
+
  private:
   static std::optional<uint64_t> estimateNumericSize(
       const EncodingType encodingType,
