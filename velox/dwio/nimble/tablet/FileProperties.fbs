@@ -23,6 +23,26 @@ table CompactEncoding {
   row_count:bool = false;
 }
 
+/// What one field of the stream trailer holds. Append-only: a value keeps its
+/// meaning forever. Readers skip fields of kinds they do not know by the
+/// field's size.
+enum StreamTrailerFieldKind : ubyte {
+  /// The stream's checksum: the file's ChecksumType hash of the stream's bytes,
+  /// narrowed to 32 bits as that type defines (for XXH3_64, the low 32 bits
+  /// XOR the high 32 bits) and stored little-endian. 4 bytes.
+  Checksum32 = 0,
+}
+
+/// One field of the stream trailer. A struct, so its layout can never change:
+/// anything new is a new kind.
+struct StreamTrailerField {
+  /// A StreamTrailerFieldKind, stored as a plain byte: as an enum-typed field,
+  /// a kind added after this reader was built would not be a valid value.
+  kind:ubyte;
+  /// Bytes the field takes in every trailer.
+  size:ubyte;
+}
+
 /// File-level properties needed by readers before other optional metadata is
 /// loaded.
 table FileProperties {
@@ -35,10 +55,26 @@ table FileProperties {
   /// Experimental compact encoding state.
   compact_encoding:CompactEncoding;
 
-  /// Whether stripe groups carry per-stream checksums. The algorithm is not
-  /// recorded here: per-stream checksums use the same ChecksumType as the
-  /// whole-file checksum, which the postscript already carries.
+  /// Whether stripe groups carry per-stream checksum arrays (stream_checksums).
+  /// The algorithm is not recorded here: per-stream checksums use the same
+  /// ChecksumType as the whole-file checksum, which the postscript already
+  /// carries. Only legacy files set this: current writers put each checksum in
+  /// its stream's trailer (stream_trailer). A file never records checksums in
+  /// both places.
   has_stream_checksums:bool = false;
+
+  /// Fields of the trailer that follows every non-empty stream in the stripe
+  /// data, in on-disk order. A stream's recorded offset and size cover only its
+  /// own bytes, so readers that do not look here read the streams as if they
+  /// had no trailer. Duplicate streams share the original's bytes, trailer
+  /// included. Absent when streams have no trailer.
+  ///
+  /// Each kind appears at most once and every field has a non-zero size;
+  /// readers reject a file that breaks either rule, or that gives a kind they
+  /// know the wrong size. Every stripe follows this one layout, so a tool that
+  /// copies streams into a file that declares this field must copy their
+  /// trailers too.
+  stream_trailer:[StreamTrailerField];
 }
 
 root_type FileProperties;

@@ -1182,6 +1182,35 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
+namespace {
+
+bool supportsImplicitNullElse(const TypePtr& type) {
+  // Interval constant scalars differ from the cuDF storage type used for the
+  // implicit null ELSE.
+  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
+    return false;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
@@ -2613,7 +2642,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       /*overwrite=*/true,
       [](const core::TypedExprPtr& expr) {
         return !expr->inputs()[0]->isConstantKind() &&
-            canMakeCudfDefaultScalar(expr->type());
+            supportsImplicitNullElse(expr->type());
       });
   registerCudfFunctions(
       {"switch", "if"},
@@ -2897,7 +2926,8 @@ std::string exprRegistryName(const core::TypedExprPtr& expr) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
@@ -2941,7 +2971,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         // string ops).  Field references are handled as leaf
         // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, pool));
+            createCudfExpression(input, inputRowSchema, pool, config));
       }
     }
   }
@@ -3239,9 +3269,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    auto src = cudf_velox::veloxToCudfDataType(srcType);
-    auto dst = cudf_velox::veloxToCudfDataType(dstType);
-    return cudf::is_supported_cast(src, dst);
+    auto src = cudf_velox::tryVeloxToCudfDataType(srcType);
+    auto dst = cudf_velox::tryVeloxToCudfDataType(dstType);
+    return src && dst && cudf::is_supported_cast(*src, *dst);
   }
 
   auto& registry = getCudfFunctionRegistry();
@@ -3365,11 +3395,12 @@ bool canExprRunOnGpu(
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* best = findBestEvaluator(expr);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
-  return best->create(expr, inputRowSchema, pool);
+  return best->create(expr, inputRowSchema, pool, config);
 }
 
 void unregisterFunctions() {

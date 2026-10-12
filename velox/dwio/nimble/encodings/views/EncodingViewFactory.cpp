@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FixedBitWidthEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/FsstEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/HuffmanEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/MainlyConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/NullableEncodingView.h"
@@ -162,6 +163,13 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
           "SubIntSplit encoding only supports 32- and 64-bit numeric data "
           "types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::Fsst:
+      if constexpr (std::is_same_v<T, std::string_view>) {
+        return std::make_unique<FsstEncodingView>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "FSST encoding only supports string data, got {}.",
+          TypeTraits<T>::dataType);
     default:
       NIMBLE_UNSUPPORTED("{} does not support EncodingView.", encodingType);
   }
@@ -211,7 +219,8 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
-      EncodingType::SubIntSplit};
+      EncodingType::SubIntSplit,
+      EncodingType::Fsst};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),

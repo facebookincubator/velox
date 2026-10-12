@@ -3203,6 +3203,13 @@ TaskStats Task::taskStats() const {
   return taskStats;
 }
 
+std::optional<FixedPointExecutionStats> Task::fixedPointExecutionStats() const {
+  if (fixedPoint_ == nullptr) {
+    return std::nullopt;
+  }
+  return fixedPoint_->executionStats();
+}
+
 bool Task::getLongRunningOpCalls(
     std::chrono::nanoseconds lockTimeout,
     size_t thresholdDurationMs,

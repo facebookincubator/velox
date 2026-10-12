@@ -688,12 +688,16 @@ FOLLY_ALWAYS_INLINE const LongDecimalType& Type::asLongDecimal() const {
   return dynamic_cast<const LongDecimalType&>(*this);
 }
 
+// dynamic_cast is expensive on hot paths such as Presto serialization.
+// Checking kind_ first skips it for every type that cannot be a decimal.
 FOLLY_ALWAYS_INLINE bool Type::isShortDecimal() const {
-  return dynamic_cast<const ShortDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::BIGINT &&
+      dynamic_cast<const ShortDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isLongDecimal() const {
-  return dynamic_cast<const LongDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::HUGEINT &&
+      dynamic_cast<const LongDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isDecimal() const {

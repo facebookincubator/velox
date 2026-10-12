@@ -17,6 +17,57 @@
 
 namespace facebook::nimble {
 
+namespace detail {
+
+bool hasAlpLikeCandidate(
+    const std::vector<std::pair<EncodingType, float>>& candidates) {
+  return std::any_of(
+      candidates.begin(), candidates.end(), [](const auto& entry) {
+        return entry.first == EncodingType::ALP ||
+            entry.first == EncodingType::ALPRD;
+      });
+}
+
+bool hasAlpLikeEncoding(const EncodingLayout& layout) {
+  if (layout.encodingType() == EncodingType::ALP ||
+      layout.encodingType() == EncodingType::ALPRD) {
+    return true;
+  }
+  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+    if (layout.child(i) && hasAlpLikeEncoding(*layout.child(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasUnspecifiedValueEncoding(const EncodingLayout& layout) {
+  NestedEncodingIdentifier valueChild{0};
+  switch (layout.encodingType()) {
+    case EncodingType::Dictionary:
+      valueChild = EncodingIdentifiers::Dictionary::Alphabet;
+      break;
+    case EncodingType::RLE:
+      valueChild = EncodingIdentifiers::RunLength::RunValues;
+      break;
+    case EncodingType::MainlyConstant:
+      valueChild = EncodingIdentifiers::MainlyConstant::OtherValues;
+      break;
+    case EncodingType::Nullable:
+      valueChild = EncodingIdentifiers::Nullable::Data;
+      break;
+    default:
+      return false;
+  }
+  if (valueChild >= layout.childrenCount()) {
+    return false;
+  }
+  const auto& child = layout.child(valueChild);
+  return !child || hasUnspecifiedValueEncoding(*child);
+}
+
+} // namespace detail
+
 /* static */ std::vector<std::pair<EncodingType, float>>
 ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {
   return {
@@ -163,6 +214,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       // enable for production tables without consulting the Nimble team
       // (oncall: dwios).
       EncodingType::ALP,
+      EncodingType::ALPRD,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
@@ -172,6 +224,26 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::Fsst,
       EncodingType::Huffman,
   };
+}
+
+bool detail::useLogicalTypeForEncoding(
+    DataType logicalDataType,
+    EncodingType encodingType) {
+  // Nullable wrappers are selected through selectNullable(). This helper only
+  // considers encodings selected for non-null value streams.
+  NIMBLE_CHECK_NE(
+      encodingType,
+      EncodingType::Nullable,
+      "Nullable wrappers are handled by selectNullable().");
+  if (logicalDataType != DataType::Float &&
+      logicalDataType != DataType::Double) {
+    return false;
+  }
+  return encodingType == EncodingType::ALP ||
+      encodingType == EncodingType::ALPRD ||
+      encodingType == EncodingType::Dictionary ||
+      encodingType == EncodingType::RLE ||
+      encodingType == EncodingType::MainlyConstant;
 }
 
 } // namespace facebook::nimble

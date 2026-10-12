@@ -126,7 +126,7 @@ TEST_F(MemoryManagerTest, ctor) {
         "ARBITRATOR[SHARED CAPACITY[4.00GB] STATS[numRequests 0 numRunning 0 "
         "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
         "reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 4.00GB "
-        "freeCapacity 4.00GB freeReservedCapacity 0B] "
+        "freeCapacity 4.00GB freeReservedCapacity 0B reservedCapacity 0B] "
         "CONFIG[kind=SHARED;capacity=4.00GB;arbitrationStateCheckCb=(unset);]]]");
   }
 }

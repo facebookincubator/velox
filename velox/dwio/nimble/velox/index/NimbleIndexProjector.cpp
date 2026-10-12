@@ -24,6 +24,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
@@ -230,7 +231,6 @@ NimbleIndexProjector::NimbleIndexProjector(
       tablet_{std::move(tablet)},
       ioStats_{std::move(ioStats)},
       pool_{pool},
-      dataInput_{std::move(dataInput)},
       clusterIndex_{tablet_->clusterIndex()},
       numStripes_{tablet_->stripeCount()},
       projection_{std::move(projection)},
@@ -243,19 +243,13 @@ NimbleIndexProjector::NimbleIndexProjector(
               .streamHasChunkHeader = true,
               .streamsUseVarintRowCount =
                   tablet_->properties().compactRowCountEncoding(),
-          })} {
+          })},
+      dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
   NIMBLE_CHECK_GT(numStripes_, 0, "NimbleIndexProjector requires stripes");
   validateProjection();
-
-  // A file that records no checksums is read unverified. Per-stream checksums
-  // use the file's ChecksumType, the same one the postscript records for the
-  // whole-file checksum, so when verifying, a type this binary cannot build is
-  // rejected outright by ChecksumFactory.
-  if (verifyStreamChecksums && tablet_->properties().hasStreamChecksums()) {
-    streamChecksum_ = ChecksumFactory::create(tablet_->checksumType());
-  }
+  initStreamChecksum(verifyStreamChecksums);
 
   // Rejects the whole file rather than only the projected streams: no cheap
   // per-stream binding query exists for file and external scopes, and
@@ -273,6 +267,29 @@ NimbleIndexProjector::NimbleIndexProjector(
 }
 
 NimbleIndexProjector::~NimbleIndexProjector() = default;
+
+void NimbleIndexProjector::initStreamChecksum(bool verifyStreamChecksums) {
+  // A file that records no checksums is read unverified. Per-stream checksums
+  // use the file's ChecksumType, the same one the postscript records for the
+  // whole-file checksum, so when verifying, a type this binary cannot build is
+  // rejected outright by ChecksumFactory. Current files keep each checksum in
+  // the stream's trailer; legacy files keep them in stripe-group arrays
+  // instead. FileProperties rejects a file that claims both, so at most one
+  // branch applies.
+  const auto& properties = tablet_->properties();
+  const auto streamTrailerChecksumOffset =
+      properties.streamTrailerLayout().checksumOffset();
+  if (!verifyStreamChecksums ||
+      (!streamTrailerChecksumOffset.has_value() &&
+       !properties.hasStreamChecksums())) {
+    return;
+  }
+  streamChecksum_ = ChecksumFactory::create(tablet_->checksumType());
+  if (streamTrailerChecksumOffset.has_value()) {
+    streamTrailerSize_ = properties.streamTrailerLayout().size();
+    streamTrailerChecksumOffset_ = *streamTrailerChecksumOffset;
+  }
+}
 
 void NimbleIndexProjector::loadStripes(
     const Request& request,
@@ -649,15 +666,30 @@ void NimbleIndexProjector::lookupStripes() {
 void NimbleIndexProjector::verifyStreamChecksum(
     uint32_t enqueueIndex,
     std::string_view data) const {
-  // Checked rather than debug-checked: an index past the end would otherwise
-  // read out of bounds in opt builds, and this runs once per stream, not per
-  // byte.
-  NIMBLE_CHECK_LT(
-      enqueueIndex,
-      ctx_.expectedStreamChecksums.size(),
-      "Stream checksum index exceeds the enqueued stream count.");
+  uint32_t expected{0};
+  if (streamTrailerSize_ > 0) {
+    // The region was enqueued as the stream's bytes followed by its stream
+    // trailer.
+    NIMBLE_CHECK_GE(
+        data.size(),
+        streamTrailerSize_,
+        "Loaded stream region is shorter than its stream trailer.");
+    const auto streamSize = data.size() - streamTrailerSize_;
+    const char* checksumPos =
+        data.data() + streamSize + streamTrailerChecksumOffset_;
+    expected = encoding::readUint32(checksumPos);
+    data = data.substr(0, streamSize);
+  } else {
+    // Checked rather than debug-checked: an index past the end would otherwise
+    // read out of bounds in opt builds, and this runs once per stream, not per
+    // byte.
+    NIMBLE_CHECK_LT(
+        enqueueIndex,
+        ctx_.expectedStreamChecksums.size(),
+        "Stream checksum index exceeds the enqueued stream count.");
+    expected = ctx_.expectedStreamChecksums[enqueueIndex];
+  }
   const auto computed = streamChecksum_->computeChecksum32(data);
-  const auto expected = ctx_.expectedStreamChecksums[enqueueIndex];
   if (FOLLY_LIKELY(computed == expected)) {
     return;
   }
@@ -709,9 +741,13 @@ void NimbleIndexProjector::loadStripeStreams() {
 
   const auto numProjectedStreams = projection_->streamOffsets.size();
   ctx_.dataInputIndices.resize(numPlannedStripes * numProjectedStreams);
-  const bool verifyStreamChecksums = streamChecksum_ != nullptr;
+
+  // Stream trailer checksums arrive with the stream's bytes; only checksums
+  // from the stripe-group arrays of legacy files are collected here.
+  const bool collectExpectedChecksums =
+      streamChecksum_ != nullptr && streamTrailerSize_ == 0;
   ctx_.expectedStreamChecksums.clear();
-  if (verifyStreamChecksums) {
+  if (collectExpectedChecksums) {
     ctx_.expectedStreamChecksums.reserve(totalStreams);
   }
   for (size_t stripeOffset = 0; stripeOffset < numPlannedStripes;
@@ -732,9 +768,11 @@ void NimbleIndexProjector::loadStripeStreams() {
         continue;
       }
       const auto enqueueIndex = dataInput_->enqueue(
-          velox::common::Region{stripeFileOffset + stream.offset, stream.size});
+          velox::common::Region{
+              stripeFileOffset + stream.offset,
+              uint64_t{stream.size} + streamTrailerSize_});
       ctx_.dataInputIndices[dataInputBase + streamIndex] = enqueueIndex;
-      if (verifyStreamChecksums) {
+      if (collectExpectedChecksums) {
         // enqueue() hands out indices densely in call order, so appending here
         // keeps the vector indexable by the enqueue index.
         NIMBLE_DCHECK_EQ(
@@ -746,7 +784,7 @@ void NimbleIndexProjector::loadStripeStreams() {
     }
   }
 
-  if (!verifyStreamChecksums) {
+  if (streamChecksum_ == nullptr) {
     ctx_.dataHandle = dataInput_->load();
     return;
   }
@@ -1212,9 +1250,11 @@ NimbleIndexProjector::collectStripeStreamViews(
     const auto bufCanonical = bufferRef.canonicalIndex;
     NIMBLE_CHECK_EQ(
         bufLen,
-        streamLocation.size,
+        uint64_t{streamLocation.size} + streamTrailerSize_,
         "Loaded stream length must match projected stream length");
-    loadedStreams.streams[i] = std::string_view(bufData, bufLen);
+
+    // Drops the stream trailer, if one was read to verify the stream.
+    loadedStreams.streams[i] = std::string_view(bufData, streamLocation.size);
     if (!resolveCanonicalStreams) {
       continue;
     }

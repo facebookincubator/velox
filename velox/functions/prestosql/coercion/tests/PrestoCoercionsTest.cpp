@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
+
 namespace facebook::velox::functions::prestosql {
 namespace {
 
@@ -50,6 +52,20 @@ TEST(PrestoCoercionsTest, sanity) {
   EXPECT_TRUE(tc.coerce(DATE(), TIMESTAMP()).has_value());
   EXPECT_TRUE(tc.coerce(REAL(), DOUBLE()).has_value());
   EXPECT_TRUE(tc.coerce(UNKNOWN(), VARCHAR()).has_value());
+}
+
+// Keeps DECIMAL between BIGINT and REAL in UNKNOWN's coercion order.
+TEST(PrestoCoercionsTest, unknownToDecimal) {
+  const auto toBigint = typeCoercer().coerce(UNKNOWN(), BIGINT());
+  const auto toDecimal = typeCoercer().coerce(UNKNOWN(), "DECIMAL");
+  const auto toReal = typeCoercer().coerce(UNKNOWN(), REAL());
+
+  ASSERT_TRUE(toBigint.has_value());
+  ASSERT_TRUE(toDecimal.has_value());
+  ASSERT_TRUE(toReal.has_value());
+  VELOX_EXPECT_EQ_TYPES(toDecimal->type, DECIMAL(1, 0));
+  EXPECT_LT(toBigint->cost, toDecimal->cost);
+  EXPECT_LT(toDecimal->cost, toReal->cost);
 }
 
 } // namespace
