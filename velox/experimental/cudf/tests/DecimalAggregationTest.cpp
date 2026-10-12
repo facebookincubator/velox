@@ -288,7 +288,8 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
         auto expression = test_utils::optimizeTypedExpr(
             sql, rowType, queryCtx.get(), &execCtx);
         ASSERT_TRUE(expression->type()->equivalent(*expectedType));
-        auto evaluator = createCudfExpression(expression, rowType, pool());
+        auto evaluator = createCudfExpression(
+            expression, rowType, pool(), queryCtx->queryConfig());
         auto result = evaluator->eval(evalInputs, stream, mr);
         const auto view = asView(result);
         ASSERT_EQ(view.type(), veloxToCudfDataType(expectedType));
@@ -357,7 +358,8 @@ TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
     SCOPED_TRACE(sql);
     auto expression =
         test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
-    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto evaluator = createCudfExpression(
+        expression, rowType, pool(), queryCtx->queryConfig());
     VELOX_ASSERT_USER_THROW(
         evaluator->eval(inputs, stream, mr), "Division by zero");
   }

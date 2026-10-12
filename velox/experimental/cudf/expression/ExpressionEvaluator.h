@@ -152,7 +152,8 @@ class FunctionExpression : public CudfExpression {
   static std::shared_ptr<FunctionExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -188,10 +189,16 @@ class FunctionExpression : public CudfExpression {
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
 /// first.
+///
+/// `config` is the session query config. Evaluators that compile Velox simple
+/// functions need it because Velox hands initialize() a QueryConfig, so a
+/// function whose setup depends on a session setting resolves it the same way
+/// it would on the CPU path.
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config);
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
 /// the OperatorAdapters and the aggregation validators. Optimizes the
