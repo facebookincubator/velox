@@ -46,6 +46,13 @@ inline constexpr std::string_view kSplitBoundariesConfigKey =
 inline constexpr std::string_view kSplitModeRecompute = "recompute";
 inline constexpr std::string_view kSplitModePreserve = "preserve";
 
+/// Records whether a captured stream carried a row frame, so a preserve-mode
+/// replay pairs the replayed boundaries with the same decision instead of
+/// taking a frame the boundaries were never planned for. Absent means no frame,
+/// which is what every layout captured before frames existed describes.
+inline constexpr std::string_view kRowFrameConfigKey = "subintsplit.row_frame";
+inline constexpr std::string_view kRowFramePresent = "1";
+
 std::string serializeSplitBoundaries(std::span<const SectionPlan> sections);
 
 /// Parses boundaries covering exactly `numBits` bits. Returns nullopt when the
