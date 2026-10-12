@@ -405,8 +405,8 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
-  cudfSplitReader_->prepareSplitMetadata();
   if (hasDecimalSubfieldFilter_) {
+    const auto& fileMetadatas = cudfSplitReader_->readFileMetadatas();
     const auto readerFilterType = getTableRowType();
     const HiveConfig hiveConfig(cudfHiveConfig_->config());
     const auto fileColumnNamesReadAsLowerCase =
@@ -415,7 +415,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     pushdownFilterTree_ = cudf::ast::tree{};
     pushdownFilterScalars_.clear();
     const auto decimalTypes = parquetDecimalTypes(
-        cudfSplitReader_->fileMetadata().schema,
+        fileMetadatas.front().schema,
         readerFilterType,
         fileColumnNamesReadAsLowerCase);
     const auto& filter = createAstFromSubfieldFilters(

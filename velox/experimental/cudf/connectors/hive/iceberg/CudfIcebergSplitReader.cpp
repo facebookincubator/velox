@@ -180,10 +180,6 @@ const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
 
 void CudfIcebergSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& runtimeStats) {
-  // Base `prepareSplitMetadata` already called `resetSplit()` through virtual
-  // dispatch, which for this class clears both the iceberg-specific state and
-  // the base reader state.
-
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 

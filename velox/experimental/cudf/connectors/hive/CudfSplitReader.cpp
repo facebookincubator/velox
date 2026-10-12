@@ -270,8 +270,7 @@ void CudfSplitReader::prepareSplitInternal(
 }
 
 void CudfSplitReader::cacheSchemaFromMetadata() {
-  // Read file metadatas if not already
-  fileMetaDatas();
+  readFileMetadatas();
 
   VELOX_CHECK_EQ(
       fileMetaData_.size(),
@@ -331,39 +330,16 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
   return {startRow, numRows};
 }
 
-void CudfSplitReader::prepareSplitMetadata() {
-  resetSplit();
-  stream_ = cudfGlobalStreamPool().get_stream();
-  fileMetaDatas();
-  metadataPrepared_ = true;
-}
-
-const cudf::io::parquet::FileMetaData& CudfSplitReader::fileMetadata() const {
-  VELOX_CHECK(
-      metadataPrepared_, "Call prepareSplitMetadata() before fileMetadata()");
-  VELOX_CHECK_EQ(
-      fileMetaData_.size(),
-      1,
-      "Expected a single Parquet footer for the split");
-  return fileMetaData_.front();
-}
-
 void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
-  VELOX_CHECK(
-      metadataPrepared_,
-      "Call prepareSplitMetadata() before setPushdownFilter()");
   VELOX_CHECK_NOT_NULL(filter);
   pushdownFilterExpr_ = filter;
   hasSplitSpecificPushdownFilter_ = true;
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  VELOX_CHECK(
-      metadataPrepared_, "Call prepareSplitMetadata() before prepareSplit()");
-  VELOX_CHECK(!splitPrepared_, "Split is already prepared");
-
+  stream_ = cudfGlobalStreamPool().get_stream();
+  readFileMetadatas();
   prepareSplitInternal(runtimeStats);
-  splitPrepared_ = true;
 
   // Update runtime stats.
   if (isSplitSkipped()) {
@@ -536,8 +512,6 @@ void CudfSplitReader::resetSplit() {
   splitRowCount_ = 0;
   readAllFileColumns_ = false;
   noColumnsToRead_ = false;
-  metadataPrepared_ = false;
-  splitPrepared_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -701,9 +675,10 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
-void CudfSplitReader::fileMetaDatas() {
+const std::vector<cudf::io::parquet::FileMetaData>&
+CudfSplitReader::readFileMetadatas() {
   if (not fileMetaData_.empty()) {
-    return;
+    return fileMetaData_;
   }
 
   // Setup the datasource
@@ -722,11 +697,11 @@ void CudfSplitReader::fileMetaDatas() {
       fileMetaData_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
+  return fileMetaData_;
 }
 
 void CudfSplitReader::createCudfReader() {
-  // Read file metadatas
-  fileMetaDatas();
+  readFileMetadatas();
 
   // Check if we are reading all columns in order
   const auto& schema = fileMetaData_.front().schema;

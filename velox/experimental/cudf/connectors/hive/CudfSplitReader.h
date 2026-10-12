@@ -76,20 +76,15 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  /// Resets the previous split, acquires a stream and reads the Parquet footer.
-  /// Must be called before fileMetadata(), setPushdownFilter() or
-  /// prepareSplit().
-  void prepareSplitMetadata();
-
-  /// Returns the Parquet footer loaded by prepareSplitMetadata().
-  const cudf::io::parquet::FileMetaData& fileMetadata() const;
+  /// Reads and returns the Parquet file metadatas. Subsequent calls return the
+  /// cached metadatas.
+  const std::vector<cudf::io::parquet::FileMetaData>& readFileMetadatas();
 
   /// Sets the split-specific pushdown filter. The expression must remain alive
   /// while the split is being read.
   void setPushdownFilter(const cudf::ast::expression* filter);
 
-  /// Finishes preparing the split after prepareSplitMetadata(): opens the cuDF
-  /// reader and sets up its options.
+  /// Opens the cuDF reader and sets up its options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
@@ -146,9 +141,6 @@ class CudfSplitReader : public NvtxHelper {
 
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();
-
-  // Read file metadatas.
-  void fileMetaDatas();
 
   // Read file metadatas and cache `fileColumnNames_`, `baseReadOffset_` and
   // `splitRowCount_` from the Parquet footer.
@@ -267,8 +259,6 @@ class CudfSplitReader : public NvtxHelper {
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
-  bool metadataPrepared_{false};
-  bool splitPrepared_{false};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

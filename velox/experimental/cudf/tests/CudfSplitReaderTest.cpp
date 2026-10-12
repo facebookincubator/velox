@@ -53,7 +53,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
                                 CudfHiveConnectorTestBase {};
 
-TEST_F(CudfSplitReaderTest, setsPushdownFilterForEachSplitPreparation) {
+TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto dataFile = common::testutil::TempFilePath::create();
   writeToFile(
@@ -81,8 +81,7 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterForEachSplitPreparation) {
           .build();
 
   cudf::ast::column_reference logicalFilter{0};
-  cudf::ast::column_reference firstSplitFilter{0};
-  cudf::ast::column_reference secondSplitFilter{0};
+  cudf::ast::column_reference splitFilter{0};
   MetadataOnlySplitReader reader(
       std::move(split),
       ::facebook::velox::cudf_velox::exec::test::CudfHiveConnectorTestBase::
@@ -101,28 +100,18 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterForEachSplitPreparation) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  dwio::common::RuntimeStats runtimeStats;
-  reader.prepareSplitMetadata();
-  EXPECT_GT(reader.fileMetadata().schema.size(), 1);
-  reader.setPushdownFilter(&firstSplitFilter);
-  reader.prepareSplit(runtimeStats);
-  EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
-  EXPECT_EQ(reader.splitFilter(), &firstSplitFilter);
-  EXPECT_TRUE(reader.hasSplitFilter());
+  const auto& fileMetadatas = reader.readFileMetadatas();
+  ASSERT_FALSE(fileMetadatas.empty());
+  EXPECT_GT(fileMetadatas.front().schema.size(), 1);
+  EXPECT_EQ(&reader.readFileMetadatas(), &fileMetadatas);
 
-  // Preparing metadata again resets the previous split filter without
-  // replacing the logical filter.
-  reader.prepareSplitMetadata();
-  EXPECT_GT(reader.fileMetadata().schema.size(), 1);
-  EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
-  EXPECT_EQ(reader.splitFilter(), &logicalFilter);
-  EXPECT_FALSE(reader.hasSplitFilter());
-  reader.setPushdownFilter(&secondSplitFilter);
+  reader.setPushdownFilter(&splitFilter);
+  dwio::common::RuntimeStats runtimeStats;
   reader.prepareSplit(runtimeStats);
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
-  EXPECT_EQ(reader.splitFilter(), &secondSplitFilter);
+  EXPECT_EQ(reader.splitFilter(), &splitFilter);
   EXPECT_TRUE(reader.hasSplitFilter());
-  EXPECT_EQ(runtimeStats.processedSplits, 2);
+  EXPECT_EQ(runtimeStats.processedSplits, 1);
 }
 
 } // namespace
