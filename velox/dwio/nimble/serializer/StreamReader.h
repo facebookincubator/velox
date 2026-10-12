@@ -31,10 +31,58 @@
 
 namespace facebook::nimble {
 
+class EncodingView;
 class FieldReader;
 class FieldReaderFactory;
 class InMemoryChunkedStream;
 class Type;
+
+/// Owns one stripe's encoded streams and lazily caches their EncodingViews.
+class CachedStripeStreams
+    : public std::enable_shared_from_this<CachedStripeStreams> {
+ public:
+  struct Options {
+    bool enableEncodingViewCache{false};
+  };
+
+  CachedStripeStreams(
+      std::shared_ptr<void> bytesOwner,
+      std::vector<std::string_view> streams,
+      velox::memory::MemoryPool* viewPool,
+      Encoding::Options encodingOptions,
+      Options options);
+  ~CachedStripeStreams();
+
+  const std::vector<std::string_view>& streams() const {
+    return streams_;
+  }
+  std::shared_ptr<const EncodingView> encodingView(
+      size_t streamIndex,
+      std::string_view encodedChunk) const;
+  uint64_t numEncodingViewsCreated() const;
+  uint64_t numEncodingViewCacheHits() const;
+
+  /// Returns whether stream chunks were parsed and retained at construction.
+  bool hasPreparsedStreamChunks() const {
+    return options_.enableEncodingViewCache;
+  }
+
+  /// Returns one retained encoded chunk without reparsing its stream wrapper.
+  std::string_view preparsedStreamChunk(size_t streamIndex) const;
+
+  /// Returns the number of stream chunks parsed for this stripe.
+  uint64_t numStreamChunksParsed() const;
+
+ private:
+  class State;
+  const std::shared_ptr<void> bytesOwner_;
+  const std::vector<std::string_view> streams_;
+  std::vector<std::string_view> preparsedStreamChunks_;
+  velox::memory::MemoryPool* FOLLY_NONNULL const viewPool_;
+  const Encoding::Options encodingOptions_;
+  const Options options_;
+  std::unique_ptr<State> state_;
+};
 
 /// Decodes selected rows from the streams of one projected Nimble type through
 /// FieldReader. Scalar leaves use Decoder's random-access EncodingView path.
@@ -68,12 +116,27 @@ class StreamReader {
       velox::vector_size_t outputOffset,
       velox::VectorPtr& output);
 
+  /// Coroutine form of read() that uses caller-managed cached stripe streams.
+  folly::coro::Task<void> co_read(
+      std::shared_ptr<CachedStripeStreams> stripe,
+      std::span<const RowRange> ranges,
+      velox::vector_size_t outputOffset,
+      velox::VectorPtr& output);
+
+  uint64_t numStreamChunksParsed() const {
+    return numStreamChunksParsed_;
+  }
+
+  uint64_t numReaderTreesCreated() const {
+    return numReaderTreesCreated_;
+  }
+
  private:
   // Initializes the schema-derived reader factory and stream offsets.
   void init();
 
   // Builds the FieldReader tree for one stripe's streams.
-  void prepareRead(std::span<const std::string_view> streams);
+  void prepareRead(std::shared_ptr<CachedStripeStreams> stripe);
 
   // Decodes selected rows through the configured reader tree asynchronously.
   folly::coro::Task<void> co_decodeRows(
@@ -107,6 +170,12 @@ class StreamReader {
 
   // Root reader for the current stream binding.
   std::unique_ptr<FieldReader> reader_;
+
+  // Number of stream chunks parsed while binding stripe streams.
+  uint64_t numStreamChunksParsed_{0};
+
+  // Number of per-read FieldReader trees created.
+  uint64_t numReaderTreesCreated_{0};
 };
 
 } // namespace facebook::nimble

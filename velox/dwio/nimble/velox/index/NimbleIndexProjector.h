@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/coro/Task.h>
 #include <folly/io/IOBuf.h>
 #include <memory>
 #include <span>
@@ -40,6 +41,7 @@
 
 namespace facebook::nimble {
 
+class CachedStripeStreams;
 class StreamReader;
 class TabletReaderCache;
 namespace serde {
@@ -140,10 +142,15 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// Reuses cached EncodingViews when repeatedly decoding the same stripe.
+    bool enableEncodingViewCache{false};
   };
 
   /// Request for a batch of index lookups.
   struct Request {
+    /// Pre-encoded point keys for exact-match lookups. When set, keyBounds
+    /// must be empty.
+    std::vector<std::string> pointKeys;
     /// Pre-encoded key bounds for each lookup.
     std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
   };
@@ -241,6 +248,14 @@ class NimbleIndexProjector {
     /// numPlannedBytes reached Options::maxBytes.
     uint32_t numMaxBytesTruncations{0};
 
+    /// EncodingViews constructed while decoding vector output.
+    uint64_t numEncodingViewsCreated{0};
+    /// Reuses of previously constructed EncodingViews.
+    uint64_t numEncodingViewCacheHits{0};
+    /// Stream chunks parsed while constructing per-read decoders.
+    uint64_t numStreamChunksParsed{0};
+    /// FieldReader trees constructed while decoding requested rows.
+    uint64_t numReaderTreesCreated{0};
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
     /// Time spent building per-stripe stream and request-range plans.
@@ -423,7 +438,7 @@ class NimbleIndexProjector {
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Decodes loaded stripes into one request-major Velox vector.
-  RowProjectionResult processStripeRows();
+  folly::coro::Task<RowProjectionResult> co_processStripeRows();
 
   // Validates the schema shared by both projection paths.
   void validateProjection() const;
@@ -549,6 +564,15 @@ class NimbleIndexProjector {
   // Scratch allocations shared by successive EncodingView decodes. The
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
+  // Scratch allocations for cached EncodingViews. Borrows pool_ when the
+  // caller supplies a leaf pool, and points at ownedEncodingViewPool_ when the
+  // caller supplies an aggregate pool.
+  velox::memory::MemoryPool* encodingViewPool_{nullptr};
+  // Owns a child leaf pool for cached EncodingViews when pool_ can create
+  // children.
+  std::shared_ptr<velox::memory::MemoryPool> ownedEncodingViewPool_;
+  // Cached stream wrappers, indexed by tablet stripe.
+  std::vector<std::shared_ptr<CachedStripeStreams>> cachedStripeStreams_;
 
   // Decodes projected rows into Velox vectors. The serialized path does not
   // need this reader, so it is created on the first projectRows() call.
