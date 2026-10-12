@@ -892,7 +892,9 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
       makePointLookup(rowType, {"key"}, 999),
       makePointLookup(rowType, {"key"}, 120),
   };
-  auto result = projector->projectRows(request, {});
+  NimbleIndexProjector::Options options;
+  options.enableEncodingViewCache = true;
+  auto result = projector->projectRows(request, options);
 
   ASSERT_NE(result.values, nullptr);
   auto expected = vectorMaker_->rowVector(
@@ -912,6 +914,19 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
   EXPECT_EQ(responseOffsets, std::vector<vector_size_t>({0, 1, 2, 2}));
   EXPECT_EQ(responseSizes, std::vector<vector_size_t>({1, 1, 0, 1}));
   EXPECT_EQ(projector->stats().numProjectedRows, 3);
+
+  const auto numViewsCreated = projector->stats().numEncodingViewsCreated;
+  const auto numStreamChunksParsed = projector->stats().numStreamChunksParsed;
+  const auto numReaderTreesCreated = projector->stats().numReaderTreesCreated;
+  EXPECT_GT(numViewsCreated, 0);
+  EXPECT_GT(numStreamChunksParsed, 0);
+  EXPECT_GT(numReaderTreesCreated, 0);
+  auto cachedResult = projector->projectRows(request, options);
+  velox::test::assertEqualVectors(expected, cachedResult.values);
+  EXPECT_EQ(projector->stats().numEncodingViewsCreated, numViewsCreated);
+  EXPECT_GT(projector->stats().numEncodingViewCacheHits, 0);
+  EXPECT_EQ(projector->stats().numStreamChunksParsed, numStreamChunksParsed);
+  EXPECT_GT(projector->stats().numReaderTreesCreated, numReaderTreesCreated);
 }
 
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
@@ -3559,7 +3574,8 @@ TEST_P(NimbleIndexProjectorTest, stats) {
     auto proj = createProjector(subs);
     NimbleIndexProjector::Request request;
     NIMBLE_ASSERT_THROW(
-        proj->projectStreams(request, {}), "keyBounds must not be empty");
+        proj->projectStreams(request, {}),
+        "Exactly one of pointKeys or keyBounds must be set");
   }
 
   // Single point lookup: key=15 is in stripe 1 (rows 10..19).
@@ -3794,7 +3810,8 @@ TEST_P(NimbleIndexProjectorTest, statsToString) {
       "Stats(numReadStripes=3, numSlicedStripes=1, "
       "slicedStripePct=33.33%, numReadRows=1000, numProjectedRows=800, "
       "numOutputBytes=8.00KB, numPlannedBytes=16.00KB, "
-      "numMaxBytesTruncations=2, "
+      "numMaxBytesTruncations=2, numStreamChunksParsed=0, "
+      "numReaderTreesCreated=0, "
       "lookupTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "prepareTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "scanTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "

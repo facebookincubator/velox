@@ -21,6 +21,7 @@
 #include <limits>
 
 #include "folly/ScopeGuard.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -66,7 +67,8 @@ std::string NimbleIndexProjector::Stats::toString() const {
   return fmt::format(
       "Stats(numReadStripes={}, numSlicedStripes={}, "
       "slicedStripePct={:.2f}%, numReadRows={}, numProjectedRows={}, "
-      "numOutputBytes={}, numPlannedBytes={}, numMaxBytesTruncations={}, "
+      "numOutputBytes={}, numPlannedBytes={}, numMaxBytesTruncations={}, numStreamChunksParsed={}, "
+      "numReaderTreesCreated={}, "
       "lookupTiming=[{}], prepareTiming=[{}], scanTiming=[{}], "
       "projectionTiming=[{}])",
       numReadStripes,
@@ -79,6 +81,8 @@ std::string NimbleIndexProjector::Stats::toString() const {
       velox::succinctBytes(numOutputBytes),
       velox::succinctBytes(numPlannedBytes),
       numMaxBytesTruncations,
+      numStreamChunksParsed,
+      numReaderTreesCreated,
       lookupTiming.toString(),
       prepareTiming.toString(),
       scanTiming.toString(),
@@ -244,11 +248,18 @@ NimbleIndexProjector::NimbleIndexProjector(
               .streamsUseVarintRowCount =
                   tablet_->properties().compactRowCountEncoding(),
           })},
-      dataInput_{std::move(dataInput)} {
+      dataInput_{std::move(dataInput)},
+      encodingViewPool_{pool_},
+      cachedStripeStreams_(numStripes_) {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
   NIMBLE_CHECK_GT(numStripes_, 0, "NimbleIndexProjector requires stripes");
   validateProjection();
+  if (pool_->kind() == velox::memory::MemoryPool::Kind::kAggregate) {
+    ownedEncodingViewPool_ = pool_->addLeafChild("nimble_index_encoding_view");
+    encodingViewPool_ = ownedEncodingViewPool_.get();
+  }
+
   initStreamChecksum(verifyStreamChecksums);
 
   // Rejects the whole file rather than only the projected streams: no cheap
@@ -319,7 +330,7 @@ NimbleIndexProjector::RowProjectionResult NimbleIndexProjector::projectRows(
     clearRequest();
   };
   loadStripes(request, options);
-  return processStripeRows();
+  return folly::coro::blockingWait(co_processStripeRows());
 }
 
 Encoding::Options NimbleIndexProjector::encodingOptions() {
@@ -519,7 +530,9 @@ void NimbleIndexProjector::initRequest(
     const Options& options) {
   NIMBLE_CHECK_NULL(ctx_.request, "Projection is not reentrant");
   NIMBLE_CHECK_NULL(ctx_.options, "Projection is not reentrant");
-  NIMBLE_CHECK_GT(request.keyBounds.size(), 0, "keyBounds must not be empty");
+  NIMBLE_CHECK(
+      request.pointKeys.empty() != request.keyBounds.empty(),
+      "Exactly one of pointKeys or keyBounds must be set");
   NIMBLE_CHECK(
       std::isfinite(options.maxOverfetchRowsRatio) &&
           options.maxOverfetchRowsRatio >= 0.0 &&
@@ -528,7 +541,9 @@ void NimbleIndexProjector::initRequest(
       options.maxOverfetchRowsRatio);
   ctx_.request = &request;
   ctx_.options = &options;
-  ctx_.numRequests = static_cast<uint32_t>(request.keyBounds.size());
+  ctx_.numRequests = static_cast<uint32_t>(
+      request.pointKeys.empty() ? request.keyBounds.size()
+                                : request.pointKeys.size());
 }
 
 void NimbleIndexProjector::clearRequest() {
@@ -582,7 +597,11 @@ void NimbleIndexProjector::lookupStripes() {
   velox::CpuWallTimer timer(stats_.lookupTiming);
 
   const auto result = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+      ctx_.request->pointKeys.empty()
+          ? index::IndexLookup::LookupRequest::rangeScan(
+                ctx_.request->keyBounds)
+          : index::IndexLookup::LookupRequest::pointLookup(
+                ctx_.request->pointKeys));
 
   struct ResolvedRequest {
     uint32_t requestIndex;
@@ -830,10 +849,13 @@ void NimbleIndexProjector::validateProjection() const {
       "NimbleIndexProjector requires a row projection");
 }
 
-NimbleIndexProjector::RowProjectionResult
-NimbleIndexProjector::processStripeRows() {
+folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
+NimbleIndexProjector::co_processStripeRows() {
   NIMBLE_CHECK_NOT_NULL(streamReader_.get());
   velox::CpuWallTimer timer(stats_.projectionTiming);
+  const auto numReaderStreamChunksParsed =
+      streamReader_->numStreamChunksParsed();
+  const auto numReaderTreesCreated = streamReader_->numReaderTreesCreated();
   RowProjectionResult result;
   result.responses.resize(ctx_.numRequests);
 
@@ -876,18 +898,47 @@ NimbleIndexProjector::processStripeRows() {
     // own handle rather than result.values; the check below holds it to
     // filling the vector this function allocated.
     velox::VectorPtr outputVector = result.values;
-    for (const auto& range : plannedStripeRanges(stripeOffset)) {
-      const auto numRows = static_cast<uint32_t>(range.rowRange.numRows());
-      const auto outputOffset = result.responses[range.requestIndex].offset +
-          stripeOutputRows[range.requestIndex];
-      streamReader_->read(
-          streams,
-          std::span<const RowRange>{&range.rowRange, 1},
-          outputOffset,
-          outputVector);
-      stripeOutputRows[range.requestIndex] +=
-          static_cast<velox::vector_size_t>(numRows);
-      stats_.numProjectedRows += numRows;
+    const auto readRanges =
+        [&](const auto& streams) -> folly::coro::Task<void> {
+      for (const auto& range : plannedStripeRanges(stripeOffset)) {
+        const auto numRows = static_cast<uint32_t>(range.rowRange.numRows());
+        const auto outputOffset = result.responses[range.requestIndex].offset +
+            stripeOutputRows[range.requestIndex];
+        co_await streamReader_->co_read(
+            streams,
+            std::span<const RowRange>{&range.rowRange, 1},
+            outputOffset,
+            outputVector);
+        stripeOutputRows[range.requestIndex] +=
+            static_cast<velox::vector_size_t>(numRows);
+        stats_.numProjectedRows += numRows;
+      }
+      co_return;
+    };
+    if (!ctx_.options->enableEncodingViewCache) {
+      co_await readRanges(streams);
+    } else {
+      const auto stripeIndex = ctx_.plan.stripeIndices[stripeOffset];
+      auto& stripeStreams = cachedStripeStreams_[stripeIndex];
+      const auto numCachedStreamChunksParsed =
+          stripeStreams == nullptr ? 0 : stripeStreams->numStreamChunksParsed();
+      if (stripeStreams == nullptr) {
+        stripeStreams = std::make_shared<CachedStripeStreams>(
+            ctx_.dataHandle,
+            std::vector<std::string_view>{streams.begin(), streams.end()},
+            encodingViewPool_,
+            encodingOptions(),
+            CachedStripeStreams::Options{.enableEncodingViewCache = true});
+      }
+      const auto numViewsCreated = stripeStreams->numEncodingViewsCreated();
+      const auto numViewCacheHits = stripeStreams->numEncodingViewCacheHits();
+      co_await readRanges(stripeStreams);
+      stats_.numEncodingViewsCreated +=
+          stripeStreams->numEncodingViewsCreated() - numViewsCreated;
+      stats_.numEncodingViewCacheHits +=
+          stripeStreams->numEncodingViewCacheHits() - numViewCacheHits;
+      stats_.numStreamChunksParsed +=
+          stripeStreams->numStreamChunksParsed() - numCachedStreamChunksParsed;
     }
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(outputVector.get()),
@@ -902,7 +953,11 @@ NimbleIndexProjector::processStripeRows() {
         "Decoded response row count mismatch");
   }
   stats_.numOutputBytes += result.values->retainedSize();
-  return result;
+  stats_.numStreamChunksParsed +=
+      streamReader_->numStreamChunksParsed() - numReaderStreamChunksParsed;
+  stats_.numReaderTreesCreated +=
+      streamReader_->numReaderTreesCreated() - numReaderTreesCreated;
+  co_return result;
 }
 
 uint64_t NimbleIndexProjector::prepareStripePackRanges() {

@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/serializer/StreamReader.h"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <utility>
 
@@ -126,6 +127,122 @@ std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
 
 } // namespace
 
+class CachedStripeStreams::State {
+ public:
+  using ViewMap =
+      folly::F14FastMap<size_t, std::shared_ptr<const EncodingView>>;
+
+  explicit State(size_t numStreams) {
+    views.reserve(numStreams);
+    for (size_t i{0}; i < numStreams; ++i) {
+      views.push_back(std::make_unique<folly::Synchronized<ViewMap>>());
+    }
+  }
+
+  std::vector<std::unique_ptr<folly::Synchronized<ViewMap>>> views;
+  std::atomic<uint64_t> numCreated{0};
+  std::atomic<uint64_t> numHits{0};
+  std::atomic<uint64_t> numStreamChunksParsed{0};
+};
+
+CachedStripeStreams::CachedStripeStreams(
+    std::shared_ptr<void> bytesOwner,
+    std::vector<std::string_view> streams,
+    velox::memory::MemoryPool* viewPool,
+    Encoding::Options encodingOptions,
+    Options options)
+    : bytesOwner_{std::move(bytesOwner)},
+      streams_{std::move(streams)},
+      viewPool_{viewPool},
+      encodingOptions_{std::move(encodingOptions)},
+      options_{options},
+      state_{std::make_unique<State>(streams_.size())} {
+  NIMBLE_CHECK_NOT_NULL(viewPool_);
+  if (!options_.enableEncodingViewCache) {
+    return;
+  }
+
+  preparsedStreamChunks_.resize(streams_.size());
+  for (size_t i{0}; i < streams_.size(); ++i) {
+    const auto stream = streams_[i];
+    if (stream.empty()) {
+      continue;
+    }
+    InMemoryChunkedStream chunkedStream{
+        *viewPool_, std::make_unique<StringViewStreamLoader>(stream)};
+    NIMBLE_CHECK(
+        chunkedStream.hasNext(), "StreamReader requires a non-empty stream");
+    const auto encoded = chunkedStream.nextChunk();
+    NIMBLE_CHECK(
+        !chunkedStream.hasNext(),
+        "StreamReader requires exactly one encoded chunk per stream");
+    NIMBLE_CHECK_GE(
+        encoded.data(),
+        stream.data(),
+        "Caching an outer-compressed stream chunk is not supported");
+    NIMBLE_CHECK_LE(
+        encoded.end(),
+        stream.end(),
+        "Caching an outer-compressed stream chunk is not supported");
+    preparsedStreamChunks_[i] = encoded;
+    ++state_->numStreamChunksParsed;
+  }
+}
+
+CachedStripeStreams::~CachedStripeStreams() = default;
+
+std::shared_ptr<const EncodingView> CachedStripeStreams::encodingView(
+    size_t streamIndex,
+    std::string_view encodedChunk) const {
+  NIMBLE_CHECK_LT(streamIndex, streams_.size());
+  const auto createView = [&]() -> std::shared_ptr<const EncodingView> {
+    ++state_->numCreated;
+    return createEncodingView(encodedChunk, viewPool_, encodingOptions_);
+  };
+  if (!options_.enableEncodingViewCache) {
+    return createView();
+  }
+
+  const auto stream = streams_[streamIndex];
+  NIMBLE_CHECK_GE(
+      encodedChunk.data(),
+      stream.data(),
+      "Caching an outer-compressed stream chunk is not supported");
+  NIMBLE_CHECK_LE(
+      encodedChunk.end(),
+      stream.end(),
+      "Caching an outer-compressed stream chunk is not supported");
+  const auto chunkOffset =
+      static_cast<size_t>(encodedChunk.data() - stream.data());
+  auto views = state_->views[streamIndex]->wlock();
+  if (const auto it = views->find(chunkOffset); it != views->end()) {
+    ++state_->numHits;
+    return it->second;
+  }
+  auto view = createView();
+  views->emplace(chunkOffset, view);
+  return view;
+}
+
+uint64_t CachedStripeStreams::numEncodingViewsCreated() const {
+  return state_->numCreated.load(std::memory_order_relaxed);
+}
+
+uint64_t CachedStripeStreams::numEncodingViewCacheHits() const {
+  return state_->numHits.load(std::memory_order_relaxed);
+}
+
+std::string_view CachedStripeStreams::preparsedStreamChunk(
+    size_t streamIndex) const {
+  NIMBLE_CHECK(options_.enableEncodingViewCache);
+  NIMBLE_CHECK_LT(streamIndex, preparsedStreamChunks_.size());
+  return preparsedStreamChunks_[streamIndex];
+}
+
+uint64_t CachedStripeStreams::numStreamChunksParsed() const {
+  return state_->numStreamChunksParsed.load(std::memory_order_relaxed);
+}
+
 StreamReader::StreamReader(
     std::shared_ptr<const Type> type,
     velox::memory::MemoryPool* pool,
@@ -179,25 +296,60 @@ folly::coro::Task<void> StreamReader::co_read(
       ranges,
       outputOffset,
       output);
-  prepareRead(streams);
+  prepareRead(
+      std::make_shared<CachedStripeStreams>(
+          /*bytesOwner=*/nullptr,
+          std::vector<std::string_view>{streams.begin(), streams.end()},
+          pool_,
+          options_,
+          CachedStripeStreams::Options{.enableEncodingViewCache = false}));
   co_await co_decodeRows(ranges, outputRanges, output);
 }
 
-void StreamReader::prepareRead(std::span<const std::string_view> streams) {
-  const auto makeDecoder = [this](std::string_view stream) {
-    auto chunkedStream = std::make_unique<InMemoryChunkedStream>(
-        *pool_, std::make_unique<StringViewStreamLoader>(stream));
-    NIMBLE_CHECK(
-        chunkedStream->hasNext(), "StreamReader requires a non-empty stream");
-    const auto encoded = chunkedStream->nextChunk();
-    NIMBLE_CHECK(
-        !chunkedStream->hasNext(),
-        "StreamReader requires exactly one encoded chunk per stream");
+folly::coro::Task<void> StreamReader::co_read(
+    std::shared_ptr<CachedStripeStreams> stripe,
+    std::span<const RowRange> ranges,
+    velox::vector_size_t outputOffset,
+    velox::VectorPtr& output) {
+  NIMBLE_CHECK_NOT_NULL(stripe);
+  const auto outputRanges = makeOutputRanges(
+      stripe->streams().size(),
+      inputOffsets_.size(),
+      outputType_,
+      ranges,
+      outputOffset,
+      output);
+  prepareRead(std::move(stripe));
+  co_await co_decodeRows(ranges, outputRanges, output);
+}
+
+void StreamReader::prepareRead(std::shared_ptr<CachedStripeStreams> stripe) {
+  NIMBLE_CHECK_NOT_NULL(stripe);
+  const auto& streams = stripe->streams();
+  const auto makeDecoder = [this, stripe](
+                               std::string_view stream, size_t streamIndex) {
+    std::string_view encoded;
+    if (stripe->hasPreparsedStreamChunks()) {
+      encoded = stripe->preparsedStreamChunk(streamIndex);
+    } else {
+      ++numStreamChunksParsed_;
+      auto chunkedStream = std::make_unique<InMemoryChunkedStream>(
+          *pool_, std::make_unique<StringViewStreamLoader>(stream));
+      NIMBLE_CHECK(
+          chunkedStream->hasNext(), "StreamReader requires a non-empty stream");
+      encoded = chunkedStream->nextChunk();
+      NIMBLE_CHECK(
+          !chunkedStream->hasNext(),
+          "StreamReader requires exactly one encoded chunk per stream");
+      chunkedStreams_.push_back(std::move(chunkedStream));
+    }
     auto decoder = std::make_unique<EncodingViewDecoder>(
-        encoded, pool_, options_.bufferPool, [this](std::string_view encoding) {
-          return createEncodingView(encoding, pool_, options_);
+        encoded,
+        pool_,
+        options_.bufferPool,
+        [stripe, streamIndex](std::string_view encoding) {
+          return stripe->encodingView(streamIndex, encoding);
         });
-    chunkedStreams_.push_back(std::move(chunkedStream));
     return decoder;
   };
 
@@ -210,10 +362,11 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
   chunkedStreams_.reserve(streams.size());
   for (size_t i{0}; i < streams.size(); ++i) {
     if (!streams[i].empty()) {
-      streamDecoders_.emplace(inputOffsets_[i], makeDecoder(streams[i]));
+      streamDecoders_.emplace(inputOffsets_[i], makeDecoder(streams[i], i));
     }
   }
   reader_ = readerFactory_->createReader(streamDecoders_);
+  ++numReaderTreesCreated_;
 }
 
 folly::coro::Task<void> StreamReader::co_decodeRows(
