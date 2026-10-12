@@ -24,6 +24,8 @@ class SetDigestType final : public VarbinaryType {
   SetDigestType() = default;
 
  public:
+  static std::shared_ptr<const SetDigestType> create() = delete;
+
   static std::shared_ptr<const SetDigestType> get() {
     VELOX_CONSTEXPR_SINGLETON SetDigestType kInstance;
     return {std::shared_ptr<const SetDigestType>{}, &kInstance};

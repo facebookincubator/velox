@@ -36,6 +36,9 @@ void testTypeSerde(const TypePtr& type) {
   ASSERT_EQ(type->toString(), copy->toString());
   ASSERT_EQ(*type, *copy);
 }
+
+template <typename T>
+concept HasCreate = requires { T::create(); };
 } // namespace
 
 TEST(TypeTest, constructorThrow) {
@@ -1537,4 +1540,18 @@ TEST(TypeTest, timeToIso8601) {
   EXPECT_EQ("08:08:08", toIso8601(8, 8, 8, 0));
   EXPECT_EQ("10:12:55.038", toIso8601(10, 12, 55, 38'000));
   EXPECT_EQ("23:59:59.999999", toIso8601(23, 59, 59, 999'999));
+}
+
+// Types derived from a scalar type would otherwise inherit its create() and
+// return the base type: DateType::create() would return INTEGER.
+TEST(TypeTest, derivedScalarTypesHaveNoCreate) {
+  static_assert(HasCreate<IntegerType>);
+  static_assert(!HasCreate<DateType>);
+  static_assert(!HasCreate<IntervalDayTimeType>);
+  static_assert(!HasCreate<IntervalYearMonthType>);
+  static_assert(!HasCreate<TimestampUtcType>);
+  static_assert(!HasCreate<TimeMilliPrecisionType>);
+  static_assert(!HasCreate<TimeMicroPrecisionUtcType>);
+  static_assert(!HasCreate<ShortDecimalType>);
+  static_assert(!HasCreate<LongDecimalType>);
 }
