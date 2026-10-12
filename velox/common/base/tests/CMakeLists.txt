@@ -90,3 +90,10 @@ velox_add_library(velox_gtest_utils INTERFACE HEADERS GTestUtils.h)
 velox_add_library(velox_stats_reporter_utils INTERFACE HEADERS StatsReporterUtils.h)
 
 velox_add_library(velox_float_constants INTERFACE HEADERS FloatConstants.h)
+
+add_executable(velox_int128_test Int128Test.cpp)
+add_test(velox_int128_test velox_int128_test)
+target_link_libraries(
+  velox_int128_test
+  PRIVATE Folly::folly fmt::fmt GTest::gtest GTest::gtest_main
+)
