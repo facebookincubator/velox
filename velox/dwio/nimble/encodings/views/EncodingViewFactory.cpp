@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
@@ -33,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/views/NullableEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SparseBoolEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
@@ -51,6 +53,8 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
   switch (encodingType) {
     case EncodingType::Nullable:
       return std::make_unique<NullableEncodingView<T>>(data, pool, options);
+    case EncodingType::Sentinel:
+      return std::make_unique<SentinelEncodingView<T>>(data, pool, options);
     case EncodingType::Constant:
       return std::make_unique<ConstantEncodingView<T>>(data, pool, options);
     case EncodingType::Trivial:
@@ -200,9 +204,9 @@ INSTANTIATE_CREATE_TYPED_ENCODING_VIEW(std::string_view);
 
 bool supportsEncodingView(EncodingType encodingType) {
   // Keep in sync with the encoding dispatch in createTypedEncodingView().
-  // Nullable is intentionally excluded because its view requires the
-  // null-aware read API and cannot implement EncodingView::readAt.
   static constexpr std::array kViewableEncodings{
+      EncodingType::Nullable,
+      EncodingType::Sentinel,
       EncodingType::Constant,
       EncodingType::Trivial,
       EncodingType::MainlyConstant,
