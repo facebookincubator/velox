@@ -306,6 +306,16 @@ String Functions
         SELECT mask(NULL); -- NULL
         SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL); -- "AbCD123-@$#"
 
+.. spark:function:: octet_length(string/binary) -> integer
+
+    Returns the byte length of the specified string or binary value.
+    For strings, this is the UTF-8 encoded byte count (not character count).
+    See the `Spark documentation
+    <https://spark.apache.org/docs/3.5.0/api/sql/index.html#octet_length>`_. ::
+
+        SELECT octet_length('hello'); -- 5
+        SELECT octet_length('€'); -- 3
+
 .. spark:function:: overlay(input, replace, pos, len) -> same as input
 
     Replace a substring of ``input`` starting at ``pos`` character with ``replace`` and
