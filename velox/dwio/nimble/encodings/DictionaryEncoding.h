@@ -226,10 +226,29 @@ class DictionaryEncoding
     return indicesBuffer_->asMutable<uint32_t>();
   }
 
+  // Resets the filter verdict cache to kUnknown for the current alphabet,
+  // resizing if the alphabet size changed.
+  void ensureFilterCache(velox::dwio::common::ScanState& scanState) {
+    auto& filterCache = scanState.filterCache;
+    const auto size = std::max<size_t>(1, alphabet_.size());
+    filterCache.resize(size);
+    std::fill(
+        filterCache.begin(),
+        filterCache.end(),
+        velox::dwio::common::FilterResult::kUnknown);
+    scanState.updateRawState();
+    filterCacheInitialized_ = true;
+  }
+
   Vector<T> alphabet_;
   std::unique_ptr<Encoding> indicesEncoding_;
   std::unique_ptr<Encoding> alphabetEncoding_;
   velox::BufferPtr indicesBuffer_;
+
+  // True once this encoding has reset the reader's verdict cache for its
+  // alphabet. SelectiveColumnReader::resetFilterCaches() invalidates the
+  // verdicts when the filter changes.
+  bool filterCacheInitialized_{false};
 };
 
 //
@@ -317,6 +336,244 @@ class DictionaryIndicesHook : public velox::ValueHook {
   const vector_size_t offset_;
 };
 
+/// Fuses index decoding with dictionary translation and filtering. Index
+/// decoders call the dictionary visitor directly instead of staging indices in
+/// a buffer, and index batches go through processBulk().
+template <typename DictionaryVisitor>
+class FusedDictionaryIndicesHook : public velox::ValueHook {
+ public:
+  static constexpr bool kSkipNulls = true;
+  static constexpr bool kBulkFastPath = true;
+
+  /// Constructs a hook bound to the given dictionary visitor.
+  /// 'filterCache' is the visitor's per-index verdict cache. It may be null
+  /// for reads without a filter.
+  FusedDictionaryIndicesHook(
+      DictionaryVisitor& visitor,
+      const uint8_t* filterCache)
+      : visitor_{visitor}, filterCache_{filterCache} {}
+
+  bool acceptsNulls() const final {
+    return false;
+  }
+
+  /// Processes a single dictionary index. Handles leading nulls from the
+  /// current row to the given row, then translates the index via the visitor.
+  void addValue(vector_size_t row, int64_t index) final {
+    processNulls(row);
+    NIMBLE_DCHECK(
+        !visitor_.atEnd(), "Dictionary visitor received an extra index");
+    bool atEnd{false};
+    visitor_.process(index, atEnd);
+    syncFilterOnlyNumValues();
+  }
+
+  /// Processes a batch of non-null indices with their requested-row positions.
+  /// The visitor handles the non-null values. This hook handles the null gaps
+  /// between 'rows': it writes their null bits in projection output and merges
+  /// passing nulls into filtered output.
+  void addValues(
+      const vector_size_t* rows,
+      const int32_t* indices,
+      vector_size_t size) final {
+    if (size == 0) {
+      return;
+    }
+    processNulls(rows[0]);
+    const auto startRowIndex = visitor_.rowIndex();
+    const auto outputOffset = visitor_.reader().numValues();
+    visitor_.processBulk(indices, size, rows);
+    const auto numNulls = rows[size - 1] + 1 - startRowIndex - size;
+    if (numNulls > 0) {
+      if constexpr (DictionaryVisitor::kHasFilter) {
+        if (visitor_.allowNulls()) {
+          mergeBulkNulls(rows, indices, size, numNulls, outputOffset);
+        }
+      } else {
+        setProjectionNulls(rows, size, startRowIndex, outputOffset);
+      }
+    }
+    syncFilterOnlyNumValues();
+  }
+
+  void addNull(vector_size_t /*row*/) final {
+    NIMBLE_UNREACHABLE(__PRETTY_FUNCTION__);
+  }
+
+  /// Handles nulls at the end of the read range after all indices are
+  /// processed.
+  void processTrailingNulls() {
+    processNulls(visitor_.numRows());
+  }
+
+ private:
+  // Marks the null gaps between 'rows' in projection output. The visitor has
+  // already scattered the values around these gaps.
+  void setProjectionNulls(
+      const vector_size_t* rows,
+      vector_size_t size,
+      vector_size_t startRowIndex,
+      vector_size_t outputOffset) {
+    if constexpr (std::is_same_v<
+                      typename DictionaryVisitor::Extract,
+                      velox::dwio::common::ExtractToReader>) {
+      if (visitor_.reader().returnReaderNulls()) {
+        return;
+      }
+      auto* nulls = visitor_.rawNulls(0);
+      velox::bits::fillBits(
+          nulls,
+          outputOffset,
+          visitor_.reader().numValues(),
+          velox::bits::kNotNull);
+      for (vector_size_t position = 1; position < size; ++position) {
+        const auto nullBegin = rows[position - 1] + 1;
+        const auto nullEnd = rows[position];
+        if (nullBegin == nullEnd) {
+          continue;
+        }
+        velox::bits::fillBits(
+            nulls,
+            outputOffset + nullBegin - startRowIndex,
+            outputOffset + nullEnd - startRowIndex,
+            velox::bits::kNull);
+      }
+      visitor_.setHasNulls();
+    }
+  }
+
+  // Inserts the null rows between 'rows' into the filtered output. Walks
+  // backward because the inserted nulls shift passing values to the right.
+  void mergeBulkNulls(
+      const vector_size_t* rows,
+      const int32_t* indices,
+      vector_size_t size,
+      vector_size_t numNulls,
+      vector_size_t outputOffset) {
+    using T = typename DictionaryVisitor::DataType;
+    const auto numValues = visitor_.reader().numValues();
+    auto* filterHits = visitor_.outputRows(numNulls) - numValues;
+    auto* values = reinterpret_cast<T*>(visitor_.reader().rawValues());
+    uint64_t* nulls{nullptr};
+    if constexpr (!DictionaryVisitor::kFilterOnly) {
+      nulls = visitor_.rawNulls(numNulls);
+      velox::bits::fillBits(
+          nulls, outputOffset, numValues + numNulls, velox::bits::kNotNull);
+      visitor_.setHasNulls();
+    }
+    auto passingPosition = numValues - 1;
+    auto outputPosition = numValues + numNulls - 1;
+
+    if (numNulls * 4 >= size) {
+      // Dense nulls leave few passing rows between gaps, in counts a branch
+      // cannot predict. Visit every non-null row instead, and take its verdict
+      // from the filter cache, which processBulk() filled for every index in
+      // 'indices'. Each row copies the current passing value and moves the
+      // cursors only if it passed, so no branch depends on the filter result.
+      // The loop stops once every null is placed, because the passing values
+      // below are already in their final slots.
+      for (auto position = size - 1; outputPosition > passingPosition;
+           --position) {
+        NIMBLE_DCHECK_GT(position, 0);
+        const bool passed = filterCache_[indices[position]] ==
+            velox::dwio::common::FilterResult::kSuccess;
+
+        // Slots above 'passingPosition' are free, so the copy is harmless
+        // when the row failed the filter.
+        const auto source = std::max(passingPosition, outputOffset);
+        NIMBLE_DCHECK(
+            !passed || filterHits[source] == visitor_.rowAt(rows[position]),
+            "Filter cache disagrees with the passing rows");
+        filterHits[outputPosition] = filterHits[source];
+        if constexpr (!DictionaryVisitor::kFilterOnly) {
+          values[outputPosition] = values[source];
+        }
+        passingPosition -= passed;
+        outputPosition -= passed;
+
+        const auto nullBegin = rows[position - 1] + 1;
+        for (auto nullPosition = rows[position]; nullPosition-- > nullBegin;) {
+          filterHits[outputPosition] = visitor_.rowAt(nullPosition);
+          if constexpr (!DictionaryVisitor::kFilterOnly) {
+            velox::bits::setNull(nulls, outputPosition);
+          }
+          --outputPosition;
+        }
+      }
+    } else {
+      // Sparse nulls leave long runs between gaps, so jump from gap to gap and
+      // move the passing values in between. The branches mispredict only
+      // around the gaps, which are rare.
+      for (auto position = size - 1; position > 0; --position) {
+        const auto nullBegin = rows[position - 1] + 1;
+        const auto nullEnd = rows[position];
+        if (nullBegin == nullEnd) {
+          continue;
+        }
+        const auto firstNullRow = visitor_.rowAt(nullBegin);
+        while (passingPosition >= outputOffset &&
+               filterHits[passingPosition] > firstNullRow) {
+          filterHits[outputPosition] = filterHits[passingPosition];
+          if constexpr (!DictionaryVisitor::kFilterOnly) {
+            values[outputPosition] = values[passingPosition];
+          }
+          --passingPosition;
+          --outputPosition;
+        }
+        for (auto nullPosition = nullEnd; nullPosition-- > nullBegin;) {
+          filterHits[outputPosition] = visitor_.rowAt(nullPosition);
+          if constexpr (!DictionaryVisitor::kFilterOnly) {
+            velox::bits::setNull(nulls, outputPosition);
+          }
+          --outputPosition;
+        }
+      }
+    }
+    NIMBLE_DCHECK_EQ(outputPosition, passingPosition);
+    visitor_.addNumValues(numNulls);
+  }
+
+  // Handles nulls from the current visitor row to the given row. For
+  // filter-only reads, records null rows. For projection reads, outputs
+  // nulls or skips them depending on the visitor's extraction mode.
+  void processNulls(vector_size_t row) {
+    NIMBLE_DCHECK_LE(visitor_.rowIndex(), row);
+    NIMBLE_DCHECK_LE(row, visitor_.numRows());
+    const auto numNulls = row - visitor_.rowIndex();
+    if (!visitor_.allowNulls()) {
+      visitor_.addRowIndex(numNulls);
+      return;
+    }
+    if constexpr (std::is_same_v<
+                      typename DictionaryVisitor::Extract,
+                      velox::dwio::common::ExtractToReader>) {
+      if (visitor_.reader().returnReaderNulls()) {
+        visitor_.addRowIndex(numNulls);
+        visitor_.addNumValues(numNulls);
+        return;
+      }
+    }
+    bool atEnd{false};
+    while (visitor_.rowIndex() < row) {
+      visitor_.processNull(atEnd);
+    }
+    syncFilterOnlyNumValues();
+  }
+
+  void syncFilterOnlyNumValues() {
+    if constexpr (DictionaryVisitor::kFilterOnly) {
+      visitor_.reader().setNumValues(visitor_.reader().outputRows().size());
+    }
+  }
+
+  // Visitor that translates and filters the forwarded indices and owns the
+  // output.
+  DictionaryVisitor& visitor_;
+
+  // Verdict per dictionary index, filled by the visitor's processBulk().
+  const uint8_t* filterCache_;
+};
+
 } // namespace detail
 
 template <typename T>
@@ -324,6 +581,82 @@ template <typename V>
 void DictionaryEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
+  // Decode indices with an AlwaysTrue visitor and forward them directly into
+  // the shared logical-value dictionary visitor.
+  if (params.dictionaryAwareReads) {
+    if constexpr (
+        isNumericType<T>() && sizeof(T) >= sizeof(int16_t) && !V::kHasHook &&
+        V::FilterType::deterministic && V::kHasBulkPath) {
+      using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
+          T,
+          typename V::FilterType,
+          typename V::Extract,
+          V::dense>;
+
+      auto& scanState = visitor.reader().scanState();
+
+      // Projection-only reads never consult the verdict cache.
+      if constexpr (V::kHasFilter) {
+        const auto filterCacheSize = std::max<size_t>(1, alphabet_.size());
+        if (!filterCacheInitialized_ ||
+            scanState.filterCache.size() != filterCacheSize) {
+          ensureFilterCache(scanState);
+        }
+      }
+      velox::dwio::common::RawScanState dictionaryState{};
+      dictionaryState.dictionary.values = alphabet_.data();
+      NIMBLE_CHECK_LE(
+          alphabet_.size(),
+          static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+          "Dictionary size exceeds the supported index range");
+      dictionaryState.dictionary.numValues =
+          static_cast<int32_t>(alphabet_.size());
+      dictionaryState.filterCache = scanState.filterCache.data();
+
+      const auto numRows = visitor.numRows() - visitor.rowIndex();
+      const auto outputCapacity = visitor.reader().numValues() + numRows;
+      const auto requiredBytes = std::max(
+          outputCapacity * sizeof(int32_t),
+          outputCapacity * sizeof(T) + numRows * sizeof(int32_t));
+      visitor.reader().template ensureValuesCapacity<uint8_t>(
+          requiredBytes, /*preserveData=*/true);
+
+      DictionaryVisitor dictionaryVisitor{
+          visitor.filter(),
+          &visitor.reader(),
+          velox::RowSet(visitor.rows(), visitor.numRows()),
+          visitor.extractValues(),
+          dictionaryState};
+      dictionaryVisitor.setRowIndex(visitor.rowIndex());
+      dictionaryVisitor.setNumValuesBias(visitor.numValuesBias());
+
+      if constexpr (std::is_same_v<
+                        typename V::Extract,
+                        velox::dwio::common::ExtractToReader>) {
+        params.prepareResultNulls();
+      }
+
+      using Hook = detail::FusedDictionaryIndicesHook<DictionaryVisitor>;
+      Hook dictionaryHook{dictionaryVisitor, dictionaryState.filterCache};
+      velox::common::AlwaysTrue indicesFilter;
+      DecoderVisitor<
+          int32_t,
+          velox::common::AlwaysTrue,
+          velox::dwio::common::ExtractToHook<Hook>,
+          V::dense>
+          indicesVisitor{
+              indicesFilter,
+              &visitor.reader(),
+              velox::RowSet(visitor.rows(), visitor.numRows()),
+              velox::dwio::common::ExtractToHook<Hook>(&dictionaryHook)};
+      indicesVisitor.setRowIndex(visitor.rowIndex());
+      callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
+      dictionaryHook.processTrailingNulls();
+      visitor.setRowIndex(dictionaryVisitor.rowIndex());
+      return;
+    }
+  }
+
   if constexpr (sizeof(T) < sizeof(uint32_t)) {
     // Although we do not use column reader values buffer in this decoder, the
     // fast path in nested decoders of indices can use it, so need to ensure it
