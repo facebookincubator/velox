@@ -235,7 +235,7 @@ jobs:
 
       - name: Save Function Signature Stash
         if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' && steps.sig-paths.outputs.signatures == 'true' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: /tmp/signatures
           key: function-signatures-${{ steps.get-merge-base.outputs.head_main }}
@@ -289,7 +289,7 @@ jobs:
         # see https://github.com/actions/upload-artifact/issues/543
         continue-on-error: true
         if: ${{ github.event_name != 'schedule' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fuzzer-centos
@@ -338,7 +338,7 @@ jobs:
 
       - name: Save Function Signature Stash
         if: ${{ github.event_name == 'push' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: /tmp/signatures
           key: function-signatures-${{ github.sha }}
@@ -579,14 +579,14 @@ jobs:
       - name: Save ccache
         continue-on-error: true
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' && github.event_name != 'schedule' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-baseline-local-runner-centos
 
       - name: Save baseline LocalRunnerService
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.BASELINE_DIR }}
           key: local-runner-service-${{ env.BASELINE_CACHE_VERSION }}-${{ runner.arch }}-${{ steps.get-merge-base.outputs.head_main }}
