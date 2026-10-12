@@ -68,13 +68,12 @@ class CudfVector : public RowVector {
     return stream_;
   }
 
-  cudf::table_view getTableView() const {
-    return tabView_;
-  }
+  /// Returns a view of the underlying table. Throws after release().
+  cudf::table_view getTableView() const;
 
   /// Releases ownership of the underlying table.
   /// If constructed from packed_table, materializes a table from the view
-  /// first (which copies the data).
+  /// first (which copies the data). Throws if called more than once.
   std::unique_ptr<cudf::table> release();
 
   /// Rebinds the vector's device buffers (owned or packed) to use 'stream' for
@@ -96,8 +95,7 @@ class CudfVector : public RowVector {
       std::unique_ptr<cudf::packed_table>>;
   TableStorage tableStorage_;
 
-  // Table view - always valid, points to either table_->view() or
-  // packedTable_->table.
+  // Views either the owned table or the packed table. Invalid after release().
   cudf::table_view tabView_;
 
   cuda::stream_ref stream_;

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/process/StackTrace.h"
 #include "velox/vector/TypeAliases.h"
@@ -113,6 +114,13 @@ void logDefaultStreamIfNeeded(
                << process::StackTrace().toString();
 }
 
+// Returns false once release() has taken the storage.
+template <typename TableStorage>
+bool hasStorage(const TableStorage& storage) {
+  return std::visit(
+      [](const auto& table) { return table != nullptr; }, storage);
+}
+
 } // namespace
 
 CudfVector::CudfVector(
@@ -162,11 +170,17 @@ CudfVector::CudfVector(
   flatSize_ = packedPtr->data.gpu_data->size();
 }
 
+cudf::table_view CudfVector::getTableView() const {
+  VELOX_CHECK(hasStorage(tableStorage_), "CudfVector was already released");
+  return tabView_;
+}
+
 std::unique_ptr<cudf::table> CudfVector::release() {
-  flatSize_ = 0;
+  VELOX_CHECK(hasStorage(tableStorage_), "CudfVector was already released");
   if (auto* tablePtr =
           std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
     // Constructed from owned table - just move it out
+    flatSize_ = 0;
     return std::move(*tablePtr);
   }
   // Constructed from packed_table - materialize a table from the view.
@@ -179,6 +193,7 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   stream_.sync();
   // Clear the packed table since we've materialized
   packedPtr.reset();
+  flatSize_ = 0;
   return materializedTable;
 }
 

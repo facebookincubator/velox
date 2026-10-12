@@ -360,4 +360,39 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
   EXPECT_EQ(materialized->num_rows(), 4);
 }
 
+TEST_F(CudfVectorTest, ownedTableRejectsUseAfterRelease) {
+  TestCudaStream stream;
+  auto table =
+      makeTable(stream.view(), cudf::get_current_device_resource_ref());
+  stream.view().sync();
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      table->num_rows(),
+      std::move(table),
+      stream.view());
+
+  auto released = vector.release();
+
+  VELOX_ASSERT_THROW(vector.release(), "CudfVector was already released");
+  VELOX_ASSERT_THROW(vector.getTableView(), "CudfVector was already released");
+}
+
+TEST_F(CudfVectorTest, packedTableRejectsUseAfterRelease) {
+  TestCudaStream stream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(stream.view(), resource);
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      stream.view());
+
+  auto materialized = vector.release();
+
+  VELOX_ASSERT_THROW(vector.release(), "CudfVector was already released");
+  VELOX_ASSERT_THROW(vector.getTableView(), "CudfVector was already released");
+}
+
 } // namespace
