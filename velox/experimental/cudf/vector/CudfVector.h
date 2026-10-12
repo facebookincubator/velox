@@ -43,9 +43,8 @@ namespace facebook::velox::cudf_velox {
 class CudfVector : public RowVector {
  public:
   /// Constructs a CudfVector from an owned cudf::table.
-  /// 'stream' must be the stream the table's buffers were allocated on (or
-  /// last rebound to). They are freed there until rebindStream() moves them to
-  /// a different stream.
+  /// The table's buffers are freed on 'stream', or on the stream passed to a
+  /// later rebindStream().
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,

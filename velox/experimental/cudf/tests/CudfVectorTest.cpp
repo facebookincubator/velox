@@ -224,6 +224,33 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
+TEST_F(CudfVectorTest, ownedTableDestructionUsesConsumerStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream consumerStream;
+  RecordingAsyncDeviceResource resource;
+
+  auto table = makeTable(
+      allocationStream.view(),
+      rmm::to_device_async_resource_ref_checked(&resource));
+  allocationStream.view().sync();
+
+  // The table's buffers were allocated on allocationStream, but downstream
+  // operators read the vector on consumerStream. Dropping the vector must
+  // order the free after that work.
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      table->num_rows(),
+      std::move(table),
+      consumerStream.view());
+  resource.reset();
+
+  vector.reset();
+
+  EXPECT_GT(resource.deallocationCount(), 0);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
+}
+
 TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
   TestCudaStream allocationStream;
   TestCudaStream consumerStream;
