@@ -481,6 +481,7 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
 };
 
 TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
   using ::facebook::velox::connector::hive::HiveConfig;
   auto file = TempFilePath::create();
   auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
@@ -501,24 +502,43 @@ TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
         true,
         std::vector<IcebergDeleteFile>{});
   };
-  EXPECT_THROW(
-      AssertQueryBuilder(plan).split(missing()).assertEmptyResults(),
-      std::exception);
-  auto splits = makeIcebergSplits(file->getPath());
-  splits.insert(splits.begin(), missing());
-  splits.push_back(missing());
-  auto task = AssertQueryBuilder(plan)
-                  .maxDrivers(1)
-                  .connectorSessionProperty(
-                      kCudfIcebergConnectorId,
-                      HiveConfig::kIgnoreMissingFilesSession,
-                      "true")
-                  .splits(splits)
-                  .assertResults({data});
-  const auto stats = toPlanStats(task->taskStats()).at(plan->id()).customStats;
-  EXPECT_EQ(stats.count("skippedSplits"), 0);
-  EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
-  EXPECT_EQ(stats.at("processedSplits").sum, 1);
+  for (bool buffered : {false, true}) {
+    const auto useBufferedInput = buffered ? "true" : "false";
+    EXPECT_THROW(
+        AssertQueryBuilder(plan)
+            .connectorSessionProperty(
+                kCudfIcebergConnectorId,
+                CudfHiveConfig::kUseBufferedInputSession,
+                useBufferedInput)
+            .split(missing())
+            .assertEmptyResults(),
+        std::exception);
+    for (const auto preload : {0, 4}) {
+      auto splits = makeIcebergSplits(file->getPath());
+      splits.insert(splits.begin(), missing());
+      splits.push_back(missing());
+      auto task = AssertQueryBuilder(plan)
+                      .maxDrivers(1)
+                      .config(
+                          core::QueryConfig::kMaxSplitPreloadPerDriver,
+                          std::to_string(preload))
+                      .connectorSessionProperty(
+                          kCudfIcebergConnectorId,
+                          CudfHiveConfig::kUseBufferedInputSession,
+                          useBufferedInput)
+                      .connectorSessionProperty(
+                          kCudfIcebergConnectorId,
+                          HiveConfig::kIgnoreMissingFilesSession,
+                          "true")
+                      .splits(splits)
+                      .assertResults({data});
+      const auto stats =
+          toPlanStats(task->taskStats()).at(plan->id()).customStats;
+      EXPECT_EQ(stats.count("skippedSplits"), 0);
+      EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
+      EXPECT_EQ(stats.at("processedSplits").sum, 1);
+    }
+  }
 }
 
 /// Basic read without any deletes.

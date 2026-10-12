@@ -340,15 +340,21 @@ TEST_P(TableScanTestParameterized, ignoreMissingFiles) {
   auto plan = tableScanNode();
 
   const auto useBufferedInput = GetParam() ? "true" : "false";
-  EXPECT_THROW(
-      AssertQueryBuilder(plan)
-          .connectorSessionProperty(
-              kCudfHiveConnectorId,
-              CudfHiveConfig::kUseBufferedInputSession,
-              useBufferedInput)
-          .split(missingSplit())
-          .assertEmptyResults(),
-      std::exception);
+  for (bool explicitFalse : {false, true}) {
+    AssertQueryBuilder query(plan);
+    query.connectorSessionProperty(
+        kCudfHiveConnectorId,
+        CudfHiveConfig::kUseBufferedInputSession,
+        useBufferedInput);
+    if (explicitFalse) {
+      query.connectorSessionProperty(
+          kCudfHiveConnectorId,
+          HiveConfig::kIgnoreMissingFilesSession,
+          "false");
+    }
+    EXPECT_THROW(
+        query.split(missingSplit()).assertEmptyResults(), std::exception);
+  }
 
   for (const auto preload : {0, 4}) {
     std::vector<std::shared_ptr<ConnectorSplit>> splits{missingSplit()};
@@ -1457,9 +1463,18 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   for (const auto& paths :
        {std::vector{decimal32Path, decimal64Path},
         std::vector{decimal64Path, decimal32Path}}) {
+    // A missing file is skipped before its footer is read for the filter.
+    auto splits = makeCudfHiveConnectorSplits(paths);
+    splits.insert(
+        splits.begin() + 1,
+        makeCudfHiveConnectorSplit(paths.front()->getPath() + ".missing"));
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .maxDrivers(1)
-        .splits(makeCudfHiveConnectorSplits(paths))
+        .connectorSessionProperty(
+            kCudfHiveConnectorId,
+            hive::HiveConfig::kIgnoreMissingFilesSession,
+            "true")
+        .splits(splits)
         .assertResults(expected);
   }
 }
