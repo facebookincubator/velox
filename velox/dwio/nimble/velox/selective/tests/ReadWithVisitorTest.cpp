@@ -91,6 +91,10 @@ class IntegerColumnReaderTestAccessor : public IntegerColumnReader {
     this->template prepareRead<T>(offset, rows, nulls);
   }
 
+  const BufferPtr& resultNullsForTest() const {
+    return resultNulls();
+  }
+
   const int32_t* rawIndices() const {
     return reinterpret_cast<const int32_t*>(rawValues_);
   }
@@ -6032,6 +6036,178 @@ TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitDeltaVisitor) {
   const auto actual = getValues<int64_t>(reader);
   for (size_t index = 0; index < rowNumbers.size(); ++index) {
     EXPECT_EQ(actual[index], data[rowNumbers[index]]);
+  }
+}
+
+// Seeded random readWithVisitor pass over SubIntSplit under random decode
+// switches: random streams of structured and unstructured values, read dense
+// with AlwaysTrue or sparse with a BigintRange drawn from the stream's own
+// values, each read checked value by value against the rows that pass. A
+// third of the streams carry nulls and are read through a NullableEncoding,
+// whose SubIntSplit child the factory builds with the default switches.
+TEST_P(ReadWithVisitorTest, encodingLevelSubIntSplitVisitorFuzz) {
+  constexpr uint32_t kSeeds[] = {42, 7, 1'234};
+  constexpr int kIterations{40};
+  for (const auto seed : kSeeds) {
+    std::mt19937 rng(seed);
+    for (int iteration = 0; iteration < kIterations; ++iteration) {
+      const vector_size_t numRows = 1 + folly::Random::rand32(6'000, rng);
+      std::vector<int64_t> data(numRows);
+      const auto base = static_cast<int64_t>(folly::Random::rand64(rng) >> 2);
+      const int shape = folly::Random::rand32(4, rng);
+      for (vector_size_t row = 0; row < numRows; ++row) {
+        switch (shape) {
+          case 0:
+            data[row] = static_cast<int64_t>(folly::Random::rand64(rng));
+            break;
+          case 1:
+            data[row] = base + row;
+            break;
+          case 2:
+            data[row] = base + (folly::Random::rand32(rng) & 0xFFFF);
+            break;
+          default:
+            data[row] = (base & ~int64_t{0xFFF}) |
+                static_cast<int64_t>(folly::Random::rand32(16, rng) << 8) |
+                (row & 0xFF);
+            break;
+        }
+      }
+      const bool nullable = folly::Random::oneIn(3, rng);
+      std::vector<bool> isNull(numRows, false);
+      std::vector<int64_t> nonNullValues;
+      Vector<bool> notNulls(pool(), numRows, true);
+      for (vector_size_t row = 0; row < numRows; ++row) {
+        isNull[row] = nullable && folly::Random::oneIn(5, rng);
+        notNulls[row] = !isNull[row];
+        if (!isNull[row]) {
+          nonNullValues.push_back(data[row]);
+        }
+      }
+      if (nonNullValues.empty()) {
+        isNull[0] = false;
+        notNulls[0] = true;
+        nonNullValues.push_back(data[0]);
+      }
+      auto tuning = subintsplit::kDefaultTuningConfig;
+      if (!nullable) {
+        tuning.foldConstantSections = folly::Random::oneIn(2, rng);
+        tuning.passThrough = folly::Random::oneIn(2, rng);
+        tuning.visitorBlockBuffer = folly::Random::oneIn(2, rng);
+        constexpr uint32_t kChunkSizes[] = {1, 64, 4'096};
+        tuning.decodeChunkSize = kChunkSizes[folly::Random::rand32(3, rng)];
+      }
+      const bool dense = folly::Random::oneIn(2, rng);
+      const bool nullAllowed = folly::Random::oneIn(2, rng);
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "seed=" << seed << " iteration=" << iteration << " rows="
+          << numRows << " shape=" << shape << " nullable=" << nullable
+          << " dense=" << dense << " nullAllowed=" << nullAllowed
+          << " fold=" << tuning.foldConstantSections
+          << " passThrough=" << tuning.passThrough
+          << " visitorBlockBuffer=" << tuning.visitorBlockBuffer
+          << " decodeChunkSize=" << tuning.decodeChunkSize);
+
+      auto input = makeRowVector({makeFlatVector<int64_t>(
+          numRows, [&](auto row) { return data[row]; })});
+      const auto rowType = asRowType(input->type());
+      auto context = makeFileContext(input);
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*rowType);
+      auto root = buildReader(*context, rowType, *scanSpec);
+      auto* structReader =
+          dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+              root.get());
+      auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+          dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+      ASSERT_NE(reader, nullptr);
+
+      std::vector<vector_size_t> rowNumbers;
+      for (vector_size_t row = 0; row < numRows; ++row) {
+        if (dense || folly::Random::oneIn(3, rng)) {
+          rowNumbers.push_back(row);
+        }
+      }
+      if (rowNumbers.empty()) {
+        rowNumbers.push_back(numRows - 1);
+      }
+      const RowSet rows(rowNumbers.data(), rowNumbers.size());
+      reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+      Buffer buffer(*pool());
+      std::unique_ptr<Encoding> encoding;
+      if (nullable) {
+        const std::span<const uint64_t> values(
+            reinterpret_cast<const uint64_t*>(nonNullValues.data()),
+            nonNullValues.size());
+        EncodingSelection<uint64_t> selection{
+            {.encodingType = EncodingType::SubIntSplit},
+            Statistics<uint64_t>::create(values),
+            std::make_unique<NonRecursiveSubIntSplitPolicy<int64_t>>()};
+        const auto encodedValues = SubIntSplitEncoding<int64_t>::encode(
+            selection, values, buffer, Encoding::Options{}, tuning);
+        const auto encodedNulls = EncodingFactory::encode<bool>(
+            std::make_unique<TrivialNestedPolicy<bool>>(), notNulls, buffer);
+        const auto serialized = NullableEncoding<int64_t>::encodeNullable(
+            numRows, encodedValues, encodedNulls, buffer);
+        encoding = EncodingFactory().create(*pool(), serialized, nullptr);
+        ASSERT_EQ(encoding->encodingType(), EncodingType::Nullable);
+      } else {
+        encoding = makeSubIntSplitEncoding<int64_t>(
+            data, buffer, *pool(), Encoding::Options{}, tuning);
+      }
+      dwio::common::ExtractToReader extractValues(reader);
+      std::vector<vector_size_t> expectedRows;
+      if (dense) {
+        common::AlwaysTrue filter;
+        DecoderVisitor<
+            int64_t,
+            common::AlwaysTrue,
+            dwio::common::ExtractToReader,
+            true>
+            visitor(filter, reader, rows, extractValues);
+        auto params = makeReadWithVisitorParams(visitor, rows, pool());
+        nimble::callReadWithVisitor(*encoding, visitor, params);
+        expectedRows = rowNumbers;
+      } else {
+        auto lower =
+            nonNullValues[folly::Random::rand32(nonNullValues.size(), rng)];
+        auto upper =
+            nonNullValues[folly::Random::rand32(nonNullValues.size(), rng)];
+        if (lower > upper) {
+          std::swap(lower, upper);
+        }
+        common::BigintRange filter(lower, upper, nullAllowed);
+        DecoderVisitor<
+            int64_t,
+            common::BigintRange,
+            dwio::common::ExtractToReader,
+            false>
+            visitor(filter, reader, rows, extractValues);
+        auto params = makeReadWithVisitorParams(visitor, rows, pool());
+        nimble::callReadWithVisitor(*encoding, visitor, params);
+        for (const auto row : rowNumbers) {
+          if (isNull[row] ? nullAllowed
+                          : data[row] >= lower && data[row] <= upper) {
+            expectedRows.push_back(row);
+          }
+        }
+      }
+
+      ASSERT_EQ(reader->numValues(), expectedRows.size());
+      const auto actual = getValues<int64_t>(reader);
+      const auto& resultNulls = reader->resultNullsForTest();
+      for (size_t index = 0; index < expectedRows.size(); ++index) {
+        const auto row = expectedRows[index];
+        const bool actualNull = resultNulls &&
+            velox::bits::isBitNull(resultNulls->template as<uint64_t>(), index);
+        ASSERT_EQ(actualNull, isNull[row]) << "value " << index;
+        if (!isNull[row]) {
+          ASSERT_EQ(actual[index], data[row]) << "value " << index;
+        }
+      }
+    }
   }
 }
 

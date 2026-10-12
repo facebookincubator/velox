@@ -30,6 +30,11 @@
 
 namespace facebook::nimble::subintsplit {
 
+/// Mask selecting the low `width` bits.
+constexpr uint64_t widthMask(int width) noexcept {
+  return width >= 64 ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
+}
+
 /// Half-open-free, inclusive range of bit positions within a value, shared by
 /// the planner (which chooses ranges) and the codec (which stores them).
 struct BitSection {
@@ -46,7 +51,7 @@ struct BitSection {
   /// Mask selecting `width()` low bits, applied after shifting right by
   /// `bitStart`.
   uint64_t mask() const noexcept {
-    return width() >= 64 ? ~uint64_t{0} : ((uint64_t{1} << width()) - 1);
+    return widthMask(width());
   }
 };
 
@@ -102,8 +107,13 @@ struct SectionPlan {
   /// nested encoding selection makes the final choice at encode time.
   EncodingType encoding{EncodingType::Trivial};
 
-  /// Estimated total bits to store this section across the full stream.
+  /// Total bits to store this section, weighted by decode cost if requested.
   double cost{0.0};
+  /// Estimated size alone, in bits; equals `cost` unless decode was weighted.
+  double sizeCostBits{0.0};
+  /// Estimated decode cost in nanoseconds per row, reported regardless of
+  /// whether decode was weighted into `cost`.
+  double decodeNanosPerRow{0.0};
 
   int width() const noexcept {
     return bitEnd - bitStart + 1;
