@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/table/table.hpp>
@@ -35,6 +36,24 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 /// Returns true if every leaf type in \p type can be represented in cuDF.
 bool isTypeSupportedByCudf(const TypePtr& type);
+
+/// Returns true if 'type' or any type nested in it provides a custom
+/// comparison. cuDF sees only the physical representation of such values, so
+/// hashing, equality and ordering on the GPU diverge from Velox semantics.
+/// TIMESTAMP WITH TIME ZONE, for example, packs a zone key into the low bits
+/// of the BIGINT cuDF sees, while Velox compares the UTC millis alone.
+/// Operators that hash, compare, sort or partition by such a type must stay on
+/// the CPU.
+bool containsCustomComparison(const TypePtr& type);
+
+/// Returns true if 'expression' or any of its sub-expressions has a type that
+/// contains a custom comparison. Covers join conditions, whose compared
+/// columns are not exposed as keys.
+bool containsCustomComparison(const core::TypedExprPtr& expression);
+
+/// Returns true if any of 'keys' has a type that contains a custom comparison.
+bool containsCustomComparison(
+    const std::vector<core::FieldAccessTypedExprPtr>& keys);
 
 namespace with_arrow {
 
