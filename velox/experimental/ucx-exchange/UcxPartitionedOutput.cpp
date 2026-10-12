@@ -199,8 +199,7 @@ void UcxPartitionedOutput::flushPending() {
       cudf::detail::join_streams(inputStreams, stream);
       mergedTable = cudf::concatenate(views, stream, get_temp_mr());
 
-      orderCudfVectorDeallocationsAfterStream(
-          pendingInputs_, inputStreams, stream);
+      orderCudfVectorDeallocationsAfterStream(pendingInputs_, stream);
 
       // Free input GPU memory before partitioning (peak = 2x -> 1x).
       pendingInputs_.clear();

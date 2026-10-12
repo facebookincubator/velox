@@ -37,33 +37,6 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-int getNumCudaDevices() {
-  int numDevices{};
-  CUDF_CUDA_TRY(cudaGetDeviceCount(&numDevices));
-  return numDevices;
-}
-
-int getCurrentCudaDevice() {
-  int device{};
-  CUDF_CUDA_TRY(cudaGetDevice(&device));
-  return device;
-}
-
-CudaEvent& eventForThread() {
-  // Intentionally leak per-thread, per-device events to avoid CUDA calls from
-  // thread-local destructors after CUDA context teardown.
-  thread_local static std::vector<CudaEvent*> events(getNumCudaDevices());
-  auto const device = getCurrentCudaDevice();
-  VELOX_CHECK_GE(device, 0);
-  auto const deviceIndex = static_cast<size_t>(device);
-  VELOX_CHECK_LT(deviceIndex, events.size());
-
-  if (events[deviceIndex] == nullptr) {
-    events[deviceIndex] = new CudaEvent(cudaEventDisableTiming);
-  }
-  return *events[deviceIndex];
-}
-
 size_t maxBatchRows() {
   const auto& cudfConfig = CudfConfig::getInstance();
   if (cudfConfig.batchSizeMaxThreshold) {
@@ -151,7 +124,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   // the wrong stream.
   auto output = cudf::concatenate(tableViews, stream, mr);
 
-  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
+  orderCudfVectorDeallocationsAfterStream(tables, stream);
   // Input tables are deallocated here when 'tables' goes out of scope.
   return output;
 }
@@ -200,11 +173,11 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     cudf::detail::join_streams(inputStreams, stream);
     outputTables.push_back(cudf::concatenate(tableViews, stream, mr));
 
-    // Rebind deallocation to the output stream where possible, then release
-    // this group's inputs. Each completed output replaces its source inputs,
-    // so peak memory is approximately the original input footprint plus the
-    // largest output batch instead of the full input and output footprints.
-    orderCudfVectorDeallocationsAfterStream(batch, inputStreams, stream);
+    // Rebind deallocation to the output stream, then release this group's
+    // inputs. Each completed output replaces its source inputs, so peak memory
+    // is approximately the original input footprint plus the largest output
+    // batch instead of the full input and output footprints.
+    orderCudfVectorDeallocationsAfterStream(batch, stream);
     batch.clear();
 
     size_t retainedInputBatches =
@@ -325,17 +298,15 @@ std::string stripFunctionPrefix(
 
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
-    std::span<const cuda::stream_ref> inputStreams,
     cuda::stream_ref stream) {
+  // Rebind every input before checking, so a released one does not leave the
+  // rest freeing on their producer streams while 'stream' may still read them.
   bool allRebound = true;
   for (const auto& vector : vectors) {
     VELOX_CHECK_NOT_NULL(vector);
     allRebound &= vector->rebindStream(stream);
   }
-
-  if (!allRebound) {
-    streamsWaitForStream(eventForThread(), inputStreams, stream);
-  }
+  VELOX_CHECK(allRebound, "Cannot rebind a released CudfVector");
 }
 
 std::unique_ptr<cudf::column> makeAllNullColumn(

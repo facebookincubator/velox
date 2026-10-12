@@ -203,12 +203,11 @@ void streamsWaitForStream(
  * @brief Orders CudfVector deallocations after work on a target stream.
  *
  * Rebinds each input's device buffers to @p stream so stream-ordered memory
- * resources free the inputs after prior work on that stream. Falls back to an
- * event wait on @p inputStreams when an input cannot be rebound.
+ * resources free the inputs after prior work on that stream. Inputs must not
+ * have been passed to CudfVector::release().
  */
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
-    std::span<const cuda::stream_ref> inputStreams,
     cuda::stream_ref stream);
 
 /// Creates an all-null cuDF column of \p numRows for the given Velox \p type.

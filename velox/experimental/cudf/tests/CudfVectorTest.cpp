@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/contiguous_split.hpp>
@@ -267,6 +269,41 @@ TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   vector.reset();
 
   EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
+}
+
+TEST_F(CudfVectorTest, orderDeallocationsRejectsReleasedInput) {
+  TestCudaStream allocationStream;
+  TestCudaStream targetStream;
+  RecordingAsyncDeviceResource resource;
+  auto mr = rmm::to_device_async_resource_ref_checked(&resource);
+
+  auto makeVector = [&]() {
+    auto table = makeTable(allocationStream.view(), mr);
+    return std::make_shared<CudfVector>(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        table->num_rows(),
+        std::move(table),
+        allocationStream.view());
+  };
+  auto released = makeVector();
+  auto retained = makeVector();
+  allocationStream.view().sync();
+  auto releasedTable = released->release();
+  resource.reset();
+
+  // The released input comes first, so the check must not skip rebinding the
+  // inputs after it.
+  std::vector<CudfVectorPtr> inputs{released, retained};
+  VELOX_ASSERT_THROW(
+      orderCudfVectorDeallocationsAfterStream(inputs, targetStream.view()),
+      "Cannot rebind a released CudfVector");
+
+  inputs.clear();
+  retained.reset();
+
+  EXPECT_GT(resource.deallocationCount(), 0);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
