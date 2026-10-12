@@ -114,7 +114,8 @@ class StripeGroup {
   /// otherwise returns 0. Stateless.
   uint32_t streamChecksum(uint32_t stripeIndex, uint32_t streamId) const;
 
-  /// Whether this group carries per-stream checksums.
+  /// Whether this group carries a per-stream checksum array. Only legacy files
+  /// have them; current writers put checksums in stream trailers.
   bool hasStreamChecksums() const {
     return hasStreamChecksums_;
   }
@@ -124,9 +125,10 @@ class StripeGroup {
   struct StreamMetadata {
     uint32_t offset{0};
     uint32_t size{0};
-    /// Checksum of the stream's on-disk bytes. Zero when the group carries no
-    /// checksums, so callers must gate on hasStreamChecksums() rather than on
-    /// this being non-zero.
+    /// Checksum of the stream's on-disk bytes from the group's checksum array,
+    /// which only legacy files carry. Zero otherwise, including in files that
+    /// keep checksums in stream trailers, so callers must gate on
+    /// hasStreamChecksums() rather than on this being non-zero.
     uint32_t checksum{0};
   };
 

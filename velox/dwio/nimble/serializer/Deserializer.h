@@ -276,6 +276,10 @@ class Deserializer {
       uint32_t startRow,
       bool requiredBarrier) const;
 
+  // Returns whether FlatMap or Hybrid FlatMap value-stream presence needs
+  // per-batch tracking.
+  bool shouldTrackMapValueStreams() const;
+
   // Appends a decoded run to the accumulated output vector.
   void appendToOutput(velox::VectorPtr&& decoded, velox::VectorPtr& output)
       const;
@@ -332,9 +336,11 @@ class Deserializer {
   // disabled.
   std::vector<bool> selectedStreamOffsetFlags_;
 
-  // --- FlatMap omitted in-map stream reconstruction ---
+  // --- Omitted FlatMap/Hybrid FlatMap stream state ---
   // Maps FlatMap in-map stream offsets to their child value types.
-  folly::F14FastMap<uint32_t, const Type*> inMapChildTypes_;
+  folly::F14FastMap<uint32_t, const Type*> inMapValueTypes_;
+  // Maps Hybrid FlatMap group in-map offsets to their value subtrees.
+  folly::F14FastMap<uint32_t, const Type*> hybridFlatMapGroupValueTypes_;
 
   static constexpr uint32_t kInvalidInMapOffset =
       std::numeric_limits<uint32_t>::max();
@@ -343,11 +349,18 @@ class Deserializer {
   // stream offset. Entries that are not FlatMap child presence streams use
   // kInvalidInMapOffset.
   std::vector<uint32_t> valueOffsetToInMap_;
+  // Reverse lookup from a Hybrid FlatMap value-subtree stream offset to its
+  // group's in-map stream offset.
+  std::vector<uint32_t> hybridValueOffsetToInMap_;
 
   // Per-batch stream presence, indexed by stream offset.
   mutable std::vector<bool> streamPresentFlags_;
-  // Stream offsets present in the current batch. Used to find omitted FlatMap
-  // in-map streams.
+  // Per-batch OR of value-subtree stream presence, indexed by group in-map
+  // offset. streamPresentFlags_ tracks individual streams, so it cannot answer
+  // this group-level query without rescanning each subtree.
+  mutable std::vector<bool> hybridFlatMapValueStreamsPresent_;
+  // Stream offsets present in the current batch. Used to reconstruct omitted
+  // FlatMap in-map streams and record Hybrid FlatMap value-stream presence.
   mutable std::vector<uint32_t> presentStreamOffsets_;
 };
 

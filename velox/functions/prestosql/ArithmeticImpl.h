@@ -23,8 +23,14 @@
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
-#include "velox/type/CppToType.h"
 #include "velox/type/FloatingPointUtil.h"
+
+// CppToType is only reached from abs()'s overflow message. It pulls in the
+// runtime type system, which nvcc cannot parse, so device translation units
+// build the message without the type name instead.
+#ifndef __CUDACC__
+#include "velox/type/CppToType.h"
+#endif
 
 namespace facebook::velox::functions {
 
@@ -38,7 +44,7 @@ namespace facebook::velox::functions {
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-FOLLY_ALWAYS_INLINE TNum
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum
 round(const TNum& number, const TDecimals& decimals = 0) {
   static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
 
@@ -164,8 +170,12 @@ template <typename T>
 VELOX_GPU_COMPATIBLE T abs(const T& arg) {
   if constexpr (std::is_integral_v<T>) {
     if (arg == std::numeric_limits<T>::min()) {
+#ifdef __CUDACC__
+      VELOX_USER_FAIL("Value {} is out of range for abs()", arg);
+#else
       VELOX_USER_FAIL(
           "Value {} is out of range for abs({})", arg, CppToType<T>::name);
+#endif
     }
   }
   T results = std::abs(arg);
@@ -184,7 +194,9 @@ VELOX_GPU_COMPATIBLE T ceil(const T& arg) {
   return results;
 }
 
-FOLLY_ALWAYS_INLINE double truncate(double number, int32_t decimals) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double truncate(
+    double number,
+    int32_t decimals) {
   const bool decNegative = (decimals < 0);
   const auto log10Size = DoubleUtil::kNumPowersOfTen; // 309
   if (decNegative && decimals <= -log10Size) {

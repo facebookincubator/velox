@@ -624,7 +624,7 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   EXPECT_EQ(slidingMap.lengthsDescriptor().offset(), 15);
   EXPECT_EQ(slidingMap.keys()->asScalar().scalarDescriptor().offset(), 16);
   EXPECT_EQ(slidingMap.values()->asScalar().scalarDescriptor().offset(), 17);
-  EXPECT_EQ(projectedMap.groupAt(0).keyDescriptor.offset(), 18);
+  EXPECT_EQ(projectedMap.groupAt(0).keyPresenceDescriptor.offset(), 18);
   EXPECT_EQ(projectedMap.groupAt(0).inMapDescriptor.offset(), 19);
   EXPECT_EQ(
       row.attributes(),
@@ -666,7 +666,7 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
       sourceSlidingMap.lengthsDescriptor().offset(),
       sourceSlidingMap.keys()->asScalar().scalarDescriptor().offset(),
       sourceSlidingMap.values()->asScalar().scalarDescriptor().offset(),
-      sourceGroup.keyDescriptor.offset(),
+      sourceGroup.keyPresenceDescriptor.offset(),
       sourceGroup.inMapDescriptor.offset(),
   };
   EXPECT_EQ(projection.streamOffsets, expectedStreamOffsets);
@@ -720,6 +720,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   addGroup(0, {"1"});
   addGroup(1, {"2", "3"});
   addGroup(HybridFlatMap::kDefaultGroupId, {});
+  hybridMap->appendDefaultGroupKey("9");
   root->addChild("features", hybridMap);
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
   const auto& sourceRoot = schema->asRow();
@@ -750,7 +751,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
           sourceRoot.nullsDescriptor().offset(),
           sourceMap.nullsDescriptor().offset(),
           sourceGroup.valueType->asScalar().scalarDescriptor().offset(),
-          sourceGroup.keyDescriptor.offset(),
+          sourceGroup.keyPresenceDescriptor.offset(),
           sourceGroup.inMapDescriptor.offset()));
   EXPECT_THAT(
       projection.rowOrFlatMapNullStreams,
@@ -770,7 +771,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
       (std::vector<std::string>{"2", "3"}));
   EXPECT_TRUE(roundTrippedMap.attributes().empty());
 
-  // A key outside every configured group selects only Default's streams.
+  // A key recorded in Default selects only Default's streams.
   std::vector<Subfield> unconfigured;
   unconfigured.emplace_back("features[9]");
   const auto defaultProjection =
@@ -779,7 +780,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
       defaultProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(defaultMap.groupCount(), 1);
   EXPECT_EQ(defaultMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(defaultMap.groupAt(0).groupKeys.empty());
+  EXPECT_EQ(defaultMap.groupAt(0).groupKeys, (std::vector<std::string>{"9"}));
   const auto& sourceDefault = sourceMap.defaultGroup();
   EXPECT_THAT(
       defaultProjection.streamOffsets,
@@ -787,10 +788,10 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
           sourceRoot.nullsDescriptor().offset(),
           sourceMap.nullsDescriptor().offset(),
           sourceDefault.valueType->asScalar().scalarDescriptor().offset(),
-          sourceDefault.keyDescriptor.offset(),
+          sourceDefault.keyPresenceDescriptor.offset(),
           sourceDefault.inMapDescriptor.offset()));
 
-  // A configured key and an unconfigured one select group 1 and Default.
+  // A configured key and a key recorded in Default select group 1 and Default.
   std::vector<Subfield> mixed;
   mixed.emplace_back("features[2]");
   mixed.emplace_back("features[9]");
@@ -802,17 +803,17 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   EXPECT_EQ(
       mixedMap.groupAt(0).groupKeys, (std::vector<std::string>{"2", "3"}));
   EXPECT_EQ(mixedMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(mixedMap.groupAt(1).groupKeys.empty());
+  EXPECT_EQ(mixedMap.groupAt(1).groupKeys, (std::vector<std::string>{"9"}));
   EXPECT_THAT(
       mixedProjection.streamOffsets,
       ElementsAre(
           sourceRoot.nullsDescriptor().offset(),
           sourceMap.nullsDescriptor().offset(),
           sourceGroup.valueType->asScalar().scalarDescriptor().offset(),
-          sourceGroup.keyDescriptor.offset(),
+          sourceGroup.keyPresenceDescriptor.offset(),
           sourceGroup.inMapDescriptor.offset(),
           sourceDefault.valueType->asScalar().scalarDescriptor().offset(),
-          sourceDefault.keyDescriptor.offset(),
+          sourceDefault.keyPresenceDescriptor.offset(),
           sourceDefault.inMapDescriptor.offset()));
   EXPECT_THAT(
       mixedProjection.rowOrFlatMapNullStreams,
@@ -836,7 +837,105 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   EXPECT_EQ(reorderedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
   EXPECT_EQ(
       reorderedMap.groupAt(1).groupKeys, (std::vector<std::string>{"2", "3"}));
-  EXPECT_TRUE(reorderedMap.groupAt(2).groupKeys.empty());
+  EXPECT_EQ(reorderedMap.groupAt(2).groupKeys, (std::vector<std::string>{"9"}));
+}
+
+TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  hybridMap->addGroup(
+      0, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Double));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Double));
+  hybridMap->appendDefaultGroupKey("9");
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto& sourceRoot = schema->asRow();
+  const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
+
+  // A key in no group keeps the column as a keyless Default group whose
+  // streams map to no source stream.
+  {
+    const auto projection =
+        buildProjectedNimbleType(schema.get(), makeSubfields({"features[99]"}));
+    const auto& projectedMap =
+        projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+    ASSERT_EQ(projectedMap.groupCount(), 1);
+    EXPECT_EQ(projectedMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_THAT(projectedMap.groupAt(0).groupKeys, IsEmpty());
+    EXPECT_EQ(
+        projectedMap.valueType().asScalar().scalarDescriptor().scalarKind(),
+        ScalarKind::Double);
+    EXPECT_THAT(
+        projection.streamOffsets,
+        ElementsAre(
+            sourceRoot.nullsDescriptor().offset(),
+            sourceMap.nullsDescriptor().offset(),
+            UINT32_MAX,
+            UINT32_MAX,
+            UINT32_MAX));
+    EXPECT_THAT(
+        projection.rowOrFlatMapNullStreams,
+        ElementsAre(true, true, false, true, false));
+
+    SchemaSerializer serializer;
+    const auto roundTripped = SchemaDeserializer::deserialize(
+        std::string(serializer.serialize(*projection.nimbleType)));
+    const auto& roundTrippedMap =
+        roundTripped->asRow().childAt(0)->asHybridFlatMap();
+    ASSERT_EQ(roundTrippedMap.groupCount(), 1);
+    EXPECT_EQ(
+        roundTrippedMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_THAT(roundTrippedMap.groupAt(0).groupKeys, IsEmpty());
+  }
+
+  // An absent key next to a configured key adds no group.
+  {
+    const auto projection = buildProjectedNimbleType(
+        schema.get(), makeSubfields({"features[1]", "features[99]"}));
+    const auto& projectedMap =
+        projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+    ASSERT_EQ(projectedMap.groupCount(), 1);
+    EXPECT_EQ(projectedMap.groupAt(0).groupId, 0);
+    const auto& sourceGroup = sourceMap.groupAt(0);
+    EXPECT_THAT(
+        projection.streamOffsets,
+        ElementsAre(
+            sourceRoot.nullsDescriptor().offset(),
+            sourceMap.nullsDescriptor().offset(),
+            sourceGroup.valueType->asScalar().scalarDescriptor().offset(),
+            sourceGroup.keyPresenceDescriptor.offset(),
+            sourceGroup.inMapDescriptor.offset()));
+  }
+
+  // Projecting configured key 1 drops Default. Projecting that schema again
+  // with an absent key still yields the keyless Default group.
+  {
+    const auto configured =
+        buildProjectedNimbleType(schema.get(), makeSubfields({"features[1]"}));
+    const auto projection = buildProjectedNimbleType(
+        configured.nimbleType.get(), makeSubfields({"features[99]"}));
+    const auto& projectedMap =
+        projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
+    ASSERT_EQ(projectedMap.groupCount(), 1);
+    EXPECT_EQ(projectedMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+    EXPECT_THAT(projectedMap.groupAt(0).groupKeys, IsEmpty());
+    const auto& configuredRoot = configured.nimbleType->asRow();
+    EXPECT_THAT(
+        projection.streamOffsets,
+        ElementsAre(
+            configuredRoot.nullsDescriptor().offset(),
+            configuredRoot.childAt(0)
+                ->asHybridFlatMap()
+                .nullsDescriptor()
+                .offset(),
+            UINT32_MAX,
+            UINT32_MAX,
+            UINT32_MAX));
+  }
 }
 
 // --- convertToNimbleType with projected subfields tests ---
@@ -1558,12 +1657,66 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
   EXPECT_EQ(
       projectedMap.groupAt(0).valueType->asScalar().scalarDescriptor().offset(),
       2);
-  EXPECT_EQ(projectedMap.groupAt(0).keyDescriptor.offset(), 3);
+  EXPECT_EQ(projectedMap.groupAt(0).keyPresenceDescriptor.offset(), 3);
   EXPECT_EQ(projectedMap.groupAt(0).inMapDescriptor.offset(), 4);
   EXPECT_EQ(projection.streamOffsets.size(), 6);
   EXPECT_EQ(
       projection.rowOrFlatMapNullStreams.size(),
       projection.streamOffsets.size());
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(2);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(0, {"configured"}, makeAllKindValueType(schemaBuilder));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(schemaBuilder));
+  root->addChild("features", features);
+  root->addChild(
+      "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  const auto projection = buildProjectedNimbleType(
+      schema.get(), makeSubfields({"features[\"absent\"]", "id"}));
+
+  // The keyless Default group needs one placeholder for each value stream, then
+  // one each for key presence and in-map. A wrong count would shift the
+  // following column onto another column's source stream.
+  constexpr size_t kNumValueStreams{16};
+  const auto& sourceRoot = schema->asRow();
+  std::vector<uint32_t> expectedStreamOffsets{
+      sourceRoot.nullsDescriptor().offset(),
+      sourceRoot.childAt(0)->asHybridFlatMap().nullsDescriptor().offset(),
+  };
+  expectedStreamOffsets.insert(
+      expectedStreamOffsets.end(), kNumValueStreams + 2, UINT32_MAX);
+  expectedStreamOffsets.push_back(
+      sourceRoot.childAt(1)->asScalar().scalarDescriptor().offset());
+  EXPECT_EQ(projection.streamOffsets, expectedStreamOffsets);
+  EXPECT_EQ(
+      projection.streamOffsets.size(),
+      schemaNodes(*projection.nimbleType).size());
+
+  std::vector<bool> expectedBarriers(expectedStreamOffsets.size(), false);
+  expectedBarriers[0] = true;
+  expectedBarriers[1] = true;
+  expectedBarriers[2] = true;
+  expectedBarriers[2 + kNumValueStreams] = true;
+  EXPECT_EQ(projection.rowOrFlatMapNullStreams, expectedBarriers);
+
+  const auto& projectedRoot = projection.nimbleType->asRow();
+  const auto& projectedMap = projectedRoot.childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(projectedMap.groupCount(), 1);
+  EXPECT_EQ(projectedMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_THAT(projectedMap.groupAt(0).groupKeys, IsEmpty());
+  EXPECT_EQ(
+      projectedMap.groupAt(0).inMapDescriptor.offset(),
+      2 + kNumValueStreams + 1);
+  EXPECT_EQ(
+      projectedRoot.childAt(1)->asScalar().scalarDescriptor().offset(),
+      expectedStreamOffsets.size() - 1);
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {

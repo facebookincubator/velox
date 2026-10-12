@@ -21,6 +21,7 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <cuda/buffer>
 #include <cuda/stream>
 
 #include <cstddef>
@@ -74,28 +75,20 @@ void packDecimalSumState(
     cuda::stream_ref stream);
 
 /**
- * Inverse of packDecimalSumState.
+ * Decodes each non-null row of a serialized decimal SUM state STRING column.
  *
- * @param offsetType INT32 or INT64; selects offset storage width via
- *        cudf::type_dispatcher.
- * @param offsetsView per-row byte offsets into chars.
- * @param chars packed payload buffer.
- * @param sumView output per-row DECIMAL128 sums.
- * @param countView output per-row counts.
- * @param numRows number of rows.
- * @param nullMask device null-mask bitmap; null rows are skipped to avoid
- *        out-of-bounds reads when Arrow compacts null payloads.  Pass nullptr
- *        when no mask is present.
+ * @param stateCol logical STRING view of packed states. Sliced views are
+ *        supported; their row offset is applied to payload and null-mask
+ *        access by cudf::column_device_view.
+ * @param sumView output per-row DECIMAL128 sums, sized to stateCol.
+ * @param countView output per-row counts, sized to stateCol.
  * @param stream CUDA stream for the launch.
+ * @return true if every non-null row contains a valid serialized state.
  */
-void unpackDecimalSumState(
-    cudf::type_id offsetType,
-    cudf::column_view offsetsView,
-    const uint8_t* chars,
+bool unpackDecimalSumState(
+    cudf::column_view stateCol,
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
-    cudf::size_type numRows,
-    cudf::bitmask_type const* nullMask,
     cuda::stream_ref stream);
 
 /**
@@ -128,7 +121,8 @@ void averageRoundDecimalSum(
  * @param mr memory resource for the returned mask.
  * @return {null mask buffer, null count}.
  */
-std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
+std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     cuda::stream_ref stream,

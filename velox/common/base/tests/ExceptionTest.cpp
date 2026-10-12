@@ -993,17 +993,17 @@ TEST(ExceptionTest, wrappedExceptionWithContext) {
 }
 
 TEST(ExceptionTest, properties) {
-  using facebook::velox::ExceptionContextProperties;
-  using facebook::velox::ExpressionExceptionProperties;
+  struct TestExceptionContextProperties final
+      : public ExceptionContextProperties {
+    std::string value;
+  };
 
   auto makeProperties =
       [](facebook::velox::VeloxException::Type /*exceptionType*/,
          void* untypedArg)
       -> std::shared_ptr<const ExceptionContextProperties> {
-    auto properties = std::make_shared<ExpressionExceptionProperties>();
-    properties->owner = static_cast<const char*>(untypedArg);
-    properties->functionName = "expr";
-    properties->expression = "expr(c0)";
+    auto properties = std::make_shared<TestExceptionContextProperties>();
+    properties->value = static_cast<const char*>(untypedArg);
     return properties;
   };
 
@@ -1022,13 +1022,11 @@ TEST(ExceptionTest, properties) {
     throw std::invalid_argument("boom");
   } catch (const std::exception& e) {
     VeloxUserError ve(std::current_exception(), e.what(), false);
-    auto properties =
-        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+    const auto properties =
+        std::dynamic_pointer_cast<const TestExceptionContextProperties>(
             ve.properties());
     ASSERT_NE(properties, nullptr);
-    EXPECT_EQ(properties->owner, "outer-team");
-    EXPECT_EQ(properties->functionName, "expr");
-    EXPECT_EQ(properties->expression, "expr(c0)");
+    EXPECT_EQ(properties->value, "outer-team");
   }
 
   // The inner-most context's properties win.
@@ -1036,10 +1034,8 @@ TEST(ExceptionTest, properties) {
       [](facebook::velox::VeloxException::Type /*exceptionType*/,
          void* /*untypedArg*/)
       -> std::shared_ptr<const ExceptionContextProperties> {
-    auto properties = std::make_shared<ExpressionExceptionProperties>();
-    properties->owner = "inner-team";
-    properties->functionName = "innerExpr";
-    properties->expression = "expr(c1)";
+    auto properties = std::make_shared<TestExceptionContextProperties>();
+    properties->value = "inner-team";
     return properties;
   };
   facebook::velox::ExceptionContextSetter innerContext(
@@ -1048,13 +1044,11 @@ TEST(ExceptionTest, properties) {
     throw std::invalid_argument("boom");
   } catch (const std::exception& e) {
     VeloxUserError ve(std::current_exception(), e.what(), false);
-    auto properties =
-        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+    const auto properties =
+        std::dynamic_pointer_cast<const TestExceptionContextProperties>(
             ve.properties());
     ASSERT_NE(properties, nullptr);
-    EXPECT_EQ(properties->owner, "inner-team");
-    EXPECT_EQ(properties->functionName, "innerExpr");
-    EXPECT_EQ(properties->expression, "expr(c1)");
+    EXPECT_EQ(properties->value, "inner-team");
   }
 }
 

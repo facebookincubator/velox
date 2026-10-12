@@ -175,13 +175,12 @@ uint32_t ChunkedStreamDecoder::next(
   return nonNullCount;
 }
 
-void ChunkedStreamDecoder::read(
-    const std::function<void*(uint32_t rowCount)>& /*prepareOutput*/,
-    std::function<void*()> /*getOutputNulls*/,
-    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
-  NIMBLE_UNSUPPORTED(
-      "ChunkedStreamDecoder does not support reading all rows because "
-      "remaining chunks cannot be counted without consuming the stream");
+uint32_t ChunkedStreamDecoder::remainingRows() {
+  if (remaining_ == 0 && !stream_->hasNext()) {
+    return 0;
+  }
+  ensureLoaded();
+  return remaining_;
 }
 
 uint32_t ChunkedStreamDecoder::read(

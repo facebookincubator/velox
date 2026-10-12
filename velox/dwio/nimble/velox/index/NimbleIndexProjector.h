@@ -415,10 +415,11 @@ class NimbleIndexProjector {
   // Builds serialized responses from the loaded stripe streams.
   SerializedResult processStripeStreams();
 
-  // Checks one loaded stream against the checksum its stripe group records,
-  // throwing when they differ. `enqueueIndex` is the index DataInput returned
-  // from enqueue(), which is also this stream's position in
-  // ctx_.expectedStreamChecksums.
+  // Checks one loaded stream against the checksum the file records for it,
+  // throwing when they differ. With stream trailers, `data` ends with the
+  // stream's trailer. Otherwise the checksum comes from the stream's stripe
+  // group, at the stream's position in ctx_.expectedStreamChecksums, which is
+  // `enqueueIndex`: the index DataInput returned from enqueue().
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Decodes loaded stripes into one request-major Velox vector.
@@ -426,6 +427,11 @@ class NimbleIndexProjector {
 
   // Validates the schema shared by both projection paths.
   void validateProjection() const;
+
+  // Builds streamChecksum_, and for files with stream trailers the trailer
+  // members, when `verifyStreamChecksums` is set and the file records
+  // per-stream checksums.
+  void initStreamChecksum(bool verifyStreamChecksums);
 
   // Resolves the request's stripes and loads their projected streams.
   void loadStripes(const Request& request, const Options& options);
@@ -519,7 +525,6 @@ class NimbleIndexProjector {
   const std::shared_ptr<TabletReader> tablet_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
   velox::memory::MemoryPool* const pool_;
-  std::unique_ptr<DataInput> dataInput_;
   const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
 
@@ -527,14 +532,20 @@ class NimbleIndexProjector {
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
-  // Verifies a stream read from storage against the checksum recorded in its
-  // stripe group. Built only when ReaderOptions::verifyStreamChecksums() is set
-  // and the file records per-stream checksums, so null means this projector
-  // does not verify. Stateful, so it relies on this class being
-  // single-threaded.
-  std::unique_ptr<Checksum> streamChecksum_;
   // Reused across stripes; its raw input format is fixed by the tablet.
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
+
+  std::unique_ptr<DataInput> dataInput_;
+  // Verifies a stream read from storage against the checksum the file records
+  // for it. Built only when ReaderOptions::verifyStreamChecksums() is set and
+  // the file records per-stream checksums, so null means this projector does
+  // not verify. Stateful, so it relies on this class being single-threaded.
+  std::unique_ptr<Checksum> streamChecksum_;
+  // When verifying a file whose checksums are in stream trailers: the stream
+  // trailer's size, read with every stream, and the checksum's offset within
+  // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
+  uint32_t streamTrailerSize_{0};
+  uint32_t streamTrailerChecksumOffset_{0};
   // Scratch allocations shared by successive EncodingView decodes. The
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
@@ -580,7 +591,8 @@ class NimbleIndexProjector {
     std::vector<std::optional<uint32_t>> dataInputIndices;
     // Expected checksum of each enqueued stream, indexed by the enqueue index
     // DataInput returns. Appended in enqueue order by loadStripes(). Empty
-    // when checksum verification is off.
+    // when checksum verification is off or reads checksums from stream
+    // trailers.
     std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;

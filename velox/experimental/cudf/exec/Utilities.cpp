@@ -24,6 +24,8 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime_api.h>
@@ -103,28 +105,21 @@ std::unique_ptr<cudf::table> concatenateTables(
   return cudf::concatenate(tableViews, stream, mr);
 }
 
-std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
+namespace {
+
+std::unique_ptr<cudf::table> makeEmptyTable(
+    const TypePtr& type,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
-  for (size_t i = 0; i < inputType->size(); ++i) {
-    if (auto const& childType = inputType->childAt(i);
-        childType->kind() == TypeKind::ROW) {
-      auto tbl = makeEmptyTable(childType);
-      auto structColumn = std::make_unique<cudf::column>(
-          cudf::data_type(cudf::type_id::STRUCT),
-          0,
-          rmm::device_buffer(),
-          rmm::device_buffer(),
-          0,
-          tbl->release());
-      emptyColumns.push_back(std::move(structColumn));
-    } else {
-      auto emptyColumn = cudf::make_empty_column(
-          cudf_velox::veloxToCudfDataType(inputType->childAt(i)));
-      emptyColumns.push_back(std::move(emptyColumn));
-    }
+  emptyColumns.reserve(type->size());
+  for (size_t i = 0; i < type->size(); ++i) {
+    emptyColumns.push_back(makeAllNullColumn(type->childAt(i), 0, stream, mr));
   }
   return std::make_unique<cudf::table>(std::move(emptyColumns));
 }
+
+} // namespace
 
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>&& tables,
@@ -133,7 +128,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
     rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
-    return makeEmptyTable(tableType);
+    return makeEmptyTable(tableType, stream, mr);
   }
 
   auto inputStreams = std::vector<cuda::stream_ref>();
@@ -169,7 +164,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   std::vector<std::unique_ptr<cudf::table>> concatTables;
   // Check for empty vector
   if (tables.size() == 0) {
-    concatTables.push_back(makeEmptyTable(tableType));
+    concatTables.push_back(makeEmptyTable(tableType, stream, mr));
     return concatTables;
   }
 
@@ -268,7 +263,7 @@ std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
             pool,
             tableType,
             checkedVectorSize(chunkRows),
-            makeEmptyTable(tableType),
+            makeEmptyTable(tableType, stream, mr),
             stream));
     remainingRows -= chunkRows;
   } while (remainingRows > 0);
@@ -340,6 +335,60 @@ void orderCudfVectorDeallocationsAfterStream(
 
   if (!allRebound) {
     streamsWaitForStream(eventForThread(), inputStreams, stream);
+  }
+}
+
+std::unique_ptr<cudf::column> makeAllNullColumn(
+    const TypePtr& type,
+    cudf::size_type numRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  switch (type->kind()) {
+    case TypeKind::ARRAY: {
+      // LIST: zeroed offsets (numRows + 1 zeros) + empty child + ALL_NULL mask.
+      cudf::numeric_scalar<int32_t> zeroScalar{0, true, stream, get_temp_mr()};
+      auto offsets =
+          cudf::make_column_from_scalar(zeroScalar, numRows + 1, stream, mr);
+      auto child = makeAllNullColumn(type->childAt(0), 0, stream, mr);
+      auto nullMask = cudf::create_null_mask(
+          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+      return cudf::make_lists_column(
+          numRows,
+          std::move(offsets),
+          std::move(child),
+          numRows,
+          std::move(nullMask));
+    }
+    case TypeKind::ROW: {
+      // STRUCT: recursively create all-null children + ALL_NULL mask.
+      std::vector<std::unique_ptr<cudf::column>> children;
+      children.reserve(type->size());
+      for (size_t i = 0; i < type->size(); ++i) {
+        children.push_back(
+            makeAllNullColumn(type->childAt(i), numRows, stream, mr));
+      }
+      auto nullMask = cudf::create_null_mask(
+          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+      return cudf::make_structs_column(
+          numRows,
+          std::move(children),
+          numRows,
+          std::move(nullMask),
+          stream,
+          mr);
+    }
+    default: {
+      // Flat types (including STRING): use the scalar approach.
+      auto cudfType = tryVeloxToCudfDataType(type);
+      if (!cudfType) {
+        VELOX_NYI(
+            "All-null column creation is not implemented for type {}",
+            type->toString());
+      }
+      auto nullScalar = cudf::make_default_constructed_scalar(
+          *cudfType, stream, get_temp_mr());
+      return cudf::make_column_from_scalar(*nullScalar, numRows, stream, mr);
+    }
   }
 }
 

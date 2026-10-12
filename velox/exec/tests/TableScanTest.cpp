@@ -19,6 +19,7 @@
 #include <fmt/ranges.h>
 #include <folly/OperationCancelled.h>
 #include <folly/ScopeGuard.h>
+#include <folly/Synchronized.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
@@ -7321,9 +7322,11 @@ TEST_F(TableScanTest, scanBatchCallback) {
   uint64_t callbackCount{0};
   std::string receivedTableName;
   std::string receivedDbName;
+  std::string receivedPlanNodeId;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
     totalRows += event.numRows;
+    receivedPlanNodeId = std::string(event.planNodeId);
     if (const auto* fileEvent =
             dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event)) {
       receivedTableName = std::string(fileEvent->tableName);
@@ -7340,12 +7343,14 @@ TEST_F(TableScanTest, scanBatchCallback) {
       /*indexColumns=*/std::vector<std::string>{},
       /*storageParameters=*/std::unordered_map<std::string, std::string>{},
       "scan_callback_db");
+  core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder(pool_.get())
                   .startTableScan()
                   .outputType(rowType_)
                   .tableHandle(tableHandle)
                   .assignments(allRegularColumns(rowType_))
                   .endTableScan()
+                  .captureScanNodeId(scanNodeId)
                   .planNode();
   auto task = AssertQueryBuilder(plan)
                   .splits(makeHiveConnectorSplits({filePath}))
@@ -7356,6 +7361,54 @@ TEST_F(TableScanTest, scanBatchCallback) {
   EXPECT_GT(callbackCount, 0);
   EXPECT_EQ(receivedTableName, "scan_callback_table");
   EXPECT_EQ(receivedDbName, "scan_callback_db");
+  EXPECT_EQ(receivedPlanNodeId, scanNodeId);
+}
+
+TEST_F(TableScanTest, scanBatchCallbackDistinguishesScans) {
+  // Different row counts, so a swapped mapping fails rather than passing on
+  // symmetry.
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), makeVectors(1, 1'000));
+  writeToFile(secondFile->getPath(), makeVectors(2, 1'000));
+
+  // Each scan is its own pipeline, so the callback fires concurrently from
+  // different driver threads.
+  folly::Synchronized<std::map<std::string, uint64_t>> rowsByPlanNodeId;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    (*rowsByPlanNodeId.wlock())[std::string(event.planNodeId)] += event.numRows;
+  });
+
+  // Two scans of the same schema, so every field of the event except the plan
+  // node id is identical between them.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId firstScanId;
+  core::PlanNodeId secondScanId;
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .localPartition(
+                      {},
+                      {PlanBuilder(planNodeIdGenerator, pool_.get())
+                           .tableScan(rowType_)
+                           .captureScanNodeId(firstScanId)
+                           .planNode(),
+                       PlanBuilder(planNodeIdGenerator, pool_.get())
+                           .tableScan(rowType_)
+                           .captureScanNodeId(secondScanId)
+                           .planNode()})
+                  .planNode();
+
+  AssertQueryBuilder(plan)
+      .split(firstScanId, makeHiveConnectorSplit(firstFile->getPath()))
+      .split(secondScanId, makeHiveConnectorSplit(secondFile->getPath()))
+      .queryCtx(queryCtx)
+      .copyResults(pool_.get());
+
+  ASSERT_NE(firstScanId, secondScanId);
+  const auto rows = rowsByPlanNodeId.copy();
+  ASSERT_EQ(rows.size(), 2);
+  EXPECT_EQ(rows.at(firstScanId), 1'000);
+  EXPECT_EQ(rows.at(secondScanId), 2'000);
 }
 
 TEST_F(TableScanTest, scanBatchCallbackPartitionKeys) {

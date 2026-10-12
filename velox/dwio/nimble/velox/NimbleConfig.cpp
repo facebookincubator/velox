@@ -421,6 +421,11 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.stats.enable_vectorized",
     true);
 
+/* static */ Config::Entry<uint32_t>
+    Config::VECTORIZED_STATS_STRING_LENGTH_LIMIT(
+        "nimble.vectorized.stats.string_length_limit",
+        64);
+
 /* static */ Config::Entry<bool> Config::ENABLE_ENCODING_SELECTION_CACHE(
     "nimble.encoding.enable_selection_cache",
     false);

@@ -1182,6 +1182,35 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
+namespace {
+
+bool supportsImplicitNullElse(const TypePtr& type) {
+  // Interval constant scalars differ from the cuDF storage type used for the
+  // implicit null ELSE.
+  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
+    return false;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
@@ -2100,7 +2129,12 @@ class RowConstructorFunction : public CudfFunction {
 
     VELOX_CHECK_EQ(nextInputColumnIndex, inputColumns.size());
     return cudf::make_structs_column(
-        outputSize, std::move(children), 0, rmm::device_buffer{}, stream, mr);
+        outputSize,
+        std::move(children),
+        0,
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        stream,
+        mr);
   }
 
  private:
@@ -2608,7 +2642,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       /*overwrite=*/true,
       [](const core::TypedExprPtr& expr) {
         return !expr->inputs()[0]->isConstantKind() &&
-            canMakeCudfDefaultScalar(expr->type());
+            supportsImplicitNullElse(expr->type());
       });
   registerCudfFunctions(
       {"switch", "if"},
@@ -3010,7 +3044,7 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
 /// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
 /// selects `(valid(i) and condition[i]) ? then : else`, so a null condition row
 /// belongs to the else branch alone.
-rmm::device_buffer makeBranchRowMask(
+cuda::device_buffer<std::byte> makeBranchRowMask(
     const cudf::column_view& condition,
     bool takeWhenTrue,
     cuda::stream_ref stream,
@@ -3040,7 +3074,7 @@ rmm::device_buffer makeBranchRowMask(
 /// result can itself be a view (e.g. a bare field reference).
 struct MaskedInputs {
   std::vector<cudf::column_view> views;
-  std::vector<rmm::device_buffer> masks;
+  std::vector<cuda::device_buffer<std::byte>> masks;
 };
 
 MaskedInputs maskInputRows(
@@ -3086,7 +3120,7 @@ MaskedInputs maskInputRows(
         input.type(),
         input.size(),
         input.head<void>(),
-        static_cast<const cudf::bitmask_type*>(masked.masks.back().data()),
+        reinterpret_cast<const cudf::bitmask_type*>(masked.masks.back().data()),
         nullCount,
         0,
         children);
@@ -3145,7 +3179,7 @@ ColumnOrView FunctionExpression::eval(
 
     // Borrowed by the masked views until after function_->eval.
     std::vector<MaskedInputs> branchInputs;
-    std::vector<rmm::device_buffer> branchRowMasks;
+    std::vector<cuda::device_buffer<std::byte>> branchRowMasks;
 
     // Operand 0 is the condition, 1 and 2 the branches. Not positionally
     // aligned with subexpressions_, which omits constant branches.
@@ -3176,7 +3210,7 @@ ColumnOrView FunctionExpression::eval(
             mr));
         branchInputs.push_back(maskInputRows(
             inputColumnViews,
-            static_cast<const cudf::bitmask_type*>(
+            reinterpret_cast<const cudf::bitmask_type*>(
                 branchRowMasks.back().data()),
             stream,
             mr));
@@ -3234,9 +3268,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    auto src = cudf_velox::veloxToCudfDataType(srcType);
-    auto dst = cudf_velox::veloxToCudfDataType(dstType);
-    return cudf::is_supported_cast(src, dst);
+    auto src = cudf_velox::tryVeloxToCudfDataType(srcType);
+    auto dst = cudf_velox::tryVeloxToCudfDataType(dstType);
+    return src && dst && cudf::is_supported_cast(*src, *dst);
   }
 
   auto& registry = getCudfFunctionRegistry();
