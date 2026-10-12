@@ -34,6 +34,7 @@ add_executable(
   SpillConfigTest.cpp
   SplitBlockBloomFilterTest.cpp
   StatsReporterTest.cpp
+  StatusIntegrationTest.cpp
   StatusTest.cpp
   SuccinctPrinterTest.cpp
   TrackedExecutorTest.cpp

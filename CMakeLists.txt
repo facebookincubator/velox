@@ -77,6 +77,7 @@ option(
   "Enable Velox tests. This will enable all other build options automatically."
   ON
 )
+option(VELOX_BUILD_STATUS_TEST "Build standalone status tests without the full test suite." OFF)
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
@@ -842,7 +843,7 @@ find_package(double-conversion 3.1.5 REQUIRED)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 
-if(NOT VELOX_DISABLE_GOOGLETEST)
+if(NOT VELOX_DISABLE_GOOGLETEST OR VELOX_BUILD_STATUS_TEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR "${gtest_SOURCE_DIR}/include" PARENT_SCOPE)
@@ -851,7 +852,7 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
-if(VELOX_ENABLE_PRESTO_FUNCTIONS)
+if(NOT WIN32 OR VELOX_ENABLE_PRESTO_FUNCTIONS)
   velox_set_source(stemmer)
   velox_resolve_dependency(stemmer)
 endif()
@@ -859,6 +860,8 @@ endif()
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()
+elseif(VELOX_BUILD_STATUS_TEST)
+  enable_testing()
 endif()
 
 include_directories(.)
