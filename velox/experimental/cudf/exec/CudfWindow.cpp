@@ -1136,7 +1136,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
           : sortedView.column(*inputColIdx);
       if (baseName == "sum" &&
           func.functionCall->inputs()[0]->type()->isDecimal()) {
-        inputCol = castDecimal64InputToDecimal128(
+        inputCol = castDecimalInputToDecimal128(
             inputCol, decimalSumInputOwners[funcIndex], stream_);
       }
       const bool isFullPartition =
