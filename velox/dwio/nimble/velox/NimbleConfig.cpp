@@ -434,6 +434,15 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "feature.ordering.override",
     "");
 
+/* static */ Config::Entry<const std::vector<uint32_t>>
+    Config::COLUMN_ORDERING_OVERRIDE(
+        "column.ordering.override",
+        {},
+        [](const std::vector<uint32_t>& val) { return folly::join(",", val); },
+        [](const std::string& /* key */, const std::string& val) {
+          return parseVector<uint32_t>(val);
+        });
+
 // Defaults match the corresponding WriterOptions fields, so an absent key
 // leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
 // exception: WriterOptions holds an optional and the writer substitutes its own
