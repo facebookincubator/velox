@@ -391,11 +391,17 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
     TypePtr const& outputType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
   if (inputCol.type().id() == cudf::type_id::DECIMAL64) {
-    return cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr).sum;
+    auto result = cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr).sum;
+    VELOX_CHECK(
+        result->type() == cudfOutType,
+        "Direct decimal sum output type {} does not match declared output type {}",
+        cudf::type_to_name(result->type()),
+        cudf::type_to_name(cudfOutType));
+    return result;
   }
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
   auto const resultScalar =
       cudf::reduce(inputCol, *sumAgg, cudfOutType, stream, get_temp_mr());
   return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);

@@ -35,10 +35,13 @@ DecimalSumStateColumns reduceDecimal64SumCount(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   DecimalSumStateColumns result;
+  auto const sumMaskState = input.size() == input.null_count()
+      ? cudf::mask_state::ALL_NULL
+      : cudf::mask_state::UNALLOCATED;
   result.sum = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::DECIMAL128, input.type().scale()},
       1,
-      cudf::mask_state::UNALLOCATED,
+      sumMaskState,
       stream,
       mr);
   result.count = cudf::make_fixed_width_column(
@@ -52,10 +55,7 @@ DecimalSumStateColumns reduceDecimal64SumCount(
       result.sum->mutable_view(),
       result.count->mutable_view(),
       stream,
-      mr);
-  auto [nullMask, nullCount] = detail::buildStateValidityMask(
-      result.sum->view(), result.count->view(), stream, mr);
-  result.sum->set_null_mask(std::move(nullMask), nullCount);
+      get_temp_mr());
   return result;
 }
 

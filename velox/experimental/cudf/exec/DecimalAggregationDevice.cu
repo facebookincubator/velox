@@ -22,7 +22,6 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
-#include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_for.cuh>
@@ -50,6 +49,9 @@ struct DecimalSumState {
   int64_t upper; // upper 64 bits of the decimal sum (signed)
 };
 
+// Widens raw DECIMAL64 values into sum/count pairs, reduces them, then splits
+// the result into output columns. The raw sum retains the input scale, and a
+// null input contributes zero to both sum and count.
 struct DecimalSumCount {
   __int128_t sum;
   int64_t count;
@@ -58,30 +60,26 @@ struct DecimalSumCount {
 struct Decimal64ToSumCount {
   int64_t const* values;
   cudf::bitmask_type const* nullMask;
+  cudf::size_type offset;
 
   __device__ DecimalSumCount operator()(cudf::size_type idx) const {
-    return nullMask && !cudf::bit_is_set(nullMask, idx)
+    return nullMask && !cudf::bit_is_set(nullMask, idx + offset)
         ? DecimalSumCount{0, 0}
         : DecimalSumCount{static_cast<__int128_t>(values[idx]), 1};
   }
 };
 
 struct AddDecimalSumCount {
-  __device__ DecimalSumCount operator()(
-      DecimalSumCount lhs,
-      DecimalSumCount rhs) const {
+  __device__ DecimalSumCount
+  operator()(DecimalSumCount lhs, DecimalSumCount rhs) const {
     return {lhs.sum + rhs.sum, lhs.count + rhs.count};
   }
 };
 
-struct StoreDecimalSumCount {
-  DecimalSumCount const* result;
-  __int128_t* sum;
-  int64_t* count;
-
-  __device__ void operator()(cudf::size_type) const {
-    *sum = result->sum;
-    *count = result->count;
+struct SplitDecimalSumCount {
+  __device__ cuda::std::tuple<__int128_t, int64_t> operator()(
+      DecimalSumCount result) const {
+    return {result.sum, result.count};
   }
 };
 
@@ -247,45 +245,45 @@ void reduceDecimal64SumCount(
       input.type().id() == cudf::type_id::DECIMAL64,
       "Direct decimal reduction requires DECIMAL64 input");
   CUDF_EXPECTS(
-      sum.type().id() == cudf::type_id::DECIMAL128 && sum.size() == 1,
-      "Direct decimal reduction requires one DECIMAL128 sum output");
+      sum.type().id() == cudf::type_id::DECIMAL128 &&
+          sum.type().scale() == input.type().scale() && sum.size() == 1,
+      "Direct decimal reduction requires one DECIMAL128 sum output with the input scale");
   CUDF_EXPECTS(
       count.type().id() == cudf::type_id::INT64 && count.size() == 1,
       "Direct decimal reduction requires one INT64 count output");
 
   auto indices = cuda::counting_iterator<cudf::size_type>{0};
   auto transform = Decimal64ToSumCount{
-      input.data<int64_t>(), input.nullable() ? input.null_mask() : nullptr};
-  auto result = rmm::device_uvector<DecimalSumCount>(1, stream, mr);
+      input.data<int64_t>(),
+      input.nullable() ? input.null_mask() : nullptr,
+      input.offset()};
+  auto output = cuda::transform_output_iterator{
+      cuda::make_zip_iterator(sum.data<__int128_t>(), count.data<int64_t>()),
+      SplitDecimalSumCount{}};
   size_t tempStorageBytes = 0;
-  CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(
-      nullptr,
-      tempStorageBytes,
-      indices,
-      result.data(),
-      input.size(),
-      AddDecimalSumCount{},
-      transform,
-      DecimalSumCount{0, 0},
-      stream.get()));
+  CUDF_CUDA_TRY(
+      cub::DeviceReduce::TransformReduce(
+          nullptr,
+          tempStorageBytes,
+          indices,
+          output,
+          input.size(),
+          AddDecimalSumCount{},
+          transform,
+          DecimalSumCount{0, 0},
+          stream.get()));
   auto tempStorage = rmm::device_buffer(tempStorageBytes, stream, mr);
-  CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(
-      tempStorage.data(),
-      tempStorageBytes,
-      indices,
-      result.data(),
-      input.size(),
-      AddDecimalSumCount{},
-      transform,
-      DecimalSumCount{0, 0},
-      stream.get()));
-  cub::DeviceFor::ForEachN(
-      cuda::counting_iterator<cudf::size_type>{0},
-      1,
-      StoreDecimalSumCount{
-          result.data(), sum.data<__int128_t>(), count.data<int64_t>()},
-      stream.get());
-  CUDF_CUDA_TRY(cudaGetLastError());
+  CUDF_CUDA_TRY(
+      cub::DeviceReduce::TransformReduce(
+          tempStorage.data(),
+          tempStorageBytes,
+          indices,
+          output,
+          input.size(),
+          AddDecimalSumCount{},
+          transform,
+          DecimalSumCount{0, 0},
+          stream.get()));
 }
 
 template <typename T>
