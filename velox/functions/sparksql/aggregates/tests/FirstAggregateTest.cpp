@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/tests/utils/AggregationResolver.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -147,6 +148,148 @@ TEST_F(FirstAggregateTest, integer) {
 
 TEST_F(FirstAggregateTest, bigint) {
   testAggregate<int64_t>();
+}
+
+TEST_F(FirstAggregateTest, unknownInput) {
+  const std::vector<std::string> aggregates{
+      "spark_first(c1)", "spark_first_ignore_null(c1)"};
+
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 0, 1}),
+      makeAllNullFlatVector<UnknownValue>(4),
+  });
+
+  auto expectedGlobal = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(1),
+      makeAllNullFlatVector<UnknownValue>(1),
+  });
+  auto expectedGrouped = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeAllNullFlatVector<UnknownValue>(2),
+      makeAllNullFlatVector<UnknownValue>(2),
+  });
+
+  testAggregations({input}, {}, aggregates, {expectedGlobal});
+  testAggregations({input}, {"c0"}, aggregates, {expectedGrouped});
+}
+
+TEST_F(FirstAggregateTest, unknownEmptyAndConstantNullInput) {
+  const std::vector<std::string> aggregates{
+      "spark_first(c1)", "spark_first_ignore_null(c1)"};
+  auto assertSingleAggregation = [&](const RowVectorPtr& input,
+                                     const std::vector<std::string>& keys,
+                                     const RowVectorPtr& expected) {
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .singleAggregation(keys, aggregates)
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  };
+
+  auto constantNullInput = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 0, 1}),
+      BaseVector::createNullConstant(UNKNOWN(), 4, pool()),
+  });
+  assertSingleAggregation(
+      constantNullInput,
+      {},
+      makeRowVector({
+          makeAllNullFlatVector<UnknownValue>(1),
+          makeAllNullFlatVector<UnknownValue>(1),
+      }));
+  assertSingleAggregation(
+      constantNullInput,
+      {"c0"},
+      makeRowVector({
+          makeFlatVector<int32_t>({0, 1}),
+          makeAllNullFlatVector<UnknownValue>(2),
+          makeAllNullFlatVector<UnknownValue>(2),
+      }));
+
+  auto emptyInput = makeRowVector({
+      makeFlatVector<int32_t>({}),
+      makeAllNullFlatVector<UnknownValue>(0),
+  });
+  assertSingleAggregation(
+      emptyInput,
+      {},
+      makeRowVector({
+          makeAllNullFlatVector<UnknownValue>(1),
+          makeAllNullFlatVector<UnknownValue>(1),
+      }));
+  assertSingleAggregation(
+      emptyInput,
+      {"c0"},
+      makeRowVector({
+          makeFlatVector<int32_t>({}),
+          makeAllNullFlatVector<UnknownValue>(0),
+          makeAllNullFlatVector<UnknownValue>(0),
+      }));
+}
+
+TEST_F(FirstAggregateTest, unknownIntermediateAndFinalInputs) {
+  const std::vector<std::string> functionNames{
+      "spark_first", "spark_first_ignore_null"};
+  std::vector<std::string> aggregates;
+  std::vector<std::string> aggregateNames;
+  std::vector<std::vector<TypePtr>> rawInputTypes;
+  std::vector<core::AggregationNode::Aggregate> intermediateAggregates;
+  std::vector<VectorPtr> expectedIntermediateChildren;
+
+  auto intermediateType = ROW({UNKNOWN(), BOOLEAN()});
+  for (auto i = 0; i < functionNames.size(); ++i) {
+    aggregates.push_back(functionNames[i] + "(c0)");
+    aggregateNames.push_back("a" + std::to_string(i));
+    rawInputTypes.push_back({UNKNOWN()});
+
+    core::AggregationNode::Aggregate aggregate;
+    aggregate.call = std::make_shared<core::CallTypedExpr>(
+        exec::test::resolveAggregateType(
+            functionNames[i],
+            core::AggregationNode::Step::kIntermediate,
+            {UNKNOWN()},
+            false),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(
+                intermediateType, "c0")},
+        functionNames[i]);
+    aggregate.rawInputTypes = {UNKNOWN()};
+    intermediateAggregates.push_back(std::move(aggregate));
+
+    expectedIntermediateChildren.push_back(
+        BaseVector::createNullConstant(intermediateType, 1, pool()));
+  }
+
+  auto intermediateRows = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(2),
+      makeFlatVector<bool>({false, true}),
+  });
+  auto intermediateInput = makeRowVector({intermediateRows});
+  auto intermediateSource =
+      PlanBuilder().values({intermediateInput}).planNode();
+  auto intermediatePlan = core::AggregationNode::Builder()
+                              .id("first_unknown_intermediate")
+                              .step(core::AggregationNode::Step::kIntermediate)
+                              .groupingKeys({})
+                              .preGroupedKeys({})
+                              .aggregateNames(aggregateNames)
+                              .aggregates(intermediateAggregates)
+                              .ignoreNullKeys(false)
+                              .source(intermediateSource)
+                              .build();
+  AssertQueryBuilder(intermediatePlan)
+      .assertResults(makeRowVector(expectedIntermediateChildren));
+
+  auto finalPlan = PlanBuilder()
+                       .values({intermediateInput})
+                       .finalAggregation({}, aggregates, rawInputTypes)
+                       .planNode();
+  std::vector<VectorPtr> expectedFinalChildren;
+  for (size_t i = 0; i < functionNames.size(); ++i) {
+    expectedFinalChildren.push_back(makeAllNullFlatVector<UnknownValue>(1));
+  }
+  AssertQueryBuilder(finalPlan).assertResults(
+      makeRowVector(expectedFinalChildren));
 }
 
 TEST_F(FirstAggregateTest, real) {
