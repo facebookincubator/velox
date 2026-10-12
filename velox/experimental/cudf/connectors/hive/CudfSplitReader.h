@@ -77,16 +77,24 @@ class CudfSplitReader : public NvtxHelper {
   virtual ~CudfSplitReader();
 
   /// Reads and returns the Parquet file metadatas, cached until prepareSplit()
-  /// hands them to the cuDF reader.
+  /// hands them to the cuDF reader. Returns no metadata when the split is
+  /// empty.
   const std::vector<cudf::io::parquet::FileMetaData>& readFileMetadatas();
 
   /// Sets the split-specific pushdown filter. The expression must remain alive
   /// while the split is being read.
   void setPushdownFilter(const cudf::ast::expression* filter);
 
-  /// Opens the cuDF reader and sets up its options.
+  /// Opens the cuDF reader and sets up its options. Returns early without
+  /// updating runtime statistics when the split is empty.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
+
+  /// Returns whether the split is empty because its missing data file is
+  /// ignored.
+  bool emptySplit() const {
+    return emptySplit_;
+  }
 
   /// A table chunk and its row count
   struct TableChunk {
@@ -136,7 +144,8 @@ class CudfSplitReader : public NvtxHelper {
   // row-index column is not part of the logical read schema.
   virtual std::optional<TableChunk> readNextChunk();
 
-  // Setup the cuDF data source
+  // Setup the cuDF data source. Marks the split empty when its missing data
+  // file is ignored.
   void setupCudfDataSource();
 
   // Create the parquet reader and select the row group passes to read.
@@ -259,6 +268,8 @@ class CudfSplitReader : public NvtxHelper {
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
+  // Set when an ignored missing data file leaves nothing to read.
+  bool emptySplit_{false};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

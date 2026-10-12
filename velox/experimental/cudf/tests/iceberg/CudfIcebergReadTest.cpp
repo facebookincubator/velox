@@ -480,6 +480,47 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
       IcebergMetadataColumn::icebergDeletePosColumn();
 };
 
+TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
+  using ::facebook::velox::connector::hive::HiveConfig;
+  auto file = TempFilePath::create();
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  writeToFile(file->getPath(), {data});
+  const auto missingPath = file->getPath() + ".missing";
+  auto plan = makeTableScanPlan(data->rowType());
+  auto missing = [&]() {
+    return std::make_shared<HiveIcebergSplit>(
+        kCudfIcebergConnectorId,
+        missingPath,
+        dwio::common::FileFormat::PARQUET,
+        0,
+        123,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        nullptr,
+        true,
+        std::vector<IcebergDeleteFile>{});
+  };
+  EXPECT_THROW(
+      AssertQueryBuilder(plan).split(missing()).assertEmptyResults(),
+      std::exception);
+  auto splits = makeIcebergSplits(file->getPath());
+  splits.insert(splits.begin(), missing());
+  splits.push_back(missing());
+  auto task = AssertQueryBuilder(plan)
+                  .maxDrivers(1)
+                  .connectorSessionProperty(
+                      kCudfIcebergConnectorId,
+                      HiveConfig::kIgnoreMissingFilesSession,
+                      "true")
+                  .splits(splits)
+                  .assertResults({data});
+  const auto stats = toPlanStats(task->taskStats()).at(plan->id()).customStats;
+  EXPECT_EQ(stats.count("skippedSplits"), 0);
+  EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
+  EXPECT_EQ(stats.at("processedSplits").sum, 1);
+}
+
 /// Basic read without any deletes.
 TEST_F(CudfIcebergReadTest, basicRead) {
   auto rowType = ROW({"c0"}, {BIGINT()});

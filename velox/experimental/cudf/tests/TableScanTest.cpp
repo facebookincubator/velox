@@ -321,6 +321,140 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 class TableScanTestParameterized : public TableScanTest,
                                    public testing::WithParamInterface<bool> {};
 
+TEST_P(TableScanTestParameterized, ignoreMissingFiles) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  using hive::HiveConfig;
+  auto directory = TempDirectoryPath::create();
+  const auto missingPath = directory->getPath() + "/missing.parquet";
+  auto missingSplit = [&]() {
+    return hive::HiveConnectorSplitBuilder(missingPath)
+        .connectorId(kCudfHiveConnectorId)
+        .fileFormat(dwio::common::FileFormat::PARQUET)
+        .length(123)
+        .build();
+  };
+  auto vectors = makeVectors(1, 100);
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), vectors);
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+
+  const auto useBufferedInput = GetParam() ? "true" : "false";
+  EXPECT_THROW(
+      AssertQueryBuilder(plan)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              CudfHiveConfig::kUseBufferedInputSession,
+              useBufferedInput)
+          .split(missingSplit())
+          .assertEmptyResults(),
+      std::exception);
+
+  for (const auto preload : {0, 4}) {
+    std::vector<std::shared_ptr<ConnectorSplit>> splits{missingSplit()};
+    auto existingSplits = makeCudfHiveConnectorSplits({file});
+    splits.insert(splits.end(), existingSplits.begin(), existingSplits.end());
+    splits.push_back(missingSplit());
+    auto moreExistingSplits = makeCudfHiveConnectorSplits({file});
+    splits.insert(
+        splits.end(), moreExistingSplits.begin(), moreExistingSplits.end());
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(1)
+            .config(
+                QueryConfig::kMaxSplitPreloadPerDriver, std::to_string(preload))
+            .connectorSessionProperty(
+                kCudfHiveConnectorId,
+                CudfHiveConfig::kUseBufferedInputSession,
+                useBufferedInput)
+            .connectorSessionProperty(
+                kCudfHiveConnectorId,
+                HiveConfig::kIgnoreMissingFilesSession,
+                "true")
+            .splits(splits)
+            .assertResults("SELECT * FROM tmp UNION ALL SELECT * FROM tmp");
+    const auto stats = getTableScanRuntimeStats(task);
+    EXPECT_EQ(stats.count("skippedSplits"), 0);
+    EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
+    EXPECT_EQ(stats.at("processedSplits").sum, 2);
+  }
+}
+
+TEST_F(TableScanTest, ignoreMissingFilesPreservesReadErrors) {
+  // Preserve the actual open failure instead of retrying through KvikIO.
+  filesystems::registerFileSystem(
+      [](std::string_view path) { return path.starts_with("denied:"); },
+      [](std::shared_ptr<const config::ConfigBase>,
+         std::string_view) -> std::shared_ptr<filesystems::FileSystem> {
+        VELOX_FAIL("Injected permission denied at open");
+      });
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(tableScanNode())
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseBufferedInputSession,
+              "true")
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              hive::HiveConfig::kIgnoreMissingFilesSession,
+              "true")
+          .split(makeCudfHiveConnectorSplit("denied:/missing.parquet"))
+          .assertEmptyResults(),
+      "Injected permission denied at open");
+}
+
+TEST_P(TableScanTestParameterized, ignoreMissingFilesAfterCachedOpen) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {CudfHiveConfig::kUseBufferedInput,
+               GetParam() ? "true" : "false"}}));
+  auto file = TempFilePath::create();
+  auto vectors = makeVectors(1, 10);
+  writeToFile(file->getPath(), vectors);
+  auto plan = tableScanNode();
+  AssertQueryBuilder(plan)
+      .splits(makeCudfHiveConnectorSplits({file}))
+      .assertResults(vectors);
+  fs::remove(file->getPath());
+  AssertQueryBuilder query(plan);
+  query
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          hive::HiveConfig::kIgnoreMissingFilesSession,
+          "true")
+      .splits(makeCudfHiveConnectorSplits({file}));
+  if (GetParam()) {
+    // Buffered input reuses the cached file handle.
+    query.assertResults(vectors);
+  } else {
+    // KvikIO opens the path and reports ENOENT at that actual open.
+    query.assertEmptyResults();
+  }
+}
+
+TEST_P(TableScanTestParameterized, ignoreMissingFilesPreservesCorruption) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {CudfHiveConfig::kUseBufferedInput,
+               GetParam() ? "true" : "false"}}));
+  // An existing empty file is invalid Parquet, not a missing split.
+  auto file = TempFilePath::create();
+  EXPECT_THROW(
+      AssertQueryBuilder(tableScanNode())
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              hive::HiveConfig::kIgnoreMissingFilesSession,
+              "true")
+          .splits(makeCudfHiveConnectorSplits({file}))
+          .assertEmptyResults(),
+      std::exception);
+}
+
 TEST_P(TableScanTestParameterized, allColumns) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();

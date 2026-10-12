@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -54,6 +55,7 @@
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <system_error>
 #include <tuple>
 #include <utility>
 
@@ -339,6 +341,9 @@ void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   stream_ = cudfGlobalStreamPool().get_stream();
   readFileMetadatas();
+  if (emptySplit_) {
+    return;
+  }
   prepareSplitInternal(runtimeStats);
 
   // Update runtime stats.
@@ -507,6 +512,7 @@ void CudfSplitReader::resetSplit() {
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  emptySplit_ = false;
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
   splitRowCount_ = 0;
@@ -531,7 +537,7 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
 }
 
 void CudfSplitReader::setupCudfDataSource() {
-  if (dataSource_) {
+  if (dataSource_ or emptySplit_) {
     return;
   }
 
@@ -547,13 +553,34 @@ void CudfSplitReader::setupCudfDataSource() {
       CudfHiveConfig::kUseBufferedInput,
       split_->filePath);
 
+  const HiveConfig hiveConfig(cudfHiveConfig_->config());
+  const bool ignoreMissingFiles =
+      hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+
+  // Helper to create a KvikIO data source.
+  auto makeKvikioDataSource = [&]() {
+    try {
+      dataSource_ = std::move(
+          cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
+              .front());
+    } catch (const std::system_error& e) {
+      // KvikIO preserves errno for local opens only.
+      // TODO: Ignore missing remote files once KvikIO reports them
+      // distinctly.
+      if (ignoreMissingFiles and
+          e.code() == std::errc::no_such_file_or_directory) {
+        emptySplit_ = true;
+        return;
+      }
+      throw;
+    }
+  };
+
   // Use KvikIO data source if we don't want to use the BufferedInput source
   if (not useBufferedInput) {
     VLOG(1) << fmt::format(
         "Using KvikIO data source for file: {}", split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
 
@@ -567,6 +594,18 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
+    if (ignoreMissingFiles) {
+      if (e.errorCode() == error_code::kFileNotFound) {
+        emptySplit_ = true;
+        return;
+      }
+      // Rethrow actual filesystem errors only. Unsupported paths may fall back
+      // to KvikIO.
+      if (filesystems::isPathSupportedByRegisteredFileSystems(
+              split_->filePath)) {
+        throw;
+      }
+    }
     // ABFS blobs can not fall back to KvikIO. Throw the original error.
     if (isAbfsPath(split_->filePath)) {
       VELOX_USER_FAIL(
@@ -581,9 +620,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
 
@@ -615,9 +652,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
   dataSource_ =
@@ -683,6 +718,9 @@ CudfSplitReader::readFileMetadatas() {
 
   // Setup the datasource
   setupCudfDataSource();
+  if (emptySplit_) {
+    return fileMetaData_;
+  }
 
   // Check that the datasource is set up
   VELOX_CHECK_NOT_NULL(
