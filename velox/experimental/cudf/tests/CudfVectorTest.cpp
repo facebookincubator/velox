@@ -263,7 +263,7 @@ TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
   // that work.
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
-      ROW("c0", INTEGER()),
+      ROW({"c0"}, {INTEGER()}),
       packedTable->table.num_rows(),
       std::move(packedTable),
       consumerStream.view());
