@@ -36,6 +36,7 @@
 #include <cuda/stream>
 
 #include <memory>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox {
 
@@ -171,6 +172,19 @@ class CudfHashJoinProbe : public CudfOperatorBase {
  private:
   void waitForBuildReady(cuda::stream_ref stream);
 
+  // Builds a supported integer dynamic filter from a build key.
+  std::shared_ptr<common::Filter> makeIntegerDynamicFilter(
+      column_index_t keyIndex);
+
+  // Checks plan restrictions; the build keys must also be unique.
+  bool canReplaceJoinWithUniqueKeys() const;
+
+  // Returns the matching probe operators in this pipeline.
+  std::vector<CudfHashJoinProbe*> findPeerOperators();
+
+  // Publishes build-side filters through the existing Driver protocol.
+  void pushdownDynamicFilters();
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
@@ -204,6 +218,16 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::vector<cudf::size_type> leftKeyIndices_;
   /** @brief Column indices for join keys in right (build) table */
   std::vector<cudf::size_type> rightKeyIndices_;
+  // Preserves the join key order expected by Driver::pushdownFilters().
+  std::vector<column_index_t> probeKeyChannels_;
+
+  // Prevents peer probe operators from rebuilding the same filter.
+  std::unordered_set<column_index_t> dynamicFiltersProducedOnChannels_;
+  // Learned while deduplicating a complete single-key build for an exact
+  // filter.
+  bool dynamicFilterHasUniqueKeys_{false};
+  // The exact pushed filter can replace an inner join with probe-only output.
+  bool canReplaceWithDynamicFilter_{false};
   CudfJoinOutputLayout outputLayout_;
   bool finished_{false};
 

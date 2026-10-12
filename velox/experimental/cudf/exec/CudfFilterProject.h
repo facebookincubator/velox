@@ -78,9 +78,6 @@ class CudfFilterProject : public CudfOperatorBase {
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
   CudfExpressionPtr filterEvaluator_;
-
-  std::vector<velox::exec::IdentityProjection> resultProjections_;
-  std::vector<velox::exec::IdentityProjection> identityProjections_;
 };
 
 } // namespace facebook::velox::cudf_velox
