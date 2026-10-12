@@ -16,9 +16,11 @@
 
 #include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
 
+#include <folly/Conv.h>
 #include <folly/container/F14Set.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
@@ -48,6 +50,8 @@ void initHook();
 using namespace facebook::velox;
 
 namespace {
+
+const RowTypePtr kEmptyRowType = ROW({}, {});
 
 Encoding::Options encodingOptions(const TabletReader& tablet) {
   Encoding::Options options;
@@ -1116,6 +1120,8 @@ void SelectiveNimbleRowReader::setStripeRowRange() {
   }
 }
 
+bool isZeroColumnScan(const std::shared_ptr<velox::common::ScanSpec>& scanSpec);
+
 class SelectiveNimbleReader : public dwio::common::Reader {
  public:
   SelectiveNimbleReader(
@@ -1123,6 +1129,13 @@ class SelectiveNimbleReader : public dwio::common::Reader {
       const dwio::common::ReaderOptions& options)
       : readerBase_(ReaderBase::create(std::move(input), options)),
         options_(options) {
+    detail::initHook();
+  }
+
+  SelectiveNimbleReader(
+      std::shared_ptr<ReaderBase> readerBase,
+      const dwio::common::ReaderOptions& options)
+      : readerBase_{std::move(readerBase)}, options_(options) {
     detail::initHook();
   }
 
@@ -1204,10 +1217,12 @@ void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
   const auto* scanSpec = options.scanSpec().get();
   for (const auto& column :
        properties.clusterIndexKeyColumnsWithOmittedStorage()) {
-    NIMBLE_USER_CHECK(
-        !outputType->containsChild(column),
-        "Cluster index key column '{}' cannot be projected because this file stores it only in the cluster index key stream",
-        column);
+    if (!isZeroColumnScan(options.scanSpec())) {
+      NIMBLE_USER_CHECK(
+          !outputType->containsChild(column),
+          "Cluster index key column '{}' cannot be projected because this file stores it only in the cluster index key stream",
+          column);
+    }
     if (scanSpec != nullptr) {
       const auto* childSpec = scanSpec->childByName(column);
       NIMBLE_USER_CHECK(
@@ -1218,12 +1233,250 @@ void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
   }
 }
 
+bool isZeroColumnScan(
+    const std::shared_ptr<velox::common::ScanSpec>& scanSpec) {
+  return scanSpec != nullptr && scanSpec->children().empty() &&
+      !scanSpec->hasFilter();
+}
+
+// Reader creation is only a candidate check. createRowReader performs the
+// final check because its options may request more work than ReaderOptions.
+bool isFooterOnlyReaderCandidate(const dwio::common::ReaderOptions& options) {
+  return options.fileSchema() != nullptr &&
+      isZeroColumnScan(options.scanSpec()) && options.randomSkip() == nullptr;
+}
+
+bool needsOnlyRowCount(const dwio::common::RowReaderOptions& options) {
+  return isZeroColumnScan(options.scanSpec()) &&
+      options.metadataFilter() == nullptr &&
+      options.remainingFilterColumns().empty() &&
+      !options.rowNumberColumnInfo().has_value();
+}
+
+bool coversEntireFile(
+    const dwio::common::RowReaderOptions& options,
+    uint64_t fileSizeBytes) {
+  // RowReaderOptions expresses the split as a byte range.
+  return options.skipRows() == 0 && options.offset() == 0 &&
+      options.limit() >= fileSizeBytes;
+}
+
+bool isFooterOnlyRowReaderEligible(
+    const dwio::common::RowReaderOptions& options,
+    uint64_t fileSizeBytes) {
+  return needsOnlyRowCount(options) && coversEntireFile(options, fileSizeBytes);
+}
+
+int64_t checkedRowCount(const TabletReader& tablet) {
+  const auto rowCount = tablet.tabletRowCount();
+  NIMBLE_CHECK_FILE(
+      rowCount <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "Corrupted file. Tablet row count {} exceeds the supported maximum {}.",
+      rowCount,
+      std::numeric_limits<int64_t>::max());
+  return static_cast<int64_t>(rowCount);
+}
+
+// Produces empty batches for a zero-column, whole-file scan using only the row
+// count stored in the Nimble footer.
+class FooterOnlyNimbleRowReader final : public dwio::common::RowReader {
+ public:
+  FooterOnlyNimbleRowReader(
+      std::shared_ptr<TabletReader> tablet,
+      const dwio::common::RowReaderOptions& options,
+      memory::MemoryPool* pool)
+      : tablet_{std::move(tablet)},
+        options_{options},
+        pool_{pool},
+        rowCount_{checkedRowCount(*tablet_)} {}
+
+  int64_t nextRowNumber() override {
+    return currentRow_ < rowCount_ ? currentRow_ : kAtEnd;
+  }
+
+  int64_t nextReadSize(uint64_t size) override {
+    if (currentRow_ >= rowCount_) {
+      return kAtEnd;
+    }
+    return static_cast<int64_t>(std::min<uint64_t>(
+        size, static_cast<uint64_t>(rowCount_ - currentRow_)));
+  }
+
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& result,
+      const dwio::common::Mutation* mutation) override {
+    const auto rowsToRead = nextReadSize(size);
+    if (rowsToRead == kAtEnd) {
+      return 0;
+    }
+    const auto vectorSize = folly::to<vector_size_t>(rowsToRead);
+    auto rows = std::make_shared<RowVector>(
+        pool_, kEmptyRowType, nullptr, vectorSize, std::vector<VectorPtr>{});
+    result = projectColumns(rows, *options_.scanSpec(), mutation);
+    currentRow_ += rowsToRead;
+    processedRows_ += rowsToRead;
+    return static_cast<uint64_t>(rowsToRead);
+  }
+
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override {
+    const auto& tabletStats = tablet_->stats();
+    stats.footerBufferOverread += tabletStats.footerBufferOverread;
+    stats.footerBufferUnderread += tabletStats.footerBufferUnderread;
+    stats.footerCacheHit += tabletStats.footerCacheHit ? 1 : 0;
+    stats.processedRows += processedRows_;
+  }
+
+  void resetFilterCaches() override {}
+
+  std::optional<size_t> estimatedRowSize() const override {
+    return 0;
+  }
+
+  bool allPrefetchIssued() const final {
+    return true;
+  }
+
+ private:
+  // Owns the exact footer read and its runtime I/O statistics.
+  const std::shared_ptr<TabletReader> tablet_;
+  // Retains the scan specification used to project an empty row type.
+  const dwio::common::RowReaderOptions options_;
+  // Allocates the empty output batches.
+  memory::MemoryPool* const pool_;
+  // Footer row count converted once to the signed RowReader coordinate space.
+  const int64_t rowCount_;
+  // Next row number to return, or rowCount_ after the scan is exhausted.
+  int64_t currentRow_{0};
+  // Rows returned so far, exported through RuntimeStats.
+  int64_t processedRows_{0};
+};
+
+// Handles the narrow zero-column reader fast path. It defers footer I/O until
+// row counts are requested and falls back to SelectiveNimbleReader whenever
+// row-reader options require columns, filtering, or a partial file split. Like
+// other DWIO readers, one instance is driven by a single thread; its lazy
+// members rely on that lifecycle.
+class FooterOnlyNimbleReader final : public dwio::common::Reader {
+ public:
+  FooterOnlyNimbleReader(
+      std::unique_ptr<dwio::common::BufferedInput> input,
+      const dwio::common::ReaderOptions& options)
+      : input_{std::move(input)},
+        options_{options},
+        fileSize_{input_->getReadFile()->size()},
+        rowType_{options.fileSchema()},
+        typeWithId_{
+            options.scanSpec() ? dwio::common::TypeWithId::create(
+                                     rowType_,
+                                     *options.scanSpec())
+                               : dwio::common::TypeWithId::create(rowType_)} {
+    detail::initHook();
+  }
+
+  std::optional<uint64_t> numberOfRows() const override {
+    if (fullReader_ != nullptr) {
+      return fullReader_->numberOfRows();
+    }
+    return tablet().tabletRowCount();
+  }
+
+  std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
+      uint32_t index) const override {
+    if (fullReader_ != nullptr) {
+      return fullReader_->columnStatistics(index);
+    }
+    return nullptr;
+  }
+
+  const RowTypePtr& rowType() const override {
+    if (fullReader_ != nullptr) {
+      return fullReader_->rowType();
+    }
+    return rowType_;
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
+      const override {
+    if (fullReader_ != nullptr) {
+      return fullReader_->typeWithId();
+    }
+    return typeWithId_;
+  }
+
+  std::unique_ptr<dwio::common::RowReader> createRowReader(
+      const dwio::common::RowReaderOptions& options) const override {
+    if (fullReader_ != nullptr ||
+        !isFooterOnlyRowReaderEligible(options, fileSize_)) {
+      return fullReader(options.scanSpec()).createRowReader(options);
+    }
+    tablet();
+    return std::make_unique<FooterOnlyNimbleRowReader>(
+        tablet_, options, &options_.memoryPool());
+  }
+
+  std::unique_ptr<dwio::common::IndexReader> createIndexReader(
+      const dwio::common::RowReaderOptions& options) const override {
+    return fullReader(options.scanSpec()).createIndexReader(options);
+  }
+
+ private:
+  // Creates the exact-footer tablet on first use.
+  TabletReader& tablet() const {
+    if (tablet_ == nullptr) {
+      NIMBLE_CHECK_NOT_NULL(
+          input_, "Buffered input has already moved to the full reader");
+      auto tabletOptions = TabletReader::configureOptions(options_);
+      tabletOptions.footerOnly = true;
+      tabletOptions.maxFooterIoBytes = 0;
+      tablet_ = TabletReader::create(
+          input_->getReadFile(), &options_.memoryPool(), tabletOptions);
+    }
+    return *tablet_;
+  }
+
+  SelectiveNimbleReader& fullReader(
+      const std::shared_ptr<velox::common::ScanSpec>& scanSpec =
+          nullptr) const {
+    if (fullReader_ == nullptr) {
+      auto readerOptions = options_;
+      if (scanSpec != nullptr) {
+        readerOptions.setScanSpec(scanSpec);
+      }
+      auto readerBase = tablet_ == nullptr
+          ? ReaderBase::create(std::move(input_), readerOptions)
+          : ReaderBase::create(std::move(input_), tablet_, readerOptions);
+      fullReader_ = std::make_unique<SelectiveNimbleReader>(
+          std::move(readerBase), readerOptions);
+    }
+    return *fullReader_;
+  }
+
+  // Input moves into the normal reader if the request falls back.
+  mutable std::unique_ptr<dwio::common::BufferedInput> input_;
+  // Original reader options used by either lazy reader implementation.
+  const dwio::common::ReaderOptions options_;
+  // File size retained after input_ moves into the fallback reader.
+  const uint64_t fileSize_;
+  // A zero-column ScanSpec cannot access physical columns, so the caller's
+  // schema is sufficient and avoids loading the file's schema section.
+  const RowTypePtr rowType_;
+  const std::shared_ptr<const dwio::common::TypeWithId> typeWithId_;
+  // Lazily created to avoid any footer I/O when a request falls back.
+  mutable std::shared_ptr<TabletReader> tablet_;
+  // Lazily created fallback for scans outside the footer-only contract.
+  mutable std::unique_ptr<SelectiveNimbleReader> fullReader_;
+};
+
 } // namespace
 
 std::unique_ptr<dwio::common::Reader>
 SelectiveNimbleReaderFactory::createReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options) {
+  if (isFooterOnlyReaderCandidate(options)) {
+    return std::make_unique<FooterOnlyNimbleReader>(std::move(input), options);
+  }
   return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
 }
 

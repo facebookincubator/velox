@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/FileConfig.h"
 
+#include <folly/Conv.h>
+
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::connector::hive {
@@ -89,6 +91,20 @@ size_t FileConfig::parallelUnitLoadCount(
 
 uint64_t FileConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
+}
+
+uint64_t FileConfig::nimbleFooterSpeculativeIoSize(
+    const config::ConfigBase* session) const {
+  const auto value = sessionValue<std::string>(
+      session,
+      kNimbleFooterSpeculativeIoSizeSession,
+      kNimbleFooterSpeculativeIoSize,
+      "8MB");
+  // Preserve the legacy contract: an unqualified integer is a byte count.
+  if (auto bytes = folly::tryTo<uint64_t>(value); bytes.hasValue()) {
+    return bytes.value();
+  }
+  return config::toCapacity(value, config::CapacityUnit::BYTE);
 }
 
 uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
