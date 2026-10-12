@@ -23,9 +23,11 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
 namespace facebook::nimble {
@@ -548,6 +550,176 @@ TYPED_TEST(ALPRDEncodingTest, skipResetAndSliceWithLargePositions) {
   }
 }
 
+TYPED_TEST(ALPRDEncodingTest, nativeExceptionSlicesAndComposition) {
+  using Physical = typename TestFixture::Physical;
+  constexpr uint32_t kNumRows = 513;
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  const std::vector<uint32_t> positions{0, 1, 127, 128, 255, 256, 511, 512};
+  const std::vector<uint16_t> highParts{2, 3, 4, 5, 6, 7, 8, 9};
+  std::vector<Physical> right(kNumRows);
+  std::iota(right.begin(), right.end(), 0);
+  std::vector<Physical> expected(kNumRows);
+  for (uint32_t i = 0; i < kNumRows; ++i) {
+    expected[i] = (Physical{1} << kShift) | right[i];
+  }
+  for (uint32_t i = 0; i < positions.size(); ++i) {
+    expected[positions[i]] =
+        (Physical{highParts[i]} << kShift) | right[positions[i]];
+  }
+  for (const auto childType :
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::RLE,
+        EncodingType::Varint}) {
+    SCOPED_TRACE(fmt::format("child={}", childType));
+    const auto encodeChild = [&]<typename U>(const std::vector<U>& values) {
+      const auto type = childType == EncodingType::Varint && sizeof(U) < 4
+          ? EncodingType::Trivial
+          : childType;
+      const auto layout = type == EncodingType::RLE
+          ? EncodingLayout{type, {}, CompressionType::Uncompressed, {std::nullopt, std::nullopt}}
+          : EncodingLayout{type, {}, CompressionType::Uncompressed};
+      return EncodingFactory::encode<U>(
+          makePolicy<U>(layout), values, *this->buffer_, this->options_);
+    };
+    auto codes = encodeChild(std::vector<uint16_t>(kNumRows, 0));
+    auto lows = encodeChild(right);
+    const auto encodedPositions = encodeChild(positions);
+    const auto highs = encodeChild(highParts);
+    for (const bool wrappedMain : {false, true}) {
+      if (wrappedMain) {
+        codes = SliceEncoding<uint16_t>::wrap(
+            codes, 0, kNumRows, *this->buffer_, 0, this->options_);
+        lows = SliceEncoding<Physical>::wrap(
+            lows, 0, kNumRows, *this->buffer_, 0, this->options_);
+      }
+      const auto encoded = this->fixtureWithChildren(
+          kNumRows, positions.size(), {codes, lows, encodedPositions, highs});
+      for (const auto& [offset, length] :
+           std::vector<std::pair<uint32_t, uint32_t>>{
+               {0, kNumRows},
+               {1, kNumRows - 1},
+               {126, 132},
+               {2, 124},
+               {511, 2}}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "offset={} length={} wrapped={}", offset, length, wrappedMain));
+        const auto sliced = EncodingFactory::slice(
+            encoded, offset, length, *this->buffer_, this->options_);
+        this->check(
+            sliced,
+            std::span<const Physical>(expected).subspan(offset, length));
+        const auto metadata =
+            ALPRDEncodingBase::readMetadata(sliced, this->options_);
+        if (metadata.exceptionCount > 0 && offset > 0) {
+          ASSERT_EQ(
+              EncodingPrefix::encodingType(metadata.children[2]),
+              EncodingType::Slice);
+          SliceEncoding<uint32_t> positionsSlice(
+              *this->pool_, metadata.children[2], nullptr, this->options_);
+          if (childType == EncodingType::Trivial ||
+              childType == EncodingType::FixedBitWidth) {
+            EXPECT_EQ(positionsSlice.valueDelta(), 0);
+          } else {
+            EXPECT_EQ(positionsSlice.valueDelta(), -int64_t(offset));
+          }
+          EXPECT_EQ(
+              EncodingLayoutCapture::capture(sliced, this->options_)
+                  .child(2)
+                  ->encodingType(),
+              EncodingType::Slice);
+        }
+        // Retain an exception at the boundary through a second slice. Any
+        // existing value delta must be applied exactly once per slice.
+        const auto twice = EncodingFactory::slice(
+            sliced, length - 1, 1, *this->buffer_, this->options_);
+        this->check(
+            twice,
+            std::span<const Physical>(expected).subspan(
+                offset + length - 1, 1));
+      }
+    }
+  }
+}
+
+TYPED_TEST(ALPRDEncodingTest, sliceOffsetsAboveSignedPositionRange) {
+  using Physical = typename TestFixture::Physical;
+  constexpr uint32_t kOffset = (uint32_t{1} << 31) + 17;
+  const auto codes = this->constantChild(uint16_t{0}, kOffset + 3);
+  const auto right = this->constantChild(Physical{1}, kOffset + 3);
+  const auto high = this->constantChild(uint16_t{3}, 1);
+  const auto positions = EncodingFactory::encode<uint32_t>(
+      makePolicy<uint32_t>(EncodingLayout{
+          EncodingType::Varint, {}, CompressionType::Uncompressed}),
+      std::vector<uint32_t>{kOffset + 1},
+      *this->buffer_,
+      this->options_);
+  const auto encoded = this->fixtureWithChildren(
+      kOffset + 3, 1, {codes, right, positions, high});
+  const auto sliced = EncodingFactory::slice(
+      encoded, kOffset, 3, *this->buffer_, this->options_);
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  this->check(
+      sliced,
+      std::vector<Physical>{
+          (Physical{1} << kShift) | 1,
+          (Physical{3} << kShift) | 1,
+          (Physical{1} << kShift) | 1});
+}
+
+TYPED_TEST(ALPRDEncodingTest, viewIndependentFixtureAndValidation) {
+  using T = typename TestFixture::T;
+  using Physical = typename TestFixture::Physical;
+  const auto valid = this->fixture();
+  auto view = createEncodingView(valid, this->pool_.get(), this->options_);
+  std::array<Physical, 3> output;
+  view->read(0, 3, output.data());
+  constexpr auto kShift = sizeof(Physical) * 8 - 16;
+  EXPECT_THAT(
+      output,
+      ::testing::ElementsAre(
+          (Physical{2} << kShift) | 1,
+          (Physical{3} << kShift) | 2,
+          (Physical{2} << kShift) | 3));
+  for (size_t size = 0; size < valid.size(); ++size) {
+    SCOPED_TRACE(size);
+    EXPECT_THROW(
+        (ALPRDEncodingView<T>(
+            std::string_view(valid).substr(0, size),
+            this->pool_.get(),
+            this->options_)),
+        NimbleException);
+  }
+  for (const auto& invalid : {
+           valid + 'x',
+           this->fixture({1, 1}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {3}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {1, 1}, {3, 3}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, 2, 3}, {2, 1}, {3, 3}),
+           this->fixture(
+               {0, 1}, {1, 0, 1}, {1, 2, 3}, {1}, {2}, sizeof(T) * 8 - 1),
+       }) {
+    EXPECT_THROW(
+        createEncodingView(invalid, this->pool_.get(), this->options_),
+        NimbleException);
+  }
+  // Main-stream validation still applies on exception rows and on both APIs.
+  for (const auto& invalid : {
+           this->fixture({1, 2}, {1, 2, 1}),
+           this->fixture({1, 2}, {1, 0, 1}, {1, Physical{1} << kShift, 3}),
+       }) {
+    auto invalidView =
+        createEncodingView(invalid, this->pool_.get(), this->options_);
+    EXPECT_THROW(invalidView->readAt(1, output.data()), NimbleException);
+    EXPECT_THROW(invalidView->read(0, 3, output.data()), NimbleException);
+  }
+  const auto empty = this->fixture({1}, {}, {}, {}, {});
+  NIMBLE_ASSERT_THROW(
+      createEncodingView(empty, this->pool_.get(), this->options_),
+      "Empty ALPRD encoding");
+}
+
 TYPED_TEST(ALPRDEncodingTest, replayUsesCurrentDictionary) {
   using Physical = typename TestFixture::Physical;
   const auto firstValues = this->valuesWithLateException(4'099);
@@ -682,6 +854,11 @@ TYPED_TEST(ALPRDEncodingTest, exceptionLoadingRespectsMemoryPool) {
               ? legacy::EncodingFactory(this->options_)
                     .create(*pool, encoded, nullptr)
               : EncodingFactory(this->options_).create(*pool, encoded, nullptr),
+          velox::error_code::kMemCapExceeded,
+          "Exceeded memory pool capacity");
+      EXPECT_EQ(pool->usedBytes(), 0);
+      VELOX_ASSERT_RUNTIME_THROW_CODE(
+          createEncodingView(encoded, pool.get(), this->options_),
           velox::error_code::kMemCapExceeded,
           "Exceeded memory pool capacity");
       EXPECT_EQ(pool->usedBytes(), 0);
