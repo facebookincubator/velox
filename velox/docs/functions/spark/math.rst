@@ -487,7 +487,9 @@ Mathematical Functions
 
     Returns the result of multiplying ``x`` by ``y``. The types of ``x`` and
     ``y`` must be the same. For integral types, overflow returns NULL.
-    Corresponds to Spark's ``try_multiply``. ::
+    Corresponds to Spark's ``try_multiply``. Unlike
+    ``try(checked_multiply(x, y))``, errors from ``x`` and ``y`` are not turned
+    into NULL. ::
 
         SELECT try_multiply(2147483647, 2); -- NULL
         SELECT try_multiply(3, -4); -- -12
@@ -496,7 +498,9 @@ Mathematical Functions
 
     Returns the result of subtracting ``y`` from ``x``. The types of ``x`` and
     ``y`` must be the same. For integral types, overflow returns NULL.
-    Corresponds to Spark's ``try_subtract``. ::
+    Corresponds to Spark's ``try_subtract``. Unlike
+    ``try(checked_subtract(x, y))``, errors from ``x`` and ``y`` are not turned
+    into NULL. ::
 
         SELECT try_subtract(-2147483648, 1); -- NULL
         SELECT try_subtract(5, 2); -- 3

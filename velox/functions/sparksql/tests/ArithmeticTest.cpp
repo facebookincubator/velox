@@ -887,6 +887,10 @@ TEST_F(ArithmeticTest, trySubtract) {
   EXPECT_EQ(tryArithmetic<int16_t>("try_subtract", INT16_MIN, 1), std::nullopt);
   EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", INT32_MIN, 1), std::nullopt);
   EXPECT_EQ(tryArithmetic<int64_t>("try_subtract", INT64_MIN, 1), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_subtract", INT32_MAX, -1), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int64_t>("try_subtract", INT64_MAX, -1), std::nullopt);
   EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", 5, 2), 3);
   EXPECT_EQ(
       tryArithmetic<int32_t>("try_subtract", 5, std::nullopt), std::nullopt);
