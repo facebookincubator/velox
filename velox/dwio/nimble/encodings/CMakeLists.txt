@@ -80,6 +80,7 @@ add_library(
   views/SimdForBitpackEncodingView.h
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
+  views/SentinelEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h

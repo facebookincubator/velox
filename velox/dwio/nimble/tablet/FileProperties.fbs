@@ -75,6 +75,9 @@ table FileProperties {
   /// copies streams into a file that declares this field must copy their
   /// trailers too.
   stream_trailer:[StreamTrailerField];
+
+  /// Whether any top-level row in the file is null.
+  has_top_level_nulls:bool = false;
 }
 
 root_type FileProperties;

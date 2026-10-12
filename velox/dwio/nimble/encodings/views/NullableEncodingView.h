@@ -29,6 +29,8 @@
 namespace facebook::nimble::detail {
 
 /// Maps logical rows to the compact non-null child encoding.
+/// Single-value reads require a non-null row. Uses null-aware reads for
+/// batches.
 template <typename T>
 class NullableEncodingView final : public TypedEncodingView<T> {
  public:
@@ -196,13 +198,17 @@ class NullableEncodingView final : public TypedEncodingView<T> {
   }
 
   physicalType readPhysicalAt(uint32_t index) const final {
-    NIMBLE_UNSUPPORTED(
-        "Nullable EncodingView requires a null-aware read: index={}", index);
+    this->checkReadRange(index, 1);
+    NIMBLE_CHECK(
+        isNonNull_[index],
+        "Nullable EncodingView physical reads require a non-null row");
+    physicalType value;
+    nonNullValues_->readAt(nonNullOffsets_[index], &value);
+    return value;
   }
 
   T readTypedAt(uint32_t index) const final {
-    NIMBLE_UNSUPPORTED(
-        "Nullable EncodingView requires a null-aware read: index={}", index);
+    return detail::castFromPhysicalType<T>(readPhysicalAt(index));
   }
 
  private:

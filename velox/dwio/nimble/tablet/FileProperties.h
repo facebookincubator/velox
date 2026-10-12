@@ -104,7 +104,8 @@ class FileProperties {
       bool clusterIndexKeyColumnStorageOmitted,
       std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
       bool hasStreamChecksums = false,
-      StreamTrailerLayout streamTrailerLayout = {});
+      StreamTrailerLayout streamTrailerLayout = {},
+      bool hasTopLevelNulls = false);
 
   /// Returns whether encoded stream row counts use compact varint encoding.
   bool compactRowCountEncoding() const {
@@ -136,6 +137,11 @@ class FileProperties {
     return streamTrailerLayout_;
   }
 
+  /// Returns whether any top-level row in the file is null.
+  bool hasTopLevelNulls() const {
+    return hasTopLevelNulls_;
+  }
+
   /// Serializes file properties into the `columnar.properties` optional
   /// section.
   std::string serialize() const;
@@ -149,6 +155,7 @@ class FileProperties {
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage_;
   bool hasStreamChecksums_{false};
   StreamTrailerLayout streamTrailerLayout_;
+  bool hasTopLevelNulls_{false};
 };
 
 } // namespace facebook::nimble

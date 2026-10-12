@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SentinelEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -139,6 +140,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::RLEEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::RLE;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::SentinelEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Sentinel;
 };
 
 template <>

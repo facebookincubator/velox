@@ -2196,7 +2196,30 @@ bool Writer::flushInputBuffers(bool finalize) {
   return anyStripeFlushed;
 }
 
+void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
+  if (hasTopLevelNulls_) {
+    return;
+  }
+  const auto numRows = input->size();
+  bool batchHasTopLevelNulls{false};
+  const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      !context_->options().ignoreTopLevelNulls;
+  if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      if (input->isNullAt(row)) {
+        batchHasTopLevelNulls = true;
+        break;
+      }
+    }
+  }
+  NIMBLE_USER_CHECK(
+      clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
+      "Cluster-indexed Nimble files cannot contain top-level null rows");
+  hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
+}
+
 void Writer::writeBatch(const velox::VectorPtr& input) {
+  checkTopLevelNulls(input);
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
   {
@@ -2460,7 +2483,7 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   auto streamTrailerLayout = tabletWriter_->streamTrailerLayout();
 
   if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
-      streamTrailerLayout.empty()) {
+      streamTrailerLayout.empty() && !hasTopLevelNulls_) {
     return;
   }
 
@@ -2470,7 +2493,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
           /*hasStreamChecksums=*/false,
-          std::move(streamTrailerLayout)}
+          std::move(streamTrailerLayout),
+          hasTopLevelNulls_}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
