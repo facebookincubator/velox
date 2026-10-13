@@ -28,9 +28,12 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -399,6 +402,21 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+  // Registering a function parses its signature, and one naming TIMESTAMP
+  // WITH TIME ZONE needs the type known first. The device translation unit
+  // that registers them cannot depend on the host type library.
+  registerTimestampWithTimeZoneType();
+  // The GPU SFI registrations also say which calls depend on the session time
+  // zone, and the selection needs that whether or not the evaluator is
+  // enabled: with it off, such a call must stay on the CPU rather than go to
+  // an evaluator that reads TIMESTAMP as UTC. So the functions and the
+  // sensitivity are registered regardless; only the evaluator is optional.
+  gpu_sfi::registerPrestoGpuFunctions(prefix);
+  registerGpuSfiSessionTimeZoneSensitivity();
+  if (CudfConfig::getInstance().gpuSfiExpressionEnabled) {
+    registerGpuSfiEvaluator(CudfConfig::getInstance().gpuSfiExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -491,6 +509,18 @@ void CudfConfig::initialize(
   if (config.find(kCudfAstExpressionPriority) != config.end()) {
     astExpressionPriority =
         folly::to<int32_t>(config[kCudfAstExpressionPriority]);
+  }
+  if (config.find(kCudfJitExpressionPriority) != config.end()) {
+    jitExpressionPriority =
+        folly::to<int32_t>(config[kCudfJitExpressionPriority]);
+  }
+  if (config.find(kCudfGpuSfiExpressionEnabled) != config.end()) {
+    gpuSfiExpressionEnabled =
+        folly::to<bool>(config[kCudfGpuSfiExpressionEnabled]);
+  }
+  if (config.find(kCudfGpuSfiExpressionPriority) != config.end()) {
+    gpuSfiExpressionPriority =
+        folly::to<int32_t>(config[kCudfGpuSfiExpressionPriority]);
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);

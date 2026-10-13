@@ -35,6 +35,7 @@
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
+#include <algorithm>
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
@@ -218,7 +219,14 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       stream.sync();
       return scalar;
     } else if (type->isIntervalYearMonth()) {
-      VELOX_FAIL("Interval year month not supported");
+      // A count of months as the plain integer it is stored as: cuDF has no
+      // month interval.
+      if constexpr (std::is_same_v<T, int32_t>) {
+        auto scalar = std::make_unique<cudf::numeric_scalar<T>>(
+            value, !isNull, stream, mr);
+        stream.sync();
+        return scalar;
+      }
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
@@ -358,10 +366,28 @@ cudf::ast::literal makeScalarAndLiteral(
 }
 
 /// Returns true if expr is non-null and its output type is one the AST/JIT
-/// evaluator does not support (currently TIMESTAMP and DECIMAL).
+/// evaluator does not support: TIMESTAMP, DECIMAL, and every type whose values
+/// compare through custom functions (TIMESTAMP WITH TIME ZONE, TIME WITH TIME
+/// ZONE, IPADDRESS). cuDF holds the latter as the integer that packs them, so
+/// an AST operator would compare or cast the packed bits as a number.
 inline bool isAstUnsupportedType(const core::TypedExprPtr& expr) {
   return expr && expr->type() &&
-      (expr->type()->isTimestamp() || expr->type()->isDecimal());
+      (expr->type()->isTimestamp() || expr->type()->isDecimal() ||
+       expr->type()->providesCustomComparison());
+}
+
+/// Returns true if expr yields, or takes as a direct input, a type whose values
+/// compare through custom functions. Only an evaluator that binds the logical
+/// type, as GPU SFI does through the function signature, may claim such a
+/// node; the others decline it so the operator stays on the CPU.
+inline bool hasCustomComparisonOperand(const core::TypedExprPtr& expr) {
+  if (expr->type()->providesCustomComparison()) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), [](const auto& input) {
+        return input->type()->providesCustomComparison();
+      });
 }
 
 /// Returns true if expr's own output type or any direct input type is one

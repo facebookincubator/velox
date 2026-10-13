@@ -17,6 +17,8 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
@@ -24,6 +26,13 @@ namespace {
 std::unordered_map<std::string, CudfExpressionEvaluatorEntry>&
 getRegistryImpl() {
   static std::unordered_map<std::string, CudfExpressionEvaluatorEntry> registry;
+  return registry;
+}
+
+std::unordered_map<std::string, CudfExpressionEvaluatorCanEvaluate>&
+getSessionTimeZoneSensitivityRegistry() {
+  static std::unordered_map<std::string, CudfExpressionEvaluatorCanEvaluate>
+      registry;
   return registry;
 }
 
@@ -36,14 +45,34 @@ bool registerCudfExpressionEvaluator(
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
     CudfExpressionEvaluatorCreate create,
+    bool honorsSessionTimeZone,
     bool overwrite) {
   auto& registry = getCudfExpressionEvaluatorRegistry();
   if (!overwrite && registry.find(name) != registry.end()) {
     return false;
   }
   registry[name] = CudfExpressionEvaluatorEntry{
-      priority, std::move(canEvaluate), std::move(create)};
+      priority,
+      std::move(canEvaluate),
+      std::move(create),
+      honorsSessionTimeZone};
   return true;
+}
+
+void registerSessionTimeZoneSensitivity(
+    const std::string& name,
+    CudfExpressionEvaluatorCanEvaluate predicate) {
+  getSessionTimeZoneSensitivityRegistry()[name] = std::move(predicate);
+}
+
+bool isSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto& registry = getSessionTimeZoneSensitivityRegistry();
+  return std::any_of(registry.begin(), registry.end(), [&](const auto& named) {
+    return named.second(expr);
+  });
 }
 
 std::unordered_map<std::string, CudfExpressionEvaluatorEntry>&
@@ -72,6 +101,7 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
          const core::QueryConfig& config) {
         return FunctionExpression::create(expr, row, pool, config);
       },
+      /*honorsSessionTimeZone=*/false,
       /*overwrite=*/false);
 
   registeredBuiltins = true;

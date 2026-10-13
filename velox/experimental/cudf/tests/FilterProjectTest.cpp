@@ -18,6 +18,9 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/GpuTestFunctions.h"
+#include "velox/experimental/cudf/tests/utils/CpuErrorParity.h"
+#include "velox/experimental/cudf/tests/utils/PreferGpuSfi.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -27,13 +30,19 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <folly/ScopeGuard.h>
+#include <gmock/gmock.h>
 
+#include <algorithm>
 #include <atomic>
 #include <limits>
+#include <unordered_map>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -665,9 +674,66 @@ class CudfFilterProjectTest : public OperatorTestBase {
     assertPlanMatchesVelox(plan);
   }
 
+  // Runs `plan` under `configs` on the CPU and on the GPU and requires the
+  // same error of the same class, with `message` in it. A declined batch is
+  // re-evaluated through Velox, so the GPU's error is Velox's own.
+  void assertGpuRaisesCpuError(
+      const core::PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& configs,
+      const std::string& message) {
+    struct Raised {
+      std::string message;
+      bool userError;
+    };
+    const auto run = [&]() -> Raised {
+      try {
+        AssertQueryBuilder(plan).configs(configs).copyResults(pool());
+      } catch (const VeloxException& error) {
+        return {error.message(), error.isUserError()};
+      }
+      ADD_FAILURE() << "Expected an error";
+      return {"", false};
+    };
+    cudf_velox::unregisterCudf();
+    const auto cpu = run();
+    cudf_velox::registerCudf();
+    EXPECT_THAT(cpu.message, testing::HasSubstr(message));
+    const auto gpu = run();
+    EXPECT_EQ(gpu.message, cpu.message);
+    EXPECT_EQ(gpu.userError, cpu.userError);
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
+  }
+
+  // Two TIMESTAMP WITH TIME ZONE columns: the same instants in two zones, in
+  // both orders since the zone keys sort one way, one row where the instants
+  // differ, and a null.
+  RowVectorPtr makeTimestampWithTimeZonePairs() {
+    const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
+    const auto utc = tz::getTimeZoneID("UTC");
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeNullableFlatVector<int64_t>(
+             {pack(0, losAngeles),
+              pack(1'000, losAngeles),
+              pack(-1'000, losAngeles),
+              pack(1'700'000'000'000, losAngeles),
+              pack(5'000, utc),
+              pack(1'000, losAngeles),
+              std::nullopt},
+             TIMESTAMP_WITH_TIME_ZONE()),
+         makeNullableFlatVector<int64_t>(
+             {pack(0, utc),
+              pack(1'000, utc),
+              pack(-1'000, utc),
+              pack(1'700'000'000'000, utc),
+              pack(5'000, losAngeles),
+              pack(2'000, utc),
+              pack(0, utc)},
+             TIMESTAMP_WITH_TIME_ZONE())});
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -996,6 +1062,296 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
   }
 }
 
+// TIMESTAMP WITH TIME ZONE packs UTC millis over a zone key in one int64, and
+// two values naming the same instant in different zones compare equal. cuDF
+// sees the column as INT64, so only GPU SFI, which unpacks the instant, may
+// compare it. The fixture forbids CPU fallback, so these run on the GPU or
+// fail.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneComparisonsRunOnGpu) {
+  auto data = makeTimestampWithTimeZonePairs();
+
+  for (const auto& projection :
+       {"c0 = c1",
+        "c0 <> c1",
+        "c0 < c1",
+        "c0 <= c1",
+        "c0 > c1",
+        "c0 >= c1",
+        "c0 between c1 and c1"}) {
+    SCOPED_TRACE(projection);
+    assertProjectMatchesVelox({data}, {projection});
+  }
+
+  for (const auto& filter : {"c0 = c1", "c0 between c1 and c1"}) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox({data}, filter, {"c0", "c1"});
+  }
+}
+
+// A cast of TIMESTAMP WITH TIME ZONE would read the packed bits as a number,
+// so casts stay on the CPU.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneCastsRunOnCpu) {
+  auto data = makeTimestampWithTimeZonePairs();
+
+  // The operator declines these expressions at plan time, which is observable
+  // only when the plan may continue on the CPU.
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
+  for (const auto& projection :
+       {"cast(c0 as varchar)", "cast(c0 as timestamp)"}) {
+    SCOPED_TRACE(projection);
+    assertProjectMatchesVelox({data}, {projection});
+  }
+
+  // Presto has no cast from TIMESTAMP WITH TIME ZONE to BIGINT, so the plan
+  // reports the CPU's error rather than handing back the packed bits.
+  auto plan =
+      PlanBuilder().values({data}).project({"cast(c0 as bigint)"}).planNode();
+  VELOX_ASSERT_THROW(
+      runPlan(plan), "Cannot cast TIMESTAMP WITH TIME ZONE to BIGINT");
+}
+
+// A zone id the Velox database never assigned. Twelve bits can name one, and
+// nothing stops a packed value from carrying it.
+int16_t absentTimeZoneId() {
+  const auto ids = tz::getTimeZoneIDs();
+  for (int16_t id = 1; id < ids.back(); ++id) {
+    if (!std::binary_search(ids.begin(), ids.end(), id)) {
+      return id;
+    }
+  }
+  ADD_FAILURE() << "The Velox time zone database has no hole";
+  return -1;
+}
+
+// Every check a TIMESTAMP WITH TIME ZONE function can fail on the device
+// raises the CPU's error, as a declined row is re-evaluated through Velox:
+// tz::locateZone(id) raises a runtime error for a hole, which a TRY must not
+// swallow; pack() rejects millis past the twelve-bit shift;
+// tz::getTimeZoneID(int32_t) rejects an offset beyond fourteen hours, per row
+// and once in initialize() for the constant form; tz::getTimeZoneID(name)
+// rejects an unknown name; getTimestampUnit() rejects the unit once, in
+// initialize() on the host, where a failed check throws as it does on the CPU.
+TEST_F(CudfFilterProjectTest, timestampWithTimeZoneChecksRaiseTheCpuError) {
+  const auto hole = absentTimeZoneId();
+  const auto utc = tz::getTimeZoneID("UTC");
+
+  // The second row of each pair fails, next to a clean first row.
+  auto absentZone = makeRowVector({makeFlatVector<int64_t>(
+      {pack(0, utc), pack(1'000, hole)}, TIMESTAMP_WITH_TIME_ZONE())});
+  auto doubles = makeRowVector({makeFlatVector<double>({0.0, 1e300})});
+  auto offsets = makeRowVector({
+      makeFlatVector<double>({0.0, 1.0}),
+      makeFlatVector<int64_t>({5, 15}),
+      makeFlatVector<int64_t>({30, 0}),
+  });
+  auto overflowingOffsets = makeRowVector({
+      makeFlatVector<double>({0.0, 1.0}),
+      makeFlatVector<int64_t>({5, std::numeric_limits<int64_t>::max()}),
+      makeFlatVector<int64_t>({30, 0}),
+  });
+
+  struct Case {
+    RowVectorPtr data;
+    const char* projection;
+    const char* message;
+    bool userError;
+  };
+  const auto absentMessage =
+      fmt::format("Unable to resolve timeZoneID '{}'", hole);
+  const std::string overflow{"TimestampWithTimeZone overflow"};
+  const std::string offsetRange{"Invalid timezone offset minutes: 900"};
+  const std::string unknown{"Unknown time zone: 'Mars/Olympus_Mons'"};
+  const std::vector<Case> cases{
+      {absentZone, "year(c0)", absentMessage.c_str(), false},
+      {absentZone, "second(c0)", absentMessage.c_str(), false},
+      {absentZone, "timezone_hour(c0)", absentMessage.c_str(), false},
+      {absentZone, "timezone_minute(c0)", absentMessage.c_str(), false},
+      {doubles, "from_unixtime(c0, 'UTC')", overflow.c_str(), true},
+      {offsets, "from_unixtime(c0, c1, c2)", offsetRange.c_str(), true},
+      {doubles, "from_unixtime(c0, 15, 0)", offsetRange.c_str(), true},
+      {overflowingOffsets,
+       "from_unixtime(c0, c1, c2)",
+       "integer overflow: ",
+       true},
+      {doubles,
+       "from_unixtime(c0, 'Mars/Olympus_Mons')",
+       unknown.c_str(),
+       true},
+      {absentZone,
+       "at_timezone(c0, 'Mars/Olympus_Mons')",
+       unknown.c_str(),
+       true},
+      {absentZone,
+       "date_trunc('millisecond', c0)",
+       "millisecond is not a valid TIMESTAMP field",
+       true},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(fmt::format("{}: {}", testCase.projection, testCase.message));
+    auto plan = PlanBuilder()
+                    .values({testCase.data})
+                    .project({fmt::format("{} AS out", testCase.projection)})
+                    .planNode();
+    if (testCase.userError) {
+      VELOX_ASSERT_USER_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()), testCase.message);
+    } else {
+      VELOX_ASSERT_RUNTIME_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()), testCase.message);
+    }
+  }
+
+  // Rendered in the session zone, the embedded id is consulted only by the
+  // offset functions.
+  auto plan = PlanBuilder()
+                  .values({absentZone})
+                  .project({"year(c0) AS out", "timezone_hour(c0) AS tz"})
+                  .planNode();
+  VELOX_ASSERT_RUNTIME_THROW(
+      AssertQueryBuilder(plan)
+          .config(
+              core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
+              "true")
+          .copyResults(pool()),
+      absentMessage);
+  auto rendered = PlanBuilder()
+                      .values({absentZone})
+                      .project({"year(c0) AS out", "hour(c0) AS h"})
+                      .planNode();
+  AssertQueryBuilder(rendered)
+      .config(
+          core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
+          "true")
+      .config(core::QueryConfig::kSessionTimezone, "Asia/Kathmandu")
+      .assertResults(makeRowVector(
+          {makeFlatVector<int64_t>({1970, 1970}),
+           makeFlatVector<int64_t>({5, 5})}));
+}
+
+// The checks the date arithmetic can fail each raise the CPU's error for a
+// declined row: a truncation whose local day begins in a gap and a month onto
+// a skipped local time (America/Sao_Paulo moved its clocks forward at the
+// midnight of 2018-11-04; the interval operators do not move past a gap as
+// date_add does), an unknown unit, a unit the overload rejects, a count beyond
+// int32 and a result past the type's range.
+TEST_F(CudfFilterProjectTest, dateArithmeticChecksRaiseTheCpuError) {
+  // 2018-11-04T03:00:00Z, when Sao_Paulo's clocks moved from midnight to one,
+  // and the local midnight a month before it.
+  constexpr int64_t kSkippedMidnight = 1'541'300'400;
+  constexpr int64_t kMonthBefore = 1'538'622'000;
+  const std::unordered_map<std::string, std::string> saoPaulo{
+      {core::QueryConfig::kSessionTimezone, "America/Sao_Paulo"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  };
+  const auto utc = tz::getTimeZoneID("UTC");
+  // The second row of each input fails, next to a clean first row.
+  const auto timestamps = [&](int64_t seconds) {
+    return makeRowVector(
+        {makeFlatVector<Timestamp>({Timestamp(0, 0), Timestamp(seconds, 0)})});
+  };
+  auto afterTheGap = timestamps(kSkippedMidnight + 1);
+  auto monthBefore = timestamps(kMonthBefore);
+  auto ts = timestamps(1'700'000'000);
+  auto dates = makeRowVector({makeFlatVector<int32_t>({0, 18'262}, DATE())});
+  auto zoned = makeRowVector({makeFlatVector<int64_t>(
+      {pack(0, utc), pack(1'000, utc)}, TIMESTAMP_WITH_TIME_ZONE())});
+  auto longIntervals = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(0, utc), pack(0, utc)}, TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>({1, 4'000'000'000'000'000}, INTERVAL_DAY_TIME()),
+  });
+
+  struct Case {
+    RowVectorPtr data;
+    const char* projection;
+    std::unordered_map<std::string, std::string> configs;
+    const char* message;
+  };
+  const std::vector<Case> cases{
+      {afterTheGap, "date_trunc('day', c0)", saoPaulo, "is in a gap"},
+      {monthBefore, "c0 + INTERVAL 1 MONTH", saoPaulo, "is in a gap"},
+      {ts, "date_add('fortnight', 1, c0)", {}, "Unsupported datetime unit"},
+      {ts, "date_diff('fortnight', c0, c0)", {}, "Unsupported datetime unit"},
+      {ts, "date_trunc('millisecond', c0)", {}, "not a valid TIMESTAMP field"},
+      {dates, "date_trunc('hour', c0)", {}, "not a valid DATE field"},
+      {dates, "date_add('hour', 1, c0)", {}, "not a valid DATE field"},
+      {dates, "date_diff('minute', c0, c0)", {}, "not a valid DATE field"},
+      {ts, "date_add('day', 2147483648, c0)", {}, "Value should be in range"},
+      {ts, "date_add('year', 2147483647, c0)", {}, "Year is out of range"},
+      {zoned, "date_add('year', 2147483647, c0)", {}, "Year is out of range"},
+      {dates, "date_add('day', 2147483647, c0)", {}, "Date is out of range"},
+      {longIntervals, "c0 + c1", {}, "TimestampWithTimeZone overflow"},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.projection);
+    auto plan = PlanBuilder()
+                    .values({testCase.data})
+                    .project({fmt::format("{} AS out", testCase.projection)})
+                    .planNode();
+    assertGpuRaisesCpuError(plan, testCase.configs, testCase.message);
+  }
+}
+
+// A planner delivers `c0 + INTERVAL 1 MONTH` as a literal of INTERVAL YEAR TO
+// MONTH, which GPU SFI reads through a one-row column as it reads any
+// literal; a column of the type cannot cross to cuDF, which has no month
+// interval. The fixture forbids CPU fallback, so these run on the GPU or fail.
+TEST_F(CudfFilterProjectTest, intervalLiteralsRunOnGpu) {
+  // 2024-01-31, 2024-02-29 and the epoch, where the end-of-month rules act.
+  const auto losAngeles = tz::getTimeZoneID("America/Los_Angeles");
+  const std::vector<VectorPtr> columns{
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(1'706'659'200, 0),
+           Timestamp(1'709'164'800, 123'000'000),
+           Timestamp(0, 0),
+           std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {pack(1'706'659'200'000, losAngeles),
+           pack(1'709'164'800'123, losAngeles),
+           pack(0, losAngeles),
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  };
+  for (const auto& column : columns) {
+    SCOPED_TRACE(column->type()->toString());
+    assertPlanMatchesVelox(
+        PlanBuilder()
+            .values({makeRowVector({column})})
+            .project(
+                {"c0 + INTERVAL 1 MONTH",
+                 "INTERVAL 13 MONTH + c0",
+                 "c0 - INTERVAL 12 MONTH",
+                 "c0 + INTERVAL 1 DAY",
+                 "c0 - INTERVAL 1 MILLISECOND"})
+            .planNode());
+  }
+}
+
+// A TIMESTAMP result the output column's unit cannot hold is declined on the
+// device, so the CPU's value stands for the row: from_unixtime(1e18) clamps to
+// the last millisecond a Timestamp holds, far past the nanosecond column's
+// range. That value then meets the error every out-of-range Timestamp meets on
+// its way into a cuDF column, rather than being handed back as other bits.
+TEST_F(CudfFilterProjectTest, timestampResultBeyondTheColumnUnitIsTheCpus) {
+  auto data = makeRowVector({makeFlatVector<double>({0.0, 1e18, 1.5})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"from_unixtime(c0) AS out"})
+                  .planNode();
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Could not convert Timestamp(9223372036854775, 807000000) to "
+      "nanoseconds");
+}
+
 TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
   std::vector<int32_t> dates = {
       toDateDays("2024-12-31"),
@@ -1308,40 +1664,36 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+// A count beyond int32 raises Velox's own error, whether the count is a
+// literal or a column: the GPU declines the row and the CPU reports it.
 TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
-  // Literal value that exceeds int32 range; checked at eval time by
-  // checkedScaleValue -> checkValueInInt32Range.
   auto data = makeRowVector(
       {"event_date"},
       {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
-  std::vector<RowVectorPtr> vectors{data};
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"date_add('day', 2147483648, event_date) AS r"})
-                  .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "date_add value is out of range");
+  assertGpuRaisesCpuError(
+      PlanBuilder()
+          .values({data})
+          .project({"date_add('day', 2147483648, event_date) AS r"})
+          .planNode(),
+      {},
+      "Value should be in range");
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
-  // Column value that exceeds int32 range; checked at eval time by
-  // checkValueRange on the GPU.
   auto data = makeRowVector(
       {"event_date", "amount"},
       {makeFlatVector<int32_t>(
            {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
        makeFlatVector<int64_t>({1, std::numeric_limits<int64_t>::max()})});
-  std::vector<RowVectorPtr> vectors{data};
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"date_add('day', amount, event_date) AS r"})
-                  .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "date_add value is out of range");
+  assertGpuRaisesCpuError(
+      PlanBuilder()
+          .values({data})
+          .project({"date_add('day', amount, event_date) AS r"})
+          .planNode(),
+      {},
+      "Value should be in range");
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
@@ -1361,7 +1713,9 @@ TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
-TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
+// A count of weeks that fits an int32 while the days it adds do not: Velox
+// raises for the date that leaves the type's range, and so must the GPU.
+TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowRaisesTheCpuError) {
   constexpr int64_t kPositiveWeekOverflow =
       std::numeric_limits<int32_t>::max() / 7LL + 1;
   constexpr int64_t kNegativeWeekOverflow =
@@ -1372,13 +1726,17 @@ TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
       {makeFlatVector<int32_t>({0, 0}, DATE()),
        makeFlatVector<int64_t>(
            {kPositiveWeekOverflow, kNegativeWeekOverflow})});
-  std::vector<RowVectorPtr> vectors{data};
 
-  const std::vector<std::string> projections{
-      "date_add('week', amount, event_date) AS column_value",
-      "date_add('week', 306783379, event_date) AS positive_literal",
-      "date_add('week', -306783379, event_date) AS negative_literal"};
-  assertProjectMatchesVelox(vectors, projections);
+  for (const auto& projection :
+       {"date_add('week', amount, event_date) AS column_value",
+        "date_add('week', 306783379, event_date) AS positive_literal",
+        "date_add('week', -306783379, event_date) AS negative_literal"}) {
+    SCOPED_TRACE(projection);
+    assertGpuRaisesCpuError(
+        PlanBuilder().values({data}).project({projection}).planNode(),
+        {},
+        "Date is out of range after arithmetic");
+  }
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
@@ -1811,13 +2169,14 @@ TEST_F(CudfFilterProjectTest, round) {
              .planNode();
   AssertQueryBuilder(plan).assertResults(data);
 
+  // Velox's round returns an integral argument unchanged for negative digits,
+  // and GPU SFI runs Velox's own body.
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0, -3) as c1"})
              .planNode();
-  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(plan).assertResults(data);
 }
 
 TEST_F(CudfFilterProjectTest, roundDecimal) {
@@ -3146,6 +3505,239 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Integral arithmetic and the checked bitwise functions on GPU SFI return the
+// CPU's result when every check passes, and when a check fails only in a branch
+// the condition excludes: a GPU conditional computes both branches for every
+// row, so `c0 + c0` overflows on the device for the excluded row, and
+// re-running the whole expression through Velox, not the subtree, returns the
+// CPU's answer.
+TEST_F(CudfFilterProjectTest, deviceChecksDoNotRaiseWhereTheCpuDoesNot) {
+  // Integral arithmetic would otherwise go to the AST evaluator, which carries
+  // no checks.
+  cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  // Number, shift and width: a negative number inside the width, then a shift
+  // that reaches the width and the full 64 bits, which pass every check.
+  auto bitwise = makeRowVector({
+      makeFlatVector<int64_t>({-9, 9}),
+      makeFlatVector<int64_t>({3, 63}),
+      makeFlatVector<int64_t>({8, 64}),
+  });
+  struct Case {
+    const char* what;
+    RowVectorPtr data;
+    const char* projection;
+  };
+  const std::vector<Case> cases{
+      {"clean rows",
+       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}),
+       "c0 + c0 AS c1"},
+      {"masked overflow",
+       makeRowVector({makeFlatVector<int64_t>({1, kMax})}),
+       "if(c0 = 1, c0 + c0, c0) AS c1"},
+      {"bit_count", bitwise, "bit_count(c0, c2) AS out"},
+      {"arithmetic shift right",
+       bitwise,
+       "bitwise_arithmetic_shift_right(c0, c1) AS out"},
+      {"shift left", bitwise, "bitwise_shift_left(c0, c1, c2) AS out"},
+      {"logical shift right",
+       bitwise,
+       "bitwise_logical_shift_right(c0, c1, c2) AS out"},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.what);
+    assertProjectMatchesVelox({testCase.data}, {testCase.projection});
+  }
+}
+
+// No cuDF evaluator claims "try", so a tree containing it stays on the CPU and
+// TRY behaves as Velox's. If an evaluator ever claims it, a declined row must
+// become a null rather than an error, and this test fails first.
+TEST_F(CudfFilterProjectTest, tryIsNotGpuEligible) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2)),
+      makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2)),
+  });
+
+  auto plan =
+      PlanBuilder().values({data}).project({"try(c0 / c1) AS c2"}).planNode();
+
+  // The fixture forbids CPU fallback, so a plan the GPU cannot take fails.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // With fallback, Velox runs it: 1.00 / 0.05 = 20.00 and the division by zero
+  // becomes a null. Re-registered because the adapter reads the flag then.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    config.allowCpuFallback = previousFallback;
+    cudf_velox::registerCudf();
+  };
+  cudf_velox::unregisterCudf();
+  config.allowCpuFallback = true;
+  cudf_velox::registerCudf();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({2000, std::nullopt}, DECIMAL(12, 2))});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Every reachable check in the registered functions, the Checked* integral
+// operators, the checked bitwise functions and the decimal operators, raises
+// Velox's own user error, message included, in a projection and in a filter,
+// where the failure is detected before the declined row is dropped.
+TEST_F(CudfFilterProjectTest, deviceChecksRaiseTheCpuError) {
+  // Integral arithmetic would otherwise go to the AST evaluator, which carries
+  // no checks.
+  cudf_velox::test_utils::PreferGpuSfi preferGpuSfi;
+
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  constexpr auto kMin = std::numeric_limits<int64_t>::min();
+
+  // The second row of each pair fails, next to a clean first row.
+  auto integral = makeRowVector({
+      makeFlatVector<int64_t>({1, kMax}),
+      makeFlatVector<int64_t>({1, 0}),
+  });
+  auto extremes = makeRowVector({
+      makeFlatVector<int64_t>({1, kMin}),
+      makeFlatVector<int64_t>({1, 1}),
+  });
+  // Number, shift and width, each failing row tripping one check only: a
+  // negative shift, with a number that 8 bits cannot hold for bit_count, and a
+  // width outside 2..64 with a clean shift.
+  auto negativeShift = makeRowVector({
+      makeFlatVector<int64_t>({9, 200}),
+      makeFlatVector<int64_t>({3, -1}),
+      makeFlatVector<int64_t>({8, 8}),
+  });
+  auto narrowBits = makeRowVector({
+      makeFlatVector<int64_t>({9, 9}),
+      makeFlatVector<int64_t>({3, 3}),
+      makeFlatVector<int64_t>({8, 1}),
+  });
+  auto decimals = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}, DECIMAL(10, 2)),
+      makeFlatVector<int64_t>({5, 0}, DECIMAL(10, 2)),
+  });
+  auto wideDecimals = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+      // Negated, so that subtracting it overflows the same way adding the
+      // positive one does.
+      makeFlatVector<int128_t>(
+          {1, -DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+  });
+
+  auto nearLimit = makeRowVector({
+      makeFlatVector<int128_t>(
+          {1, static_cast<int128_t>(6) * DecimalUtil::kPowersOfTen[37]},
+          DECIMAL(38, 0)),
+      makeFlatVector<int128_t>({1, 2}, DECIMAL(38, 0)),
+  });
+
+  struct Case {
+    const char* what;
+    RowVectorPtr data;
+    const char* expression;
+    bool isFilter;
+  };
+
+  const std::vector<Case> cases{
+      {"checkedPlus", integral, "c0 + c0", false},
+      {"checkedMinus", extremes, "c0 - c1", false},
+      {"checkedMultiply", integral, "c0 * c0", false},
+      {"checkedDivide", integral, "c0 / c1", false},
+      {"checkedModulus", integral, "c0 % c1", false},
+      {"checkedNegate", extremes, "negate(c0)", false},
+      // The decimal operators. At scale 0, plus and minus overflow in
+      // checkedPlus rather than in their own "Decimal overflow" branch, and
+      // checkedMultiply fires first when the product leaves int128 entirely.
+      {"decimalPlus", wideDecimals, "c0 + c0", false},
+      {"decimalMinus", wideDecimals, "c0 - c1", false},
+      {"decimalMultiply", wideDecimals, "c0 * c0", false},
+      // 6e37 * 2 fits int128 but not decimal(38,0), so valueInRange fails.
+      {"decimalMultiplyRange", nearLimit, "c0 * c1", false},
+      {"decimalDivide", decimals, "c0 / c1", false},
+      {"decimalModulus", decimals, "mod(c0, c1)", false},
+      {"filter", integral, "c0 / c1 > 1", true},
+      {"bitCountNumber", negativeShift, "bit_count(c0, c2)", false},
+      {"bitCountBits", narrowBits, "bit_count(c0, c2)", false},
+      // Widths past the one word a number occupies, as a constant so every
+      // row fails: the device runs on after the width check and must not read
+      // past the number.
+      {"bitCountOneWordPast", narrowBits, "bit_count(c0, 65)", false},
+      {"bitCountFarPast", narrowBits, "bit_count(c0, 1048576)", false},
+      {"bitCountMaxWidth", narrowBits, "bit_count(c0, 2147483647)", false},
+      {"arithmeticShiftRightShift",
+       negativeShift,
+       "bitwise_arithmetic_shift_right(c0, c1)",
+       false},
+      {"shiftLeftShift",
+       negativeShift,
+       "bitwise_shift_left(c0, c1, c2)",
+       false},
+      {"shiftLeftBits", narrowBits, "bitwise_shift_left(c0, c1, c2)", false},
+      {"logicalShiftRightShift",
+       negativeShift,
+       "bitwise_logical_shift_right(c0, c1, c2)",
+       false},
+      {"logicalShiftRightBits",
+       narrowBits,
+       "bitwise_logical_shift_right(c0, c1, c2)",
+       false},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.what);
+    auto builder = PlanBuilder().values({testCase.data});
+    auto plan = testCase.isFilter
+        ? builder.filter(testCase.expression).planNode()
+        : builder.project({fmt::format("{} AS out", testCase.expression)})
+              .planNode();
+    cudf_velox::test_utils::assertGpuRaisesCpuError(plan, pool());
+  }
+}
+
+// A literal argument's value reaches the function's initialize(), and a column
+// in the same position does not. The test function answers with what
+// initialize() saw, so the kernel's output is the only evidence. Built as typed
+// expressions because the CPU has no such function to parse against.
+TEST_F(CudfFilterProjectTest, literalArgumentsReachInitialize) {
+  cudf_velox::gpu_sfi::registerGpuTestFunctions();
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3}), makeFlatVector<int64_t>({7, 8, 9})});
+
+  auto column = [](const std::string& name) {
+    return std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), name);
+  };
+  auto call = [](std::vector<core::TypedExprPtr> inputs) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(), std::move(inputs), "test_initialize_constant");
+  };
+
+  auto withLiteral = PlanBuilder()
+                         .values({data})
+                         .projectExpressions({call(
+                             {column("c0"),
+                              std::make_shared<core::ConstantTypedExpr>(
+                                  BIGINT(), Variant(int64_t{42}))})})
+                         .planNode();
+  AssertQueryBuilder(withLiteral)
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({42, 42, 42})}));
+
+  auto withColumn =
+      PlanBuilder()
+          .values({data})
+          .projectExpressions({call({column("c0"), column("c1")})})
+          .planNode();
+  AssertQueryBuilder(withColumn)
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({-1, -1, -1})}));
 }
 
 } // namespace
