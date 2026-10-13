@@ -31,6 +31,7 @@
 #include <cub/device/device_reduce.cuh>
 #include <cuda/iterator>
 #include <cuda/std/span>
+#include <cuda/std/tuple>
 #include <cuda/std/type_traits>
 #include <cuda_runtime.h>
 #include <thrust/transform.h>

@@ -627,8 +627,9 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalDecimal64Overflow) {
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
-  testAggregation(false);
-  testAggregation(true);
+  for (bool partial : {false, true}) {
+    testAggregation(partial);
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalAvgGroupbySingleDecimal64Overflow) {
@@ -1151,6 +1152,8 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingleRescalesOutput) {
         stream,
         cudf::get_current_device_resource_ref());
 
+    ASSERT_EQ(result->size(), 1);
+    ASSERT_EQ(result->null_count(), 0);
     EXPECT_EQ(result->type(), cudf_velox::veloxToCudfDataType(outputType));
     EXPECT_EQ(
         copyColumnData<int128_t>(result->view(), stream),
@@ -1158,9 +1161,10 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingleRescalesOutput) {
   };
 
   testRescale({12'345, 100}, DECIMAL(38, 3), 124'450);
-  // Cast-before-sum rounds each 0.06 to 0.0, instead of summing to 0.12 and
-  // then rounding the result to 0.1.
+  // Cast-before-sum truncates each 0.06 to 0.0, instead of summing to 0.12 and
+  // then truncating the result to 0.1.
   testRescale({6, 6}, DECIMAL(38, 1), 0);
+  testRescale({-16, -16}, DECIMAL(38, 1), -2);
 }
 
 // Masked groupby sum: the mask null-injects raw input so cuDF sum excludes
@@ -1320,8 +1324,9 @@ TEST_F(CudfDecimalTest, decimalSumGlobalDecimal64Overflow) {
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
-  testAggregation(false);
-  testAggregation(true);
+  for (bool partial : {false, true}) {
+    testAggregation(partial);
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinaryNullGroup) {
