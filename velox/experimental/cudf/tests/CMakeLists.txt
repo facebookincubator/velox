@@ -335,5 +335,5 @@ endif()
 velox_add_cudf_test(
   NAME velox_cudf_pinned_memory_test
   SOURCES PinnedMemoryAllocatorTest.cpp
-  LIBS velox_cudf_pinned_memory velox_caching CUDA::cudart
+  LIBS velox_cudf_pinned_memory velox_caching CUDA::cudart CCCL::CCCL
 )

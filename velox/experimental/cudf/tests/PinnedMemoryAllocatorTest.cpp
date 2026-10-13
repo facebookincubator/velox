@@ -24,6 +24,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
 
+#include <cuda/memory_resource>
 #include <cuda_runtime_api.h>
 
 #include <folly/ScopeGuard.h>
@@ -145,6 +146,43 @@ DEBUG_ONLY_TEST_F(PinnedMemoryAllocatorTest, partialRunFailure) {
   EXPECT_EQ(mr->numAllocated(), 0);
   ASSERT_TRUE(mr->allocateNonContiguous(257, pages));
   mr->freeNonContiguous(pages);
+  EXPECT_TRUE(mr->checkConsistency());
+}
+
+DEBUG_ONLY_TEST_F(
+    PinnedMemoryAllocatorTest,
+    fragmentedPoolReclaimsBeyondRequestSize) {
+  common::testutil::TestValue::enable();
+  auto mr = allocator(64 * kMiB);
+  cache::AsyncDataCache::Options options;
+  options.numShards = 1;
+  auto cache = cache::AsyncDataCache::create(mr.get(), nullptr, options);
+  auto shutdown = folly::makeGuard([&] { cache->shutdown(); });
+  StringIdLease file(fileIds(), std::string_view("fragmented-pinned-pool"));
+  for (int i = 0; i < 48; ++i) {
+    auto pin = cache->findOrCreate({file.id(), i * kMiB}, kMiB, true, nullptr);
+    pin.entry()->setExclusiveToShared();
+  }
+  // Reproduce a pool that has enough logical headroom but cannot satisfy a
+  // small contiguous request until substantially more cache has been evicted.
+  // This is the condition observed with real CUDA host-pool fragmentation.
+  {
+    SCOPED_TESTVALUE_SET(
+        "PinnedMemoryAllocator::poolAllocate",
+        std::function<void(uint64_t*)>([](uint64_t* charged) {
+          if (*charged > 8 * kMiB) {
+            throw cuda::cuda_error(
+                cudaErrorMemoryAllocation, "fragmented test pool");
+          }
+        }));
+    auto* spill = mr->allocateBytes(kMiB);
+    ASSERT_NE(spill, nullptr);
+    EXPECT_GT(cache->refreshStats().numEvict, 4);
+    mr->freeBytes(spill, kMiB);
+  }
+  cache->shutdown();
+  shutdown.dismiss();
+  EXPECT_EQ(mr->numAllocated(), 0);
   EXPECT_TRUE(mr->checkConsistency());
 }
 

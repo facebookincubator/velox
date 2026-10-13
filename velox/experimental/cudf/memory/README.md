@@ -75,3 +75,10 @@ cache->shutdown();
 Production callers should retain spill allocations in their existing RAII
 owners so cancellation and exceptions also release them after GPU completion.
 No host-to-disk spill implementation or query-level spill policy is introduced.
+
+On CUDA allocation failure with logical headroom, the adapter asks the cache to
+shrink in progressively larger batches. Host-pool fragmentation can require
+more reclamation than the incoming request size. Reclamation runs outside the
+allocator mutex (cache eviction calls back into freeBytes), is bounded by one
+capacity's worth of progress per attempt, and stops when no cache can be freed.
+It neither synchronizes application streams nor changes core cache policy APIs.

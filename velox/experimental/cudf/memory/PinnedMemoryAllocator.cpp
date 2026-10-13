@@ -145,29 +145,54 @@ void* PinnedMemoryAllocator::allocateBytesWithoutRetry(
     return nullptr;
   }
   const auto charged = AllocationTraits::roundUpPageBytes(bytes + padding);
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (charged > impl_->capacity - impl_->chargedBytes ||
-      testingHasInjectedFailure(InjectedFailure::kCap)) {
-    setAllocatorFailureMessage("Pinned allocator capacity exhausted");
-    return nullptr;
-  }
-  bool fail = testingHasInjectedFailure(InjectedFailure::kAllocate);
-  common::testutil::TestValue::adjust("PinnedMemoryAllocator::allocate", &fail);
-  if (fail) {
-    setAllocatorFailureMessage("Injected pinned allocation failure");
-    return nullptr;
-  }
+  std::unique_lock<std::mutex> lock(impl_->mutex);
+  uint64_t reclaimBytes = std::max<uint64_t>(charged, 32ULL << 20);
+  uint64_t reclaimedBytes = 0;
   void* base;
-  try {
-    stats_.recordAllocate(
-        charged, 1, [&] { base = impl_->pool.allocate_sync(charged); });
-  } catch (const cuda::cuda_error& error) {
-    // Only capacity failures are retryable through cache eviction.
-    if (error.status() != cudaErrorMemoryAllocation) {
-      throw;
+  for (;;) {
+    // Recheck after eviction: another allocator thread may consume the space.
+    if (charged > impl_->capacity - impl_->chargedBytes ||
+        testingHasInjectedFailure(InjectedFailure::kCap)) {
+      setAllocatorFailureMessage("Pinned allocator capacity exhausted");
+      return nullptr;
     }
-    setAllocatorFailureMessage(error.what());
-    return nullptr;
+    bool fail = testingHasInjectedFailure(InjectedFailure::kAllocate);
+    common::testutil::TestValue::adjust(
+        "PinnedMemoryAllocator::allocate", &fail);
+    if (fail) {
+      setAllocatorFailureMessage("Injected pinned allocation failure");
+      return nullptr;
+    }
+    try {
+      common::testutil::TestValue::adjust(
+          "PinnedMemoryAllocator::poolAllocate", &impl_->chargedBytes);
+      stats_.recordAllocate(
+          charged, 1, [&] { base = impl_->pool.allocate_sync(charged); });
+      break;
+    } catch (const cuda::cuda_error& error) {
+      if (error.status() != cudaErrorMemoryAllocation) {
+        throw;
+      }
+      setAllocatorFailureMessage(error.what());
+      if (!cache_ || reclaimedBytes >= impl_->capacity) {
+        return nullptr;
+      }
+      // Host-pool fragmentation can require much more eviction than the byte
+      // request. The base makeSpace() loop has bounded, request-sized retries.
+      // Reclaim progressively larger batches without changing AsyncDataCache.
+      // shrink() calls freeBytes(), so never hold the allocator lock here.
+      const auto target =
+          std::min(reclaimBytes, impl_->capacity - reclaimedBytes);
+      lock.unlock();
+      const auto reclaimed = cache_->shrink(target);
+      lock.lock();
+      if (reclaimed == 0) {
+        return nullptr;
+      }
+      reclaimedBytes += reclaimed;
+      reclaimBytes = reclaimBytes >= impl_->capacity / 2 ? impl_->capacity
+                                                         : reclaimBytes * 2;
+    }
   }
   auto guard =
       folly::makeGuard([&] { impl_->pool.deallocate_sync(base, charged); });
