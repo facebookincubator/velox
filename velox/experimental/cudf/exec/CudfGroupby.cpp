@@ -1689,12 +1689,16 @@ void CudfGroupby::computePartialGroupbyIncrementally(CudfVectorPtr tbl) {
     auto partialOutputStream = bufferedResult_->stream();
     std::vector<CudfVectorPtr> tablesToConcat;
     tablesToConcat.push_back(bufferedResult_);
-    tablesToConcat.push_back(groupbyOnInput);
+    tablesToConcat.push_back(std::move(groupbyOnInput));
     auto concatenatedTable = getConcatenatedTable(
         std::move(tablesToConcat),
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // getConcatenatedTable consumed tablesToConcat; drop the last reference
+    // too, before the re-aggregation, so the copied-from state is not part of
+    // the peak.
+    bufferedResult_.reset();
 
     // Now we have to groupby again but this time with intermediate aggregators.
     // Keep concatenatedTable alive while we use its view.
@@ -1746,6 +1750,10 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
 
   auto concatenatedTable =
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
+  // Release before the re-aggregation so the copied-from state is not part of
+  // the peak. The free is stream-ordered on `finalStream`, the stream the
+  // concatenate ran on, so it cannot race the copy.
+  bufferedResult_.reset();
   cudf::detail::join_streams(
       std::vector<cuda::stream_ref>{finalStream}, inputTableStream);
   // The concatenation owns a replacement for the retained result. Release
@@ -1781,12 +1789,14 @@ void CudfGroupby::computeSingleGroupbyIncrementally(CudfVectorPtr tbl) {
     auto partialOutputStream = bufferedResult_->stream();
     std::vector<CudfVectorPtr> tablesToConcat;
     tablesToConcat.push_back(bufferedResult_);
-    tablesToConcat.push_back(groupbyOnInput);
+    tablesToConcat.push_back(std::move(groupbyOnInput));
     auto concatenatedTable = getConcatenatedTable(
         std::move(tablesToConcat),
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // Same as the partial path.
+    bufferedResult_.reset();
 
     auto compactedOutput = doGroupByAggregation(
         concatenatedTable->view(),
