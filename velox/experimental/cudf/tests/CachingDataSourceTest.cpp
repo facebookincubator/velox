@@ -305,11 +305,8 @@ TEST_F(CachingDataSourceTest, asyncFillsExceedExecutorThreadsAndStayBounded) {
   }
   EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
   EXPECT_EQ(read_->reads, kRequests);
-  const auto metrics = stats_->stats();
-  EXPECT_EQ(metrics.at("cudfKvikioCacheAsyncFillSubmitted").sum, kRequests);
-  EXPECT_EQ(metrics.at("cudfKvikioCacheAsyncFillInFlightSamples").max, 8);
-  EXPECT_EQ(metrics.count("cudfKvikioCacheDeferredHostReads"), 0);
-  EXPECT_EQ(metrics.count("cudfKvikioCacheAsyncReadFailures"), 0);
+  EXPECT_EQ(control->submitted, kRequests);
+  EXPECT_EQ(control->synchronous, 0);
 }
 
 class CachingDataSourceFragmentTest : public CachingDataSourceTest,
@@ -360,7 +357,6 @@ TEST_P(CachingDataSourceFragmentTest, deviceReadsReuseCachedFragments) {
   EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, kTailBytes);
   EXPECT_EQ(metrics.at("cudfKvikioCacheReusedPrefixes").sum, kFragments);
   EXPECT_EQ(metrics.at("cudfKvikioCacheReusedPrefixBytes").sum, kPrefixBytes);
-  EXPECT_EQ(metrics.count("cudfKvikioCacheAsyncReadSynchronousFallbacks"), 0);
 
   // Synchronous overloads and a smaller final fragment use the same chain.
   EXPECT_EQ(
@@ -429,7 +425,7 @@ TEST_F(CachingDataSourceTest, asyncSharedFillAndOutOfOrderCompletion) {
   ASSERT_TRUE(waitUntil([&] { return control->submitted.load() == 2; }));
   control->completeNewest();
   ASSERT_TRUE(waitUntil([&] {
-    return stats_->stats().contains("cudfKvikioCacheHostToDeviceBytes");
+    return stats_->stats().contains("cudfKvikioCacheMissBytes");
   })) << "A ready range must complete while the oldest range is still pending";
   EXPECT_EQ(reads.back().get(), 4096);
   EXPECT_EQ(fromDevice(dst + 12288, 4096), std::string(4096, 'a'));
@@ -469,7 +465,6 @@ TEST_F(CachingDataSourceTest, asyncFailedAndShortFillsAreNotPublished) {
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream.view()).get(), 4096);
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream.view()).get(), 4096);
   EXPECT_EQ(control->submitted, 3);
-  EXPECT_EQ(stats_->stats().at("cudfKvikioCacheAsyncReadFailures").sum, 4);
   EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(0, 4096));
 }
 
@@ -516,9 +511,6 @@ TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
       read_->data.size());
   EXPECT_EQ(control->submitted, 0);
   EXPECT_EQ(control->synchronous, 1);
-  EXPECT_EQ(
-      stats_->stats().at("cudfKvikioCacheAsyncReadSynchronousFallbacks").sum,
-      1);
   EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
   EXPECT_EQ(cache_->refreshStats().numEntries, 0);
 }
@@ -542,7 +534,6 @@ TEST_F(CachingDataSourceTest, missesHitsAndSynchronousOverloads) {
   const auto metrics = stats_->stats();
   EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, kSize);
   EXPECT_EQ(metrics.at("cudfKvikioCacheHitBytes").sum, 2 * kSize);
-  EXPECT_EQ(metrics.at("cudfKvikioCacheHostToDeviceBytes").sum, 3 * kSize);
   EXPECT_EQ(input->host_read(19, kSize)->size(), kSize);
   EXPECT_EQ(read_->reads, 1);
 }

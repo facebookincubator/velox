@@ -176,8 +176,6 @@ class CacheReadScheduler {
   std::list<std::shared_ptr<Read>> waiting_;
 };
 
-std::atomic<int64_t> activeCacheFills{0};
-
 int streamDevice(cuda::stream_ref stream) {
   int device{};
 #if defined(CUDART_VERSION) && CUDART_VERSION >= 12080
@@ -299,10 +297,8 @@ struct DeviceReadCompletion {
       }
     }
   }
-  static size_t finish(
-      SubmittedDeviceRead result,
-      cuda::stream_ref stream,
-      int device) {
+  static size_t
+  finish(SubmittedDeviceRead result, cuda::stream_ref stream, int device) {
     finishDeviceRead(stream, device);
     return result.bytes;
   }
@@ -343,18 +339,6 @@ struct CachingDataSource::State {
   void addCount(const std::string& name, int64_t value = 1) {
     if (ioStats) {
       ioStats->addCounter(name, RuntimeCounter(value));
-    }
-  }
-
-  void addTime(
-      const std::string& name,
-      std::chrono::steady_clock::time_point start) {
-    if (ioStats) {
-      const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                             std::chrono::steady_clock::now() - start)
-                             .count();
-      ioStats->addCounter(
-          name, RuntimeCounter(nanos, RuntimeCounter::Unit::kNanos));
     }
   }
 
@@ -544,7 +528,6 @@ struct CachingDataSource::State {
           dst, staging, actual, cudaMemcpyHostToDevice, stream.get()));
       slot.recordCopy(stream.get());
       result.bytes += actual;
-      addBytes("cudfKvikioCacheHostToDeviceBytes", actual);
     } catch (...) {
       finishDeviceRead(stream, device);
       throw;
@@ -572,13 +555,7 @@ struct CachingDataSource::State::AsyncRead final
   size_t fragmentBytes{0};
   folly::SemiFuture<bool> cacheWait = folly::SemiFuture<bool>::makeEmpty();
   std::future<size_t> hostRead;
-  const std::chrono::steady_clock::time_point queued =
-      std::chrono::steady_clock::now();
-  std::chrono::steady_clock::time_point fillStart;
-  std::chrono::steady_clock::time_point cacheWaitStart;
   int attempts{0};
-  bool activeFill{false};
-  bool started{false};
 
   AsyncRead(
       std::shared_ptr<State> s,
@@ -606,13 +583,6 @@ struct CachingDataSource::State::AsyncRead final
         std::future_status::timeout;
   }
 
-  void endFill() {
-    if (std::exchange(activeFill, false)) {
-      --activeCacheFills;
-      state->addTime("cudfKvikioCacheAsyncFillReadNanos", fillStart);
-    }
-  }
-
   void fail(std::exception_ptr error) noexcept override {
     // A std::future destructor need not wait for external writes. Even if
     // scheduling/allocation fails after dispatch, drain before abandoning the
@@ -629,11 +599,6 @@ struct CachingDataSource::State::AsyncRead final
       } catch (...) {
       }
     }
-    try {
-      endFill();
-      state->addCount("cudfKvikioCacheAsyncReadFailures");
-    } catch (...) {
-    }
     pin.clear();
     promise->set_exception(error);
     scheduler.finished();
@@ -642,12 +607,8 @@ struct CachingDataSource::State::AsyncRead final
   void run() noexcept override {
     try {
       const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
-      if (!std::exchange(started, true)) {
-        state->addTime("cudfKvikioCacheAsyncReadQueueNanos", queued);
-      }
       if (hostRead.valid()) {
         const auto actual = hostRead.get();
-        endFill();
         VELOX_CHECK_EQ(
             actual, fragmentBytes, "Short KvikIO read while filling cache");
         pin.checkedEntry()->setExclusiveToShared();
@@ -657,7 +618,6 @@ struct CachingDataSource::State::AsyncRead final
       if (cacheWait.valid()) {
         std::move(cacheWait).get();
         cacheWait = folly::SemiFuture<bool>::makeEmpty();
-        state->addTime("cudfKvikioCacheExclusiveWaitNanos", cacheWaitStart);
       }
       while (result.bytes < bytes) {
         const auto remaining = bytes - result.bytes;
@@ -682,7 +642,6 @@ struct CachingDataSource::State::AsyncRead final
         }
         if (pin.empty()) {
           if (cacheWait.valid()) {
-            cacheWaitStart = std::chrono::steady_clock::now();
             scheduler.await(shared_from_this());
           } else {
             bypass();
@@ -702,20 +661,11 @@ struct CachingDataSource::State::AsyncRead final
           bypass();
           return;
         }
-        fillStart = std::chrono::steady_clock::now();
-        activeFill = true;
-        const auto active = ++activeCacheFills;
-        state->addCount("cudfKvikioCacheAsyncFillInFlightSamples", active);
         hostRead = state->delegate->host_read_async(
             offset + result.bytes,
             fragmentBytes,
             reinterpret_cast<uint8_t*>(entry->contiguousData()));
         VELOX_CHECK(hostRead.valid(), "KvikIO returned an invalid read future");
-        state->addCount("cudfKvikioCacheAsyncFillSubmitted");
-        if (hostRead.wait_for(std::chrono::seconds(0)) ==
-            std::future_status::deferred) {
-          state->addCount("cudfKvikioCacheDeferredHostReads");
-        }
         scheduler.await(shared_from_this());
         return;
       }
@@ -740,7 +690,6 @@ struct CachingDataSource::State::AsyncRead final
 
   // Reads the rest of the range synchronously, bypassing the cache.
   void bypass() {
-    state->addCount("cudfKvikioCacheAsyncReadSynchronousFallbacks");
     fragmentBytes = bytes - result.bytes;
     copyFragment();
     complete();
