@@ -303,6 +303,11 @@ General Aggregate Functions
     returns Infinity. For all other input types, when the sum of input values exceeds its limit, it cycles to the
     overflowed value rather than raising an error.
 
+    When Spark ANSI mode is enabled (``spark.ansi_enabled``), an overflow is an error instead: for
+    TINYINT, SMALLINT, INTEGER and BIGINT input, the sum throws when it exceeds the BIGINT range, and for
+    DECIMAL input, the sum throws when the final result overflows. An intermediate overflow that comes
+    back into range is not an error.
+
     Example::
 
         SELECT SUM(x)
