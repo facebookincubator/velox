@@ -330,7 +330,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->allPeersFinished(&peerFuture_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&peerFuture_, promises, peerOperators)) {
     return;
   }
 
@@ -349,7 +349,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
   if (!buildEmpty_ && hasFilter_) {
     auto stream = cudfGlobalStreamPool().get_stream();
 
-    // GPU stream synchronization: allPeersFinished synchronizes CPU threads
+    // GPU stream synchronization: allPeersArrived synchronizes CPU threads
     // but not GPU streams. A peer's CPU thread may have returned from
     // getOutput() while its GPU work (updating buildMatchedFlags_) is still
     // in flight. join_streams establishes GPU-side ordering.
@@ -407,7 +407,7 @@ bool CudfNestedLoopJoinProbe::isFinished() {
 exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     ContinueFuture* future) {
   // For right/full join: after build data is available, also block on peer
-  // probes finishing (allPeersFinished barrier in noMoreInput).
+  // probes finishing (allPeersArrived barrier in noMoreInput).
   if (isRightOrFullJoin() && buildData_.has_value()) {
     if (!peerFuture_.valid()) {
       return exec::BlockingReason::kNotBlocked;
