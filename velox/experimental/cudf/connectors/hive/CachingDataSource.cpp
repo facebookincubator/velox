@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
 #include "velox/common/caching/FileIds.h"
@@ -31,7 +32,6 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
-#include <folly/system/HardwareConcurrency.h>
 
 #include <algorithm>
 #include <atomic>
@@ -49,15 +49,28 @@
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
 
-// Keep remote cache fills out of the connector I/O executor. KVIKIO_NTHREADS
-// sizes this executor when set; otherwise it uses 5 threads per core.
+// The most async device reads that run at once: KvikIO's
+// KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS, with KvikIO's default of 256.
+// KvikIO's 0 means unlimited. Use 64 then so cache allocations stay bounded.
+size_t maxConcurrentReads() {
+  static const size_t value = [] {
+    size_t requests = 256;
+    if (const auto* env =
+            std::getenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS")) {
+      requests = folly::to<size_t>(env);
+    }
+    return requests == 0 ? size_t{64} : requests;
+  }();
+  return value;
+}
+
+// Keep remote cache fills out of the connector I/O executor. Sized by
+// cudf.kvikio_cache_threads.
 folly::Executor* remoteReadExecutor() {
   static auto* executor = [] {
-    size_t threads = 5 * std::max<size_t>(1, folly::available_concurrency());
-    if (const auto* value = std::getenv("KVIKIO_NTHREADS")) {
-      threads = folly::to<size_t>(value);
-      VELOX_USER_CHECK_GT(threads, 0, "KVIKIO_NTHREADS must be positive");
-    }
+    const auto threads = CudfConfig::getInstance().kvikioCacheThreads;
+    VELOX_USER_CHECK_GT(
+        threads, 0, "{} must be positive", CudfConfig::kCudfKvikioCacheThreads);
     return new folly::CPUThreadPoolExecutor(
         threads, std::make_shared<folly::NamedThreadFactory>("CudfRemoteIO"));
   }();
@@ -125,15 +138,6 @@ class CacheReadScheduler {
 
  private:
   CacheReadScheduler() : executor_(remoteReadExecutor()) {
-    // Reuse the existing remote-I/O window. "Unlimited" transport admission
-    // must not imply unbounded cache allocations; absent/zero uses 64 here.
-    if (const auto* value =
-            std::getenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS")) {
-      const auto configured = folly::to<size_t>(value);
-      if (configured != 0) {
-        limit_ = configured;
-      }
-    }
     std::thread([this] { poll(); }).detach();
   }
 
@@ -168,7 +172,7 @@ class CacheReadScheduler {
   }
 
   folly::Executor* const executor_;
-  size_t limit_{64};
+  const size_t limit_{maxConcurrentReads()};
   size_t admitted_{0};
   std::mutex mutex_;
   std::condition_variable condition_;

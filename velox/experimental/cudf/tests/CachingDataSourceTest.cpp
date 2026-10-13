@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
 #include "velox/common/caching/FileIds.h"
@@ -227,7 +228,7 @@ class CachingDataSourceTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     // This test executable owns its remote executor.
-    setenv("KVIKIO_NTHREADS", "2", 1);
+    CudfConfig::getInstance().kvikioCacheThreads = 2;
     setenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS", "8", 1);
   }
 
