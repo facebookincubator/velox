@@ -28,6 +28,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRenderZone.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/TimestampCalendar.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 // Calendar arithmetic and field extraction over DATE, TIME, TIMESTAMP and
@@ -1121,7 +1122,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     auto dateTime = getDateTime(date);
     adjustDateTime(dateTime, unit);
 
-    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    result = calendar::calendarUtcToEpoch(dateTime) / kSecondsInDay;
   }
 
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
@@ -1155,7 +1156,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       // timestamp. We then subtract this difference from the UTC timestamp,
       // this handles things like ambiguous timestamps in the local time zone.
       const auto millisDifference =
-          timestamp.toMillis() - Timestamp::calendarUtcToEpoch(dateTime) * 1000;
+          timestamp.toMillis() - calendar::calendarUtcToEpoch(dateTime) * 1000;
 
       resultMillis = unpackMillisUtc(*timestampWithTimezone) - millisDifference;
     } else {
@@ -1164,7 +1165,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       // cases like when a time zone has daylight savings time, a "day" can be
       // 25 or 23 hours at the transition points.
       auto updatedTimestamp =
-          Timestamp::fromMillis(Timestamp::calendarUtcToEpoch(dateTime) * 1000);
+          Timestamp::fromMillis(calendar::calendarUtcToEpoch(dateTime) * 1000);
       updatedTimestamp.toGMT(*this->renderZone(timestampWithTimezone));
 
       resultMillis = updatedTimestamp.toMillis();
