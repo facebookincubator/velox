@@ -18,7 +18,6 @@ velox_link_libraries(velox_is_null_functions velox_expression)
 
 velox_add_library(
   velox_functions_util
-  Murmur3Hash32Base.cpp
   LambdaFunctionUtil.cpp
   RowsTranslationUtil.cpp
   HEADERS

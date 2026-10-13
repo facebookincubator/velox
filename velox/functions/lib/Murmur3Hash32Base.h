@@ -17,23 +17,57 @@
 
 #include <cstdint>
 
+#include "velox/common/base/BitUtil.h"
+
 namespace facebook::velox::functions {
 /// Murmur3 aligns with Austin Appleby
 /// https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
 ///
 /// Signed integer types have been remapped to unsigned types (as in the
 /// original) to avoid undefined signed integer overflow and sign extension.
+///
+/// The mixing steps must stay in the header: they are called per row, so the
+/// bodies have to be visible for inlining into the caller's hash loop.
 class Murmur3Hash32Base {
  protected:
   /// Hash the lower int, then combine with higher int, is a fast path of
   /// hashBytes.
-  static uint32_t hashInt64(uint64_t input, uint32_t seed);
+  static uint32_t hashInt64(uint64_t input, uint32_t seed) {
+    uint32_t low = input;
+    uint32_t high = input >> 32;
 
-  static uint32_t mixK1(uint32_t k1);
+    uint32_t k1 = mixK1(low);
+    uint32_t h1 = mixH1(seed, k1);
 
-  static uint32_t mixH1(uint32_t h1, uint32_t k1);
+    k1 = mixK1(high);
+    h1 = mixH1(h1, k1);
+
+    return fmix(h1, 8);
+  }
+
+  static uint32_t mixK1(uint32_t k1) {
+    k1 *= 0xcc9e2d51;
+    k1 = bits::rotateLeft(k1, 15);
+    k1 *= 0x1b873593;
+    return k1;
+  }
+
+  static uint32_t mixH1(uint32_t h1, uint32_t k1) {
+    h1 ^= k1;
+    h1 = bits::rotateLeft(h1, 13);
+    h1 = h1 * 5 + 0xe6546b64;
+    return h1;
+  }
 
   // Finalization mix - force all bits of a hash block to avalanche.
-  static uint32_t fmix(uint32_t h1, uint32_t length);
+  static uint32_t fmix(uint32_t h1, uint32_t length) {
+    h1 ^= length;
+    h1 ^= h1 >> 16;
+    h1 *= 0x85ebca6b;
+    h1 ^= h1 >> 13;
+    h1 *= 0xc2b2ae35;
+    h1 ^= h1 >> 16;
+    return h1;
+  }
 };
 } // namespace facebook::velox::functions
