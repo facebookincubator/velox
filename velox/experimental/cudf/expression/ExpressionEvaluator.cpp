@@ -71,6 +71,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -299,16 +300,43 @@ void collectReferencedInputFields(
   }
 }
 
+// Defined below.
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr);
+
+// True when Velox would read TIMESTAMP arguments in the session time zone.
+bool sessionTimeZoneApplies(const core::QueryConfig& config) {
+  return config.adjustTimestampToTimezone() &&
+      !config.sessionTimezone().empty();
+}
+
+// True when `entry` can evaluate `expr` with Velox's result. While the session
+// time zone applies, an evaluator that reads TIMESTAMP as UTC is not offered a
+// tree containing a call such as hour(timestamp).
+bool canEvaluateUnder(
+    const CudfExpressionEvaluatorEntry& entry,
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
+  if (!entry.canEvaluate) {
+    return false;
+  }
+  if (sessionTimeZone && !entry.honorsSessionTimeZone &&
+      containsSessionTimeZoneSensitiveCall(expr)) {
+    return false;
+  }
+  return entry.canEvaluate(expr);
+}
+
 // Returns the highest-priority evaluator entry that can handle `expr`, or
 // nullptr when none can.
 const CudfExpressionEvaluatorEntry* findBestEvaluator(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (canEvaluateUnder(entry, expr, sessionTimeZone)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }
@@ -320,14 +348,16 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
 // Recursive, context-free check that some cuDF evaluator supports every node in
 // the expression tree. canExprRunOnGpu wraps this with expression optimization
 // and the timezone fallback.
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+bool canBeEvaluatedByCudf(
+    const core::TypedExprPtr& expr,
+    bool sessionTimeZone) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (canEvaluateUnder(entry, expr, sessionTimeZone)) {
       supported = true;
       break;
     }
@@ -341,7 +371,7 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
     if (input->isConstantKind() || input->isInputKind()) {
       continue;
     }
-    if (!canBeEvaluatedByCudf(input)) {
+    if (!canBeEvaluatedByCudf(input, sessionTimeZone)) {
       return false;
     }
   }
@@ -3135,7 +3165,8 @@ ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
-    bool finalize) {
+    bool finalize,
+    gpu_sfi::GpuSfiErrors* errors) {
   // Top-level field access (or chain of field accesses on input columns) maps
   // directly to a column_view zero-copy.
   if (isInputFieldReference(expr_)) {
@@ -3165,7 +3196,8 @@ ColumnOrView FunctionExpression::eval(
         subexpressions_.size(),
         1,
         "Nested field reference expects exactly one subexpression");
-    auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+    auto parent = subexpressions_[0]->eval(
+        inputColumnViews, stream, mr, /*finalize=*/false, errors);
     VELOX_DCHECK_GE(fieldIndex_, 0);
     auto child = FunctionExpression::makeStructChildColumn(
         parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
@@ -3197,7 +3229,8 @@ ColumnOrView FunctionExpression::eval(
       // conditional discards. Hand each branch inputs whose null mask excludes
       // the rows it does not supply; the kernels already skip null rows. Velox
       // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      auto condition = subexpressions_[0]->eval(
+          inputColumnViews, stream, mr, /*finalize=*/false, errors);
       const auto conditionView = asView(condition);
       subexprResults.push_back(std::move(condition));
 
@@ -3217,11 +3250,16 @@ ColumnOrView FunctionExpression::eval(
             mr));
         subexprResults.push_back(
             subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
+                branchInputs.back().views,
+                stream,
+                mr,
+                /*finalize=*/false,
+                errors));
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+        subexprResults.push_back(subexpr->eval(
+            inputColumnViews, stream, mr, /*finalize=*/false, errors));
       }
     }
 
@@ -3259,6 +3297,12 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->isFieldAccessKind() || expr->isDereferenceKind()) {
     return !expr->inputs().empty() && !expr->inputs()[0]->isInputKind() &&
         expr->inputs()[0]->type()->kind() == TypeKind::ROW;
+  }
+
+  // Column references above only pass the packed integer through; a cast or
+  // a registered operator would read it as a number.
+  if (hasCustomComparisonOperand(expr)) {
+    return false;
   }
 
   const auto opName = exprRegistryName(expr);
@@ -3374,6 +3418,19 @@ bool requiresCpuForTimezone(
   return false;
 }
 
+// True when the tree holds a call whose result depends on the session time
+// zone, such as year(timestamp), as the registered sensitivity predicates
+// report it.
+bool containsSessionTimeZoneSensitiveCall(const core::TypedExprPtr& expr) {
+  if (isSessionTimeZoneSensitiveCall(expr)) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(),
+      expr->inputs().end(),
+      containsSessionTimeZoneSensitiveCall);
+}
+
 } // namespace
 
 bool canExprRunOnGpu(
@@ -3388,8 +3445,10 @@ bool canExprRunOnGpu(
   const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
       ? expression::optimize(expr, queryCtx, pool)
       : expr;
+  const bool sessionTimeZone =
+      queryCtx != nullptr && sessionTimeZoneApplies(queryCtx->queryConfig());
   return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+      canBeEvaluatedByCudf(checked, sessionTimeZone);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(
@@ -3397,7 +3456,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool,
     const core::QueryConfig& config) {
-  const auto* best = findBestEvaluator(expr);
+  const auto* best = findBestEvaluator(expr, sessionTimeZoneApplies(config));
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
   return best->create(expr, inputRowSchema, pool, config);
