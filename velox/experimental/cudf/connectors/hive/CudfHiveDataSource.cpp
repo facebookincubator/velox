@@ -423,8 +423,8 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // An empty split has no footer to build the filter from.
   if (hasDecimalSubfieldFilter_ and
-      not cudfSplitReader_->readFileMetadatas().empty()) {
-    const auto& fileMetadatas = cudfSplitReader_->readFileMetadatas();
+      not cudfSplitReader_->fileMetaDatas().empty()) {
+    const auto& fileMetadatas = cudfSplitReader_->fileMetaDatas();
     const auto readerFilterType = getTableRowType();
     const HiveConfig hiveConfig(cudfHiveConfig_->config());
     const auto fileColumnNamesReadAsLowerCase =

@@ -272,13 +272,13 @@ void CudfSplitReader::prepareSplitInternal(
 }
 
 void CudfSplitReader::cacheSchemaFromMetadata() {
-  readFileMetadatas();
+  fileMetaDatas();
 
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "Expected a single parquet footer for the split's data file");
-  const auto& meta = fileMetaData_.front();
+  const auto& meta = fileMetaDatas_.front();
   VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
   VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
   std::tie(baseReadOffset_, splitRowCount_) = computeSplitRowRange();
@@ -318,7 +318,7 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
 
   std::size_t startRow{0};
   std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+  for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
     VELOX_CHECK(
         not rowGroup.columns.empty(),
         "Parquet footer reports a row group with no column chunks");
@@ -340,7 +340,7 @@ void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   stream_ = cudfGlobalStreamPool().get_stream();
-  readFileMetadatas();
+  fileMetaDatas();
   if (emptySplit_) {
     return;
   }
@@ -509,7 +509,7 @@ void CudfSplitReader::resetSplit() {
   splitReader_.reset();
   passState_.reset();
   dataSource_.reset();
-  fileMetaData_.clear();
+  fileMetaDatas_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
   emptySplit_ = false;
@@ -711,15 +711,15 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
 }
 
 const std::vector<cudf::io::parquet::FileMetaData>&
-CudfSplitReader::readFileMetadatas() {
-  if (not fileMetaData_.empty()) {
-    return fileMetaData_;
+CudfSplitReader::fileMetaDatas() {
+  if (not fileMetaDatas_.empty()) {
+    return fileMetaDatas_;
   }
 
   // Setup the datasource
   setupCudfDataSource();
   if (emptySplit_) {
-    return fileMetaData_;
+    return fileMetaDatas_;
   }
 
   // Check that the datasource is set up
@@ -730,19 +730,19 @@ CudfSplitReader::readFileMetadatas() {
   // Wrap the existing datasource without transferring ownership.
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
   sources.push_back(cudf::io::datasource::create(dataSource_.get()));
-  fileMetaData_ = cudf::io::read_parquet_footers(sources);
+  fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
   VELOX_CHECK_GE(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
-  return fileMetaData_;
+  return fileMetaDatas_;
 }
 
 void CudfSplitReader::createCudfReader() {
-  readFileMetadatas();
+  fileMetaDatas();
 
   // Check if we are reading all columns in order
-  const auto& schema = fileMetaData_.front().schema;
+  const auto& schema = fileMetaDatas_.front().schema;
   readAllFileColumns_ = std::ranges::equal(
       schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
         const auto& name = schema[childIdx].name;
@@ -757,7 +757,7 @@ void CudfSplitReader::createCudfReader() {
   // A reader spanning multiple sources also needs the byte range source index
   // map to fetch column chunks from the matching data source.
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "cuDF parquet reader supports a single parquet metadata per split");
 
@@ -770,7 +770,7 @@ void CudfSplitReader::createCudfReader() {
 
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(
-      std::move(fileMetaData_), readerOptions_);
+      std::move(fileMetaDatas_), readerOptions_);
 
   setupPageIndexes();
 

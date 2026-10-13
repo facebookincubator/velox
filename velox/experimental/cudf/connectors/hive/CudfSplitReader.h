@@ -79,7 +79,7 @@ class CudfSplitReader : public NvtxHelper {
   /// Reads and returns the Parquet file metadatas, cached until prepareSplit()
   /// hands them to the cuDF reader. Returns no metadata when the split is
   /// empty.
-  const std::vector<cudf::io::parquet::FileMetaData>& readFileMetadatas();
+  const std::vector<cudf::io::parquet::FileMetaData>& fileMetaDatas();
 
   /// Sets the split-specific pushdown filter. The expression must remain alive
   /// while the split is being read.
@@ -182,7 +182,7 @@ class CudfSplitReader : public NvtxHelper {
   cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
 
   // Parquet metadata(s) for the current split(s).
-  std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;
+  std::vector<cudf::io::parquet::FileMetaData> fileMetaDatas_;
 
   // Whether to prepend a row index column to the output.
   bool prependRowIndex_{false};
