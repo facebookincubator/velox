@@ -69,10 +69,8 @@ struct CudfHiveConnectorSplit
       const folly::dynamic& obj);
 };
 
-/// Returns the whole-file size that the coordinator forwarded with 'split' as
-/// the synthesized $file_size column, when it is present, well formed and
-/// consistent with the split's byte range. A split's own length never
-/// establishes the file size. KvikIO uses this to skip the size probe on open.
+/// Returns the coordinator's whole-file size when present and consistent with
+/// the split range. A split's length alone never establishes the file size.
 std::optional<size_t> knownKvikioFileSize(const CudfHiveConnectorSplit& split);
 
 class CudfHiveConnectorSplitBuilder {

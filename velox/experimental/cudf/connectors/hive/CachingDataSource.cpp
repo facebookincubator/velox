@@ -49,9 +49,8 @@
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
 
-// Executor for the work that fills the cache and serves hits. Sized like
-// KvikIO's own pool: KVIKIO_NTHREADS when set, otherwise 5 threads per core.
-// Never destroyed, so it outlives static teardown.
+// Keep remote cache fills out of the connector I/O executor. KVIKIO_NTHREADS
+// sizes this executor when set; otherwise it uses 5 threads per core.
 folly::Executor* remoteReadExecutor() {
   static auto* executor = [] {
     size_t threads = 5 * std::max<size_t>(1, folly::available_concurrency());
@@ -65,15 +64,13 @@ folly::Executor* remoteReadExecutor() {
   return executor;
 }
 
-// cuDF exposes std::future, not a completion callback. This keeps pending host
-// reads off the executor while their futures are outstanding: a single
-// readiness thread polls the pending futures and hands a read back to the
-// executor once it is ready. The readiness thread never performs I/O, CUDA
-// work, or a blocking future get. Deferred futures are supported too, but
-// their get still runs on the executor.
-//
-// Admission is bounded before any cache entry is allocated, so a large pass
-// cannot allocate host buffers for every queued request at once.
+// cuDF exposes std::future, not a completion callback. Keep outstanding host
+// reads off the executor while their futures are pending. The single readiness
+// thread never performs I/O, CUDA work, or a blocking future get. Deferred
+// delegates are supported, but their get must still run on the executor.
+// Admission precedes cache allocation, so a large pass cannot allocate host
+// buffers for every queued request at once. This does not change GPU
+// preloading.
 class CacheReadScheduler {
  public:
   struct Read {
@@ -84,9 +81,8 @@ class CacheReadScheduler {
   };
 
   static CacheReadScheduler& instance() {
-    // Like remoteReadExecutor, outlives CUDA and static teardown. No buffers
-    // are retained once reads finish; callers must quiesce before the cache
-    // shuts down.
+    // Like remoteReadExecutor, outlive CUDA/static teardown. No buffers are
+    // retained once reads finish; callers must quiesce before cache shutdown.
     static auto* scheduler = new CacheReadScheduler;
     return *scheduler;
   }
@@ -129,8 +125,8 @@ class CacheReadScheduler {
 
  private:
   CacheReadScheduler() : executor_(remoteReadExecutor()) {
-    // Reuse KvikIO's remote I/O window. An unlimited transport window must
-    // not imply unbounded cache allocations, so absent or zero means 64 here.
+    // Reuse the existing remote-I/O window. "Unlimited" transport admission
+    // must not imply unbounded cache allocations; absent/zero uses 64 here.
     if (const auto* value =
             std::getenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS")) {
       const auto configured = folly::to<size_t>(value);
@@ -206,7 +202,6 @@ void finishDeviceRead(cuda::stream_ref stream, int device) {
   }
 }
 
-// A host buffer drawn from cuDF's pinned memory pool.
 class PinnedStagingBuffer {
  public:
   static constexpr size_t kAlignment = 64;
@@ -249,7 +244,7 @@ struct PinnedStagingSlot {
     if (capacity < size) {
       delete std::exchange(buffer, nullptr);
       capacity = 0;
-      // Leave an empty, reusable slot if the allocation throws.
+      // Leave an empty, reusable slot if allocation throws.
       buffer = new PinnedStagingBuffer(size);
       capacity = size;
     }
@@ -264,9 +259,8 @@ struct PinnedStagingSlot {
   }
 };
 
-// The high-water staging capacity is retained until process exit on purpose:
-// CUDA must not be invoked during thread-pool or static teardown, when the
-// runtime may already be gone.
+// Retain the high-water staging capacity until process exit. Do not invoke
+// CUDA during thread-pool/static teardown: the runtime may already be gone.
 PinnedStagingSlot& stagingSlot(int device) {
   static thread_local std::unordered_map<int, PinnedStagingSlot> slots;
   return slots[device];
@@ -276,9 +270,10 @@ struct SubmittedDeviceRead {
   size_t bytes{0};
 };
 
-// The executor's future only marks H2D submission, so the future handed to the
-// caller also fences the copy, whether it is consumed or discarded. That wait
-// happens on the caller's thread rather than on an executor thread.
+// A caller may destroy the destination once its future is consumed or
+// discarded. The executor's future alone only marks H2D submission, so the
+// outer completion also fences the copy. Wait outside the remote executor
+// rather than occupying an I/O thread during H2D completion.
 struct DeviceReadCompletion {
   std::future<SubmittedDeviceRead> submitted;
   cuda::stream_ref stream;
@@ -386,8 +381,8 @@ struct CachingDataSource::State {
   // a miss. The entry may be shorter than 'size'. Returns an empty pin when
   // the cache cannot admit the range.
   cache::CachePin pinFragment(size_t offset, size_t size) {
-    // AsyncDataCache stores entry lengths in an int32_t. Larger requests are
-    // legal datasource reads but must bypass the cache.
+    // AsyncDataCache stores entry lengths in an int32_t. Large individual
+    // reads remain legal datasource requests, but must bypass that cache.
     if (size > std::numeric_limits<int32_t>::max()) {
       return {};
     }
@@ -426,8 +421,8 @@ struct CachingDataSource::State {
       }
       const auto actual = delegate->host_read(
           offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
-      // Never publish uninitialized tail bytes after a short read. The
-      // exception releases the exclusive pin and abandons the fill.
+      // Do not publish uninitialized tail bytes after a short read. An
+      // exception releases the exclusive pin and abandons the incomplete fill.
       VELOX_CHECK_EQ(actual, size, "Short KvikIO read while filling cache");
       entry->setExclusiveToShared();
       addBytes("cudfKvikioCacheMissBytes", size);
@@ -447,8 +442,8 @@ struct CachingDataSource::State {
       const auto remaining = bytes - copied;
       auto pin = pinFragment(offset + copied, remaining);
       if (pin.empty()) {
-        // Prefixes already consumed stay useful even when the remaining
-        // suffix cannot be cached. Never refetch the whole request.
+        // Already consumed prefixes remain useful, even when the remaining
+        // suffix cannot be cached. Never bypass/refetch the whole request.
         const auto actual =
             delegate->host_read(offset + copied, remaining, dst + copied);
         addBytes("cudfKvikioCacheBypassBytes", actual);
@@ -468,8 +463,8 @@ struct CachingDataSource::State {
       std::memcpy(dst, entry->contiguousData(), bytes);
       return;
     }
-    // Another reader may have populated this key with page-run allocation.
-    // contiguous=true controls new allocations, not the layout of hits.
+    // Another reader may have populated this key using page-run allocation.
+    // contiguous=true controls new allocations, not the layout of cache hits.
     for (const auto& range : entry->dataRanges(bytes)) {
       std::memcpy(dst, range.data(), range.size());
       dst += range.size();
@@ -514,7 +509,7 @@ struct CachingDataSource::State {
       }
       return result;
     } catch (...) {
-      // A later lookup or read can fail while an earlier prefix is still in
+      // A later lookup/read can fail while an earlier prefix is still in
       // flight. Fence before the destination can be released.
       finishDeviceRead(stream, device);
       throw;
@@ -619,9 +614,9 @@ struct CachingDataSource::State::AsyncRead final
   }
 
   void fail(std::exception_ptr error) noexcept override {
-    // A std::future destructor need not wait for external writes. Drain the
-    // fill before abandoning the exclusive cache entry, and fence submitted
-    // copies before the destination can be destroyed.
+    // A std::future destructor need not wait for external writes. Even if
+    // scheduling/allocation fails after dispatch, drain before abandoning the
+    // exclusive cache allocation or allowing destination destruction.
     if (hostRead.valid()) {
       try {
         hostRead.get();
@@ -856,9 +851,9 @@ size_t CachingDataSource::device_read(
   VELOX_CHECK_NOT_NULL(dst);
   const auto device = streamDevice(stream);
   // A synchronous caller may already occupy the connector executor. Queuing
-  // the read back to that executor and waiting would deadlock once all of its
-  // threads are such callers, so synchronous reads run inline, including the
-  // destination-lifetime fence.
+  // the read back to that executor and waiting would deadlock when all its
+  // threads are occupied by such callers. Keep scheduling in the async API;
+  // perform synchronous reads inline, including the destination-lifetime fence.
   return DeviceReadCompletion::finish(
       state_->submitDeviceRead(offset, bytes, dst, stream, device),
       stream,

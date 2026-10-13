@@ -29,25 +29,20 @@
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
-/// Wraps a KvikIO cudf::io::datasource and serves its reads out of Velox's
-/// AsyncDataCache.
+/// KvikIO-backed cache fills, followed by a reusable per-thread pinned H2D
+/// staging buffer. This is separate from the BufferedInput/AWS SDK datasource;
+/// it does not change that reader's I/O.
+/// Device-read cache misses use the delegate's asynchronous host API. Pending
+/// fills and exclusive-entry waits do not occupy remote executor threads.
+/// Admission is bounded before allocating cache entries, independently of
+/// driver/preload counts. The returned future still fences destination writes
+/// on both consumption and discard; failed/short fills are never published.
 ///
-/// Cache keys are (file ID, request offset). A read consumes the cached entry
-/// at its offset even when that entry is shorter than the request, then
-/// continues at the next offset and fills only the missing suffix. This is
-/// exact-offset fragment reuse, not an arbitrary interval lookup: a read that
-/// begins inside an existing entry does not reuse it.
-///
-/// Misses are filled with the delegate's asynchronous host read directly into
-/// the cache entry. Pending fills and waits on exclusive entries do not occupy
-/// executor threads, and the number of admitted logical reads is bounded before
-/// any cache entry is allocated. Short or failed fills are never published.
-///
-/// Device reads stage the bytes through a per-thread pinned buffer. The future
-/// returned by device_read_async fences the H2D copy both when it is consumed
-/// and when it is discarded. Asynchronous work owns the delegate, so this
-/// object may be destroyed while reads are in flight. The process-wide cache
-/// must outlive all reads.
+/// Cache keys are (file ID, request offset). Reads reuse smaller entries at
+/// successive offsets and fill only the remaining suffix. This is exact-offset
+/// fragment reuse, not an arbitrary interval lookup: differently aligned
+/// ranges need not reuse cached bytes. The process-wide cache must outlive
+/// reads.
 class CachingDataSource final : public cudf::io::datasource {
  public:
   CachingDataSource(
@@ -91,10 +86,9 @@ class CachingDataSource final : public cudf::io::datasource {
   std::shared_ptr<State> state_;
 };
 
-/// Returns 'delegate' itself when caching does not apply, that is when no
-/// cache is configured or the split is not cacheable. The direct KvikIO path
-/// then keeps its native asynchronous interfaces without an extra wrapper,
-/// pool, file ID or staging allocation.
+/// With caching disabled (or a non-cacheable split), return the original
+/// datasource itself. This preserves the direct KvikIO path, including native
+/// async interfaces, without extra pools, file IDs or staging allocations.
 std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     std::unique_ptr<cudf::io::datasource> delegate,
     std::string_view path,

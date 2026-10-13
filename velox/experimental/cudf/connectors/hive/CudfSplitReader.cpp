@@ -549,17 +549,15 @@ void recordIoTime(
   }
 }
 
-// Opens the KvikIO datasource for 'split' and wraps it in the AsyncDataCache
-// when caching applies. Without the whole-file size KvikIO issues a
-// synchronous size probe on open, even when every requested byte is cached,
-// so the size forwarded by the coordinator is passed through. The range hints
-// stay zero: the datasource must address the full file, footer included, even
-// when this split covers only part of it.
 std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
     const CudfHiveConnectorSplit& split,
     const std::shared_ptr<IoStats>& ioStats) {
   const auto knownSize = knownKvikioFileSize(split);
   const auto start = std::chrono::steady_clock::now();
+  // Open precedes the cache wrapper. Without the whole-file size, KvikIO
+  // issues a synchronous HEAD even when all requested bytes are cached.
+  // Leave the range hints at zero: the datasource must address the full file,
+  // including its footer, even when this split reads only part of it.
   auto source = cudf::io::datasource::create(split.filePath, 0, 0, knownSize);
   recordIoTime(ioStats, "cudfKvikioDataSourceOpenNanos", start);
   if (ioStats) {
