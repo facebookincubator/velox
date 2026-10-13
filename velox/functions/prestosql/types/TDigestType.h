@@ -22,6 +22,8 @@ namespace facebook::velox {
 
 class TDigestType final : public VarbinaryType {
  public:
+  static std::shared_ptr<const TDigestType> create() = delete;
+
   static std::shared_ptr<const TDigestType> get(const TypePtr& dataType) {
     // Only TDIGEST(DOUBLE) exists in Presto so we use a singleton to improve
     // performance.

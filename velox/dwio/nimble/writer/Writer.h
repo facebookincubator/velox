@@ -309,6 +309,9 @@ class Writer : public velox::dwio::common::Writer {
   // BufferPolicy is installed. Returns true if any stripe was flushed.
   bool flushInputBuffers(bool finalize);
 
+  // Rejects null rows in indexed files and records stored top-level nulls.
+  void checkTopLevelNulls(const velox::VectorPtr& input);
+
   // Ingests a (possibly sliced) input into the per-column stream buffers,
   // adds index keys, and refreshes per-stripe accounting. Callers pre-slice
   // via input->slice(start, length) when they need to write only a subset of
@@ -427,6 +430,8 @@ class Writer : public velox::dwio::common::Writer {
   const std::unique_ptr<BufferPolicy> bufferPolicy_;
 
   std::unique_ptr<FieldWriter> rootWriter_;
+  // Records null top-level rows that are preserved in the output streams.
+  bool hasTopLevelNulls_{false};
   std::unique_ptr<Buffer> encodingBuffer_;
 
   // Per-encode-task scratch vector buffer caches. They are retained across

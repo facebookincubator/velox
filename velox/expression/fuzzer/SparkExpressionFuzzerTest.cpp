@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/expression/fuzzer/ArgValuesGenerators.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
@@ -46,7 +47,9 @@ DEFINE_int64(
     "Initial seed for random number generator "
     "(use it to reproduce previous results).");
 
+using facebook::velox::fuzzer::ArgValuesGenerator;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::LevenshteinArgValuesGenerator;
 
 int main(int argc, char** argv) {
   facebook::velox::functions::sparksql::registerFunctions("");
@@ -142,6 +145,10 @@ int main(int argc, char** argv) {
           {"try_make_timestamp_ntz",
            std::make_shared<MakeTimestampArgTypesGenerator>()}};
 
+  std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
+      argValuesGenerators = {
+          {"levenshtein", std::make_shared<LevenshteinArgValuesGenerator>()}};
+
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
   return FuzzerRunner::run(
       FLAGS_seed,
@@ -149,7 +156,7 @@ int main(int argc, char** argv) {
       {{}},
       queryConfigs,
       argTypesGenerators,
-      {{}},
+      argValuesGenerators,
       referenceQueryRunner,
       std::make_shared<
           facebook::velox::fuzzer::SparkSpecialFormSignatureGenerator>());

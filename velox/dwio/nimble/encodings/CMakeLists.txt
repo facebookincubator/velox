@@ -73,16 +73,19 @@ add_library(
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
+  views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
   views/SparseBoolEncodingView.h
   views/SimdForBitpackEncodingView.h
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
+  views/SentinelEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
+  views/FsstEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
   views/EncodingViewUtils.h
@@ -92,6 +95,7 @@ add_library(
   views/BlockBitPackingEncodingView.h
   views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
+  views/ALPRDEncodingView.h
   selection/Statistics.h
   selection/NestedAlpSizeEstimation.h
   selection/EncodingSizeEstimation.h

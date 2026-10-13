@@ -64,13 +64,15 @@ FileProperties::FileProperties(
     bool clusterIndexKeyColumnStorageOmitted,
     std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
     bool hasStreamChecksums,
-    StreamTrailerLayout streamTrailerLayout)
+    StreamTrailerLayout streamTrailerLayout,
+    bool hasTopLevelNulls)
     : compactRowCountEncoding_{compactRowCountEncoding},
       clusterIndexKeyColumnStorageOmitted_{clusterIndexKeyColumnStorageOmitted},
       clusterIndexKeyColumnsWithOmittedStorage_{
           std::move(clusterIndexKeyColumnsWithOmittedStorage)},
       hasStreamChecksums_{hasStreamChecksums},
-      streamTrailerLayout_{std::move(streamTrailerLayout)} {
+      streamTrailerLayout_{std::move(streamTrailerLayout)},
+      hasTopLevelNulls_{hasTopLevelNulls} {
   NIMBLE_CHECK_EQ(
       clusterIndexKeyColumnStorageOmitted_,
       !clusterIndexKeyColumnsWithOmittedStorage_.empty(),
@@ -117,7 +119,8 @@ std::string FileProperties::serialize() const {
           clusterIndexKeyColumnsWithOmittedStorage,
           compactEncodingOffset,
           hasStreamChecksums_,
-          streamTrailer));
+          streamTrailer,
+          hasTopLevelNulls_));
 
   return std::string{
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -171,7 +174,8 @@ FileProperties FileProperties::deserialize(std::string_view data) {
       serialized->cluster_index_key_column_storage_omitted(),
       std::move(clusterIndexKeyColumnsWithOmittedStorage),
       serialized->has_stream_checksums(),
-      std::move(streamTrailerLayout)};
+      std::move(streamTrailerLayout),
+      serialized->has_top_level_nulls()};
 }
 
 } // namespace facebook::nimble

@@ -220,6 +220,16 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
           op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
       result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
           op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
+      result.numSmallintDictionaryAwareReads +=
+          runtimeStatSum(op, nimble::fuzzer::kSmallintDictionaryAwareReads);
+      result.numIntegerDictionaryAwareReads +=
+          runtimeStatSum(op, nimble::fuzzer::kIntegerDictionaryAwareReads);
+      result.numBigintDictionaryAwareReads +=
+          runtimeStatSum(op, nimble::fuzzer::kBigintDictionaryAwareReads);
+      result.numRealDictionaryAwareReads +=
+          runtimeStatSum(op, nimble::fuzzer::kRealDictionaryAwareReads);
+      result.numDoubleDictionaryAwareReads +=
+          runtimeStatSum(op, nimble::fuzzer::kDoubleDictionaryAwareReads);
     }
   }
   result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
@@ -259,6 +269,13 @@ void addScanStats(
       stats.numStringDictionaryEncodingPreserved;
   coverage.numStringDictionaryEncodingAbandoned +=
       stats.numStringDictionaryEncodingAbandoned;
+  coverage.numSmallintDictionaryAwareReads +=
+      stats.numSmallintDictionaryAwareReads;
+  coverage.numIntegerDictionaryAwareReads +=
+      stats.numIntegerDictionaryAwareReads;
+  coverage.numBigintDictionaryAwareReads += stats.numBigintDictionaryAwareReads;
+  coverage.numRealDictionaryAwareReads += stats.numRealDictionaryAwareReads;
+  coverage.numDoubleDictionaryAwareReads += stats.numDoubleDictionaryAwareReads;
   coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
   coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
   coverage.numQueriesWithRemainingFilterEvaluation +=
@@ -299,7 +316,12 @@ void logScanStats(
           << " dictionaryEncodingPreserved="
           << stats.numStringDictionaryEncodingPreserved
           << " dictionaryEncodingAbandoned="
-          << stats.numStringDictionaryEncodingAbandoned;
+          << stats.numStringDictionaryEncodingAbandoned
+          << " smallintDictAwareReads=" << stats.numSmallintDictionaryAwareReads
+          << " integerDictAwareReads=" << stats.numIntegerDictionaryAwareReads
+          << " bigintDictAwareReads=" << stats.numBigintDictionaryAwareReads
+          << " realDictAwareReads=" << stats.numRealDictionaryAwareReads
+          << " doubleDictAwareReads=" << stats.numDoubleDictionaryAwareReads;
   VLOG(1) << "ScanCoverage[" << label
           << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
           << " valueHookValues=" << stats.numValuesLoadedToValueHook

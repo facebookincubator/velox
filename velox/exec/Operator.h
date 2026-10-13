@@ -64,7 +64,7 @@ class OperatorCtx {
   /// The last peer must fulfill every promise, including when an exception
   /// occurs. If 'future' is null, non-last peers do not wait and are not
   /// returned. Each peer operator retains its owning driver until released.
-  bool allPeersFinished(
+  bool allPeersArrived(
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Operator>>& peerOperators) const;

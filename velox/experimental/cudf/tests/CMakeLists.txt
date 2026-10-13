@@ -304,7 +304,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock
 )
 
 velox_add_cudf_test(

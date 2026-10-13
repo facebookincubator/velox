@@ -31,6 +31,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -1435,7 +1436,7 @@ TEST_F(VectorTest, copyFromUnknown) {
 
   // Copy to FLAT_MAP.
   test([&]() {
-    return vectorMaker_.flatMapVector<int64_t>(makeMapVector<int64_t, double>(
+    return FlatMapVector::fromMapVector(*makeMapVector<int64_t, double>(
         size,
         [](auto row) { return row % 7; },
         [](auto index) { return index % 7; },

@@ -73,16 +73,7 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     // Validate that the updated flat map matches the expectation.
     auto expectedFlatMap =
         makeFlatMapVectorFromJson<int64_t, int32_t>(expectedData);
-    EXPECT_EQ(baseFlatMap->size(), expectedFlatMap->size());
-
-    for (vector_size_t i = 0; i < baseFlatMap->size(); ++i) {
-      EXPECT_EQ(
-          baseFlatMap->compare(
-              expectedFlatMap.get(), i, i, CompareFlags{.equalsOnly = true}),
-          0)
-          << "Failed at index " << i << ":\n  " << baseFlatMap->toString(i)
-          << "\nvs.\n  " << expectedFlatMap->toString(i);
-    }
+    assertEqualVectors(expectedFlatMap, baseFlatMap);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -1532,6 +1523,55 @@ TEST_F(FlatMapVectorTest, fromMapVector) {
   auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
   EXPECT_EQ(flatMapVector->numDistinctKeys(), 2);
   assertEqualVectors(mapVector, flatMapVector);
+}
+
+TEST_F(FlatMapVectorTest, withFlatMapBaseAndWithMapBase) {
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "null",
+      "{2: 20, 1: 11}",
+  });
+  auto dictionaryNulls = allocateNulls(3, pool());
+  bits::setNull(dictionaryNulls->asMutable<uint64_t>(), 0);
+
+  // Each input keeps its wrapping, and only its base map changes encoding.
+  for (const auto& input : std::vector<VectorPtr>{
+           map,
+           BaseVector::wrapInDictionary(
+               dictionaryNulls, makeIndicesInReverse(3), 3, map),
+           BaseVector::wrapInConstant(3, 2, map),
+       }) {
+    SCOPED_TRACE(input->toString());
+    const bool wrapped = input->wrappedVector() != input.get();
+
+    auto flatMapBased = withFlatMapBase(input);
+    EXPECT_EQ(
+        flatMapBased->wrappedVector()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    if (wrapped) {
+      EXPECT_EQ(flatMapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, flatMapBased);
+
+    auto mapBased = withMapBase(flatMapBased);
+    EXPECT_EQ(
+        mapBased->wrappedVector()->encoding(), VectorEncoding::Simple::MAP);
+    if (wrapped) {
+      EXPECT_EQ(mapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, mapBased);
+  }
+
+  // A null constant stays a null constant.
+  auto nullConstant =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 3, pool());
+  auto flatMapBased = withFlatMapBase(nullConstant);
+  EXPECT_TRUE(flatMapBased->isConstantEncoding());
+  assertEqualVectors(nullConstant, flatMapBased);
+  assertEqualVectors(nullConstant, withMapBase(flatMapBased));
+
+  // A base that already has the requested encoding is returned as is.
+  EXPECT_EQ(withMapBase(map), map);
 }
 
 TEST_F(FlatMapVectorTest, copyRanges) {
