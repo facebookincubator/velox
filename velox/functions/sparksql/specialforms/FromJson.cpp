@@ -587,6 +587,74 @@ struct ExtractJsonTypeImpl {
   constexpr static std::string_view kGMT{"GMT"};
 };
 
+// Spark accepts single-quoted JSON strings by default. Detect them cheaply so
+// standard JSON remains allocation-free.
+bool normalizeSingleQuotedJson(std::string_view input, std::string& output) {
+  if (input.find('\'') == std::string_view::npos) {
+    return false;
+  }
+
+  enum class Quote { kNone, kSingle, kDouble };
+
+  Quote quote{Quote::kNone};
+  bool converted{false};
+  output.clear();
+  output.reserve(input.size());
+  for (size_t i = 0; i < input.size(); ++i) {
+    const auto character = input[i];
+    if (quote == Quote::kNone) {
+      if (character == '\'') {
+        output.push_back('"');
+        quote = Quote::kSingle;
+        converted = true;
+      } else {
+        output.push_back(character);
+        if (character == '"') {
+          quote = Quote::kDouble;
+        }
+      }
+      continue;
+    }
+
+    if (quote == Quote::kDouble) {
+      if (character == '\\' && i + 1 < input.size()) {
+        const auto escaped = input[++i];
+        if (escaped == '\'') {
+          output.push_back('\'');
+          converted = true;
+        } else {
+          output.push_back('\\');
+          output.push_back(escaped);
+        }
+      } else {
+        output.push_back(character);
+        if (character == '"') {
+          quote = Quote::kNone;
+        }
+      }
+      continue;
+    }
+
+    if (character == '\\' && i + 1 < input.size()) {
+      const auto escaped = input[++i];
+      if (escaped == '\'') {
+        output.push_back('\'');
+      } else {
+        output.push_back('\\');
+        output.push_back(escaped);
+      }
+    } else if (character == '\'') {
+      output.push_back('"');
+      quote = Quote::kNone;
+    } else if (character == '"') {
+      output.append("\\\"");
+    } else {
+      output.push_back(character);
+    }
+  }
+  return converted && quote == Quote::kNone;
+}
+
 /// @brief Parses a JSON string into the specified data type. Supports ROW,
 /// ARRAY, and MAP as root types. Key Behavior:
 /// - Failure Handling: Returns `NULL` for invalid JSON or incompatible values.
@@ -627,6 +695,20 @@ class FromJsonFunction final : public exec::VectorFunction {
   }
 
  private:
+  // Applies Spark's single-quote default before handing the input to simdjson.
+  simdjson::simdjson_result<simdjson::ondemand::document> parseJson(
+      const simdjson::padded_string_view& paddedInput) const {
+    if (!normalizeSingleQuotedJson(paddedInput, normalizedInput_)) {
+      return simdjsonParse(paddedInput);
+    }
+
+    const auto normalizedSize = normalizedInput_.size();
+    normalizedInput_.resize(normalizedSize + simdjson::SIMDJSON_PADDING);
+    simdjson::padded_string_view normalizedInput(
+        normalizedInput_.data(), normalizedSize, normalizedInput_.size());
+    return simdjsonParse(normalizedInput);
+  }
+
   void parseJsonConstant(
       VectorPtr& input,
       exec::EvalCtx& context,
@@ -650,7 +732,7 @@ class FromJsonFunction final : public exec::VectorFunction {
           paddedInput_.data(), constant.size(), paddedInput_.size());
 
       simdjson::ondemand::document jsonDoc;
-      auto error = simdjsonParse(paddedInput).get(jsonDoc);
+      auto error = parseJson(paddedInput).get(jsonDoc);
 
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         writer.setOffset(row);
@@ -694,7 +776,7 @@ class FromJsonFunction final : public exec::VectorFunction {
       simdjson::padded_string_view paddedInput(
           paddedInput_.data(), input.size(), paddedInput_.size());
       simdjson::ondemand::document doc;
-      auto error = simdjsonParse(paddedInput).get(doc);
+      auto error = parseJson(paddedInput).get(doc);
       if (error != simdjson::SUCCESS ||
           extractJsonToWriter(doc, writer, rowSchemaInfoMap_) !=
               simdjson::SUCCESS) {
@@ -776,6 +858,8 @@ class FromJsonFunction final : public exec::VectorFunction {
 
   // The buffer with extra bytes for parser::parse(),
   mutable std::string paddedInput_;
+  // Reusable buffer for normalizing Spark's default single-quoted JSON.
+  mutable std::string normalizedInput_;
   // Map from row schema tree node index to schema information for JSON rows.
   folly::F14FastMap<int64_t, JsonRowSchemaInfo> rowSchemaInfoMap_;
 };

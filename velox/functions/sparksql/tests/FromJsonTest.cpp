@@ -58,6 +58,22 @@ TEST_F(FromJsonTest, basicMap) {
   testFromJson(input, expected);
 }
 
+TEST_F(FromJsonTest, singleQuotedJson) {
+  auto expected = makeMapVector<std::string, std::string>(
+      {{{"a", "1"}},
+       {{"a", "two"}},
+       {{"a", "it's"}},
+       {{"a", "it's"}},
+       {{"a", "he said \"hi\""}}});
+  auto input = makeFlatVector<std::string>(
+      {R"({'a': '1'})",
+       R"({"a": 'two'})",
+       R"({'a': 'it\'s'})",
+       R"({"a": "it\'s"})",
+       R"({'a': 'he said "hi"'})"});
+  testFromJson(input, expected);
+}
+
 TEST_F(FromJsonTest, basicBool) {
   auto expected = makeNullableFlatVector<bool>(
       {true, false, std::nullopt, std::nullopt, std::nullopt});
