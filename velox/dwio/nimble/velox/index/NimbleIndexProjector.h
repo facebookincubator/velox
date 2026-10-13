@@ -19,6 +19,7 @@
 #include <folly/coro/Task.h>
 #include <folly/io/IOBuf.h>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -234,7 +235,7 @@ class NimbleIndexProjector {
   /// Returns one entry per stripe, in stripe order, including stripes whose
   /// projected streams are all absent. The caller applies row selections.
   /// Requires a non-zero stripe count.
-  std::vector<facebook::nimble::ProjectedStripeStreams> loadStripeStreams(
+  std::vector<facebook::nimble::ProjectedStripe> loadStripeStreams(
       uint32_t stripeOffset,
       uint32_t numStripes);
 
@@ -296,11 +297,20 @@ class NimbleIndexProjector {
     std::string toString() const;
   };
 
-  /// Returns cumulative statistics. The caller serializes stats reads with
-  /// projector operations.
+  /// Returns approximate cumulative statistics. TSan builds synchronize
+  /// snapshots with counter and timing updates.
   Stats stats() const;
 
  private:
+  // Applies a synchronous counter or timing update under the TSan guard.
+  template <typename Update>
+  void updateStats(Update&& update);
+
+  // Accumulates one timing sample for the selected statistic.
+  void recordStatsTiming(
+      velox::CpuWallTiming Stats::* field,
+      const velox::CpuWallTiming& timing);
+
   NimbleIndexProjector(
       std::shared_ptr<TabletReader> tablet,
       std::shared_ptr<velox::ReadFile> file,
@@ -696,6 +706,8 @@ class NimbleIndexProjector {
   };
   ProjectionContext ctx_;
 
+  // Guards stats updates and snapshots in TSan builds.
+  mutable std::mutex statsLock_{};
   // Updated by the thread performing projection work.
   Stats stats_;
 };

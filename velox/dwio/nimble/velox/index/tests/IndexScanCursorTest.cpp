@@ -20,18 +20,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <ctime>
 #include <future>
 #include <limits>
-#include <mutex>
 
-#include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "folly/CancellationToken.h"
 #include "folly/ScopeGuard.h"
-#include "folly/coro/Timeout.h"
 #include "folly/init/Init.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -40,7 +36,7 @@
 
 namespace facebook::nimble::test {
 
-// Rejects one scheduled operation while retaining a real executor for recovery.
+// Rejects one submission while retaining a working executor for the producer.
 class RejectNextExecutor final : public folly::CPUThreadPoolExecutor {
  public:
   RejectNextExecutor() : folly::CPUThreadPoolExecutor(1) {}
@@ -58,44 +54,6 @@ class RejectNextExecutor final : public folly::CPUThreadPoolExecutor {
 
  private:
   std::atomic_bool rejectNext_{false};
-};
-
-// Captures error messages emitted by detached cleanup during the test.
-class CleanupLogSink final : public google::LogSink {
- public:
-  CleanupLogSink() {
-    google::AddLogSink(this);
-  }
-
-  ~CleanupLogSink() override {
-    google::RemoveLogSink(this);
-  }
-
-  void send(
-      google::LogSeverity severity,
-      const char*,
-      const char*,
-      int,
-      const std::tm*,
-      const char* message,
-      size_t length) override {
-    if (severity == google::GLOG_ERROR) {
-      std::lock_guard lock(mutex_);
-      messages_.emplace_back(message, length);
-    }
-  }
-
-  bool contains(std::string_view message) const {
-    std::lock_guard lock(mutex_);
-    return std::any_of(
-        messages_.begin(), messages_.end(), [&](const auto& text) {
-          return text.find(message) != std::string::npos;
-        });
-  }
-
- private:
-  mutable std::mutex mutex_;
-  std::vector<std::string> messages_;
 };
 
 // Exercises scan state and stripe loading through the cursor's own API.
@@ -475,33 +433,6 @@ TEST_P(IndexScanCursorTest, preservesRowsWithAbsentProjectedStreams) {
   }
 }
 
-TEST_P(IndexScanCursorTest, propagatesSchedulingFailureAndRecoversAfterReset) {
-  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
-  auto executor = std::make_unique<RejectNextExecutor>();
-  executor->rejectNext();
-  NimbleIterator::Options options;
-  options.prefetchExecutor = folly::getKeepAliveToken(*executor);
-  options.maxPrefetchStripes = 1;
-  auto cursor = makeCursor(options);
-  folly::coro::blockingWait(cursor->co_seekToFirst());
-  for (int attempt{0}; attempt < 2; ++attempt) {
-    SCOPED_TRACE(attempt);
-    NIMBLE_ASSERT_THROW(
-        folly::coro::blockingWait(
-            folly::coro::timeoutNoDiscard(
-                cursor->co_nextStripe(0), std::chrono::seconds{5})),
-        "injected executor scheduling failure");
-  }
-  EXPECT_EQ(dataIoStats_->read().count(), 0);
-  folly::coro::blockingWait(cursor->co_reset());
-  folly::coro::blockingWait(cursor->co_seekToFirst());
-  {
-    const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
-    EXPECT_EQ(stripe.selection.stripeIndex, 0);
-  }
-  folly::coro::blockingWait(cursor->co_reset());
-}
-
 // Cancels a consumer that waits for a prefetched stripe, then retries. The only
 // prefetch thread is held busy, so the first co_nextStripe(0) call suspends on
 // the empty stripe queue before any I/O starts. Cancelling it fails the call
@@ -522,7 +453,7 @@ TEST_P(IndexScanCursorTest, retriesAfterConsumerCancellation) {
   folly::CancellationSource cancellation;
   std::promise<void> consumerStarted;
   auto started = consumerStarted.get_future();
-  std::future<folly::Try<ProjectedStripeStreams>> pendingStripe;
+  std::future<folly::Try<ProjectedStripe>> pendingStripe;
   bool released{false};
   const auto release = [&] {
     if (!released) {
@@ -592,9 +523,7 @@ TEST_P(IndexScanCursorTest, stopsPrefetchWhenDestroyedWithAFullQueue) {
   EXPECT_EQ(dataIoStats_->read().count(), 1);
 }
 
-TEST_P(
-    IndexScanCursorTest,
-    logsCleanupSchedulingFailureAfterProducerCompletes) {
+TEST_P(IndexScanCursorTest, joinsAfterCleanupSchedulingFailure) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/1);
   auto executor = std::make_unique<RejectNextExecutor>();
   NimbleIterator::Options options;
@@ -608,12 +537,14 @@ TEST_P(
   std::promise<void> producerFinished;
   auto finished = producerFinished.get_future();
   executor->add([&] { producerFinished.set_value(); });
-  finished.wait();
-  CleanupLogSink logs;
+  ASSERT_EQ(
+      finished.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  std::weak_ptr<detail::IndexScanCursor> owner = cursor;
   executor->rejectNext();
-  EXPECT_NO_THROW(cursor.reset());
+  cursor.reset();
+  EXPECT_TRUE(owner.expired());
   executor->join();
-  EXPECT_TRUE(logs.contains("asynchronous prefetch cleanup"));
+  EXPECT_EQ(dataIoStats_->read().count(), 1);
 }
 
 DEBUG_ONLY_TEST_P(
@@ -744,7 +675,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesSkippedStatsAfterCancellation) {
   auto started = secondLoadStarted.get_future();
   std::promise<void> continueLoad;
   auto continuation = continueLoad.get_future().share();
-  std::future<folly::Try<ProjectedStripeStreams>> pendingStripe;
+  std::future<folly::Try<ProjectedStripe>> pendingStripe;
   std::atomic_uint32_t attempts{0};
   bool released{false};
   const auto release = [&] {
@@ -949,7 +880,7 @@ TEST_P(IndexScanCursorTest, stopsBeforeQueuedProducerStarts) {
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 }
 
-DEBUG_ONLY_TEST_P(IndexScanCursorTest, statsWaitForAnInFlightLoad) {
+DEBUG_ONLY_TEST_P(IndexScanCursorTest, reportsStatsDuringAnInFlightLoad) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const bool wasEnabled = velox::common::testutil::TestValue::enabled();
   velox::common::testutil::TestValue::enable();
@@ -1002,12 +933,15 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, statsWaitForAnInFlightLoad) {
   ASSERT_EQ(
       readingStats.wait_for(std::chrono::seconds{5}),
       std::future_status::ready);
-  EXPECT_EQ(
-      statsTask.wait_for(std::chrono::milliseconds{20}),
-      std::future_status::timeout);
+  ASSERT_EQ(
+      statsTask.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+  const auto partialStats = statsTask.get();
+  EXPECT_EQ(partialStats.numReadStripes, 0);
+  EXPECT_GT(partialStats.numPlannedBytes, 0);
   EXPECT_EQ(dataIoStats_->read().count(), 0);
   release();
-  const auto stats = statsTask.get();
+  folly::coro::blockingWait(cursor->co_reset());
+  const auto stats = cursor->stats();
   EXPECT_EQ(stats.numReadStripes, 1);
   EXPECT_GT(stats.numPlannedBytes, 0);
   EXPECT_EQ(dataIoStats_->read().count(), 1);

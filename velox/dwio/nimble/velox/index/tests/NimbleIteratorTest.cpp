@@ -312,9 +312,7 @@ TEST_P(NimbleIteratorTest, indexIteratorRejectsNullProjector) {
   }
 }
 
-DEBUG_ONLY_TEST_P(
-    NimbleIteratorTest,
-    indexIteratorWaitsForPrefetchBeforeReadingStats) {
+DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorReportsStatsDuringPrefetch) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   std::vector<Subfield> projectedSubfields;
   projectedSubfields.emplace_back("value");
@@ -380,13 +378,17 @@ DEBUG_ONLY_TEST_P(
   ASSERT_EQ(
       statsStartedFuture.wait_for(std::chrono::seconds{5}),
       std::future_status::ready);
-  EXPECT_EQ(
-      pendingStats.wait_for(std::chrono::milliseconds{20}),
-      std::future_status::timeout);
+  ASSERT_EQ(
+      pendingStats.wait_for(std::chrono::seconds{5}),
+      std::future_status::ready);
+  const auto partialStats = pendingStats.get();
+  EXPECT_EQ(partialStats.numReadStripes, 0);
+  EXPECT_GT(partialStats.numPlannedBytes, 0);
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 
   releaseLoad();
-  const auto completedStats = pendingStats.get();
+  folly::coro::blockingWait(iterator->co_reset());
+  const auto completedStats = iterator->stats();
   EXPECT_GT(completedStats.numPlannedBytes, 0);
   EXPECT_EQ(completedStats.numReadStripes, 1);
   EXPECT_EQ(dataIoStats_->read().count(), 1);
@@ -607,8 +609,7 @@ DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorCancelsPrefetchDuringLoad) {
         std::future_status::ready);
     EXPECT_EQ(dataIoStats_->read().count(), 0);
 
-    // Destroy the iterator while the producer retains its cursor during
-    // loading.
+    // Release the iterator while the producer is loading a stripe.
     iterator.reset();
     releaseLoad();
     executor->join();

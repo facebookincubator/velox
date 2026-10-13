@@ -50,7 +50,7 @@ struct StripeSelection {
 
 // Holds a stripe's projected encoded streams, selected rows, and backing
 // storage.
-struct ProjectedStripeStreams {
+struct ProjectedStripe {
   // Loading selects the full stripe, and the cursor clips it to the active
   // scan.
   StripeSelection selection{};

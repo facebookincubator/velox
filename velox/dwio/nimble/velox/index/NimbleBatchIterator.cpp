@@ -183,7 +183,7 @@ class NimbleBatchIterator final : public NimbleIterator {
   // Decodes the currently bound stripe into output vectors.
   const std::unique_ptr<StreamReader> streamReader_;
   // Keeps the current stripe streams alive while they are decoded.
-  std::optional<ProjectedStripeStreams> stripeStreams_;
+  std::optional<ProjectedStripe> stripeStreams_;
   // Tracks vector decoding time separately from stripe projection time.
   velox::CpuWallTiming materializationTiming_{};
 };

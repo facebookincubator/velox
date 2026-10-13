@@ -19,7 +19,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,11 +40,12 @@ class Type;
 
 namespace detail {
 
+class ScanPrefetcher;
+
 /// Owns an index scan and its bounded stripe-stream prefetch for one iterator.
 /// Is not thread-safe. The owning iterator must serialize cursor calls.
 /// Resets and joins prefetch before using mutable projector APIs on the caller.
-class IndexScanCursor final
-    : public std::enable_shared_from_this<IndexScanCursor> {
+class IndexScanCursor final {
  public:
   using ProjectorPtr = std::shared_ptr<NimbleIndexProjector>;
 
@@ -56,7 +56,7 @@ class IndexScanCursor final
       const NimbleIterator::Options& options);
 
   /// Requests cancellation and defers producer cleanup until its tasks stop.
-  /// Logs failures when detached cleanup cannot be started or completed.
+  /// Joins synchronously if asynchronous cleanup cannot start.
   ~IndexScanCursor();
 
   IndexScanCursor(const IndexScanCursor&) = delete;
@@ -91,15 +91,13 @@ class IndexScanCursor final
   /// Skips earlier stripes and clips the selection to this row. The iterator
   /// retains the result while navigating rows within the stripe.
   /// Successive calls must advance to a later stripe.
-  folly::coro::Task<ProjectedStripeStreams> co_nextStripe(uint32_t row);
+  folly::coro::Task<ProjectedStripe> co_nextStripe(uint32_t row);
 
-  /// Returns cumulative projector and cursor statistics.
-  /// Waits for an active prefetch load before reading projector counters.
+  /// Returns approximate cumulative projector and cursor statistics.
+  /// Counters can reflect different points of an active prefetch load.
   NimbleIterator::Stats stats() const;
 
  private:
-  class ScanPrefetcher;
-
   // Initializes projector access and the configured scan limits.
   IndexScanCursor(
       std::unique_ptr<NimbleIndexProjector> projector,
@@ -119,8 +117,6 @@ class IndexScanCursor final
 
   // Shares the projector with its background prefetch task.
   const ProjectorPtr projector_;
-  // Serializes background loads with reads of the projector's plain counters.
-  mutable std::mutex lock_;
   // Executor used to project later stripes.
   const folly::Executor::KeepAlive<> prefetchExecutor_;
   // Maximum number of stripe streams queued ahead of the consumer.

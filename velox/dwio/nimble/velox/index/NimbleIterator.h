@@ -73,6 +73,7 @@ class NimbleIterator {
     uint32_t outputBatchRows{1'024};
 
     /// Executor used to project later stripes ahead of the consumer.
+    /// Must accept task submissions while its keep-alive token is held.
     /// Prefetch is disabled when the executor is empty or the stripe limit is
     /// zero.
     folly::Executor::KeepAlive<> prefetchExecutor{};

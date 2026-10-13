@@ -20,6 +20,7 @@
 #include <chrono>
 #include <future>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -323,7 +324,7 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
       stripes,
       ::testing::ElementsAre(
           ::testing::Field(
-              &ProjectedStripeStreams::selection,
+              &ProjectedStripe::selection,
               ::testing::AllOf(
                   ::testing::Field(&StripeSelection::stripeIndex, 1),
                   ::testing::Field(&StripeSelection::startRow, 4),
@@ -332,7 +333,7 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
                       &StripeSelection::rowRange,
                       RowRange(0, kRowsPerStripe)))),
           ::testing::Field(
-              &ProjectedStripeStreams::selection,
+              &ProjectedStripe::selection,
               ::testing::AllOf(
                   ::testing::Field(&StripeSelection::stripeIndex, 2),
                   ::testing::Field(&StripeSelection::startRow, 8),
@@ -354,7 +355,7 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
   EXPECT_THAT(
       firstStripe.front(),
       ::testing::Field(
-          &ProjectedStripeStreams::selection,
+          &ProjectedStripe::selection,
           ::testing::AllOf(
               ::testing::Field(&StripeSelection::stripeIndex, 0),
               ::testing::Field(&StripeSelection::numRows, kRowsPerStripe),
@@ -3312,6 +3313,92 @@ TEST_P(NimbleIndexProjectorTest, stats) {
     EXPECT_EQ(proj->stats().numReadRows, 0);
     EXPECT_EQ(proj->stats().numProjectedRows, 0);
     EXPECT_EQ(dataIoStats_->rawBytesRead(), 0);
+  }
+}
+
+DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
+  constexpr uint32_t kNumRows{4};
+  writeResumeKeyTestData(/*rowsPerBatch=*/kNumRows, /*numBatches=*/1);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
+  for (const std::string_view method :
+       {"projectStreams", "co_projectRows", "loadStripeStreams"}) {
+    SCOPED_TRACE(method);
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    auto projector = createProjector(subfields);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
+    std::promise<void> loadStarted;
+    auto loading = loadStarted.get_future();
+    std::promise<void> continueLoad;
+    const auto continuation = continueLoad.get_future().share();
+    std::promise<void> statsStarted;
+    auto readingStats = statsStarted.get_future();
+    std::future<void> projectionTask;
+    std::future<NimbleIndexProjector::Stats> statsTask;
+    bool released{false};
+    const auto release = [&] {
+      if (!released) {
+        released = true;
+        continueLoad.set_value();
+      }
+    };
+    auto cleanup = folly::makeGuard([&] {
+      release();
+      if (projectionTask.valid()) {
+        projectionTask.wait();
+      }
+      if (statsTask.valid()) {
+        statsTask.wait();
+      }
+    });
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::DirectDataInput::allocateBuffer",
+        std::function<void(uint64_t*)>([&](uint64_t*) {
+          loadStarted.set_value();
+          continuation.wait();
+        }));
+    projectionTask = std::async(std::launch::async, [&] {
+      if (method == "projectStreams") {
+        projector->projectStreams(request, {});
+      } else if (method == "co_projectRows") {
+        folly::coro::blockingWait(projector->co_projectRows(request, {}));
+      } else {
+        projector->loadStripeStreams(0, 1);
+      }
+    });
+    ASSERT_EQ(
+        loading.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+    statsTask = std::async(std::launch::async, [&] {
+      statsStarted.set_value();
+      return projector->stats();
+    });
+    ASSERT_EQ(
+        readingStats.wait_for(std::chrono::seconds{5}),
+        std::future_status::ready);
+    ASSERT_EQ(
+        statsTask.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+    const auto partialStats = statsTask.get();
+    EXPECT_EQ(partialStats.numReadStripes, 0);
+    EXPECT_GT(partialStats.numPlannedBytes, 0);
+    EXPECT_EQ(partialStats.prepareTiming.count, 1);
+    EXPECT_EQ(partialStats.scanTiming.count, 0);
+    release();
+    projectionTask.get();
+    const auto stats = projector->stats();
+    EXPECT_EQ(stats.numReadStripes, 1);
+    EXPECT_EQ(stats.numReadRows, kNumRows);
+    EXPECT_EQ(stats.numProjectedRows, kNumRows);
+    EXPECT_EQ(stats.prepareTiming.count, 1);
+    EXPECT_EQ(stats.scanTiming.count, 1);
+    EXPECT_EQ(stats.projectionTiming.count, 1);
   }
 }
 
