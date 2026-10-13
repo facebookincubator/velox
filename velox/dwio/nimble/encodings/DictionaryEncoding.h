@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 
 // A dictionary encoded stream is comprised of two pieces: a mapping from the
 // n unique values in a stream to the integers [0, n) and the vector of indices
@@ -653,6 +654,17 @@ void DictionaryEncoding<T>::readWithVisitor(
       callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
       dictionaryHook.processTrailingNulls();
       visitor.setRowIndex(dictionaryVisitor.rowIndex());
+      if constexpr (std::is_same_v<T, int16_t>) {
+        fuzzer::updateSmallintDictionaryAwareReads();
+      } else if constexpr (std::is_same_v<T, int32_t>) {
+        fuzzer::updateIntegerDictionaryAwareReads();
+      } else if constexpr (std::is_same_v<T, int64_t>) {
+        fuzzer::updateBigintDictionaryAwareReads();
+      } else if constexpr (std::is_same_v<T, float>) {
+        fuzzer::updateRealDictionaryAwareReads();
+      } else if constexpr (std::is_same_v<T, double>) {
+        fuzzer::updateDoubleDictionaryAwareReads();
+      }
       return;
     }
   }

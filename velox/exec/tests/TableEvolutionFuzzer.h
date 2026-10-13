@@ -70,6 +70,12 @@ class TableEvolutionFuzzer {
     int64_t numIndexFilterConversions{0};
     int64_t numStringDictionaryEncodingPreserved{0};
     int64_t numStringDictionaryEncodingAbandoned{0};
+    /// Completed fused dictionary visitor calls, including nested encodings.
+    int64_t numSmallintDictionaryAwareReads{0};
+    int64_t numIntegerDictionaryAwareReads{0};
+    int64_t numBigintDictionaryAwareReads{0};
+    int64_t numRealDictionaryAwareReads{0};
+    int64_t numDoubleDictionaryAwareReads{0};
     int64_t numQueriesWithValueHook{0};
     uint64_t numValuesLoadedToValueHook{0};
     int64_t numQueriesWithRemainingFilterEvaluation{0};
