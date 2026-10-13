@@ -283,8 +283,8 @@ bool isOpAndInputsSupported(
 bool isAstExprSupported(const core::TypedExprPtr& expr) {
   using Op = cudf::ast::ast_operator;
 
-  // Reject expressions with types not yet supported in AST/JIT (currently
-  // TIMESTAMP and DECIMAL).
+  // Reject expressions with types not supported in AST/JIT: TIMESTAMP,
+  // DECIMAL, and types compared through custom functions.
   if (containsAstUnsupportedType(expr)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
       LOG(WARNING) << "Expression contains a type not supported by AST/JIT: "
@@ -725,12 +725,16 @@ int AstContext::findExpressionSide(const core::TypedExprPtr& expr) const {
   return foundSide;
 }
 
+/// `errors` is forwarded to compiled nodes evaluated here, so a delegated GPU
+/// SFI node can report a declined row. It is null when the owner cannot act on
+/// one, as for joins, whose predicate is consumed inside a fused cuDF call.
 std::vector<ColumnOrView> precomputeSubexpressions(
     const std::vector<cudf::column_view>& inputColumnViews,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    gpu_sfi::GpuSfiErrors* errors = nullptr) {
   std::vector<ColumnOrView> precomputedColumns;
   precomputedColumns.reserve(precomputeInstructions.size());
 
@@ -745,10 +749,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
     // If a compiled cudf node is available, evaluate it directly.
     if (cudf_expression) {
       auto result = cudf_expression->eval(
-          inputColumnViews,
-          stream,
-          get_output_mr(),
-          /*finalize=*/true);
+          inputColumnViews, stream, get_output_mr(), /*finalize=*/true, errors);
       precomputedColumns.push_back(std::move(result));
       continue;
     }
