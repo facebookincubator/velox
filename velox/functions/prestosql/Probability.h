@@ -454,6 +454,16 @@ struct InversePoissonCDFFunction {
         (lambda > 0) && (lambda != kInf),
         "inversePoissonCdf Function: lambda must be greater than 0");
 
+    // From this lambda on, the quantile exceeds INT32_MAX for every p > 0, so
+    // the result is clamped below anyway. Boost's discrete quantile steps one
+    // floating point value at a time and does not finish for some lambda above
+    // 2^53.
+    static constexpr double kLambdaWithMaxResult = 1e10;
+    if (p > 0 && lambda >= kLambdaWithMaxResult) {
+      result = std::numeric_limits<int32_t>::max();
+      return;
+    }
+
     boost::math::poisson_distribution<double, InverseDiscreteCdfPolicy> dist(
         lambda);
     double quantile = boost::math::quantile(dist, p);
