@@ -614,7 +614,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Operator>> peerOperators;
   // Only last driver collects all answers
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 
@@ -632,7 +632,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
     if (hashObject_.has_value()) {
       auto stream = cudfGlobalStreamPool().get_stream();
 
-      // The allPeersFinished barrier above synchronizes CPU threads, but not
+      // The allPeersArrived barrier above synchronizes CPU threads, but not
       // GPU streams. A driver's CPU thread may return from getOutput() while
       // its GPU work (updating rightMatchedFlags_) is still in flight.
       // join_streams establishes GPU-side ordering so that all probe stream
