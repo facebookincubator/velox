@@ -31,6 +31,7 @@ target_link_libraries(
   nimble_velox_selective
   nimble_velox_schema_utils
   velox_dwio_common
+  velox_dwio_common_test_utils
   velox_key_encoder
   velox_memory
   velox_vector_fuzzer

@@ -1799,7 +1799,7 @@ TEST_F(WindowTest, nagativeFrameArg) {
   }
 }
 
-DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
+TEST_F(WindowTest, frameColumnNullCheck) {
   auto makePlan = [&](const RowVectorPtr& input) {
     return PlanBuilder()
         .values({input})
@@ -1818,8 +1818,9 @@ DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
           makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 5}),
           makeNullableFlatVector<int64_t>({2, std::nullopt, 4, 5, 6}),
       });
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()), "");
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()),
+      "k RANGE frame bound must be null exactly when the ORDER BY key is null");
 
   // Null values in order-by column 's0' and frame column 'off0' match, so no
   // exception should be thrown.
@@ -1833,6 +1834,48 @@ DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
       });
   ASSERT_NO_THROW(
       AssertQueryBuilder(makePlan(inputNoThrow)).copyResults(pool()));
+}
+
+// A k RANGE frame covers the rows whose keys fall between its bound values,
+// whichever side of the current row each value is on.
+TEST_F(WindowTest, frameBoundOnOtherSide) {
+  auto input = makeRowVector(
+      {"c", "s", "minus_two", "minus_one", "plus_one", "plus_two"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({-1, 0, 1, 2, 3}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int64_t>({2, 3, 4, 5, 6}),
+          makeFlatVector<int64_t>({3, 4, 5, 6, 7}),
+      });
+
+  auto assertFrame = [&](const std::string& frame,
+                         const std::vector<std::optional<int64_t>>& expected) {
+    SCOPED_TRACE(frame);
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .window({fmt::format("sum(c) OVER (ORDER BY s {})", frame)})
+                    .project({"w0"})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeNullableFlatVector<int64_t>(expected)}));
+  };
+
+  // Starts after the current row and ends at it: empty.
+  assertFrame(
+      "RANGE BETWEEN plus_one PRECEDING AND CURRENT ROW",
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  // Keys in [s + 1, s + 2].
+  assertFrame(
+      "RANGE BETWEEN plus_one PRECEDING AND plus_two FOLLOWING",
+      {5, 7, 9, 5, std::nullopt});
+
+  // Keys in [s - 2, s - 1].
+  assertFrame(
+      "RANGE BETWEEN minus_two PRECEDING AND minus_one FOLLOWING",
+      {std::nullopt, 1, 3, 5, 7});
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {

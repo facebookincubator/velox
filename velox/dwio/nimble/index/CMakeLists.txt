@@ -106,6 +106,8 @@ target_link_libraries(
   Folly::folly
 )
 
+find_package(OpenMP REQUIRED)
+
 add_library(
   nimble_vector_index
   VectorIndex.cpp
@@ -126,6 +128,7 @@ target_link_libraries(
   velox_vector
   FAISS::faiss
   Folly::folly
+  OpenMP::OpenMP_CXX
 )
 
 if(NIMBLE_BUILD_TESTING)

@@ -288,7 +288,7 @@ class HiveTableHandle : public FileTableHandle {
   // filterColumnHandles, indexColumns, dbName) into an object whose "name"
   // key is set to @p typeName. Subclasses call this instead of duplicating
   // the field list, then append their own keys.
-  folly::dynamic serializeHiveFields(const std::string& typeName) const;
+  folly::dynamic serializeHiveFields(std::string_view typeName) const;
 
   // Fills the common Hive fields from @p obj into the provided out-parameters.
   // Subclasses call this from their own create() and then parse only their

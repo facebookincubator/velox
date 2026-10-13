@@ -90,6 +90,11 @@ struct GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
+  // Release request temporaries after aggregate() has enqueued their last use.
+  virtual void releaseInput() {
+    maskedValues_.reset();
+  }
+
   virtual ~GroupbyAggregator() = default;
 
  protected:

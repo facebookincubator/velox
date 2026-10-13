@@ -296,6 +296,15 @@ TEST(TypeTest, shortDecimal) {
               TypeParameter(5),
           }));
 
+  ASSERT_TRUE(shortDecimal->isShortDecimal());
+  ASSERT_FALSE(shortDecimal->isLongDecimal());
+  ASSERT_TRUE(shortDecimal->isDecimal());
+
+  // Plain BIGINT shares the kind but is not a decimal.
+  ASSERT_FALSE(BIGINT()->isShortDecimal());
+  ASSERT_FALSE(BIGINT()->isLongDecimal());
+  ASSERT_FALSE(BIGINT()->isDecimal());
+
   testTypeSerde(shortDecimal);
 }
 
@@ -332,6 +341,15 @@ TEST(TypeTest, longDecimal) {
               TypeParameter(30),
               TypeParameter(5),
           }));
+
+  ASSERT_FALSE(longDecimal->isShortDecimal());
+  ASSERT_TRUE(longDecimal->isLongDecimal());
+  ASSERT_TRUE(longDecimal->isDecimal());
+
+  // Plain HUGEINT shares the kind but is not a decimal.
+  ASSERT_FALSE(HUGEINT()->isShortDecimal());
+  ASSERT_FALSE(HUGEINT()->isLongDecimal());
+  ASSERT_FALSE(HUGEINT()->isDecimal());
 
   testTypeSerde(longDecimal);
 }

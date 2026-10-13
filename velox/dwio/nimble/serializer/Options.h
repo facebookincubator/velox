@@ -173,8 +173,17 @@ struct SerializerOptions {
   /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
   /// group keys are stored in schema metadata; Default has no schema keys.
   /// Every block carries its observed typed keys, key-major in-map bits, and
-  /// values in one complete value subtree per group.
+  /// values in one complete value subtree per group. Default is required and
+  /// may be the only group, in which case it holds every key.
   folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
+
+  /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
+  /// serialized values. All-true in-map streams stay explicit so the reader
+  /// can derive each batch's row count. All-true key-presence streams stay
+  /// explicit so later Default-group keys do not appear in earlier batches.
+  /// Disabled by default for compatibility with readers that require explicit
+  /// metadata streams.
+  bool skipConstantHybridFlatMapMetadataStreams{false};
 
   /// Factory for creating encoding selection policies.
   /// Used by encoded serializer writes.

@@ -18,6 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -160,6 +161,26 @@ core::PlanNodePtr CudfIcebergTestBase::makeTableScanPlan(
       .dataColumns(rowType)
       .endTableScan()
       .planNode();
+}
+
+facebook::velox::connector::ColumnHandleMap
+CudfIcebergTestBase::makeAssignments(
+    const RowTypePtr& rowType,
+    const std::unordered_set<std::string>& partitionColumnNames) {
+  using facebook::velox::connector::hive::HiveColumnHandle;
+  facebook::velox::connector::ColumnHandleMap assignments;
+  for (uint32_t i = 0; i < rowType->size(); ++i) {
+    const auto& name = rowType->nameOf(i);
+    const auto& type = rowType->childAt(i);
+    assignments[name] = std::make_shared<HiveColumnHandle>(
+        name,
+        partitionColumnNames.contains(name)
+            ? HiveColumnHandle::ColumnType::kPartitionKey
+            : HiveColumnHandle::ColumnType::kRegular,
+        type,
+        type);
+  }
+  return assignments;
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test

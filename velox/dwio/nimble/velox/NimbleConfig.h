@@ -216,6 +216,9 @@ class Config : public velox::config::ConfigBase {
   /// Enable vectorized column statistics for row size estimation.
   static Entry<bool> ENABLE_VECTORIZED_STATS;
 
+  /// Longest string min/max, in bytes, kept in vectorized statistics.
+  static Entry<uint32_t> VECTORIZED_STATS_STRING_LENGTH_LIMIT;
+
   /// Enable the encoding selection cache: capture the encoding layout from the
   /// first encoding of each stream and replay it on subsequent chunks/stripes.
   static Entry<bool> ENABLE_ENCODING_SELECTION_CACHE;

@@ -59,7 +59,6 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
-        .allowNestedAlpSelection = allowNestedAlpSelection,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -91,6 +90,10 @@ struct WriterOptions {
 
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
+
+  /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
+  /// are written as absent, matching the DWRF writer's default limit.
+  uint32_t vectorizedStatsStringLengthLimit{64};
 
   /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
   /// alias before passing the canonical chunk stats options to TabletWriter.
@@ -125,7 +128,7 @@ struct WriterOptions {
   /// encoding per-stripe-group stream offsets/sizes (kStreamMajor). Only
   /// encodings with O(1) stateless point access (via EncodingView) are valid.
   /// Empty (default) lets the writer pick its own candidate set (Constant,
-  /// Trivial, FixedBitWidth).
+  /// Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
 
@@ -275,11 +278,6 @@ struct WriterOptions {
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
-
-  /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-  /// encoding selection. False by default; do not enable for production until
-  /// ALP is production-ready.
-  bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by
@@ -449,11 +447,12 @@ struct WriterOptions {
 
   bool enableStreamDeduplication{true};
 
-  /// When true, records a checksum of each stream's on-disk bytes in the
-  /// stripe group, so a reader can verify an individual stream without reading
-  /// the whole file. Costs 4 bytes per stream per stripe in the footer, and
-  /// the checksums do not compress. The whole-file checksum in the postscript
-  /// is written either way.
+  /// When true, follows each non-empty stream's on-disk bytes with a 4-byte
+  /// checksum of them, so a reader can verify an individual stream without
+  /// reading the whole file. The checksum sits in the stripe data, outside the
+  /// stream's recorded size, and costs no metadata. Readers that predate it
+  /// read such files unverified. The whole-file checksum in the postscript is
+  /// written either way.
   bool enableStreamChecksums{false};
 
   /// When true, string fields use per-field buffers instead of a shared buffer.

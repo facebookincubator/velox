@@ -202,8 +202,7 @@ void DirectBufferedInput::readRegion(
       groupId_.id(),
       requests,
       pool_,
-      options_.loadQuantum(),
-      options_.directBufferedInputSharedAllocation());
+      options_.loadQuantum());
   coalescedLoads_.push_back(load);
   streamToCoalescedLoad_.withWLock([&](auto& loads) {
     for (auto& request : requests) {
@@ -401,7 +400,7 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   constexpr int64_t kMinPaddingBytesToUseSharedAllocation =
       static_cast<int64_t>(memory::AllocationPool::kMinPages) *
       static_cast<int64_t>(memory::AllocationTraits::kPageSize);
-  const bool useSharedAllocation = sharedAllocationEnabled_ &&
+  const bool useSharedAllocation =
       overAllocatedBytes > kMinPaddingBytesToUseSharedAllocation;
 
   int64_t size = 0;
