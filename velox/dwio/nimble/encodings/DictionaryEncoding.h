@@ -336,15 +336,50 @@ class DictionaryIndicesHook : public velox::ValueHook {
   const vector_size_t offset_;
 };
 
-/// Fuses index decoding with dictionary translation and filtering. Index
-/// decoders call the dictionary visitor directly instead of staging indices in
-/// a buffer, and index batches go through processBulk().
-template <typename DictionaryVisitor>
-class FusedDictionaryIndicesHook : public velox::ValueHook {
+/// Forwards decoded dictionary indices to a typed hook through virtual calls.
+/// Index decoders are instantiated per hook type. Every
+/// FusedDictionaryIndicesHook shares this one type, so the index decoders are
+/// compiled once per density instead of once per value type, filter and
+/// extraction mode. Bulk decoders make one virtual call per batch.
+class ForwardingIndicesHook : public velox::ValueHook {
  public:
   static constexpr bool kSkipNulls = true;
   static constexpr bool kBulkFastPath = true;
 
+  /// Constructs a hook that forwards every index to 'target'.
+  explicit ForwardingIndicesHook(velox::ValueHook& target) : target_{&target} {}
+
+  bool acceptsNulls() const final {
+    return false;
+  }
+
+  void addValue(vector_size_t row, int64_t index) final {
+    target_->addValue(row, index);
+  }
+
+  void addValues(
+      const vector_size_t* rows,
+      const int32_t* indices,
+      vector_size_t size) final {
+    target_->addValues(rows, indices, size);
+  }
+
+  void addNull(vector_size_t /*row*/) final {
+    NIMBLE_UNREACHABLE(__PRETTY_FUNCTION__);
+  }
+
+ private:
+  // Typed hook that translates and filters the forwarded indices.
+  velox::ValueHook* target_;
+};
+
+/// Fuses index decoding with dictionary translation and filtering. Index
+/// decoders pass indices to the dictionary visitor through
+/// ForwardingIndicesHook instead of staging them in a buffer, and index batches
+/// go through processBulk().
+template <typename DictionaryVisitor>
+class FusedDictionaryIndicesHook : public velox::ValueHook {
+ public:
   /// Constructs a hook bound to the given dictionary visitor.
   /// 'filterCache' is the visitor's per-index verdict cache. It may be null
   /// for reads without a filter.
@@ -636,19 +671,22 @@ void DictionaryEncoding<T>::readWithVisitor(
         params.prepareResultNulls();
       }
 
-      using Hook = detail::FusedDictionaryIndicesHook<DictionaryVisitor>;
-      Hook dictionaryHook{dictionaryVisitor, dictionaryState.filterCache};
+      detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
+          dictionaryVisitor, dictionaryState.filterCache};
+      detail::ForwardingIndicesHook indicesHook{dictionaryHook};
+      using IndicesExtract =
+          velox::dwio::common::ExtractToHook<detail::ForwardingIndicesHook>;
       velox::common::AlwaysTrue indicesFilter;
       DecoderVisitor<
           int32_t,
           velox::common::AlwaysTrue,
-          velox::dwio::common::ExtractToHook<Hook>,
+          IndicesExtract,
           V::dense>
           indicesVisitor{
               indicesFilter,
               &visitor.reader(),
               velox::RowSet(visitor.rows(), visitor.numRows()),
-              velox::dwio::common::ExtractToHook<Hook>(&dictionaryHook)};
+              IndicesExtract(&indicesHook)};
       indicesVisitor.setRowIndex(visitor.rowIndex());
       callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
       dictionaryHook.processTrailingNulls();
