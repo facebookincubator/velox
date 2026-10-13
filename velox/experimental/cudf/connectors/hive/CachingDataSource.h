@@ -74,10 +74,8 @@ class CachingDataSource final : public cudf::io::datasource {
       size_t size,
       uint8_t* dst,
       cuda::stream_ref stream) override;
-  std::unique_ptr<datasource::buffer> device_read(
-      size_t offset,
-      size_t size,
-      cuda::stream_ref stream) override;
+  std::unique_ptr<datasource::buffer>
+  device_read(size_t offset, size_t size, cuda::stream_ref stream) override;
 
  private:
   struct State;
@@ -89,6 +87,8 @@ class CachingDataSource final : public cudf::io::datasource {
 /// With caching disabled (or a non-cacheable split), return the original
 /// datasource itself. This preserves the direct KvikIO path, including native
 /// async interfaces, without extra pools, file IDs or staging allocations.
+/// Presto marks splits cacheable only under soft or hard affinity scheduling,
+/// so with its default NO_PREFERENCE the cache is never used.
 std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     std::unique_ptr<cudf::io::datasource> delegate,
     std::string_view path,
