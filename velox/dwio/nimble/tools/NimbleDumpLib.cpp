@@ -655,25 +655,11 @@ void NimbleDumpLib::emitStripes(bool noHeader) {
        {"Stripe Size", 15, Alignment::Right},
        {"Row Count", 10, Alignment::Right}},
       noHeader);
-  // Stripe identifier internally is holding on to a reference counted cache of
-  // stripe groups. We must hold on to it across loop iterations in order to
-  // maintain the items in the cache.
-  std::optional<StripeIdentifier> stripeIdentifier;
-  std::vector<TabletReader::StreamMetadata> locationsScratch;
   for (auto i = 0; i < tabletReader->stripeCount(); ++i) {
-    stripeIdentifier = tabletReader->stripeIdentifier(i);
-    locationsScratch.resize(
-        tabletReader->streamCount(stripeIdentifier.value()));
-    tabletReader->streamLocations(stripeIdentifier.value(), locationsScratch);
-    auto stripeSize = std::accumulate(
-        locationsScratch.begin(),
-        locationsScratch.end(),
-        0UL,
-        [](auto size, const auto& location) { return size + location.size; });
     formatter.writeRow({
         folly::to<std::string>(i),
         commaSeparated(tabletReader->stripeOffset(i)),
-        commaSeparated(stripeSize),
+        commaSeparated(tabletReader->stripeSize(i)),
         commaSeparated(tabletReader->stripeRowCount(i)),
     });
   }

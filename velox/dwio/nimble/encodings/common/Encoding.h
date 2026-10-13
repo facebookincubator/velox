@@ -156,11 +156,6 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
-    /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-    /// encoding selection. False by default; do not enable for production
-    /// until ALP is production-ready.
-    bool allowNestedAlpSelection{false};
-
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///
@@ -884,6 +879,15 @@ T* mutableValues(const V& visitor, vector_size_t size) {
         visitor.reader().numValues();
   }
   return values;
+}
+
+// Returns whether a hook explicitly opts in to the encoding bulk fast path.
+template <typename Hook>
+constexpr bool hookAllowsBulkFastPath() {
+  if constexpr (requires { Hook::kBulkFastPath; }) {
+    return Hook::kBulkFastPath;
+  }
+  return false;
 }
 
 } // namespace detail

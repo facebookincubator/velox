@@ -174,6 +174,9 @@ class FlatMapVector : public BaseVector {
   /// Returns a vector containing a projection for a specific primitive key.
   /// This is an efficient operation in flat maps (zero-copy).
   ///
+  /// The projection has an entry for every row, including rows whose map does
+  /// not contain the key; callers must check isInMap() to tell them apart.
+  ///
   /// The key restrictions are the same as the ones listed above for
   /// `getKeyChannel()`.
   template <typename TKey>
@@ -299,7 +302,8 @@ class FlatMapVector : public BaseVector {
       vector_size_t otherIndex,
       CompareFlags flags) const override;
 
-  /// Copy the ranges defined by `ranges` from source into `this`.
+  /// Copy the ranges defined by `ranges` from source into `this`. `source` may
+  /// be a FlatMapVector or a MapVector, under any wrapping.
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
@@ -325,6 +329,13 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  /// Converts and copies `map` into a FlatMapVector, allocated from the same
+  /// memory pool. Each distinct key in `map` becomes a key channel.
+  ///
+  /// Like toMapVector(), this is an expensive operation that should be used
+  /// mostly for testing/validation purposes.
+  static std::shared_ptr<FlatMapVector> fromMapVector(const MapVector& map);
+
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
     // TODO: enable this after
     // https://github.com/facebookincubator/velox/issues/15485 is resolved to
@@ -339,6 +350,11 @@ class FlatMapVector : public BaseVector {
       const VectorPtr& sourceDistinctKeys,
       column_index_t sourceChannel);
 
+  /// Returns the in-map bits of the key at `channel` for writing. A key without
+  /// an in-map buffer is in every row, so a buffer allocated here starts with
+  /// every bit set. A buffer that is a view or shared is copied first.
+  uint64_t* ensureInMapAt(column_index_t channel);
+
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in
   /// `ranges`.
@@ -352,6 +368,21 @@ class FlatMapVector : public BaseVector {
       const folly::Range<const BaseVector::CopyRange*>& ranges);
 
  private:
+  // Copies 'ranges' from an unwrapped flat map.
+  void copyFlatMapRanges(
+      const FlatMapVector* sourceFlatMap,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', a flat map under a dictionary or constant.
+  void copyWrappedFlatMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
+  // Copies 'ranges' from 'source', whose wrapped vector is a MapVector.
+  void copyMapRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges);
+
   void setDistinctKeysImpl(VectorPtr distinctKeys);
 
   // Returns the index over distinct keys, building it on first use.

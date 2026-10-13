@@ -179,6 +179,16 @@ class CudaEvent {
    */
   const CudaEvent& waitOn(cuda::stream_ref stream) const;
 
+  /**
+   * @brief Blocks the host thread until the most recent recordFrom() has
+   * completed.
+   *
+   * Returns immediately if the event has never been recorded.
+   *
+   * @return Reference to this CudaEvent for method chaining
+   */
+  const CudaEvent& synchronize() const;
+
  private:
   cudaEvent_t event_{};
 };
@@ -211,6 +221,15 @@ void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
     std::span<const cuda::stream_ref> inputStreams,
     cuda::stream_ref stream);
+
+/// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
+/// Supports cuDF-compatible scalar types and nested Velox ARRAY and ROW types.
+/// Throws for unsupported types.
+std::unique_ptr<cudf::column> makeAllNullColumn(
+    const TypePtr& type,
+    cudf::size_type numRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /// Extract the base function name from a possibly-prefixed name.
 /// Handles both Presto-style "presto.default.lag" and simple "lag".

@@ -619,6 +619,7 @@ void SelectiveNimbleRowReader::updateRuntimeStats(
   stats.footerCacheHit += tabletStats.footerCacheHit ? 1 : 0;
   stats.chunkSkippedRows += chunkSkippedRows_;
   stats.processedRows += processedRows_;
+  stats.mergeFrom(splitStats_);
 }
 
 void SelectiveNimbleRowReader::resetFilterCaches() {

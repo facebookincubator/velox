@@ -2039,7 +2039,6 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroPreservesBitsWithoutAlp) {
     values[i] = (i % 2 == 0) ? -0.0f : 0.0f;
   }
 
-  // Default options: allowNestedAlpSelection is false (prod/default).
   const nimble::Encoding::Options options;
   auto policy = getRootManualSelectionPolicy<T>();
   auto serialized = nimble::EncodingFactory::encode<T>(
@@ -2059,36 +2058,50 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroPreservesBitsWithoutAlp) {
   }
 }
 
-// Companion: with allowNestedAlpSelection=true, floats are encoded by logical
-// value, so logically-equal ±0.0 are legitimately collapsed into a single
-// canonical ConstantEncoding value. Covers the ALP gate in the on state.
-TEST(EncodingSelectionFloatSignTest, mixedSignedZeroCollapsesWithAlp) {
-  using T = float;
+TEST(EncodingSelectionFloatSignTest, signedZeroPreservesBitsWithAlprd) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
-  nimble::Buffer buffer{*pool};
+  const auto verify = [&](auto typeTag) {
+    using T = decltype(typeTag);
+    SCOPED_TRACE(nimble::toString(nimble::TypeTraits<T>::dataType));
+    for (const bool mixedSigns : {false, true}) {
+      SCOPED_TRACE(fmt::format("mixedSigns={}", mixedSigns));
+      nimble::Buffer buffer{*pool};
+      std::vector<T> values(1000);
+      for (size_t row = 0; row < values.size(); ++row) {
+        values[row] = mixedSigns && row % 2 != 0 ? T{0} : T{-0.0};
+      }
 
-  std::vector<T> values(1000);
-  for (auto i = 0; i < values.size(); ++i) {
-    values[i] = (i % 2 == 0) ? -0.0f : 0.0f;
-  }
+      const nimble::Encoding::Options options;
+      auto policy = std::make_unique<nimble::ManualEncodingSelectionPolicy<T>>(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::Constant, 1},
+              {nimble::EncodingType::Trivial, 1},
+              {nimble::EncodingType::ALPRD, 1},
+          },
+          std::nullopt,
+          std::nullopt);
+      const auto serialized = nimble::EncodingFactory::encode<T>(
+          std::move(policy), values, buffer, options);
+      auto encoding = nimble::EncodingFactory().create(
+          *pool,
+          serialized,
+          [](uint32_t) -> void* { return nullptr; },
+          options);
+      EXPECT_EQ(
+          encoding->encodingType(),
+          mixedSigns ? nimble::EncodingType::ALPRD
+                     : nimble::EncodingType::Constant);
 
-  nimble::Encoding::Options options;
-  options.allowNestedAlpSelection = true;
-  auto policy = getRootManualSelectionPolicy<T>();
-  auto serialized = nimble::EncodingFactory::encode<T>(
-      std::move(policy), values, buffer, options);
-
-  auto encoding = nimble::EncodingFactory().create(
-      *pool, serialized, [](uint32_t) -> void* { return nullptr; }, options);
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant);
-
-  nimble::Vector<T> result{pool.get()};
-  result.resize(values.size());
-  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
-  const auto canonicalBits = asPhysicalType(result[0]);
-  for (auto i = 0; i < values.size(); ++i) {
-    EXPECT_FLOAT_EQ(result[i], 0.0f) << "row " << i;
-    // All values collapse to a single canonical bit pattern under ALP.
-    EXPECT_EQ(asPhysicalType(result[i]), canonicalBits) << "row " << i;
-  }
+      nimble::Vector<T> result{pool.get()};
+      result.resize(values.size());
+      encoding->materialize(
+          static_cast<uint32_t>(values.size()), result.data());
+      for (size_t row = 0; row < values.size(); ++row) {
+        SCOPED_TRACE(row);
+        EXPECT_EQ(asPhysicalType(values[row]), asPhysicalType(result[row]));
+      }
+    }
+  };
+  verify(float{});
+  verify(double{});
 }
