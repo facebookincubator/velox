@@ -78,6 +78,8 @@ std::string MemoryAllocator::kindString(Kind kind) {
       return "MALLOC";
     case Kind::kMmap:
       return "MMAP";
+    case Kind::kCustom:
+      return "CUSTOM";
     default:
       return fmt::format("UNKNOWN: {}", static_cast<int>(kind));
   }
