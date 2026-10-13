@@ -382,6 +382,9 @@ IcebergDataSink::IcebergDataSink(
       "Writing an Iceberg geometry column is not supported: the Iceberg writer "
       "does not convert Velox's internal geometry encoding to ISO WKB. Geometry "
       "support in the Iceberg connector is currently read-only.");
+  VELOX_USER_CHECK(
+      !insertTableHandle->inputSortedOnPartitionAndBucketKeys(),
+      "Eagerly closing files is not supported for Iceberg writes");
 
   commitPartitionValue_.resize(maxOpenWriters_);
 
