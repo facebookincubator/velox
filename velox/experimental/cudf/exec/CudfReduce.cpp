@@ -302,7 +302,8 @@ cudf_velox::DecimalSumStateColumns reduceRawDecimalSumCount(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (inputCol.type().id() == cudf::type_id::DECIMAL64) {
-    return cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr);
+    return cudf_velox::reduceDecimal64SumCount(
+        inputCol, numeric::scale_type{inputCol.type().scale()}, stream, mr);
   }
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto sumScalar =
@@ -392,14 +393,16 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto const cudfOutType = cudf_velox::veloxToCudfDataType(outputType);
-  if (inputCol.type().id() == cudf::type_id::DECIMAL64) {
-    auto result = cudf_velox::reduceDecimal64SumCount(inputCol, stream, mr).sum;
-    VELOX_CHECK(
-        result->type() == cudfOutType,
-        "Direct decimal sum output type {} does not match declared output type {}",
-        cudf::type_to_name(result->type()),
-        cudf::type_to_name(cudfOutType));
-    return result;
+  if (inputCol.type().id() == cudf::type_id::DECIMAL64 &&
+      cudfOutType.id() == cudf::type_id::DECIMAL128) {
+    return cudf_velox::reduceDecimal64SumCount(
+               inputCol, numeric::scale_type{cudfOutType.scale()}, stream, mr)
+        .sum;
+  }
+  std::unique_ptr<cudf::column> castedInput;
+  if (outputType->isDecimal() && inputCol.type() != cudfOutType) {
+    castedInput = cudf::cast(inputCol, cudfOutType, stream, get_temp_mr());
+    inputCol = castedInput->view();
   }
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
   auto const resultScalar =

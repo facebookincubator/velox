@@ -18,6 +18,7 @@
 
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/strings/string_view.cuh>
 #include <cudf/transform.hpp>
 #include <cudf/utilities/error.hpp>
@@ -51,9 +52,9 @@ struct DecimalSumState {
   int64_t upper; // upper 64 bits of the decimal sum (signed)
 };
 
-// Widens raw DECIMAL64 values into sum/count pairs, reduces them, then splits
-// the result into output columns. The raw sum retains the input scale, and a
-// null input contributes zero to both sum and count.
+// Widens and rescales raw DECIMAL64 values into sum/count pairs, reduces them,
+// then splits the result into output columns. A null input contributes zero to
+// both sum and count.
 struct DecimalSumCount {
   __int128_t sum;
   int64_t count;
@@ -63,11 +64,16 @@ struct Decimal64ToSumCount {
   int64_t const* values;
   cudf::bitmask_type const* nullMask;
   cudf::size_type offset;
+  numeric::scale_type inputScale;
+  numeric::scale_type outputScale;
 
   __device__ DecimalSumCount operator()(cudf::size_type idx) const {
-    return nullMask && !cudf::bit_is_set(nullMask, idx + offset)
-        ? DecimalSumCount{0, 0}
-        : DecimalSumCount{static_cast<__int128_t>(values[idx]), 1};
+    if (nullMask && !cudf::bit_is_set(nullMask, idx + offset)) {
+      return {0, 0};
+    }
+    auto value = numeric::decimal128{numeric::scaled_integer<__int128_t>{
+        static_cast<__int128_t>(values[idx]), inputScale}};
+    return {value.rescaled(outputScale).value(), 1};
   }
 };
 
@@ -252,9 +258,8 @@ void reduceDecimal64SumCount(
       input.type().id() == cudf::type_id::DECIMAL64,
       "Direct decimal reduction requires DECIMAL64 input");
   CUDF_EXPECTS(
-      sum.type().id() == cudf::type_id::DECIMAL128 &&
-          sum.type().scale() == input.type().scale() && sum.size() == 1,
-      "Direct decimal reduction requires one DECIMAL128 sum output with the input scale");
+      sum.type().id() == cudf::type_id::DECIMAL128 && sum.size() == 1,
+      "Direct decimal reduction requires one DECIMAL128 sum output");
   CUDF_EXPECTS(
       count.type().id() == cudf::type_id::INT64 && count.size() == 1,
       "Direct decimal reduction requires one INT64 count output");
@@ -263,7 +268,9 @@ void reduceDecimal64SumCount(
   auto transform = Decimal64ToSumCount{
       input.data<int64_t>(),
       input.nullable() ? input.null_mask() : nullptr,
-      input.offset()};
+      input.offset(),
+      numeric::scale_type{input.type().scale()},
+      numeric::scale_type{sum.type().scale()}};
   auto output = cuda::transform_output_iterator{
       cuda::make_zip_iterator(sum.data<__int128_t>(), count.data<int64_t>()),
       SplitDecimalSumCount{}};

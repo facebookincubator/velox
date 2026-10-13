@@ -29,9 +29,10 @@ struct DecimalSumStateColumns {
   std::unique_ptr<cudf::column> count;
 };
 
-/** Directly reduces DECIMAL64 input into one DECIMAL128 sum and INT64 count. */
+/** Directly reduces DECIMAL64 input into a sum at the specified scale. */
 DecimalSumStateColumns reduceDecimal64SumCount(
     const cudf::column_view& input,
+    numeric::scale_type outputScale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 

@@ -37,9 +37,9 @@ constexpr size_t kDecimalSumStateSize = 32;
 
 /**
  * Reduces a DECIMAL64 column directly into one DECIMAL128 sum and one INT64
- * non-null count without materializing a DECIMAL128 input column. The sum must
- * use the input scale because the raw representation is widened without
- * rescaling.
+ * non-null count without materializing a DECIMAL128 input column. Each input
+ * value is rescaled to the sum output's scale before accumulation, matching
+ * cast-before-sum semantics.
  */
 void reduceDecimal64SumCount(
     cudf::column_view input,

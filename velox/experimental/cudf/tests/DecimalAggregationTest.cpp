@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -1105,6 +1106,61 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
 
   facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults("SELECT sum(d) AS s FROM tmp");
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalSingleRescalesOutput) {
+  auto const inputType = DECIMAL(12, 2);
+  auto testRescale = [&](const std::vector<int64_t>& values,
+                         const TypePtr& outputType,
+                         int128_t expected) {
+    auto source = exec::test::PlanBuilder()
+                      .values({makeRowVector(
+                          {"d"}, {makeFlatVector<int64_t>(values, inputType)})})
+                      .planNode();
+    auto aggregation = std::make_shared<core::AggregationNode>(
+        "aggregation",
+        core::AggregationNode::Step::kSingle,
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"s"},
+        std::vector<core::AggregationNode::Aggregate>{
+            {.call = std::make_shared<core::CallTypedExpr>(
+                 outputType,
+                 std::vector<core::TypedExprPtr>{
+                     std::make_shared<core::FieldAccessTypedExpr>(
+                         inputType, "d")},
+                 "sum"),
+             .rawInputTypes = {inputType}}},
+        false,
+        false,
+        source);
+    auto aggregators = toReduceAggregators(
+        *aggregation,
+        core::AggregationNode::Step::kSingle,
+        aggregation->outputType(),
+        {nullptr},
+        {std::nullopt});
+
+    auto stream = cudf::get_default_stream();
+    auto input = makeDecimalColumn<int64_t>(values, 2, nullptr, stream);
+    std::vector<cudf::column_view> columns{input->view()};
+    auto result = aggregators.front()->doReduce(
+        cudf::table_view{columns},
+        outputType,
+        input->size(),
+        stream,
+        cudf::get_current_device_resource_ref());
+
+    EXPECT_EQ(result->type(), cudf_velox::veloxToCudfDataType(outputType));
+    EXPECT_EQ(
+        copyColumnData<int128_t>(result->view(), stream),
+        std::vector<int128_t>{expected});
+  };
+
+  testRescale({12'345, 100}, DECIMAL(38, 3), 124'450);
+  // Cast-before-sum rounds each 0.06 to 0.0, instead of summing to 0.12 and
+  // then rounding the result to 0.1.
+  testRescale({6, 6}, DECIMAL(38, 1), 0);
 }
 
 // Masked groupby sum: the mask null-injects raw input so cuDF sum excludes
