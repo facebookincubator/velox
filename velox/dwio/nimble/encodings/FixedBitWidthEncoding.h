@@ -64,7 +64,6 @@ class FixedBitWidthEncoding final
 
   ~FixedBitWidthEncoding() override {
     this->releaseBuffer(uncompressedData_);
-    this->releaseVectorBuffer(buffer_);
   }
 
   void reset() final;
@@ -145,7 +144,6 @@ class FixedBitWidthEncoding final
   FixedBitArray fixedBitArray_;
   uint32_t row_ = 0;
   velox::BufferPtr uncompressedData_;
-  Vector<physicalType> buffer_;
 };
 
 //
@@ -158,8 +156,7 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
     std::string_view data,
     std::function<void*(uint32_t)> /* stringBufferFactory */,
     const Encoding::Options& options)
-    : TypedEncoding<T, physicalType>{pool, data, options},
-      buffer_(this->template getVectorBuffer<physicalType>()) {
+    : TypedEncoding<T, physicalType>{pool, data, options} {
   auto pos = data.data() + this->dataOffset();
   auto compressionType = static_cast<CompressionType>(encoding::readChar(pos));
   baseline_ = encoding::read<const physicalType>(pos);
@@ -280,10 +277,11 @@ void FixedBitWidthEncoding<T>::bulkScan(
     if constexpr (isFourByteIntegralType<physicalType>()) {
       // 4-byte path: use the optimized template-unrolled bulk decode.
       if constexpr (kSameSize) {
-        buffer_.resize(numSelected);
         fixedBitArray_.bulkGetWithBaseline(
-            selectedRows[0] + offset, numSelected, buffer_.data(), baseline_);
-        std::memcpy(values, buffer_.data(), numSelected * sizeof(physicalType));
+            selectedRows[0] + offset,
+            numSelected,
+            reinterpret_cast<physicalType*>(values),
+            baseline_);
       } else if constexpr (kIsUpcast) {
         static_assert(isEightByteIntegralType<OutputType>());
         // Read the 4-byte-width values directly into the wider 8-byte output in
