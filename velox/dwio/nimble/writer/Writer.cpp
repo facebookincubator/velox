@@ -1155,6 +1155,39 @@ std::string_view encodeWithFallback(
   }
 }
 
+// Returns the layout to cache for a stream, generalizing Constant to
+// MainlyConstant and passing every other layout through unchanged.
+//
+// A stream that is constant in its first chunk is often not constant in the
+// next. Caching Constant verbatim makes every later chunk fail the replay --
+// ConstantEncoding rejects non-constant data -- and fall back to the full
+// selection cascade, which is what the cache exists to avoid. MainlyConstant
+// covers both shapes: while the data stays constant its encode() falls back to
+// ConstantEncoding and emits byte-identical output, and once uncommon values
+// appear it absorbs them without discarding the cached layout. Both child slots
+// are left absent so each sub-stream still runs its own selection.
+template <typename T>
+EncodingLayout cacheEncodingLayout(EncodingLayout captured) {
+  // MainlyConstant is not defined for bool streams (EncodingFactory rejects
+  // it), so a constant bool stream keeps its captured layout.
+  if constexpr (std::is_same_v<T, bool>) {
+    return captured;
+  } else {
+    if (captured.encodingType() != EncodingType::Constant) {
+      return captured;
+    }
+    std::vector<std::optional<const EncodingLayout>> children;
+    children.reserve(2);
+    children.emplace_back(std::nullopt);
+    children.emplace_back(std::nullopt);
+    return EncodingLayout{
+        EncodingType::MainlyConstant,
+        /*encodingConfig=*/{},
+        CompressionType::Uncompressed,
+        std::move(children)};
+  }
+}
+
 template <typename T>
 std::string_view encodeStreamTyped(
     detail::WriterContext& context,
@@ -1198,8 +1231,8 @@ std::string_view encodeStreamTyped(
   if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
-            EncodingLayoutCapture::capture(
-                encoded, context.options().buildEncodingOptions()));
+            cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
+                encoded, context.options().buildEncodingOptions())));
   }
   return encoded;
 }
@@ -2254,14 +2287,17 @@ void Writer::writeColumnStats() {
   }
 
   if (context_->options().enableVectorizedStats) {
+    VectorizedFileStats::Options statsOptions{
+        .stringStatsLengthLimit =
+            context_->options().vectorizedStatsStringLengthLimit};
     VectorizedFileStats fileStats{
-        context_->columnStats(), encodingMemoryPool_.get()};
+        context_->columnStats(), encodingMemoryPool_.get(), statsOptions};
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
     if (context_->stripeStatsWriteEnabled()) {
       VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get()};
+          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
       Buffer stripeStatsBuffer{*encodingMemoryPool_};
       tabletWriter_->writeOptionalSection(
           std::string(kStripeStatsSection),
@@ -2420,11 +2456,11 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   }
 
   // Read back from the tablet writer rather than from options, so the recorded
-  // flag cannot drift from what was actually written.
-  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+  // trailer cannot drift from what was actually written.
+  auto streamTrailerLayout = tabletWriter_->streamTrailerLayout();
 
   if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
-      !hasStreamChecksums) {
+      streamTrailerLayout.empty()) {
     return;
   }
 
@@ -2433,7 +2469,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          hasStreamChecksums}
+          /*hasStreamChecksums=*/false,
+          std::move(streamTrailerLayout)}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -3139,8 +3176,8 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are constant, since the
-    // reader recovers the in-map state from value stream presence.
+    // When enabled, skip encoding constant in-map streams, since the reader
+    // recovers the in-map state from value stream presence.
     //
     // All-false is dropped here: the key really is absent from this stripe,
     // which is exactly what the reader concludes from two missing streams.

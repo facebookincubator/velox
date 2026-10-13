@@ -58,6 +58,13 @@ struct FieldReaderParams {
   std::function<void(velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback{nullptr};
 
+  /// Reports whether a Hybrid FlatMap group's value subtree has streams in
+  /// the current batch. The argument is the group's in-map stream offset.
+  /// Readers that reuse decoder instances across batches must provide this
+  /// callback; standalone readers may omit it because the factory infers
+  /// presence from the decoder map.
+  std::function<bool(uint32_t)> hybridFlatMapValueStreamsPresent{nullptr};
+
   bool optimizeStringBufferHandling{false};
 
   /// Executor for parallel decoding of child fields.

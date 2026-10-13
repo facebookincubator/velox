@@ -2828,6 +2828,64 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
   }
 }
 
+TEST_P(IndexLookupJoinTest, innerJoinNoLookupOutputColumns) {
+  IndexTableData tableData;
+  generateIndexTableData({128, 1, 1}, tableData, pool_);
+
+  const auto probeVectors = generateProbeInput(
+      /*numBatches=*/4,
+      /*batchSize=*/32,
+      /*numDuplicateProbeRows=*/1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      /*equalMatchPct=*/50);
+  const auto probeFiles = createProbeFiles(probeVectors);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2"}),
+      makeIndexColumnHandles({"u0", "u1", "u2"}));
+
+  // Join output picks only probe-side columns: no lookup value columns.
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      /*joinConditions=*/{},
+      /*filter=*/"",
+      /*hasMarker=*/false,
+      core::JoinType::kInner,
+      /*outputColumns=*/{"t3"});
+
+  runLookupQuery(
+      plan,
+      probeFiles,
+      GetParam().serialExecution,
+      GetParam().serialExecution,
+      /*maxBatchRows=*/32,
+      GetParam().numPrefetches,
+      GetParam().needsIndexSplit,
+      "SELECT t.c3 FROM t, u "
+      "WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+}
+
 TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
   IndexTableData tableData;
   generateIndexTableData({3'000, 1, 1}, tableData, pool_);

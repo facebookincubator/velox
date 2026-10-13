@@ -44,6 +44,8 @@
 
 #include <cuda/std/numeric>
 
+#include <folly/ScopeGuard.h>
+
 #include <cmath>
 #include <limits>
 
@@ -428,6 +430,13 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
     return col;
   }
 
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    castedInput_.reset();
+    decodedSum_.reset();
+    decodedCount_.reset();
+  }
+
  private:
   uint32_t sumIdx_{0};
   uint32_t countIdx_{0};
@@ -512,6 +521,13 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
     VELOX_UNREACHABLE();
   }
 
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    castedInput_.reset();
+    decodedSum_.reset();
+    decodedCount_.reset();
+  }
+
  private:
   uint32_t sumIdx_{0};
   uint32_t countIdx_{0};
@@ -589,6 +605,11 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       col = cudf::cast(*col, cudfOutputType, stream, mr);
     }
     return col;
+  }
+
+  void releaseInput() override {
+    GroupbyAggregator::releaseInput();
+    maskedCount_.reset();
   }
 
  private:
@@ -1731,12 +1752,21 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
                       : cudf::null_policy::INCLUDE);
 
+  auto releaseInputs = [&]() {
+    for (auto& aggregator : aggregators) {
+      aggregator->releaseInput();
+    }
+  };
+  auto releaseInputsGuard = folly::makeGuard(releaseInputs);
   std::vector<cudf::groupby::aggregation_request> requests;
   for (auto& aggregator : aggregators) {
     aggregator->addGroupbyRequest(tableView, requests, stream, get_temp_mr());
   }
 
   auto [groupKeys, results] = groupByOwner.aggregate(requests, stream, mr);
+  requests.clear();
+  releaseInputs();
+  releaseInputsGuard.dismiss();
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 

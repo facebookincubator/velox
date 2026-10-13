@@ -246,7 +246,7 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
         HybridFlatMapType::Group{
             .groupId = group.groupId,
             .groupKeys = group.groupKeys,
-            .keyDescriptor = group.keyDescriptor,
+            .keyPresenceDescriptor = group.keyPresenceDescriptor,
             .inMapDescriptor = group.inMapDescriptor,
             .valueType = std::move(valueType),
         });

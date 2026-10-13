@@ -17,6 +17,7 @@ add_test(velox_connector_test velox_connector_test)
 target_link_libraries(
   velox_connector_test
   velox_connector
+  velox_connector_exception_properties
   velox_connector_registry
   velox_core
   velox_expression
