@@ -31,7 +31,9 @@
 
 #include <folly/ExceptionWrapper.h>
 #include <folly/Try.h>
+#include <folly/coro/AsyncScope.h>
 #include <folly/coro/Baton.h>
+#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Invoke.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/UnboundedQueue.h>
@@ -45,21 +47,18 @@
 namespace facebook::nimble::detail {
 
 // Prefetches contiguous stripe batches within the configured stripe limit.
-class IndexScanCursor::ScanPrefetcher final
-    : public std::enable_shared_from_this<ScanPrefetcher> {
+class ScanPrefetcher {
  public:
   using ProjectorPtr = IndexScanCursor::ProjectorPtr;
 
   // Starts prefetching the stripes selected for the active scan.
   ScanPrefetcher(
       ProjectorPtr projector,
-      std::weak_ptr<IndexScanCursor> cursor,
       uint32_t stripeOffset,
       uint32_t numStripes,
       folly::Executor::KeepAlive<> prefetchExecutor,
       uint32_t maxPrefetchStripes)
       : projector_{std::move(projector)},
-        cursor_{std::move(cursor)},
         stripeOffset_{stripeOffset},
         numStripes_{numStripes},
         prefetchExecutor_{std::move(prefetchExecutor)},
@@ -84,7 +83,7 @@ class IndexScanCursor::ScanPrefetcher final
   // Stops queue admission and waits for the producer to finish.
   folly::coro::Task<void> cancelAndJoin() noexcept {
     requestStop();
-    co_await producerFinished_;
+    co_await prefetchScope_.cancelAndJoinAsync();
   }
 
   // Schedules the producer once on the configured executor.
@@ -92,32 +91,14 @@ class IndexScanCursor::ScanPrefetcher final
     if (prefetchStarted_.exchange(true)) {
       return;
     }
-    try {
-      auto task = folly::coro::co_withExecutor(prefetchExecutor_, run());
-      prefetchExecutor_->add(
-          [self = shared_from_this(), task = std::move(task)]() mutable {
-            try {
-              std::move(task).startInlineUnsafe(
-                  [self](folly::Try<void>&& result) noexcept {
-                    self->finishProducer(std::move(result));
-                  });
-            } catch (...) {
-              self->finishProducer(
-                  folly::Try<void>{
-                      folly::exception_wrapper{std::current_exception()}});
-            }
-          });
-    } catch (...) {
-      finishProducer(
-          folly::Try<void>{folly::exception_wrapper{std::current_exception()}});
-    }
+    prefetchScope_.add(folly::coro::co_withExecutor(prefetchExecutor_, run()));
   }
 
   // Waits for and returns the next queued stripe's streams.
-  folly::coro::Task<ProjectedStripeStreams> co_nextStripe() {
+  folly::coro::Task<ProjectedStripe> co_nextStripe() {
     checkLoadError();
     if (currentBatchStripe_ == currentBatch_.size()) {
-      folly::Try<std::vector<ProjectedStripeStreams>> stripesOr;
+      folly::Try<std::vector<ProjectedStripe>> stripesOr;
       co_await loadedStripes_.dequeue(stripesOr);
       if (stripesOr.hasException()) {
         loadError_ = stripesOr.exception();
@@ -135,15 +116,6 @@ class IndexScanCursor::ScanPrefetcher final
   }
 
  private:
-  // Delivers startup failures and releases waiters after the task finishes.
-  void finishProducer(folly::Try<void>&& result) noexcept {
-    if (result.hasException()) {
-      loadedStripes_.enqueue(
-          folly::Try<std::vector<ProjectedStripeStreams>>{result.exception()});
-    }
-    producerFinished_.post();
-  }
-
   // Makes consumer retries fail promptly after a terminal load failure.
   void checkLoadError() const {
     if (loadError_) {
@@ -189,7 +161,7 @@ class IndexScanCursor::ScanPrefetcher final
     while (nextStripeOffset_ < numStripes_ &&
            !stopped_.load(std::memory_order_acquire)) {
       uint32_t reservedStripes{0};
-      std::vector<ProjectedStripeStreams> stripeStreams;
+      std::vector<ProjectedStripe> stripeStreams;
       try {
         const auto numStripes =
             std::min(maxBatchStripes_, numStripes_ - nextStripeOffset_);
@@ -202,38 +174,31 @@ class IndexScanCursor::ScanPrefetcher final
           releaseReservation(reservedStripes);
           co_return;
         }
-        {
-          const auto cursor = cursor_.lock();
-          velox::common::testutil::TestValue::adjust(
-              "facebook::nimble::ScanPrefetcher::run::beforeLoad", &stopped_);
-          if (cursor == nullptr || stopped_.load(std::memory_order_acquire)) {
-            // The consumer can be destroyed before queued cancellation starts.
-            releaseReservation(reservedStripes);
-            co_return;
-          }
-          std::lock_guard lock(cursor->lock_);
-          stripeStreams = projector_->loadStripeStreams(
-              stripeOffset_ + nextStripeOffset_, reservedStripes);
-          NIMBLE_CHECK_EQ(stripeStreams.size(), reservedStripes);
+        velox::common::testutil::TestValue::adjust(
+            "facebook::nimble::ScanPrefetcher::run::beforeLoad", &stopped_);
+        if (stopped_.load(std::memory_order_acquire)) {
+          // The consumer can be destroyed before queued cancellation starts.
+          releaseReservation(reservedStripes);
+          co_return;
         }
+        stripeStreams = projector_->loadStripeStreams(
+            stripeOffset_ + nextStripeOffset_, reservedStripes);
+        NIMBLE_CHECK_EQ(stripeStreams.size(), reservedStripes);
       } catch (...) {
         releaseReservation(reservedStripes);
         loadedStripes_.enqueue(
-            folly::Try<std::vector<ProjectedStripeStreams>>{
+            folly::Try<std::vector<ProjectedStripe>>{
                 folly::exception_wrapper{std::current_exception()}});
         co_return;
       }
       loadedStripes_.enqueue(
-          folly::Try<std::vector<ProjectedStripeStreams>>{
-              std::move(stripeStreams)});
+          folly::Try<std::vector<ProjectedStripe>>{std::move(stripeStreams)});
       nextStripeOffset_ += reservedStripes;
     }
   }
 
   // Keeps projector resources alive through detached producer cleanup.
   const ProjectorPtr projector_;
-  // Promotes cursor ownership only while loading a synchronous stripe batch.
-  const std::weak_ptr<IndexScanCursor> cursor_;
   // First source stripe selected by the consumer's active scan.
   const uint32_t stripeOffset_;
   // Total source stripes selected for the active scan.
@@ -250,12 +215,12 @@ class IndexScanCursor::ScanPrefetcher final
   // One prefetch coroutine produces batches; serialized iterator calls consume
   // them.
   folly::coro::UnboundedQueue<
-      folly::Try<std::vector<ProjectedStripeStreams>>,
+      folly::Try<std::vector<ProjectedStripe>>,
       /*SingleProducer=*/true,
       /*SingleConsumer=*/true>
       loadedStripes_;
   // Holds the current batch until the consumer dequeues its final stripe.
-  std::vector<ProjectedStripeStreams> currentBatch_;
+  std::vector<ProjectedStripe> currentBatch_;
   // Next stripe to return from the consumer's current batch.
   size_t currentBatchStripe_{0};
   // Retains the terminal producer failure for serialized consumer calls.
@@ -268,8 +233,8 @@ class IndexScanCursor::ScanPrefetcher final
   std::atomic_bool stopped_{false};
   // Wakes the producer when the consumer releases a batch reservation.
   folly::coro::Baton prefetchBaton_;
-  // Releases cancellation waiters after the producer and its frame finish.
-  folly::coro::Baton producerFinished_;
+  // Owns the producer until cancellation and join complete.
+  folly::coro::CancellableAsyncScope prefetchScope_;
 };
 
 std::shared_ptr<IndexScanCursor> IndexScanCursor::create(
@@ -296,27 +261,27 @@ IndexScanCursor::~IndexScanCursor() {
   const auto scanPrefetcher = scanPrefetcher_;
   scanPrefetcher->requestStop();
   try {
-    auto cleanup =
-        folly::coro::co_withExecutor(prefetchExecutor_, co_resetPrefetch());
-    prefetchExecutor_->add([scanPrefetcher,
-                            cleanup = std::move(cleanup)]() mutable {
-      try {
-        std::move(cleanup).startInlineUnsafe(
-            [scanPrefetcher](folly::Try<void>&& result) noexcept {
-              if (result.hasException()) {
-                LOG(ERROR)
-                    << "Failed to complete asynchronous prefetch cleanup: "
-                    << result.exception().what();
-              }
-            });
-      } catch (...) {
-        LOG(ERROR) << "Failed to start asynchronous prefetch cleanup: "
-                   << folly::exception_wrapper{std::current_exception()}.what();
-      }
-    });
+    // Schedules with add() because TaskWithExecutor::start() calls add() from a
+    // noexcept await_suspend, which terminates on a scheduling failure instead
+    // of reaching the handler below.
+    prefetchExecutor_->add(
+        [scanPrefetcher,
+         cleanup = folly::coro::co_withExecutor(
+             prefetchExecutor_, co_resetPrefetch())]() mutable {
+          std::move(cleanup).startInlineUnsafe(
+              [scanPrefetcher](folly::Try<void>&& result) noexcept {
+                if (result.hasException()) {
+                  LOG(ERROR)
+                      << "Failed to complete asynchronous prefetch cleanup: "
+                      << result.exception().what();
+                  folly::coro::blockingWait(scanPrefetcher->cancelAndJoin());
+                }
+              });
+        });
   } catch (...) {
     LOG(ERROR) << "Failed to start asynchronous prefetch cleanup: "
                << folly::exception_wrapper{std::current_exception()}.what();
+    folly::coro::blockingWait(scanPrefetcher->cancelAndJoin());
   }
 }
 
@@ -395,7 +360,7 @@ std::unique_ptr<index::KeyCursor> IndexScanCursor::keyCursor(
   return projector_->clusterIndex().keyCursor(RowRange{row, range_->endRow});
 }
 
-folly::coro::Task<ProjectedStripeStreams> IndexScanCursor::co_nextStripe(
+folly::coro::Task<ProjectedStripe> IndexScanCursor::co_nextStripe(
     uint32_t row) {
   NIMBLE_CHECK(range_.has_value(), "No index scan is active");
   NIMBLE_CHECK(
@@ -418,7 +383,7 @@ folly::coro::Task<ProjectedStripeStreams> IndexScanCursor::co_nextStripe(
       "Row is outside the selected stripe: row {}, selection {}",
       row,
       selection);
-  ProjectedStripeStreams stripeStreams;
+  ProjectedStripe stripeStreams;
   if (scanPrefetcher_ == nullptr) {
     auto stripes =
         projector_->loadStripeStreams(selection.stripeIndex, /*numStripes=*/1);
@@ -454,7 +419,6 @@ void IndexScanCursor::startPrefetch() {
   }
   scanPrefetcher_ = std::make_shared<ScanPrefetcher>(
       projector_,
-      weak_from_this(),
       stripeSelections_.front().stripeIndex,
       static_cast<uint32_t>(stripeSelections_.size()),
       prefetchExecutor_,
@@ -479,7 +443,6 @@ folly::coro::Task<void> IndexScanCursor::co_resetPrefetch() {
 }
 
 NimbleIterator::Stats IndexScanCursor::stats() const {
-  std::lock_guard lock(lock_);
   const auto projectorStats = projector_->stats();
   return {
       .numReadStripes = projectorStats.numReadStripes,

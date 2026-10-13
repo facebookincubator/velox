@@ -19,9 +19,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include "folly/ScopeGuard.h"
 #include "velox/common/Casts.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -86,7 +88,20 @@ std::string NimbleIndexProjector::Stats::toString() const {
       projectionTiming.toString());
 }
 
+template <typename Update>
+void NimbleIndexProjector::updateStats(Update&& update) {
+  velox::tsan_lock_guard<std::mutex> lock(statsLock_);
+  std::forward<Update>(update)(stats_);
+}
+
+void NimbleIndexProjector::recordStatsTiming(
+    velox::CpuWallTiming Stats::* field,
+    const velox::CpuWallTiming& timing) {
+  updateStats([field, &timing](Stats& stats) { (stats.*field).add(timing); });
+}
+
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
+  velox::tsan_lock_guard<std::mutex> lock(statsLock_);
   return stats_;
 }
 
@@ -333,7 +348,9 @@ NimbleIndexProjector::co_projectRows(
   };
   loadStripes(request, options);
   NIMBLE_CHECK_NOT_NULL(streamReader_);
-  velox::CpuWallTimer timer{stats_.projectionTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::projectionTiming, timing);
+  }};
   RowProjectionResult result;
   result.responses.resize(ctx_.numRequests);
 
@@ -363,8 +380,10 @@ NimbleIndexProjector::co_projectRows(
   std::fill(stripeOutputRows.begin(), stripeOutputRows.end(), 0);
   for (size_t stripeOffset{0}; stripeOffset < ctx_.plan.stripeIndices.size();
        ++stripeOffset) {
-    ++stats_.numReadStripes;
-    stats_.numReadRows += ctx_.plan.numRows[stripeOffset];
+    updateStats([numRows = ctx_.plan.numRows[stripeOffset]](Stats& stats) {
+      ++stats.numReadStripes;
+      stats.numReadRows += numRows;
+    });
     // StreamReader consumes one view per projected stream and can read
     // duplicate views directly. Canonical metadata is only needed when
     // serializing a stripe to emit each unique payload once.
@@ -387,7 +406,8 @@ NimbleIndexProjector::co_projectRows(
           outputVector);
       stripeOutputRows[range.requestIndex] +=
           static_cast<velox::vector_size_t>(numRows);
-      stats_.numProjectedRows += numRows;
+      updateStats(
+          [numRows](Stats& stats) { stats.numProjectedRows += numRows; });
     }
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(outputVector.get()),
@@ -401,14 +421,18 @@ NimbleIndexProjector::co_projectRows(
         result.responses[i].size,
         "Decoded response row count mismatch");
   }
-  stats_.numOutputBytes += result.values->retainedSize();
+  updateStats([outputBytes = result.values->retainedSize()](Stats& stats) {
+    stats.numOutputBytes += outputBytes;
+  });
   co_return result;
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
-  velox::CpuWallTimer timer{stats_.lookupTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::lookupTiming, timing);
+  }};
   const auto result = clusterIndex().lookup(
       index::IndexLookup::LookupRequest::rangeScan({bounds}));
   NIMBLE_CHECK_EQ(result.size(), 1);
@@ -446,7 +470,7 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
   return stripeSelections;
 }
 
-std::vector<facebook::nimble::ProjectedStripeStreams>
+std::vector<facebook::nimble::ProjectedStripe>
 NimbleIndexProjector::loadStripeStreams(
     uint32_t stripeOffset,
     uint32_t numStripes) {
@@ -457,20 +481,26 @@ NimbleIndexProjector::loadStripeStreams(
 
   std::vector<StripeIdentifier> stripes;
   {
-    velox::CpuWallTimer timer{stats_.prepareTiming};
+    velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+      recordStatsTiming(&Stats::prepareTiming, timing);
+    }};
     stripes = tablet_->stripeIdentifiers(stripeOffset, numStripes);
     NIMBLE_CHECK_EQ(stripes.size(), numStripes);
     for (uint32_t i{0}; i < numStripes; ++i) {
       const auto stripeIndex = stripeOffset + i;
       const auto streams = locateStripeStreams(stripes[i]);
       appendStripePlan(stripeIndex, /*rangeOffset=*/0, streams);
-      stats_.numPlannedBytes += streams.projectedBytes;
+      updateStats([projectedBytes = streams.projectedBytes](Stats& stats) {
+        stats.numPlannedBytes += projectedBytes;
+      });
     }
   }
   loadStripeStreams();
 
-  velox::CpuWallTimer timer{stats_.projectionTiming};
-  std::vector<facebook::nimble::ProjectedStripeStreams> result;
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::projectionTiming, timing);
+  }};
+  std::vector<facebook::nimble::ProjectedStripe> result;
   result.reserve(numStripes);
   for (uint32_t i{0}; i < numStripes; ++i) {
     const auto stripeIndex = stripeOffset + i;
@@ -480,14 +510,18 @@ NimbleIndexProjector::loadStripeStreams(
                         .streams;
     const auto numRows = ctx_.plan.numRows[i];
     const auto stripeBytes = ctx_.plan.projectedBytes[i];
-    if (ctx_.plan.numStreams[i] > 0) {
-      ++stats_.numReadStripes;
-      stats_.numReadRows += numRows;
-    }
-    stats_.numProjectedRows += numRows;
-    stats_.numOutputBytes += stripeBytes;
+    updateStats([hasStreams = ctx_.plan.numStreams[i] > 0,
+                 numRows,
+                 stripeBytes](Stats& stats) {
+      if (hasStreams) {
+        ++stats.numReadStripes;
+        stats.numReadRows += numRows;
+      }
+      stats.numProjectedRows += numRows;
+      stats.numOutputBytes += stripeBytes;
+    });
     result.push_back(
-        facebook::nimble::ProjectedStripeStreams{
+        facebook::nimble::ProjectedStripe{
             .selection =
                 StripeSelection{
                     .stripeIndex = stripeIndex,
@@ -558,7 +592,9 @@ void NimbleIndexProjector::setResumeKey(
 }
 
 void NimbleIndexProjector::prepareStripes() {
-  velox::CpuWallTimer timer{stats_.prepareTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::prepareTiming, timing);
+  }};
   uint64_t totalRows{0};
   uint64_t totalBytes{0};
   const auto maxRowsPerRequest = ctx_.options->maxRowsPerRequest;
@@ -678,13 +714,14 @@ void NimbleIndexProjector::prepareStripes() {
         maxBytesReached) {
       // Reaching the budget on the last planned stripe cuts nothing short.
       if (maxBytesReached && resolvedStripeIndex + 1 < numResolvedStripes) {
-        ++stats_.numMaxBytesTruncations;
+        updateStats([](Stats& stats) { ++stats.numMaxBytesTruncations; });
       }
       ctx_.plan.truncated = true;
       break;
     }
   }
-  stats_.numPlannedBytes += totalBytes;
+  updateStats(
+      [totalBytes](Stats& stats) { stats.numPlannedBytes += totalBytes; });
   ctx_.plan.stripeRangeOffsets.push_back(ctx_.plan.stripeRanges.size());
   ctx_.plan.projectedStreams.resize(
       ctx_.plan.stripeIndices.size() * projection_->streamOffsets.size());
@@ -755,7 +792,9 @@ RowRange NimbleIndexProjector::stripeRowRange(
 }
 
 void NimbleIndexProjector::lookupStripes() {
-  velox::CpuWallTimer timer{stats_.lookupTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::lookupTiming, timing);
+  }};
 
   const auto result = clusterIndex_->lookup(
       index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
@@ -911,7 +950,9 @@ void NimbleIndexProjector::loadStripeStreams() {
   if (numPlannedStripes == 0) {
     return;
   }
-  velox::CpuWallTimer timer{stats_.scanTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::scanTiming, timing);
+  }};
 
   uint32_t totalStreams = 0;
   for (const auto numStreams : ctx_.plan.numStreams) {
@@ -984,7 +1025,9 @@ void NimbleIndexProjector::loadStripeStreams() {
 
 NimbleIndexProjector::SerializedResult
 NimbleIndexProjector::processStripeStreams() {
-  velox::CpuWallTimer timer{stats_.projectionTiming};
+  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
+    recordStatsTiming(&Stats::projectionTiming, timing);
+  }};
   SerializedResult result;
   result.responses.resize(ctx_.numRequests);
   ctx_.packedStripes.resize(ctx_.plan.stripeIndices.size());
@@ -997,7 +1040,7 @@ NimbleIndexProjector::processStripeStreams() {
   }
 
   for (size_t i = 0; i < ctx_.plan.stripeIndices.size(); ++i) {
-    ++stats_.numReadStripes;
+    updateStats([](Stats& stats) { ++stats.numReadStripes; });
     ctx_.packedStripes[i] = packStripe(i, ctx_.stripePackRanges[i]);
   }
   if (hasSlicedStripes) {
@@ -1206,7 +1249,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packStripe(
   if (packRange == stripeRange) {
     return packFullStripe(stripeOffset);
   }
-  ++stats_.numSlicedStripes;
+  updateStats([](Stats& stats) { ++stats.numSlicedStripes; });
   return packPartialStripe(stripeOffset, packRange);
 }
 
@@ -1313,8 +1356,10 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
   // projectedBytes counts logical projected stream bytes, including duplicate
   // slots. bodyOffset is the physical body size after deduplication.
   const size_t bodySize = bodyOffset + trailerSize;
-  stats_.numReadRows += numRows;
-  stats_.numOutputBytes += bodySize;
+  updateStats([numRows, bodySize](Stats& stats) {
+    stats.numReadRows += numRows;
+    stats.numOutputBytes += bodySize;
+  });
   return {
       .body = std::move(*chain),
       .rowRange = stripeRange,
@@ -1455,8 +1500,11 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
   bodySize += trailer->length();
   chain->appendToChain(std::move(trailer));
 
-  stats_.numReadRows += ctx_.plan.numRows[stripeOffset];
-  stats_.numOutputBytes += bodySize;
+  updateStats(
+      [numRows = ctx_.plan.numRows[stripeOffset], bodySize](Stats& stats) {
+        stats.numReadRows += numRows;
+        stats.numOutputBytes += bodySize;
+      });
   return {
       .body = std::move(*chain),
       .rowRange = packRange,
@@ -1587,7 +1635,9 @@ void NimbleIndexProjector::buildResult(SerializedResult& result) {
       const RowRange packedRelativeRange{
           range.rowRange.startRow - packedStripe.rowRange.startRow,
           range.rowRange.endRow - packedStripe.rowRange.startRow};
-      stats_.numProjectedRows += range.rowRange.numRows();
+      updateStats([numRows = range.rowRange.numRows()](Stats& stats) {
+        stats.numProjectedRows += numRows;
+      });
       ++emittedSlices[range.requestIndex];
       const bool isLastSlice =
           emittedSlices[range.requestIndex] == sliceCounts[range.requestIndex];

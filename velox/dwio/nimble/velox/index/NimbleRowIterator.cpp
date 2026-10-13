@@ -316,7 +316,7 @@ class NimbleRowIterator final : public NimbleIterator {
   // Reuses decoded vectors across serialized-row requests.
   velox::VectorPtr rowVector_;
   // Keeps the current stripe streams alive while they are decoded.
-  std::optional<ProjectedStripeStreams> stripeStreams_;
+  std::optional<ProjectedStripe> stripeStreams_;
   // Tracks row serialization time.
   velox::CpuWallTiming materializationTiming_{};
   // File-level row represented by the first materialized row in rowVector_.
