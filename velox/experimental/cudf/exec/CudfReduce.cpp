@@ -34,6 +34,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/reduction/approx_distinct_count.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
@@ -245,7 +246,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
             cudf::data_type(cudf::type_id::STRUCT),
             1,
             rmm::device_buffer{},
-            rmm::device_buffer{},
+            cudf::create_null_mask(
+                0, cudf::mask_state::UNALLOCATED, stream, mr),
             0,
             std::move(children));
       }
@@ -592,7 +594,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         cudf::data_type{cudf::type_id::INT32},
         2,
         std::move(offsets_device),
-        rmm::device_buffer{},
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
         0);
 
     return cudf::make_strings_column(
@@ -600,7 +602,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         std::move(offsets_column),
         std::move(chars_buffer),
         0,
-        rmm::device_buffer{});
+        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr));
   }
 
   template <typename Func>

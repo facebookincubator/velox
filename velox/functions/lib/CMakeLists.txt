@@ -69,6 +69,8 @@ velox_add_library(
   CheckedArithmetic.h
   CheckedArithmeticImpl.h
   ComparatorUtil.h
+  DateTimeUnit.h
+  DateTimeUnitArithmetic.h
   FilterFunctionBase.h
   JsonUtil.h
   KllSketch-inl.h

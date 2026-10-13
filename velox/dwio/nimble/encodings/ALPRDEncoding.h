@@ -20,12 +20,12 @@
 #include <bit>
 #include <limits>
 #include <span>
-#include <unordered_map>
-#include <vector>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -87,51 +87,24 @@ class ALPRDEncodingBase {
       std::string_view data,
       const Encoding::Options& options);
 
-  /// Trains a bounded sample using the initial packed-bit cost approximation.
+  /// Maximum number of input values inspected by split encoding selection.
+  static constexpr uint32_t kSampleSize = 1'024;
+
+  /// Selects a split and dictionary using bounded sampling and scalar child
+  /// estimates. Each child writer applies its own encoding selection policy.
   template <typename PhysicalType>
-  static Parameters selectParameters(std::span<const PhysicalType> values) {
-    constexpr uint32_t kSampleSize = 1'024;
-    const auto sampleSize = std::min<size_t>(values.size(), kSampleSize);
-    Parameters best;
-    uint64_t bestCost = std::numeric_limits<uint64_t>::max();
-    for (uint8_t highBitWidth = 1; highBitWidth <= kMaxHighBitWidth;
-         ++highBitWidth) {
-      const uint8_t rightBitWidth = sizeof(PhysicalType) * 8 - highBitWidth;
-      std::unordered_map<uint16_t, uint32_t> frequencies;
-      for (uint32_t i = 0; i < sampleSize; ++i) {
-        const auto sampleIndex = uint64_t{i} * values.size() / sampleSize;
-        ++frequencies[values[sampleIndex] >> rightBitWidth];
-      }
-      std::vector<std::pair<uint16_t, uint32_t>> entries(
-          frequencies.begin(), frequencies.end());
-      std::sort(
-          entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.second != rhs.second ? lhs.second > rhs.second
-                                            : lhs.first < rhs.first;
-          });
-      const auto dictionarySize =
-          std::min<size_t>(entries.size(), kMaxDictionarySize);
-      uint32_t exceptions = sampleSize;
-      for (uint8_t i = 0; i < dictionarySize; ++i) {
-        exceptions -= entries[i].second;
-      }
-      // Estimate the split using packed integers. Exceptions carry a 32-bit
-      // position and a 16-bit high part; child codecs choose their own layout.
-      const auto codeBitWidth = std::bit_width(dictionarySize - 1);
-      const uint64_t cost = sampleSize * (rightBitWidth + codeBitWidth) +
-          uint64_t{exceptions} * 48 + dictionarySize * 16;
-      // Prefer the narrower right part when minimum estimated costs tie.
-      if (cost <= bestCost) {
-        bestCost = cost;
-        best.rightBitWidth = rightBitWidth;
-        best.dictionarySize = dictionarySize;
-        for (uint8_t i = 0; i < dictionarySize; ++i) {
-          best.dictionary[i] = entries[i].first;
-        }
-      }
-    }
-    return best;
-  }
+  static Parameters selectParameters(
+      std::span<const PhysicalType> values,
+      const Encoding::Options& options);
+
+  /// Estimates numRows values from a representative sample, which may contain
+  /// the full input. Uses the same split selection as encode(), adding ALPRD
+  /// metadata once to the heuristic child sizes.
+  template <typename PhysicalType>
+  static std::optional<uint64_t> estimateSize(
+      std::span<const PhysicalType> sampleValues,
+      uint32_t numRows,
+      const Encoding::Options& options);
 
  protected:
   /// Creates a child decoder and rejects NULL wrappers within ALPRD streams.
@@ -239,7 +212,22 @@ class ALPRDEncoding final
 
   template <typename Visitor>
   void readWithVisitor(Visitor& visitor, ReadWithVisitorParams& params) {
-    // TODO: Add a bulk visitor path while preserving this generic fallback.
+    if constexpr (
+        Visitor::dense && Visitor::kHasBulkPath &&
+        std::is_same_v<typename Visitor::DataType, T> &&
+        std::is_same_v<
+            typename Visitor::Extract,
+            velox::dwio::common::ExtractToReader>) {
+      // Match the conservative ALP cutoff; shorter reads avoid bulk setup.
+      constexpr vector_size_t kMinBulkRows = 128;
+      if (visitor.numRows() - visitor.rowIndex() >= kMinBulkRows) {
+        const auto* nulls = visitor.reader().rawNullsInReadRange();
+        if (velox::dwio::common::useFastPath(visitor, nulls)) {
+          detail::readWithVisitorFast(*this, visitor, params, nulls);
+          return;
+        }
+      }
+    }
     auto skipValues = [&](auto count) { skip(count); };
     auto decodeOne = [&] {
       physicalType value;
@@ -247,6 +235,31 @@ class ALPRDEncoding final
       return value;
     };
     detail::readWithVisitorSlow(visitor, params, skipValues, decodeOne);
+  }
+
+  /// Decodes contiguous non-null rows before framework filtering and scatter.
+  template <bool kScatter, typename Visitor>
+  void bulkScan(
+      Visitor& visitor,
+      vector_size_t currentRow,
+      const vector_size_t* selectedRows,
+      vector_size_t numSelected,
+      const vector_size_t* scatterRows) {
+    static_assert(Visitor::dense);
+    static_assert(std::is_same_v<typename Visitor::DataType, T>);
+    NIMBLE_CHECK_GT(numSelected, 0);
+    NIMBLE_DCHECK_GE(selectedRows[0], currentRow);
+    NIMBLE_DCHECK_EQ(
+        selectedRows[numSelected - 1] - selectedRows[0] + 1, numSelected);
+    const auto numRows = visitor.numRows() - visitor.rowIndex();
+    auto* values = detail::mutableValues<T>(visitor, numRows);
+    // Both main children are stateful. Advance them along with the exception
+    // cursor, including gaps before the first selected row.
+    skip(selectedRows[0] - currentRow);
+    materialize(numSelected, values);
+    detail::applyFixedWidthRun<kScatter>(
+        visitor, selectedRows, numSelected, scatterRows, values, numRows);
+    visitor.setRowIndex(visitor.numRows());
   }
 
   std::string debugString(int offset) const final {
@@ -261,6 +274,14 @@ class ALPRDEncoding final
         metadata_.exceptionCount);
   }
 
+  /// Estimates the full input with the bounded scalar child-cost model.
+  static std::optional<uint64_t> estimateSize(
+      std::span<const physicalType> values,
+      const Encoding::Options& options) {
+    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+    return ALPRDEncodingBase::estimateSize(values, values.size(), options);
+  }
+
   static std::string_view encode(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
@@ -270,7 +291,7 @@ class ALPRDEncoding final
     if (values.empty()) {
       NIMBLE_INCOMPATIBLE_ENCODING("ALPRD cannot encode empty data.");
     }
-    const auto parameters = selectParameters(values);
+    const auto parameters = selectParameters(values, options);
     const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
     ScopedVector<uint16_t> codes(rowCount, pool, options.bufferPool);
@@ -341,15 +362,15 @@ class ALPRDEncoding final
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scratch(pool, options.encodingBufferPool);
     std::array<std::string_view, 4> children;
-    children[0] = EncodingFactory::slice(
-        metadata.children[0], offset, length, scratch.get(), options);
-    children[1] = EncodingFactory::slice(
-        metadata.children[1], offset, length, scratch.get(), options);
+    children[0] = sliceChild<uint16_t>(
+        metadata.children[0], offset, length, 0, scratch.get(), options);
+    children[1] = sliceChild<physicalType>(
+        metadata.children[1], offset, length, 0, scratch.get(), options);
     uint32_t exceptionCount = 0;
     if (metadata.exceptionCount != 0) {
       // Validate exception ordering and bounds before using lower_bound.
-      Vector<uint32_t> exceptionPositions(pool);
-      Vector<uint16_t> exceptionHighParts(pool);
+      ScopedVector<uint32_t> exceptionPositions{0, pool, options.bufferPool};
+      ScopedVector<uint16_t> exceptionHighParts{0, pool, options.bufferPool};
       loadExceptions(
           *pool, metadata, options, exceptionPositions, exceptionHighParts);
       const auto* begin = exceptionPositions.data();
@@ -358,20 +379,21 @@ class ALPRDEncoding final
       const auto* last = std::lower_bound(first, end, offset + length);
       exceptionCount = last - first;
       if (exceptionCount != 0) {
-        ScopedVector<uint32_t> positions(
-            exceptionCount, pool, options.bufferPool);
-        for (uint32_t i = 0; i < exceptionCount; ++i) {
-          positions[i] = first[i] - offset;
-        }
-        children[2] = EncodingFactory::encodeWithCapturedLayout<uint32_t>(
+        // The signed 32-bit delta also covers offsets above INT32_MAX:
+        // positions are uint32 values, so subtraction is modulo 2^32.
+        const auto delta = static_cast<int32_t>(uint32_t{0} - offset);
+        children[2] = sliceChild<uint32_t>(
             metadata.children[2],
-            {positions.data(), positions.size()},
+            first - begin,
+            exceptionCount,
+            delta,
             scratch.get(),
             options);
-        children[3] = EncodingFactory::slice(
+        children[3] = sliceChild<uint16_t>(
             metadata.children[3],
             first - begin,
             exceptionCount,
+            0,
             scratch.get(),
             options);
       }
@@ -381,6 +403,28 @@ class ALPRDEncoding final
   }
 
  private:
+  // Native slices retain only the touched data. Already wrapped children use
+  // composition because the generic slice factory cannot replay a Slice layout.
+  template <typename Child>
+  static std::string_view sliceChild(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      int64_t valueDelta,
+      Buffer& buffer,
+      const Encoding::Options& options) {
+    if (EncodingPrefix::encodingType(encoded) == EncodingType::Slice) {
+      return SliceEncoding<Child>::wrap(
+          encoded, offset, length, buffer, valueDelta, options);
+    }
+    const auto sliced =
+        EncodingFactory::slice(encoded, offset, length, buffer, options);
+    return valueDelta == 0
+        ? sliced
+        : SliceEncoding<Child>::wrap(
+              sliced, 0, length, buffer, valueDelta, options);
+  }
+
   // Accepts validated metadata so the base can safely read the raw prefix.
   ALPRDEncoding(
       velox::memory::MemoryPool& pool,

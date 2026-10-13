@@ -38,6 +38,21 @@ namespace facebook::nimble {
 using EncodingSelectionPolicyCreator =
     std::function<std::unique_ptr<EncodingSelectionPolicyBase>(DataType)>;
 
+namespace detail {
+
+/// Checks whether the candidates contain an AlpLike encoding (ALP or ALP_RD).
+bool hasAlpLikeCandidate(
+    const std::vector<std::pair<EncodingType, float>>& candidates);
+
+/// Checks whether a layout tree contains an AlpLike encoding (ALP or ALP_RD).
+bool hasAlpLikeEncoding(const EncodingLayout& layout);
+
+/// Checks whether a value child that can select ALP or ALPRD lacks a layout.
+/// Auxiliary streams such as null flags and dictionary indices are excluded.
+bool hasUnspecifiedValueEncoding(const EncodingLayout& layout);
+
+} // namespace detail
+
 // The following enables encoding selection debug messages. By default, these
 // logs are turned off (with zero overhead). In tests (or in debug sessions), we
 // enable these logs.
@@ -131,23 +146,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
-    auto candidateEncodingReadFactors = candidateEncodingReadFactors_;
-    // TODO: Remove this opt-in once ALP is production-ready for default
-    // selection.
-    if constexpr (isFloatingPointType<T>()) {
-      if (options.allowNestedAlpSelection &&
-          (identifier_ == EncodingIdentifiers::Dictionary::Alphabet ||
-           identifier_ == EncodingIdentifiers::MainlyConstant::OtherValues ||
-           identifier_ == EncodingIdentifiers::RunLength::RunValues) &&
-          std::none_of(
-              candidateEncodingReadFactors.begin(),
-              candidateEncodingReadFactors.end(),
-              [](const auto& entry) {
-                return entry.first == EncodingType::ALP;
-              })) {
-        candidateEncodingReadFactors.emplace_back(EncodingType::ALP, 1.0);
-      }
-    }
+    const auto& candidateEncodingReadFactors =
+        this->candidateEncodingReadFactors();
 
     // Fast path: when there are no candidate encodings, fall back to Trivial.
     if (candidateEncodingReadFactors.empty()) {
@@ -158,6 +158,10 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
+    const auto& nestedEncodingReadFactors =
+        nestedEncodingReadFactorsOverride_.has_value()
+        ? nestedEncodingReadFactorsOverride_.value()
+        : candidateEncodingReadFactors_;
     float minCost = std::numeric_limits<float>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
     std::optional<uint64_t> selectedEstimatedSize;
@@ -167,7 +171,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const auto encodingType = entry.first;
       const auto estimatedSize =
           detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
+              encodingType,
+              values,
+              statistics,
+              options,
+              nestedEncodingReadFactors);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;
@@ -237,6 +245,13 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
+  bool hasAlpLikeCandidates() const override {
+    return detail::hasAlpLikeCandidate(candidateEncodingReadFactors_) ||
+        (nestedEncodingReadFactorsOverride_ &&
+         detail::hasAlpLikeCandidate(*nestedEncodingReadFactorsOverride_));
+  }
+
+  /// Returns the configured candidates for this selection node.
   const std::vector<std::pair<EncodingType, float>>&
   candidateEncodingReadFactors() const {
     return candidateEncodingReadFactors_;
@@ -525,7 +540,8 @@ class ReplayedEncodingSelectionPolicy
       std::span<const bool> /* nulls */,
       const Statistics<physicalType>& /* statistics */,
       const Encoding::Options& /* options */) override {
-    // NullableEncoding asks createImpl() for nullable data and nulls children.
+    // NullableEncoding asks createImpl() for non-null value and null-flag
+    // children.
     // The replay policy is initialized with the data layout, so synthesize the
     // nullable parent shape here.
     encodingLayout_ = EncodingLayout{
@@ -541,6 +557,14 @@ class ReplayedEncodingSelectionPolicy
         .encodingConfig = {},
         .estimatedSize = std::nullopt,
     };
+  }
+
+  bool hasAlpLikeCandidates() const override {
+    // Only an unspecified value encoding needs the fallback's capabilities.
+    return detail::hasAlpLikeEncoding(encodingLayout_) ||
+        (detail::hasUnspecifiedValueEncoding(encodingLayout_) &&
+         encodingSelectionPolicyCreator_(TypeTraits<T>::dataType)
+             ->hasAlpLikeCandidates());
   }
 
  protected:

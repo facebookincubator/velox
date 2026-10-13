@@ -104,6 +104,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
+  // Carries the session settings the remaining filter is folded and compiled
+  // against. Kept for the data source's lifetime: createCudfExpression borrows
+  // its config, and an evaluator may hold on to it.
+  std::shared_ptr<core::QueryCtx> optimizeQueryCtx_;
+
   // Columns to read.
   std::vector<std::string> readColumnNames_;
 
@@ -132,8 +137,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
   // Optimized remaining-filter expression, or null when there is no remaining
-  // filter. Gates remaining-filter evaluation in next().
+  // filter or it folded to a constant. Gates remaining-filter evaluation in
+  // next().
   core::TypedExprPtr optimizedRemainingFilter_;
+
+  // Whether the remaining filter folded to a constant that no row satisfies,
+  // in which case splits are skipped without opening them.
+  bool remainingFilterRejectsAllRows_{false};
 
   // Compiled cuDF evaluator for the remaining filter, applied post-read in
   // next(). Null when there is no remaining filter.

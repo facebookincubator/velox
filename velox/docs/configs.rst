@@ -81,17 +81,17 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
-   * - legacy_timestamp_with_timezone
+   * - use_session_timezone_for_timestamp_with_timezone
      - bool
-     - true
-     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, each value renders in its own
-       embedded time zone. If false, values render the UTC instant in the session time zone, so values that compare
-       equal produce equal results. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which
-       report the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``,
-       ``TIME`` and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL
-       DAY TO SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
-       ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false,
-       ``legacy_timestamp_with_timezone`` selects the embedded or session time zone.
+     - false
+     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, values render the UTC instant in
+       the session time zone, so values that compare equal produce equal results. If false, each value renders in its
+       own embedded time zone. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which report
+       the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
+       and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
+       SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
+       ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
+       property selects the session or embedded time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -1163,7 +1163,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
    * - ``writer.enable-page-index``
      - bool
-     - false
+     - true
      - Whether to write the Parquet page index (column index and offset index) when writing into
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.

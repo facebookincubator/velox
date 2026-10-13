@@ -135,6 +135,15 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     };
   }
 
+  bool hasAlpLikeCandidates() const override {
+    return std::any_of(
+        candidateEncodingTypes_.begin(),
+        candidateEncodingTypes_.end(),
+        [](EncodingType type) {
+          return type == EncodingType::ALP || type == EncodingType::ALPRD;
+        });
+  }
+
  protected:
   std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
       EncodingType parentEncodingType,

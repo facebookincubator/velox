@@ -35,6 +35,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -106,6 +107,12 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   static void SetUpTestCase() {
     CudfHiveConnectorTestBase::SetUpTestCase();
+    parquet::registerParquetReaderFactory();
+  }
+
+  static void TearDownTestCase() {
+    parquet::unregisterParquetReaderFactory();
+    CudfHiveConnectorTestBase::TearDownTestCase();
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -114,6 +121,30 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
       const RowTypePtr& rowType = nullptr) {
     auto inputs = rowType ? rowType : rowType_;
     return CudfHiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
+  }
+
+  std::shared_ptr<TempFilePath> writeUnsupportedMapInput() {
+    auto input = makeRowVector(
+        {"k", "m"},
+        {makeFlatVector<int64_t>({1, 2}),
+         makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+    auto filePath = TempFilePath::create();
+    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        filePath->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), filePath->getPath());
+    auto writerPool =
+        rootPool_->addAggregateChild("TableScanTest.UnsupportedMapWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    parquet::Writer writer(
+        std::move(sink), options, writerPool, asRowType(input->type()));
+    writer.write(input);
+    writer.close();
+    return filePath;
   }
 
   Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
@@ -178,6 +209,15 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
     return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  }
+
+  // Runtime stats omit zero-valued counters, so a missing stat reads as zero.
+  static int64_t getTableScanRuntimeStat(
+      const std::shared_ptr<Task>& task,
+      std::string_view name) {
+    const auto runtimeStats = getTableScanRuntimeStats(task);
+    const auto it = runtimeStats.find(std::string(name));
+    return it == runtimeStats.end() ? 0 : it->second.sum;
   }
 
   // Verifies I/O is bounded by one footer and one data read of the unique file.
@@ -580,6 +620,55 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
   EXPECT_EQ(planStats.at(plan->id()).outputRows, 0);
 }
 
+// Table schemas use lowercase names while the file keeps mixed-case names. The
+// filter-only column must still be read so the pushed-down filter can find it.
+TEST_F(TableScanTest, mixedCaseFileColumnNames) {
+  auto vector = makeRowVector(
+      {"Filter_Col", "Value_Col"},
+      {makeFlatVector<std::string>({"a", "b", "c", "d"}),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  auto rowType = ROW({"filter_col", "value_col"}, {VARCHAR(), BIGINT()});
+  auto outputType = ROW({"value_col"}, {BIGINT()});
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "filter_col",
+              std::make_unique<common::BytesRange>(
+                  "b",
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  "",
+                  /*upperUnbounded*/ true,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .build();
+  auto plan =
+      PlanBuilder()
+          .startTableScan()
+          .outputType(outputType)
+          .tableHandle(makeTableHandle(
+              "parquet_table", rowType, std::move(subfieldFilters), nullptr))
+          .assignments(
+              facebook::velox::exec::test::HiveConnectorTestBase::
+                  allRegularColumns(outputType))
+          .endTableScan()
+          .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .connectorSessionProperty(
+          kCudfHiveConnectorId,
+          facebook::velox::connector::hive::HiveConfig::
+              kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .splits(makeCudfHiveConnectorSplits({filePath}))
+      .assertResults("SELECT Value_Col FROM tmp WHERE Filter_Col >= 'b'");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ,
     TableScanTestParameterized,
@@ -703,7 +792,6 @@ TEST_F(TableScanTest, filterPushdown) {
   // EXPECT_LT(tableScanStats.inputRows, tableScanStats.rawInputRows);
   EXPECT_EQ(tableScanStats.inputRows, tableScanStats.outputRows);
 
-#if 0
   // Repeat the same but do not project out the filtered columns.
   assignments.clear();
   assignments["c0"] =
@@ -718,10 +806,10 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // TODO: zero column non-empty table is not possible in cudf, need to implement.
-  // Do the same for count, no columns projected out.
+  // Count with no projections, however the filter columns c1 and c3 are still
+  // read.
   assignments.clear();
   assertQuery(
       PlanBuilder()
@@ -730,20 +818,14 @@ TEST_F(TableScanTest, filterPushdown) {
           .tableHandle(tableHandle)
           .assignments(assignments)
           .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
+          .singleAggregation({}, {"count(1)"})
           .planNode(),
       filePaths,
-      "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT count(*) FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
-  // Do the same for count, no filter, no projections.
+  // Do the same for count, no filter, no projections. Only the footer is read.
   assignments.clear();
-  // subfieldFilters.clear(); // Explicitly clear this.
-  tableHandle = makeTableHandle(
-      "parquet_table",
-      rowType,
-      false,
-      nullptr,
-      nullptr);
+  tableHandle = makeTableHandle("parquet_table", rowType);
   assertQuery(
       PlanBuilder()
           .startTableScan()
@@ -751,11 +833,10 @@ TEST_F(TableScanTest, filterPushdown) {
           .tableHandle(tableHandle)
           .assignments(assignments)
           .endTableScan()
-          .singleAggregation({}, {"sum(1)"})
+          .singleAggregation({}, {"count(1)"})
           .planNode(),
       filePaths,
       "SELECT count(*) FROM tmp");
-#endif
 }
 
 // Disable this test and the one below for now, pending a CUDF fix.
@@ -954,6 +1035,119 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       "SELECT * FROM tmp LIMIT 0");
 }
 
+// Verify that a `count(*)` scan with no projected columns returns the correct
+// row count from the Parquet footer
+TEST_F(TableScanTest, countStarNoProjectedColumns) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  // Scans no columns, the shape a `SELECT count(*)` plan produces.
+  auto countStarPlan = PlanBuilder(pool_.get())
+                           .startTableScan()
+                           .outputType(ROW({}, {}))
+                           .tableHandle(makeTableHandle())
+                           .endTableScan()
+                           .singleAggregation({}, {"count(1)"})
+                           .planNode();
+
+  // Counts the same rows through a decoded column, the oracle for the
+  // footer-derived counts below.
+  auto countColumnPlan = PlanBuilder(pool_.get())
+                             .startTableScan()
+                             .outputType(ROW({"c0"}, {INTEGER()}))
+                             .tableHandle(makeTableHandle())
+                             .endTableScan()
+                             .singleAggregation({}, {"count(1)"})
+                             .planNode();
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+  const auto halfFileSize = fileSize / 2;
+
+  const auto countRows = [&](const core::PlanNodePtr& plan,
+                             uint64_t start,
+                             uint64_t length) {
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .split(Split(makeCudfHiveConnectorSplit(
+                          filePath->getPath(), start, length)))
+                      .copyResults(pool_.get(), task);
+    EXPECT_EQ(result->size(), 1);
+    // A footer-only scan reads no column chunks.
+    if (plan == countStarPlan) {
+      EXPECT_LT(
+          getTableScanRuntimeStat(task, io::kStorageReadBytes), fileSize / 4);
+    }
+    return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+  };
+
+  // A split owns only the row groups that start inside its byte range, so a
+  // whole-file footer count would over-count either half.
+  const auto firstHalf = countRows(countStarPlan, 0, halfFileSize);
+  const auto secondHalf =
+      countRows(countStarPlan, halfFileSize, fileSize - halfFileSize);
+  EXPECT_EQ(firstHalf, countRows(countColumnPlan, 0, halfFileSize));
+  EXPECT_EQ(
+      secondHalf,
+      countRows(countColumnPlan, halfFileSize, fileSize - halfFileSize));
+  EXPECT_EQ(firstHalf + secondHalf, 10'000);
+
+  // A split that starts past the last row group owns no rows.
+  EXPECT_EQ(countRows(countStarPlan, fileSize, 1), 0);
+}
+
+// A remaining filter that folds to a constant must either keep the row count
+// from the footer or skip the split without reading any columns.
+TEST_F(TableScanTest, constantRemainingFilter) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  using CountAndSkippedSplits = std::pair<int64_t, int64_t>;
+  const auto countRows = [&](const core::TypedExprPtr& remainingFilter) {
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(ROW({}, {}))
+                    .tableHandle(makeTableHandle(
+                        "parquet_table", rowType_, {}, remainingFilter))
+                    .endTableScan()
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .split(makeCudfHiveSplit(filePath->getPath()))
+                      .copyResults(pool_.get(), task);
+    EXPECT_EQ(result->size(), 1);
+    return CountAndSkippedSplits{
+        result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0),
+        getTableScanRuntimeStat(task, "skippedSplits")};
+  };
+
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true)),
+      CountAndSkippedSplits(10'000, 0));
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), false)),
+      CountAndSkippedSplits(0, 1));
+  EXPECT_EQ(
+      countRows(
+          std::make_shared<core::ConstantTypedExpr>(
+              BOOLEAN(), Variant::null(TypeKind::BOOLEAN))),
+      CountAndSkippedSplits(0, 1));
+
+  // A non-constant filter that references no column is rejected.
+  auto randomFilter = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::CallTypedExpr>(
+              DOUBLE(), std::vector<core::TypedExprPtr>{}, "rand"),
+          std::make_shared<core::ConstantTypedExpr>(DOUBLE(), 0.5),
+      },
+      "gt");
+  VELOX_ASSERT_USER_THROW(
+      countRows(randomFilter), "references no column is not supported");
+}
+
 // Verify that extractFiltersFromRemainingFilter extracts simple single-column
 // filters from the remaining filter into subfield filters for pushdown.
 // When a filter like "c0 = 1" is fully extracted,
@@ -1064,6 +1258,62 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
+  auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
+  auto filePath = writeUnsupportedMapInput();
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .project({"k"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .split(makeCudfHiveConnectorSplit(filePath->getPath()))
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("CudfFilterProject"), 0);
+  EXPECT_EQ(operatorStats.count("FilterProject"), 1);
+}
+
+TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
+  auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
+  auto filePath = writeUnsupportedMapInput();
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+      .split(makeCudfHiveConnectorSplit(filePath->getPath()))
+      .assertResults(expected);
 }
 
 // Velox's parquet writer stores DECIMAL(7, 2) as INT32 when

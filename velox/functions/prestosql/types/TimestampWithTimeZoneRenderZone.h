@@ -25,7 +25,7 @@ namespace facebook::velox {
 /// Selects the zone used to render a packed TIMESTAMP WITH TIME ZONE.
 class TimestampWithTimeZoneRenderZone {
  public:
-  /// Controls when a non-legacy session zone is validated and resolved.
+  /// Controls when the configured session zone is validated and resolved.
   enum class SessionZoneResolution { kEager, kOnDemand };
 
   /// Captures the query's render-zone policy.
@@ -37,18 +37,18 @@ class TimestampWithTimeZoneRenderZone {
   TimestampWithTimeZoneRenderZone(
       const core::QueryConfig& config,
       SessionZoneResolution resolution)
-      : legacyTimestampWithTimeZone_(config.legacyTimestampWithTimezone()),
+      : useSessionTimeZone_(
+            config.useSessionTimezoneForTimestampWithTimezone()),
         sessionTimeZoneName_(config.sessionTimezone()),
         sessionRenderZone_(
-            !legacyTimestampWithTimeZone_ &&
-                    resolution == SessionZoneResolution::kEager
+            useSessionTimeZone_ && resolution == SessionZoneResolution::kEager
                 ? functions::getSessionTimeZone(sessionTimeZoneName_)
                 : nullptr) {}
 
-  /// Returns the value's embedded zone in legacy mode and the session zone
+  /// Returns the session zone when enabled and the value's embedded zone
   /// otherwise.
   const tz::TimeZone* get(int64_t timestampWithTimeZone) const {
-    if (legacyTimestampWithTimeZone_) {
+    if (!useSessionTimeZone_) {
       return tz::locateZone(unpackZoneKeyId(timestampWithTimeZone));
     }
     if (sessionRenderZone_ == nullptr) {
@@ -58,8 +58,8 @@ class TimestampWithTimeZoneRenderZone {
   }
 
  private:
-  // Preserves embedded-zone rendering when true.
-  const bool legacyTimestampWithTimeZone_;
+  // Captures the render-zone policy at construction.
+  const bool useSessionTimeZone_;
   // Retains the configured name for on-demand resolution.
   const std::string sessionTimeZoneName_;
   // Caches the first successful eager or on-demand session-zone resolution.

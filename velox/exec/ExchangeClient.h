@@ -29,16 +29,13 @@ namespace facebook::velox::exec {
 /// transport. Implementations own the set of producers a pipeline reads from
 /// and provide the operations by which Task drives them.
 ///
-/// The data plane is deliberately absent: page payloads are transport specific
-/// (in-memory serialized pages, GPU buffers, ...), so there is nothing shared
-/// to abstract. The operator that consumes a transport's pages is built
-/// together with that transport's client, so it always knows the concrete
-/// client type and can reach the transport's own data plane directly.
+/// Page data is transport-specific and deliberately absent from this
+/// interface. ExchangeTransportRegistry pairs each client with an operator
+/// factory that understands its data plane.
 ///
-/// The control-plane operations addRemoteTaskId(), noMoreRemoteTasks(), and
-/// close() must be safe to call from multiple threads: Task adds remote tasks
-/// from the split path while drivers consume data. The status accessors provide
-/// best-effort snapshots for diagnostics.
+/// Control-plane operations must be thread-safe because Task adds remote tasks
+/// while drivers consume data. Status accessors provide best-effort snapshots
+/// for diagnostics.
 class ExchangeClient {
  public:
   virtual ~ExchangeClient() = default;
@@ -49,10 +46,11 @@ class ExchangeClient {
   /// ignored.
   virtual void addRemoteTaskId(std::string_view remoteTaskId) = 0;
 
-  /// Signals that no more calls to addRemoteTaskId() will follow.
+  /// Signals that no more calls to addRemoteTaskId() will follow. Must not
+  /// throw.
   virtual void noMoreRemoteTasks() = 0;
 
-  /// Releases the producers and unblocks consumers. Idempotent.
+  /// Releases the producers and unblocks consumers. Idempotent. Must not throw.
   virtual void close() = 0;
 
   /// Returns runtime statistics aggregated across all producers.

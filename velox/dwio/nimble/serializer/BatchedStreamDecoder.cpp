@@ -228,37 +228,20 @@ const Encoding* BatchedStreamDecoder::encoding() const {
   NIMBLE_UNREACHABLE("unexpected call");
 }
 
-void BatchedStreamDecoder::read(
-    const std::function<void*(uint32_t rowCount)>& prepareOutput,
-    std::function<void*()> getOutputNulls,
-    std::vector<velox::BufferPtr>& stringBuffers) {
-  NIMBLE_CHECK(
-      !isInMapStream(),
-      "read is not supported for logical FlatMap in-map streams");
+uint32_t BatchedStreamDecoder::remainingRows() {
   if (streamSegmentIndex_ >= streamSegments_.size()) {
-    return;
+    return 0;
   }
-
-  const auto& segment = streamSegments_[streamSegmentIndex_];
   NIMBLE_CHECK(
-      !segment.legacyHeaderless,
-      "read is not supported for legacy headerless streams");
-  auto& streamData = ensureStreamData(stringBuffers);
+      !streamSegments_[streamSegmentIndex_].legacyHeaderless,
+      "remainingRows is not supported for legacy headerless streams");
+  auto& streamData = ensureStreamData(skipStringBuffers_);
   NIMBLE_CHECK(
-      streamData.hasEncoding(), "read requires an encoded stream segment");
+      streamData.hasEncoding(),
+      "remainingRows requires an encoded stream segment");
   const auto rowCount = streamData.remainingRows();
-  if (rowCount == 0) {
-    advanceSegment();
-    return;
-  }
-  auto* output = prepareOutput(rowCount);
-  NIMBLE_CHECK_NOT_NULL(output);
-  next(
-      rowCount,
-      output,
-      std::move(getOutputNulls),
-      stringBuffers,
-      /*scatterOutputBitmap=*/nullptr);
+  NIMBLE_CHECK_GT(rowCount, 0, "Stream segment has no rows");
+  return rowCount;
 }
 
 serde::StreamData& BatchedStreamDecoder::ensureStreamData(

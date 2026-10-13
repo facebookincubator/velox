@@ -177,10 +177,12 @@ TEST(StreamLabelsTest, hybridFlatMap) {
   const auto& hybridMapType = schema->asRow().childAt(0)->asHybridFlatMap();
 
   EXPECT_EQ(labels.streamLabel(hybridMapType.nullsDescriptor().offset()), "/0");
-  EXPECT_EQ(labels.streamLabel(groupStreams.keyDescriptor.offset()), "/0");
+  EXPECT_EQ(
+      labels.streamLabel(groupStreams.keyPresenceDescriptor.offset()), "/0");
   EXPECT_EQ(labels.streamLabel(groupStreams.inMapDescriptor.offset()), "/0");
   EXPECT_EQ(labels.streamLabel(groupValueOffset), "/0");
-  EXPECT_EQ(labels.streamLabel(defaultStreams.keyDescriptor.offset()), "/0");
+  EXPECT_EQ(
+      labels.streamLabel(defaultStreams.keyPresenceDescriptor.offset()), "/0");
   EXPECT_EQ(labels.streamLabel(defaultStreams.inMapDescriptor.offset()), "/0");
   EXPECT_EQ(
       labels.streamLabel(defaultValue->scalarDescriptor().offset()), "/0");

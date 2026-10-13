@@ -22,6 +22,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -2179,58 +2180,73 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
 TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   setupSources(5, 100);
   Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
-  auto leafTaskId = makeTaskId("leaf", 0);
-  core::PlanNodeId partitionNodeId;
-  auto leafPlan =
-      PlanBuilder()
-          .values(vectors_)
-          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
-          .capturePlanNodeId(partitionNodeId)
-          .planNode();
-  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  leafTask->start(1);
+  // Custom leaf nodes name no transport, so they use the built-in in-memory
+  // client even with an isolated query registry.
+  for (const bool isolatedTransportRegistry : {false, true}) {
+    SCOPED_TRACE(
+        isolatedTransportRegistry ? "isolated transport registry"
+                                  : "global transport registry");
+    auto leafTaskId =
+        makeTaskId(isolatedTransportRegistry ? "isolated-leaf" : "leaf", 0);
+    core::PlanNodeId partitionNodeId;
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(1);
 
-  CursorParameters params;
-  params.queryConfigs.emplace(
-      core::QueryConfig::kShuffleCompressionKind,
-      common::compressionKindToString(GetParam().compressionKind));
-  core::PlanNodeId testNodeId;
-  params.maxDrivers = 1;
-  params.planNode =
-      PlanBuilder()
-          .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */) {
-            return std::make_shared<TestCustomExchangeNode>(
-                id, leafPlan->outputType(), GetParam().serdeKind);
-          })
-          .capturePlanNodeId(testNodeId)
-          .planNode();
+    CursorParameters params;
+    if (isolatedTransportRegistry) {
+      params.queryCtx = core::QueryCtx::create(executor_.get());
+      params.queryCtx->setRegistry(
+          ExchangeTransportRegistry::kRegistryKey,
+          ExchangeTransportRegistry::create(/*parent=*/nullptr));
+    }
+    params.queryConfigs.emplace(
+        core::QueryConfig::kShuffleCompressionKind,
+        common::compressionKindToString(GetParam().compressionKind));
+    core::PlanNodeId testNodeId;
+    params.maxDrivers = 1;
+    params.planNode =
+        PlanBuilder()
+            .addNode(
+                [&leafPlan](std::string id, core::PlanNodePtr /* input */) {
+                  return std::make_shared<TestCustomExchangeNode>(
+                      id, leafPlan->outputType(), GetParam().serdeKind);
+                })
+            .capturePlanNodeId(testNodeId)
+            .planNode();
 
-  auto cursor = TaskCursor::create(params);
-  auto task = cursor->task();
-  addRemoteSplits(task, {leafTaskId});
-  while (cursor->moveNext()) {
+    auto cursor = TaskCursor::create(params);
+    auto task = cursor->task();
+    addRemoteSplits(task, {leafTaskId});
+    while (cursor->moveNext()) {
+    }
+    ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+        << leafTask->taskId();
+    ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+
+    EXPECT_NE(
+        toPlanStats(task->taskStats())
+            .at(testNodeId)
+            .customStats.count("testCustomExchangeStat"),
+        0);
+
+    auto planStats = toPlanStats(leafTask->taskStats());
+    const auto serdeKindRuntimsStats =
+        planStats.at(partitionNodeId)
+            .customStats.at(std::string(Operator::kShuffleSerdeKind));
+    ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+    ASSERT_EQ(
+        serdeKindRuntimsStats.min,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+    ASSERT_EQ(
+        serdeKindRuntimsStats.max,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   }
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
-      << leafTask->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
-
-  EXPECT_NE(
-      toPlanStats(task->taskStats())
-          .at(testNodeId)
-          .customStats.count("testCustomExchangeStat"),
-      0);
-
-  auto planStats = toPlanStats(leafTask->taskStats());
-  const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
-  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
-  ASSERT_EQ(
-      serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
-  ASSERT_EQ(
-      serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 }
 
 // This test is to reproduce the race condition between task terminate and no
