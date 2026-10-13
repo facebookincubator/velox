@@ -90,10 +90,10 @@ velox_add_library(
   Cardinality.h
   Comparisons.h
   DataSizeFunctions.h
+  DateTimeCalendarFunctions.h
   DateTimeFunctions.h
   DateTimeImpl.h
   DecimalFunctions.h
-  detail/DateTimeCalendarFunctions.h
   detail/DecimalMathFunctions.h
   DistanceFunctions.h
   DotProduct.h
