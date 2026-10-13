@@ -4359,6 +4359,67 @@ TEST_P(SelectiveNimbleReaderTest, corruptStripeStatsSectionStillReads) {
   EXPECT_EQ(corruptStats.skippedStrides, 0);
 }
 
+// BIGINT -> HUGEINT is a permitted widening, so a bigint column can be read as
+// a long decimal. The reader reinterprets the physical value as the decimal's
+// unscaled value, so the two compare identically, but a pushed-down filter on
+// such a column is built over int128 while the column is decoded as int64.
+TEST_P(SelectiveNimbleReaderTest, bigintAsLongDecimalWithFilter) {
+  auto firstStripe = makeRowVector({
+      makeFlatVector<int64_t>(100, folly::identity),
+  });
+  auto secondStripe = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return 1000 + row; }),
+  });
+
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return true; });
+  };
+  std::string fileContent;
+  {
+    test::ScopedFeatureGate stripeStatsGate{
+        FeatureGate::FeatureSet::kStripeStatsWrite,
+        FeatureGate::FeatureSet::kStripeStatsPruning};
+    fileContent = test::createNimbleFile(
+        *rootPool(), {firstStripe, secondStripe}, writerOptions, false);
+  }
+
+  std::vector<int128_t> expectedValues;
+  expectedValues.reserve(200);
+  for (int64_t row = 0; row < 200; ++row) {
+    expectedValues.push_back(row < 100 ? row : 900 + row);
+  }
+  auto requested = makeRowVector({
+      makeFlatVector<int128_t>(expectedValues, DECIMAL(38, 0)),
+  });
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*requested->type());
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::HugeintRange>(10, 20, false));
+
+  test::ScopedFeatureGate stripeStatsGate{
+      FeatureGate::FeatureSet::kStripeStatsPruning};
+  auto readers = makeReaders(
+      requested, fileContent, scanSpec, this->stringDecoderZeroCopy());
+
+  validate(
+      *requested,
+      *readers.rowReader,
+      7,
+      /*dropColumn=*/-1,
+      [](auto row) { return row >= 10 && row <= 20; },
+      /*allowStripePruning=*/true);
+
+  // The second stripe holds only values >= 1000, so its statistics prove the
+  // filter cannot match and it is pruned rather than decoded.
+  dwio::common::RuntimeStats stats;
+  readers.rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.skippedStrides, 0);
+}
+
 TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneStringFilter) {
   auto firstStripe = makeRowVector({
       makeFlatVector<std::string>(

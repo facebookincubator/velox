@@ -259,6 +259,31 @@ TEST(FilterTest, hugeintRangeBoundaryOverflow) {
   EXPECT_FALSE(filter->testInt128(0));
 }
 
+TEST(FilterTest, hugeintRangeNarrowerIntegralValues) {
+  // A narrower integral column read as a long decimal decodes to int64 while
+  // its filter is built over int128, so the int64 forms must answer too.
+  const HugeintRange filter(10, 20, /*nullAllowed=*/false);
+
+  EXPECT_TRUE(filter.testInt64(10));
+  EXPECT_TRUE(filter.testInt64(15));
+  EXPECT_TRUE(filter.testInt64(20));
+  EXPECT_FALSE(filter.testInt64(9));
+  EXPECT_FALSE(filter.testInt64(21));
+  EXPECT_FALSE(filter.testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter.testInt64(std::numeric_limits<int64_t>::max()));
+
+  EXPECT_TRUE(filter.testInt64Range(0, 10, /*hasNull=*/false));
+  EXPECT_TRUE(filter.testInt64Range(12, 18, /*hasNull=*/false));
+  EXPECT_TRUE(filter.testInt64Range(20, 100, /*hasNull=*/false));
+  EXPECT_FALSE(filter.testInt64Range(0, 9, /*hasNull=*/false));
+  EXPECT_FALSE(filter.testInt64Range(21, 100, /*hasNull=*/false));
+
+  // Nulls only rescue a non-overlapping range when the filter admits them.
+  EXPECT_FALSE(filter.testInt64Range(21, 100, /*hasNull=*/true));
+  const HugeintRange nullable(10, 20, /*nullAllowed=*/true);
+  EXPECT_TRUE(nullable.testInt64Range(21, 100, /*hasNull=*/true));
+}
+
 TEST(FilterTest, createHugeintValuesEmpty) {
   auto filter = createHugeintValues({}, false);
   EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
