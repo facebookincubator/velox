@@ -285,7 +285,7 @@ subsequent drivers also call <code class="docutils literal notranslate"><span cl
 <code class="docutils literal notranslate"><span class="pre">builderTaskId</span> <span class="pre">==</span> <span class="pre">taskId</span></code>). Each driver calls <code class="docutils literal notranslate"><span class="pre">setupTable()</span></code> to allocate
 its own partial <code class="docutils literal notranslate"><span class="pre">BaseHashTable</span></code> using <code class="docutils literal notranslate"><span class="pre">cacheEntry-&gt;tablePool</span></code>, receives its
 subset of input via <code class="docutils literal notranslate"><span class="pre">addInput()</span></code>, and builds a partial table. Intra-task
-coordination between these drivers uses the standard <code class="docutils literal notranslate"><span class="pre">allPeersFinished()</span></code> /
+coordination between these drivers uses the standard <code class="docutils literal notranslate"><span class="pre">allPeersArrived()</span></code> /
 <code class="docutils literal notranslate"><span class="pre">JoinBridge</span></code> mechanism, not the cache.</p></li>
 <li><p><strong>The Wait (Waiters)</strong>: If other tasks arrive while the Builder is building,
 they encounter the pending state and transition to <code class="docutils literal notranslate"><span class="pre">kWaitForBuild</span></code>, waiting
@@ -343,7 +343,7 @@ shown.</p>
 <section id="build-and-publish">
 <h3>Build and Publish<a class="headerlink" href="#build-and-publish" title="Link to this heading">¶</a></h3>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>noMoreInput() → finishHashBuild():
-    if not allPeersFinished():          // wait for peer drivers in same task
+    if not allPeersArrived():           // wait for peer drivers in same task
         state = kWaitForBuild
         return
 
