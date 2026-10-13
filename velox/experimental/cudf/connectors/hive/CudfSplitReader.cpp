@@ -539,9 +539,10 @@ std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
   const auto knownSize = knownKvikioFileSize(split);
   // Open precedes the cache wrapper. Without the whole-file size, KvikIO
   // issues a synchronous HEAD even when all requested bytes are cached.
-  // Leave the range hints at zero: the datasource must address the full file,
-  // including its footer, even when this split reads only part of it.
-  auto source = cudf::io::datasource::create(split.filePath, 0, 0, knownSize);
+  // Describe the whole file (offset 0, no size estimate), not this split's
+  // range: the reader also needs the footer at the end of the file.
+  auto source = cudf::io::datasource::create(
+      split.filePath, /*offset=*/0, /*max_size_estimate=*/0, knownSize);
   if (ioStats) {
     ioStats->addCounter(
         knownSize.has_value() ? "cudfKvikioKnownSizeOpens"
