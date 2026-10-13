@@ -76,8 +76,8 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  /// Reads and returns the Parquet file metadatas. Subsequent calls return the
-  /// cached metadatas.
+  /// Reads and returns the Parquet file metadatas, cached until prepareSplit()
+  /// hands them to the cuDF reader.
   const std::vector<cudf::io::parquet::FileMetaData>& readFileMetadatas();
 
   /// Sets the split-specific pushdown filter. The expression must remain alive
