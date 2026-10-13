@@ -270,8 +270,7 @@ void CudfSplitReader::prepareSplitInternal(
 }
 
 void CudfSplitReader::cacheSchemaFromMetadata() {
-  // Read file metadatas if not already
-  fileMetaDatas();
+  readFileMetadatas();
 
   VELOX_CHECK_EQ(
       fileMetaData_.size(),
@@ -331,14 +330,15 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
   return {startRow, numRows};
 }
 
+void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+  pushdownFilterExpr_ = filter;
+  hasSplitSpecificPushdownFilter_ = true;
+}
+
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  // Reset existing split and split readers, if any
-  resetSplit();
-
-  // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
-
-  // Perform split-specific setup.
+  readFileMetadatas();
   prepareSplitInternal(runtimeStats);
 
   // Update runtime stats.
@@ -675,9 +675,10 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
-void CudfSplitReader::fileMetaDatas() {
+const std::vector<cudf::io::parquet::FileMetaData>&
+CudfSplitReader::readFileMetadatas() {
   if (not fileMetaData_.empty()) {
-    return;
+    return fileMetaData_;
   }
 
   // Setup the datasource
@@ -696,23 +697,11 @@ void CudfSplitReader::fileMetaDatas() {
       fileMetaData_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
-
-  if (pushdownFilterBuilder_) {
-    VELOX_CHECK_EQ(
-        fileMetaData_.size(),
-        1,
-        "Split-specific pushdown filters require exactly one Parquet metadata");
-    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
-    VELOX_CHECK_NOT_NULL(
-        pushdownFilterExpr_,
-        "Split-specific pushdown filter builder must return an expression");
-    hasSplitSpecificPushdownFilter_ = true;
-  }
+  return fileMetaData_;
 }
 
 void CudfSplitReader::createCudfReader() {
-  // Read file metadatas
-  fileMetaDatas();
+  readFileMetadatas();
 
   // Check if we are reading all columns in order
   const auto& schema = fileMetaData_.front().schema;

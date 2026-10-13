@@ -35,7 +35,6 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
-#include <functional>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -77,18 +76,15 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
-      const cudf::io::parquet::FileMetaData&)>;
+  /// Reads and returns the Parquet file metadatas, cached until prepareSplit()
+  /// hands them to the cuDF reader.
+  const std::vector<cudf::io::parquet::FileMetaData>& readFileMetadatas();
 
-  /// Sets a builder for a split-specific pushdown filter. The builder is
-  /// invoked after the Parquet footer is read and before reader options are
-  /// configured. The returned expression must remain alive while the split is
-  /// being read.
-  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
-    pushdownFilterBuilder_ = std::move(builder);
-  }
+  /// Sets the split-specific pushdown filter. The expression must remain alive
+  /// while the split is being read.
+  void setPushdownFilter(const cudf::ast::expression* filter);
 
-  /// Prepare the split: open cudf reader, set up data source and options.
+  /// Opens the cuDF reader and sets up its options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
@@ -120,7 +116,7 @@ class CudfSplitReader : public NvtxHelper {
   virtual void resetSplit();
 
  protected:
-  // Performs split-specific setup after base reader state is reset.
+  // Performs split-specific setup after the Parquet footer is loaded.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
   // Returns whether the split is skipped.
@@ -145,9 +141,6 @@ class CudfSplitReader : public NvtxHelper {
 
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();
-
-  // Read file metadatas.
-  void fileMetaDatas();
 
   // Read file metadatas and cache `fileColumnNames_`, `baseReadOffset_` and
   // `splitRowCount_` from the Parquet footer.
@@ -265,7 +258,6 @@ class CudfSplitReader : public NvtxHelper {
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
-  PushdownFilterBuilder pushdownFilterBuilder_;
   bool hasSplitSpecificPushdownFilter_{false};
 
   struct TotalScanTimeCallbackData {
