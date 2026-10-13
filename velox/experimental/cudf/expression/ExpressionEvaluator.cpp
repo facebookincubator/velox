@@ -71,6 +71,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -3135,7 +3136,8 @@ ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
-    bool finalize) {
+    bool finalize,
+    gpu_sfi::GpuSfiErrors* errors) {
   // Top-level field access (or chain of field accesses on input columns) maps
   // directly to a column_view zero-copy.
   if (isInputFieldReference(expr_)) {
@@ -3165,7 +3167,8 @@ ColumnOrView FunctionExpression::eval(
         subexpressions_.size(),
         1,
         "Nested field reference expects exactly one subexpression");
-    auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+    auto parent = subexpressions_[0]->eval(
+        inputColumnViews, stream, mr, /*finalize=*/false, errors);
     VELOX_DCHECK_GE(fieldIndex_, 0);
     auto child = FunctionExpression::makeStructChildColumn(
         parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
@@ -3197,7 +3200,8 @@ ColumnOrView FunctionExpression::eval(
       // conditional discards. Hand each branch inputs whose null mask excludes
       // the rows it does not supply; the kernels already skip null rows. Velox
       // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      auto condition = subexpressions_[0]->eval(
+          inputColumnViews, stream, mr, /*finalize=*/false, errors);
       const auto conditionView = asView(condition);
       subexprResults.push_back(std::move(condition));
 
@@ -3217,11 +3221,16 @@ ColumnOrView FunctionExpression::eval(
             mr));
         subexprResults.push_back(
             subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
+                branchInputs.back().views,
+                stream,
+                mr,
+                /*finalize=*/false,
+                errors));
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+        subexprResults.push_back(subexpr->eval(
+            inputColumnViews, stream, mr, /*finalize=*/false, errors));
       }
     }
 
@@ -3259,6 +3268,12 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->isFieldAccessKind() || expr->isDereferenceKind()) {
     return !expr->inputs().empty() && !expr->inputs()[0]->isInputKind() &&
         expr->inputs()[0]->type()->kind() == TypeKind::ROW;
+  }
+
+  // Column references above only pass the packed integer through; a cast or
+  // a registered operator would read it as a number.
+  if (hasCustomComparisonOperand(expr)) {
+    return false;
   }
 
   const auto opName = exprRegistryName(expr);

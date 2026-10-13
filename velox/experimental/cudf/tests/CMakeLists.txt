@@ -139,6 +139,26 @@ velox_add_cudf_test(
   TIMEOUT 3000
 )
 
+# Decimal arithmetic on the device. gpu_shadows/ must precede the Velox root,
+# and --diag-error=20011 fails the build on host-only calls from device code.
+velox_add_cudf_test(
+  NAME velox_cudf_decimal_arithmetic_device_test
+  SOURCES DecimalArithmeticDeviceTest.cu
+  LIBS cudf::cudf
+)
+set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
+target_include_directories(
+  velox_cudf_decimal_arithmetic_device_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_decimal_arithmetic_device_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
 velox_add_cudf_test(
   NAME velox_cudf_enforce_single_row_test
   SOURCES Main.cpp EnforceSingleRowTest.cpp
@@ -154,7 +174,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_filter_project_test
   SOURCES Main.cpp FilterProjectTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_gpu_test_functions velox_functions_test_lib
 )
 
 velox_add_cudf_test(
@@ -326,8 +346,149 @@ velox_add_cudf_test(
 )
 
 add_subdirectory(iceberg)
+
+# Host-only checks of the GpuExec type resolver, the GPU proxy types, the
+# custom-type view and the BitUtil shadow's helpers.
+add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp GpuShadowBitUtilTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_types_test
+  COMMAND velox_cudf_gpu_types_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+target_link_libraries(velox_cudf_gpu_types_test velox_type velox_type_tz gtest gtest_main)
+
+# Test-only GPU simple functions over types the production registrations do
+# not cover yet, compiled as velox_cudf_gpu_simple_functions is: with the
+# gpu_shadows/ include path and the same device flags.
+add_library(velox_cudf_gpu_test_functions GpuTestFunctions.cu)
+velox_add_test_headers(velox_cudf_gpu_test_functions GpuTestFunctions.h)
+set_target_properties(
+  velox_cudf_gpu_test_functions
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(
+  velox_cudf_gpu_test_functions
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_test_functions
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+target_link_libraries(
+  velox_cudf_gpu_test_functions
+  PRIVATE cudf::cudf velox_cudf_gpu_function_bridge
+)
+
+# GPU SFI registry, on the host: the launchers are stand-ins that are never
+# invoked. Resolving a call through GpuSfiExpression reaches the expression
+# stack, hence the default test libraries.
+add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_function_registry_test
+  COMMAND velox_cudf_gpu_function_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_registry_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+target_link_libraries(
+  velox_cudf_gpu_function_registry_test
+  velox_cudf_gpu_test_functions
+  velox_cudf_gpu_function_bridge
+  ${CUDF_TEST_DEFAULT_LIBS}
+  velox_functions_prestosql
+  GTest::gmock
+  gtest
+  gtest_main
+)
+
+# GPU SFI semantics, on the device. Uses the registrations' shadow include path
+# and --diag-error=20011, so it instantiates the same functions.
+add_executable(velox_cudf_gpu_function_semantics_test GpuFunctionSemanticsTest.cu)
+set_target_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_include_directories(
+  velox_cudf_gpu_function_semantics_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_function_semantics_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+target_link_libraries(
+  velox_cudf_gpu_function_semantics_test
+  cudf::cudf
+  fmt::fmt
+  GTest::gmock
+  gtest
+  gtest_main
+)
+add_test(
+  NAME velox_cudf_gpu_function_semantics_test
+  COMMAND velox_cudf_gpu_function_semantics_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(
+  velox_cudf_gpu_function_semantics_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
+
+# Compile-only test that each mechanism a Velox simple function needs on the
+# device, the gpu_shadows/ headers and the VELOX_GPU_COMPATIBLE annotations,
+# generates device code under nvcc with gpu_shadows/ ahead of the Velox source
+# root.
+add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+set_target_properties(
+  velox_cudf_gpu_shadow_compile_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION ON
+)
+target_include_directories(
+  velox_cudf_gpu_shadow_compile_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+# --diag-error=20011 makes calling a __host__ function from a __host__
+# __device__ one an error. nvcc otherwise only warns when the call sits in a
+# template instantiated for both, and the kernel computes garbage.
+target_compile_options(
+  velox_cudf_gpu_shadow_compile_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
   add_subdirectory(sparksql)
 endif()
+
+# Every Velox time zone looked up on the device and compared with tz::TimeZone
+# on the host. Compiled against the real time zone headers, not the shadow
+# ones, so the host half of the comparison is the real library; the device
+# half reads the POD table through GpuTimeZoneDatabase.h.
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_time_zone_database_test
+  SOURCES GpuTimeZoneDatabaseTest.cu
+  LIBS velox_cudf_gpu_sfi_host velox_type_tz cudf::cudf
+)
+set_target_properties(
+  velox_cudf_gpu_time_zone_database_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+target_compile_options(
+  velox_cudf_gpu_time_zone_database_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
