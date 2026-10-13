@@ -25,6 +25,8 @@
 #include "velox/exec/AdaptivePrefetch.h"
 #include "velox/exec/OperatorUtils.h"
 
+#include <cstring>
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -356,27 +358,222 @@ char* HashTable<ignoreNullKeys>::insertEntry(
   return group;
 }
 
+namespace {
+
+FOLLY_ALWAYS_INLINE bool wordEquals(const char* left, const char* right) {
+  uint64_t leftWord;
+  uint64_t rightWord;
+  ::memcpy(&leftWord, left, sizeof(leftWord));
+  ::memcpy(&rightWord, right, sizeof(rightWord));
+  return leftWord == rightWord;
+}
+
+// Compares 'size' bytes, which the caller knows to be at least one word.
+//
+// The last load is made to end at the end of the range instead of starting
+// where the previous one stopped, so it overlaps rather than reading past: one
+// of the two ranges can be the buffer of a std::string whose allocation ends at
+// its last byte, which rules out simd::memEqualUnsafe. Reading the same bytes
+// twice does not change the answer.
+FOLLY_ALWAYS_INLINE bool
+bytesEqual(const char* left, const char* right, int32_t size) {
+  VELOX_DCHECK_GE(size, static_cast<int32_t>(sizeof(uint64_t)));
+  using Batch = xsimd::batch<uint8_t>;
+  constexpr int32_t kBatchSize = Batch::size;
+  const auto* leftBytes = reinterpret_cast<const uint8_t*>(left);
+  const auto* rightBytes = reinterpret_cast<const uint8_t*>(right);
+
+  if (size >= kBatchSize) {
+    int32_t offset = 0;
+    for (; offset + kBatchSize <= size; offset += kBatchSize) {
+      if (!simd::all(
+              Batch::load_unaligned(leftBytes + offset) ==
+              Batch::load_unaligned(rightBytes + offset))) {
+        return false;
+      }
+    }
+    return offset == size ||
+        simd::all(
+               Batch::load_unaligned(leftBytes + size - kBatchSize) ==
+               Batch::load_unaligned(rightBytes + size - kBatchSize));
+  }
+
+  constexpr int32_t kWordSize = sizeof(uint64_t);
+  int32_t offset = 0;
+  for (; offset + kWordSize <= size; offset += kWordSize) {
+    if (!wordEquals(left + offset, right + offset)) {
+      return false;
+    }
+  }
+  return offset == size ||
+      wordEquals(left + size - kWordSize, right + size - kWordSize);
+}
+
+FOLLY_ALWAYS_INLINE bool stringKeyEquals(
+    const StringView& stored,
+    const StringView& probed) {
+  // Differing length or first four bytes is the cheapest rejection there is,
+  // and it holds for an out of line string without resolving it.
+  if (!stored.sizeAndPrefixEquals(probed)) {
+    return false;
+  }
+  // An inline string lives entirely in the two words of the StringView, so it
+  // needs neither the allocator nor the staging buffer that
+  // RowContainer::compare() sets up for every row regardless of length.
+  if (stored.isInline()) {
+    return stored == probed;
+  }
+  std::string storage;
+  const auto contiguous =
+      HashStringAllocator::contiguousString(stored, storage);
+  if (contiguous.size() != probed.size()) {
+    return false;
+  }
+  // Both are out of line, so the size is more than kInlineSize and the body
+  // left after the compared prefix is still more than one word. operator==
+  // skips the prefix the same way.
+  return bytesEqual(
+      contiguous.data() + StringView::kPrefixSize,
+      probed.data() + StringView::kPrefixSize,
+      contiguous.size() - StringView::kPrefixSize);
+}
+
+// Reads a key from a row. The row only guarantees 8 byte alignment, so a
+// 16 byte key such as a long decimal is copied rather than dereferenced, which
+// the compiler would otherwise load with an aligned vector instruction.
+template <typename T>
+FOLLY_ALWAYS_INLINE T loadStoredKey(const char* stored) {
+  T value;
+  std::memcpy(&value, stored, sizeof(T));
+  return value;
+}
+
+template <typename T>
+FOLLY_ALWAYS_INLINE bool keyValueEquals(const T& stored, const T& probed) {
+  if constexpr (std::is_floating_point_v<T>) {
+    // SimpleVector<T>::comparePrimitiveAsc() orders NaN above every number and
+    // reports two NaNs as equal, and leaves -0 equal to 0.
+    return stored == probed || (std::isnan(stored) && std::isnan(probed));
+  } else {
+    return stored == probed;
+  }
+}
+
+// Kinds whose equality the hand written comparison covers. The complex kinds
+// are left out because their values do not live in the fixed part of the row,
+// and OPAQUE and UNKNOWN because RowContainer::compare() handles them
+// separately.
+bool hasFastKeyCompare(TypeKind kind) {
+  switch (kind) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::HUGEINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::TIMESTAMP:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      return true;
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 template <bool ignoreNullKeys>
-bool HashTable<ignoreNullKeys>::compareKeys(
+void HashTable<ignoreNullKeys>::makeKeyComparePlans(HashLookup& lookup) {
+  lookup.keyComparePlans.clear();
+  const int32_t numKeys = lookup.hashers.size();
+  lookup.keyComparePlans.reserve(numKeys);
+  for (int32_t i = 0; i < numKeys; ++i) {
+    // The stored type decides the row layout, so read the value as that type
+    // and only take the fast path when the probe side agrees with it.
+    const auto& storedType = rows_->columnTypes()[i];
+    const auto* base = lookup.hashers[i]->decodedVector().base();
+    const bool fastPath = base != nullptr &&
+        base->typeKind() == storedType->kind() &&
+        !base->typeUsesCustomComparison() &&
+        !storedType->providesCustomComparison() &&
+        hasFastKeyCompare(storedType->kind());
+    lookup.keyComparePlans.push_back(
+        KeyComparePlan{
+            rows_->columnAt(i),
+            storedType->kind(),
+            fastPath,
+        });
+  }
+}
+
+template <bool ignoreNullKeys>
+FOLLY_ALWAYS_INLINE bool HashTable<ignoreNullKeys>::compareKeys(
     const char* group,
     HashLookup& lookup,
     vector_size_t row) {
-  int32_t numKeys = lookup.hashers.size();
-  // The loop runs at least once. Allow for first comparison to fail
-  // before loop end check.
-  int32_t i = 0;
-  do {
-    auto& hasher = lookup.hashers[i];
-    if (rows_->compare<!ignoreNullKeys>(
-            group,
-            rows_->columnAt(i),
-            hasher->decodedVector(),
-            row,
-            CompareFlags::equality(
-                CompareFlags::NullHandlingMode::kNullAsValue)) != 0) {
+  // Only the kHash mode reaches here, and groupProbe()/joinProbe() build the
+  // plans before entering it. A future caller that skips that step would
+  // otherwise find an empty plan list and report every key as equal.
+  VELOX_DCHECK_EQ(lookup.keyComparePlans.size(), lookup.hashers.size());
+  const int32_t numKeys = lookup.keyComparePlans.size();
+  for (int32_t i = 0; i < numKeys; ++i) {
+    const auto& plan = lookup.keyComparePlans[i];
+    auto& decoded = lookup.hashers[i]->decodedVector();
+    if (FOLLY_UNLIKELY(!plan.fastPath)) {
+      if (rows_->compare<!ignoreNullKeys>(
+              group,
+              plan.column,
+              decoded,
+              row,
+              CompareFlags::equality(
+                  CompareFlags::NullHandlingMode::kNullAsValue)) != 0) {
+        return false;
+      }
+      continue;
+    }
+    if constexpr (!ignoreNullKeys) {
+      const bool groupIsNull = RowContainer::isNullAt(group, plan.column);
+      const bool probeIsNull = decoded.isNullAt(row);
+      if (groupIsNull || probeIsNull) {
+        if (groupIsNull != probeIsNull) {
+          return false;
+        }
+        continue;
+      }
+    }
+    const auto* stored = group + plan.column.offset();
+    bool equal;
+#define COMPARE_KEY_KIND(kind, Type)                              \
+  case TypeKind::kind:                                            \
+    equal = keyValueEquals<Type>(                                 \
+        loadStoredKey<Type>(stored), decoded.valueAt<Type>(row)); \
+    break;
+    switch (plan.kind) {
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        equal = stringKeyEquals(
+            *reinterpret_cast<const StringView*>(stored),
+            decoded.valueAt<StringView>(row));
+        break;
+        COMPARE_KEY_KIND(BOOLEAN, bool)
+        COMPARE_KEY_KIND(TINYINT, int8_t)
+        COMPARE_KEY_KIND(SMALLINT, int16_t)
+        COMPARE_KEY_KIND(INTEGER, int32_t)
+        COMPARE_KEY_KIND(BIGINT, int64_t)
+        COMPARE_KEY_KIND(HUGEINT, int128_t)
+        COMPARE_KEY_KIND(REAL, float)
+        COMPARE_KEY_KIND(DOUBLE, double)
+        COMPARE_KEY_KIND(TIMESTAMP, Timestamp)
+      default:
+        VELOX_UNREACHABLE();
+    }
+#undef COMPARE_KEY_KIND
+    if (!equal) {
       return false;
     }
-  } while (++i < numKeys);
+  }
   return true;
 }
 
@@ -485,6 +682,7 @@ void HashTable<ignoreNullKeys>::groupProbe(
     groupProbeWithPrefetch<true>(lookup);
     return;
   }
+  makeKeyComparePlans(lookup);
   groupProbeWithPrefetch<false>(lookup);
 }
 
@@ -589,6 +787,7 @@ void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
     joinNormalizedKeyProbe(lookup);
     return;
   }
+  makeKeyComparePlans(lookup);
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();

@@ -205,7 +205,22 @@ class HashStringAllocator : public StreamArena {
   /// Returns a contiguous view on 'view', where 'view' comes from
   /// copyMultipart(). Uses 'storage' to own a possible temporary copy. Making a
   /// temporary copy only happens for non-contiguous strings.
-  static StringView contiguousString(StringView view, std::string& storage);
+  ///
+  /// The cases that return 'view' unchanged, an inline view and a single block,
+  /// are the common ones for a caller that reads one string per row, so they
+  /// are inline here and only the copy is out of line.
+  FOLLY_ALWAYS_INLINE static StringView contiguousString(
+      StringView view,
+      std::string& storage) {
+    if (view.isInline()) {
+      return view;
+    }
+    auto* header = headerOf(view.data());
+    if (view.size() <= header->size()) {
+      return view;
+    }
+    return copyContiguousString(view, storage);
+  }
 
   /// Allocates 'size' contiguous bytes preceded by a Header. Returns the
   /// address of Header.
@@ -359,6 +374,9 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kMinContiguous = 48;
   static constexpr int32_t kNumFreeLists = kMaxAlloc - kMinAlloc + 2;
   static constexpr uint32_t kHeaderSize = sizeof(Header);
+
+  // Copies a 'view' whose bytes span more than one block into 'storage'.
+  static StringView copyContiguousString(StringView view, std::string& storage);
 
   void newRange(
       int64_t bytes,

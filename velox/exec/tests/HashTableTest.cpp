@@ -22,6 +22,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -69,6 +70,10 @@ class HashTableTestHelper {
   void setHashMode(BaseHashTable::HashMode mode, int32_t numNew) {
     table_->setHashMode(
         mode, numNew, BaseHashTable::kNoSpillInputStartPartitionBit);
+  }
+
+  bool compareKeys(const char* group, HashLookup& lookup, vector_size_t row) {
+    return table_->compareKeys(group, lookup, row);
   }
 
  private:
@@ -1209,6 +1214,554 @@ TEST_P(HashTableTest, checkSizeValidation) {
   // the number of distinct entries that it stores.
   insertGroups(*vector3, *lookup, *table);
   ASSERT_EQ(table->capacity(), 512 << 10);
+}
+
+// The comparison that resolves the key kinds once per probe must agree with the
+// one that dispatches on the probe side's type for every row, on every kind and
+// every null combination.
+TEST_P(HashTableTest, keyComparePlanAgreesWithDispatch) {
+  auto rowType =
+      ROW({"boolKey",
+           "tinyKey",
+           "smallKey",
+           "intKey",
+           "bigKey",
+           "decimalKey",
+           "realKey",
+           "doubleKey",
+           "timestampKey",
+           "inlineStringKey",
+           "storedStringKey",
+           "oneVectorStringKey",
+           "overlappedStringKey",
+           "arrayKey"},
+          {BOOLEAN(),
+           TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           DECIMAL(38, 2),
+           REAL(),
+           DOUBLE(),
+           TIMESTAMP(),
+           VARCHAR(),
+           VARCHAR(),
+           VARCHAR(),
+           VARCHAR(),
+           ARRAY(BIGINT())});
+
+  constexpr vector_size_t kNumRows = 100;
+  // Each column repeats with its own period so that a pair of rows agrees on
+  // some keys and differs on others, and each column nulls a different subset.
+  auto isNullAt = [](vector_size_t row, int32_t phase) {
+    return (row + phase) % 7 == 0;
+  };
+  auto data = makeRowVector({
+      makeFlatVector<bool>(
+          kNumRows,
+          [](auto row) { return row % 2 == 0; },
+          [&](auto row) { return isNullAt(row, 0); }),
+      makeFlatVector<int8_t>(
+          kNumRows,
+          [](auto row) { return row % 3; },
+          [&](auto row) { return isNullAt(row, 1); }),
+      makeFlatVector<int16_t>(
+          kNumRows,
+          [](auto row) { return row % 5; },
+          [&](auto row) { return isNullAt(row, 2); }),
+      makeFlatVector<int32_t>(
+          kNumRows,
+          [](auto row) { return row % 11; },
+          [&](auto row) { return isNullAt(row, 3); }),
+      makeFlatVector<int64_t>(
+          kNumRows,
+          [](auto row) { return row % 13; },
+          [&](auto row) { return isNullAt(row, 4); }),
+      makeFlatVector<int128_t>(
+          kNumRows,
+          [](auto row) { return HugeInt::build(row % 3, row % 17); },
+          [&](auto row) { return isNullAt(row, 5); },
+          DECIMAL(38, 2)),
+      // NaN and negative zero are the two values whose equality is not byte
+      // equality.
+      makeFlatVector<float>(
+          kNumRows,
+          [](auto row) {
+            if (row % 19 == 0) {
+              return std::nanf("");
+            }
+            return row % 23 == 0 ? -0.0f : static_cast<float>(row % 7);
+          },
+          [&](auto row) { return isNullAt(row, 6); }),
+      makeFlatVector<double>(
+          kNumRows,
+          [](auto row) {
+            if (row % 17 == 0) {
+              return std::nan("");
+            }
+            return row % 29 == 0 ? -0.0 : static_cast<double>(row % 9);
+          },
+          [&](auto row) { return isNullAt(row, 0); }),
+      makeFlatVector<Timestamp>(
+          kNumRows,
+          [](auto row) { return Timestamp(row % 7, row % 3); },
+          [&](auto row) { return isNullAt(row, 1); }),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) { return fmt::format("s{}", row % 9); },
+          [&](auto row) { return isNullAt(row, 2); }),
+      // Longer than StringView's inline size, so the value lives in the
+      // allocator and the comparison has to reach it.
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) {
+            return fmt::format("a long enough key to be stored {}", row % 9);
+          },
+          [&](auto row) { return isNullAt(row, 3); }),
+      // The next two differ from each other only in the last byte, which is
+      // what a comparison that reads whole vectors can miss. Their lengths are
+      // picked around a 32 byte vector: the body left after the already
+      // compared 4 byte prefix is exactly one vector for the first and one and
+      // a half for the second, so the second can only be settled by a load
+      // that ends at the end of the string rather than one that continues from
+      // where the previous stopped.
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) {
+            return std::string(35, 'p') + static_cast<char>('0' + row % 9);
+          },
+          [&](auto row) { return isNullAt(row, 5); }),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) {
+            return std::string(49, 'q') + static_cast<char>('0' + row % 9);
+          },
+          [&](auto row) { return isNullAt(row, 6); }),
+      makeArrayVector<int64_t>(
+          kNumRows,
+          [](auto row) { return row % 4; },
+          [](auto row) { return row % 6; },
+          [&](auto row) { return isNullAt(row, 4); }),
+  });
+
+  auto table = createHashTableForAggregation(rowType, rowType->size());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+  auto helper = HashTableTestHelper<false>::create(table.get());
+  insertGroups(*data, *lookup, *table);
+
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+  ASSERT_EQ(lookup->keyComparePlans.size(), rowType->size());
+  EXPECT_TRUE(lookup->keyComparePlans.front().fastPath);
+  // A complex key is not in the fixed part of the row, so it must keep
+  // dispatching.
+  EXPECT_FALSE(lookup->keyComparePlans.back().fastPath);
+
+  const std::vector<char*> groups(lookup->hits.begin(), lookup->hits.end());
+  // The same plans with every column forced off the fast path, so that the
+  // second comparison really goes through RowContainer::compare(). Clearing
+  // the plans would not do that: compareKeys() would find no keys to compare
+  // and report equal. KeyComparePlan holds a RowColumn, whose packed offsets
+  // are const, so the vector cannot be copy-assigned; swap the two instead.
+  std::vector<KeyComparePlan> slowPlans;
+  slowPlans.reserve(lookup->keyComparePlans.size());
+  for (const auto& plan : lookup->keyComparePlans) {
+    slowPlans.push_back(KeyComparePlan{plan.column, plan.kind, false});
+  }
+
+  int32_t numEqual = 0;
+  int32_t numNotEqual = 0;
+  for (auto* group : groups) {
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      const bool planned = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      const bool dispatched = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      ASSERT_EQ(planned, dispatched) << "Row " << row;
+      planned ? ++numEqual : ++numNotEqual;
+    }
+  }
+  // Every row matches at least the group it was inserted into, and the keys are
+  // not all the same row, so both outcomes have to occur.
+  EXPECT_GE(numEqual, data->size());
+  EXPECT_GT(numNotEqual, 0);
+}
+
+// The mixed-column test above returns as soon as one key differs, so a column
+// late in the row is not necessarily reached. Floating point equality is not
+// byte equality, so it gets a row of its own where it cannot be skipped.
+TEST_P(HashTableTest, keyComparePlanFloatingPointSpecialValues) {
+  auto rowType = ROW({"realKey", "doubleKey"}, {REAL(), DOUBLE()});
+  // Build the NaNs from explicit bit patterns rather than std::nanf(), which
+  // does not promise distinct payloads: the point of the test is that two NaNs
+  // with different payloads compare equal, so the payloads have to differ.
+  auto bitsToFloat = [](uint32_t bits) {
+    float value;
+    ::memcpy(&value, &bits, sizeof(value));
+    return value;
+  };
+  auto bitsToDouble = [](uint64_t bits) {
+    double value;
+    ::memcpy(&value, &bits, sizeof(value));
+    return value;
+  };
+  constexpr uint32_t kFloatNan1 = 0x7fc00001;
+  constexpr uint32_t kFloatNan2 = 0x7fc00002;
+  constexpr uint64_t kDoubleNan1 = 0x7ff8000000000001ull;
+  constexpr uint64_t kDoubleNan2 = 0x7ff8000000000002ull;
+  static_assert(kFloatNan1 != kFloatNan2);
+  static_assert(kDoubleNan1 != kDoubleNan2);
+  ASSERT_TRUE(std::isnan(bitsToFloat(kFloatNan1)));
+  ASSERT_TRUE(std::isnan(bitsToFloat(kFloatNan2)));
+  ASSERT_TRUE(std::isnan(bitsToDouble(kDoubleNan1)));
+  ASSERT_TRUE(std::isnan(bitsToDouble(kDoubleNan2)));
+
+  // Two NaN payloads, both signs of zero, and an ordinary value.
+  // SimpleVector<T>::comparePrimitiveAsc() reports two NaNs as equal and keeps
+  // -0 equal to 0, and the fast path has to agree on both.
+  auto data = makeRowVector({
+      makeFlatVector<float>({
+          bitsToFloat(kFloatNan1),
+          bitsToFloat(kFloatNan2),
+          -0.0f,
+          0.0f,
+          1.0f,
+      }),
+      makeFlatVector<double>({
+          bitsToDouble(kDoubleNan1),
+          bitsToDouble(kDoubleNan2),
+          -0.0,
+          0.0,
+          1.0,
+      }),
+  });
+
+  auto table = createHashTableForAggregation(rowType, rowType->size());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+  auto helper = HashTableTestHelper<false>::create(table.get());
+  insertGroups(*data, *lookup, *table);
+
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+  ASSERT_EQ(lookup->keyComparePlans.size(), rowType->size());
+  for (const auto& plan : lookup->keyComparePlans) {
+    EXPECT_TRUE(plan.fastPath);
+  }
+
+  std::vector<KeyComparePlan> slowPlans;
+  slowPlans.reserve(lookup->keyComparePlans.size());
+  for (const auto& plan : lookup->keyComparePlans) {
+    slowPlans.push_back(KeyComparePlan{plan.column, plan.kind, false});
+  }
+
+  const std::vector<char*> groups(lookup->hits.begin(), lookup->hits.end());
+  int32_t numEqual = 0;
+  for (auto* group : groups) {
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      const bool planned = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      const bool dispatched = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      ASSERT_EQ(planned, dispatched) << "Row " << row;
+      if (planned) {
+        ++numEqual;
+      }
+    }
+  }
+  // The NaN rows and the two zero rows are equal to each other, so more rows
+  // match than the one group each was inserted into.
+  EXPECT_GT(numEqual, data->size());
+}
+
+// Timestamp equality has to look at both fields. The mixed-column test cannot
+// guarantee that: it returns at the first key that differs, so a timestamp
+// late in the row may never be compared.
+TEST_P(HashTableTest, keyComparePlanTimestampNanos) {
+  // The complex column keeps the table in kHash, the only mode that compares
+  // unpacked keys, and holds the same value in every row so that it neither
+  // short-circuits the timestamp comparison nor masks its outcome.
+  auto rowType =
+      ROW({"timestampKey", "complexKey"}, {TIMESTAMP(), ARRAY(BIGINT())});
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1, 100),
+      Timestamp(1, 101), // Same seconds, one nanosecond apart.
+      Timestamp(1, 100), // Equal to row 0.
+      Timestamp(2, 100), // Same nanoseconds, different seconds.
+  };
+  const vector_size_t kNumRows = timestamps.size();
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>(timestamps),
+      makeArrayVector<int64_t>(
+          kNumRows,
+          [](auto /*row*/) { return 1; },
+          [](auto /*row*/) { return 0; }),
+  });
+
+  auto table = createHashTableForAggregation(rowType, rowType->size());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+  auto helper = HashTableTestHelper<false>::create(table.get());
+  insertGroups(*data, *lookup, *table);
+
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+  ASSERT_EQ(lookup->keyComparePlans.size(), rowType->size());
+  EXPECT_TRUE(lookup->keyComparePlans[0].fastPath);
+
+  // Rows 0 and 2 are the same timestamp; the nanosecond difference in row 1
+  // and the second difference in row 3 both have to keep them apart.
+  EXPECT_EQ(lookup->hits[0], lookup->hits[2]);
+  EXPECT_NE(lookup->hits[0], lookup->hits[1]);
+  EXPECT_NE(lookup->hits[0], lookup->hits[3]);
+  EXPECT_EQ(table->numDistinct(), 3);
+
+  std::vector<KeyComparePlan> slowPlans;
+  slowPlans.reserve(lookup->keyComparePlans.size());
+  for (const auto& plan : lookup->keyComparePlans) {
+    slowPlans.push_back(KeyComparePlan{plan.column, plan.kind, false});
+  }
+  const std::vector<char*> groups(lookup->hits.begin(), lookup->hits.end());
+  for (auto* group : groups) {
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      const bool planned = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      const bool dispatched = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      ASSERT_EQ(planned, dispatched) << "Row " << row;
+    }
+  }
+}
+
+// A type that provides its own comparison must keep dispatching, because
+// RowContainer::compare() is the only path that calls that comparison.
+TEST_P(HashTableTest, keyComparePlanFallsBackForCustomComparison) {
+  auto rowType =
+      ROW({"plainKey", "customKey"},
+          {BIGINT(), BIGINT_TYPE_WITH_CUSTOM_COMPARISON()});
+  // Row pairs share plainKey and carry customKey values that differ as plain
+  // integers but agree in their bottom 8 bits, which is all this type's
+  // compare() and hash() look at. Each pair therefore collapses into one group
+  // only if the custom comparison really runs; plain int64 equality would keep
+  // them apart. The plain keys are spread out so that the hashers give up on
+  // value ids and the table stays in kHash, the only mode that compares
+  // unpacked keys.
+  constexpr vector_size_t kNumRows = 50;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return (row / 2) * 1'000'000; }),
+      makeFlatVector<int64_t>(
+          kNumRows,
+          [](auto row) { return row % 2 == 0 ? 256 : 512; },
+          nullptr,
+          BIGINT_TYPE_WITH_CUSTOM_COMPARISON()),
+  });
+
+  auto table = createHashTableForAggregation(rowType, rowType->size());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+  auto helper = HashTableTestHelper<false>::create(table.get());
+  insertGroups(*data, *lookup, *table);
+
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+  ASSERT_EQ(lookup->keyComparePlans.size(), rowType->size());
+  EXPECT_TRUE(lookup->keyComparePlans[0].fastPath);
+  EXPECT_FALSE(lookup->keyComparePlans[1].fastPath);
+
+  // 256 and 512 are distinct int64 values that this type considers equal, so
+  // each pair of rows is one group. Plain integer equality would give
+  // kNumRows groups instead.
+  EXPECT_EQ(lookup->hits[0], lookup->hits[1]);
+  EXPECT_EQ(table->numDistinct(), kNumRows / 2);
+
+  const std::vector<char*> groups(lookup->hits.begin(), lookup->hits.end());
+  for (auto* group : groups) {
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      // The custom column is already on the fallback, so the comparison has to
+      // agree with a run where the plain column is forced onto it as well.
+      const bool planned = helper.compareKeys(group, *lookup, row);
+      std::vector<KeyComparePlan> slowPlans;
+      slowPlans.reserve(lookup->keyComparePlans.size());
+      for (const auto& plan : lookup->keyComparePlans) {
+        slowPlans.push_back(KeyComparePlan{plan.column, plan.kind, false});
+      }
+      lookup->keyComparePlans.swap(slowPlans);
+      const bool dispatched = helper.compareKeys(group, *lookup, row);
+      lookup->keyComparePlans.swap(slowPlans);
+      ASSERT_EQ(planned, dispatched) << "Row " << row;
+    }
+  }
+}
+
+// A string key whose bytes are split over several allocator blocks cannot be
+// read in place. The keys below differ only in their last byte, which lies in a
+// later block than the one the StringView points to.
+TEST_P(HashTableTest, keyComparePlanComparesMultipartStrings) {
+  auto rowType = ROW({"stringKey", "arrayKey"}, {VARCHAR(), ARRAY(BIGINT())});
+  constexpr vector_size_t kNumRows = 40;
+  constexpr int32_t kStringSize = 5'000;
+  auto stringAt = [](vector_size_t row) {
+    return std::string(kStringSize - 1, 'x') + static_cast<char>('0' + row % 4);
+  };
+  auto data = makeRowVector({
+      makeFlatVector<std::string>(kNumRows, stringAt),
+      makeArrayVector<int64_t>(
+          kNumRows,
+          [](auto) { return 2; },
+          [](auto, auto index) { return index; }),
+  });
+
+  auto table = createHashTableForAggregation(rowType, rowType->size());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+  auto helper = HashTableTestHelper<false>::create(table.get());
+  insertGroups(*data, *lookup, *table);
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+  ASSERT_TRUE(lookup->keyComparePlans.front().fastPath);
+
+  // Compare against a copy of each group whose string is replaced by one split
+  // over several blocks, so that the table's own rows and allocator are left
+  // alone. An allocator whose free space is only small holes has no block that
+  // can take the string whole.
+  HashStringAllocator fragmented(pool());
+  std::vector<HashStringAllocator::Header*> holes;
+  for (int32_t i = 0; i < 8'000; ++i) {
+    holes.push_back(fragmented.allocate(100));
+  }
+  for (int32_t i = 0; i < holes.size(); i += 2) {
+    fragmented.free(holes[i]);
+  }
+  const auto offset = table->rows()->columnAt(0).offset();
+  const auto rowSize = table->rows()->fixedRowSize();
+  std::vector<uint64_t> rowCopy(bits::divRoundUp(rowSize, sizeof(uint64_t)));
+  char* const groupCopy = reinterpret_cast<char*>(rowCopy.data());
+
+  int32_t numEqual = 0;
+  int32_t numNotEqual = 0;
+  for (vector_size_t groupRow = 0; groupRow < kNumRows; ++groupRow) {
+    std::memcpy(groupCopy, lookup->hits[groupRow], rowSize);
+    const auto text = stringAt(groupRow);
+    ByteOutputStream stream(&fragmented);
+    const auto position = fragmented.newWrite(stream, 16);
+    stream.appendStringView(StringView(text));
+    fragmented.finishWrite(stream, 0);
+    const StringView multipart(position.position, text.size());
+    ASSERT_LT(
+        HashStringAllocator::headerOf(multipart.data())->size(),
+        multipart.size());
+    *reinterpret_cast<StringView*>(groupCopy + offset) = multipart;
+
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      const bool expected = text == stringAt(row);
+      ASSERT_EQ(helper.compareKeys(groupCopy, *lookup, row), expected)
+          << "Group " << groupRow << " row " << row;
+      expected ? ++numEqual : ++numNotEqual;
+    }
+  }
+  EXPECT_GT(numEqual, 0);
+  EXPECT_GT(numNotEqual, 0);
+}
+
+// Probes a join table in the kHash mode with dictionary encoded keys. A probe
+// key is a miss when it is not in the table, when only its last byte differs
+// from a stored string of the same size and prefix, when its other key differs,
+// or when it is null.
+TEST_P(HashTableTest, keyComparePlanJoinProbe) {
+  if (GetParam()) {
+    GTEST_SKIP() << "No need to run this in multi-threaded mode";
+  }
+  constexpr int32_t kNumBuild = 50;
+  constexpr int32_t kNumDistinctProbe = 77;
+  constexpr int32_t kNumProbe = 200;
+  auto textOf = [](int64_t id) {
+    return fmt::format("a long enough key to be stored {}", id);
+  };
+
+  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+  keyHashers.emplace_back(std::make_unique<VectorHasher>(VARCHAR(), 0));
+  keyHashers.emplace_back(std::make_unique<VectorHasher>(ARRAY(BIGINT()), 1));
+  auto table = HashTable<true>::createForJoin(
+      std::move(keyHashers), {BIGINT()}, pool(), {.allowDuplicates = false});
+
+  auto buildBatch = makeRowVector({
+      makeFlatVector<std::string>(
+          kNumBuild, [&](auto row) { return textOf(row); }),
+      makeArrayVector<int64_t>(
+          kNumBuild,
+          [](auto) { return 2; },
+          [](auto row, auto index) { return row * 10 + index; }),
+      makeFlatVector<int64_t>(kNumBuild, [](auto row) { return row; }),
+  });
+  copyVectorsToTable({buildBatch}, 0, table.get());
+  table->prepareJoinTable(
+      {},
+      BaseHashTable::kNoSpillInputStartPartitionBit,
+      1'000'000,
+      false,
+      executor_.get());
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+
+  // Kind of probe key by position in the distinct probe values.
+  enum Kind { kPresent, kLastByteDiffers, kOtherKeyDiffers, kNullString };
+  auto idAt = [](vector_size_t index) { return index % 60; };
+  auto kindAt = [](vector_size_t index) {
+    switch (index % 9) {
+      case 3:
+        return kOtherKeyDiffers;
+      case 5:
+        return kLastByteDiffers;
+      case 7:
+        return kNullString;
+      default:
+        return kPresent;
+    }
+  };
+  auto distinctStrings = makeFlatVector<std::string>(
+      kNumDistinctProbe,
+      [&](auto index) {
+        auto text = textOf(idAt(index));
+        if (kindAt(index) == kLastByteDiffers) {
+          text.back() = 'Z';
+        }
+        return text;
+      },
+      [&](auto index) { return kindAt(index) == kNullString; });
+  auto distinctArrays = makeArrayVector<int64_t>(
+      kNumDistinctProbe,
+      [](auto) { return 2; },
+      [&](auto index, auto element) {
+        const int64_t id =
+            idAt(index) + (kindAt(index) == kOtherKeyDiffers ? 1'000 : 0);
+        return id * 10 + element;
+      });
+  auto indexAt = [](vector_size_t row) {
+    return (row * 3) % kNumDistinctProbe;
+  };
+  auto probeBatch = makeRowVector({
+      wrapInDictionary(makeIndices(kNumProbe, indexAt), distinctStrings),
+      wrapInDictionary(makeIndices(kNumProbe, indexAt), distinctArrays),
+  });
+
+  SelectivityVector selectivity(kNumProbe);
+  HashLookup lookup(table->hashers(), pool());
+  table->prepareForJoinProbe(lookup, probeBatch, selectivity, true);
+  lookup.hits.resize(kNumProbe);
+  std::fill(lookup.hits.begin(), lookup.hits.end(), nullptr);
+  table->joinProbe(lookup);
+
+  const auto payloadOffset = table->rows()->columnAt(2).offset();
+  int32_t numHits = 0;
+  int32_t numMisses = 0;
+  for (vector_size_t row = 0; row < kNumProbe; ++row) {
+    const auto index = indexAt(row);
+    const bool expectHit = kindAt(index) == kPresent && idAt(index) < kNumBuild;
+    if (expectHit) {
+      ASSERT_NE(lookup.hits[row], nullptr) << "Row " << row;
+      ASSERT_EQ(
+          folly::loadUnaligned<int64_t>(lookup.hits[row] + payloadOffset),
+          idAt(index))
+          << "Row " << row;
+      ++numHits;
+    } else {
+      ASSERT_EQ(lookup.hits[row], nullptr) << "Row " << row;
+      ++numMisses;
+    }
+  }
+  EXPECT_GT(numHits, 0);
+  EXPECT_GT(numMisses, 0);
 }
 
 TEST_P(HashTableTest, listNullKeyRows) {

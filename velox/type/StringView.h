@@ -142,6 +142,14 @@ struct StringView {
     return isInline(size_);
   }
 
+  /// Returns true when the size and the first kPrefixSize bytes of the two
+  /// strings are equal. operator== begins with this same comparison; it is
+  /// exposed separately because a caller that has to resolve a possibly
+  /// non-contiguous string on its own cannot use operator== for the rest.
+  bool sizeAndPrefixEquals(const StringView& other) const {
+    return sizeAndPrefixAsInt64() == other.sizeAndPrefixAsInt64();
+  }
+
   FOLLY_ALWAYS_INLINE static constexpr bool isInline(uint32_t size) {
     return size <= kInlineSize;
   }

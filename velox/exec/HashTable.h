@@ -65,6 +65,22 @@ struct TableInsertPartitionInfo {
   }
 };
 
+/// Per key column values that a probe's key comparison would otherwise
+/// re-derive for every probed row.
+struct KeyComparePlan {
+  /// Position of the key in the stored row.
+  RowColumn column;
+
+  /// Kind of the stored key. The value is read as this kind, so a probe side
+  /// that decodes to a different kind must not take the fast path.
+  TypeKind kind;
+
+  /// False for kinds the hand written equality does not cover. Those columns
+  /// fall back to RowContainer::compare(), which is the only comparison that
+  /// knows about custom comparisons and complex types.
+  bool fastPath;
+};
+
 /// Contains input and output parameters for groupProbe and joinProbe APIs.
 struct HashLookup {
   HashLookup(
@@ -113,6 +129,12 @@ struct HashLookup {
   /// If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
   /// Populated by groupProbe and joinProbe.
   raw_vector<uint64_t> normalizedKeys;
+
+  /// One entry per key, resolved by groupProbe and joinProbe for the kHash
+  /// mode. Lives here rather than on the table because one join table is
+  /// probed by many drivers at once. Stays empty in the modes that never
+  /// compare unpacked keys.
+  std::vector<KeyComparePlan> keyComparePlans;
 };
 
 struct HashTableStats {
@@ -1092,6 +1114,9 @@ class HashTable : public BaseHashTable {
   bool compareKeys(const char* group, HashLookup& lookup, vector_size_t row);
 
   bool compareKeys(const char* group, const char* inserted);
+
+  // Resolves 'lookup.keyComparePlans' from the key schema.
+  void makeKeyComparePlans(HashLookup& lookup);
 
   template <bool isJoin, bool isNormalizedKey = false>
   void fullProbe(HashLookup& lookup, ProbeState& state, bool extraCheck);
