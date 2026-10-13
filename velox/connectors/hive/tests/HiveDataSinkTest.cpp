@@ -158,7 +158,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false) {
+      const bool ensureFiles = false,
+      const bool inputSortedOnPartitionAndBucketKeys = false) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
@@ -172,7 +173,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         CompressionKind::CompressionKind_ZSTD,
         {}, // serdeParameters
         writerOptions,
-        ensureFiles);
+        ensureFiles,
+        {}, // storageParameters
+        inputSortedOnPartitionAndBucketKeys);
   }
 
   std::shared_ptr<HiveDataSink> createDataSink(
@@ -184,7 +187,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false) {
+      const bool ensureFiles = false,
+      const bool inputSortedOnPartitionAndBucketKeys = false) {
     return std::make_shared<HiveDataSink>(
         rowType,
         createHiveInsertTableHandle(
@@ -194,7 +198,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             partitionedBy,
             bucketProperty,
             writerOptions,
-            ensureFiles),
+            ensureFiles,
+            inputSortedOnPartitionAndBucketKeys),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
@@ -1790,6 +1795,473 @@ TEST_F(HiveDataSinkTest, fileRotationWithPartitionedTable) {
   }
 
   ASSERT_EQ(totalFilesFromPartitions, stats.numWrittenFiles);
+}
+
+TEST_F(HiveDataSinkTest, sortedPartitionKeyReleasesFinishedWriters) {
+  // A dynamic-partition write whose input is sorted on the partition column
+  // completes each partition before the next one begins, so a writer could be
+  // released as soon as the key advances past it. Every writer stays open until
+  // the sink finishes instead, so the memory the sink holds grows with the
+  // number of partitions seen.
+  //
+  // The open writer limit counts closed writers too, so raise it past the
+  // bucketed writer count; what this measures is memory growth rather than the
+  // sink refusing the write.
+  //
+  // Hold the writer's own flush and rotation triggers off, so the partition
+  // lifetime is the only thing deciding what stays resident.
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1GB");
+  connectorConfig.emplace("hive.orc.writer.dictionary-max-memory", "1GB");
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
+  connectorSessionProperties_->set(
+      HiveConfig::kMaxPartitionsPerWritersSession, "1024");
+
+  constexpr int32_t kNumPartitions{64};
+  constexpr vector_size_t kRowsPerPartition{500};
+  constexpr int32_t kNumBuckets{4};
+
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  std::vector<std::string> partitionNames;
+  partitionNames.reserve(kNumPartitions);
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    partitionNames.push_back(fmt::format("p{}", partition));
+  }
+
+  const auto makeBucketProperty =
+      [&](std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy) {
+        return std::make_shared<HiveBucketProperty>(
+            HiveBucketProperty::Kind::kHiveCompatible,
+            kNumBuckets,
+            std::vector<std::string>{"c0"},
+            std::vector<TypePtr>{BIGINT()},
+            std::move(sortedBy));
+      };
+
+  struct {
+    std::string name;
+    std::shared_ptr<HiveBucketProperty> bucketProperty;
+    int32_t numFilesPerPartition;
+  } testSettings[] = {
+      {"unbucketed", nullptr, 1},
+      {"bucketed", makeBucketProperty({}), kNumBuckets},
+      {"bucketedSorted",
+       makeBucketProperty({std::make_shared<HiveSortingColumn>(
+           "c0", core::SortOrder{false, false})}),
+       kNumBuckets},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.name);
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto dataSink = createDataSink(
+        rowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {"p0"},
+        testData.bucketProperty,
+        /*writerOptions=*/nullptr,
+        /*ensureFiles=*/false,
+        /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+    int64_t bytesAfterFirstPartition{0};
+    for (auto partition = 0; partition < kNumPartitions; ++partition) {
+      auto c0 = makeFlatVector<int64_t>(
+          kRowsPerPartition, [](auto row) { return row; });
+      auto p0 = makeFlatVector<StringView>(
+          kRowsPerPartition,
+          [&](auto /*row*/) { return StringView(partitionNames[partition]); });
+      dataSink->appendData(makeRowVector({c0, p0}));
+      if (partition == 0) {
+        bytesAfterFirstPartition = connectorPool_->usedBytes();
+      }
+    }
+    const auto bytesAfterLastPartition = connectorPool_->usedBytes();
+
+    // Releasing a writer as the key advances would leave roughly one partition
+    // resident, so the bound below carries generous headroom and still
+    // separates that from memory that scales with the partition count.
+    EXPECT_LT(bytesAfterLastPartition, 4 * bytesAfterFirstPartition)
+        << "held after 1 partition: " << bytesAfterFirstPartition
+        << ", held after " << kNumPartitions
+        << " partitions: " << bytesAfterLastPartition;
+
+    while (!dataSink->finish()) {
+    }
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(
+        partitions.size(), kNumPartitions * testData.numFilesPerPartition);
+    ASSERT_EQ(
+        dataSink->stats().numWrittenFiles,
+        kNumPartitions * testData.numFilesPerPartition);
+  }
+}
+
+TEST_F(HiveDataSinkTest, sortedBucketKeyReleasesFinishedWriters) {
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1GB");
+  connectorConfig.emplace("hive.orc.writer.dictionary-max-memory", "1GB");
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
+  connectorSessionProperties_->set(
+      HiveConfig::kMaxPartitionsPerWritersSession, "1024");
+
+  constexpr int32_t kNumBuckets{64};
+  constexpr vector_size_t kRowsPerBucket{500};
+
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  const std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy{
+      std::make_shared<HiveSortingColumn>("c0", core::SortOrder{false, false}),
+  };
+
+  struct {
+    std::string name;
+    std::vector<std::string> partitionedBy;
+    std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+  } testSettings[] = {
+      {"unpartitioned", {}, {}},
+      {"unpartitionedSorted", {}, sortedBy},
+      {"partitioned", {"p0"}, {}},
+      {"partitionedSorted", {"p0"}, sortedBy},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.name);
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto dataSink = createDataSink(
+        rowType,
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        testData.partitionedBy,
+        std::make_shared<HiveBucketProperty>(
+            HiveBucketProperty::Kind::kHiveCompatible,
+            kNumBuckets,
+            std::vector<std::string>{"c0"},
+            std::vector<TypePtr>{BIGINT()},
+            testData.sortedBy),
+        /*writerOptions=*/nullptr,
+        /*ensureFiles=*/false,
+        /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+    int64_t bytesAfterFirstBucket{0};
+    for (auto bucket = 0; bucket < kNumBuckets; ++bucket) {
+      // Hive hashes a small non-negative BIGINT to itself, so every row of this
+      // batch lands in 'bucket'.
+      auto c0 = makeFlatVector<int64_t>(
+          kRowsPerBucket, [&](auto row) { return bucket + row * kNumBuckets; });
+      auto p0 = makeFlatVector<StringView>(
+          kRowsPerBucket, [](auto /*row*/) { return StringView("p0"); });
+      dataSink->appendData(makeRowVector({c0, p0}));
+      if (bucket == 0) {
+        bytesAfterFirstBucket = connectorPool_->usedBytes();
+      }
+    }
+    const auto bytesAfterLastBucket = connectorPool_->usedBytes();
+
+    EXPECT_LT(bytesAfterLastBucket, 4 * bytesAfterFirstBucket)
+        << "held after 1 bucket: " << bytesAfterFirstBucket << ", held after "
+        << kNumBuckets << " buckets: " << bytesAfterLastBucket;
+
+    while (!dataSink->finish()) {
+    }
+    const auto partitions = dataSink->close();
+    ASSERT_EQ(partitions.size(), kNumBuckets);
+    ASSERT_EQ(dataSink->stats().numWrittenFiles, kNumBuckets);
+  }
+}
+
+TEST_F(HiveDataSinkTest, sortedPartitionKeyReleasesWritersWithinBatch) {
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1GB");
+  connectorConfig.emplace("hive.orc.writer.dictionary-max-memory", "1GB");
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      /*bucketProperty=*/nullptr,
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr int32_t kNumPartitions{64};
+  constexpr vector_size_t kRowsPerPartition{500};
+
+  std::vector<std::string> partitionNames;
+  partitionNames.reserve(kNumPartitions + 1);
+  for (auto partition = 0; partition <= kNumPartitions; ++partition) {
+    partitionNames.push_back(fmt::format("p{}", partition));
+  }
+
+  auto c0 =
+      makeFlatVector<int64_t>(kRowsPerPartition, [](auto row) { return row; });
+  auto p0 = makeFlatVector<StringView>(kRowsPerPartition, [&](auto /*row*/) {
+    return StringView(partitionNames[0]);
+  });
+  dataSink->appendData(makeRowVector({c0, p0}));
+  const auto bytesAfterOnePartition = connectorPool_->usedBytes();
+
+  // One batch holding every remaining partition. Only the partition of its last
+  // row can receive more rows, so every other writer it opened is done.
+  const vector_size_t numRows{kNumPartitions * kRowsPerPartition};
+  c0 = makeFlatVector<int64_t>(numRows, [](auto row) { return row; });
+  p0 = makeFlatVector<StringView>(numRows, [&](auto row) {
+    return StringView(partitionNames[1 + row / kRowsPerPartition]);
+  });
+  dataSink->appendData(makeRowVector({c0, p0}));
+  const auto bytesAfterBatch = connectorPool_->usedBytes();
+
+  EXPECT_LT(bytesAfterBatch, 4 * bytesAfterOnePartition)
+      << "held after 1 partition: " << bytesAfterOnePartition
+      << ", held after a batch of " << kNumPartitions
+      << " partitions: " << bytesAfterBatch;
+
+  ASSERT_TRUE(dataSink->finish());
+  const auto partitions = dataSink->close();
+  ASSERT_EQ(partitions.size(), kNumPartitions + 1);
+  ASSERT_EQ(dataSink->stats().numWrittenFiles, kNumPartitions + 1);
+}
+
+TEST_F(
+    HiveDataSinkTest,
+    sortedPartitionKeyClosedSortWriterSurvivesArbitration) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
+  const auto spillConfig = getSpillConfig(spillDirectory->getPath(), 1);
+  setConnectorQueryContext(
+      std::make_unique<connector::ConnectorQueryCtx>(
+          opPool_.get(),
+          connectorPool_.get(),
+          connectorSessionProperties_.get(),
+          spillConfig.get(),
+          common::PrefixSortConfig(),
+          nullptr,
+          nullptr,
+          "query.HiveDataSinkTest",
+          "task.HiveDataSinkTest",
+          "planNodeId.HiveDataSinkTest",
+          0,
+          ""));
+
+  constexpr int32_t kNumBuckets{4};
+  const auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      kNumBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{
+          std::make_shared<HiveSortingColumn>(
+              "c0", core::SortOrder{false, false})});
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      bucketProperty,
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr vector_size_t kRowsPerPartition{500};
+  for (const auto* partition : {"p0", "p1"}) {
+    auto c0 = makeFlatVector<int64_t>(
+        kRowsPerPartition, [](auto row) { return row; });
+    auto p0 = makeFlatVector<StringView>(
+        kRowsPerPartition, [&](auto /*row*/) { return StringView(partition); });
+    dataSink->appendData(makeRowVector({c0, p0}));
+  }
+
+  std::vector<uintmax_t> fileSizes;
+  for (const auto& file : listFiles(outputDirectory->getPath())) {
+    fileSizes.push_back(fs::file_size(file));
+  }
+  ASSERT_EQ(fileSizes.size(), 2 * kNumBuckets);
+  std::sort(fileSizes.begin(), fileSizes.end());
+  ASSERT_LT(fileSizes[0], fileSizes[1]);
+
+  // The p0 sort writers are closed; arbitration must not reach them.
+  ASSERT_GT(root_->reclaimableBytes().value(), 0);
+  memory::testingRunArbitration();
+
+  while (!dataSink->finish()) {
+  }
+  const auto partitions = dataSink->close();
+  ASSERT_EQ(partitions.size(), 2 * kNumBuckets);
+  ASSERT_EQ(dataSink->stats().numWrittenFiles, 2 * kNumBuckets);
+}
+
+TEST_F(HiveDataSinkTest, sortedPartitionKeyEmptyBatchKeepsWriterOpen) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      /*bucketProperty=*/nullptr,
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr vector_size_t kRowsPerBatch{500};
+  const auto makeBatch = [&](vector_size_t numRows) {
+    auto c0 = makeFlatVector<int64_t>(numRows, [](auto row) { return row; });
+    auto p0 = makeFlatVector<StringView>(
+        numRows, [](auto /*row*/) { return StringView("p0"); });
+    return makeRowVector({c0, p0});
+  };
+
+  dataSink->appendData(makeBatch(kRowsPerBatch));
+  dataSink->appendData(makeBatch(0));
+  dataSink->appendData(makeBatch(kRowsPerBatch));
+
+  ASSERT_TRUE(dataSink->finish());
+  const auto partitions = dataSink->close();
+  ASSERT_EQ(partitions.size(), 1);
+  ASSERT_EQ(dataSink->stats().numWrittenFiles, 1);
+}
+
+TEST_F(HiveDataSinkTest, sortedPartitionKeyRequiresPartitionedWrite) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          /*partitionedBy=*/{},
+          /*bucketProperty=*/nullptr,
+          /*writerOptions=*/nullptr,
+          /*ensureFiles=*/false,
+          /*inputSortedOnPartitionAndBucketKeys=*/true),
+      "Eagerly closing files requires a partitioned or bucketed write");
+}
+
+TEST_F(HiveDataSinkTest, sortedPartitionKeyRevisitedPartitionFails) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      /*bucketProperty=*/nullptr,
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr vector_size_t kRowsPerBatch{500};
+  const auto makeBatch = [&](const char* partition) {
+    auto c0 =
+        makeFlatVector<int64_t>(kRowsPerBatch, [](auto row) { return row; });
+    auto p0 = makeFlatVector<StringView>(
+        kRowsPerBatch, [&](auto /*row*/) { return StringView(partition); });
+    return makeRowVector({c0, p0});
+  };
+
+  dataSink->appendData(makeBatch("p0"));
+  dataSink->appendData(makeBatch("p1"));
+  VELOX_ASSERT_THROW(
+      dataSink->appendData(makeBatch("p0")),
+      "Received input for a closed writer, the input is not sorted on the partition and bucket keys");
+  dataSink->abort();
+}
+
+TEST_F(HiveDataSinkTest, sortedBucketKeyRevisitedBucketFails) {
+  constexpr int32_t kNumBuckets{4};
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW("c0", BIGINT());
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      /*partitionedBy=*/{},
+      std::make_shared<HiveBucketProperty>(
+          HiveBucketProperty::Kind::kHiveCompatible,
+          kNumBuckets,
+          std::vector<std::string>{"c0"},
+          std::vector<TypePtr>{BIGINT()},
+          std::vector<std::shared_ptr<const HiveSortingColumn>>{}),
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr vector_size_t kRowsPerBatch{500};
+  const auto makeBatch = [&](int32_t bucket) {
+    return makeRowVector({makeFlatVector<int64_t>(
+        kRowsPerBatch, [&](auto row) { return bucket + row * kNumBuckets; })});
+  };
+
+  dataSink->appendData(makeBatch(0));
+  dataSink->appendData(makeBatch(1));
+  VELOX_ASSERT_THROW(
+      dataSink->appendData(makeBatch(0)),
+      "Received input for a closed writer, the input is not sorted on the partition and bucket keys");
+  dataSink->abort();
+}
+
+DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortedPartitionKeySortWriterFinishYields) {
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "1");
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterMaxOutputRowsSession, "100");
+
+  constexpr int32_t kNumBuckets{4};
+  const auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      kNumBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{
+          std::make_shared<HiveSortingColumn>(
+              "c0", core::SortOrder{false, false}),
+      });
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW({{"c0", BIGINT()}, {"p0", VARCHAR()}});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      bucketProperty,
+      /*writerOptions=*/nullptr,
+      /*ensureFiles=*/false,
+      /*inputSortedOnPartitionAndBucketKeys=*/true);
+
+  constexpr vector_size_t kRowsPerPartition{500};
+  const auto makeBatch = [&](const char* partition) {
+    auto c0 = makeFlatVector<int64_t>(
+        kRowsPerPartition, [](auto row) { return row; });
+    auto p0 = makeFlatVector<StringView>(
+        kRowsPerPartition, [&](auto /*row*/) { return StringView(partition); });
+    return makeRowVector({c0, p0});
+  };
+
+  dataSink->appendData(makeBatch("p0"));
+  {
+    int32_t numWrites{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::dwrf::Writer::write",
+        std::function<void(dwrf::Writer*)>([&](dwrf::Writer* /*unused*/) {
+          ++numWrites;
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }));
+    dataSink->appendData(makeBatch("p1"));
+    ASSERT_EQ(numWrites, 1);
+  }
+
+  while (!dataSink->finish()) {
+  }
+  const auto partitions = dataSink->close();
+  ASSERT_EQ(partitions.size(), 2 * kNumBuckets);
+  ASSERT_EQ(dataSink->stats().numWrittenFiles, 2 * kNumBuckets);
 }
 
 TEST_F(HiveDataSinkTest, fileRotationWriteIOTimeAccumulation) {

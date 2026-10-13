@@ -359,7 +359,8 @@ HiveInsertTableHandle::HiveInsertTableHandle(
     // engine handles ensuring a 1 to 1 mapping from task to bucket.
     const bool ensureFiles,
     std::shared_ptr<const FileNameGenerator> fileNameGenerator,
-    const std::unordered_map<std::string, std::string>& storageParameters)
+    const std::unordered_map<std::string, std::string>& storageParameters,
+    const bool inputSortedOnPartitionAndBucketKeys)
     : inputColumns_(std::move(inputColumns)),
       locationHandle_(std::move(locationHandle)),
       storageFormat_(storageFormat),
@@ -371,7 +372,9 @@ HiveInsertTableHandle::HiveInsertTableHandle(
       fileNameGenerator_(std::move(fileNameGenerator)),
       storageParameters_(storageParameters),
       partitionChannels_(computePartitionChannels(inputColumns_)),
-      nonPartitionChannels_(computeNonPartitionChannels(inputColumns_)) {
+      nonPartitionChannels_(computeNonPartitionChannels(inputColumns_)),
+      inputSortedOnPartitionAndBucketKeys_(
+          inputSortedOnPartitionAndBucketKeys) {
   if (compressionKind.has_value()) {
     VELOX_CHECK(
         compressionKind.value() != common::CompressionKind_MAX,
@@ -452,7 +455,8 @@ HiveDataSink::HiveDataSink(
           connectorQueryCtx->spillConfig(),
           getFinishTimeSliceLimitMsFromHiveConfig(
               hiveConfig,
-              connectorQueryCtx->sessionProperties())),
+              connectorQueryCtx->sessionProperties()),
+          insertTableHandle->inputSortedOnPartitionAndBucketKeys()),
       insertTableHandle_(std::move(insertTableHandle)),
       hiveConfig_(hiveConfig),
       updateMode_(getUpdateMode()),
@@ -902,6 +906,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
   obj["storageParameters"] = storageParams;
 
   obj["ensureFiles"] = ensureFiles_;
+  obj["inputSortedOnPartitionAndBucketKeys"] =
+      inputSortedOnPartitionAndBucketKeys_;
   obj["fileNameGenerator"] = fileNameGenerator_->serialize();
   return obj;
 }
@@ -940,6 +946,8 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
   }
 
   bool ensureFiles = obj["ensureFiles"].asBool();
+  const bool inputSortedOnPartitionAndBucketKeys =
+      obj.getDefault("inputSortedOnPartitionAndBucketKeys", false).asBool();
 
   auto fileNameGenerator =
       ISerializable::deserialize<FileNameGenerator>(obj["fileNameGenerator"]);
@@ -953,7 +961,8 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
       nullptr, // writerOptions is not serializable
       ensureFiles,
       fileNameGenerator,
-      storageParameters);
+      storageParameters,
+      inputSortedOnPartitionAndBucketKeys);
 }
 
 void HiveInsertTableHandle::registerSerDe() {
