@@ -30,11 +30,11 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
-// Calendar arithmetic and field extraction over DATE, TIMESTAMP and TIMESTAMP
-// WITH TIME ZONE. These structs depend only on the time zone database and
-// the date arithmetic in velox/functions/lib, so a translation unit can
-// compile them without the formatters, parsers and vector machinery that the
-// rest of DateTimeFunctions.h needs.
+// Calendar arithmetic and field extraction over DATE, TIME, TIMESTAMP and
+// TIMESTAMP WITH TIME ZONE. Kept apart from DateTimeFunctions.h, which
+// includes this, so that CUDA translation units can compile these structs as
+// device code; a struct that needs re2, fast_float, XxHashInline.h or
+// velox/type/Time.h belongs in DateTimeFunctions.h instead.
 namespace facebook::velox::functions {
 
 template <typename T>
@@ -655,11 +655,11 @@ struct TimestampMinusInterval : public TimestampWithTimezoneSupport<T> {
 
 namespace {
 
-bool isIntervalWholeDays(int64_t milliseconds) {
+VELOX_GPU_COMPATIBLE bool isIntervalWholeDays(int64_t milliseconds) {
   return (milliseconds % kMillisInDay) == 0;
 }
 
-int64_t intervalDays(int64_t milliseconds) {
+VELOX_GPU_COMPATIBLE int64_t intervalDays(int64_t milliseconds) {
   return milliseconds / kMillisInDay;
 }
 
@@ -669,7 +669,7 @@ template <typename T>
 struct DateMinusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
@@ -679,7 +679,7 @@ struct DateMinusInterval {
     result = addToDate(date, DateTimeUnit::kDay, -intervalDays(interval));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalYearMonth>& interval) {
@@ -691,7 +691,7 @@ template <typename T>
 struct DatePlusInterval {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
@@ -701,7 +701,7 @@ struct DatePlusInterval {
     result = addToDate(date, DateTimeUnit::kDay, intervalDays(interval));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalYearMonth>& interval) {
@@ -1005,7 +1005,7 @@ VELOX_GPU_COMPATIBLE inline std::optional<DateTimeUnit> getTimestampUnit(
   return unit;
 }
 
-VELOX_GPU_COMPATIBLE inline std::optional<DateTimeUnit> getTimeUnit(
+inline std::optional<DateTimeUnit> getTimeUnit(
     const StringView& unitString,
     bool throwIfInvalid = true) {
   std::optional<DateTimeUnit> unit =
@@ -1173,7 +1173,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     result = pack(resultMillis, unpackZoneKeyId(*timestampWithTimezone));
   }
 
-  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Time>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Time>& time) {
@@ -1297,7 +1297,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     result = addToDate(date, unit, static_cast<int32_t>(value));
   }
 
-  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Time>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
@@ -1423,7 +1423,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Time>& time1,
