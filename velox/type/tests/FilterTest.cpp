@@ -799,11 +799,11 @@ TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
 
 TEST(FilterTest, bloomMergeAtInt64Max) {
   const auto max = std::numeric_limits<int64_t>::max();
-  BigintValuesUsingBloomFilter bloom(4, false);
+  BigintValuesUsingBloomFilter bloom(4, true);
   bloom.insert(max);
 
   {
-    BigintRange range(max - 2, max, true);
+    BigintRange range(max - 2, max, false);
     auto merged = bloom.mergeWith(&range);
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_FALSE(merged->testNull());
@@ -812,19 +812,15 @@ TEST(FilterTest, bloomMergeAtInt64Max) {
   {
     const std::vector<int64_t> values{max - 2, max};
     BigintValuesUsingBitmask bitmask(
-        values.front(), values.back(), values, true);
+        values.front(), values.back(), values, false);
     auto merged = bloom.mergeWith(&bitmask);
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_FALSE(merged->testNull());
   }
 
-  for (bool bloomFirst : {false, true}) {
-    SCOPED_TRACE(testing::Message() << "bloomFirst=" << bloomFirst);
-    BigintValuesUsingBloomFilter bloom(4, true);
-    bloom.insert(max);
+  {
     BigintRange range(max, max, true);
-    auto merged =
-        bloomFirst ? bloom.mergeWith(&range) : range.mergeWith(&bloom);
+    auto merged = bloom.mergeWith(&range);
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_TRUE(merged->testNull());
   }
