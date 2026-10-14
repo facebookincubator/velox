@@ -21,9 +21,12 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
+#include <folly/Executor.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gmock/gmock.h>
@@ -74,40 +77,49 @@ TableEvolutionFuzzer::Config makeDwrfConfig(
   return config;
 }
 
+class TableEvolutionFuzzerTest : public testing::Test {
+ protected:
+  // A task frees vectors allocated from 'pool_' when it is destroyed, so
+  // 'pool_' must outlive every task. TearDown() runs before the fixture's
+  // members are destroyed.
+  void TearDown() override {
+    waitForAllTasksToBeDeleted();
+  }
+
+  const std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool("TableEvolutionFuzzer")};
+};
+
 // Constructs the fuzzer with various evolutionCount values to pin the relaxed
 // constructor assert (VELOX_CHECK_GT(evolutionCount, 0)). evolutionCount == 1
 // is the no-evolution mode (single setup, no schema evolution) and must
 // construct cleanly; evolutionCount == 0 must throw.
-TEST(TableEvolutionFuzzerTest, constructorEvolutionCountBoundary) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-
+TEST_F(TableEvolutionFuzzerTest, constructorEvolutionCountBoundary) {
   EXPECT_NO_THROW(
-      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); });
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 1)); });
   EXPECT_NO_THROW(
-      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 2)); });
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 2)); });
 
   EXPECT_THROW(
-      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 0)); },
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 0)); },
       VeloxException);
 }
 
 // The constructor validates the batch-shaping gflags: a non-positive
 // batches_per_file or batch_target_bytes must throw.
-TEST(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-
+TEST_F(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
   {
     gflags::FlagSaver flagSaver;
     FLAGS_batches_per_file = 0;
     EXPECT_THROW(
-        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); },
+        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 1)); },
         VeloxException);
   }
   {
     gflags::FlagSaver flagSaver;
     FLAGS_batch_target_bytes = 0;
     EXPECT_THROW(
-        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); },
+        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 1)); },
         VeloxException);
   }
 }
@@ -117,11 +129,10 @@ TEST(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
 // path together with filter-no-project (dropped filter-only columns) and the
 // shared flatmap-as-struct read schema end to end; the fuzzer's internal
 // pushdown-vs-FilterNode oracle is the assertion (run() throws on divergence).
-TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
+TEST_F(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   gflags::FlagSaver flagSaver;
   FLAGS_aggregation_pushdown_frequency = 1;
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  auto config = makeDwrfConfig(pool.get(), 1);
+  auto config = makeDwrfConfig(pool_.get(), 1);
   int64_t numObservedQueries = 0;
   config.queryCoverageObserver =
       [&](const TableEvolutionFuzzer::QueryCoverage& query) {
@@ -178,7 +189,7 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   EXPECT_EQ(coverage.queryShapes.aggregations.numReferencePlanActivated, 0);
 }
 
-TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
+TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
   TableEvolutionFuzzer::QueryCoverage query{
       .pushdownFiles = {},
       .referenceFiles = {},
@@ -283,7 +294,7 @@ TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
   EXPECT_EQ(coverage.reference.numStringDictionaryEncodingAbandoned, 1);
 }
 
-TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
+TEST_F(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
   TableEvolutionFuzzer::QueryCoverage firstShape{
       .pushdownFiles = {},
       .referenceFiles = {},
@@ -344,7 +355,7 @@ TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
   EXPECT_EQ(coverage.configs.bucketSelectedByBucketCount.at(8), 1);
 }
 
-TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
+TEST_F(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   TableEvolutionFuzzer::QueryCoverage query;
   query.pushdown.numQueries = 1;
   query.pushdown.skippedSplits = 1;
@@ -510,9 +521,8 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   EXPECT_EQ(coverage.failuresByPhase.at("verification"), 1);
 }
 
-TEST(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  auto config = makeDwrfConfig(pool.get(), 1);
+TEST_F(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
+  auto config = makeDwrfConfig(pool_.get(), 1);
   config.queryCoverageObserver = [](const auto&) {
     throw std::runtime_error("observer failure");
   };
@@ -522,9 +532,8 @@ TEST(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
   EXPECT_NO_THROW(fuzzer.run());
 }
 
-TEST(TableEvolutionFuzzerTest, propagatesGeneratedFilesValidatorFailure) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  auto config = makeDwrfConfig(pool.get(), 1);
+TEST_F(TableEvolutionFuzzerTest, propagatesGeneratedFilesValidatorFailure) {
+  auto config = makeDwrfConfig(pool_.get(), 1);
   bool queryObserved = false;
   config.generatedFilesValidator = [](const auto& files) {
     EXPECT_FALSE(files.empty());
@@ -542,12 +551,57 @@ TEST(TableEvolutionFuzzerTest, propagatesGeneratedFilesValidatorFailure) {
   EXPECT_FALSE(queryObserved);
 }
 
-TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
+// Runs each function as soon as it is added and then keeps it, so whatever the
+// function captured stays alive until the executor is destroyed.
+class RetainingExecutor : public folly::Executor {
+ public:
+  void add(folly::Func function) override {
+    function();
+    retained_.push_back(std::move(function));
+  }
+
+ private:
+  std::vector<folly::Func> retained_;
+};
+
+std::shared_ptr<TaskCursor> makeProjectionCursor(
+    memory::MemoryPool* pool,
+    const std::string& projection) {
+  velox::test::VectorMaker vectorMaker(pool);
+  CursorParameters params;
+  params.serialExecution = true;
+  params.planNode = PlanBuilder(pool)
+                        .values({vectorMaker.rowVector(
+                            {vectorMaker.flatVector<int64_t>({1, 2, 3})})})
+                        .project({projection})
+                        .planNode();
+  return TaskCursor::create(params);
+}
+
+// Callers destroy their tasks and then the pools those tasks' plans reference.
+// That order holds only if the executor has released every cursor by the time
+// runTaskCursors returns or throws.
+TEST_F(TableEvolutionFuzzerTest, runTaskCursorsReleasesCursors) {
+  RetainingExecutor executor;
+  {
+    const auto cursor = makeProjectionCursor(pool_.get(), "c0");
+    TableEvolutionFuzzer::runTaskCursors({cursor}, executor);
+    EXPECT_EQ(cursor.use_count(), 1);
+  }
+  {
+    const auto cursor = makeProjectionCursor(pool_.get(), "c0 / 0");
+    VELOX_ASSERT_THROW(
+        TableEvolutionFuzzer::runTaskCursors({cursor}, executor),
+        "division by zero");
+    EXPECT_EQ(cursor.use_count(), 1);
+  }
+}
+
+TEST_F(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
   gflags::FlagSaver flagSaver;
   FLAGS_enable_oom_injection_write_path = true;
 
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  auto config = makeDwrfConfig(pool.get(), 1);
+  auto config = makeDwrfConfig(pool_.get(), 1);
   bool observerCalled = false;
   config.queryCoverageObserver =
       [&](const TableEvolutionFuzzer::QueryCoverage&) {
@@ -570,7 +624,7 @@ TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
 // Unquoted, a name that is a SQL keyword fails to parse, and one that does not
 // lex as a bare identifier loses the offending prefix and silently binds to a
 // different column.
-TEST(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
+TEST_F(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
   EXPECT_EQ(TableEvolutionFuzzer::quoteIdentifier("table"), "\"table\"");
   EXPECT_EQ(
       TableEvolutionFuzzer::quoteIdentifier("1_ensemble_prediction"),
@@ -607,7 +661,7 @@ TEST(TableEvolutionFuzzerTest, aggregationConfigQuotesIdentifiers) {
 
 // A column is "used by aggregation" if it is a grouping key or appears in an
 // aggregate expression.
-TEST(TableEvolutionFuzzerTest, isColumnUsedByAggregation) {
+TEST_F(TableEvolutionFuzzerTest, isColumnUsedByAggregation) {
   AggregationConfig aggConfig;
   aggConfig.groupingKeys = {"g0", "g1"};
   aggConfig.aggregates = {"sum(a0)", "max(a1)"};
@@ -622,7 +676,7 @@ TEST(TableEvolutionFuzzerTest, isColumnUsedByAggregation) {
 
 // projectedColumnNames returns the schema's columns in order, minus the dropped
 // set; names not present in the schema are ignored.
-TEST(TableEvolutionFuzzerTest, projectedColumnNames) {
+TEST_F(TableEvolutionFuzzerTest, projectedColumnNames) {
   auto schema = ROW({{"c0", INTEGER()}, {"c1", BIGINT()}, {"c2", VARCHAR()}});
 
   EXPECT_EQ(
@@ -640,7 +694,7 @@ TEST(TableEvolutionFuzzerTest, projectedColumnNames) {
 // column is eligible to be dropped filter-only; everything else is always
 // projected. Across many seeds the eligible column is sometimes dropped and the
 // ineligible ones never are.
-TEST(TableEvolutionFuzzerTest, selectFilterOnlyColumns) {
+TEST_F(TableEvolutionFuzzerTest, selectFilterOnlyColumns) {
   auto schema = ROW({
       {"c_scalar", INTEGER()}, // eligible
       {"c_map", MAP(VARCHAR(), INTEGER())}, // map -> excluded
@@ -690,9 +744,8 @@ TEST(TableEvolutionFuzzerTest, selectFilterOnlyColumns) {
 // multi-batch write + liftToType + merge path across evolving schemas, which
 // the single-schema noEvolutionBoundedRun does not. The pushdown-vs-FilterNode
 // oracle inside run() is the assertion.
-TEST(TableEvolutionFuzzerTest, multiBatchEvolutionBoundedRun) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 3));
+TEST_F(TableEvolutionFuzzerTest, multiBatchEvolutionBoundedRun) {
+  TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool_.get(), 3));
   fuzzer.setSeed(20260629);
   constexpr int kIterations = 4;
   for (int i = 0; i < kIterations; ++i) {
@@ -707,7 +760,7 @@ TEST(TableEvolutionFuzzerTest, multiBatchEvolutionBoundedRun) {
 // saturate at the max row count, very wide rows floor at the min, and in the
 // unclamped band the row count is kTargetBatchBytes / bytesPerRow and is
 // monotonically non-increasing in bytesPerRow.
-TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeClampsToByteTarget) {
+TEST_F(TableEvolutionFuzzerTest, adaptiveVectorSizeClampsToByteTarget) {
   using Fuzzer = TableEvolutionFuzzer;
 
   // Narrow rows -> many rows, capped at the max. A sub-byte estimate is treated
@@ -745,7 +798,7 @@ TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeClampsToByteTarget) {
 // scales the per-batch row count: in the unclamped band the count is
 // targetBatchBytes / bytesPerRow, so doubling the target doubles the rows. The
 // one-arg form defaults to kTargetBatchBytes.
-TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
+TEST_F(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
   using Fuzzer = TableEvolutionFuzzer;
   constexpr double kBytesPerRow = 512.0;
 
@@ -766,9 +819,8 @@ TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
   EXPECT_EQ(doubled, 2 * base);
 }
 
-TEST(TableEvolutionFuzzerTest, extraReadSessionPropertiesApplied) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  auto config = makeDwrfConfig(pool.get(), 1);
+TEST_F(TableEvolutionFuzzerTest, extraReadSessionPropertiesApplied) {
+  auto config = makeDwrfConfig(pool_.get(), 1);
   int calls = 0;
   config.extraReadSessionProperties =
       [&](FuzzerGenerator&) -> std::pair<
@@ -789,10 +841,9 @@ TEST(TableEvolutionFuzzerTest, extraReadSessionPropertiesApplied) {
   EXPECT_GE(calls, kIterations);
 }
 
-TEST(TableEvolutionFuzzerTest, run) {
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+TEST_F(TableEvolutionFuzzerTest, run) {
   exec::test::TableEvolutionFuzzer::Config config;
-  config.pool = pool.get();
+  config.pool = pool_.get();
   config.columnCount = FLAGS_column_count;
   config.evolutionCount = FLAGS_evolution_count;
   config.formats = TableEvolutionFuzzer::parseFileFormats("dwrf");

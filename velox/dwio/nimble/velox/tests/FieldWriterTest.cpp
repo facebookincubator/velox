@@ -21,6 +21,7 @@
 #include <cstring>
 #include <optional>
 #include <string_view>
+#include <tuple>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -289,7 +290,8 @@ TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
   context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
   auto writer = FieldWriter::create(context, typeWithId);
 
-  const auto writeAndReadDefaultKeyPresence =
+  // Returns the Default catalog, key-presence bits, in-map bits and values.
+  const auto writeAndReadDefaultGroup =
       [&](const std::vector<std::vector<Entry>>& maps) {
         const auto input = vectorMaker_->mapVector<int32_t, int64_t>(maps);
         writer->write(input, OrderedRanges::of(0, input->size()));
@@ -298,21 +300,39 @@ TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
         const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
         const auto* keyPresence =
             findStream(context, defaultGroup.keyPresenceDescriptor.offset());
+        const auto* inMap =
+            findStream(context, defaultGroup.inMapDescriptor.offset());
+        const auto* values = findStream(
+            context,
+            defaultGroup.valueType->asScalar().scalarDescriptor().offset());
         NIMBLE_CHECK_NOT_NULL(keyPresence);
-        return std::pair{
-            defaultGroup.groupKeys, readStream<uint8_t>(*keyPresence)};
+        NIMBLE_CHECK_NOT_NULL(inMap);
+        NIMBLE_CHECK_NOT_NULL(values);
+        return std::tuple{
+            defaultGroup.groupKeys,
+            readStream<uint8_t>(*keyPresence),
+            readStream<uint8_t>(*inMap),
+            readStream<int64_t>(*values)};
       };
 
   EXPECT_EQ(
-      writeAndReadDefaultKeyPresence({{{1, 10}, {9, 90}, {8, 80}}}),
-      (std::pair{
-          std::vector<std::string>{"9", "8"}, std::vector<uint8_t>{1, 1}}));
+      writeAndReadDefaultGroup({{{1, 10}, {9, 90}, {8, 80}}}),
+      (std::tuple{
+          std::vector<std::string>{"9", "8"},
+          std::vector<uint8_t>{1, 1},
+          std::vector<uint8_t>{1, 1},
+          std::vector<int64_t>{90, 80}}));
   writer->reset();
+
+  // Keys 10 and 9 arrive in the opposite order to the catalog. In-map bits and
+  // values must follow the catalog, or readers swap the two keys' values.
   EXPECT_EQ(
-      writeAndReadDefaultKeyPresence({{{1, 11}, {10, 100}, {9, 99}}}),
-      (std::pair{
+      writeAndReadDefaultGroup({{{1, 11}, {10, 100}, {9, 99}}, {{9, 98}}}),
+      (std::tuple{
           std::vector<std::string>{"9", "8", "10"},
-          std::vector<uint8_t>{1, 0, 1}}));
+          std::vector<uint8_t>{1, 0, 1},
+          std::vector<uint8_t>{1, 1, 1, 0},
+          std::vector<int64_t>{99, 98, 100}}));
 }
 
 TEST_F(FieldWriterTest, rejectsEmptyConfiguredKey) {
@@ -412,7 +432,34 @@ TEST_F(FieldWriterTest, rejectsConfiguredKeysInDefaultGroup) {
               },
       });
 
-  EXPECT_THROW(FieldWriter::create(context, typeWithId), NimbleInternalError);
+  NIMBLE_ASSERT_USER_THROW(
+      FieldWriter::create(context, typeWithId),
+      "Hybrid FlatMap Default group keys are appended in first-seen order and "
+      "cannot be configured for node");
+}
+
+TEST_F(FieldWriterTest, rejectsDuplicateConfiguredKeys) {
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+
+  // The type builder rejects both: a key repeated within one group fails the
+  // strictly ascending check, and a key repeated across groups fails the
+  // cross-group check.
+  for (const auto& explicitGroups :
+       std::vector<std::vector<std::vector<std::string>>>{
+           {{"1", "1"}},
+           {{"1"}, {"1"}},
+       }) {
+    SCOPED_TRACE(explicitGroups.size());
+    FieldWriterContext context{*pool_};
+    context.addHybridFlatMapNode(
+        typeWithId->id(), makeHybridFlatMap(explicitGroups));
+
+    NIMBLE_ASSERT_THROW(
+        FieldWriter::create(context, typeWithId),
+        "Duplicate Hybrid FlatMap key: '1'");
+  }
 }
 
 TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {

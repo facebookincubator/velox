@@ -2871,27 +2871,10 @@ TEST_F(WriterTest, encodingLayout) {
         // Verify FlatMap Kay "1" stream
         auto capture = nimble::EncodingLayoutCapture::capture(
             chunkedStream.nextChunk(), nimble::Encoding::Options{});
-        EXPECT_EQ(nimble::EncodingType::MainlyConstant, capture.encodingType());
-        EXPECT_EQ(
-            nimble::EncodingType::Trivial,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::IsCommon)
-                ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::Uncompressed,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::IsCommon)
-                ->compressionType());
-        EXPECT_EQ(
-            nimble::EncodingType::FixedBitWidth,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
-                ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::Uncompressed,
-            capture
-                .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
-                ->compressionType());
+        // Key "1" holds a single non-null value, so replaying the requested
+        // MainlyConstant layout finds no uncommon values and encode() falls
+        // back to ConstantEncoding, which has no child streams to verify.
+        EXPECT_EQ(nimble::EncodingType::Constant, capture.encodingType());
       }
 
       {
@@ -6595,15 +6578,25 @@ TEST_F(WriterTest, cachedEncodingLayoutFuzz) {
     // which the writer catches and falls back to a fresh selection — the same
     // encoding the uncached writer chose for that chunk (see
     // encodeWithFallback).
+    //
+    // A Constant chunk 0 is the one case where the cached layout is not chunk
+    // 0's own encoding: it is generalized to MainlyConstant so later chunks
+    // that gain uncommon values still replay instead of falling back. Replaying
+    // it yields MainlyConstant, or Constant again while the chunk stays
+    // constant (MainlyConstantEncoding::encode falls back to Constant then).
+    const bool constantFirstChunk =
+        cachedLayouts.front().encodingType() == nimble::EncodingType::Constant;
     for (int chunk = 0; chunk < kChunkCount; ++chunk) {
-      EXPECT_TRUE(
-          cachedLayouts[chunk].encodingType() ==
-              cachedLayouts.front().encodingType() ||
-          cachedLayouts[chunk].encodingType() ==
-              controlLayouts[chunk].encodingType())
+      const auto cachedType = cachedLayouts[chunk].encodingType();
+      const bool replayedFirstChunk =
+          cachedType == cachedLayouts.front().encodingType();
+      const bool replayedGeneralized = constantFirstChunk &&
+          cachedType == nimble::EncodingType::MainlyConstant;
+      const bool fellBackToFresh =
+          cachedType == controlLayouts[chunk].encodingType();
+      EXPECT_TRUE(replayedFirstChunk || replayedGeneralized || fellBackToFresh)
           << "seed=" << seed << " chunk=" << chunk
-          << " cached=" << static_cast<int>(cachedLayouts[chunk].encodingType())
-          << " cached0="
+          << " cached=" << static_cast<int>(cachedType) << " cached0="
           << static_cast<int>(cachedLayouts.front().encodingType())
           << " control="
           << static_cast<int>(controlLayouts[chunk].encodingType());
@@ -6699,6 +6692,126 @@ TEST_F(WriterTest, cachedEncodingLayoutIncompatibleFallback) {
       cachedLayouts.front().encodingType(), cachedLayouts[3].encodingType());
   EXPECT_EQ(
       cachedLayouts.front().encodingType(), cachedLayouts[4].encodingType());
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, cachedConstantLayoutReplaysAsMainlyConstant) {
+  // A stream that is constant in chunk 0 and only mainly-constant afterwards
+  // used to lose the cache entirely: Constant was cached verbatim, replaying it
+  // raised IncompatibleEncoding, and the chunk paid a full selection. The cache
+  // now generalizes Constant to MainlyConstant, which replays on both shapes.
+  //
+  // Counting fresh selections is what distinguishes "replayed" from "fell back
+  // and happened to pick the same encoding" -- the resulting encoding type
+  // alone cannot tell those apart.
+  velox::common::testutil::TestValue::enable();
+
+  constexpr int kRowsPerChunk = 1000;
+  constexpr int64_t kDominantValue = 7;
+  const std::vector<int64_t> fullyConstant(kRowsPerChunk, kDominantValue);
+  std::mt19937 rng{0xC0FFEE};
+  std::vector<int64_t> mainlyConstant(kRowsPerChunk, kDominantValue);
+  for (int i = 0; i < kRowsPerChunk / 100; ++i) {
+    mainlyConstant[std::uniform_int_distribution<int>(
+        0, kRowsPerChunk - 1)(rng)] = static_cast<int64_t>(rng());
+  }
+
+  const auto type = velox::ROW({{"c0", velox::BIGINT()}});
+  const auto batches = bigintBatches({fullyConstant, mainlyConstant});
+
+  int fullSelectionCount = 0;
+  int replayCount = 0;
+  {
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::encode",
+        std::function<void(const bool*)>([&](const bool* hasEncodingLayout) {
+          if (*hasEncodingLayout) {
+            ++replayCount;
+          } else {
+            ++fullSelectionCount;
+          }
+        }));
+
+    nimble::WriterOptions options;
+    options.enableEncodingSelectionCache = true;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          /*flushLambda=*/[](auto&) { return false; },
+          /*chunkLambda=*/[](auto&) { return true; });
+    };
+
+    const auto layouts = writeAndCaptureChunkLayouts(
+        type, batches, std::move(options), /*expectedStripeCount=*/1);
+    ASSERT_EQ(layouts.size(), 2);
+
+    // Chunk 0 is constant, so MainlyConstantEncoding::encode emits the smaller
+    // ConstantEncoding for it; chunk 1 has uncommon values and stays
+    // MainlyConstant.
+    EXPECT_EQ(layouts[0].encodingType(), nimble::EncodingType::Constant);
+    EXPECT_EQ(layouts[1].encodingType(), nimble::EncodingType::MainlyConstant);
+  }
+
+  // Only chunk 0 ran a full selection. Without the generalization chunk 1 would
+  // attempt the replay, throw, and run a second full selection.
+  EXPECT_EQ(fullSelectionCount, 1);
+  EXPECT_GT(replayCount, 0);
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, cachedConstantBoolLayoutIsNotGeneralized) {
+  // MainlyConstant is undefined for bool streams (EncodingFactory rejects it),
+  // so a constant bool stream must keep its captured Constant layout. That
+  // layout is genuinely incompatible with a later non-constant chunk, which
+  // therefore still falls back to a fresh selection -- two full selections.
+  velox::common::testutil::TestValue::enable();
+
+  constexpr int kRowsPerChunk = 1000;
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::RowVectorPtr> batches;
+  // Chunk 0: every row true. Chunk 1: alternating, so it is not constant.
+  batches.push_back(vectorMaker.rowVector(
+      {"c0"},
+      {vectorMaker.flatVector<bool>(
+          kRowsPerChunk, [](velox::vector_size_t) { return true; })}));
+  batches.push_back(vectorMaker.rowVector(
+      {"c0"},
+      {vectorMaker.flatVector<bool>(
+          kRowsPerChunk,
+          [](velox::vector_size_t row) { return row % 2 == 0; })}));
+
+  int fullSelectionCount = 0;
+  {
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::encode",
+        std::function<void(const bool*)>([&](const bool* hasEncodingLayout) {
+          if (!*hasEncodingLayout) {
+            ++fullSelectionCount;
+          }
+        }));
+
+    nimble::WriterOptions options;
+    options.enableEncodingSelectionCache = true;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          /*flushLambda=*/[](auto&) { return false; },
+          /*chunkLambda=*/[](auto&) { return true; });
+    };
+
+    const auto layouts = writeAndCaptureChunkLayouts(
+        velox::ROW({{"c0", velox::BOOLEAN()}}),
+        batches,
+        std::move(options),
+        /*expectedStripeCount=*/1);
+    ASSERT_EQ(layouts.size(), 2);
+    EXPECT_EQ(layouts[0].encodingType(), nimble::EncodingType::Constant);
+    // Never MainlyConstant: promoting a bool layout would fail at encode time.
+    EXPECT_NE(layouts[1].encodingType(), nimble::EncodingType::MainlyConstant);
+  }
+
+  // Chunk 0 selects, chunk 1's replay of Constant is incompatible and retries.
+  EXPECT_EQ(fullSelectionCount, 2);
 }
 
 TEST_F(WriterTest, cachedEncodingLayoutNestedDictionaryIncompatibleFallback) {

@@ -153,6 +153,7 @@ set(
   AsyncConnectorTest.cpp
   VectorWindowPartitionTest.cpp
   FileExchangeTest.cpp
+  CursorTest.cpp
 )
 
 set(

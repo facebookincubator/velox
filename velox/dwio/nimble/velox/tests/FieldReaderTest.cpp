@@ -494,13 +494,98 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
   EXPECT_EQ(map->sizeAt(1), 0);
 }
 
+TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto valueOffset = groupValue->scalarDescriptor().offset();
+  const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  struct TestCase {
+    std::string_view name;
+    std::optional<std::vector<uint8_t>> keyPresence;
+    std::optional<std::vector<uint8_t>> inMap;
+    std::optional<std::vector<int64_t>> values;
+    std::vector<std::string> expectedMaps;
+  };
+  const std::vector<TestCase> testCases{
+      {
+          .name = "inMapOnly",
+          .keyPresence = std::nullopt,
+          .inMap = std::vector<uint8_t>{true, false},
+          .values = std::nullopt,
+          .expectedMaps = {"{1: null}", "{}"},
+      },
+      {
+          .name = "keyPresenceOnly",
+          .keyPresence = std::vector<uint8_t>{true},
+          .inMap = std::nullopt,
+          .values = std::nullopt,
+          .expectedMaps = {"{}", "{}"},
+      },
+      {
+          .name = "allAbsent",
+          .keyPresence = std::nullopt,
+          .inMap = std::nullopt,
+          .values = std::nullopt,
+          .expectedMaps = {"{}", "{}"},
+      },
+  };
+
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+    if (testCase.keyPresence.has_value()) {
+      decoders[group.keyPresenceDescriptor.offset()] =
+          std::make_unique<BoolDecoder>(*testCase.keyPresence);
+    }
+    if (testCase.inMap.has_value()) {
+      decoders[group.inMapDescriptor.offset()] =
+          std::make_unique<BoolDecoder>(*testCase.inMap);
+    }
+    if (testCase.values.has_value()) {
+      decoders[valueOffset] =
+          std::make_unique<TestDecoder<int64_t>>(*testCase.values);
+    }
+    auto reader = factory->createReader(decoders);
+    velox::VectorPtr output;
+    folly::coro::blockingWait(reader->co_next(2, output));
+    const auto expected = vectorMaker.rowVector(
+        {"features"},
+        {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
+            testCase.expectedMaps)});
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(expected->equalValueAt(output.get(), row, row));
+    }
+  }
+}
+
 TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
-  const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
+  const auto group = hybridMap->addGroup(7, {"1", "2"}, std::move(groupValue));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
       {},
@@ -524,6 +609,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   const auto expectFailure =
       [&](std::optional<std::vector<uint8_t>> keyPresence,
           std::optional<std::vector<uint8_t>> inMap,
+          std::optional<std::vector<int64_t>> values,
           std::string_view message) {
         folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
         if (keyPresence.has_value()) {
@@ -534,6 +620,10 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
           decoders[group.inMapDescriptor.offset()] =
               std::make_unique<BoolDecoder>(std::move(*inMap));
         }
+        if (values.has_value()) {
+          decoders[groupValueOffset] =
+              std::make_unique<TestDecoder<int64_t>>(std::move(*values));
+        }
         auto reader = factory->createReader(decoders);
         velox::VectorPtr output;
         NIMBLE_ASSERT_FILE_THROW(
@@ -541,30 +631,30 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
       };
 
   expectFailure(
-      std::vector<uint8_t>{true, true},
+      std::vector<uint8_t>{true, true, true},
       std::vector<uint8_t>{true},
+      std::nullopt,
       "exceeds schema key count");
+  expectFailure(
+      std::nullopt,
+      std::vector<uint8_t>{true},
+      std::nullopt,
+      "in-map count is not divisible by present key count");
+  expectFailure(
+      std::nullopt,
+      std::nullopt,
+      std::vector<int64_t>{10},
+      "Hybrid FlatMap group with present keys is missing in-map rows.");
   expectFailure(
       std::vector<uint8_t>{false},
       std::vector<uint8_t>{true},
+      std::nullopt,
       "in-map rows without present keys");
   expectFailure(
       std::vector<uint8_t>{true},
       std::vector<uint8_t>{false},
+      std::nullopt,
       "has no present rows");
-  expectFailure(
-      std::nullopt,
-      std::vector<uint8_t>{true},
-      "key-presence and in-map streams must be present together");
-  expectFailure(
-      std::vector<uint8_t>{true},
-      std::nullopt,
-      "key-presence and in-map streams must be present together");
-  expectFailure(
-      std::vector<uint8_t>{},
-      std::vector<uint8_t>{true},
-      "in-map rows without key presence");
-
   const auto expectNullableMetadataFailure = [&](bool nullableKey,
                                                  std::string_view message) {
     folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;

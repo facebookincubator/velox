@@ -339,7 +339,7 @@ TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
   registry.Register(
-      Type::getClassName(),
+      std::string{Type::getClassName()},
       static_cast<TypePtr (*)(const folly::dynamic&)>(Type::create));
 
   registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);

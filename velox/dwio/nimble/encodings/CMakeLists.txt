@@ -45,6 +45,7 @@ add_library(
   TrivialEncoding.cpp
   subintsplit/CostModel.cpp
   subintsplit/CostModel.h
+  subintsplit/EncodingConfig.h
   subintsplit/BitSection.h
   subintsplit/DeltaTransform.h
   subintsplit/Format.h

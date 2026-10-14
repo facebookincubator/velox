@@ -2151,9 +2151,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
     ASSERT_EQ(projectedHybridMap.groupCount(), 1);
     EXPECT_EQ(
         projectedHybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
-    EXPECT_EQ(
-        projectedHybridMap.groupAt(0).groupKeys,
-        (std::vector<std::string>{"9", "1", "2"}));
+    EXPECT_EQ(projectedHybridMap.groupAt(0).groupKeys, defaultGroup.groupKeys);
 
     for (bool useIOBuf : {false, true}) {
       SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
