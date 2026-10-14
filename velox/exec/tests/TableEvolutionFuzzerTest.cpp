@@ -198,15 +198,13 @@ TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
               .numQueries = 1,
               .numSplits = 2,
               .skippedSplits = 1,
-              .numStringDictionaryEncodingPreserved = 3,
-              .numStringDictionaryEncodingAbandoned = 1,
+              .customRuntimeStats = {{"statA", 3}, {"statB", 1}},
           },
       .reference =
           TableEvolutionFuzzer::ScanPlanCoverage{
               .numQueries = 1,
               .numSplits = 2,
-              .numStringDictionaryEncodingPreserved = 5,
-              .numStringDictionaryEncodingAbandoned = 1,
+              .customRuntimeStats = {{"statA", 5}, {"statB", 1}},
           },
       .hasSubfieldFilters = false,
       .hasRemainingFilter = false,
@@ -288,10 +286,14 @@ TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
   EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("rowField"), 1);
   EXPECT_EQ(coverage.pushdown.numQueries, 1);
   EXPECT_EQ(coverage.reference.numQueries, 1);
-  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingPreserved, 3);
-  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingAbandoned, 1);
-  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingPreserved, 5);
-  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingAbandoned, 1);
+  EXPECT_THAT(
+      coverage.pushdown.customRuntimeStats,
+      testing::UnorderedElementsAre(
+          testing::Pair("statA", 3), testing::Pair("statB", 1)));
+  EXPECT_THAT(
+      coverage.reference.customRuntimeStats,
+      testing::UnorderedElementsAre(
+          testing::Pair("statA", 5), testing::Pair("statB", 1)));
 }
 
 TEST_F(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {

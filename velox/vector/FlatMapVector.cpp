@@ -17,6 +17,8 @@
 #include <folly/hash/Hash.h>
 
 #include "velox/vector/FlatMapVector.h"
+
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
@@ -143,6 +145,118 @@ std::optional<column_index_t> FlatMapVector::getKeyChannel(
     const VectorPtr& keysVector,
     vector_size_t index) const {
   return keyIndex().find(*distinctKeys_, *keysVector, index);
+}
+
+namespace {
+
+// Returns the channel of a constant key in every selected row, or kNoChannel
+// when the key is null or the flat map does not have it. 'lookUp(index)' looks
+// up the key at 'index' of the decoded base in the distinct keys.
+template <typename TLookUp>
+std::vector<column_index_t> getConstantKeyChannels(
+    const SelectivityVector& rows,
+    const DecodedVector& keys,
+    const TLookUp& lookUp) {
+  std::vector<column_index_t> channels(rows.end(), FlatMapVector::kNoChannel);
+  if (!rows.hasSelections() || keys.isNullAt(rows.begin())) {
+    return channels;
+  }
+  if (const auto channel = lookUp(keys.index(rows.begin()))) {
+    rows.applyToSelected(
+        [&](vector_size_t row) { channels[row] = channel.value(); });
+  }
+  return channels;
+}
+
+// Returns the channel of each selected row's key, or kNoChannel.
+// 'keyIndex(row)' maps a row to its index in the decoded base and
+// 'isNullAt(row)' tells whether its key is null. Both are inlined, so each
+// combination compiles to a loop without per-row checks of the mapping or
+// of the nulls.
+template <typename TLookUp, typename TKeyIndex, typename TIsNullAt>
+std::vector<column_index_t> getKeyChannelsLoop(
+    const SelectivityVector& rows,
+    const TLookUp& lookUp,
+    const TKeyIndex& keyIndex,
+    const TIsNullAt& isNullAt) {
+  std::vector<column_index_t> channels(rows.end(), FlatMapVector::kNoChannel);
+  rows.applyToSelected([&](vector_size_t row) {
+    if (!isNullAt(row)) {
+      channels[row] = lookUp(keyIndex(row)).value_or(FlatMapVector::kNoChannel);
+    }
+  });
+  return channels;
+}
+
+// Returns the channel of each selected row's key, or kNoChannel, picking the
+// row mapping and the null check once.
+template <typename TLookUp>
+std::vector<column_index_t> getKeyChannelsImpl(
+    const SelectivityVector& rows,
+    const DecodedVector& keys,
+    const TLookUp& lookUp) {
+  if (keys.isConstantMapping()) {
+    return getConstantKeyChannels(rows, keys, lookUp);
+  }
+
+  // Keys that cannot be null skip the null check.
+  auto loop = [&](auto keyIndex) {
+    if (keys.mayHaveNulls()) {
+      return getKeyChannelsLoop(rows, lookUp, keyIndex, [&](vector_size_t row) {
+        return keys.isNullAt(row);
+      });
+    }
+    return getKeyChannelsLoop(
+        rows, lookUp, keyIndex, [](vector_size_t) { return false; });
+  };
+
+  if (keys.isIdentityMapping()) {
+    return loop([](vector_size_t row) { return row; });
+  }
+  return loop([rawIndices = keys.indices()](vector_size_t row) {
+    return rawIndices[row];
+  });
+}
+
+} // namespace
+
+std::vector<column_index_t> FlatMapVector::getKeyChannels(
+    const SelectivityVector& rows,
+    const DecodedVector& keys) const {
+  // Typed lookups for the key types that have one. Keys with custom comparison
+  // take the generic lookup, which compares them the way their type does.
+  if (!keys.base()->type()->providesCustomComparison()) {
+    switch (keys.base()->typeKind()) { // NOLINT(clang-diagnostic-switch-enum)
+      case TypeKind::INTEGER:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<int32_t>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      case TypeKind::BIGINT:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<int64_t>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<StringView>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      default:
+        break;
+    }
+  }
+
+  return getKeyChannelsImpl(rows, keys, [&](vector_size_t index) {
+    return keyIndex().find(*distinctKeys_, *keys.base(), index);
+  });
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
