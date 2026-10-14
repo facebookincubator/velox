@@ -113,18 +113,22 @@ void RPCState::setStreamingMode(
     RPCStreamingMode mode,
     int64_t minWindow,
     double stepCoef,
-    int64_t maxWindow) {
+    int64_t maxWindow,
+    int64_t batchStartWindow) {
+  VELOX_USER_CHECK_GE(
+      batchStartWindow,
+      0,
+      "BATCH RPC congestion start window must be non-negative: {}",
+      batchStartWindow);
   streamingMode_ = mode;
   if (mode == RPCStreamingMode::kBatch) {
-    // BATCH: the gradient window starts at 2 (the previously hand-tuned value)
-    // and learns the in-flight-batch sweet spot from per-batch RTT, bounded
-    // only by a large safety ceiling so it never leaves throughput on the
-    // table.
     const int64_t maxW = maxWindow > 0 ? maxWindow : kBatchMaxWindow;
-    window_ = CongestionController{/*startWindow*/ 2,
-                                   /*maxWindow*/ maxW,
-                                   minWindow,
-                                   stepCoef};
+    window_ = CongestionController{
+        batchStartWindow > 0 ? batchStartWindow : 2,
+        /*maxWindow*/ maxW,
+        minWindow,
+        stepCoef,
+    };
   } else {
     // PER_ROW: start == max. Default ceiling 100; a high-latency backend can
     // raise it via rpc.congestion.max_window. Pinning start == max is
@@ -136,7 +140,11 @@ void RPCState::setStreamingMode(
     // by RPCOperator) shrink it under sustained overload.
     const int64_t maxW = maxWindow > 0 ? maxWindow : 100;
     window_ = CongestionController{
-        /*startWindow*/ maxW, /*maxWindow*/ maxW, minWindow, stepCoef};
+        maxW,
+        /*maxWindow*/ maxW,
+        minWindow,
+        stepCoef,
+    };
   }
 }
 

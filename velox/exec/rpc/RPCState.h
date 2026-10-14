@@ -229,11 +229,17 @@ class RPCState {
   /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
   /// 256). Raise it so a high-latency backend can run at high concurrency;
   /// admission-controlled dispatch makes this ceiling bind.
+  /// @param batchStartWindow Initial BATCH congestion window. 0 keeps the
+  /// built-in default of 2. Positive values are clamped to [minWindow,
+  /// maxWindow]. PER_ROW startup is unaffected. Size at or below the
+  /// backend's measured knee: starting above it seeds the baseline with
+  /// queueing delay, leaving only explicit overload errors to shrink it.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
       double stepCoef = 1.0,
-      int64_t maxWindow = 0);
+      int64_t maxWindow = 0,
+      int64_t batchStartWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
