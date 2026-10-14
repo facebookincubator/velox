@@ -26,7 +26,9 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/contiguous_split.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/cuda_stream.hpp>
@@ -156,7 +158,7 @@ std::shared_ptr<core::QueryCtx> makeTrackedQueryCtx(
   return queryCtx;
 }
 
-std::unique_ptr<cudf::table> makeDeviceTable(rmm::cuda_stream_view stream) {
+std::unique_ptr<cudf::table> makeDeviceTable(cuda::stream_ref stream) {
   std::array<int32_t, 4> values{{1, 2, 3, 4}};
   rmm::device_buffer data(
       values.size() * sizeof(int32_t),
@@ -167,14 +169,18 @@ std::unique_ptr<cudf::table> makeDeviceTable(rmm::cuda_stream_view stream) {
       values.data(),
       values.size() * sizeof(int32_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(
       std::make_unique<cudf::column>(
           cudf::data_type{cudf::type_id::INT32},
           static_cast<cudf::size_type>(values.size()),
           std::move(data),
-          rmm::device_buffer{},
+          cudf::create_null_mask(
+              0,
+              cudf::mask_state::UNALLOCATED,
+              stream,
+              cudf::get_current_device_resource_ref()),
           0));
   return std::make_unique<cudf::table>(std::move(columns));
 }
@@ -200,7 +206,7 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
   void* allocation = nullptr;
   std::thread allocateThread([&] {
     allocation = ownedResource.allocate(
-        allocationStream.view().value(), kBytes, alignof(std::max_align_t));
+        allocationStream.value(), kBytes, alignof(std::max_align_t));
   });
   allocateThread.join();
 
@@ -209,7 +215,7 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
 
   std::thread deallocateThread([&] {
     ownedResource.deallocate(
-        deallocationStream.view().value(),
+        deallocationStream.value(),
         allocation,
         kBytes,
         alignof(std::max_align_t));
@@ -218,10 +224,10 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
   EXPECT_EQ(pool->usedBytes(), 0);
   EXPECT_EQ(
       state->allocationStream,
-      reinterpret_cast<std::uintptr_t>(allocationStream.view().value()));
+      reinterpret_cast<std::uintptr_t>(allocationStream.value()));
   EXPECT_EQ(
       state->deallocationStream,
-      reinterpret_cast<std::uintptr_t>(deallocationStream.view().value()));
+      reinterpret_cast<std::uintptr_t>(deallocationStream.value()));
   EXPECT_NE(state->allocationStream, state->deallocationStream);
 
   auto* synchronousAllocation =
@@ -234,7 +240,7 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
   state->failNextAllocation = true;
   EXPECT_THROW(
       ownedResource.allocate(
-          rmm::cuda_stream_default, kBytes, alignof(std::max_align_t)),
+          cudf::get_default_stream(), kBytes, alignof(std::max_align_t)),
       std::bad_alloc);
   EXPECT_EQ(pool->usedBytes(), 0);
 }
@@ -261,7 +267,7 @@ TEST_F(CudfMemoryResourceTest, RetainsCompleteCustomPoolHierarchyAndOwner) {
 
   constexpr std::size_t kBytes = 192;
   auto* allocation = retainedResource->allocate(
-      rmm::cuda_stream_default, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(), kBytes, alignof(std::max_align_t));
   EXPECT_EQ(operatorPool->usedBytes(), kBytes);
 
   operatorPool.reset();
@@ -275,7 +281,10 @@ TEST_F(CudfMemoryResourceTest, RetainsCompleteCustomPoolHierarchyAndOwner) {
   EXPECT_FALSE(weakOperatorPool.expired());
 
   retainedResource->deallocate(
-      rmm::cuda_stream_default, allocation, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(),
+      allocation,
+      kBytes,
+      alignof(std::max_align_t));
   EXPECT_EQ(weakOperatorPool.lock()->usedBytes(), 0);
   retainedResource.reset();
 
@@ -308,10 +317,13 @@ TEST_F(CudfMemoryResourceTest, ReservationAndExternalAccountingCoexist) {
   constexpr std::size_t kBytes = 256;
   ASSERT_TRUE(pool->maybeReserve(kBytes * 2));
   auto* allocation = resource.allocate(
-      rmm::cuda_stream_default, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(), kBytes, alignof(std::max_align_t));
   EXPECT_EQ(pool->usedBytes(), kBytes);
   resource.deallocate(
-      rmm::cuda_stream_default, allocation, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(),
+      allocation,
+      kBytes,
+      alignof(std::max_align_t));
   EXPECT_EQ(pool->usedBytes(), 0);
   pool->release();
   EXPECT_EQ(pool->reservedBytes(), 0);
@@ -381,10 +393,13 @@ TEST_F(CudfMemoryResourceTest, RegistryKeepsReferencedResourceAlive) {
 
   constexpr std::size_t kBytes = 128;
   auto* allocation = resources.output.allocate(
-      rmm::cuda_stream_default, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(), kBytes, alignof(std::max_align_t));
   EXPECT_EQ(weakPool.lock()->usedBytes(), kBytes);
   resources.output.deallocate(
-      rmm::cuda_stream_default, allocation, kBytes, alignof(std::max_align_t));
+      cudf::get_default_stream(),
+      allocation,
+      kBytes,
+      alignof(std::max_align_t));
 
   EXPECT_FALSE(weakPool.expired());
   registry.reset();
@@ -457,11 +472,14 @@ TEST_F(
   {
     ScopedCudfMemoryResources untrackedScope{fallbackRef, outputRef};
     auto* untrackedAllocation = currentResource.allocate(
-        rmm::cuda_stream_default, kTempBytes, kAlignment);
+        cudf::get_default_stream(), kTempBytes, kAlignment);
     EXPECT_EQ(fallbackState->liveBytes, kTempBytes);
     EXPECT_EQ(tempPool->usedBytes(), 0);
     currentResource.deallocate(
-        rmm::cuda_stream_default, untrackedAllocation, kTempBytes, kAlignment);
+        cudf::get_default_stream(),
+        untrackedAllocation,
+        kTempBytes,
+        kAlignment);
   }
   EXPECT_EQ(fallbackState->liveBytes, 0);
 
@@ -470,13 +488,13 @@ TEST_F(
   {
     ScopedCudfMemoryResources scope{tempRef, outputRef};
     tempAllocation = currentResource.allocate(
-        rmm::cuda_stream_default, kTempBytes, kAlignment);
+        cudf::get_default_stream(), kTempBytes, kAlignment);
     EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
     EXPECT_EQ(outputPool->usedBytes(), 0);
     EXPECT_EQ(fallbackState->liveBytes, 0);
 
-    outputAllocation =
-        outputRef.allocate(rmm::cuda_stream_default, kOutputBytes, kAlignment);
+    outputAllocation = outputRef.allocate(
+        cudf::get_default_stream(), kOutputBytes, kAlignment);
     EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
     EXPECT_EQ(outputPool->usedBytes(), kOutputBytes);
   }
@@ -485,14 +503,14 @@ TEST_F(
   // pointer, so the deallocation does not depend on the current TLS scope.
   EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
   currentResource.deallocate(
-      rmm::cuda_stream_default, tempAllocation, kTempBytes, kAlignment);
+      cudf::get_default_stream(), tempAllocation, kTempBytes, kAlignment);
   EXPECT_EQ(tempPool->usedBytes(), 0);
 
   // Explicit output resources independently carry their accounting identity
   // and can likewise be deallocated after the operational TLS scope has ended.
   EXPECT_EQ(outputPool->usedBytes(), kOutputBytes);
   outputRef.deallocate(
-      rmm::cuda_stream_default, outputAllocation, kOutputBytes, kAlignment);
+      cudf::get_default_stream(), outputAllocation, kOutputBytes, kAlignment);
   EXPECT_EQ(outputPool->usedBytes(), 0);
 }
 
@@ -519,8 +537,8 @@ TEST_F(CudfMemoryResourceTest, CurrentResourceUsesCallingThreadScope) {
   auto childAllocationFuture = childAllocation.get_future();
   std::thread child([&] {
     ScopedCudfMemoryResources childScope{childRef, childRef};
-    auto* allocation =
-        currentResource.allocate(rmm::cuda_stream_default, kBytes, kAlignment);
+    auto* allocation = currentResource.allocate(
+        cudf::get_default_stream(), kBytes, kAlignment);
     childAllocation.set_value(allocation);
   });
 
@@ -528,19 +546,19 @@ TEST_F(CudfMemoryResourceTest, CurrentResourceUsesCallingThreadScope) {
   child.join();
   {
     ScopedCudfMemoryResources mainScope{mainRef, mainRef};
-    auto* allocation =
-        currentResource.allocate(rmm::cuda_stream_default, kBytes, kAlignment);
+    auto* allocation = currentResource.allocate(
+        cudf::get_default_stream(), kBytes, kAlignment);
     EXPECT_EQ(mainPool->usedBytes(), kBytes);
     EXPECT_EQ(childPool->usedBytes(), kBytes);
     EXPECT_EQ(fallbackState->liveBytes, 0);
     currentResource.deallocate(
-        rmm::cuda_stream_default, allocation, kBytes, kAlignment);
+        cudf::get_default_stream(), allocation, kBytes, kAlignment);
   }
 
   EXPECT_EQ(mainPool->usedBytes(), 0);
   EXPECT_EQ(childPool->usedBytes(), kBytes);
   currentResource.deallocate(
-      rmm::cuda_stream_default, allocationFromChild, kBytes, kAlignment);
+      cudf::get_default_stream(), allocationFromChild, kBytes, kAlignment);
   EXPECT_EQ(childPool->usedBytes(), 0);
   EXPECT_EQ(fallbackState->liveBytes, 0);
 }
@@ -668,10 +686,10 @@ TEST_F(CudfMemoryResourceTest, PackedGpuMemoryIsChargedToExchangePool) {
   auto exchangePool = cudfExchangeMemoryPool(*queryCtx);
   ASSERT_NE(exchangePool, nullptr);
 
-  rmm::cuda_stream_view stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream = cudf::get_default_stream();
   auto table = makeDeviceTable(stream);
   auto packed = cudf::pack(table->view(), stream, *exchangeMr);
-  stream.synchronize();
+  stream.sync();
 
   ASSERT_NE(packed.gpu_data, nullptr);
   const auto packedBytes = packed.gpu_data->size();
@@ -721,10 +739,10 @@ TEST_F(CudfMemoryResourceTest, UnregisterRetainsBusyExchangeResourceSafely) {
   auto exchangePool = cudfExchangeMemoryPool(*queryCtx);
   ASSERT_NE(exchangePool, nullptr);
 
-  rmm::cuda_stream_view stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream = cudf::get_default_stream();
   auto table = makeDeviceTable(stream);
   auto packed = cudf::pack(table->view(), stream, *exchangeMr);
-  stream.synchronize();
+  stream.sync();
   ASSERT_NE(packed.gpu_data, nullptr);
   ASSERT_GT(packed.gpu_data->size(), 0);
 

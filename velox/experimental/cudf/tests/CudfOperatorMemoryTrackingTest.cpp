@@ -26,6 +26,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 
+#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <folly/ScopeGuard.h>
@@ -109,7 +110,7 @@ class TestCudfOperator final : public CudfOperatorBase {
     constexpr auto kAlignment = alignof(std::max_align_t);
     auto outputResource = get_output_mr();
     auto* output = outputResource.allocate(
-        rmm::cuda_stream_default, kOutputBytes, kAlignment);
+        cudf::get_default_stream(), kOutputBytes, kAlignment);
     outputAllocation_.emplace(
         OutputAllocation{output, kOutputBytes, outputResource});
     return nullptr;
@@ -131,9 +132,9 @@ class TestCudfOperator final : public CudfOperatorBase {
     constexpr auto kAlignment = alignof(std::max_align_t);
     auto currentResource = cudf::get_current_device_resource_ref();
     auto* temporary = currentResource.allocate(
-        rmm::cuda_stream_default, kTempBytes, kAlignment);
+        cudf::get_default_stream(), kTempBytes, kAlignment);
     currentResource.deallocate(
-        rmm::cuda_stream_default, temporary, kTempBytes, kAlignment);
+        cudf::get_default_stream(), temporary, kTempBytes, kAlignment);
   }
 
   std::optional<OutputAllocation> outputAllocation_;
@@ -230,7 +231,7 @@ TEST_F(
   }
 
   outputAllocation->resource.deallocate(
-      rmm::cuda_stream_default,
+      cudf::get_default_stream(),
       outputAllocation->pointer,
       outputAllocation->bytes,
       alignof(std::max_align_t));
