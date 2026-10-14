@@ -846,6 +846,8 @@ struct ExtractJsonTypeImpl {
       return simdjson::DEPTH_ERROR;
     }
     switch (type) {
+      case simdjson::ondemand::json_type::unknown:
+        return simdjson::INCORRECT_TYPE;
       case simdjson::ondemand::json_type::array: {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
         for (auto element : array) {
@@ -1322,7 +1324,7 @@ class FromJsonFunction final : public exec::VectorFunction {
       StringView rawInput) const {
     auto* rowVector = result.asUnchecked<RowVector>();
     auto* stringChild = rowVector->childAt(*config_.corruptRecordIndex)
-                            ->asUnchecked<FlatVector<StringView>>();
+                            ->template asUnchecked<FlatVector<StringView>>();
     stringChild->setNull(row, false);
     stringChild->set(row, rawInput);
     for (column_index_t i = 0; i < rowVector->childrenSize(); ++i) {

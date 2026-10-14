@@ -1135,7 +1135,7 @@ TEST_F(FromJsonTest, constantFunctionPreservesUnselectedRows) {
     std::vector<VectorPtr> args{makeConstant(StringView(json), 6)};
     auto input = makeRowVector(args);
     exec::EvalCtx context(&execCtx_, &exprSet, input.get());
-    context.mutableThrowOnError() = false;
+    *context.mutableThrowOnError() = false;
     VectorPtr result = makeArrayVector<int32_t>({{0}, {1}, {2}, {3}, {4}, {5}});
     function->apply(rows, args, outputType, context, result);
     if (std::string_view(json) == R"([1,2,"bad"])") {
@@ -1811,7 +1811,11 @@ TEST_F(FromJsonTest, corruptRecordWithAllNestedSiblings) {
       {"a", "b", "c", "d", "_corrupt_record"},
       {makeNullableFlatVector<int32_t>({1, std::nullopt, 2, std::nullopt, 3}),
        makeNullableArrayVector<int32_t>(
-           {{{1, 2}}, std::nullopt, {{3, 4, 5}}, std::nullopt, {{}}}),
+           {{{1, 2}},
+            std::nullopt,
+            {{3, 4, 5}},
+            std::nullopt,
+            std::vector<std::optional<int32_t>>{}}),
        makeNullableMapVector<std::string, int32_t>(
            std::vector<std::optional<std::vector<MapEntry>>>{
                std::vector<MapEntry>{{"k", 1}},
