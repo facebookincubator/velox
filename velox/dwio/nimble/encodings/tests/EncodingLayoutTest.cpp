@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/nimble/common/Buffer.h"
 
+#include <fmt/format.h>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
@@ -25,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
@@ -699,6 +701,55 @@ TEST(EncodingLayoutTests, nullable) {
       expected.child(nimble::EncodingIdentifiers::Nullable::Data),
       actual.first,
       /*compressionMayBeRedirected=*/false);
+}
+
+namespace {
+
+// Encodes 'data' with createNullableFromCustomLayout, using a Constant layout
+// for the non-null values, then reads every row back.
+template <typename T>
+void testNullableCustomLayout(const std::vector<std::optional<T>>& data) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  auto encoding = nimble::createNullableFromCustomLayout<T>(
+      nimble::ConstantEnc{}, data, *pool, buffer);
+
+  ASSERT_TRUE(encoding->isNullable());
+  ASSERT_EQ(nimble::TypeTraits<T>::dataType, encoding->dataType());
+  ASSERT_EQ(data.size(), encoding->rowCount());
+
+  // Null rows materialize as the default value.
+  std::vector<T> expected;
+  for (const auto& value : data) {
+    expected.push_back(value.value_or(T{}));
+  }
+  std::vector<T> actual(data.size());
+  encoding->materialize(data.size(), actual.data());
+  ASSERT_EQ(expected, actual);
+
+  const auto numNonNull =
+      std::count_if(data.begin(), data.end(), [](const auto& value) {
+        return value.has_value();
+      });
+  // The non-null values are encoded as the physical type of T.
+  using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+  const auto expectedChild = fmt::format(
+      "non-null child:\n    {}<{}> rowCount={}",
+      nimble::toString(nimble::EncodingType::Constant),
+      nimble::toString(nimble::TypeTraits<PhysicalType>::dataType),
+      numNonNull);
+  ASSERT_NE(std::string::npos, encoding->debugString().find(expectedChild))
+      << encoding->debugString();
+}
+
+} // namespace
+
+TEST(EncodingLayoutTests, nullableCustomLayout) {
+  // Covers uint32_t, which is its own physical type, and int64_t and double,
+  // which both map to uint64_t.
+  testNullableCustomLayout<uint32_t>({7, std::nullopt, 7, 7, std::nullopt});
+  testNullableCustomLayout<int64_t>({-7, std::nullopt, -7, -7, std::nullopt});
+  testNullableCustomLayout<double>({2.5, std::nullopt, 2.5, 2.5, std::nullopt});
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
