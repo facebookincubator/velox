@@ -26,6 +26,11 @@
 # re-run the Presto-SOT fuzzers locally to confirm before merging.
 ARG CENTOS_TZDATA_VERSION=2026a-1.el9
 
+# Same switch as the CMake option: when ON, the adapters image also gets
+# the dependencies that only cuDF builds need (UCX, for the UCX exchange).
+# CI builds cuDF in the adapters image.
+ARG VELOX_ENABLE_CUDF=ON
+
 ########################
 # Stage 1: Base Build  #
 ########################
@@ -179,6 +184,16 @@ RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites'
 RUN bash /setup-centos-adapters.sh install_adapters && \
     find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
 
+ARG CUDA_VERSION
+ENV CUDA_VERSION=${CUDA_VERSION:-12.9}
+
+ARG VELOX_ENABLE_CUDF
+# UCX only builds its CUDA transports when CUDA is installed, so this
+# stage needs CUDA too, although nothing else here uses it.
+RUN if [ "${VELOX_ENABLE_CUDF}" = "ON" ]; then \
+      bash /setup-centos-adapters.sh install_cuda install_ucx; \
+    fi
+
 ########################
 # Stage: Adapters      #
 ########################
@@ -194,6 +209,13 @@ RUN bash /setup-centos-adapters.sh install_cuda && \
 
 RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
       dnf clean all
+
+ARG VELOX_ENABLE_CUDF
+# UCX loads its verbs and rdmacm transports at run time, and they need
+# these libraries.
+RUN if [ "${VELOX_ENABLE_CUDF}" = "ON" ]; then \
+      dnf -y install libibverbs librdmacm && dnf clean all; \
+    fi
 
 ARG CENTOS_TZDATA_VERSION
 # tzdata-java is pulled in by the Java install above. Pin it to match
