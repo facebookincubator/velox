@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <unistd.h>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -799,43 +798,25 @@ TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
 }
 
 TEST(FilterTest, bloomMergeAtInt64Max) {
-  EXPECT_EXIT(
-      {
-        alarm(2);
-        const auto max = std::numeric_limits<int64_t>::max();
-        BigintValuesUsingBloomFilter bloom(4, false);
-        bloom.insert(max);
-        BigintRange range(max - 2, max, true);
-        auto merged = bloom.mergeWith(&range);
-        if (!merged->testInt64(max) || merged->testNull()) {
-          _exit(1);
-        }
-        alarm(0);
-        _exit(0);
-      },
-      ::testing::ExitedWithCode(0),
-      "");
+  const auto max = std::numeric_limits<int64_t>::max();
+  BigintValuesUsingBloomFilter bloom(4, false);
+  bloom.insert(max);
 
-  EXPECT_EXIT(
-      {
-        alarm(2);
-        const auto max = std::numeric_limits<int64_t>::max();
-        BigintValuesUsingBloomFilter bloom(4, false);
-        bloom.insert(max);
-        std::vector<int64_t> values;
-        values.push_back(max - 2);
-        values.push_back(max);
-        BigintValuesUsingBitmask bitmask(
-            values.front(), values.back(), values, true);
-        auto merged = bloom.mergeWith(&bitmask);
-        if (!merged->testInt64(max) || merged->testNull()) {
-          _exit(1);
-        }
-        alarm(0);
-        _exit(0);
-      },
-      ::testing::ExitedWithCode(0),
-      "");
+  {
+    BigintRange range(max - 2, max, true);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    const std::vector<int64_t> values{max - 2, max};
+    BigintValuesUsingBitmask bitmask(
+        values.front(), values.back(), values, true);
+    auto merged = bloom.mergeWith(&bitmask);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
 }
 
 TEST(FilterTest, bloomMergeEmptyRange) {
@@ -843,6 +824,11 @@ TEST(FilterTest, bloomMergeEmptyRange) {
     for (bool bloomNull : {false, true}) {
       for (bool rangeNull : {false, true}) {
         for (bool bloomFirst : {false, true}) {
+          SCOPED_TRACE(
+              testing::Message()
+              << "lower=" << lower << ", upper=" << upper
+              << ", bloomNull=" << bloomNull << ", rangeNull=" << rangeNull
+              << ", bloomFirst=" << bloomFirst);
           BigintValuesUsingBloomFilter bloom(4, bloomNull);
           bloom.insert(lower);
           BigintRange range(lower, upper, rangeNull);
@@ -851,39 +837,28 @@ TEST(FilterTest, bloomMergeEmptyRange) {
           const bool expectedNull = bloomNull && rangeNull;
           const auto expectedKind =
               expectedNull ? FilterKind::kIsNull : FilterKind::kAlwaysFalse;
-          if (merged->kind() != expectedKind ||
-              merged->testNull() != expectedNull || merged->testInt64(lower)) {
-            _exit(1);
-          }
+          EXPECT_EQ(merged->kind(), expectedKind);
+          EXPECT_EQ(merged->testNull(), expectedNull);
+          EXPECT_FALSE(merged->testInt64(lower));
         }
       }
     }
   };
-  auto checkSingleValueRange = [](bool bloomFirst) {
-    const auto max = std::numeric_limits<int64_t>::max();
+
+  const auto max = std::numeric_limits<int64_t>::max();
+  checkEmptyRange(max, max - 1);
+  checkEmptyRange(10, 9);
+
+  for (bool bloomFirst : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "bloomFirst=" << bloomFirst);
     BigintValuesUsingBloomFilter bloom(4, true);
     bloom.insert(max);
     BigintRange range(max, max, true);
     auto merged =
         bloomFirst ? bloom.mergeWith(&range) : range.mergeWith(&bloom);
-    if (!merged->testInt64(max) || !merged->testNull()) {
-      _exit(1);
-    }
-  };
-
-  EXPECT_EXIT(
-      {
-        alarm(2);
-        const auto max = std::numeric_limits<int64_t>::max();
-        checkEmptyRange(max, max - 1);
-        checkEmptyRange(10, 9);
-        checkSingleValueRange(false);
-        checkSingleValueRange(true);
-        alarm(0);
-        _exit(0);
-      },
-      ::testing::ExitedWithCode(0),
-      "");
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testNull());
+  }
 }
 
 TEST(FilterTest, bigintMultiRange) {
@@ -2110,40 +2085,25 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
 }
 
 TEST(FilterTest, bitmaskMergeEndpointsAreBounded) {
-  EXPECT_EXIT(
-      {
-        alarm(2);
-        const auto max = std::numeric_limits<int64_t>::max();
-        auto bitmask = createBigintValues({max - 2, max}, true);
-        std::vector<std::unique_ptr<BigintRange>> subRanges;
-        subRanges.push_back(std::make_unique<BigintRange>(0, 5, false));
-        subRanges.push_back(std::make_unique<BigintRange>(max - 2, max, false));
-        BigintMultiRange multiRange(std::move(subRanges), false);
-        auto merged = bitmask->mergeWith(&multiRange);
-        if (!merged->testInt64(max)) {
-          _exit(1);
-        }
-        alarm(0);
-        _exit(0);
-      },
-      ::testing::ExitedWithCode(0),
-      "");
+  const auto max = std::numeric_limits<int64_t>::max();
+  auto bitmask = createBigintValues({max - 2, max}, true);
 
-  EXPECT_EXIT(
-      {
-        alarm(2);
-        const auto max = std::numeric_limits<int64_t>::max();
-        auto bitmask = createBigintValues({max - 2, max}, true);
-        NegatedBigintRange negated(15, 25, true);
-        auto merged = bitmask->mergeWith(&negated);
-        if (!merged->testInt64(max) || !merged->testInt64(max - 2)) {
-          _exit(1);
-        }
-        alarm(0);
-        _exit(0);
-      },
-      ::testing::ExitedWithCode(0),
-      "");
+  {
+    std::vector<std::unique_ptr<BigintRange>> subRanges;
+    subRanges.push_back(std::make_unique<BigintRange>(0, 5, false));
+    subRanges.push_back(std::make_unique<BigintRange>(max - 2, max, false));
+    BigintMultiRange multiRange(std::move(subRanges), false);
+    auto merged = bitmask->mergeWith(&multiRange);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    NegatedBigintRange negated(15, 25, true);
+    auto merged = bitmask->mergeWith(&negated);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testInt64(max - 2));
+  }
 }
 
 TEST(FilterTest, mergeMultiRange) {
