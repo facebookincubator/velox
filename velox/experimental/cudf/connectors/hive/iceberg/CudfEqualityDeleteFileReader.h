@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
+
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
@@ -39,6 +41,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -100,7 +103,11 @@ class CudfEqualityDeleteFileReader {
       const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
       const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
       ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      std::optional<rmm::device_async_resource_ref> tempMemoryResource =
+          std::nullopt,
+      std::optional<rmm::device_async_resource_ref> outputMemoryResource =
+          std::nullopt);
 
   /// Applies equality deletes to the output CudfVector by clearing the
   /// row mask for rows whose equality column values match any delete key tuple.
@@ -135,6 +142,14 @@ class CudfEqualityDeleteFileReader {
   // Converts `deleteRows_` to a GPU table if needed.
   void buildHashJoin(cuda::stream_ref stream);
 
+  rmm::device_async_resource_ref tempMemoryResource() const {
+    return tempMemoryResource_.value_or(get_temp_mr());
+  }
+
+  rmm::device_async_resource_ref outputMemoryResource() const {
+    return outputMemoryResource_.value_or(get_output_mr());
+  }
+
   // Eagerly reads the Parquet-format equality delete file into the
   // deleteKeyTable_ cudf table, normalizing decimals to the logical key types.
   // Key columns are matched case-insensitively when caseInsensitiveColumnNames
@@ -168,6 +183,8 @@ class CudfEqualityDeleteFileReader {
   std::vector<cudf::size_type> equalityColumnIndices_;
 
   memory::MemoryPool* pool_;
+  std::optional<rmm::device_async_resource_ref> tempMemoryResource_;
+  std::optional<rmm::device_async_resource_ref> outputMemoryResource_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
