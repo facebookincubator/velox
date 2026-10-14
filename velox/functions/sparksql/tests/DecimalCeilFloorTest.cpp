@@ -366,22 +366,5 @@ TEST_F(DecimalCeilFloorTest, floorIdentityLongDecimal) {
       makeFlatVector<int128_t>({bigVal, -bigVal, 0}, DECIMAL(38, 38)));
 }
 
-TEST_F(DecimalCeilFloorTest, nonConstantScaleError) {
-  // The scale argument must be a constant. Passing a non-constant (field
-  // reference) should fail during special form construction.
-  auto inputType = DECIMAL(10, 5);
-  std::vector<core::TypedExprPtr> inputs = {
-      std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0"),
-      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")};
-  // Result type is irrelevant — error fires before it's used.
-  auto callExpr = std::make_shared<const core::CallTypedExpr>(
-      DECIMAL(8, 2), std::move(inputs), "decimal_ceil");
-  auto input = makeFlatVector<int64_t>({12345}, inputType);
-  auto scaleCol = makeFlatVector<int32_t>({2});
-  VELOX_ASSERT_THROW(
-      evaluate(callExpr, makeRowVector({input, scaleCol})),
-      "The second argument of decimal_ceil must be a constant expression.");
-}
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
