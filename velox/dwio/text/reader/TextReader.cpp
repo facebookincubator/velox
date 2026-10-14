@@ -751,10 +751,9 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
+  // Reject prefixes that are not valid for Hive text integers.
   char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  if (c != '-' && c != '+' && !std::isdigit(static_cast<unsigned char>(c))) {
     isNull = true;
     return 0;
   }
