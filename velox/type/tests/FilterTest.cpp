@@ -810,19 +810,19 @@ TEST(FilterTest, bloomMergeAtInt64Max) {
   }
 
   {
+    BigintRange range(max, max, true);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testNull());
+  }
+
+  {
     const std::vector<int64_t> values{max - 2, max};
     BigintValuesUsingBitmask bitmask(
         values.front(), values.back(), values, false);
     auto merged = bloom.mergeWith(&bitmask);
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_FALSE(merged->testNull());
-  }
-
-  {
-    BigintRange range(max, max, true);
-    auto merged = bloom.mergeWith(&range);
-    ASSERT_TRUE(merged->testInt64(max));
-    EXPECT_TRUE(merged->testNull());
   }
 }
 
