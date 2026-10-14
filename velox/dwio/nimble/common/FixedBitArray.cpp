@@ -18,6 +18,7 @@
 #include <folly/lang/Bits.h>
 
 #include <glog/logging.h>
+#include <utility>
 
 namespace facebook::nimble {
 
@@ -325,10 +326,69 @@ void bulkGet32Internal(
   return;
 }
 
+template <int bitWidth>
+inline uint64_t loadWideResidual(const char* buffer, uint64_t bitsOffset) {
+  static_assert(bitWidth > 0 && bitWidth <= 57);
+  constexpr uint64_t kMask = (uint64_t{1} << bitWidth) - 1;
+  const uint64_t byteOffset = bitsOffset >> 3;
+  const uint64_t remainder = bitsOffset & 7;
+  const uint64_t word = folly::loadUnaligned<uint64_t>(buffer + byteOffset);
+  return (word >> remainder) & kMask;
+}
+
+template <int bitWidth, size_t... indices>
+inline void bulkGetWideGroup(
+    const char* buffer,
+    uint64_t* values,
+    uint64_t baseline,
+    std::index_sequence<indices...>) {
+  ((values[indices] =
+        loadWideResidual<bitWidth>(buffer, indices * bitWidth) + baseline),
+   ...);
+}
+
+template <int bitWidth>
+inline void bulkGetWideGroupedWithBaseline(
+    const char* buffer,
+    uint64_t start,
+    uint64_t length,
+    uint64_t* values,
+    uint64_t baseline) {
+  static_assert(bitWidth == 33 || bitWidth == 34);
+  constexpr uint64_t kGroupSize = bitWidth == 34 ? 4 : 8;
+  constexpr uint64_t kGroupBytes = kGroupSize * bitWidth / 8;
+  uint64_t bitsOffset = start * bitWidth;
+  // Each group begins and ends on a byte boundary, so every lane's load
+  // offset and shift are constant. bufferSize() covers the final wide load.
+  while (length > 0 && (bitsOffset & 7)) {
+    *values++ = loadWideResidual<bitWidth>(buffer, bitsOffset) + baseline;
+    bitsOffset += bitWidth;
+    --length;
+  }
+  const char* next = buffer + (bitsOffset >> 3);
+  while (length >= kGroupSize) {
+    bulkGetWideGroup<bitWidth>(
+        next, values, baseline, std::make_index_sequence<kGroupSize>{});
+    next += kGroupBytes;
+    values += kGroupSize;
+    length -= kGroupSize;
+  }
+  for (uint64_t i = 0; i < length; ++i) {
+    *values++ = loadWideResidual<bitWidth>(next, i * bitWidth) + baseline;
+  }
+}
+
 template <int byteWidth>
 inline uint64_t loadByteAlignedResidual(const char* next) {
-  static_assert(byteWidth >= 4 && byteWidth <= 8);
-  if constexpr (byteWidth == 4) {
+  static_assert(byteWidth >= 1 && byteWidth <= 8);
+  if constexpr (byteWidth == 1) {
+    return folly::loadUnaligned<uint8_t>(next);
+  } else if constexpr (byteWidth == 2) {
+    return folly::loadUnaligned<uint16_t>(next);
+  } else if constexpr (byteWidth == 3) {
+    constexpr uint32_t kMask = (uint32_t{1} << 24) - 1;
+    return folly::loadUnaligned<uint32_t>(next) & kMask;
+  } else if constexpr (byteWidth == 4) {
     return folly::loadUnaligned<uint32_t>(next);
   } else if constexpr (byteWidth == 8) {
     return folly::loadUnaligned<uint64_t>(next);
@@ -430,12 +490,42 @@ void FixedBitArray::bulkGet64WithBaseline(
     uint64_t baseline) const {
   const int bitWidth = bitWidth_;
   if (bitWidth < 32) {
+    switch (bitWidth) {
+      case 8:
+        bulkGetByteAlignedWithBaseline<1>(
+            buffer_, start, length, values, baseline);
+        return;
+      case 16:
+        bulkGetByteAlignedWithBaseline<2>(
+            buffer_, start, length, values, baseline);
+        return;
+      case 24:
+        bulkGetByteAlignedWithBaseline<3>(
+            buffer_, start, length, values, baseline);
+        return;
+      default:
+        break;
+    }
     // Delegate to the optimized template-unrolled 32-bit path.
     bulkGetWithBaseline32Into64(start, length, values, baseline);
     return;
   }
 
   switch (bitWidth) {
+    case 33:
+      if (length >= 8) {
+        bulkGetWideGroupedWithBaseline<33>(
+            buffer_, start, length, values, baseline);
+        return;
+      }
+      break;
+    case 34:
+      if (length >= 8) {
+        bulkGetWideGroupedWithBaseline<34>(
+            buffer_, start, length, values, baseline);
+        return;
+      }
+      break;
     case 32: {
       bulkGetByteAlignedWithBaseline<4>(
           buffer_, start, length, values, baseline);
