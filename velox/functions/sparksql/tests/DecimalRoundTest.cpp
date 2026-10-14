@@ -192,13 +192,6 @@ TEST_F(DecimalRoundTest, round) {
       makeFlatVector<int128_t>({0, 0, 0, 0}, DECIMAL(38, 0)));
 }
 
-TEST_F(DecimalRoundTest, roundNullScale) {
-  testDecimalRoundingWithNullScale(
-      makeFlatVector<int64_t>({25, 35, 45}, DECIMAL(3, 1)),
-      BaseVector::createNullConstant(DECIMAL(3, 0), 3, pool()),
-      kRoundDecimal);
-}
-
 TEST_F(DecimalRoundTest, sharedExtremeScaleAndErrors) {
   const auto type = DECIMAL(38, 0);
   const auto maximum = HugeInt::parse("99999999999999999999999999999999999999");
@@ -246,19 +239,21 @@ TEST_F(DecimalRoundTest, sharedExtremeScaleAndErrors) {
   }
 }
 
-TEST_F(DecimalRoundTest, sharedNullScaleAndMetadata) {
-  const auto type = DECIMAL(3, 1);
-  const auto input = makeFlatVector<int64_t>({25, -25, 0}, type);
+TEST_F(DecimalRoundTest, sharedNullScale) {
+  const auto shortInput = makeNullableFlatVector<int64_t>(
+      {25, -25, 0, std::nullopt}, DECIMAL(3, 1));
+  const auto longInput = makeNullableFlatVector<int128_t>(
+      {25, -25, 0, std::nullopt}, DECIMAL(19, 2));
   for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    SCOPED_TRACE(name);
     testDecimalRoundingWithNullScale(
-        input, BaseVector::createNullConstant(DECIMAL(3, 0), 3, pool()), name);
-    const auto field = std::make_shared<core::FieldAccessTypedExpr>(type, "c0");
-    const auto scale = std::make_shared<core::ConstantTypedExpr>(
-        INTEGER(), variant(int32_t{0}));
-    const auto bad = std::make_shared<core::CallTypedExpr>(
-        DECIMAL(2, 0), std::vector<core::TypedExprPtr>{field, scale}, name);
-    VELOX_ASSERT_USER_THROW(
-        evaluate(bad, makeRowVector({input})), "result type");
+        shortInput,
+        BaseVector::createNullConstant(DECIMAL(3, 0), 4, pool()),
+        name);
+    testDecimalRoundingWithNullScale(
+        longInput,
+        BaseVector::createNullConstant(DECIMAL(18, 0), 4, pool()),
+        name);
   }
 }
 
@@ -485,11 +480,9 @@ TEST_F(DecimalRoundTest, sharedSelectionErrorsAndResultReuse) {
   }
 }
 
-TEST_F(DecimalRoundTest, roundMetadataValidation) {
+TEST_F(DecimalRoundTest, unaryRoundMetadataValidation) {
   const auto type = DECIMAL(3, 1);
-  const auto input = makeRowVector(
-      {makeFlatVector<int64_t>({25, 35}, type),
-       makeFlatVector<int32_t>({0, 1})});
+  const auto input = makeRowVector({makeFlatVector<int64_t>({25, 35}, type)});
   const auto field = std::make_shared<core::FieldAccessTypedExpr>(type, "c0");
   const auto call = [&](TypePtr resultType,
                         std::vector<core::TypedExprPtr> args) {
@@ -501,35 +494,6 @@ TEST_F(DecimalRoundTest, roundMetadataValidation) {
   VELOX_ASSERT_THROW(
       evaluate(call(DECIMAL(3, 1), {field}), input), "result type");
   VELOX_ASSERT_THROW(evaluate(call(BIGINT(), {field}), input), "result type");
-  VELOX_ASSERT_THROW(
-      evaluate(call(DECIMAL(3, 0), {}), input), "one or two arguments");
-  VELOX_ASSERT_THROW(
-      evaluate(call(DECIMAL(3, 0), {field, field, field}), input),
-      "one or two arguments");
-  VELOX_ASSERT_THROW(
-      evaluate(
-          call(
-              DECIMAL(3, 0),
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")}),
-          input),
-      "must be decimal");
-  VELOX_ASSERT_THROW(
-      evaluate(
-          call(
-              DECIMAL(3, 0),
-              {field,
-               std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")}),
-          input),
-      "constant expression");
-  VELOX_ASSERT_THROW(
-      evaluate(
-          call(
-              DECIMAL(3, 0),
-              {field,
-               std::make_shared<core::ConstantTypedExpr>(
-                   BIGINT(), variant(int64_t{0}))}),
-          input),
-      "INTEGER");
 }
 
 TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
@@ -543,6 +507,7 @@ TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
   const auto nullScale = std::make_shared<core::ConstantTypedExpr>(
       INTEGER(), variant::null(TypeKind::INTEGER));
   for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+    SCOPED_TRACE(name);
     const auto call = [&](TypePtr result,
                           std::vector<core::TypedExprPtr> args) {
       return std::make_shared<core::CallTypedExpr>(
@@ -569,15 +534,14 @@ TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
                      INTEGER(), "c1")}),
             row),
         "constant expression");
-    VELOX_ASSERT_USER_THROW(
-        evaluate(
-            call(
-                DECIMAL(18, 0),
-                {field,
-                 std::make_shared<core::ConstantTypedExpr>(
-                     BOOLEAN(), variant(true))}),
-            row),
-        "INTEGER");
+    for (const auto& invalidScale :
+         {std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), variant(true)),
+          std::make_shared<core::ConstantTypedExpr>(
+              BIGINT(), variant(int64_t{0}))}) {
+      VELOX_ASSERT_USER_THROW(
+          evaluate(call(DECIMAL(18, 0), {field, invalidScale}), row),
+          "INTEGER");
+    }
     VELOX_ASSERT_USER_THROW(
         evaluate(
             call(
@@ -618,7 +582,7 @@ TEST_F(DecimalRoundTest, roundFullIntegerScaleDomain) {
       makeNullableFlatVector<int64_t>({25, -25, std::nullopt}, DECIMAL(4, 1)));
 }
 
-TEST_F(DecimalRoundTest, roundNullScaleSkipsChild) {
+TEST_F(DecimalRoundTest, sharedNullScaleSkipsChild) {
   const auto type = DECIMAL(38, 0);
   const auto maximum = DecimalUtil::kPowersOfTen[38] - 1;
   const auto input =
