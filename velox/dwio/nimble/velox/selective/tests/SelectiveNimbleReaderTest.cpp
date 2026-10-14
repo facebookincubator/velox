@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <set>
@@ -4566,7 +4567,61 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsDouble) {
   ASSERT_TRUE(fpStats->getMinimum().has_value());
   EXPECT_DOUBLE_EQ(fpStats->getMinimum().value(), 0.0);
   ASSERT_TRUE(fpStats->getMaximum().has_value());
-  EXPECT_DOUBLE_EQ(fpStats->getMaximum().value(), 73.5);
+  EXPECT_TRUE(std::isnan(fpStats->getMaximum().value()));
+}
+
+// Verifies file stats keep the NaN rows of a file whose finite values all fail
+// the filter. NaN passes a filter with an unbounded upper end, and the writer's
+// max skips a NaN that is not the first value. NaN fails a bounded upper end,
+// so the min still prunes.
+TEST_P(SelectiveNimbleReaderTest, columnStatisticsFloatingPointNaN) {
+  auto input = makeRowVector({
+      makeFlatVector<double>(
+          {1.0, std::numeric_limits<double>::quiet_NaN(), 2.0}),
+      makeFlatVector<float>(
+          {1.0f, std::numeric_limits<float>::quiet_NaN(), 2.0f}),
+  });
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers =
+      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+
+  auto doubleStats = readers.reader->columnStatistics(1);
+  auto realStats = readers.reader->columnStatistics(2);
+  ASSERT_NE(doubleStats, nullptr);
+  ASSERT_NE(realStats, nullptr);
+  const auto testDouble = [&](const common::Filter& filter) {
+    return common::testFilter(
+        &filter, doubleStats.get(), input->size(), DOUBLE());
+  };
+  const auto testReal = [&](const common::Filter& filter) {
+    return common::testFilter(&filter, realStats.get(), input->size(), REAL());
+  };
+
+  // x > 5.0, x >= 5.0, and x >= nan(), which Presto turns into x > +inf.
+  EXPECT_TRUE(testDouble(
+      common::FloatingPointRange<double>(
+          5.0, false, true, 0.0, true, false, false)));
+  EXPECT_TRUE(testDouble(
+      common::FloatingPointRange<double>(
+          5.0, false, false, 0.0, true, false, false)));
+  EXPECT_TRUE(testDouble(
+      common::FloatingPointRange<double>(
+          INFINITY, false, true, INFINITY, true, false, false)));
+  EXPECT_TRUE(testReal(
+      common::FloatingPointRange<float>(
+          5.0f, false, true, 0.0f, true, false, false)));
+
+  // x < 0.0
+  EXPECT_FALSE(testDouble(
+      common::FloatingPointRange<double>(
+          -INFINITY, true, false, 0.0, false, true, false)));
+  EXPECT_FALSE(testReal(
+      common::FloatingPointRange<float>(
+          -INFINITY, true, false, 0.0f, false, true, false)));
 }
 
 // Verifies columnStatistics returns StringColumnStatistics for VARCHAR columns.

@@ -19,6 +19,7 @@
 #include <folly/container/F14Set.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
@@ -1162,7 +1163,22 @@ SelectiveNimbleReader::columnStatistics(uint32_t index) const {
   if (index >= stats.size() || !stats[index]) {
     return nullptr;
   }
-  return stats[index]->toCommonStatistics();
+  auto commonStats = stats[index]->toCommonStatistics();
+  const auto* doubleStats =
+      dynamic_cast<const dwio::common::DoubleColumnStatistics*>(
+          commonStats.get());
+  if (doubleStats == nullptr || !doubleStats->getMaximum().has_value() ||
+      !featureGate()->enabled(
+          FeatureGate::FeatureSet::kFileStatsNanMax, /*defaultValue=*/true)) {
+    return commonStats;
+  }
+  // The written max skips NaN, and filters such as x > 5.0 accept NaN. A NaN
+  // max keeps them from pruning a file that holds NaN rows.
+  return std::make_unique<dwio::common::DoubleColumnStatistics>(
+      *doubleStats,
+      doubleStats->getMinimum(),
+      std::numeric_limits<double>::quiet_NaN(),
+      doubleStats->getSum());
 }
 
 const RowTypePtr& SelectiveNimbleReader::rowType() const {
