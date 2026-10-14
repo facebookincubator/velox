@@ -100,10 +100,10 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  const auto& fileMetadatas = reader.readFileMetadatas();
+  const auto& fileMetadatas = reader.fileMetaDatas();
   ASSERT_FALSE(fileMetadatas.empty());
   EXPECT_GT(fileMetadatas.front().schema.size(), 1);
-  EXPECT_EQ(&reader.readFileMetadatas(), &fileMetadatas);
+  EXPECT_EQ(&reader.fileMetaDatas(), &fileMetadatas);
 
   reader.setPushdownFilter(&splitFilter);
   dwio::common::RuntimeStats runtimeStats;

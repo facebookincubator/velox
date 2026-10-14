@@ -480,6 +480,56 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
       IcebergMetadataColumn::icebergDeletePosColumn();
 };
 
+TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
+  auto file = TempFilePath::create();
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  writeToFile(file->getPath(), {data});
+  auto plan = makeTableScanPlan(data->rowType());
+  // The delete file is missing too. Opening it would fail the query, so this
+  // checks that delete-file setup is skipped for a missing data file.
+  auto missing = [&]() {
+    return std::make_shared<HiveIcebergSplit>(
+        kCudfIcebergConnectorId,
+        file->getPath() + ".missing",
+        dwio::common::FileFormat::PARQUET,
+        0,
+        123,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        nullptr,
+        true,
+        std::vector<IcebergDeleteFile>{IcebergDeleteFile(
+            FileContent::kPositionalDeletes,
+            file->getPath() + ".missing-delete",
+            dwio::common::FileFormat::PARQUET,
+            1,
+            1024)});
+  };
+  for (const auto preload : {0, 4}) {
+    auto splits = makeIcebergSplits(file->getPath());
+    splits.insert(splits.begin(), missing());
+    splits.push_back(missing());
+    auto task = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config(
+                        core::QueryConfig::kMaxSplitPreloadPerDriver,
+                        std::to_string(preload))
+                    .connectorSessionProperty(
+                        kCudfIcebergConnectorId,
+                        ::facebook::velox::connector::hive::HiveConfig::
+                            kIgnoreMissingFilesSession,
+                        "true")
+                    .splits(splits)
+                    .assertResults({data});
+    const auto stats =
+        toPlanStats(task->taskStats()).at(plan->id()).customStats;
+    EXPECT_EQ(stats.count("skippedSplits"), 0);
+    EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
+    EXPECT_EQ(stats.at("processedSplits").sum, 1);
+  }
+}
+
 /// Basic read without any deletes.
 TEST_F(CudfIcebergReadTest, basicRead) {
   auto rowType = ROW({"c0"}, {BIGINT()});
