@@ -35,19 +35,23 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
-#include <list>
 #include <mutex>
-#include <thread>
+#include <optional>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
+
+// How many times a read looks up one piece while other readers fill it.
+constexpr int kMaxLookupAttempts = 32;
+
+// AsyncDataCache stores entry lengths in an int32_t. Large individual reads
+// remain legal datasource requests, but must bypass that cache.
+constexpr size_t kMaxCacheEntryBytes = std::numeric_limits<int32_t>::max();
 
 // The most async device reads that run at once: KvikIO's
 // KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS, with KvikIO's default of 256.
@@ -77,108 +81,17 @@ folly::Executor* remoteReadExecutor() {
   return executor;
 }
 
-// cuDF exposes std::future, not a completion callback. Keep outstanding host
-// reads off the executor while their futures are pending. The single readiness
-// thread never performs I/O, CUDA work, or a blocking future get. Deferred
-// delegates are supported, but their get must still run on the executor.
-// Admission precedes cache allocation, so a large pass cannot allocate host
-// buffers for every queued request at once. This does not change GPU
-// preloading.
-class CacheReadScheduler {
- public:
-  struct Read {
-    virtual ~Read() = default;
-    virtual bool ready() noexcept = 0;
-    virtual void run() noexcept = 0;
-    virtual void fail(std::exception_ptr error) noexcept = 0;
-  };
-
-  static CacheReadScheduler& instance() {
-    // Like remoteReadExecutor, outlive CUDA/static teardown. No buffers are
-    // retained once reads finish; callers must quiesce before cache shutdown.
-    static auto* scheduler = new CacheReadScheduler;
-    return *scheduler;
-  }
-
-  void add(std::shared_ptr<Read> read) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (admitted_ == limit_) {
-        queued_.push_back(std::move(read));
-        return;
-      }
-      ++admitted_;
-    }
-    dispatch(std::move(read));
-  }
-
-  void await(std::shared_ptr<Read> read) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      waiting_.push_back(std::move(read));
-    }
-    condition_.notify_one();
-  }
-
-  void finished() noexcept {
-    std::shared_ptr<Read> next;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (queued_.empty()) {
-        --admitted_;
-      } else {
-        next = std::move(queued_.front());
-        queued_.pop_front();
-      }
-    }
-    if (next) {
-      dispatch(std::move(next));
-    }
-  }
-
- private:
-  CacheReadScheduler() : executor_(remoteReadExecutor()) {
-    std::thread([this] { poll(); }).detach();
-  }
-
-  void dispatch(std::shared_ptr<Read> read) noexcept {
-    try {
-      executor_->add([read] { read->run(); });
-    } catch (...) {
-      read->fail(std::current_exception());
-    }
-  }
-
-  void poll() {
-    for (;;) {
-      std::list<std::shared_ptr<Read>> ready;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        condition_.wait(lock, [&] { return !waiting_.empty(); });
-        for (auto it = waiting_.begin(); it != waiting_.end();) {
-          auto current = it++;
-          if ((*current)->ready()) {
-            ready.splice(ready.end(), waiting_, current);
-          }
-        }
-        if (ready.empty()) {
-          condition_.wait_for(lock, std::chrono::microseconds(100));
-        }
-      }
-      for (auto& read : ready) {
-        dispatch(std::move(read));
-      }
-    }
-  }
-
-  folly::Executor* const executor_;
-  const size_t limit_{maxConcurrentReads()};
-  size_t admitted_{0};
-  std::mutex mutex_;
-  std::condition_variable condition_;
-  std::deque<std::shared_ptr<Read>> queued_;
-  std::list<std::shared_ptr<Read>> waiting_;
-};
+// cuDF exposes std::future, not a completion callback. A read that waits for
+// its KvikIO fill, or for another reader's fill of the same entry, blocks a
+// thread of this executor rather than a remoteReadExecutor thread, so copies of
+// cache hits never queue behind waits. At most maxConcurrentReads() reads run
+// at once, so that many threads let all of them wait at the same time.
+folly::Executor* fillWaitExecutor() {
+  static auto* executor = new folly::CPUThreadPoolExecutor(
+      maxConcurrentReads(),
+      std::make_shared<folly::NamedThreadFactory>("CudfCacheWait"));
+  return executor;
+}
 
 int streamDevice(cuda::stream_ref stream) {
   int device{};
@@ -204,36 +117,14 @@ void finishDeviceRead(cuda::stream_ref stream, int device) {
   }
 }
 
-class PinnedStagingBuffer {
- public:
-  static constexpr size_t kAlignment = 64;
-
-  explicit PinnedStagingBuffer(size_t size)
-      : mr_(cudf::get_pinned_memory_resource()),
-        size_(size),
-        data_(static_cast<uint8_t*>(mr_.allocate_sync(size, kAlignment))) {}
-
-  ~PinnedStagingBuffer() {
-    mr_.deallocate_sync(data_, size_, kAlignment);
-  }
-
-  PinnedStagingBuffer(const PinnedStagingBuffer&) = delete;
-  PinnedStagingBuffer& operator=(const PinnedStagingBuffer&) = delete;
-
-  uint8_t* data() const {
-    return data_;
-  }
-
- private:
-  rmm::host_device_async_resource_ref mr_;
-  size_t size_;
-  uint8_t* data_;
-};
-
 // One reusable pinned staging buffer per thread and device, plus the event
 // marking its last H2D copy.
 struct PinnedStagingSlot {
-  PinnedStagingBuffer* buffer{nullptr};
+  static constexpr size_t kAlignment = 64;
+
+  // The memory resource that allocated 'data', which must also free it.
+  std::optional<rmm::host_device_async_resource_ref> mr;
+  uint8_t* data{nullptr};
   size_t capacity{0};
   cudaEvent_t event{nullptr};
 
@@ -244,13 +135,16 @@ struct PinnedStagingSlot {
       CUDF_CUDA_TRY(cudaEventSynchronize(event));
     }
     if (capacity < size) {
-      delete std::exchange(buffer, nullptr);
-      capacity = 0;
+      if (data != nullptr) {
+        mr->deallocate_sync(std::exchange(data, nullptr), capacity, kAlignment);
+        capacity = 0;
+      }
       // Leave an empty, reusable slot if allocation throws.
-      buffer = new PinnedStagingBuffer(size);
+      mr = cudf::get_pinned_memory_resource();
+      data = static_cast<uint8_t*>(mr->allocate_sync(size, kAlignment));
       capacity = size;
     }
-    return buffer->data();
+    return data;
   }
 
   void recordCopy(cudaStream_t stream) {
@@ -268,22 +162,19 @@ PinnedStagingSlot& stagingSlot(int device) {
   return slots[device];
 }
 
-struct SubmittedDeviceRead {
-  size_t bytes{0};
-};
-
 // A caller may destroy the destination once its future is consumed or
 // discarded. The executor's future alone only marks H2D submission, so the
 // outer completion also fences the copy. Wait outside the remote executor
 // rather than occupying an I/O thread during H2D completion.
 struct DeviceReadCompletion {
-  std::future<SubmittedDeviceRead> submitted;
+  // The number of bytes whose H2D copies were submitted.
+  std::future<size_t> submitted;
   cuda::stream_ref stream;
   int device;
   std::shared_ptr<std::atomic<bool>> published;
 
   DeviceReadCompletion(
-      std::future<SubmittedDeviceRead> f,
+      std::future<size_t> f,
       cuda::stream_ref s,
       int d,
       std::shared_ptr<std::atomic<bool>> ioPublished)
@@ -301,10 +192,9 @@ struct DeviceReadCompletion {
       }
     }
   }
-  static size_t
-  finish(SubmittedDeviceRead result, cuda::stream_ref stream, int device) {
+  static size_t finish(size_t bytes, cuda::stream_ref stream, int device) {
     finishDeviceRead(stream, device);
-    return result.bytes;
+    return bytes;
   }
   size_t get() {
     return finish(submitted.get(), stream, device);
@@ -365,32 +255,48 @@ struct CachingDataSource::State {
     }
   }
 
+  // Looks up the cache entry at 'offset'. Returns a shared pin on a hit, or an
+  // exclusive pin with contiguous memory for the caller to fill on a miss. The
+  // entry may be shorter than 'size'. Returns an empty pin and sets 'wait'
+  // while another reader fills the entry, and an empty pin without 'wait' when
+  // the range cannot be cached.
+  cache::CachePin
+  lookup(size_t offset, size_t size, folly::SemiFuture<bool>& wait) {
+    if (size > kMaxCacheEntryBytes) {
+      return {};
+    }
+    cache::CachePin pin;
+    try {
+      pin = cache->findOrCreate(
+          {fileNum.id(), offset},
+          size,
+          /*contiguous=*/true,
+          &wait,
+          cache::CacheEntrySizePolicy::kAllowSmaller);
+    } catch (const VeloxRuntimeError& error) {
+      if (error.errorCode() != error_code::kNoCacheSpace) {
+        throw;
+      }
+      return {};
+    }
+    if (pin.empty()) {
+      return pin;
+    }
+    auto* entry = pin.checkedEntry();
+    entry->getAndClearFirstUseFlag();
+    if (entry->isExclusive() && !entry->hasContiguousData()) {
+      return {};
+    }
+    return pin;
+  }
+
   // Returns a shared pin on the entry at 'offset', filling it synchronously on
   // a miss. The entry may be shorter than 'size'. Returns an empty pin when
   // the cache cannot admit the range.
   cache::CachePin pinFragment(size_t offset, size_t size) {
-    // AsyncDataCache stores entry lengths in an int32_t. Large individual
-    // reads remain legal datasource requests, but must bypass that cache.
-    if (size > std::numeric_limits<int32_t>::max()) {
-      return {};
-    }
-    const cache::RawFileCacheKey key{fileNum.id(), offset};
-    for (int attempt = 0; attempt < 32; ++attempt) {
-      folly::SemiFuture<bool> wait = folly::SemiFuture<bool>::makeEmpty();
-      cache::CachePin pin;
-      try {
-        pin = cache->findOrCreate(
-            key,
-            size,
-            /*contiguous=*/true,
-            &wait,
-            cache::CacheEntrySizePolicy::kAllowSmaller);
-      } catch (const VeloxRuntimeError& error) {
-        if (error.errorCode() != error_code::kNoCacheSpace) {
-          throw;
-        }
-        return {};
-      }
+    for (int attempt = 0; attempt < kMaxLookupAttempts; ++attempt) {
+      auto wait = folly::SemiFuture<bool>::makeEmpty();
+      auto pin = lookup(offset, size, wait);
       if (pin.empty()) {
         if (!wait.valid()) {
           return {};
@@ -399,13 +305,9 @@ struct CachingDataSource::State {
         continue;
       }
       auto* entry = pin.checkedEntry();
-      entry->getAndClearFirstUseFlag();
       if (!entry->isExclusive()) {
         recordHit(fragmentSize(pin, size), size);
         return pin;
-      }
-      if (!entry->hasContiguousData()) {
-        return {};
       }
       const auto actual = delegate->host_read(
           offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
@@ -468,34 +370,34 @@ struct CachingDataSource::State {
   }
 
   // Synchronous device read: consume cached fragments and fill misses inline.
-  SubmittedDeviceRead submitDeviceRead(
+  // Returns the number of bytes whose H2D copies were submitted.
+  size_t submitDeviceRead(
       size_t offset,
       size_t bytes,
       uint8_t* dst,
       cuda::stream_ref stream,
       int device) {
     const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
-    SubmittedDeviceRead result;
+    size_t submitted = 0;
     try {
-      while (result.bytes < bytes) {
-        const auto position = result.bytes;
-        const auto remaining = bytes - position;
-        auto pin = pinFragment(offset + position, remaining);
+      while (submitted < bytes) {
+        const auto remaining = bytes - submitted;
+        auto pin = pinFragment(offset + submitted, remaining);
         const auto fragmentBytes =
             pin.empty() ? remaining : fragmentSize(pin, remaining);
         const auto actual = submitReadyDeviceRead(
             std::move(pin),
-            offset + position,
+            offset + submitted,
             fragmentBytes,
-            dst + position,
+            dst + submitted,
             stream,
-            device,
-            result);
+            device);
+        submitted += actual;
         if (actual < fragmentBytes) {
           break;
         }
       }
-      return result;
+      return submitted;
     } catch (...) {
       // A later lookup/read can fail while an earlier prefix is still in
       // flight. Fence before the destination can be released.
@@ -506,15 +408,15 @@ struct CachingDataSource::State {
 
   // Stages one fragment through the thread's pinned buffer and submits its
   // H2D copy. 'pin' is shared and fully filled, or empty for an uncached
-  // range that is read synchronously from the delegate.
+  // range that is read synchronously from the delegate. Returns the number of
+  // bytes submitted.
   size_t submitReadyDeviceRead(
       cache::CachePin pin,
       size_t offset,
       size_t bytes,
       uint8_t* dst,
       cuda::stream_ref stream,
-      int device,
-      SubmittedDeviceRead& result) {
+      int device) {
     const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
     auto& slot = stagingSlot(device);
     auto* staging = slot.reserve(bytes);
@@ -531,7 +433,6 @@ struct CachingDataSource::State {
       CUDF_CUDA_TRY(cudaMemcpyAsync(
           dst, staging, actual, cudaMemcpyHostToDevice, stream.get()));
       slot.recordCopy(stream.get());
-      result.bytes += actual;
     } catch (...) {
       finishDeviceRead(stream, device);
       throw;
@@ -540,22 +441,22 @@ struct CachingDataSource::State {
   }
 };
 
-// One asynchronous device read. It is driven by the scheduler: run() makes as
-// much progress as it can without blocking, parks itself with await() while a
-// fill or an exclusive entry is pending, and is dispatched again once ready.
+// One asynchronous device read. run() makes as much progress as it can on a
+// remoteReadExecutor() thread without blocking. While its KvikIO fill, or
+// another reader's fill of the same entry, is pending, the read waits on a
+// fillWaitExecutor() thread and then continues in run().
 struct CachingDataSource::State::AsyncRead final
-    : CacheReadScheduler::Read,
-      std::enable_shared_from_this<AsyncRead> {
+    : std::enable_shared_from_this<AsyncRead> {
   std::shared_ptr<State> state;
-  std::shared_ptr<std::promise<SubmittedDeviceRead>> promise;
+  // Set to the number of bytes whose H2D copies were submitted.
+  std::shared_ptr<std::promise<size_t>> promise;
   size_t offset;
   size_t bytes;
   uint8_t* dst;
   cuda::stream_ref stream;
   int device;
-  CacheReadScheduler& scheduler;
   cache::CachePin pin;
-  SubmittedDeviceRead result;
+  size_t submittedBytes{0};
   size_t fragmentBytes{0};
   folly::SemiFuture<bool> cacheWait = folly::SemiFuture<bool>::makeEmpty();
   std::future<size_t> hostRead;
@@ -563,31 +464,92 @@ struct CachingDataSource::State::AsyncRead final
 
   AsyncRead(
       std::shared_ptr<State> s,
-      std::shared_ptr<std::promise<SubmittedDeviceRead>> p,
+      std::shared_ptr<std::promise<size_t>> p,
       size_t o,
       size_t b,
       uint8_t* d,
       cuda::stream_ref st,
-      int dev,
-      CacheReadScheduler& sched)
+      int dev)
       : state(std::move(s)),
         promise(std::move(p)),
         offset(o),
         bytes(b),
         dst(d),
         stream(st),
-        device(dev),
-        scheduler(sched) {}
+        device(dev) {}
 
-  bool ready() noexcept override {
-    if (cacheWait.valid()) {
-      return cacheWait.isReady();
+  // Starts 'read', or queues it while maxConcurrentReads() reads are running.
+  // Queued reads have not allocated cache entries yet, so a large pass cannot
+  // allocate host buffers for every queued request at once.
+  static void start(std::shared_ptr<AsyncRead> read) {
+    auto& queue = startQueue();
+    {
+      std::lock_guard<std::mutex> lock(queue.mutex);
+      if (queue.running == maxConcurrentReads()) {
+        queue.waiting.push_back(std::move(read));
+        return;
+      }
+      ++queue.running;
     }
-    return hostRead.wait_for(std::chrono::seconds(0)) !=
-        std::future_status::timeout;
+    read->resume();
   }
 
-  void fail(std::exception_ptr error) noexcept override {
+  struct StartQueue {
+    std::mutex mutex;
+    size_t running{0};
+    std::deque<std::shared_ptr<AsyncRead>> waiting;
+  };
+
+  static StartQueue& startQueue() {
+    // Never destroyed, like the executors.
+    static auto* queue = new StartQueue;
+    return *queue;
+  }
+
+  // Ends this read's turn and starts the next queued read, if any.
+  static void finishOne() noexcept {
+    std::shared_ptr<AsyncRead> next;
+    {
+      auto& queue = startQueue();
+      std::lock_guard<std::mutex> lock(queue.mutex);
+      if (queue.waiting.empty()) {
+        --queue.running;
+      } else {
+        next = std::move(queue.waiting.front());
+        queue.waiting.pop_front();
+      }
+    }
+    if (next) {
+      next->resume();
+    }
+  }
+
+  // Continues this read in run() on remoteReadExecutor().
+  void resume() noexcept {
+    try {
+      remoteReadExecutor()->add([self = shared_from_this()] { self->run(); });
+    } catch (...) {
+      fail(std::current_exception());
+    }
+  }
+
+  // Waits on a fillWaitExecutor() thread for the pending fill, then resumes.
+  void waitThenResume() noexcept {
+    try {
+      fillWaitExecutor()->add([self = shared_from_this()] {
+        if (self->cacheWait.valid()) {
+          self->cacheWait.wait();
+        } else {
+          self->hostRead.wait();
+        }
+        self->resume();
+      });
+    } catch (...) {
+      fail(std::current_exception());
+    }
+  }
+
+  void fail(std::exception_ptr error) noexcept {
     // A std::future destructor need not wait for external writes. Even if
     // scheduling/allocation fails after dispatch, drain before abandoning the
     // exclusive cache allocation or allowing destination destruction.
@@ -597,7 +559,7 @@ struct CachingDataSource::State::AsyncRead final
       } catch (...) {
       }
     }
-    if (result.bytes != 0) {
+    if (submittedBytes != 0) {
       try {
         finishDeviceRead(stream, device);
       } catch (...) {
@@ -605,10 +567,10 @@ struct CachingDataSource::State::AsyncRead final
     }
     pin.clear();
     promise->set_exception(error);
-    scheduler.finished();
+    finishOne();
   }
 
-  void run() noexcept override {
+  void run() noexcept {
     try {
       const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
       if (hostRead.valid()) {
@@ -623,54 +585,34 @@ struct CachingDataSource::State::AsyncRead final
         std::move(cacheWait).get();
         cacheWait = folly::SemiFuture<bool>::makeEmpty();
       }
-      while (result.bytes < bytes) {
-        const auto remaining = bytes - result.bytes;
-        if (++attempts > 32 ||
-            remaining > std::numeric_limits<int32_t>::max()) {
+      while (submittedBytes < bytes) {
+        const auto remaining = bytes - submittedBytes;
+        if (++attempts > kMaxLookupAttempts) {
           bypass();
           return;
         }
-        try {
-          pin = state->cache->findOrCreate(
-              {state->fileNum.id(), offset + result.bytes},
-              remaining,
-              true,
-              &cacheWait,
-              cache::CacheEntrySizePolicy::kAllowSmaller);
-        } catch (const VeloxRuntimeError& error) {
-          if (error.errorCode() != error_code::kNoCacheSpace) {
-            throw;
-          }
-          bypass();
-          return;
-        }
+        pin = state->lookup(offset + submittedBytes, remaining, cacheWait);
         if (pin.empty()) {
           if (cacheWait.valid()) {
-            scheduler.await(shared_from_this());
+            waitThenResume();
           } else {
             bypass();
           }
           return;
         }
         auto* entry = pin.checkedEntry();
-        entry->getAndClearFirstUseFlag();
         fragmentBytes = State::fragmentSize(pin, remaining);
         if (!entry->isExclusive()) {
           state->recordHit(fragmentBytes, remaining);
           copyFragment();
           continue;
         }
-        if (!entry->hasContiguousData()) {
-          pin.clear();
-          bypass();
-          return;
-        }
         hostRead = state->delegate->host_read_async(
-            offset + result.bytes,
+            offset + submittedBytes,
             fragmentBytes,
             reinterpret_cast<uint8_t*>(entry->contiguousData()));
         VELOX_CHECK(hostRead.valid(), "KvikIO returned an invalid read future");
-        scheduler.await(shared_from_this());
+        waitThenResume();
         return;
       }
       complete();
@@ -680,28 +622,26 @@ struct CachingDataSource::State::AsyncRead final
   }
 
   void copyFragment() {
-    const auto position = result.bytes;
-    state->submitReadyDeviceRead(
+    submittedBytes += state->submitReadyDeviceRead(
         std::move(pin),
-        offset + position,
+        offset + submittedBytes,
         fragmentBytes,
-        dst + position,
+        dst + submittedBytes,
         stream,
-        device,
-        result);
+        device);
     attempts = 0;
   }
 
   // Reads the rest of the range synchronously, bypassing the cache.
   void bypass() {
-    fragmentBytes = bytes - result.bytes;
+    fragmentBytes = bytes - submittedBytes;
     copyFragment();
     complete();
   }
 
   void complete() {
-    promise->set_value(std::move(result));
-    scheduler.finished();
+    promise->set_value(submittedBytes);
+    finishOne();
   }
 };
 
@@ -769,11 +709,10 @@ std::future<size_t> CachingDataSource::device_read_async(
   }
   VELOX_CHECK_NOT_NULL(dst);
   const auto device = streamDevice(stream);
-  auto& scheduler = CacheReadScheduler::instance();
-  auto promise = std::make_shared<std::promise<SubmittedDeviceRead>>();
+  auto promise = std::make_shared<std::promise<size_t>>();
   auto submitted = promise->get_future();
   auto read = std::make_shared<State::AsyncRead>(
-      state_, promise, offset, bytes, dst, stream, device, scheduler);
+      state_, promise, offset, bytes, dst, stream, device);
   auto published = std::make_shared<std::atomic<bool>>(false);
   // Construct the destination-lifetime fence before publishing any I/O.
   auto completion = std::async(
@@ -784,7 +723,7 @@ std::future<size_t> CachingDataSource::device_read_async(
       });
   published->store(true);
   try {
-    scheduler.add(std::move(read));
+    State::AsyncRead::start(std::move(read));
   } catch (...) {
     promise->set_exception(std::current_exception());
     throw;
