@@ -38,6 +38,15 @@
 ///   - NarrowBlocks: per-block 4 bits, global ~20 bits (BBP sweet spot)
 ///   - Uniform: ~20 bits everywhere (all encodings comparable)
 ///
+/// Constant: a separate file in which every row holds one value, so every chunk
+/// is Constant encoded. Only c0 is read: unfiltered, with a filter that passes
+/// every row, and with a filter that rejects every row.
+///
+/// Constant Sparse: c0 = random filter column (not constant), c1 = constant.
+/// Filter on c0 at various selectivities; c1 is read sparsely through the
+/// bulkScan path. The c1 decode stats isolate Constant performance under sparse
+/// access.
+///
 /// Run:
 ///   buck2 run @//mode/opt \
 ///     fbcode//velox/dwio/nimble/velox/selective/tests:int_encoding_benchmark
@@ -218,9 +227,10 @@ struct BenchmarkState : public velox::test::VectorTestBase {
               filter->first, filter->second, false));
       // Force c1 to be read eagerly (not lazy) so it receives the
       // sparse RowSet from c0's filter and goes through the sparse
-      // bulkScan path (V::dense = false).
-      scanSpec->childByName("c1")->setFilter(
-          std::make_unique<common::AlwaysTrue>());
+      // bulkScan path (V::dense = false). Single-column reads have no c1.
+      if (auto* c1 = scanSpec->childByName("c1")) {
+        c1->setFilter(std::make_unique<common::AlwaysTrue>());
+      }
     }
 
     auto us = [](auto d) {
@@ -310,6 +320,7 @@ struct BenchmarkState : public velox::test::VectorTestBase {
     // zeroCopy=true uses nimble::EncodingFactory (not legacy), which forwards
     // Encoding::Options including decodingStats to encoding constructors.
     rowOptions.setStringDecoderZeroCopy(true);
+    rowOptions.setNimbleConstantBulkScan(true);
     rowOptions.setCollectColumnStats(true);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
@@ -572,6 +583,62 @@ void runMultiTypeBenchmarks() {
   }
 }
 
+// Writes one value in every row so that every chunk is Constant encoded, then
+// reads c0 with and without a filter.
+void runConstantBenchmarks() {
+  const auto constantColumn =
+      state().makeVector<int32_t>(std::vector<int32_t>(kTotalRows, 7));
+  const auto file = state().writeFile(
+      "Constant",
+      constantColumn,
+      constantColumn,
+      EncodingType::Constant,
+      std::nullopt);
+
+  struct Filter {
+    const char* name;
+    std::optional<std::pair<int64_t, int64_t>> range;
+  };
+  Filter filters[] = {
+      {"No filter", std::nullopt},
+      {"Pass     ", {{7, 7}}},
+      {"Reject   ", {{100, 100}}},
+  };
+
+  // Reads only c0 so that no other column's work is mixed in.
+  const auto singleColumnType = ROW({"c0"}, {INTEGER()});
+  LOG(INFO) << "=== Constant ===";
+  for (auto& filter : filters) {
+    LOG(INFO) << "--- " << filter.name << " ---";
+    benchmark(std::string("  Constant"), file, filter.range, singleColumnType);
+  }
+
+  // Sparse: c0 = random filter column, c1 = constant. Filter on c0 selects a
+  // subset of rows; c1 is read sparsely through bulkScan with the surviving
+  // RowSet. The c1 stats isolate Constant decoding on the sparse path.
+  const auto sparseFile = state().writeFile(
+      "ConstantSparse",
+      state().generateFilterColumn(),
+      constantColumn,
+      EncodingType::Constant,
+      std::nullopt);
+
+  Filter sparseFilters[] = {
+      {"Dense     ", std::nullopt},
+      {"Sparse50% ", {{0, 249}}},
+      {"Sparse20% ", {{0, 99}}},
+      {"Sparse10% ", {{0, 49}}},
+      {"Sparse1%  ", {{0, 4}}},
+      {"Sparse0.2%", {{0, 0}}},
+  };
+
+  LOG(INFO) << "=== Constant Sparse (c1 stats) ===";
+  for (auto& filter : sparseFilters) {
+    LOG(INFO) << "--- " << filter.name << " ---";
+    benchmark(std::string("  ConstSparse"), sparseFile, filter.range);
+  }
+}
+
 } // namespace
 } // namespace facebook::nimble
 
@@ -582,5 +649,6 @@ int main(int argc, char** argv) {
 
   facebook::nimble::runBenchmarks();
   facebook::nimble::runMultiTypeBenchmarks();
+  facebook::nimble::runConstantBenchmarks();
   return 0;
 }
