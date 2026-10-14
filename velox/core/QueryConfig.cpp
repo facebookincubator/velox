@@ -146,6 +146,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
+    VELOX_REGISTER_QUERY_CONFIG(kTaskPartitionedWriterCount);
 
     // Hash probe.
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeFinishEarlyOnEmptyBuild);
