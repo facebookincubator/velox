@@ -862,8 +862,7 @@ void BlockBitPackingEncoding<T>::readWithVisitor(
       (std::is_same_v<
            typename V::Extract,
            velox::dwio::common::ExtractToReader> ||
-       (V::kHasHook && !V::kHasFilter &&
-        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
+       (V::kHasHook && !V::kHasFilter)) &&
       kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
     if (velox::dwio::common::useFastPath(visitor, nulls) &&

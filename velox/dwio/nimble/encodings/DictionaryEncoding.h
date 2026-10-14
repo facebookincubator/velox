@@ -345,8 +345,6 @@ class DictionaryIndicesHook : public velox::ValueHook {
 class ForwardingIndicesHook : public velox::ValueHook {
  public:
   static constexpr bool kSkipNulls = true;
-  static constexpr bool kBulkFastPath = true;
-
   /// Constructs a hook that forwards every index to 'target'.
   explicit ForwardingIndicesHook(velox::ValueHook& target) : target_{&target} {}
 

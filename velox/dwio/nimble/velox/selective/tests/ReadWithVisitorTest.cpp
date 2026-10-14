@@ -25,6 +25,8 @@
 //   repeated runs → RLEEncoding
 //   nullable wrappers → NullableEncoding
 
+#include <cstddef>
+
 #include <gtest/gtest.h>
 #include <bit>
 
@@ -61,6 +63,7 @@
 #include "velox/dwio/nimble/velox/selective/ReaderBase.h"
 #include "velox/dwio/nimble/velox/selective/RowSizeTracker.h"
 #include "velox/dwio/nimble/velox/selective/StringColumnReader.h"
+#include "velox/vector/AggregationHook.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -106,13 +109,10 @@ class IntegerColumnReaderTestAccessor : public IntegerColumnReader {
   }
 };
 
-// Records integer hook callbacks and counts bulk calls. 'kOptInBulkFastPath'
-// controls whether encodings may route this hook through their bulk path.
-template <bool kOptInBulkFastPath>
+// Records integer hook callbacks and counts bulk calls.
 class CapturingIntHook final : public ValueHook {
  public:
   static constexpr bool kSkipNulls = true;
-  static constexpr bool kBulkFastPath = kOptInBulkFastPath;
 
   bool acceptsNulls() const final {
     return false;
@@ -137,8 +137,6 @@ class CapturingIntHook final : public ValueHook {
   std::vector<int64_t> values;
   uint32_t numBulkCalls{0};
 };
-
-using BulkCapturingIntHook = CapturingIntHook</*kOptInBulkFastPath=*/true>;
 
 // ---------------------------------------------------------------------------
 // Test-only accessor for FloatingPointColumnReader: exposes protected
@@ -1761,18 +1759,18 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     auto encoding = makeEncoding(nonNullValues, buffer);
 
     common::AlwaysTrue filter;
-    BulkCapturingIntHook hook;
+    CapturingIntHook hook;
     constexpr bool kIsDense = true;
     DecoderVisitor<
         int32_t,
         common::AlwaysTrue,
-        dwio::common::ExtractToHook<BulkCapturingIntHook>,
+        dwio::common::ExtractToHook<CapturingIntHook>,
         kIsDense>
         visitor(
             filter,
             reader,
             rows,
-            dwio::common::ExtractToHook<BulkCapturingIntHook>(&hook));
+            dwio::common::ExtractToHook<CapturingIntHook>(&hook));
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
     dispatchCallReadWithVisitor(*encoding, visitor, params);
@@ -2683,7 +2681,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseHook) {
 
 TEST_P(
     ReadWithVisitorNonLegacyTest,
-    columnReaderFixedBitWidthHookUsesScalarPathWithoutOptIn) {
+    columnReaderFixedBitWidthGenericHookUsesBulkPath) {
   constexpr vector_size_t kNumRows{256};
   auto input =
       makeRowVector({makeFlatVector<int32_t>(kNumRows, folly::identity)});
@@ -2696,11 +2694,15 @@ TEST_P(
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*rowType);
-  CapturingIntHook</*kOptInBulkFastPath=*/false> hook;
+  CapturingIntHook hook;
   auto* childSpec = scanSpec->childByName("c0");
   childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
   childSpec->setValueHook(&hook);
-  auto root = buildReader(*fileContext, rowType, *scanSpec, true);
+  auto root = buildReader(
+      *fileContext,
+      rowType,
+      *scanSpec,
+      /*stringDecoderZeroCopy=*/true);
   readColumn(root.get(), kNumRows);
 
   std::vector<vector_size_t> expectedRows;
@@ -2711,9 +2713,53 @@ TEST_P(
     expectedRows.push_back(row);
     expectedValues.push_back(row);
   }
-  EXPECT_EQ(hook.numBulkCalls, 0);
+  EXPECT_GT(hook.numBulkCalls, 0);
   EXPECT_EQ(hook.rows, expectedRows);
   EXPECT_EQ(hook.values, expectedValues);
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderFixedBitWidthAggregationHookUsesBulkPath) {
+  struct GroupState {
+    int64_t sum{0};
+    uint8_t nulls{0};
+  };
+
+  constexpr vector_size_t kNumRows{256};
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(kNumRows, folly::identity, nullEvery(17))});
+  auto rowType = asRowType(input->type());
+  auto fileContext = makeFileContext(
+      input,
+      makeSingleColumnWriterOptions(
+          EncodingLayout{
+              EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed}));
+
+  GroupState state;
+  std::vector<char*> groups(kNumRows, reinterpret_cast<char*>(&state));
+  uint64_t numNulls{0};
+  aggregate::SumHook<int64_t, false> hook{
+      offsetof(GroupState, sum),
+      offsetof(GroupState, nulls),
+      1,
+      groups.data(),
+      &numNulls};
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto* childSpec = scanSpec->childByName("c0");
+  childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+  childSpec->setValueHook(&hook);
+  auto root = buildReader(*fileContext, rowType, *scanSpec, true);
+  readColumn(root.get(), kNumRows);
+
+  int64_t expectedSum{0};
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    if (row % 17 != 0) {
+      expectedSum += row;
+    }
+  }
+  EXPECT_EQ(state.sum, expectedSum);
 }
 
 TEST_P(
