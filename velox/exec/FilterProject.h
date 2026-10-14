@@ -103,6 +103,9 @@ class FilterProject : public Operator {
       const SelectivityVector& rows,
       EvalCtx& evalCtx);
 
+  // Adjusts the next projection batch from the observed output row size.
+  void updateOutputBatchRows(const RowVectorPtr& output);
+
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
 
@@ -118,6 +121,12 @@ class FilterProject : public Operator {
   int32_t numExprs_;
 
   FilterEvalCtx filterEvalCtx_;
+
+  // Starts at the preferred row count and adapts to the observed output width.
+  vector_size_t outputBatchRows_{0};
+
+  // Identifies the first unprocessed row while an input is emitted in batches.
+  vector_size_t inputOffset_{0};
 
   // Indices for fields/input columns that are both an identity projection and
   // are referenced by either a filter or project expression. This is used to

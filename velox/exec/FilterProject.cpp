@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/FilterProject.h"
+
+#include <algorithm>
+
 #include "velox/core/Expressions.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OperatorType.h"
@@ -127,6 +130,7 @@ FilterProject::FilterProject(
 
 void FilterProject::initialize() {
   Operator::initialize();
+  outputBatchRows_ = outputBatchRows();
   std::vector<core::TypedExprPtr> allExprs;
   if (hasFilter_) {
     VELOX_CHECK_NOT_NULL(filter_);
@@ -190,6 +194,7 @@ void FilterProject::initialize() {
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
+  VELOX_DCHECK_EQ(inputOffset_, 0);
   input_ = std::move(input);
 }
 
@@ -201,11 +206,35 @@ RowVectorPtr FilterProject::getOutput() {
   if (!input_) {
     return nullptr;
   }
+
+  auto originalInput = input_;
+  const bool splitInput =
+      !hasFilter_ && !lazyDereference_ && !isIdentityProjection_;
+  const auto numRemainingRows = originalInput->size() - inputOffset_;
+  const auto numInputRows = splitInput
+      ? std::min(outputBatchRows_, numRemainingRows)
+      : numRemainingRows;
+  if (inputOffset_ > 0 || numInputRows < originalInput->size()) {
+    loadColumns(originalInput, *operatorCtx_->execCtx());
+    auto indices = allocateIndices(numInputRows, pool());
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    for (vector_size_t i = 0; i < numInputRows; ++i) {
+      rawIndices[i] = inputOffset_ + i;
+    }
+    input_ = wrap(numInputRows, std::move(indices), originalInput);
+  }
+
   SCOPE_EXIT {
-    input_.reset();
+    inputOffset_ += numInputRows;
+    if (inputOffset_ == originalInput->size()) {
+      input_.reset();
+      inputOffset_ = 0;
+    } else {
+      input_ = std::move(originalInput);
+    }
   };
 
-  vector_size_t size = input_->size();
+  const auto size = input_->size();
   LocalSelectivityVector localRows(*operatorCtx_->execCtx(), size);
   auto* rows = localRows.get();
   VELOX_DCHECK_NOT_NULL(rows);
@@ -228,6 +257,7 @@ RowVectorPtr FilterProject::getOutput() {
       loadReusedLazyVectors(input_, reusedInputChannels_);
     }
     auto output = fillOutput(size, nullptr, results);
+    updateOutputBatchRows(output);
     return output;
   }
 
@@ -255,7 +285,17 @@ RowVectorPtr FilterProject::getOutput() {
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
       results);
+  updateOutputBatchRows(output);
   return output;
+}
+
+void FilterProject::updateOutputBatchRows(const RowVectorPtr& output) {
+  if (hasFilter_ || lazyDereference_ || isIdentityProjection_ ||
+      output->size() == 0) {
+    return;
+  }
+  const auto averageRowSize = output->estimateFlatSize() / output->size();
+  outputBatchRows_ = outputBatchRows(averageRowSize);
 }
 
 std::vector<VectorPtr> FilterProject::project(

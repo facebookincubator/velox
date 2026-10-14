@@ -132,6 +132,32 @@ TEST_F(FilterProjectTest, project) {
   assertProject(vectors);
 }
 
+TEST_F(FilterProjectTest, projectionBatchSize) {
+  constexpr vector_size_t kSize{100};
+  constexpr vector_size_t kInitialBatchRows{20};
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(kSize)});
+
+  core::PlanNodeId projectId;
+  auto plan = test::PlanBuilder()
+                  .values({data})
+                  .project({"c0 + 1"})
+                  .capturePlanNodeId(projectId)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  test::AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(kInitialBatchRows))
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "80")
+      .countResults(task);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(projectId);
+  EXPECT_EQ(stats.outputRows, kSize);
+  EXPECT_GT(stats.outputVectors, kSize / kInitialBatchRows);
+}
+
 TEST_F(FilterProjectTest, projectOverDictionary) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
@@ -193,7 +219,9 @@ TEST_F(FilterProjectTest, projectOverLazy) {
                   .values({lazyVectors})
                   .project({"c0 > 0 AND c1 > 0.0", "c1 + 5.2"})
                   .planNode();
-  assertQuery(plan, "SELECT c0 > 0 AND c1 > 0, c1 + 5.2 FROM tmp");
+  test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "100")
+      .assertResults("SELECT c0 > 0 AND c1 > 0, c1 + 5.2 FROM tmp");
 }
 
 TEST_F(FilterProjectTest, filterProject) {
