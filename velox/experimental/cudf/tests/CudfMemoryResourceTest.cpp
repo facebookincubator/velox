@@ -18,9 +18,13 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/exec/MemoryReclaimer.h"
+#include "velox/exec/Task.h"
 
 #include <cudf/utilities/memory_resource.hpp>
 
@@ -34,6 +38,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <future>
 #include <new>
 #include <thread>
@@ -125,8 +130,32 @@ std::shared_ptr<memory::CustomMemoryResource> makeCustomResource(
       std::string{kCudfMemoryResourceTag},
       std::make_shared<memory::MallocAllocator>(options),
       memory::MemoryArbitrator::create({}),
-      []() { return memory::MemoryReclaimer::create(0); },
+      [](const memory::ReclaimerContext&) {
+        return memory::MemoryReclaimer::create(0);
+      },
       capacity);
+}
+
+std::shared_ptr<core::QueryCtx> makeTrackedQueryCtx(
+    core::QueryCtx::Builder builder,
+    const std::shared_ptr<memory::CustomMemoryResource>& resource) {
+  auto queryCtx = builder.build();
+  auto root = memory::memoryManager()->addCustomRootPool(
+      core::QueryCtx::generatePoolName(queryCtx->queryId()),
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
+  auto reclaimer = resource->newReclaimer(
+      memory::QueryReclaimerContext{queryCtx.get(), root.get()});
+  if (reclaimer) {
+    root->setReclaimer(std::move(reclaimer));
+  }
+  queryCtx->addCustomPool(resource->tag(), std::move(root));
+  auto registry = memory::CustomMemoryResourceRegistry::createRegistry(nullptr);
+  registry->insert(resource->tag(), resource);
+  queryCtx->setRegistry<memory::CustomMemoryResourceRegistry::Registry>(
+      memory::kCustomMemoryResourceRegistryKey, std::move(registry));
+  return queryCtx;
 }
 
 class CudfMemoryResourceTest : public testing::Test {
@@ -650,6 +679,258 @@ TEST_F(CudfMemoryResourceTest, GlobalCountersIncludeScopedAllocations) {
     EXPECT_EQ(root->usedBytes(), 0);
     EXPECT_EQ(cudfAllocatedBytes(), 0);
   }
+}
+
+TEST_F(CudfMemoryResourceTest, SharedCapacityTransfersWithoutUsedReclaim) {
+  constexpr int64_t kCapacity = 32L << 20;
+  constexpr std::size_t kAllocation = 24L << 20;
+  // Exceed the root limit directly instead of waiting for global arbitration
+  // to time out when every used byte is non-reclaimable.
+  constexpr std::size_t kRejectedAllocation = kCapacity + 1;
+
+  auto owner = createCudfCustomMemoryResource(kCapacity);
+  auto queryA = makeTrackedQueryCtx(
+      core::QueryCtx::Builder().queryId("gpu-arbitration-a"), owner);
+  auto queryB = makeTrackedQueryCtx(
+      core::QueryCtx::Builder().queryId("gpu-arbitration-b"), owner);
+  auto rootA = queryA->customPool(std::string{kCudfMemoryResourceTag});
+  auto rootB = queryB->customPool(std::string{kCudfMemoryResourceTag});
+  ASSERT_NE(rootA, nullptr);
+  ASSERT_NE(rootB, nullptr);
+  EXPECT_EQ(rootA->arbitrator(), rootB->arbitrator());
+  EXPECT_EQ(rootA->arbitrator(), owner->arbitrator());
+
+  auto poolA = rootA->addLeafChild("gpu-arbitration-a-leaf");
+  auto poolB = rootB->addLeafChild("gpu-arbitration-b-leaf");
+  auto stateA = std::make_shared<HostBackedResourceState>();
+  auto stateB = std::make_shared<HostBackedResourceState>();
+  CudfMemoryResource resourceA{makeTestUpstream(stateA), poolA};
+  CudfMemoryResource resourceB{makeTestUpstream(stateB), poolB};
+
+  auto* allocationA = resourceA.allocate(
+      cuda::stream_ref{cudaStream_t{nullptr}},
+      kAllocation,
+      alignof(std::max_align_t));
+  EXPECT_EQ(poolA->usedBytes(), kAllocation);
+  EXPECT_GE(rootA->capacity(), kAllocation);
+  resourceA.deallocate(
+      cuda::stream_ref{cudaStream_t{nullptr}},
+      allocationA,
+      kAllocation,
+      alignof(std::max_align_t));
+  EXPECT_EQ(poolA->usedBytes(), 0);
+
+  auto* allocationB = resourceB.allocate(
+      cuda::stream_ref{cudaStream_t{nullptr}},
+      kAllocation,
+      alignof(std::max_align_t));
+  EXPECT_EQ(poolB->usedBytes(), kAllocation);
+  EXPECT_GE(rootB->capacity(), kAllocation);
+  EXPECT_LE(rootA->capacity() + rootB->capacity(), kCapacity);
+
+  EXPECT_THROW(
+      resourceA.allocate(
+          cuda::stream_ref{cudaStream_t{nullptr}},
+          kRejectedAllocation,
+          alignof(std::max_align_t)),
+      VeloxRuntimeError);
+  EXPECT_EQ(poolA->usedBytes(), 0);
+
+  const auto stats = owner->arbitrator()->stats();
+  EXPECT_GT(stats.reclaimedFreeBytes, 0);
+  EXPECT_EQ(stats.reclaimedUsedBytes, 0);
+  EXPECT_GT(stats.numFailures, 0);
+
+  resourceB.deallocate(
+      cuda::stream_ref{cudaStream_t{nullptr}},
+      allocationB,
+      kAllocation,
+      alignof(std::max_align_t));
+}
+
+TEST_F(CudfMemoryResourceTest, ProcessBackendSurvivesRegistryAndQueryRelease) {
+  // A fresh exec, not fork-after-CUDA, isolates permanent backend settings.
+  const auto previousStyle = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  SCOPE_EXIT {
+    testing::FLAGS_gtest_death_test_style = previousStyle;
+  };
+  EXPECT_EXIT(
+      ([&] {
+        constexpr int64_t kCapacity = 32L << 20;
+        auto resource = registerCudfMemoryResource(kCapacity);
+        std::weak_ptr<memory::CustomMemoryResource> weakResource = resource;
+        auto queryCtx =
+            core::QueryCtx::Builder().queryId("gpu-resource-lifetime").build();
+        attachCudfMemoryPool(*queryCtx);
+        auto root = queryCtx->customPool(std::string{kCudfMemoryResourceTag});
+        auto leaf = root->addLeafChild("retained-buffer");
+        std::weak_ptr<memory::MemoryPool> weakRoot = root;
+        std::optional<CudfMemoryResource> reporting{
+            std::in_place,
+            makeTestUpstream(std::make_shared<HostBackedResourceState>()),
+            leaf};
+        auto* allocation =
+            reporting->allocate_sync(256, alignof(std::max_align_t));
+        leaf.reset();
+        root.reset();
+        auto& registry = memory::CustomMemoryResourceRegistry::global();
+        registry.erase(std::string{kCudfMemoryResourceTag});
+        resource.reset();
+        queryCtx.reset();
+        EXPECT_FALSE(weakResource.expired());
+        EXPECT_FALSE(weakRoot.expired());
+        EXPECT_EQ(weakRoot.lock()->usedBytes(), 256);
+        reporting->deallocate_sync(allocation, 256, alignof(std::max_align_t));
+        EXPECT_EQ(weakRoot.lock()->usedBytes(), 0);
+        reporting.reset();
+        EXPECT_TRUE(weakRoot.expired());
+        EXPECT_EQ(registerCudfMemoryResource(kCapacity), weakResource.lock());
+        EXPECT_THROW(registerCudfMemoryResource(2 * kCapacity), VeloxException);
+        EXPECT_EQ(cudfCustomMemoryResource(), weakResource.lock());
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      }()),
+      testing::ExitedWithCode(0),
+      "");
+}
+
+TEST_F(CudfMemoryResourceTest, ReusesApplicationOwnedRegisteredResource) {
+  const auto previousStyle = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  SCOPE_EXIT {
+    testing::FLAGS_gtest_death_test_style = previousStyle;
+  };
+  EXPECT_EXIT(
+      ([&] {
+        constexpr int64_t kCapacity = 32L << 20;
+        auto applicationResource = makeCustomResource(kCapacity);
+        auto& registry = memory::CustomMemoryResourceRegistry::global();
+        registry.insert(
+            std::string{kCudfMemoryResourceTag}, applicationResource);
+        EXPECT_EQ(
+            registerCudfMemoryResource(kCapacity / 2), applicationResource);
+        registry.erase(std::string{kCudfMemoryResourceTag});
+        EXPECT_EQ(
+            registerCudfMemoryResource(kCapacity / 2), applicationResource);
+        registry.erase(std::string{kCudfMemoryResourceTag});
+        registry.insert(
+            std::string{kCudfMemoryResourceTag}, makeCustomResource(kCapacity));
+        EXPECT_THROW(registerCudfMemoryResource(kCapacity / 2), VeloxException);
+        EXPECT_EQ(cudfCustomMemoryResource(), applicationResource);
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      }()),
+      testing::ExitedWithCode(0),
+      "");
+}
+
+TEST_F(CudfMemoryResourceTest, RejectsInvalidGpuCapacity) {
+  EXPECT_THROW(createCudfCustomMemoryResource(0), VeloxUserError);
+  EXPECT_THROW(createCudfCustomMemoryResource(-1), VeloxUserError);
+}
+
+TEST_F(CudfMemoryResourceTest, QueryAttachmentAndTaskPropagation) {
+  const auto previousStyle = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  SCOPE_EXIT {
+    testing::FLAGS_gtest_death_test_style = previousStyle;
+  };
+  EXPECT_EXIT(
+      ([&] {
+        auto queryA = core::QueryCtx::Builder().queryId("gpu-query-a").build();
+        EXPECT_EQ(cudfCustomMemoryResource(), nullptr);
+        attachCudfMemoryPool(*queryA);
+        const std::string tag{kCudfMemoryResourceTag};
+        EXPECT_EQ(queryA->customPool(tag), nullptr);
+        auto resource = registerCudfMemoryResource(32L << 20);
+        attachCudfMemoryPool(*queryA);
+        auto queryB = core::QueryCtx::Builder().queryId("gpu-query-b").build();
+        attachCudfMemoryPool(*queryB);
+        auto rootA = queryA->customPool(tag);
+        auto rootB = queryB->customPool(tag);
+        EXPECT_NE(rootA, rootB);
+        EXPECT_NE(rootA->name(), rootB->name());
+        EXPECT_EQ(rootA->arbitrator(), resource->arbitrator());
+        EXPECT_EQ(rootB->arbitrator(), resource->arbitrator());
+        EXPECT_NE(
+            dynamic_cast<core::QueryCtx::MemoryReclaimer*>(rootA->reclaimer()),
+            nullptr);
+        EXPECT_NE(
+            dynamic_cast<core::QueryCtx::MemoryReclaimer*>(rootB->reclaimer()),
+            nullptr);
+        EXPECT_NE(rootA->arbitrator(), queryA->pool()->arbitrator());
+        EXPECT_THROW(attachCudfMemoryPool(*queryA), VeloxException);
+        EXPECT_EQ(queryA->customPool(tag), rootA);
+
+        auto cpuLeaf = queryA->pool()->addLeafChild("input-vectors");
+        auto input = BaseVector::create<RowVector>(
+            ROW({"a"}, {BIGINT()}), 1, cpuLeaf.get());
+        {
+          auto task = exec::Task::create(
+              "gpu-task",
+              core::PlanFragment{std::make_shared<core::ValuesNode>(
+                  "values", std::vector<RowVectorPtr>{input})},
+              0,
+              queryA,
+              exec::Task::ExecutionMode::kSerial,
+              exec::Consumer{},
+              7);
+          SCOPE_EXIT {
+            task->requestCancel();
+          };
+          auto* node = task->getOrAddCustomNodePool(tag, "test-node");
+          EXPECT_EQ(node->root(), rootA.get());
+          EXPECT_NE(
+              dynamic_cast<exec::MemoryReclaimer*>(node->reclaimer()), nullptr);
+          auto* taskPool = node->parent();
+          EXPECT_NE(
+              dynamic_cast<exec::Task::MemoryReclaimer*>(taskPool->reclaimer()),
+              nullptr);
+          EXPECT_EQ(taskPool->reclaimer()->priority(), 7);
+          EXPECT_EQ(rootB->getChildCount(), 0);
+        }
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      }()),
+      testing::ExitedWithCode(0),
+      "");
+}
+
+TEST_F(CudfMemoryResourceTest, ApplicationFactoryCanOptOutOfQueryReclamation) {
+  const auto previousStyle = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  SCOPE_EXIT {
+    testing::FLAGS_gtest_death_test_style = previousStyle;
+  };
+  EXPECT_EXIT(
+      ([&] {
+        memory::MemoryAllocator::Options options;
+        options.capacity = 32L << 20;
+        int queryCalls = 0;
+        auto resource = std::make_shared<memory::CustomMemoryResource>(
+            std::string{kCudfMemoryResourceTag},
+            std::make_shared<memory::MallocAllocator>(options),
+            memory::MemoryArbitrator::create({}),
+            [&](const memory::ReclaimerContext& context)
+                -> std::unique_ptr<memory::MemoryReclaimer> {
+              EXPECT_TRUE(
+                  std::holds_alternative<memory::QueryReclaimerContext>(
+                      context));
+              ++queryCalls;
+              return nullptr;
+            },
+            options.capacity);
+        memory::CustomMemoryResourceRegistry::global().insert(
+            resource->tag(), resource);
+        EXPECT_EQ(registerCudfMemoryResource(options.capacity), resource);
+        auto query = core::QueryCtx::Builder().queryId("app-factory").build();
+        attachCudfMemoryPool(*query);
+        auto root = query->customPool(resource->tag());
+        EXPECT_NE(root, nullptr);
+        EXPECT_EQ(root->reclaimer(), nullptr);
+        EXPECT_EQ(queryCalls, 1);
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      }()),
+      testing::ExitedWithCode(0),
+      "");
 }
 
 } // namespace

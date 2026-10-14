@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/exec/CudfMemoryArbitration.h"
+
 #include "velox/common/memory/MemoryPool.h"
 
 #include <rmm/resource_ref.hpp>
@@ -32,8 +34,6 @@ class QueryCtx;
 }
 
 namespace facebook::velox::cudf_velox {
-
-inline constexpr std::string_view kCudfMemoryResourceTag{"gpu"};
 
 inline constexpr std::string_view kCudfMemoryResourceRegistryKey{
     "cudfMemoryResource"};
