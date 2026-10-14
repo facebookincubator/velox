@@ -15,11 +15,13 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
+#include "velox/experimental/cudf/exec/CudfMemoryArbitration.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 
 #include <cudf/ast/expressions.hpp>
 
@@ -68,7 +70,9 @@ TEST_F(CudfSplitReaderTest, accountsFilterScalarsDuringSourceConstruction) {
   ColumnHandleMap columns{{"c0", makeColumnHandle("c0", BIGINT())}};
   for (const bool tracked : {false, true}) {
     SCOPED_TRACE(tracked);
-    auto root = memory::memoryManager()->addRootPool();
+    auto backend = createCudfCustomMemoryResource(32L << 20);
+    auto root = memory::memoryManager()->addCustomRootPool(
+        "filter-scalars-root", backend);
     auto gpuPool = root->addLeafChild("filter-scalars");
     auto builder = ::facebook::velox::connector::ConnectorQueryCtx::Builder();
     builder.operatorPool(pool_.get())
@@ -95,8 +99,12 @@ TEST_F(CudfSplitReaderTest, accountsFilterScalarsDuringSourceConstruction) {
     EXPECT_GT(cudfAllocatedBytes(), baseline);
     if (tracked) {
       EXPECT_GT(gpuPool->usedBytes(), 0);
+      EXPECT_NE(gpuPool->reclaimer(), nullptr);
+      EXPECT_FALSE(gpuPool->reclaimableBytes().has_value());
+      EXPECT_GT(backend->arbitrator()->stats().numRequests, 0);
     } else {
       EXPECT_EQ(gpuPool->usedBytes(), 0);
+      EXPECT_EQ(gpuPool->reclaimer(), nullptr);
     }
     source.reset();
     EXPECT_EQ(gpuPool->usedBytes(), 0);
