@@ -603,6 +603,14 @@ class RowReaderOptions {
     lazyColumnIo_ = lazyColumnIo;
   }
 
+  bool nimbleConstantBulkScan() const {
+    return nimbleConstantBulkScan_;
+  }
+
+  void setNimbleConstantBulkScan(bool value) {
+    nimbleConstantBulkScan_ = value;
+  }
+
   const folly::F14FastSet<std::string>& remainingFilterColumns() const {
     return remainingFilterColumns_;
   }
@@ -699,6 +707,7 @@ class RowReaderOptions {
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
   bool collectColumnCpuMetrics_{false};
+  bool nimbleConstantBulkScan_{false};
 };
 
 /// Options for creating a Reader.

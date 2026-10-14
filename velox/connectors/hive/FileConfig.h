@@ -124,6 +124,15 @@ class FileConfig {
       bool,
       false,
       "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleConstantBulkScanSession,
+      kNimbleConstantBulkScan,
+      nimbleConstantBulkScan,
+      "nimble_constant_bulk_scan",
+      "nimble.constant-bulk-scan",
+      bool,
+      false,
+      "Route Constant-encoded columns through the bulk decode fast path.")
 
   // --- VELOX_HIVE_CONFIG properties ---
 

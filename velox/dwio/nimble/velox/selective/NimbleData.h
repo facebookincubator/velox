@@ -40,7 +40,8 @@ class NimbleData : public velox::dwio::common::FormatData {
       bool nimblePreserveDictionaryEncoding = false,
       bool lazyColumnIo = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
-      bool dictionaryAwareReads = false);
+      bool dictionaryAwareReads = false,
+      bool constantBulkScan = false);
 
   /// Read internal node nulls. For leaf nodes, we only copy `incomingNulls' if
   /// it exists.
@@ -131,6 +132,7 @@ class NimbleData : public velox::dwio::common::FormatData {
   // is disabled.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
   const bool dictionaryAwareReads_{false};
+  const bool constantBulkScan_{false};
 };
 
 class NimbleParams : public velox::dwio::common::FormatParams {
@@ -147,7 +149,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       bool nimblePreserveDictionaryEncoding = false,
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
       bool lazyColumnIo = false,
-      bool dictionaryAwareReads = false)
+      bool dictionaryAwareReads = false,
+      bool constantBulkScan = false)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -158,7 +161,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         lazyColumnIo_(lazyColumnIo),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
         nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
-        dictionaryAwareReads_{dictionaryAwareReads} {}
+        dictionaryAwareReads_{dictionaryAwareReads},
+        constantBulkScan_{constantBulkScan} {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& /*type*/,
@@ -177,7 +181,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         nimblePreserveDictionaryEncoding_,
         /*lazyIoColumns=*/nullptr,
         lazyColumnIo_,
-        dictionaryAwareReads_);
+        dictionaryAwareReads_,
+        constantBulkScan_);
   }
 
   const std::shared_ptr<const Type>& nimbleType() const {
@@ -230,6 +235,10 @@ class NimbleParams : public velox::dwio::common::FormatParams {
     return dictionaryAwareReads_;
   }
 
+  bool constantBulkScan() const {
+    return constantBulkScan_;
+  }
+
  private:
   const std::shared_ptr<const Type> nimbleType_;
   StripeStreams* const streams_{nullptr};
@@ -245,6 +254,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   bool stringDecoderZeroCopy_{false};
   bool nimblePreserveDictionaryEncoding_{false};
   bool dictionaryAwareReads_{false};
+  bool constantBulkScan_{false};
 };
 
 } // namespace facebook::nimble

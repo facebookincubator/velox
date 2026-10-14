@@ -39,7 +39,8 @@ NimbleData::NimbleData(
     bool nimblePreserveDictionaryEncoding,
     bool lazyColumnIo,
     velox::dwio::common::DecodingStats* decodingStats,
-    bool dictionaryAwareReads)
+    bool dictionaryAwareReads,
+    bool constantBulkScan)
     : nimbleType_(nimbleType),
       streams_(&streams),
       pool_(&memoryPool),
@@ -47,7 +48,8 @@ NimbleData::NimbleData(
       encodingFactory_(&encodingFactory),
       lazyColumnIo_(lazyColumnIo),
       decodingStats_(decodingStats),
-      dictionaryAwareReads_(dictionaryAwareReads) {
+      dictionaryAwareReads_(dictionaryAwareReads),
+      constantBulkScan_(constantBulkScan) {
   switch (nimbleType->kind()) {
     case Kind::Scalar:
       // Nulls in scalar types will be decoded along with values.
@@ -184,7 +186,8 @@ ChunkedDecoder NimbleData::makeScalarDecoder() {
       stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
-      dictionaryAwareReads_);
+      dictionaryAwareReads_,
+      constantBulkScan_);
 }
 
 ChunkedDecoder NimbleData::makeMicrosDecoder() {
@@ -201,7 +204,8 @@ ChunkedDecoder NimbleData::makeMicrosDecoder() {
       stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
-      dictionaryAwareReads_);
+      dictionaryAwareReads_,
+      constantBulkScan_);
 }
 
 ChunkedDecoder NimbleData::makeNanosDecoder() {
@@ -218,7 +222,8 @@ ChunkedDecoder NimbleData::makeNanosDecoder() {
       stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
-      dictionaryAwareReads_);
+      dictionaryAwareReads_,
+      constantBulkScan_);
 }
 
 std::unique_ptr<ChunkedDecoder> NimbleData::makeLengthDecoder() {
@@ -251,7 +256,8 @@ std::unique_ptr<ChunkedDecoder> NimbleData::makeDecoder(
       stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(descriptor.offset()),
-      dictionaryAwareReads_);
+      dictionaryAwareReads_,
+      constantBulkScan_);
 }
 
 std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
@@ -273,7 +279,8 @@ std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
       nimblePreserveDictionaryEncoding_,
       lazyColumnIo_,
       decodingStats,
-      dictionaryAwareReads_);
+      dictionaryAwareReads_,
+      constantBulkScan_);
 }
 
 } // namespace facebook::nimble
