@@ -121,6 +121,9 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     ensureCudaContextForThread();
     auto memoryResources = scopedMemoryResources();
     Operator::initialize();
+    if (auto* gpuPool = customPool(kCudfMemoryResourceTag)) {
+      ensureCudfMemoryReclaimer(*gpuPool);
+    }
     doInitialize();
     checkCudaErrorInDebug();
   }
@@ -243,6 +246,9 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
     ensureCudaContextForThread();
     auto memoryResources = scopedMemoryResources();
     SourceOperator::initialize();
+    if (auto* gpuPool = customPool(kCudfMemoryResourceTag)) {
+      ensureCudfMemoryReclaimer(*gpuPool);
+    }
     doInitialize();
     checkCudaErrorInDebug();
   }

@@ -155,4 +155,9 @@ class CudfMemoryResourceRegistry {
 std::shared_ptr<CudfMemoryResourceRegistry> cudfMemoryResourceRegistry(
     core::QueryCtx& queryCtx);
 
+/// Installs arbitration enter/leave hooks when the parent has a reclaimer.
+/// Preserves existing reclaimers and does not make live GPU buffers
+/// reclaimable.
+void ensureCudfMemoryReclaimer(memory::MemoryPool& pool);
+
 } // namespace facebook::velox::cudf_velox

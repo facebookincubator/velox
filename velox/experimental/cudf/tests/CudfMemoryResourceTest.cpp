@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
@@ -25,6 +27,9 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/FlatVector.h"
 
 #include <cudf/utilities/memory_resource.hpp>
 
@@ -35,6 +40,7 @@
 #include <cuda/stream>
 
 #include <folly/ScopeGuard.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -931,6 +937,95 @@ TEST_F(CudfMemoryResourceTest, ApplicationFactoryCanOptOutOfQueryReclamation) {
       }()),
       testing::ExitedWithCode(0),
       "");
+}
+
+TEST_F(CudfMemoryResourceTest, RunningDriverGrowsGpuPool) {
+  int deviceCount = 0;
+  if (cudaGetDeviceCount(&deviceCount) != cudaSuccess || deviceCount == 0) {
+    GTEST_SKIP() << "No CUDA device available";
+  }
+  const auto previousStyle = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  SCOPE_EXIT {
+    testing::FLAGS_gtest_death_test_style = previousStyle;
+  };
+  EXPECT_EXIT(
+      ([&] {
+        auto& config = CudfConfig::getInstance();
+        config.memoryResource = "cuda";
+        config.outputMemoryResource = "cuda";
+        config.allowCpuFallback = false;
+        registerCudf();
+        auto resource = registerCudfMemoryResource(32L << 20);
+        auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+        auto query = core::QueryCtx::Builder()
+                         .executor(executor.get())
+                         .queryId("running-gpu-driver")
+                         .build();
+        attachCudfMemoryPool(*query);
+        auto gpuRoot = query->customPool(std::string{kCudfMemoryResourceTag});
+        EXPECT_EQ(gpuRoot->capacity(), 0);
+        auto cpuPool = memory::memoryManager()->addLeafPool("driver-test-data");
+        auto input = BaseVector::create<RowVector>(
+            ROW({"c0"}, {BIGINT()}), 3, cpuPool.get());
+        for (vector_size_t i = 0; i < 3; ++i) {
+          input->childAt(0)->asFlatVector<int64_t>()->set(i, 10 + i);
+        }
+        auto plan = exec::test::PlanBuilder()
+                        .values({input})
+                        .limit(0, 2, false)
+                        .planNode();
+        auto result =
+            exec::test::AssertQueryBuilder(plan).queryCtx(query).copyResults(
+                cpuPool.get());
+        EXPECT_EQ(result->size(), 2);
+        EXPECT_EQ(result->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 10);
+        EXPECT_EQ(result->childAt(0)->asFlatVector<int64_t>()->valueAt(1), 11);
+        EXPECT_GT(gpuRoot->peakBytes(), 0);
+        EXPECT_GT(resource->arbitrator()->stats().numRequests, 0);
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      }()),
+      testing::ExitedWithCode(0),
+      "");
+}
+
+TEST_F(
+    CudfMemoryResourceTest,
+    ConcurrentConnectorHooksDoNotEnableScanSpilling) {
+  auto root = memory::memoryManager()->addRootPool();
+  root->setReclaimer(memory::MemoryReclaimer::create());
+  auto pool = root->addLeafChild("concurrent-scan");
+  std::vector<std::thread> preloaders;
+  for (int i = 0; i < 8; ++i) {
+    preloaders.emplace_back([&]() { ensureCudfMemoryReclaimer(*pool); });
+  }
+  for (auto& thread : preloaders)
+    thread.join();
+  auto* reclaimer = pool->reclaimer();
+  ASSERT_NE(reclaimer, nullptr);
+  ensureCudfMemoryReclaimer(*pool);
+  EXPECT_EQ(pool->reclaimer(), reclaimer);
+  auto* allocation = pool->allocate(64);
+  uint64_t reclaimableBytes = 123;
+  EXPECT_FALSE(reclaimer->reclaimableBytes(*pool, reclaimableBytes));
+  EXPECT_EQ(reclaimableBytes, 0);
+  memory::MemoryReclaimer::Stats stats;
+  EXPECT_EQ(reclaimer->reclaim(pool.get(), 64, 0, stats), 0);
+  EXPECT_GT(pool->usedBytes(), 0);
+  pool->free(allocation, 64);
+
+  auto preconfigured = root->addLeafChild(
+      "preconfigured", true, memory::MemoryReclaimer::create());
+  auto* existing = preconfigured->reclaimer();
+  ensureCudfMemoryReclaimer(*preconfigured);
+  EXPECT_EQ(preconfigured->reclaimer(), existing);
+}
+
+TEST_F(CudfMemoryResourceTest, HooksRespectParentWithoutReclaimer) {
+  auto root = memory::memoryManager()->addRootPool();
+  auto pool = root->addLeafChild("unmanaged-gpu");
+  ensureCudfMemoryReclaimer(*pool);
+  EXPECT_EQ(pool->reclaimer(), nullptr);
 }
 
 } // namespace

@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -80,6 +81,10 @@ CudfHiveDataSource::CudfHiveDataSource(
       outputType_(outputType),
       pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
+  if (auto* gpuPool =
+          connectorQueryCtx_->customMemoryPool(kCudfMemoryResourceTag)) {
+    ensureCudfMemoryReclaimer(*gpuPool);
+  }
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {

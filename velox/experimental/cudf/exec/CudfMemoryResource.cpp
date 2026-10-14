@@ -15,8 +15,10 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfMemoryResource.h"
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::cudf_velox::detail {
 
@@ -166,6 +168,19 @@ CudfMemoryResourceRegistry::resourcesFor(
       resources_.emplace(poolKey, std::move(resources));
   VELOX_CHECK(inserted, "Duplicate cuDF memory resource pool");
   return insertedIt->second->refs();
+}
+
+void ensureCudfMemoryReclaimer(memory::MemoryPool& pool) {
+  static std::mutex installMutex;
+  std::lock_guard lock(installMutex);
+  if (pool.reclaimer() != nullptr) {
+    return;
+  }
+  auto* parent = pool.parent();
+  if (parent == nullptr || parent->reclaimer() == nullptr) {
+    return;
+  }
+  pool.setReclaimer(exec::MemoryReclaimer::create());
 }
 
 } // namespace facebook::velox::cudf_velox
