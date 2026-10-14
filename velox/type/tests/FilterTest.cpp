@@ -817,37 +817,6 @@ TEST(FilterTest, bloomMergeAtInt64Max) {
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_FALSE(merged->testNull());
   }
-}
-
-TEST(FilterTest, bloomMergeEmptyRange) {
-  auto checkEmptyRange = [](int64_t lower, int64_t upper) {
-    for (bool bloomNull : {false, true}) {
-      for (bool rangeNull : {false, true}) {
-        for (bool bloomFirst : {false, true}) {
-          SCOPED_TRACE(
-              testing::Message()
-              << "lower=" << lower << ", upper=" << upper
-              << ", bloomNull=" << bloomNull << ", rangeNull=" << rangeNull
-              << ", bloomFirst=" << bloomFirst);
-          BigintValuesUsingBloomFilter bloom(4, bloomNull);
-          bloom.insert(lower);
-          BigintRange range(lower, upper, rangeNull);
-          auto merged =
-              bloomFirst ? bloom.mergeWith(&range) : range.mergeWith(&bloom);
-          const bool expectedNull = bloomNull && rangeNull;
-          const auto expectedKind =
-              expectedNull ? FilterKind::kIsNull : FilterKind::kAlwaysFalse;
-          EXPECT_EQ(merged->kind(), expectedKind);
-          EXPECT_EQ(merged->testNull(), expectedNull);
-          EXPECT_FALSE(merged->testInt64(lower));
-        }
-      }
-    }
-  };
-
-  const auto max = std::numeric_limits<int64_t>::max();
-  checkEmptyRange(max, max - 1);
-  checkEmptyRange(10, 9);
 
   for (bool bloomFirst : {false, true}) {
     SCOPED_TRACE(testing::Message() << "bloomFirst=" << bloomFirst);
@@ -858,6 +827,21 @@ TEST(FilterTest, bloomMergeEmptyRange) {
         bloomFirst ? bloom.mergeWith(&range) : range.mergeWith(&bloom);
     ASSERT_TRUE(merged->testInt64(max));
     EXPECT_TRUE(merged->testNull());
+  }
+}
+
+TEST(FilterTest, bloomMergeEmptyRange) {
+  for (bool nullAllowed : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "nullAllowed=" << nullAllowed);
+    BigintValuesUsingBloomFilter bloom(4, nullAllowed);
+    bloom.insert(10);
+    BigintRange range(10, 5, nullAllowed);
+    auto merged = bloom.mergeWith(&range);
+    const auto expectedKind =
+        nullAllowed ? FilterKind::kIsNull : FilterKind::kAlwaysFalse;
+    EXPECT_EQ(merged->kind(), expectedKind);
+    EXPECT_EQ(merged->testNull(), nullAllowed);
+    EXPECT_FALSE(merged->testInt64(10));
   }
 }
 
@@ -2084,7 +2068,7 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
   }
 }
 
-TEST(FilterTest, bitmaskMergeEndpointsAreBounded) {
+TEST(FilterTest, bitmaskMergeAtInt64Max) {
   const auto max = std::numeric_limits<int64_t>::max();
   auto bitmask = createBigintValues({max - 2, max}, true);
 

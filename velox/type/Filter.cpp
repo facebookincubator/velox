@@ -2156,15 +2156,29 @@ std::unique_ptr<Filter> HugeintValuesUsingHashTable::mergeWith(
 
 namespace {
 
-// Avoids incrementing past the inclusive upper bound, which may be INT64_MAX.
+// Calls 'callback' for each value in the inclusive range [min, max]. Does
+// nothing if min > max.
+//
+// The obvious loop, 'for (v = min; v <= max; ++v)', is wrong when max is
+// INT64_MAX: 'v <= max' is always true, so after visiting INT64_MAX the loop
+// increments 'v' past it. Signed overflow is undefined behavior; in practice
+// 'v' wraps to INT64_MIN and the loop either runs forever or indexes out of
+// bounds.
+//
+// This comes up in real merges: 'x >= c' is a BigintRange with upper bound
+// INT64_MAX, and IN-lists may contain INT64_MAX itself.
+//
+// To avoid this, loop over the half-open range [min, max), where '++v' never
+// goes past max, then visit max separately.
 template <typename Callable>
-void forEachInt64InRange(int64_t min, int64_t max, Callable&& callback) {
-  for (auto value = min; value <= max; ++value) {
-    callback(value);
-    if (value == max) {
-      break;
-    }
+void safeForEachInt64(int64_t min, int64_t max, Callable&& callback) {
+  if (min > max) {
+    return;
   }
+  for (auto value = min; value < max; ++value) {
+    callback(value);
+  }
+  callback(max);
 }
 
 } // namespace
@@ -2210,7 +2224,7 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
       for (const auto& range : otherMultiRange->ranges()) {
         auto min = std::max(min_, range->lower());
         auto max = std::min(max_, range->upper());
-        forEachInt64InRange(min, max, [&](int64_t value) {
+        safeForEachInt64(min, max, [&](int64_t value) {
           if (bitmask_[value - min_] && range->testInt64(value)) {
             valuesToKeep.push_back(value);
           }
@@ -2237,7 +2251,7 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
   bool bothNullAllowed = nullAllowed_ && other->testNull();
 
   std::vector<int64_t> valuesToKeep;
-  forEachInt64InRange(min, max, [&](int64_t value) {
+  safeForEachInt64(min, max, [&](int64_t value) {
     if (bitmask_[value - min_] && other->testInt64(value)) {
       valuesToKeep.push_back(value);
     }
@@ -2425,7 +2439,7 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       }
       std::vector<int64_t> values;
       values.reserve(range + 1);
-      forEachInt64InRange(filter->lower(), filter->upper(), [&](int64_t value) {
+      safeForEachInt64(filter->lower(), filter->upper(), [&](int64_t value) {
         if (testInt64(value)) {
           values.push_back(value);
         }
@@ -2448,7 +2462,7 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       auto* filter = other->as<BigintValuesUsingBitmask>();
       std::vector<int64_t> values;
       values.reserve(filter->max() - filter->min() + 1);
-      forEachInt64InRange(filter->min(), filter->max(), [&](int64_t value) {
+      safeForEachInt64(filter->min(), filter->max(), [&](int64_t value) {
         if (filter->testInt64(value) && testInt64(value)) {
           values.push_back(value);
         }
