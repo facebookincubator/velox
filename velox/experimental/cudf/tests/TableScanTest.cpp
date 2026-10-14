@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -739,7 +740,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   ASSERT_GT(runtimeStats.at("ioWaitWallNanos").sum, 0);
 }
 
-TEST_F(TableScanTest, scanOnNonDefaultGpu) {
+TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
   int deviceCount = 0;
   ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&deviceCount));
   if (deviceCount < 2) {
@@ -748,20 +749,48 @@ TEST_F(TableScanTest, scanOnNonDefaultGpu) {
 
   int originalDevice = -1;
   ASSERT_EQ(cudaSuccess, cudaGetDevice(&originalDevice));
+  const int selectedDevice = originalDevice == 0 ? 1 : 0;
+  ensureCudaContextForThread();
   unregisterCudf();
   SCOPE_EXIT {
     unregisterCudf();
-    cudaSetDevice(originalDevice);
+    EXPECT_EQ(cudaSuccess, cudaSetDevice(originalDevice));
     registerCudf();
   };
-  ASSERT_EQ(cudaSuccess, cudaSetDevice(1));
+  ASSERT_EQ(cudaSuccess, cudaSetDevice(selectedDevice));
   registerCudf();
+  // Verify re-registration rebinds a thread still using the previous device.
+  ASSERT_EQ(cudaSuccess, cudaSetDevice(originalDevice));
+  ensureCudaContextForThread();
+  int boundDevice = -1;
+  ASSERT_EQ(cudaSuccess, cudaGetDevice(&boundDevice));
+  ASSERT_EQ(selectedDevice, boundDevice);
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseBufferedInput,
+       GetParam() ? "true" : "false"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
 
-  auto vectors = makeVectors(1, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(10, 1'000);
+  for (auto i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
   createDuckDbTable(vectors);
-  assertQuery(tableScanNode(), {filePath}, "SELECT * FROM tmp");
+
+  auto plan = tableScanNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "10")
+                  .splits(makeCudfHiveConnectorSplits(filePaths))
+                  .assertResults("SELECT * FROM tmp");
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  EXPECT_EQ(
+      customStats.at(std::string(TableScan::kPreloadedSplits)).sum,
+      filePaths.size());
 }
 
 TEST_F(TableScanTest, columnAliases) {

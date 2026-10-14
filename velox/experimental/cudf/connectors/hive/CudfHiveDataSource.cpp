@@ -474,6 +474,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
+  ensureCudaContextForThread();
   auto* preparedSource = checkedPointerCast<CudfHiveDataSource>(source.get());
 
   split_ = std::move(preparedSource->split_);

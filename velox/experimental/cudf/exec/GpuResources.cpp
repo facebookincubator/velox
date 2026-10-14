@@ -99,17 +99,16 @@ void setCudfContextDevice(int device) {
 }
 
 void ensureCudaContextForThread() {
-  // Create and push the device's primary context on this thread, at most once.
-  static thread_local bool initialized = false;
-  if (initialized) {
-    return;
-  }
-
   // Device is recorded by setCudfContextDevice() from registerCudf().
   VELOX_CHECK_GE(
       cudfContextDevice,
       0,
       "cuDF is not yet registered. Please call registerCudf() first.");
+  static thread_local int threadDevice = -1;
+  if (threadDevice == cudfContextDevice) {
+    return;
+  }
+
   VELOX_CHECK_EQ(
       static_cast<int>(cudaSuccess),
       static_cast<int>(cudaSetDevice(cudfContextDevice)),
@@ -126,7 +125,7 @@ void ensureCudaContextForThread() {
       "Failed to get current CUDA device ordinal");
   VELOX_CHECK_EQ(boundDevice, cudfContextDevice);
 
-  initialized = true;
+  threadDevice = boundDevice;
 }
 
 cuda::stream_ref getDefaultStreamForCurrentThread() {
