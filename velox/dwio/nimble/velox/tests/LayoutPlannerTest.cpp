@@ -115,7 +115,7 @@ void addNamedTypes(
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto groupStreams = hybridMap.groupAt(i);
         result.emplace_back(
-            groupStreams.keyDescriptor.offset(),
+            groupStreams.keyPresenceDescriptor.offset(),
             fmt::format("{}pf.g{}:kp", prefix, i));
         result.emplace_back(
             groupStreams.inMapDescriptor.offset(),
@@ -296,10 +296,10 @@ TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
   const std::vector<uint32_t> expectedOffsets{
       root->nullsDescriptor().offset(),
       hybridMap->nullsDescriptor().offset(),
-      groupStreams.keyDescriptor.offset(),
+      groupStreams.keyPresenceDescriptor.offset(),
       groupStreams.inMapDescriptor.offset(),
       groupValue->scalarDescriptor().offset(),
-      defaultStreams.keyDescriptor.offset(),
+      defaultStreams.keyPresenceDescriptor.offset(),
       defaultStreams.inMapDescriptor.offset(),
       defaultValue->scalarDescriptor().offset(),
   };

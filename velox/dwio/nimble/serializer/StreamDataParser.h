@@ -226,12 +226,6 @@ class StreamDataParser {
     return requiredBarrier_;
   }
 
-  /// Retains the previous accessor name for source compatibility. Use
-  /// requiredBarrier() for new callers.
-  bool requiresNullBarrier() const {
-    return requiredBarrier();
-  }
-
   /// Releases owned kTablet stream payload buffers after a decode run consumes
   /// the string_views returned by iterateStreams(). This does not reset the
   /// current initialized blob cursor/header because callers may initialize the

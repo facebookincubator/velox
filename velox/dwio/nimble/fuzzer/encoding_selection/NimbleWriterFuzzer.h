@@ -29,6 +29,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -132,6 +133,12 @@ enum class WriteOutcome {
 /// source of truth for the 'encodings:' key of
 /// nimble.encoding_selection_config.
 std::vector<EncodingType> allCandidateEncodings();
+
+/// Builds one compact JSON object shaped like a capping/exposure payload: a
+/// stable `t1` array plus sparsely present numeric-ID array fields. `rowIndex`
+/// deliberately controls empty and long arrays so a fixed seed covers those
+/// boundary shapes instead of depending on probability alone.
+std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex);
 
 /// Number of unfiltered random-policy files written before coverage repair.
 inline constexpr uint32_t kNumUnfilteredRounds = 10;
@@ -351,7 +358,8 @@ class NimbleWriterFuzzer {
   void verifyColumnStatistics(
       const std::string& file,
       const velox::RowTypePtr& schema,
-      const std::vector<velox::VectorPtr>& batches);
+      const std::vector<velox::VectorPtr>& batches,
+      const VectorizedFileStats::Options& statsOptions);
 
   // Verifies the serialized schema round-trips back to the written Velox type,
   // and that per-stream byte ranges within each stripe are non-overlapping.

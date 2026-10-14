@@ -101,7 +101,8 @@ class Writer : public velox::dwio::common::Writer {
   ///
   /// Fails when the file carries no checkpoint section, or when 'type' and
   /// 'options' would lay streams out differently than the suspended file
-  /// did: the final footer holds a single schema that has to describe every
+  /// did, stream trailers included: the final footer holds a single schema,
+  /// and the properties a single trailer layout, that have to describe every
   /// stripe.
   ///
   /// Not implemented yet.
@@ -253,6 +254,7 @@ class Writer : public velox::dwio::common::Writer {
       uint64_t minChunkSize,
       uint64_t maxChunkSize,
       bool ensureFullChunks,
+      bool lastChunk,
       Stream& stream,
       velox::BufferPool* encodingScratchBufferPool,
       EncodingBufferPool* encodingBufferPool,
@@ -306,6 +308,9 @@ class Writer : public velox::dwio::common::Writer {
   // close() to make sure no rows are left behind. Only invoked when a
   // BufferPolicy is installed. Returns true if any stripe was flushed.
   bool flushInputBuffers(bool finalize);
+
+  // Rejects null rows in indexed files and records stored top-level nulls.
+  void checkTopLevelNulls(const velox::VectorPtr& input);
 
   // Ingests a (possibly sliced) input into the per-column stream buffers,
   // adds index keys, and refreshes per-stripe accounting. Callers pre-slice
@@ -425,6 +430,8 @@ class Writer : public velox::dwio::common::Writer {
   const std::unique_ptr<BufferPolicy> bufferPolicy_;
 
   std::unique_ptr<FieldWriter> rootWriter_;
+  // Records null top-level rows that are preserved in the output streams.
+  bool hasTopLevelNulls_{false};
   std::unique_ptr<Buffer> encodingBuffer_;
 
   // Per-encode-task scratch vector buffer caches. They are retained across

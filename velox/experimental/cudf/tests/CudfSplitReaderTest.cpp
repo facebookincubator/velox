@@ -47,17 +47,13 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
  protected:
   void prepareSplitInternal(
-      dwio::common::RuntimeStats& /*runtimeStats*/) override {
-    fileMetaDatas();
-    // Metadata caching must not rebuild the filter during one preparation.
-    fileMetaDatas();
-  }
+      dwio::common::RuntimeStats& /*runtimeStats*/) override {}
 };
 
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
                                 CudfHiveConnectorTestBase {};
 
-TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
+TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto dataFile = common::testutil::TempFilePath::create();
   writeToFile(
@@ -66,19 +62,15 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
 
   auto properties = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
-  ::facebook::velox::connector::ConnectorQueryCtx connectorQueryCtx(
-      pool_.get(),
-      pool_.get(),
-      properties.get(),
-      nullptr,
-      common::PrefixSortConfig{},
-      nullptr,
-      nullptr,
-      "query.CudfSplitReaderTest",
-      "task.CudfSplitReaderTest",
-      "plan.CudfSplitReaderTest",
-      0,
-      "");
+  auto connectorQueryCtx =
+      ::facebook::velox::connector::ConnectorQueryCtx::Builder()
+          .operatorPool(pool_.get())
+          .connectorPool(pool_.get())
+          .sessionProperties(properties.get())
+          .queryId("query.CudfSplitReaderTest")
+          .taskId("task.CudfSplitReaderTest")
+          .planNodeId("plan.CudfSplitReaderTest")
+          .build();
   FileHandleFactory fileHandleFactory(
       std::make_unique<FileHandleCache>(1000),
       std::make_unique<FileHandleGenerator>());
@@ -89,8 +81,7 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
           .build();
 
   cudf::ast::column_reference logicalFilter{0};
-  cudf::ast::column_reference firstSplitFilter{0};
-  cudf::ast::column_reference secondSplitFilter{0};
+  cudf::ast::column_reference splitFilter{0};
   MetadataOnlySplitReader reader(
       std::move(split),
       ::facebook::velox::cudf_velox::exec::test::CudfHiveConnectorTestBase::
@@ -99,7 +90,7 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
       {"c0"},
       &fileHandleFactory,
       ioExecutor_.get(),
-      &connectorQueryCtx,
+      connectorQueryCtx.get(),
       std::make_shared<CudfHiveConfig>(properties),
       std::make_shared<io::IoStatistics>(),
       std::make_shared<IoStats>(),
@@ -109,40 +100,18 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  size_t builderCalls = 0;
-  std::vector<size_t> schemaSizes;
-  reader.setPushdownFilterBuilder(
-      [&](const cudf::io::parquet::FileMetaData& metadata) {
-        schemaSizes.push_back(metadata.schema.size());
-        return builderCalls++ == 0
-            ? static_cast<cudf::ast::expression const*>(&firstSplitFilter)
-            : static_cast<cudf::ast::expression const*>(&secondSplitFilter);
-      });
+  const auto& fileMetadatas = reader.readFileMetadatas();
+  ASSERT_FALSE(fileMetadatas.empty());
+  EXPECT_GT(fileMetadatas.front().schema.size(), 1);
+  EXPECT_EQ(&reader.readFileMetadatas(), &fileMetadatas);
 
-  // Installing a builder does not change the filter until split metadata is
-  // available.
-  EXPECT_EQ(reader.splitFilter(), &logicalFilter);
-  EXPECT_FALSE(reader.hasSplitFilter());
-
+  reader.setPushdownFilter(&splitFilter);
   dwio::common::RuntimeStats runtimeStats;
   reader.prepareSplit(runtimeStats);
-  EXPECT_EQ(builderCalls, 1);
-  ASSERT_EQ(schemaSizes.size(), 1);
-  EXPECT_GT(schemaSizes.front(), 1);
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
-  EXPECT_EQ(reader.splitFilter(), &firstSplitFilter);
+  EXPECT_EQ(reader.splitFilter(), &splitFilter);
   EXPECT_TRUE(reader.hasSplitFilter());
-
-  // Preparing again resets the previous split filter and rebuilds it from the
-  // footer without replacing the logical filter.
-  reader.prepareSplit(runtimeStats);
-  EXPECT_EQ(builderCalls, 2);
-  ASSERT_EQ(schemaSizes.size(), 2);
-  EXPECT_GT(schemaSizes.back(), 1);
-  EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
-  EXPECT_EQ(reader.splitFilter(), &secondSplitFilter);
-  EXPECT_TRUE(reader.hasSplitFilter());
-  EXPECT_EQ(runtimeStats.processedSplits, 2);
+  EXPECT_EQ(runtimeStats.processedSplits, 1);
 }
 
 } // namespace

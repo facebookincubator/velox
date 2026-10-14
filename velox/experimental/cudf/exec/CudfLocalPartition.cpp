@@ -32,6 +32,12 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
+// Remote UCX output uses DEFAULT_HASH_SEED. Reusing that hash locally makes
+// divisible partition counts correlate (e.g. four remote partitions -> two
+// local drivers), leaving local drivers empty. Keep one distinct local seed
+// across operators so equal keys and paired local join inputs remain colocated.
+constexpr auto kLocalExchangeHashSeed = cudf::DEFAULT_HASH_SEED ^ 0x9e3779b9U;
+
 template <class... Deriveds, class Base>
 bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
@@ -218,7 +224,7 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
             partitionKeyIndices,
             numPartitions_,
             cudf::hash_id::HASH_MURMUR3,
-            cudf::DEFAULT_HASH_SEED,
+            kLocalExchangeHashSeed,
             stream,
             get_temp_mr());
       } else if (

@@ -14,19 +14,23 @@
  * limitations under the License.
  */
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/synchronization/Baton.h>
+#include <gmock/gmock.h>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
-#include <mutex>
 #include <thread>
 #include <tuple>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
-#include "velox/exec/FixedPointOperators.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
@@ -45,6 +49,19 @@ using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
 using exec::test::PlanBuilder;
+
+std::vector<std::pair<int64_t, int64_t>> readRows(TaskCursor& cursor) {
+  std::vector<std::pair<int64_t, int64_t>> rows;
+  while (cursor.moveNext()) {
+    const auto& result = cursor.current();
+    auto first = result->childAt(0)->as<SimpleVector<int64_t>>();
+    auto second = result->childAt(1)->as<SimpleVector<int64_t>>();
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      rows.emplace_back(first->valueAt(i), second->valueAt(i));
+    }
+  }
+  return rows;
+}
 
 // Partitions rows by the first (BIGINT) column modulo the partition count.
 // Unlike hash partitioning, this pins a key to a known partition, so a test can
@@ -94,17 +111,11 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    registerFixedPoint();
     // Route local:// task ids to the in-process exchange source so
     // PartitionedOutput -> Exchange works without networking.
     exec::ExchangeSource::factories().clear();
     exec::ExchangeSource::registerFactory(
         exec::test::createLocalExchangeSource);
-  }
-
-  void TearDown() override {
-    exec::Operator::unregisterAllOperators();
-    HiveConnectorTestBase::TearDown();
   }
 
   // Number of top-level worker tasks for 'node': the partition count of the
@@ -143,8 +154,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         // 'rootWorkerTaskId' -- nesting never moves a loop off its root
         // worker's process -- and return "{scheme}://{endpoint}/{id}".
         (void)rootWorkerTaskId;
-        auto id =
-            fmt::format("{}.it{}.p{}", workerAddress, iteration, planIndex);
+        auto id = fmt::format(
+            "local://{}.it{}.p{}", workerAddress, iteration, planIndex);
         return ProducerLocation{.taskId = id, .exchangeUri = id};
       };
       opts.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
@@ -159,6 +170,12 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // iteration, converge at val=3.  For tests about the Task contract rather
   // than about a particular plan shape.
   FixedPointNodePtr countingNode() {
+    return countingNodeTo(/*target=*/3, /*maxIterations=*/100);
+  }
+
+  // Same, but converges at val='target', after 'target' iterations, unless
+  // 'maxIterations' runs out first.
+  FixedPointNodePtr countingNodeTo(int64_t target, int32_t maxIterations) {
     auto schema = ROW({"key", "val"}, BIGINT());
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto seed = makeRowVector(
@@ -167,17 +184,19 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     auto initialPlan = PlanBuilder(idGenerator).values({seed}).planNode();
 
     PlanBuilder bodyBuilder(idGenerator);
-    bodyBuilder.stateSource("vals", schema).project({"key", "val + 1 AS val"});
+    bodyBuilder.stateSource("vals", schema)
+        .project({"key AS next_key", "val + 1 AS next_val"});
 
     PlanBuilder convergenceBuilder(idGenerator);
     convergenceBuilder.stateSource("vals", schema)
-        .project({"val >= 3 AS converged"});
+        .project({fmt::format("val >= {} AS converged", target)});
 
     std::vector<StateDeclarationPtr> stateDeclarations{
         std::make_shared<VectorStateDeclaration>("vals", schema, initialPlan)};
     std::vector<core::PlanNodePtr> plans{bodyBuilder.planNode()};
     ConvergenceConfig convergence{
-        .plans = {convergenceBuilder.planNode()}, .maxIterations = 100};
+        .plans = {convergenceBuilder.planNode()},
+        .maxIterations = maxIterations};
     return std::make_shared<FixedPointNode>(
         "fixed-point",
         std::move(stateDeclarations),
@@ -276,48 +295,24 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
           [id = upstream->taskId()](const core::PlanNodeId&) { return id; };
     }
 
-    // Each worker collects its shard rows into perWorker[d] -- a serial worker
-    // from next() below, a parallel worker from this consumer (guarded by
-    // consumerMutexes[d], as it runs on the worker's executor thread).
+    // Each worker collects its shard rows into perWorker[d].
     std::vector<std::vector<std::pair<int64_t, int64_t>>> perWorker(numWorkers);
-    std::vector<std::mutex> consumerMutexes(numWorkers);
 
-    std::vector<std::shared_ptr<exec::Task>> workers;
-    workers.reserve(numWorkers);
+    std::vector<std::unique_ptr<exec::TaskCursor>> cursors;
+    cursors.reserve(numWorkers);
     for (int32_t d = 0; d < numWorkers; ++d) {
       auto node = (d == 0) ? node0 : makeWorkerNode(d);
-      exec::Consumer consumer;
-      if (mode == exec::Task::ExecutionMode::kParallel) {
-        auto* rows = &perWorker[d];
-        auto* mutex = &consumerMutexes[d];
-        consumer = [rows, mutex](
-                       RowVectorPtr batch,
-                       bool /*drained*/,
-                       ContinueFuture* /*future*/) {
-          if (batch != nullptr && batch->size() > 0) {
-            std::lock_guard<std::mutex> l(*mutex);
-            auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-            auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-            for (vector_size_t i = 0; i < batch->size(); ++i) {
-              rows->emplace_back(first->valueAt(i), second->valueAt(i));
-            }
-          }
-          return exec::BlockingReason::kNotBlocked;
-        };
-      }
-      workers.push_back(
-          exec::Task::create(
-              fmt::format(
-                  "local://fixedpoint-worker-{}-{}", queryCtx->queryId(), d),
-              core::PlanFragment{node},
-              /*destination=*/d,
-              queryCtx,
-              mode,
-              consumer,
-              /*memoryArbitrationPriority=*/0,
-              /*spillDiskOpts=*/std::nullopt,
-              /*onError=*/nullptr,
-              &options));
+      cursors.push_back(
+          TaskCursor::create({
+              .planNode = std::move(node),
+              .destination = d,
+              .queryCtx = mode == exec::Task::ExecutionMode::kParallel
+                  ? queryCtx
+                  : nullptr,
+              .copyResult = false,
+              .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
+              .fixedPointOptions = &options,
+          }));
     }
 
     // The coordinator wires the body-shuffle topology by adding one remote
@@ -330,61 +325,41 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     if (node0->requiresSplits()) {
       for (int32_t d = 0; d < numWorkers; ++d) {
         for (int32_t e = 0; e < numWorkers; ++e) {
-          workers[d]->addSplit(
+          cursors[d]->task()->addSplit(
               fixedPointNodeId,
               exec::Split(
                   std::make_shared<exec::RemoteConnectorSplit>(
-                      workers[e]->taskId())));
+                      cursors[e]->task()->taskId())));
         }
         if (initSplitsFor != nullptr) {
           // Addressed to the node that reads them, not to the fixed point:
           // that is how a fixed point with several scanned initial plans keeps
           // each one's splits apart.
           for (auto& [sourceId, split] : initSplitsFor(d)) {
-            workers[d]->addSplit(sourceId, std::move(split));
-            workers[d]->noMoreSplits(sourceId);
+            cursors[d]->task()->addSplit(sourceId, std::move(split));
+            cursors[d]->task()->noMoreSplits(sourceId);
           }
         }
-        workers[d]->noMoreSplits(fixedPointNodeId);
+        cursors[d]->task()->noMoreSplits(fixedPointNodeId);
       }
     }
 
-    // Drive each worker in 'mode'.  Serial: next() on its own thread, so peers
-    // rendezvous through the shuffle (next() runs the whole loop
-    // synchronously). Parallel: start() on the executor (run() runs there and
-    // blocks on its sub-tasks), with the shard delivered to the consumer above.
+    // Drive each cursor on its own thread so peer workers can rendezvous
+    // through the shuffle in both serial and parallel execution.
     std::vector<std::exception_ptr> errors(numWorkers);
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      std::vector<std::thread> threads;
-      threads.reserve(numWorkers);
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        threads.emplace_back([&, d]() {
-          try {
-            while (auto batch = workers[d]->next()) {
-              auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-              auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-              for (vector_size_t i = 0; i < batch->size(); ++i) {
-                perWorker[d].emplace_back(
-                    first->valueAt(i), second->valueAt(i));
-              }
-            }
-          } catch (...) {
-            errors[d] = std::current_exception();
-          }
-        });
-      }
-      for (auto& thread : threads) {
-        thread.join();
-      }
-    } else {
-      for (auto& worker : workers) {
-        worker->start(/*maxDrivers=*/1);
-      }
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        auto future = workers[d]->taskCompletionFuture();
-        std::move(future).wait();
-        errors[d] = workers[d]->error();
-      }
+    std::vector<std::thread> threads;
+    threads.reserve(numWorkers);
+    for (int32_t d = 0; d < numWorkers; ++d) {
+      threads.emplace_back([&, d]() {
+        try {
+          perWorker[d] = readRows(*cursors[d]);
+        } catch (...) {
+          errors[d] = std::current_exception();
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
     }
     for (auto& error : errors) {
       if (error) {
@@ -405,9 +380,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     std::vector<WorkerRun> results;
     results.reserve(numWorkers);
     for (int32_t d = 0; d < numWorkers; ++d) {
-      // Each worker task runs a FixedPointLoop (Task::create composes one
-      // onto a FixedPointNode plan); read its iteration count directly.
-      auto* fixedPoint = workers[d]->testingFixedPoint();
+      auto* fixedPoint = cursors[d]->task()->testingFixedPoint();
       VELOX_CHECK_NOT_NULL(fixedPoint, "Worker task has no FixedPointLoop");
       results.push_back({std::move(perWorker[d]), fixedPoint->iterations()});
     }
@@ -479,71 +452,67 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return rows;
   }
 
-  // Drives a plan whose root is NOT a FixedPointNode but which contains one as
+  // Drives a plan whose root is not a FixedPointNode but which contains one as
   // its leaf, with trailing nodes above it (e.g. a Project over a fixed point),
-  // in 'mode'.  Task::create yields a FixedPointLoop that runs the loop,
-  // then runs the trailing plan over the result.  Returns the rows as sorted
-  // (col0, col1) BIGINT pairs.
+  // in 'mode'. Returns the rows as sorted (col0, col1) BIGINT pairs.
   std::vector<std::pair<int64_t, int64_t>> runViaTrailing(
       const core::PlanNodePtr& plan,
       exec::Task::ExecutionMode mode) {
     auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
-    std::vector<std::pair<int64_t, int64_t>> rows;
-    std::mutex mutex;
-    auto collect = [&](const RowVectorPtr& batch) {
-      auto first = batch->childAt(0)->as<SimpleVector<int64_t>>();
-      auto second = batch->childAt(1)->as<SimpleVector<int64_t>>();
-      for (vector_size_t i = 0; i < batch->size(); ++i) {
-        rows.emplace_back(first->valueAt(i), second->valueAt(i));
-      }
-    };
-    const auto taskId =
-        fmt::format("local://fixedpoint-trailing-{}", queryCtx->queryId());
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      auto task = exec::Task::create(
-          taskId,
-          core::PlanFragment{plan},
-          /*destination=*/0,
-          queryCtx,
-          exec::Task::ExecutionMode::kSerial,
-          exec::Consumer{},
-          /*memoryArbitrationPriority=*/0,
-          /*spillDiskOpts=*/std::nullopt,
-          /*onError=*/nullptr,
-          &localOptions());
-      while (auto batch = task->next()) {
-        collect(batch);
-      }
-    } else {
-      exec::Consumer consumer = [&](RowVectorPtr batch,
-                                    bool /*drained*/,
-                                    ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          std::lock_guard<std::mutex> l(mutex);
-          collect(batch);
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-      auto task = exec::Task::create(
-          taskId,
-          core::PlanFragment{plan},
-          /*destination=*/0,
-          queryCtx,
-          exec::Task::ExecutionMode::kParallel,
-          consumer,
-          /*memoryArbitrationPriority=*/0,
-          /*spillDiskOpts=*/std::nullopt,
-          /*onError=*/nullptr,
-          &localOptions());
-      task->start(/*maxDrivers=*/1);
-      auto future = task->taskCompletionFuture();
-      std::move(future).wait();
-      if (auto error = task->error()) {
-        std::rethrow_exception(error);
-      }
-    }
+    auto cursor = TaskCursor::create({
+        .planNode = plan,
+        .queryCtx =
+            mode == exec::Task::ExecutionMode::kParallel ? queryCtx : nullptr,
+        .copyResult = false,
+        .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
+        .fixedPointOptions = &localOptions(),
+    });
+    auto rows = readRows(*cursor);
     std::sort(rows.begin(), rows.end());
     return rows;
+  }
+
+  // Runs 'plan' in parallel with up to 'maxDrivers' drivers per pipeline and
+  // FixedPointOptions::iterationMaxDrivers set to 'iterationMaxDrivers'.  A
+  // shuffling fixed point at the root runs as one worker.  Returns the rows as
+  // sorted (col0, col1) BIGINT pairs.
+  std::vector<std::pair<int64_t, int64_t>> runWithDrivers(
+      const core::PlanNodePtr& plan,
+      int32_t maxDrivers,
+      uint32_t iterationMaxDrivers) {
+    auto options = localOptions();
+    options.iterationMaxDrivers = iterationMaxDrivers;
+    auto cursor = TaskCursor::create({
+        .planNode = plan,
+        .maxDrivers = maxDrivers,
+        .queryCtx = core::QueryCtx::create(cpuExecutor_.get()),
+        .copyResult = false,
+        .fixedPointOptions = &options,
+    });
+    if (plan->requiresSplits()) {
+      cursor->task()->addSplit(
+          plan->id(),
+          exec::Split(
+              std::make_shared<exec::RemoteConnectorSplit>(
+                  cursor->task()->taskId())));
+      cursor->task()->noMoreSplits(plan->id());
+    }
+    auto rows = readRows(*cursor);
+    std::sort(rows.begin(), rows.end());
+    return rows;
+  }
+
+  // Returns 'numBatches' single-row (key, val) batches with key 0 and val
+  // 0..numBatches-1.
+  std::vector<RowVectorPtr> makeOneRowBatches(int32_t numBatches) {
+    std::vector<RowVectorPtr> batches;
+    batches.reserve(numBatches);
+    for (int32_t i = 0; i < numBatches; ++i) {
+      batches.push_back(makeRowVector(
+          {"key", "val"},
+          {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({i})}));
+    }
+    return batches;
   }
 
   // Runs the workers' sub-tasks.  A shuffling fixed point keeps up to
@@ -565,7 +534,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
 // The single body plan runs serially each iteration (no exchange): it reads the
 // frontier (the rows the append-mode result entry accumulated last iteration),
 // joins it with the static edges, and appends the next frontier back to result.
-// The FixedPointNode is driven through the Task interface and emits result --
+// The FixedPointNode is driven through TaskCursor and emits result --
 // the union of every iteration's frontier.
 TEST_F(FixedPointTest, recursiveCte) {
   auto schema = ROW({"id", "depth"}, BIGINT());
@@ -761,6 +730,263 @@ TEST_F(FixedPointTest, recursiveCteHashTableReuse) {
   expectBothModes(node, expected);
 }
 
+// Runs 'node' in parallel with four drivers, returning the cursor so a test
+// can inspect the loop's state afterwards, and the rows it produced as sorted
+// (col0, col1) BIGINT pairs.
+std::pair<std::unique_ptr<TaskCursor>, std::vector<std::pair<int64_t, int64_t>>>
+runWithFourDrivers(
+    const FixedPointNodePtr& node,
+    const std::shared_ptr<folly::Executor>& executor,
+    const FixedPointOptions& options) {
+  auto cursor = TaskCursor::create({
+      .planNode = node,
+      .maxDrivers = 4,
+      .queryCtx = core::QueryCtx::create(executor.get()),
+      .copyResult = false,
+      .fixedPointOptions = &options,
+  });
+  auto rows = readRows(*cursor);
+  std::sort(rows.begin(), rows.end());
+  return {std::move(cursor), std::move(rows)};
+}
+
+// Each output driver of a hash-table state's initial plan fills its own table,
+// and the tables are merged.
+TEST_F(FixedPointTest, hashTableStateIsBuiltPerDriver) {
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto probeSchema = ROW({"key", "tag"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  std::vector<RowVectorPtr> lookupBatches;
+  for (int64_t batch = 0; batch < 4; ++batch) {
+    lookupBatches.push_back(makeRowVector(
+        {"key", "payload"},
+        {makeFlatVector<int64_t>(
+             1'024, [batch](auto row) { return batch * 1'024 + row; }),
+         makeFlatVector<int64_t>(1'024, [batch](auto row) {
+           return (batch * 1'024 + row) * 10;
+         })}));
+  }
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values(lookupBatches)
+                        .localPartitionRoundRobin()
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"key", "tag"},
+                           {makeFlatVector<int64_t>({5, 4'000}),
+                            makeFlatVector<int64_t>({-1, -1})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"key", "tag", "payload"}, BIGINT()))
+      .project({"key", "payload AS tag"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  auto [cursor, rows] = runWithFourDrivers(node, cpuExecutor_, localOptions());
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {5, 50}, {4'000, 40'000}};
+  EXPECT_EQ(rows, expected);
+  auto entry =
+      cursor->task()->testingFixedPoint()->state()->getHashTable("lookup");
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_THAT(entry->table->allRows(), testing::SizeIs(4));
+}
+
+// Keys that cannot map to value ids leave the merged table in hash mode, which
+// merges the per-driver tables in parallel on the query executor.
+TEST_F(FixedPointTest, hashTableStateMergesInParallel) {
+  constexpr int32_t kRowsPerBatch{4'096};
+  auto lookupSchema = ROW({{"key", DOUBLE()}, {"payload", BIGINT()}});
+  auto probeSchema = ROW({{"key", DOUBLE()}, {"id", BIGINT()}});
+  auto outputSchema = ROW({"id", "payload"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  std::vector<RowVectorPtr> lookupBatches;
+  for (int64_t batch = 0; batch < 4; ++batch) {
+    const auto offset = batch * kRowsPerBatch;
+    lookupBatches.push_back(makeRowVector(
+        {"key", "payload"},
+        {makeFlatVector<double>(
+             kRowsPerBatch, [offset](auto row) { return offset + row + 0.5; }),
+         makeFlatVector<int64_t>(
+             kRowsPerBatch, [offset](auto row) { return offset + row; })}));
+  }
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values(lookupBatches)
+                        .localPartitionRoundRobin()
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"key", "id"},
+                           {makeFlatVector<double>({7.5, 16'000.5}),
+                            makeFlatVector<int64_t>({1, 2})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup",
+          {"key"},
+          ROW({{"key", DOUBLE()}, {"id", BIGINT()}, {"payload", BIGINT()}}))
+      .project({"id", "payload"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan),
+          std::make_shared<VectorStateDeclaration>("out", outputSchema)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"out");
+
+  auto [cursor, rows] = runWithFourDrivers(node, cpuExecutor_, localOptions());
+  const std::vector<std::pair<int64_t, int64_t>> expected{{1, 7}, {2, 16'000}};
+  EXPECT_EQ(rows, expected);
+  auto entry =
+      cursor->task()->testingFixedPoint()->state()->getHashTable("lookup");
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_EQ(entry->table->hashMode(), BaseHashTable::HashMode::kHash);
+  EXPECT_THAT(
+      entry->table->parallelJoinBuildStats().buildTimings,
+      testing::Not(testing::IsEmpty()));
+}
+
+// HashTable merges at most 255 tables in parallel, so a hash-table state built
+// by more output drivers than that must still build.
+TEST_F(FixedPointTest, hashTableStateCapsBuildDrivers) {
+  constexpr int32_t kNumDrivers{300};
+  constexpr int32_t kRowsPerBatch{4'096};
+  auto lookupSchema = ROW({{"key", DOUBLE()}, {"payload", BIGINT()}});
+  auto probeSchema = ROW({{"key", DOUBLE()}, {"id", BIGINT()}});
+  auto outputSchema = ROW({"id", "payload"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  std::vector<RowVectorPtr> lookupBatches;
+  for (int64_t batch = 0; batch < 100; ++batch) {
+    const auto offset = batch * kRowsPerBatch;
+    lookupBatches.push_back(makeRowVector(
+        {"key", "payload"},
+        {makeFlatVector<double>(
+             kRowsPerBatch, [offset](auto row) { return offset + row + 0.5; }),
+         makeFlatVector<int64_t>(
+             kRowsPerBatch, [offset](auto row) { return offset + row; })}));
+  }
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values(lookupBatches)
+                        .localPartitionRoundRobin()
+                        .planNode();
+  auto probePlan =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"key", "id"},
+              {makeFlatVector<double>({7.5}), makeFlatVector<int64_t>({1})})})
+          .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup",
+          {"key"},
+          ROW({{"key", DOUBLE()}, {"id", BIGINT()}, {"payload", BIGINT()}}))
+      .project({"id", "payload"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan),
+          std::make_shared<VectorStateDeclaration>("out", outputSchema)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"out");
+
+  auto cursor = TaskCursor::create({
+      .planNode = node,
+      .maxDrivers = kNumDrivers,
+      .queryCtx = core::QueryCtx::create(cpuExecutor_.get()),
+      .copyResult = false,
+      .fixedPointOptions = &localOptions(),
+  });
+  const std::vector<std::pair<int64_t, int64_t>> expected{{1, 7}};
+  EXPECT_EQ(readRows(*cursor), expected);
+  auto entry =
+      cursor->task()->testingFixedPoint()->state()->getHashTable("lookup");
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_THAT(entry->table->allRows(), testing::SizeIs(255));
+}
+
+// A NULL build key matches nothing, as in a hash join.  The NULL row's key slot
+// holds 0, so storing it would let a probe key of 0 match.
+TEST_F(FixedPointTest, hashTableStateDropsNullKeys) {
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto probeSchema = ROW({"key", "tag"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupKeys = makeFlatVector<int64_t>({0, 1});
+  lookupKeys->setNull(0, true);
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values({makeRowVector(
+                            {"key", "payload"},
+                            {lookupKeys, makeFlatVector<int64_t>({99, 10})})})
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"key", "tag"},
+                           {makeFlatVector<int64_t>({0, 1}),
+                            makeFlatVector<int64_t>({-1, -1})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"key", "tag", "payload"}, BIGINT()))
+      .project({"key", "payload AS tag"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  const std::vector<std::pair<int64_t, int64_t>> expected{{1, 10}};
+  expectBothModes(node, expected);
+}
+
 // Strict mode inheritance: a serial fixed point runs every sub-task on the
 // calling thread, so it cannot drive a shuffling body (PartitionedOutput /
 // Exchange require parallel mode).  The constructor rejects that combination.
@@ -814,8 +1040,8 @@ TEST_F(FixedPointTest, serialModeRejectsShuffle) {
 // Two-plan iteration that shuffles between sub-plans: plan 0 reads the frontier
 // and gathers it through a PartitionedOutput; plan 1 receives it via an
 // Exchange (a separate parallel task), halves each value, and writes the
-// frontier back.  Converges when the values reach zero.  Driven through the
-// Task interface; emits the final frontier.
+// frontier back. Converges when the values reach zero. TaskCursor emits the
+// final frontier.
 TEST_F(FixedPointTest, shuffleBetweenSubplans) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -918,7 +1144,7 @@ TEST_F(FixedPointTest, shuffleDuringIteration) {
 }
 
 // A real by-key shuffle across two peer top-level tasks.  The fixed point runs
-// as two workers (destinations 0 and 1); the coordinator (runViaTask) wires
+// as two workers (destinations 0 and 1); the test harness wires
 // them all-to-all via remote splits and they shuffle directly with each other.
 //
 // The coordinator pre-partitions the input across the workers (modeling a
@@ -1963,6 +2189,312 @@ TEST_F(FixedPointTest, countingLoopBothModes) {
   expectBothModes(countingNode(), expected);
 }
 
+// iterationMaxDrivers lets the body run several drivers, which split the state
+// between them: four drivers each count one of the four batches.  The default
+// keeps the body single-driver, which counts all four.
+TEST_F(FixedPointTest, iterationMaxDriversScalesTheBody) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto initialPlan =
+      PlanBuilder(idGenerator).values(makeOneRowBatches(4)).planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("vals", schema)
+      .partialAggregation({"key"}, {"count(1) AS val"});
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("vals", schema).initial(initialPlan),
+                      body,
+                      ConvergenceConfig{
+                          .maxIterations = 1,
+                          .errorWhenMaxIterationReached = false,
+                      })
+                  .planNode();
+
+  const std::vector<std::pair<int64_t, int64_t>> perDriver{
+      {0, 1}, {0, 1}, {0, 1}, {0, 1}};
+  EXPECT_EQ(
+      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/4),
+      perDriver);
+  const std::vector<std::pair<int64_t, int64_t>> singleDriver{{0, 4}};
+  EXPECT_EQ(
+      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/1),
+      singleDriver);
+}
+
+// The plans of a chain run at the same time and share the driver budget: with
+// five drivers the producer gets three and the consumer two.  Each producer
+// driver counts the batches it read, so the counts show the split: one driver
+// reads batches 0 and 3, the others one batch each.
+TEST_F(FixedPointTest, chainSharesIterationDrivers) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto initialPlan =
+      PlanBuilder(idGenerator).values(makeOneRowBatches(4)).planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("vals", schema)
+                      .partialAggregation({"key"}, {"count(1) AS val"})
+                      .partitionedOutput({}, 1)
+                      .planNode();
+  auto consumer =
+      PlanBuilder(idGenerator).exchange(schema, "Presto").planNode();
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "vals", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{producer, consumer},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"vals");
+
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 1}, {0, 1}, {0, 2}};
+  EXPECT_EQ(
+      runWithDrivers(node, /*maxDrivers=*/5, /*iterationMaxDrivers=*/5),
+      expected);
+}
+
+// The last convergence plan runs single-driver even when the other plans scale,
+// so a global aggregation still produces one verdict.
+TEST_F(FixedPointTest, convergenceVerdictStaysSingleDriver) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto initialPlan =
+      PlanBuilder(idGenerator).values(makeOneRowBatches(4)).planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("vals", schema).project({"key", "val"});
+  PlanBuilder convergence(idGenerator);
+  convergence.stateSource("vals", schema)
+      .singleAggregation({}, {"count(1)"})
+      .project({"a0 = 4 AS converged"});
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("vals", schema).initial(initialPlan),
+                      body,
+                      ConvergenceConfig::converging(
+                          convergence.planNode(), /*maxIterations=*/3))
+                  .planNode();
+
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 0}, {0, 1}, {0, 2}, {0, 3}};
+  EXPECT_EQ(
+      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/4),
+      expected);
+}
+
+// The trailing plan scales too, and its drivers split the output state.
+TEST_F(FixedPointTest, trailingPlanUsesIterationDrivers) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto initialPlan =
+      PlanBuilder(idGenerator).values(makeOneRowBatches(4)).planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("vals", schema).project({"key", "val"});
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("vals", schema).initial(initialPlan),
+                      body,
+                      ConvergenceConfig{
+                          .maxIterations = 1,
+                          .errorWhenMaxIterationReached = false,
+                      })
+                  .partialAggregation({"key"}, {"count(1) AS val"})
+                  .planNode();
+
+  const std::vector<std::pair<int64_t, int64_t>> perDriver{
+      {0, 1}, {0, 1}, {0, 1}, {0, 1}};
+  EXPECT_EQ(
+      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/4),
+      perDriver);
+}
+
+// Several drivers probe one hash-table state at once, each with its own
+// hashers.
+TEST_F(FixedPointTest, stateHashJoinAcrossDrivers) {
+  constexpr int64_t kNumBatches{16};
+  constexpr int64_t kRowsPerBatch{256};
+  constexpr int64_t kNumKeys{kNumBatches * kRowsPerBatch};
+  auto probeSchema = ROW({"key", "tag"}, BIGINT());
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupPlan =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"key", "payload"},
+              {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; }),
+               makeFlatVector<int64_t>(
+                   kNumKeys, [](auto row) { return row * 10; })})})
+          .planNode();
+  std::vector<RowVectorPtr> probeBatches;
+  for (int64_t batch = 0; batch < kNumBatches; ++batch) {
+    const auto offset = batch * kRowsPerBatch;
+    probeBatches.push_back(makeRowVector(
+        {"key", "tag"},
+        {makeFlatVector<int64_t>(
+             kRowsPerBatch, [offset](auto row) { return offset + row; }),
+         makeFlatVector<int64_t>(
+             kRowsPerBatch, [](auto /*row*/) { return -1; })}));
+  }
+  auto probePlan = PlanBuilder(idGenerator).values(probeBatches).planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"key", "tag", "payload"}, BIGINT()))
+      .project({"key", "payload AS tag"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  std::vector<std::pair<int64_t, int64_t>> expected;
+  expected.reserve(kNumKeys);
+  for (int64_t key = 0; key < kNumKeys; ++key) {
+    expected.emplace_back(key, key * 10);
+  }
+  for (uint32_t iterationMaxDrivers : {1, 4}) {
+    EXPECT_EQ(
+        runWithDrivers(node, /*maxDrivers=*/4, iterationMaxDrivers), expected)
+        << iterationMaxDrivers;
+  }
+}
+
+// A fixed point nested in a plan runs within that plan's share of the
+// iteration driver budget. The last convergence plan always gets one driver,
+// so a loop nested there runs its own iterations on one driver too.
+TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
+  auto outerSchema = ROW({"key", "val"}, BIGINT());
+  auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
+  auto innerSeed = makeRowVector(
+      {"ikey", "ival"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})});
+  PlanBuilder innerBodyBuilder(idGenerator);
+  innerBodyBuilder.stateSource("inner", innerSchema)
+      .project({"ikey", "ival + 1 AS ival"});
+  PlanBuilder innerConvergenceBuilder(idGenerator);
+  innerConvergenceBuilder.stateSource("inner", innerSchema)
+      .project({"ival >= 3 AS converged"});
+  core::PlanNodePtr innerFixedPoint = std::make_shared<FixedPointNode>(
+      "inner-fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "inner",
+          innerSchema,
+          PlanBuilder(idGenerator).values({innerSeed}).planNode())},
+      std::vector<core::PlanNodePtr>{innerBodyBuilder.planNode()},
+      ConvergenceConfig{
+          .plans = {innerConvergenceBuilder.planNode()}, .maxIterations = 100},
+      /*outputStateEntry=*/"inner");
+
+  // Outer fixed point: val grows by one per iteration, and the convergence
+  // plan joins the inner loop's 3, so the loop stops once val reaches 3.
+  auto outerSeed = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})});
+  PlanBuilder outerBodyBuilder(idGenerator);
+  outerBodyBuilder.stateSource("outer", outerSchema)
+      .project({"key", "val + 1 AS val"});
+  PlanBuilder outerConvergenceBuilder(idGenerator);
+  outerConvergenceBuilder.stateSource("outer", outerSchema)
+      .hashJoin({"key"}, {"ikey"}, innerFixedPoint, "", {"val", "ival"})
+      .project({"val + ival >= 6 AS converged"});
+  auto node = std::make_shared<FixedPointNode>(
+      "outer-fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "outer",
+          outerSchema,
+          PlanBuilder(idGenerator).values({outerSeed}).planNode())},
+      std::vector<core::PlanNodePtr>{outerBodyBuilder.planNode()},
+      ConvergenceConfig{
+          .plans = {outerConvergenceBuilder.planNode()}, .maxIterations = 100},
+      /*outputStateEntry=*/"outer");
+
+  const std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}};
+  for (uint32_t iterationMaxDrivers : {1, 4}) {
+    EXPECT_EQ(
+        runWithDrivers(node, /*maxDrivers=*/4, iterationMaxDrivers), expected)
+        << iterationMaxDrivers;
+  }
+}
+
+// A StateHashJoin finds its probe keys by name.  Here the key is the second
+// probe column, after a column of the same type that must not be joined on.
+TEST_F(FixedPointTest, stateHashJoinFindsProbeKeyByName) {
+  auto probeSchema = ROW({"tag", "key"}, BIGINT());
+  auto lookupSchema = ROW({"key", "payload"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupPlan = PlanBuilder(idGenerator)
+                        .values({makeRowVector(
+                            {"key", "payload"},
+                            {makeFlatVector<int64_t>({0, 1, 2}),
+                             makeFlatVector<int64_t>({0, 10, 20})})})
+                        .planNode();
+  auto probePlan = PlanBuilder(idGenerator)
+                       .values({makeRowVector(
+                           {"tag", "key"},
+                           {makeFlatVector<int64_t>({-1, -1}),
+                            makeFlatVector<int64_t>({1, 2})})})
+                       .planNode();
+  PlanBuilder body(idGenerator);
+  body.stateSource("probe", probeSchema)
+      .stateHashJoin(
+          "lookup", {"key"}, ROW({"tag", "key", "payload"}, BIGINT()))
+      .project({"payload AS tag", "key"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<HashTableStateDeclaration>(
+              "lookup",
+              lookupSchema,
+              std::vector<std::string>{"key"},
+              lookupPlan),
+          std::make_shared<VectorStateDeclaration>(
+              "probe", probeSchema, probePlan)},
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"probe");
+
+  expectBothModes(node, {{10, 1}, {20, 2}});
+}
+
+TEST_F(FixedPointTest, groupedExecutionIsRejected) {
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+  VELOX_ASSERT_THROW(
+      exec::Task::create(
+          fmt::format("local://fixedpoint-grouped-{}", queryCtx->queryId()),
+          core::PlanFragment{
+              countingNode(),
+              core::ExecutionStrategy::kGrouped,
+              /*numberOfSplitGroups=*/1,
+              /*groupedExecLeafNodeIds=*/{}},
+          /*destination=*/0,
+          queryCtx,
+          exec::Task::ExecutionMode::kParallel,
+          exec::Consumer{},
+          /*memoryArbitrationPriority=*/0,
+          /*spillDiskOpts=*/std::nullopt,
+          /*onError=*/nullptr,
+          &localOptions()),
+      "A fixed point does not support grouped execution");
+}
+
 // The contract a coordinator depends on: the owning task reaches a terminal
 // state when the loop is done, in both modes.  Nothing else moves a fixed point
 // off kRunning -- it has no drivers -- so without this taskCompletionFuture()
@@ -1987,6 +2519,159 @@ TEST_F(FixedPointTest, taskReachesTerminalStateWhenLoopFinishes) {
     EXPECT_EQ(task->state(), exec::TaskState::kFinished);
     EXPECT_EQ(task->error(), nullptr);
   }
+}
+
+// The owning task reports what each phase of the loop ran: the initial plan,
+// one entry per iteration with its body and convergence chains, and the
+// verdicts.  Timings are not checked; they may be zero on a coarse clock.
+TEST_F(FixedPointTest, reportsExecutionStats) {
+  const std::vector<bool> expectedVerdicts{false, false, true};
+  for (auto mode :
+       {exec::Task::ExecutionMode::kSerial,
+        exec::Task::ExecutionMode::kParallel}) {
+    SCOPED_TRACE(executionModeString(mode));
+    auto task = makeTask(countingNode(), mode, "stats");
+    if (mode == exec::Task::ExecutionMode::kSerial) {
+      while (task->next() != nullptr) {
+      }
+    } else {
+      task->start(/*maxDrivers=*/1);
+      task->taskCompletionFuture().wait();
+    }
+    ASSERT_EQ(task->error(), nullptr);
+
+    auto stats = task->fixedPointExecutionStats();
+    ASSERT_TRUE(stats.has_value());
+    ASSERT_THAT(stats->initializationPlans, testing::SizeIs(1));
+    EXPECT_THAT(
+        stats->initializationPlans[0].taskStats.pipelineStats,
+        testing::Not(testing::IsEmpty()));
+    std::vector<bool> verdicts;
+    for (size_t i = 0; i < stats->iterations.size(); ++i) {
+      const auto& iteration = stats->iterations[i];
+      EXPECT_EQ(iteration.iteration, i);
+      EXPECT_EQ(iteration.body.outputRows, 1);
+      ASSERT_THAT(iteration.body.plans, testing::SizeIs(1));
+      ASSERT_TRUE(iteration.convergence.has_value());
+      ASSERT_THAT(iteration.convergence->plans, testing::SizeIs(1));
+      EXPECT_EQ(iteration.convergence->plans[0].planIndex, 1);
+      verdicts.push_back(iteration.converged);
+    }
+    EXPECT_EQ(verdicts, expectedVerdicts);
+    EXPECT_FALSE(stats->trailingPlan.has_value());
+  }
+
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+  auto plainTask = exec::Task::create(
+      fmt::format("local://fixedpoint-plain-{}", queryCtx->queryId()),
+      core::PlanFragment{
+          PlanBuilder()
+              .values({makeRowVector({"key"}, {makeFlatVector<int64_t>({0})})})
+              .planNode()},
+      /*destination=*/0,
+      queryCtx,
+      exec::Task::ExecutionMode::kSerial);
+  EXPECT_FALSE(plainTask->fixedPointExecutionStats().has_value());
+  while (plainTask->next() != nullptr) {
+  }
+}
+
+// The statistics stay readable after the loop fails, which is when a caller
+// needs them most.
+TEST_F(FixedPointTest, executionStatsSurviveFailure) {
+  auto node = countingNodeTo(/*target=*/100, /*maxIterations=*/2);
+  auto task = makeTask(node, exec::Task::ExecutionMode::kParallel, "failed");
+  task->start(/*maxDrivers=*/1);
+  task->taskCompletionFuture().wait();
+  ASSERT_EQ(task->state(), exec::TaskState::kFailed);
+
+  auto stats = task->fixedPointExecutionStats();
+  ASSERT_TRUE(stats.has_value());
+  ASSERT_THAT(stats->iterations, testing::SizeIs(2));
+  EXPECT_FALSE(stats->iterations[0].converged);
+  EXPECT_FALSE(stats->iterations[1].converged);
+}
+
+// Only the first three iterations and the latest one keep their sub-tasks'
+// TaskStats, which bounds memory for long-running loops.
+TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
+  auto node = countingNodeTo(/*target=*/6, /*maxIterations=*/10);
+  auto task = makeTask(node, exec::Task::ExecutionMode::kSerial, "bounded");
+  while (task->next() != nullptr) {
+  }
+
+  auto stats = task->fixedPointExecutionStats();
+  ASSERT_TRUE(stats.has_value());
+  std::vector<bool> detailed;
+  for (const auto& iteration : stats->iterations) {
+    detailed.push_back(
+        !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
+        !iteration.convergence->plans[0].taskStats.pipelineStats.empty());
+  }
+  const std::vector<bool> expected{true, true, true, false, false, true};
+  EXPECT_EQ(detailed, expected);
+}
+
+// A chain records each plan's driver limit, which the sub-task's own TaskStats
+// confirm, and the trailing plan is recorded with its own.
+TEST_F(FixedPointTest, executionStatsRecordDrivers) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto initialPlan =
+      PlanBuilder(idGenerator).values(makeOneRowBatches(4)).planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("vals", schema)
+                      .partitionedOutput({}, 1)
+                      .planNode();
+  auto consumer =
+      PlanBuilder(idGenerator).exchange(schema, "Presto").planNode();
+  auto fixedPoint = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "vals", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{producer, consumer},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"vals");
+  auto plan = PlanBuilder(idGenerator)
+                  .addNode([&](const core::PlanNodeId& /*id*/,
+                               const core::PlanNodePtr& /*input*/) {
+                    return fixedPoint;
+                  })
+                  .project({"key", "val"})
+                  .planNode();
+
+  auto options = localOptions();
+  options.iterationMaxDrivers = 5;
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .maxDrivers = 5,
+      .queryCtx = core::QueryCtx::create(cpuExecutor_.get()),
+      .copyResult = false,
+      .fixedPointOptions = &options,
+  });
+  cursor->task()->addSplit(
+      fixedPoint->id(),
+      exec::Split(
+          std::make_shared<exec::RemoteConnectorSplit>(
+              cursor->task()->taskId())));
+  cursor->task()->noMoreSplits(fixedPoint->id());
+  EXPECT_THAT(readRows(*cursor), testing::SizeIs(4));
+
+  auto stats = cursor->task()->fixedPointExecutionStats();
+  ASSERT_TRUE(stats.has_value());
+  ASSERT_THAT(stats->iterations, testing::SizeIs(1));
+  const auto& plans = stats->iterations[0].body.plans;
+  ASSERT_THAT(plans, testing::SizeIs(2));
+  EXPECT_EQ(plans[0].maxDrivers, 3);
+  EXPECT_EQ(plans[0].taskStats.numTotalDrivers, 3);
+  EXPECT_EQ(plans[1].maxDrivers, 2);
+  EXPECT_EQ(plans[1].taskStats.numTotalDrivers, 2);
+  ASSERT_TRUE(stats->trailingPlan.has_value());
+  EXPECT_EQ(stats->trailingPlan->maxDrivers, 5);
+  EXPECT_EQ(stats->trailingPlan->taskStats.numTotalDrivers, 5);
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
@@ -2041,6 +2726,162 @@ TEST_F(FixedPointTest, loopFailureReachesTheTask) {
   // The state is half-written, so a retried next() must not re-seed it and
   // rebuild hash tables on top of a half-finished run.
   VELOX_ASSERT_THROW(task->next(), "cannot resume");
+}
+
+// A driver the test holds on its thread while another driver fails. Shared
+// with the injection callback, which can outlive the test body when the loop
+// stops the owning task too early.
+struct HeldDriver {
+  folly::Baton<> onThread;
+  folly::Baton<> done;
+  std::atomic_bool ownerStoppedFirst{false};
+};
+
+// Waits up to five seconds for 'baton' to be posted.
+void waitFor(folly::Baton<>& baton) {
+  if (!baton.try_wait_for(std::chrono::seconds(5))) {
+    ADD_FAILURE() << "Timed out waiting for a held driver";
+  }
+}
+
+// Holds the calling driver on its thread until 'owner' stops running or a
+// second passes, and records whether 'owner' stopped first.
+void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
+  held.onThread.post();
+  owner.taskCompletionFuture().wait(std::chrono::seconds(1));
+  held.ownerStoppedFirst = !owner.isRunning();
+  held.done.post();
+}
+
+// A failed sub-task resolves its completion future while its other drivers can
+// still be on thread, feeding a consumer that writes into the loop's buffers.
+// The loop must wait for those drivers before it fails the owning task. Driver
+// 0 of the initial plan fails once driver 1 is on thread, and driver 1 records
+// whether the owning task stopped while it was there.
+DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto seed = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})});
+  auto initialPlan = PlanBuilder(idGenerator)
+                         .values({seed}, /*parallelizable=*/true)
+                         .planNode();
+  PlanBuilder bodyBuilder(idGenerator);
+  bodyBuilder.stateSource("vals", schema).project({"key", "val + 1 AS val"});
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "vals", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{bodyBuilder.planNode()},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"vals");
+
+  auto task =
+      makeTask(node, exec::Task::ExecutionMode::kParallel, "stop-initial");
+  auto held = std::make_shared<HeldDriver>();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([task, held](Operator* op) {
+        if (op->operatorType() != "Values") {
+          return;
+        }
+        if (op->operatorCtx()->driverCtx()->driverId == 0) {
+          waitFor(held->onThread);
+          // Lets the loop start waiting on the sub-task before it fails.
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          VELOX_FAIL("Injected initial-plan failure");
+        }
+        holdUntilStopped(*task, *held);
+        VELOX_FAIL("Injected failure of the held driver");
+      }));
+  task->start(/*maxDrivers=*/2);
+  task->taskCompletionFuture().wait();
+  waitFor(held->done);
+
+  ASSERT_TRUE(held->done.ready());
+  EXPECT_FALSE(held->ownerStoppedFirst);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(task->error()), "Injected initial-plan failure");
+}
+
+// The same contract for a body chain: the producer plan fails while the
+// consumer plan's driver is on thread with the batch the producer sent first.
+DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
+  auto schema = ROW({"id", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto batch = makeRowVector(
+      {"id", "val"},
+      {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})});
+  auto initialPlan = PlanBuilder(idGenerator).values({batch, batch}).planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("frontier", schema)
+                      .partitionedOutput({}, 1)
+                      .planNode();
+  auto consumer = PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .project({"id", "val"})
+                      .planNode();
+  auto node = std::make_shared<FixedPointNode>(
+      "fixed-point",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "frontier", schema, initialPlan)},
+      std::vector<core::PlanNodePtr>{producer, consumer},
+      ConvergenceConfig{
+          .maxIterations = 1,
+          .errorWhenMaxIterationReached = false,
+      },
+      /*outputStateEntry=*/"frontier");
+
+  // Eager flush sends the producer's first batch before it reads the second.
+  auto queryCtx = core::QueryCtx::create(
+      cpuExecutor_.get(),
+      core::QueryConfig{
+          {{core::QueryConfig::kPartitionedOutputEagerFlush, "true"}}});
+  auto task = exec::Task::create(
+      fmt::format("local://fixedpoint-stop-body-{}", queryCtx->queryId()),
+      core::PlanFragment{node},
+      /*destination=*/0,
+      queryCtx,
+      exec::Task::ExecutionMode::kParallel,
+      exec::Consumer{},
+      /*memoryArbitrationPriority=*/0,
+      /*spillDiskOpts=*/std::nullopt,
+      /*onError=*/nullptr,
+      &localOptions());
+  task->addSplit(
+      node->id(),
+      exec::Split(
+          std::make_shared<exec::RemoteConnectorSplit>(task->taskId())));
+  task->noMoreSplits(node->id());
+
+  auto held = std::make_shared<HeldDriver>();
+  auto numProducerBatches = std::make_shared<std::atomic_int>(0);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>(
+          [task, held, numProducerBatches](Operator* op) {
+            if (op->operatorType() == "FixedPointStateSource" &&
+                ++*numProducerBatches == 2) {
+              waitFor(held->onThread);
+              VELOX_FAIL("Injected producer failure");
+            }
+            if (op->operatorType() == "Exchange") {
+              holdUntilStopped(*task, *held);
+              VELOX_FAIL("Injected failure of the held consumer");
+            }
+          }));
+  task->start(/*maxDrivers=*/1);
+  task->taskCompletionFuture().wait();
+  waitFor(held->done);
+
+  ASSERT_TRUE(held->done.ready());
+  EXPECT_FALSE(held->ownerStoppedFirst);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(task->error()), "Injected producer failure");
 }
 
 // A split addressed to a node that reads none is a coordinator bug.  The driver

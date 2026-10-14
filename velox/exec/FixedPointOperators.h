@@ -15,14 +15,36 @@
  */
 #pragma once
 
+#include <memory>
+
+#include "velox/core/FixedPointPlanNodes.h"
+
 namespace facebook::velox::exec {
 
-/// Registers the operator translator for StateSourceNode and StateHashJoinNode,
-/// which lets a fixed point's per-iteration sub-task plans read its state.
-/// Call once at startup.  Not idempotent -- pair it with
-/// Operator::unregisterAllOperators() in test teardown.  Nothing registers the
-/// executor itself: Task::create builds one directly for a plan containing a
-/// FixedPointNode.
-void registerFixedPoint();
+struct DriverCtx;
+class Operator;
+
+/// Constructs execution operators for fixed-point plan nodes.
+class FixedPointOperators {
+ public:
+  /// Creates an operator that reads the final output state of 'node'.
+  static std::unique_ptr<Operator> create(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::FixedPointNodePtr& node);
+
+  /// Creates an operator that reads the vector state named by 'node'.
+  static std::unique_ptr<Operator> create(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::StateSourceNodePtr& node);
+
+  /// Creates an operator that joins against the hash-table state named by
+  /// 'node'.
+  static std::unique_ptr<Operator> create(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const core::StateHashJoinNodePtr& node);
+};
 
 } // namespace facebook::velox::exec

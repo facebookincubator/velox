@@ -29,7 +29,6 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -164,7 +163,8 @@ int64_t runtimeStatCount(const OperatorStats& op, std::string_view key) {
 }
 
 TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
-    const std::shared_ptr<exec::Task>& task) {
+    const std::shared_ptr<exec::Task>& task,
+    const std::vector<std::string_view>& customRuntimeStatKeys) {
   TableEvolutionFuzzer::ScanPlanCoverage result;
   result.numQueries = 1;
   bool remainingFilterEvaluated{false};
@@ -216,10 +216,9 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
           runtimeStatSum(op, "dataSourceLazyCpuNanos");
       result.dataSourceLazyWallNanos +=
           runtimeStatSum(op, "dataSourceLazyWallNanos");
-      result.numStringDictionaryEncodingPreserved += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
-      result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
+      for (const auto& key : customRuntimeStatKeys) {
+        result.customRuntimeStats[std::string(key)] += runtimeStatSum(op, key);
+      }
     }
   }
   result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
@@ -255,10 +254,9 @@ void addScanStats(
 
   coverage.numStripeLoads += stats.numStripeLoads;
   coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
-  coverage.numStringDictionaryEncodingPreserved +=
-      stats.numStringDictionaryEncodingPreserved;
-  coverage.numStringDictionaryEncodingAbandoned +=
-      stats.numStringDictionaryEncodingAbandoned;
+  for (const auto& [key, value] : stats.customRuntimeStats) {
+    coverage.customRuntimeStats[key] += value;
+  }
   coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
   coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
   coverage.numQueriesWithRemainingFilterEvaluation +=
@@ -293,13 +291,16 @@ void logScanStats(
           << " processedStrides=" << stats.processedStrides
           << " chunkSkippedRows=" << stats.chunkSkippedRows
           << " processedRows=" << stats.processedRows;
-  VLOG(1) << "ScanCoverage[" << label
-          << "] nimble: stripeLoads=" << stats.numStripeLoads
-          << " indexFilterConv=" << stats.numIndexFilterConversions
-          << " dictionaryEncodingPreserved="
-          << stats.numStringDictionaryEncodingPreserved
-          << " dictionaryEncodingAbandoned="
-          << stats.numStringDictionaryEncodingAbandoned;
+  if (VLOG_IS_ON(1)) {
+    std::string customStats;
+    for (const auto& [key, value] : stats.customRuntimeStats) {
+      customStats += fmt::format(" {}={}", key, value);
+    }
+    VLOG(1) << "ScanCoverage[" << label
+            << "] format: stripeLoads=" << stats.numStripeLoads
+            << " indexFilterConv=" << stats.numIndexFilterConversions
+            << customStats;
+  }
   VLOG(1) << "ScanCoverage[" << label
           << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
           << " valueHookValues=" << stats.numValuesLoadedToValueHook
@@ -347,6 +348,22 @@ constexpr int kProbeRows = 64;
 // (now expensive) write happens once per run(); this many shapes amortize it.
 constexpr int kQueryShapesPerFile = 20;
 
+using DataBatchMutator =
+    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>;
+
+void prepareDataBatch(
+    const RowVectorPtr& data,
+    const DataBatchMutator& dataBatchMutator,
+    uint64_t seed,
+    uint64_t rowOffset) {
+  for (auto& child : data->children()) {
+    BaseVector::flattenVector(child);
+  }
+  if (dataBatchMutator) {
+    dataBatchMutator(data, seed, rowOffset);
+  }
+}
+
 VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
   VectorFuzzer::Options options;
   options.vectorSize = kDefaultVectorSize;
@@ -365,8 +382,15 @@ VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
 // TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow).
 int computeAdaptiveVectorSize(
     VectorFuzzer& vectorFuzzer,
-    const RowTypePtr& schema) {
+    const RowTypePtr& schema,
+    const DataBatchMutator& dataBatchMutator,
+    uint64_t seed) {
   auto probe = vectorFuzzer.fuzzRow(schema, kProbeRows, false);
+  // Measure the same representation that is written. Format-specific
+  // mutations can substantially change value sizes (e.g. short VARCHARs to
+  // capping JSON), so measuring the unmodified probe would overshoot the byte
+  // target for every generated batch.
+  prepareDataBatch(probe, dataBatchMutator, seed, /*rowOffset=*/0);
   const uint64_t probeRawSize = probe->estimateFlatSize();
   return TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
       static_cast<double>(probeRawSize) / kProbeRows, FLAGS_batch_target_bytes);
@@ -717,58 +741,6 @@ void generateAggregatesForColumns(
   }
 }
 
-std::vector<std::vector<RowVectorPtr>> runTaskCursors(
-    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
-    folly::Executor& executor) {
-  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
-  for (int i = 0; i < cursors.size(); ++i) {
-    auto [promise, future] =
-        folly::makePromiseContract<std::vector<RowVectorPtr>>();
-    futures.push_back(std::move(future));
-    auto cursorPtr = cursors[i];
-    auto task = cursorPtr->task();
-    executor.add([cursorPtr, task, promise = std::move(promise)]() mutable {
-      std::vector<RowVectorPtr> results;
-      try {
-        while (cursorPtr->moveNext()) {
-          auto& result = cursorPtr->current();
-          result->loadedVector();
-          results.push_back(std::move(result));
-        }
-        promise.setValue(std::move(results));
-      } catch (VeloxRuntimeError& e) {
-        if (FLAGS_enable_oom_injection_write_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
-          promise.setValue(std::move(results));
-        } else if (
-            FLAGS_enable_oom_injection_read_path &&
-            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
-          // If we enabled OOM injection we expect the exception thrown by the
-          // ScopedOOMInjector.
-          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
-          promise.setValue(std::move(results));
-        } else {
-          LOG(ERROR) << e.what();
-          promise.setException(e);
-        }
-      } catch (const std::exception& e) {
-        LOG(ERROR) << e.what();
-        promise.setException(e);
-      }
-    });
-  }
-  std::vector<std::vector<RowVectorPtr>> results;
-  results.reserve(futures.size());
-  for (auto& future : futures) {
-    results.push_back(std::move(future).get());
-  }
-  return results;
-}
 // `tableBucketCount' is the bucket count of current table setup when reading.
 // `partitionBucketCount' is the bucket count when the partition was written.
 // `tableBucketCount' must be a multiple of `partitionBucketCount'.
@@ -939,6 +911,68 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
 
 // Generate random aggregation configuration for pushdown testing.
 } // namespace
+
+std::vector<std::vector<RowVectorPtr>> TableEvolutionFuzzer::runTaskCursors(
+    const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+    folly::Executor& executor) {
+  std::vector<folly::SemiFuture<std::vector<RowVectorPtr>>> futures;
+  for (int i = 0; i < cursors.size(); ++i) {
+    auto [taskPromise, future] =
+        folly::makePromiseContract<std::vector<RowVectorPtr>>();
+    futures.push_back(std::move(future));
+    auto cursorPtr = cursors[i];
+    auto task = cursorPtr->task();
+    executor.add([cursorPtr, task, promise = std::move(taskPromise)]() mutable {
+      std::vector<RowVectorPtr> results;
+      folly::exception_wrapper error;
+      try {
+        while (cursorPtr->moveNext()) {
+          auto& result = cursorPtr->current();
+          result->loadedVector();
+          results.push_back(std::move(result));
+        }
+      } catch (VeloxRuntimeError& e) {
+        if (FLAGS_enable_oom_injection_write_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in write path: " << e.what();
+        } else if (
+            FLAGS_enable_oom_injection_read_path &&
+            e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
+            e.message() == ScopedOOMInjector::kErrorMessage) {
+          // If we enabled OOM injection we expect the exception thrown by the
+          // ScopedOOMInjector.
+          LOG(INFO) << "OOM injection triggered in read path: " << e.what();
+        } else {
+          LOG(ERROR) << e.what();
+          error = folly::exception_wrapper{std::current_exception()};
+        }
+      } catch (const std::exception& e) {
+        LOG(ERROR) << e.what();
+        error = folly::exception_wrapper{std::current_exception()};
+      }
+      // The caller wakes up when the promise is fulfilled and may then free
+      // the pools this task's plan references, so the task must not be
+      // destroyed here.
+      cursorPtr.reset();
+      task.reset();
+      if (error) {
+        promise.setException(std::move(error));
+      } else {
+        promise.setValue(std::move(results));
+      }
+    });
+  }
+  auto outcomes = folly::collectAll(std::move(futures)).get();
+  std::vector<std::vector<RowVectorPtr>> results;
+  results.reserve(outcomes.size());
+  for (auto& outcome : outcomes) {
+    results.push_back(std::move(outcome).value());
+  }
+  return results;
+}
 
 std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
   std::string quoted;
@@ -1496,6 +1530,12 @@ void TableEvolutionFuzzer::run() {
   fuzzer::ExpressionFuzzer::FuzzedExpressionData generatedRemainingFilters;
   std::vector<std::string> additionalColumnNames;
   std::vector<TypePtr> additionalColumnTypes;
+  additionalColumnNames.reserve(config_.additionalColumns.size());
+  additionalColumnTypes.reserve(config_.additionalColumns.size());
+  for (const auto& [name, type] : config_.additionalColumns) {
+    additionalColumnNames.push_back(name);
+    additionalColumnTypes.push_back(type);
+  }
 
   if (shouldGenerateRemainingFilters) {
     // Generate remaining filters and extract new columns
@@ -2098,8 +2138,10 @@ void TableEvolutionFuzzer::runQueryShape(
     return;
   }
 
-  auto pushdownStats = extractScanStats(scanTasks[0]->task());
-  auto referenceStats = extractScanStats(scanTasks[1]->task());
+  auto pushdownStats =
+      extractScanStats(scanTasks[0]->task(), config_.customRuntimeStatKeys);
+  auto referenceStats =
+      extractScanStats(scanTasks[1]->task(), config_.customRuntimeStatKeys);
   queryCoverage.pushdown = pushdownStats;
   queryCoverage.reference = referenceStats;
   queryCoverage.executionSucceeded = true;
@@ -2969,16 +3011,20 @@ void TableEvolutionFuzzer::createWriteTasks(
     // wildly different schema widths, unless adaptive sizing is disabled via
     // --adaptive_batch_sizing, in which case use a fixed per-batch row count.
     const int vectorSize = FLAGS_adaptive_batch_sizing
-        ? computeAdaptiveVectorSize(vectorFuzzer_, testSetups[i].schema)
+        ? computeAdaptiveVectorSize(
+              vectorFuzzer_,
+              testSetups[i].schema,
+              config_.dataBatchMutator,
+              currentSeed_)
         : kDefaultVectorSize;
     std::vector<RowVectorPtr> dataBatches;
     dataBatches.reserve(numBatches);
+    uint64_t rowOffset = 0;
     for (int batch = 0; batch < numBatches; ++batch) {
       auto data =
           vectorFuzzer_.fuzzRow(testSetups[i].schema, vectorSize, false);
-      for (auto& child : data->children()) {
-        BaseVector::flattenVector(child);
-      }
+      prepareDataBatch(data, config_.dataBatchMutator, currentSeed_, rowOffset);
+      rowOffset += data->size();
       dataBatches.push_back(std::move(data));
     }
 

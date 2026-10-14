@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -39,10 +40,13 @@ using EncodingViewTest = nimble::test::EncodingViewTest;
 
 TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
   const std::vector<nimble::EncodingType> supportedEncodings{
+      nimble::EncodingType::Sentinel,
+      nimble::EncodingType::Nullable,
       nimble::EncodingType::Constant,
       nimble::EncodingType::Trivial,
       nimble::EncodingType::MainlyConstant,
       nimble::EncodingType::ALP,
+      nimble::EncodingType::ALPRD,
       nimble::EncodingType::FixedBitWidth,
       nimble::EncodingType::Dictionary,
       nimble::EncodingType::SparseBool,
@@ -55,25 +59,80 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::SimdForBitpack,
       nimble::EncodingType::BitRangeSplit,
       nimble::EncodingType::BlockBitPacking,
-      nimble::EncodingType::SubIntSplit};
+      nimble::EncodingType::SubIntSplit,
+      nimble::EncodingType::Fsst};
   for (const auto encodingType : supportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     EXPECT_TRUE(nimble::supportsEncodingView(encodingType));
   }
 
-  EXPECT_FALSE(nimble::supportsEncodingView(nimble::EncodingType::Nullable));
-
   const std::vector<nimble::EncodingType> unsupportedEncodings{
-      nimble::EncodingType::Sentinel,
       nimble::EncodingType::Varint,
       nimble::EncodingType::Delta,
       nimble::EncodingType::Prefix,
       nimble::EncodingType::FrequencyPartition,
-      nimble::EncodingType::Fsst,
       nimble::EncodingType::SharedDictionary};
   for (const auto encodingType : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     EXPECT_FALSE(nimble::supportsEncodingView(encodingType));
+  }
+}
+
+TEST_F(EncodingViewTest, readsNullableEncoding) {
+  const auto values = makeVector({10, 30, 50});
+  const auto nonNulls = makeVector({true, false, true, false, true});
+  const std::array<int32_t, 5> expectedValues{10, 0, 30, 0, 50};
+  const std::array<bool, 5> expectedNulls{false, true, false, true, false};
+
+  for (const auto useVarint : {false, true}) {
+    SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = useVarint,
+    };
+    const auto verify = [&](std::string_view serialized) {
+      auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+      ASSERT_EQ(view->rowCount(), static_cast<uint32_t>(expectedValues.size()));
+      std::array<bool, 5> actualNulls{};
+      std::array<int32_t, 5> actualValues{};
+      const std::array<nimble::RowRange, 1> ranges{
+          nimble::RowRange{0, static_cast<uint32_t>(expectedValues.size())}};
+      const auto numNonNull = view->read(
+          ranges,
+          [&](uint32_t outputIndex) { actualNulls[outputIndex] = true; },
+          actualValues.data());
+      EXPECT_EQ(numNonNull, 3);
+      EXPECT_EQ(actualValues, expectedValues);
+      EXPECT_EQ(actualNulls, expectedNulls);
+    };
+
+    verify(
+        nimble::test::Encoder<nimble::NullableEncoding<int32_t>>::
+            encodeNullable(
+                *buffer_,
+                values,
+                nonNulls,
+                nimble::CompressionType::Uncompressed,
+                options));
+  }
+}
+
+TEST_F(EncodingViewTest, readsCompressedTrivialEncoding) {
+  const nimble::Encoding::Options options;
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (auto i = 0; i < 4'096; ++i) {
+    values.push_back(i % 17);
+  }
+  auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Zstd, options);
+
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  ASSERT_EQ(view->rowCount(), values.size());
+  for (uint32_t row{0}; row < values.size(); ++row) {
+    SCOPED_TRACE(row);
+    int32_t value{0};
+    view->readAt(row, &value);
+    EXPECT_EQ(value, row % 17);
   }
 }
 
@@ -339,11 +398,9 @@ TEST_F(EncodingViewTest, rejectsVarintEncoding) {
 TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
   const std::vector<std::pair<nimble::EncodingType, nimble::DataType>>
       unsupportedEncodings{
-          {nimble::EncodingType::Sentinel, nimble::DataType::Int32},
           {nimble::EncodingType::Delta, nimble::DataType::Int32},
           {nimble::EncodingType::Prefix, nimble::DataType::String},
           {nimble::EncodingType::FrequencyPartition, nimble::DataType::Uint32},
-          {nimble::EncodingType::Fsst, nimble::DataType::String},
       };
 
   const nimble::Encoding::Options options;

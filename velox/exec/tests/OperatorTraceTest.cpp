@@ -342,7 +342,7 @@ TEST_F(OperatorTraceTest, traceMetadata) {
 }
 
 TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
-  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
 
   const auto outputDir = TempDirectoryPath::create();
@@ -366,23 +366,48 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   // A value distinctive enough that a substring search over the trace file
   // cannot match it by accident.
   const std::string secret{"mg-api-key-do-not-leak-3f8a1c"};
-  const auto queryCtx = core::QueryCtx::create(
-      executor_.get(),
-      core::QueryConfig(
-          std::unordered_map<std::string, std::string>{
-              {"metagen_key", secret},
-              {"model_api_key", secret},
-              {"crypto_auth_tokens_metagen", secret},
-              {core::QueryConfig::kSpillEnabled, "true"},
-              {core::QueryConfig::kSpillNumPartitionBits, "17"},
-          }),
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
-          {"test_trace",
-           std::make_shared<config::ConfigBase>(
-               std::unordered_map<std::string, std::string>{
-                   {"metagen_key", secret},
-                   {"cKey1", "cVal1"},
-               })}});
+  const std::string credentialKey{"test_credential_token"};
+  core::CredentialKeys keys;
+  std::unordered_map<std::string, std::string> queryConfigMap{
+      // Named by isCredentialConfigKey() rather than recorded by a write.
+      // Every name on that list is covered, so dropping one from it fails
+      // here.
+      {"metagen_key", secret},
+      {"model_api_key", secret},
+      {"crypto_auth_tokens_metagen", secret},
+      {core::QueryConfig::kSpillEnabled, "true"},
+      {core::QueryConfig::kSpillNumPartitionBits, "17"},
+  };
+  keys.write(
+      queryConfigMap,
+      "",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  std::unordered_map<std::string, std::string> connectorConfigMap{
+      {"metagen_key", secret},
+      {"cKey1", "cVal1"},
+  };
+  keys.write(
+      connectorConfigMap,
+      "test_trace",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .queryConfig(core::QueryConfig(queryConfigMap))
+                            .connectorConfigs(
+                                std::unordered_map<
+                                    std::string,
+                                    std::shared_ptr<config::ConfigBase>>{
+                                    {"test_trace",
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(connectorConfigMap))}})
+                            .credentialKeys(std::move(keys))
+                            .build();
 
   trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
       .write(*queryCtx, *planNode);
@@ -395,28 +420,135 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
 
   const auto reader =
       trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
-  const auto actualQueryConfigs = reader.queryConfigs();
   EXPECT_THAT(
-      actualQueryConfigs,
-      testing::IsSupersetOf({
+      reader.queryConfigs(),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              credentialKey, std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "metagen_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "model_api_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "crypto_auth_tokens_metagen", std::string(kRedactedConfigValue)},
-          // Non-credential entries stay verbatim; replay parses them back into
-          // a typed QueryConfig and would throw on a placeholder.
+          // Non-credential entries stay verbatim; replay reparses these as a
+          // bool and an integer, which a placeholder would fail.
           std::pair<const std::string, std::string>{
-              core::QueryConfig::kSpillNumPartitionBits, "17"},
-      }));
+              core::QueryConfig::kSpillEnabled, "true"},
+          std::pair<const std::string, std::string>{
+              core::QueryConfig::kSpillNumPartitionBits, "17"}));
 
   EXPECT_THAT(
       reader.connectorProperties().at("test_trace"),
       testing::UnorderedElementsAre(
           std::pair<const std::string, std::string>{
+              credentialKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
               "metagen_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
+}
+
+TEST_F(OperatorTraceTest, traceMetadataRedactsWhereTheCredentialLanded) {
+  // One name, three destinations, built by the write() calls that produce it.
+  // It is the stored value in the query config and in one connector; the other
+  // connector kept a property of the same name, and redacting that would
+  // destroy a value replay still has to read back.
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+  const auto outputDir = TempDirectoryPath::create();
+  core::PlanNodeId traceNodeId;
+  const auto planNode = PlanBuilder()
+                            .values(rows, false)
+                            .project({"c0", "c1"})
+                            .capturePlanNodeId(traceNodeId)
+                            .planNode();
+
+  const std::string secret{"written-through-write-do-not-leak-7b1d4f"};
+  const std::string catalogValue{"an-ordinary-catalog-property"};
+  const std::string sharedKey{"test_credential_token"};
+  const std::string credentialConnectorId{"test_trace_credential"};
+  const std::string keptConnectorId{"test_trace_kept"};
+
+  core::CredentialKeys keys;
+  std::unordered_map<std::string, std::string> queryConfigMap{
+      {core::QueryConfig::kSpillNumPartitionBits, "17"}};
+  keys.write(
+      queryConfigMap,
+      "",
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  std::unordered_map<std::string, std::string> credentialConnectorMap{
+      {"cKey1", "cVal1"}};
+  keys.write(
+      credentialConnectorMap,
+      credentialConnectorId,
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  // Rejected: the property already there wins, so this connector is left
+  // unrecorded and its value must survive the trace verbatim.
+  std::unordered_map<std::string, std::string> keptConnectorMap{
+      {sharedKey, catalogValue}};
+  keys.write(
+      keptConnectorMap,
+      keptConnectorId,
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kKeep);
+  ASSERT_EQ(keptConnectorMap.at(sharedKey), catalogValue);
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .queryConfig(core::QueryConfig(queryConfigMap))
+                            .connectorConfigs(
+                                std::unordered_map<
+                                    std::string,
+                                    std::shared_ptr<config::ConfigBase>>{
+                                    {credentialConnectorId,
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(credentialConnectorMap))},
+                                    {keptConnectorId,
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(keptConnectorMap))}})
+                            .credentialKeys(std::move(keys))
+                            .build();
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  EXPECT_THAT(
+      metaFile->pread(0, metaFile->size()),
+      testing::Not(testing::HasSubstr(secret)));
+
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  EXPECT_THAT(
+      reader.queryConfigs(),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              sharedKey, std::string(kRedactedConfigValue)},
+          // Replay reparses this one as an integer, which a placeholder would
+          // fail.
+          std::pair<const std::string, std::string>{
+              core::QueryConfig::kSpillNumPartitionBits, "17"}));
+  EXPECT_THAT(
+      reader.connectorProperties().at(credentialConnectorId),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              sharedKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
+  // Redacting by name alone, or by the union of every connector's names,
+  // would redact this too.
+  EXPECT_THAT(
+      reader.connectorProperties().at(keptConnectorId),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{sharedKey, catalogValue}));
 }
 
 TEST_F(OperatorTraceTest, traceMetadataRedactsDelegatedCredentials) {

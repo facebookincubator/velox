@@ -102,6 +102,11 @@ Velox exposes other options used for tuning that are of interest:
 * *max_coalesce_distance_bytes* - Maximum gap bytes between data that can be
   coalesced. Larger may mean more fetched data but at greater bytes/sec.
 
+* *query_configs* - Semicolon-separated Velox query config overrides applied to
+  every query, e.g.
+  ``--query_configs="max_split_preload_per_driver=10;hash_probe_bloom_filter_pushdown_max_size=16777216"``.
+  The keys are the session-level configs in ``velox/core/QueryConfig.h``.
+
 Top Optimization Recommendations
 --------------------------------
 
@@ -116,7 +121,6 @@ Top Optimization Recommendations
    "max_coalesced_bytes", "Minimum of 90MB", "Minimum of 90MB"
    "max_coalesced_distance_bytes", "Workload dependent**", "Workload dependent**"
    "parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
-   "split_preload_per_driver", "Best is 2", "Best is 2"
    "cache_prefetch_min_pct", "Best is 80", "Best is 80"
 
 \*  vCPUs = (cores * hyper-threads)

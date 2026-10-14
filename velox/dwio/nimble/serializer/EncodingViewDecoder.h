@@ -48,10 +48,7 @@ class EncodingViewDecoder final : public Decoder {
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
 
-  void read(
-      const std::function<void*(uint32_t rowCount)>& prepareOutput,
-      std::function<void*()> getOutputNulls,
-      std::vector<velox::BufferPtr>& stringBuffers) override;
+  uint32_t remainingRows() override;
 
   /// Decodes the selected source rows densely into `output`.
   uint32_t read(

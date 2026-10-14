@@ -619,6 +619,7 @@ void SelectiveNimbleRowReader::updateRuntimeStats(
   stats.footerCacheHit += tabletStats.footerCacheHit ? 1 : 0;
   stats.chunkSkippedRows += chunkSkippedRows_;
   stats.processedRows += processedRows_;
+  stats.mergeFrom(splitStats_);
 }
 
 void SelectiveNimbleRowReader::resetFilterCaches() {
@@ -923,7 +924,9 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
       options_.stringDecoderZeroCopy(),
       options_.preserveFlatMapsInMemory(),
       options_.nimblePreserveDictionaryEncoding(),
-      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_);
+      lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_,
+      /*lazyColumnIo=*/false,
+      /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads());
 
   columnReader_ = buildColumnReader(
       options_.requestedType() ? options_.requestedType()

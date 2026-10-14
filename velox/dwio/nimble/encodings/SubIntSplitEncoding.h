@@ -353,16 +353,19 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
 
   // Fast path: bulk-decode for integral 4/8-byte physical types extracted into
-  // the reader with a compatible (at-least-as-wide integral) output type.
+  // the reader or an opted-in hook with a compatible (at-least-as-wide
+  // integral) output type.
   // Float/double fall through here (kIsFluidCast is false for them) and use the
   // slow path, which applies castFromPhysicalType. The runtime useFastPath
   // check additionally requires a deterministic filter, AVX2, and the bulk path
   // being enabled with null+filter/hook compatibility.
   if constexpr (
       kIsSuitableWidth &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
+      (std::is_same_v<
+           typename V::Extract,
+           velox::dwio::common::ExtractToReader> ||
+       (V::kHasHook && !V::kHasFilter &&
+        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
       kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
     if (velox::dwio::common::useFastPath(visitor, nulls)) {
@@ -459,36 +462,8 @@ void SubIntSplitEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation, and
-  // hook forwarding. For non-hook paths it operates in place on the reader's
-  // rawValues; for hooks, values stays as the staged buffer.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 

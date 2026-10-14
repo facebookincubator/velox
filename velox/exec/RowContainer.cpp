@@ -80,7 +80,11 @@ Accumulator::Accumulator(
       alignment_{alignment},
       spillType_{std::move(spillType)},
       spillExtractFunction_{std::move(spillExtractFunction)},
-      destroyFunction_{std::move(destroyFunction)} {}
+      destroyFunction_{std::move(destroyFunction)} {
+  VELOX_CHECK(
+      !usesExternalMemory_ || destroyFunction_ != nullptr,
+      "An accumulator that uses external memory requires a destroy function.");
+}
 
 bool Accumulator::isFixedSize() const {
   return isFixedSize_;
@@ -99,7 +103,9 @@ int32_t Accumulator::alignment() const {
 }
 
 void Accumulator::destroy(folly::Range<char**> groups) {
-  destroyFunction_(groups);
+  if (destroyFunction_) {
+    destroyFunction_(groups);
+  }
 }
 
 const TypePtr& Accumulator::spillType() const {

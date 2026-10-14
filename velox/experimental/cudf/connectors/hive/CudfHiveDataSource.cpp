@@ -30,18 +30,180 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 #include <cudf/stream_compaction.hpp>
+
+#include <limits>
+#include <span>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+std::optional<cudf::type_id> parquetIntegerType(
+    const cudf::io::parquet::SchemaElement& schema) {
+  using LogicalType = cudf::io::parquet::LogicalType;
+  using ParquetType = cudf::io::parquet::Type;
+
+  if (schema.logical_type.has_value()) {
+    if (schema.logical_type->type != LogicalType::INTEGER) {
+      return std::nullopt;
+    }
+    const auto isSigned = schema.logical_type->is_signed();
+    switch (schema.logical_type->bit_width()) {
+      case 8:
+        return isSigned ? cudf::type_id::INT8 : cudf::type_id::UINT8;
+      case 16:
+        return isSigned ? cudf::type_id::INT16 : cudf::type_id::UINT16;
+      case 32:
+        return isSigned ? cudf::type_id::INT32 : cudf::type_id::UINT32;
+      case 64:
+        return isSigned ? cudf::type_id::INT64 : cudf::type_id::UINT64;
+      default:
+        VELOX_FAIL(
+            "Invalid Parquet integer bit width: {}",
+            schema.logical_type->bit_width());
+    }
+  }
+  switch (schema.type) {
+    case ParquetType::INT32:
+      return cudf::type_id::INT32;
+    case ParquetType::INT64:
+      return cudf::type_id::INT64;
+    default:
+      return std::nullopt;
+  }
+}
+
+std::optional<SubfieldFilterDecimalType> parquetDecimalType(
+    const cudf::io::parquet::SchemaElement& schema) {
+  using ParquetType = cudf::io::parquet::Type;
+
+  if (!schema.logical_type.has_value() ||
+      schema.logical_type->type != cudf::io::parquet::LogicalType::DECIMAL) {
+    if (const auto integerType = parquetIntegerType(schema)) {
+      return SubfieldFilterDecimalType{*integerType, 0};
+    }
+    return std::nullopt;
+  }
+
+  const auto scale = schema.decimal_scale;
+  VELOX_CHECK_EQ(
+      schema.logical_type->scale(),
+      scale,
+      "Parquet decimal logical type and schema element scales differ");
+  auto decimalType = [&]() -> cudf::type_id {
+    switch (schema.type) {
+      case ParquetType::INT32:
+        return cudf::type_id::DECIMAL32;
+      case ParquetType::INT64:
+        return cudf::type_id::DECIMAL64;
+      case ParquetType::FIXED_LEN_BYTE_ARRAY:
+        VELOX_CHECK_GT(
+            schema.type_length,
+            0,
+            "Invalid fixed-length Parquet decimal width");
+        if (std::cmp_less_equal(schema.type_length, sizeof(int32_t))) {
+          return cudf::type_id::DECIMAL32;
+        }
+        if (std::cmp_less_equal(schema.type_length, sizeof(int64_t))) {
+          return cudf::type_id::DECIMAL64;
+        }
+        if (std::cmp_less_equal(schema.type_length, sizeof(int128_t))) {
+          return cudf::type_id::DECIMAL128;
+        }
+        VELOX_FAIL(
+            "Unsupported fixed-length Parquet decimal width: {}",
+            schema.type_length);
+      case ParquetType::BYTE_ARRAY: {
+        const auto precision = schema.logical_type->precision();
+        VELOX_CHECK_GT(
+            precision, 0, "Parquet decimal is missing a valid precision");
+        VELOX_CHECK_LE(
+            precision,
+            LongDecimalType::kMaxPrecision,
+            "Parquet decimal precision exceeds the maximum supported precision");
+        if (precision <= std::numeric_limits<int32_t>::digits10) {
+          return cudf::type_id::DECIMAL32;
+        }
+        if (precision <= std::numeric_limits<int64_t>::digits10) {
+          return cudf::type_id::DECIMAL64;
+        }
+        return cudf::type_id::DECIMAL128;
+      }
+      default:
+        VELOX_FAIL(
+            "Unsupported physical Parquet type for decimal column: {}",
+            static_cast<int32_t>(schema.type));
+    }
+  }();
+  return SubfieldFilterDecimalType{decimalType, scale};
+}
+
+SubfieldFilterDecimalTypes parquetDecimalTypes(
+    std::span<const cudf::io::parquet::SchemaElement> metadataSchema,
+    const RowTypePtr& readerSchema,
+    bool fileColumnNamesReadAsLowerCase) {
+  VELOX_CHECK(
+      !metadataSchema.empty(), "Cannot build a filter from an empty schema");
+
+  SubfieldFilterDecimalTypes decimalTypes;
+  for (const auto childIndex : metadataSchema.front().children_idx) {
+    VELOX_CHECK_LT(
+        childIndex,
+        metadataSchema.size(),
+        "Parquet schema child index out of range");
+    const auto& child = metadataSchema[childIndex];
+    const auto name = fileColumnNamesReadAsLowerCase
+        ? functions::stringImpl::utf8StrToLowerCopy(child.name)
+        : child.name;
+    if (!readerSchema->containsChild(name)) {
+      continue;
+    }
+    const auto& logicalType = readerSchema->findChild(name);
+    if (logicalType->isDecimal()) {
+      if (auto decimalType = parquetDecimalType(child)) {
+        if (cudf::is_fixed_point(cudf::data_type{decimalType->type})) {
+          const auto [_, tableScale] = getDecimalPrecisionScale(*logicalType);
+          VELOX_CHECK_LE(
+              decimalType->scale,
+              tableScale,
+              "Parquet decimal scale of '{}' exceeds the table scale",
+              name);
+        }
+        decimalTypes.emplace(name, *decimalType);
+      }
+    }
+  }
+  return decimalTypes;
+}
+
+// Returns whether a constant-folded filter keeps every row. A null constant
+// keeps none, matching SQL three-valued logic.
+bool isTrueConstant(
+    const core::ConstantTypedExpr& constant,
+    memory::MemoryPool* pool) {
+  VELOX_USER_CHECK_EQ(
+      constant.type()->kind(),
+      TypeKind::BOOLEAN,
+      "Remaining filter must be a boolean expression: {}",
+      constant.toString());
+  return !constant.isNull() &&
+      constant.toConstantVector(pool)->as<ConstantVector<bool>>()->valueAt(0);
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -106,24 +268,52 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
-  // TODO: ConnectorQueryCtx does not expose the session QueryCtx, only an
-  // ExpressionEvaluator, so constant folding here runs against a transient
-  // QueryCtx with default query config rather than the session's. Passing the
-  // real session QueryCtx (e.g. by exposing it on ConnectorQueryCtx) should be
-  // figured out later. A local QueryCtx is required because
-  // expression::optimize constant-folds through exec::ExprSet, whose
-  // constructor dereferences the QueryCtx unconditionally; a null QueryCtx
-  // would crash.
-  auto optimizeQueryCtx = core::QueryCtx::create();
+  // ConnectorQueryCtx exposes no session QueryConfig, only the session time
+  // zone and whether to apply it, so folding, and the initialize() of the
+  // evaluators built from the folded filter, run against a local QueryCtx
+  // carrying those two settings and defaults for the rest. Folding touches
+  // only deterministic functions, so start_time, read by current_date, now and
+  // localtime, cannot change a fold; a setting left at its default here, such
+  // as the rendering of TIMESTAMP WITH TIME ZONE as VARCHAR, would.
+  // TODO: Fold through the session's evaluator once expression::optimize has
+  // an ExpressionEvaluator overload (facebookincubator/velox#17898), and take
+  // the config createCudfExpression needs from ConnectorQueryCtx once it
+  // exposes it (facebookincubator/velox#19476).
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
+  // An empty time zone is not a valid setting; leaving it unset means UTC.
+  if (!connectorQueryCtx->sessionTimezone().empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone,
+        connectorQueryCtx->sessionTimezone());
+  }
+  optimizeQueryCtx_ = core::QueryCtx::create(
+      nullptr, core::QueryConfig{std::move(sessionSettings)});
   optimizedRemainingFilter_ = remainingFilter
-      ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
+      ? expression::optimize(remainingFilter, optimizeQueryCtx_.get(), pool_)
       : nullptr;
+  if (const auto constantFilter =
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+              optimizedRemainingFilter_)) {
+    // A filter that folds to a constant keeps every row or none, so it needs
+    // no columns and no evaluation.
+    remainingFilterRejectsAllRows_ = !isTrueConstant(*constantFilter, pool_);
+    optimizedRemainingFilter_ = nullptr;
+  }
   if (optimizedRemainingFilter_) {
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
     // source projects its output to the requested output type.
-    for (const auto& name : referencedInputFields(optimizedRemainingFilter_)) {
+    const auto filterFields = referencedInputFields(optimizedRemainingFilter_);
+    // The filter is evaluated over the columns read for it, so a filter that
+    // reads none has no rows to be evaluated over.
+    VELOX_USER_CHECK(
+        !filterFields.empty(),
+        "Remaining filter that references no column is not supported: {}",
+        optimizedRemainingFilter_->toString());
+    for (const auto& name : filterFields) {
       if (readColumnSet_.count(name) == 0) {
         readColumnSet_.emplace(name);
         readColumnNames_.emplace_back(name);
@@ -138,13 +328,19 @@ CudfHiveDataSource::CudfHiveDataSource(
     // directly.
     auto const remainingFilterType = getTableRowType();
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_,
+        remainingFilterType,
+        pool_,
+        optimizeQueryCtx_->queryConfig());
   }
 
-  // Build a combined AST for all subfield filters once. This is query-constant
-  // and doesn't depend on split-specific state.
+  // Keep a logical-width AST for filters that must run after the Parquet read.
+  // A second AST with split-specific physical widths is built after reading
+  // each Parquet footer.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
+    hasDecimalSubfieldFilter_ =
+        hasDecimalSubfieldFilter(subfieldFilters_, readerFilterType);
     subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
@@ -215,6 +411,37 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
+
+  // No row of the split can pass the filter, so open nothing.
+  if (remainingFilterRejectsAllRows_) {
+    runtimeStats_.skippedSplits++;
+    if (split_->length != std::numeric_limits<uint64_t>::max()) {
+      runtimeStats_.skippedSplitBytes += static_cast<int64_t>(split_->length);
+    }
+    return;
+  }
+
+  if (hasDecimalSubfieldFilter_) {
+    const auto& fileMetadatas = cudfSplitReader_->readFileMetadatas();
+    const auto readerFilterType = getTableRowType();
+    const HiveConfig hiveConfig(cudfHiveConfig_->config());
+    const auto fileColumnNamesReadAsLowerCase =
+        hiveConfig.isFileColumnNamesReadAsLowerCase(
+            connectorQueryCtx_->sessionProperties());
+    pushdownFilterTree_ = cudf::ast::tree{};
+    pushdownFilterScalars_.clear();
+    const auto decimalTypes = parquetDecimalTypes(
+        fileMetadatas.front().schema,
+        readerFilterType,
+        fileColumnNamesReadAsLowerCase);
+    const auto& filter = createAstFromSubfieldFilters(
+        subfieldFilters_,
+        pushdownFilterTree_,
+        pushdownFilterScalars_,
+        readerFilterType,
+        &decimalTypes);
+    cudfSplitReader_->setPushdownFilter(&filter);
+  }
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
   // Check if preloaded splits should start pre-fetching the first pass of
@@ -268,6 +495,8 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   subfieldScalars_ = std::move(preparedSource->subfieldScalars_);
   subfieldTree_ = std::move(preparedSource->subfieldTree_);
   subfieldFilterAst_ = preparedSource->subfieldFilterAst_;
+  pushdownFilterScalars_ = std::move(preparedSource->pushdownFilterScalars_);
+  pushdownFilterTree_ = std::move(preparedSource->pushdownFilterTree_);
 
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
   VELOX_CHECK_NOT_NULL(cudfSplitReader_);
@@ -292,12 +521,17 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+  if (remainingFilterRejectsAllRows_) {
+    cudfSplitReader_->resetSplit();
+    return nullptr;
+  }
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
     cudfSplitReader_->resetSplit();
     return nullptr;
   }
-  auto cudfTable = std::move(chunkOpt.value());
+  auto nRows = chunkOpt.value().numRows;
+  auto cudfTable = std::move(chunkOpt.value().table);
   auto stream = cudfSplitReader_->stream();
 
   uint64_t filterTimeUs{0};
@@ -315,11 +549,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_retention_mask(
         *originalTable, asView(filterResult), stream, get_output_mr());
+    nRows = cudfTable->num_rows();
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);
-
-  const auto nRows = cudfTable->num_rows();
 
   if (outputType_->size() < cudfTable->num_columns()) {
     auto cudfTableColumns = cudfTable->release();
@@ -335,11 +568,18 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   // TODO (dm): Should we only enable table scan if cudf is registered?
   // Earlier we could enable cudf table scans without using other cudf operators
   // We still can, but I'm wondering if this is the right thing to do
-  auto output = cudfIsRegistered()
-      ? std::make_shared<CudfVector>(
-            pool_, outputType_, nRows, std::move(cudfTable), stream)
-      : with_arrow::toVeloxColumn(
-            cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
+  RowVectorPtr output;
+  if (cudfIsRegistered()) {
+    output = std::make_shared<CudfVector>(
+        pool_, outputType_, nRows, std::move(cudfTable), stream);
+  } else if (cudfTable->num_columns() == 0) {
+    // There is no device data to convert, only the row count.
+    output = std::make_shared<RowVector>(
+        pool_, outputType_, nullptr, nRows, std::vector<VectorPtr>{});
+  } else {
+    output = with_arrow::toVeloxColumn(
+        cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
+  }
   stream.sync();
 
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");

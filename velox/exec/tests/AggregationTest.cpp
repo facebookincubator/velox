@@ -723,6 +723,27 @@ TEST_F(AggregationTest, combineGlobalPartial) {
   }
 }
 
+DEBUG_ONLY_TEST_F(AggregationTest, combineGlobalPartialWithTaskAbort) {
+  // Aborting the task closes the drivers waiting for the last one to merge
+  // their states. The merge must not read a closed peer.
+  auto plan = PlanBuilder()
+                  .values(
+                      {makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})})},
+                      /*parallelizable=*/true)
+                  .partialAggregation({}, {"sum(c0)"})
+                  .localPartition({})
+                  .finalAggregation()
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      std::function<void(Operator*)>(
+          [](Operator* op) { op->operatorCtx()->task()->requestAbort(); }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()), "Aborted");
+}
+
 TEST_F(AggregationTest, manyGlobalAggregations) {
   // Test a query with a large number of global aggregations.
   // Global aggregations have a separate code path that does not use a
@@ -3984,6 +4005,18 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
 
   assertQuery(
       plan, "SELECT c0, sum(DISTINCT 1), count(c1) FROM tmp GROUP BY c0");
+
+  // All-constant distinct inputs together with an accumulator that uses
+  // external memory.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "cast(c0 as varchar) as name"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)", "arbitrary(name)"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3), arbitrary(CAST(c0 AS VARCHAR)) FROM tmp GROUP BY c0");
 
   // Global aggregation with constant distinct input.
   plan = PlanBuilder()
