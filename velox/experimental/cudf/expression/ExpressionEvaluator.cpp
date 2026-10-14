@@ -30,6 +30,7 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
@@ -71,6 +72,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -269,6 +271,82 @@ std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr) {
 
 bool isInputFieldReference(const core::TypedExprPtr& expr) {
   return rootFieldName(expr).has_value();
+}
+
+/// True for the special forms registered as SwitchFunction.
+bool isConditionalFunction(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  return name == "switch" || name == "if";
+}
+
+std::string_view unprefixedFunctionName(const core::CallTypedExpr& call) {
+  std::string_view name = call.name();
+  const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+  if (name.starts_with(prefix)) {
+    name.remove_prefix(prefix.size());
+  }
+  return name;
+}
+
+/// Whether masking every referenced input field null guarantees a null result.
+/// Default-null functions preserve the activity marker when at least one of
+/// their arguments does. Constants do not carry the marker.
+bool preservesMaskedRowNull(const core::TypedExprPtr& expr) {
+  if (isInputFieldReference(expr)) {
+    return true;
+  }
+  if (expr->isConstantKind() || expr->isInputKind()) {
+    return false;
+  }
+  if (expr->isCastKind()) {
+    return !expr->inputs().empty() && preservesMaskedRowNull(expr->inputs()[0]);
+  }
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+
+  const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+  const auto name = unprefixedFunctionName(*call);
+  // Velox registers these as default-null, but GreatestLeastFunction uses
+  // NULL_MAX / NULL_MIN, which skip null operands.
+  if (name == "greatest" || name == "least") {
+    return false;
+  }
+  auto defaultNullBehavior = isDefaultNullBehavior(call->name());
+  if (!defaultNullBehavior.has_value()) {
+    defaultNullBehavior = isDefaultNullBehavior(std::string{name});
+  }
+  if (!defaultNullBehavior.value_or(false)) {
+    return false;
+  }
+  return std::ranges::any_of(expr->inputs(), [](const auto& input) {
+    return preservesMaskedRowNull(input);
+  });
+}
+
+bool isCheckedDecimalArithmetic(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall || !expr->type()->isDecimal()) {
+    return false;
+  }
+  const auto name =
+      unprefixedFunctionName(*expr->asUnchecked<core::CallTypedExpr>());
+  return name == "plus" || name == "add" || name == "minus" ||
+      name == "subtract" || name == "multiply" || name == "divide" ||
+      name == "mod";
+}
+
+/// A checked decimal operation is safe under branch masking only if at least
+/// one of its inputs still carries the masked-row null to that operation.
+bool checkedDecimalOpsPreserveMaskedRows(const core::TypedExprPtr& expr) {
+  if (isCheckedDecimalArithmetic(expr) && !preservesMaskedRowNull(expr)) {
+    return false;
+  }
+  return std::ranges::all_of(expr->inputs(), [](const auto& input) {
+    return checkedDecimalOpsPreserveMaskedRows(input);
+  });
 }
 
 void collectReferencedInputFields(
@@ -2975,6 +3053,16 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
     }
   }
 
+  if (node->function_ && isConditionalFunction(expr)) {
+    node->propagateActivity_.reserve(node->subexpressions_.size());
+    for (const auto& input : expr->inputs()) {
+      if (!input->isConstantKind() && !input->isInputKind()) {
+        node->propagateActivity_.push_back(
+            !checkedDecimalOpsPreserveMaskedRows(input));
+      }
+    }
+  }
+
   return node;
 }
 
@@ -3018,15 +3106,6 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
 
 namespace {
 
-/// True for the special forms registered as SwitchFunction.
-bool isConditionalFunction(const core::TypedExprPtr& expr) {
-  if (expr->kind() != core::ExprKind::kCall) {
-    return false;
-  }
-  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
-  return name == "switch" || name == "if";
-}
-
 /// Maps each entry of subexpressions_ back to its expr_->inputs() index.
 /// create() drops constant children, so `if(c, x, 1)` yields {0, 1}.
 std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
@@ -3043,16 +3122,31 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
 
 /// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
 /// selects `(valid(i) and condition[i]) ? then : else`, so a null condition row
-/// belongs to the else branch alone.
+/// belongs to the else branch alone. When \p activeRows is set, the result is
+/// limited to those rows, since an enclosing branch has already excluded the
+/// rest.
 cuda::device_buffer<std::byte> makeBranchRowMask(
     const cudf::column_view& condition,
     bool takeWhenTrue,
+    const cudf::bitmask_type* activeRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  auto limitToActiveRows = [&](cuda::device_buffer<std::byte> branchMask) {
+    if (activeRows == nullptr || condition.size() == 0) {
+      return branchMask;
+    }
+    const std::vector<const cudf::bitmask_type*> masks{
+        activeRows,
+        reinterpret_cast<const cudf::bitmask_type*>(branchMask.data())};
+    const std::vector<cudf::size_type> beginBits{0, 0};
+    return cudf::bitmask_and(masks, beginBits, condition.size(), stream, mr)
+        .first;
+  };
+
   // bools_to_mask clears false and null alike, already the then branch's set.
   if (takeWhenTrue) {
     auto [mask, unusedUnsetCount] = cudf::bools_to_mask(condition, stream, mr);
-    return std::move(*mask);
+    return limitToActiveRows(std::move(*mask));
   }
   // The else branch also owns the null rows, and NOT maps null to null.
   auto negated =
@@ -3065,7 +3159,7 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
   }
   auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
       elseCondition ? elseCondition->view() : negated->view(), stream, mr);
-  return std::move(*mask);
+  return limitToActiveRows(std::move(*mask));
 }
 
 /// Views over \p inputs' data with \p rowMask ANDed into every null mask, so a
@@ -3128,10 +3222,72 @@ MaskedInputs maskInputRows(
   return masked;
 }
 
+/// ANDs \p activeRows into \p result's null mask. A borrowed view is copied
+/// first because the combined mask must outlive this call.
+ColumnOrView applyActivityMask(
+    ColumnOrView result,
+    const cudf::bitmask_type* activeRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  if (activeRows == nullptr || asView(result).size() == 0) {
+    return result;
+  }
+  std::unique_ptr<cudf::column> owned;
+  if (std::holds_alternative<std::unique_ptr<cudf::column>>(result)) {
+    owned = std::move(std::get<std::unique_ptr<cudf::column>>(result));
+  } else {
+    owned = std::make_unique<cudf::column>(asView(result), stream, mr);
+  }
+  const auto view = owned->view();
+  std::vector<const cudf::bitmask_type*> masks{activeRows};
+  std::vector<cudf::size_type> beginBits{0};
+  if (view.nullable()) {
+    masks.push_back(view.null_mask());
+    beginBits.push_back(0);
+  }
+  auto [combined, nullCount] =
+      cudf::bitmask_and(masks, beginBits, view.size(), stream, mr);
+  owned->set_null_mask(std::move(combined), nullCount);
+  return owned;
+}
+
 } // namespace
+
+ColumnOrView FunctionExpression::evalSubexpression(
+    size_t index,
+    std::vector<cudf::column_view> inputColumnViews,
+    const cudf::bitmask_type* activeRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  const auto& subexpr = subexpressions_[index];
+  if (activeRows == nullptr) {
+    return subexpr->eval(std::move(inputColumnViews), stream, mr);
+  }
+  if (auto* function = dynamic_cast<FunctionExpression*>(subexpr.get())) {
+    return function->evalWithActivity(
+        std::move(inputColumnViews), activeRows, stream, mr, false);
+  }
+  // AST and JIT evaluate their tree internally, so only their result can be
+  // reapplied.
+  return applyActivityMask(
+      subexpr->eval(std::move(inputColumnViews), stream, mr),
+      activeRows,
+      stream,
+      mr);
+}
 
 ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr,
+    bool finalize) {
+  return evalWithActivity(
+      std::move(inputColumnViews), nullptr, stream, mr, finalize);
+}
+
+ColumnOrView FunctionExpression::evalWithActivity(
+    std::vector<cudf::column_view> inputColumnViews,
+    const cudf::bitmask_type* activeRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
@@ -3164,7 +3320,8 @@ ColumnOrView FunctionExpression::eval(
         subexpressions_.size(),
         1,
         "Nested field reference expects exactly one subexpression");
-    auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+    auto parent =
+        evalSubexpression(0, inputColumnViews, activeRows, stream, mr);
     VELOX_DCHECK_GE(fieldIndex_, 0);
     auto child = FunctionExpression::makeStructChildColumn(
         parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
@@ -3196,7 +3353,8 @@ ColumnOrView FunctionExpression::eval(
       // conditional discards. Hand each branch inputs whose null mask excludes
       // the rows it does not supply; the kernels already skip null rows. Velox
       // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      auto condition =
+          evalSubexpression(0, inputColumnViews, activeRows, stream, mr);
       const auto conditionView = asView(condition);
       subexprResults.push_back(std::move(condition));
 
@@ -3206,21 +3364,30 @@ ColumnOrView FunctionExpression::eval(
         branchRowMasks.push_back(makeBranchRowMask(
             conditionView,
             /*takeWhenTrue=*/operandIndex[branch] == 1,
+            activeRows,
             stream,
             mr));
-        branchInputs.push_back(maskInputRows(
-            inputColumnViews,
-            reinterpret_cast<const cudf::bitmask_type*>(
-                branchRowMasks.back().data()),
+        const auto* branchRows = reinterpret_cast<const cudf::bitmask_type*>(
+            branchRowMasks.back().data());
+        branchInputs.push_back(
+            maskInputRows(inputColumnViews, branchRows, stream, mr));
+        // Masked inputs suffice while every path to a checked decimal op
+        // propagates nulls. A null-eliminating node such as coalesce can turn
+        // an excluded row valid again, so such a branch reapplies its mask
+        // after every intermediate result instead.
+        const bool propagate =
+            activeRows != nullptr || propagateActivity_[branch];
+        subexprResults.push_back(evalSubexpression(
+            branch,
+            branchInputs.back().views,
+            propagate ? branchRows : nullptr,
             stream,
             mr));
-        subexprResults.push_back(
-            subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
       }
     } else {
-      for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+      for (size_t i = 0; i < subexpressions_.size(); ++i) {
+        subexprResults.push_back(
+            evalSubexpression(i, inputColumnViews, activeRows, stream, mr));
       }
     }
 
@@ -3229,10 +3396,10 @@ ColumnOrView FunctionExpression::eval(
       const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
       if (resultView.type() != requestedType) {
-        return cudf::cast(resultView, requestedType, stream, mr);
+        result = cudf::cast(resultView, requestedType, stream, mr);
       }
     }
-    return result;
+    return applyActivityMask(std::move(result), activeRows, stream, mr);
   }
 
   VELOX_FAIL(

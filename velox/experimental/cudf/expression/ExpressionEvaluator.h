@@ -167,6 +167,24 @@ class FunctionExpression : public CudfExpression {
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
+  /// Evaluates with \p activeRows, the rows an enclosing conditional branch
+  /// supplies, ANDed into every intermediate result's null mask. nullptr means
+  /// all rows are active. Needed when a null-eliminating node such as coalesce
+  /// would otherwise turn an excluded row's masked input into a valid value.
+  ColumnOrView evalWithActivity(
+      std::vector<cudf::column_view> inputColumnViews,
+      const cudf::bitmask_type* activeRows,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize);
+
+  ColumnOrView evalSubexpression(
+      size_t index,
+      std::vector<cudf::column_view> inputColumnViews,
+      const cudf::bitmask_type* activeRows,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr);
+
   static std::unique_ptr<cudf::column> makeStructChildColumn(
       ColumnOrView& structColumn,
       cudf::size_type childIndex,
@@ -180,6 +198,10 @@ class FunctionExpression : public CudfExpression {
   // FieldAccess/Dereference expressions. -1 for non-nested or non-field
   // expressions.
   int32_t fieldIndex_{-1};
+  // For if/switch, aligned with subexpressions_: true for a branch whose
+  // checked decimal arithmetic can see an excluded row as valid, so its
+  // evaluation must reapply the branch mask to every intermediate result.
+  std::vector<bool> propagateActivity_;
 
   RowTypePtr inputRowSchema_;
 };
