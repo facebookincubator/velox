@@ -18,8 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
-
-#include "velox/common/testutil/TestValue.h"
+#include <cstdint>
 
 namespace facebook::velox::exec {
 
@@ -44,6 +43,15 @@ class AdaptivePrefetch {
     return lookAhead_;
   }
 
+  static int32_t computeLookAhead(int64_t elapsedNs) {
+    return std::clamp(
+        static_cast<int32_t>(
+            kCoefficient * kAssumedDramLatencyNs * kMeasurementIterations /
+            std::max<int64_t>(elapsedNs, 1)),
+        kMinLookAhead,
+        kMaxLookAhead);
+  }
+
  private:
   static constexpr int32_t kMeasurementIterations = 16;
   static constexpr int32_t kMinLookAhead = 4;
@@ -52,23 +60,10 @@ class AdaptivePrefetch {
   static constexpr int64_t kCoefficient = 4;
 
   void computeLookAhead() {
-    auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now() - start_)
-                         .count();
-    common::testutil::TestValue::adjust(
-        "facebook::velox::exec::AdaptivePrefetch::computeLookAhead",
-        &elapsedNs);
-    // The measurement may be shorter than the clock's resolution.
-    if (elapsedNs <= 0) {
-      lookAhead_ = kMaxLookAhead;
-      return;
-    }
-    lookAhead_ = std::clamp(
-        static_cast<int32_t>(
-            kCoefficient * kAssumedDramLatencyNs * kMeasurementIterations /
-            elapsedNs),
-        kMinLookAhead,
-        kMaxLookAhead);
+    const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - start_)
+                               .count();
+    lookAhead_ = computeLookAhead(elapsedNs);
   }
 
   int32_t numIterations_;
