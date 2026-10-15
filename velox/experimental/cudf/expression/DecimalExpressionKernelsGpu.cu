@@ -35,6 +35,8 @@
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
+#include <rmm/mr/per_device_resource.hpp>
+
 #include <cuda_runtime.h>
 
 #include <concepts>
@@ -861,8 +863,10 @@ decimalBinaryOperationColColImpl(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal binop requires equal sizes");
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
+  auto [nullMask, nullCount] = cudf::bitmask_and(
+      cudf::table_view({lhs, rhs}),
+      stream,
+      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
   auto result = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
@@ -1013,7 +1017,10 @@ decimalBinaryOperationWithOverflow(
         outputType, lhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
+  auto nullMask = cudf::copy_bitmask(
+      lhs,
+      stream,
+      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
   auto result = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
@@ -1042,7 +1049,10 @@ decimalBinaryOperationWithOverflow(
         outputType, rhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
+  auto nullMask = cudf::copy_bitmask(
+      rhs,
+      stream,
+      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
   auto result = cudf::make_fixed_width_column(
       outputType,
       rhs.size(),

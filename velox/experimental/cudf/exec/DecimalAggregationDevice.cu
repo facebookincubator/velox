@@ -25,6 +25,7 @@
 
 #include <rmm/device_scalar.hpp>
 #include <rmm/exec_policy.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 
 #include <cub/device/device_for.cuh>
 #include <cuda/iterator>
@@ -179,7 +180,12 @@ buildStateValidityMaskImpl(
   auto numRows = sumCol.size();
   if (numRows == 0) {
     return {
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{
+                mr, rmm::mr::get_current_device_resource_ref()}),
         0};
   }
   auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);

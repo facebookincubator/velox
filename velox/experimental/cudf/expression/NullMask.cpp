@@ -20,6 +20,8 @@
 #include <cudf/copying.hpp>
 #include <cudf/null_mask.hpp>
 
+#include <rmm/mr/per_device_resource.hpp>
+
 #include <utility>
 #include <vector>
 
@@ -54,7 +56,11 @@ void mergeNullSourceNullsIntoResult(
   if (!result.nullable() && nullableSourceColumns.size() == 1) {
     auto nullSourceColumn = nullableSourceColumns.front();
     result.set_null_mask(
-        cudf::copy_bitmask(nullSourceColumn, stream, mr),
+        cudf::copy_bitmask(
+            nullSourceColumn,
+            stream,
+            cudf::memory_resources{
+                mr, rmm::mr::get_current_device_resource_ref()}),
         nullSourceColumn.null_count());
     return;
   }
@@ -71,8 +77,12 @@ void mergeNullSourceNullsIntoResult(
     masks.push_back(nullSourceColumn.null_mask());
     beginBits.push_back(nullSourceColumn.offset());
   }
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
+  auto [nullMask, nullCount] = cudf::bitmask_and(
+      masks,
+      beginBits,
+      result.size(),
+      stream,
+      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
   result.set_null_mask(std::move(nullMask), nullCount);
 }
 

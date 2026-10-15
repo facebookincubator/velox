@@ -788,7 +788,10 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             size,
             rmm::device_buffer{},
             cudf::create_null_mask(
-                0, cudf::mask_state::UNALLOCATED, stream, mr),
+                0,
+                cudf::mask_state::UNALLOCATED,
+                stream,
+                cudf::memory_resources{mr, get_temp_mr()}),
             0,
             std::move(children));
       }
@@ -824,7 +827,10 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             size,
             rmm::device_buffer{},
             cudf::create_null_mask(
-                0, cudf::mask_state::UNALLOCATED, stream, mr),
+                0,
+                cudf::mask_state::UNALLOCATED,
+                stream,
+                cudf::memory_resources{mr, get_temp_mr()}),
             0,
             std::move(children));
       }
@@ -1049,7 +1055,11 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type(cudf::type_id::STRUCT),
         size,
         rmm::device_buffer{},
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         0,
         std::move(children));
   }
