@@ -34,57 +34,61 @@
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
 
-// AsyncDataCache stores entry lengths in an int32_t. Large individual reads
-// remain legal datasource requests, but must bypass that cache.
+// AsyncDataCache stores entry sizes in an int32_t. Larger pieces are read
+// without the cache.
 constexpr size_t kMaxCacheEntryBytes = std::numeric_limits<int32_t>::max();
 
-// Async device reads run in two steps on two pools. A fill thread pins the
-// range in the cache and reads misses from the delegate, blocking until the
-// bytes arrive. A copy thread then copies the pinned bytes to the GPU. So reads
-// waiting for S3 never hold a copy thread, and only the few copy threads own
-// pinned staging buffers.
+// device_read_async() works in two steps, on two thread pools:
+//
+//   1. A fill thread puts the range in the cache. On a miss it reads the bytes
+//      from the delegate and blocks until they arrive.
+//   2. A copy thread copies the cached bytes to the GPU, through its own
+//      pinned buffer.
+//
+// Reads waiting for S3 therefore never hold a copy thread, and only the few
+// copy threads own pinned buffers.
 
-// The number of fill threads: KvikIO's
-// KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS, with KvikIO's default of 256.
-// KvikIO's 0 means unlimited. Use 64 then so cache allocations stay bounded.
-folly::Executor* cacheFillExecutor() {
-  static auto* executor = [] {
+// One fill thread per S3 request KvikIO runs at once
+// (KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS, default 256). KvikIO's 0 means
+// unlimited. Use 64 then, so cache allocations stay bounded.
+folly::Executor* fillThreads() {
+  static auto* pool = [] {
     size_t threads = 256;
-    if (const auto* env =
+    if (const char* value =
             std::getenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS")) {
-      threads = folly::to<size_t>(env);
+      threads = folly::to<size_t>(value);
+    }
+    if (threads == 0) {
+      threads = 64;
     }
     return new folly::CPUThreadPoolExecutor(
-        threads == 0 ? size_t{64} : threads,
-        std::make_shared<folly::NamedThreadFactory>("CudfCacheFill"));
+        threads, std::make_shared<folly::NamedThreadFactory>("CudfCacheFill"));
   }();
-  return executor;
+  return pool;
 }
 
-// The number of copy threads is cudf.kvikio_cache_threads.
-folly::Executor* cacheCopyExecutor() {
-  static auto* executor = [] {
+// cudf.kvikio_cache_threads copy threads.
+folly::Executor* copyThreads() {
+  static auto* pool = [] {
     const auto threads = CudfConfig::getInstance().kvikioCacheThreads;
     VELOX_USER_CHECK_GT(
         threads, 0, "{} must be positive", CudfConfig::kCudfKvikioCacheThreads);
     return new folly::CPUThreadPoolExecutor(
         threads, std::make_shared<folly::NamedThreadFactory>("CudfCacheCopy"));
   }();
-  return executor;
+  return pool;
 }
 
-int streamDevice(cuda::stream_ref stream) {
+int deviceOf(cuda::stream_ref stream) {
   int device{};
 #if defined(CUDART_VERSION) && CUDART_VERSION >= 12080
   CUDF_CUDA_TRY(cudaStreamGetDevice(stream.get(), &device));
@@ -94,13 +98,15 @@ int streamDevice(cuda::stream_ref stream) {
   return device;
 }
 
-void finishDeviceRead(cuda::stream_ref stream, int device) {
-  const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
+// Blocks until every copy queued on 'stream' has finished, so the caller may
+// use or free the destination.
+void waitForStream(cuda::stream_ref stream, int device) {
+  const rmm::cuda_set_device_raii onDevice{rmm::cuda_device_id{device}};
   try {
     CUDF_CUDA_TRY(cudaStreamSynchronize(stream.get()));
   } catch (...) {
-    // Do not release a destination while a failed stream may still reference
-    // it. A device-wide fence is the last resort before propagating.
+    // The stream failed, but a copy may still be writing to the destination.
+    // Wait for the whole GPU before letting the caller free it.
     if (cudaDeviceSynchronize() != cudaSuccess) {
       std::terminate();
     }
@@ -108,87 +114,86 @@ void finishDeviceRead(cuda::stream_ref stream, int device) {
   }
 }
 
-// One reusable pinned staging buffer per thread and device, plus the event
-// marking its last H2D copy.
-struct PinnedStagingSlot {
+// Pinned host memory that cached bytes are copied through on their way to
+// the GPU. The GPU copies from pinned memory in the background, which it
+// cannot do from the cache's ordinary memory.
+struct PinnedBuffer {
   static constexpr size_t kAlignment = 64;
 
-  // The memory resource that allocated 'data', which must also free it.
-  std::optional<rmm::host_device_async_resource_ref> mr;
+  rmm::host_device_async_resource_ref memory =
+      cudf::get_pinned_memory_resource();
   uint8_t* data{nullptr};
-  size_t capacity{0};
-  cudaEvent_t event{nullptr};
+  size_t size{0};
+  // Recorded after the last copy out of 'data'.
+  cudaEvent_t lastCopy{nullptr};
 
-  uint8_t* reserve(size_t size) {
-    // Wait for this slot's previous copy to land so the memory is safe to
-    // overwrite.
-    if (event != nullptr) {
-      CUDF_CUDA_TRY(cudaEventSynchronize(event));
+  // Returns at least 'bytes' of memory that no queued copy still reads.
+  uint8_t* take(size_t bytes) {
+    if (lastCopy != nullptr) {
+      CUDF_CUDA_TRY(cudaEventSynchronize(lastCopy));
     }
-    if (capacity < size) {
+    if (size < bytes) {
       if (data != nullptr) {
-        mr->deallocate_sync(std::exchange(data, nullptr), capacity, kAlignment);
-        capacity = 0;
+        memory.deallocate_sync(data, size, kAlignment);
+        data = nullptr;
+        size = 0;
       }
-      // Leave an empty, reusable slot if allocation throws.
-      mr = cudf::get_pinned_memory_resource();
-      data = static_cast<uint8_t*>(mr->allocate_sync(size, kAlignment));
-      capacity = size;
+      data = static_cast<uint8_t*>(memory.allocate_sync(bytes, kAlignment));
+      size = bytes;
     }
     return data;
   }
 
-  void recordCopy(cudaStream_t stream) {
-    if (event == nullptr) {
-      CUDF_CUDA_TRY(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+  void copyQueued(cudaStream_t stream) {
+    if (lastCopy == nullptr) {
+      CUDF_CUDA_TRY(
+          cudaEventCreateWithFlags(&lastCopy, cudaEventDisableTiming));
     }
-    CUDF_CUDA_TRY(cudaEventRecord(event, stream));
+    CUDF_CUDA_TRY(cudaEventRecord(lastCopy, stream));
   }
 };
 
-// Retain the high-water staging capacity until process exit. Do not invoke
-// CUDA during thread-pool/static teardown: the runtime may already be gone.
-PinnedStagingSlot& stagingSlot(int device) {
-  static thread_local std::unordered_map<int, PinnedStagingSlot> slots;
-  return slots[device];
+// One pinned buffer per thread and GPU. It is never freed: at process exit the
+// CUDA runtime may already be gone.
+PinnedBuffer& pinnedBuffer(int device) {
+  static thread_local std::unordered_map<int, PinnedBuffer> buffers;
+  return buffers[device];
 }
 
-// A caller may destroy the destination once its future is consumed or
-// discarded. The executor's future alone only marks H2D submission, so the
-// outer completion also waits for the copy. It waits on the caller's thread,
-// not on a pool thread.
-struct DeviceReadCompletion {
-  // The number of bytes whose H2D copies were submitted.
-  std::future<size_t> submitted;
+// Lives inside the future that device_read_async() returns. 'copiesQueued'
+// becomes ready once every GPU copy of the read is queued. Both get() and the
+// destructor then also wait for those copies to finish, so cuDF can never free
+// the destination while a copy still writes to it, even if it drops the future
+// without calling get().
+struct WaitForGpuCopies {
+  std::future<size_t> copiesQueued;
   cuda::stream_ref stream;
   int device;
-  std::shared_ptr<std::atomic<bool>> published;
 
-  DeviceReadCompletion(
-      std::future<size_t> f,
-      cuda::stream_ref s,
-      int d,
-      std::shared_ptr<std::atomic<bool>> ioPublished)
-      : submitted(std::move(f)),
-        stream(s),
-        device(d),
-        published(std::move(ioPublished)) {}
-  DeviceReadCompletion(DeviceReadCompletion&&) = default;
-  DeviceReadCompletion(const DeviceReadCompletion&) = delete;
-  ~DeviceReadCompletion() {
-    if (submitted.valid() && published->load()) {
+  WaitForGpuCopies(
+      std::future<size_t> queued,
+      cuda::stream_ref copyStream,
+      int copyDevice)
+      : copiesQueued(std::move(queued)),
+        stream(copyStream),
+        device(copyDevice) {}
+  WaitForGpuCopies(WaitForGpuCopies&&) = default;
+  WaitForGpuCopies(const WaitForGpuCopies&) = delete;
+
+  ~WaitForGpuCopies() {
+    // A moved-from object has nothing to wait for.
+    if (copiesQueued.valid()) {
       try {
         get();
       } catch (...) {
       }
     }
   }
-  static size_t finish(size_t bytes, cuda::stream_ref stream, int device) {
-    finishDeviceRead(stream, device);
-    return bytes;
-  }
+
   size_t get() {
-    return finish(submitted.get(), stream, device);
+    const auto bytes = copiesQueued.get();
+    waitForStream(stream, device);
+    return bytes;
   }
 };
 
@@ -197,7 +202,7 @@ struct DeviceReadCompletion {
 struct CachingDataSource::State {
   std::unique_ptr<cudf::io::datasource> delegate;
   cache::AsyncDataCache* cache;
-  StringIdLease fileNum;
+  StringIdLease fileId;
   std::shared_ptr<IoStats> ioStats;
 
   State(
@@ -207,53 +212,50 @@ struct CachingDataSource::State {
       std::shared_ptr<IoStats> stats)
       : delegate(std::move(source)),
         cache(dataCache),
-        fileNum(fileIds(), std::string(path)),
+        fileId(fileIds(), std::string(path)),
         ioStats(std::move(stats)) {
     VELOX_CHECK_NOT_NULL(delegate);
     VELOX_CHECK_NOT_NULL(cache);
   }
 
-  void addBytes(const std::string& name, size_t bytes) {
+  void countBytes(const std::string& name, size_t bytes) {
     if (ioStats) {
       ioStats->addCounter(
           name, RuntimeCounter(bytes, RuntimeCounter::Unit::kBytes));
     }
   }
 
-  void addCount(const std::string& name, int64_t value = 1) {
+  void count(const std::string& name) {
     if (ioStats) {
-      ioStats->addCounter(name, RuntimeCounter(value));
+      ioStats->addCounter(name, RuntimeCounter(1));
     }
   }
 
+  // Trims a request at the end of the file.
   size_t clamp(size_t offset, size_t size) const {
     const auto fileSize = delegate->size();
     return offset < fileSize ? std::min(size, fileSize - offset) : 0;
   }
 
-  static size_t fragmentSize(const cache::CachePin& pin, size_t requested) {
-    const auto size = pin.checkedEntry()->size();
-    VELOX_CHECK_GT(size, 0, "Cache fragments must make progress");
-    return std::min<size_t>(requested, size);
+  // How many of the 'wanted' bytes the cache entry in 'pin' holds. An entry
+  // may be shorter than the request (CacheEntrySizePolicy::kAllowSmaller).
+  static size_t pieceSize(const cache::CachePin& pin, size_t wanted) {
+    const auto entrySize = pin.checkedEntry()->size();
+    VELOX_CHECK_GT(entrySize, 0, "A cache entry must hold at least one byte");
+    return std::min<size_t>(wanted, entrySize);
   }
 
-  void recordHit(size_t bytes, size_t requested) {
-    addBytes("cudfKvikioCacheHitBytes", bytes);
-    if (bytes < requested) {
-      addCount("cudfKvikioCacheReusedPrefixes");
-      addBytes("cudfKvikioCacheReusedPrefixBytes", bytes);
-    }
-  }
-
-  // Looks up the cache entry at 'offset'. On a miss, creates an exclusive
-  // entry for the caller to fill. Returns an empty pin while another reader
-  // fills the entry, setting 'wait' if given, or when the cache has no room.
+  // Finds the cache entry at 'offset' or creates an empty one. Returns:
+  //   - a shared pin: a hit, ready to read;
+  //   - an exclusive pin: a miss, which the caller must fill;
+  //   - an empty pin: another reader is filling the entry ('wait', if not
+  //     null, is set to wait for it), or the cache has no room.
   cache::CachePin
-  lookup(size_t offset, size_t size, folly::SemiFuture<bool>* wait) {
+  findOrCreateEntry(size_t offset, size_t size, folly::SemiFuture<bool>* wait) {
     cache::CachePin pin;
     try {
       pin = cache->findOrCreate(
-          {fileNum.id(), offset},
+          {fileId.id(), offset},
           size,
           /*contiguous=*/true,
           wait,
@@ -269,46 +271,83 @@ struct CachingDataSource::State {
     }
     auto* entry = pin.checkedEntry();
     entry->getAndClearFirstUseFlag();
+    // A new entry must be one block of memory for the delegate to read into.
     if (entry->isExclusive() && !entry->hasContiguousData()) {
       return {};
     }
     return pin;
   }
 
-  // Returns a shared pin on the entry at 'offset', reading it from the
-  // delegate on a miss. The entry may be shorter than 'size'. Returns an empty
-  // pin when the range cannot be cached.
-  cache::CachePin pinFragment(size_t offset, size_t size) {
+  // Returns a pin on a filled cache entry that starts at 'offset', reading the
+  // bytes from the delegate on a miss. The entry may hold fewer than 'size'
+  // bytes. Returns an empty pin when the piece must be read without the cache.
+  cache::CachePin cachePiece(size_t offset, size_t size) {
     if (size > kMaxCacheEntryBytes) {
       return {};
     }
     auto wait = folly::SemiFuture<bool>::makeEmpty();
-    auto pin = lookup(offset, size, &wait);
+    auto pin = findOrCreateEntry(offset, size, &wait);
     if (pin.empty() && wait.valid()) {
-      // Another reader is filling this entry. Wait for it, then look it up once
-      // more. If it is still being filled, the caller reads it uncached.
+      // Another reader is filling this entry. Wait for it and look once more.
+      // If it is still being filled, the caller reads it without the cache.
       std::move(wait).via(&folly::QueuedImmediateExecutor::instance()).wait();
-      pin = lookup(offset, size, nullptr);
+      pin = findOrCreateEntry(offset, size, nullptr);
     }
     if (pin.empty()) {
       return pin;
     }
     auto* entry = pin.checkedEntry();
     if (!entry->isExclusive()) {
-      recordHit(fragmentSize(pin, size), size);
+      const auto bytes = pieceSize(pin, size);
+      countBytes("cudfKvikioCacheHitBytes", bytes);
+      if (bytes < size) {
+        count("cudfKvikioCacheReusedPrefixes");
+        countBytes("cudfKvikioCacheReusedPrefixBytes", bytes);
+      }
       return pin;
     }
-    const auto actual = delegate->host_read(
+    const auto bytesRead = delegate->host_read(
         offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
-    // Do not publish uninitialized tail bytes after a short read. An
-    // exception releases the exclusive pin and abandons the incomplete fill.
-    VELOX_CHECK_EQ(actual, size, "Short KvikIO read while filling cache");
+    // Never publish a partly filled entry. Throwing releases the exclusive pin,
+    // which drops the entry.
+    VELOX_CHECK_EQ(bytesRead, size, "Short KvikIO read while filling cache");
     entry->setExclusiveToShared();
-    addBytes("cudfKvikioCacheMissBytes", size);
+    countBytes("cudfKvikioCacheMissBytes", size);
     return pin;
   }
 
-  size_t readHost(size_t offset, size_t size, uint8_t* dst) {
+  // Puts the range from 'offset' in the cache, piece by piece, and returns a
+  // pin per piece. Stops at the first piece that cannot be cached. The rest of
+  // the range is then read without the cache.
+  std::vector<cache::CachePin> cacheRange(size_t offset, size_t bytes) {
+    std::vector<cache::CachePin> pins;
+    size_t cached = 0;
+    while (cached < bytes) {
+      auto pin = cachePiece(offset + cached, bytes - cached);
+      if (pin.empty()) {
+        break;
+      }
+      cached += pieceSize(pin, bytes - cached);
+      pins.push_back(std::move(pin));
+    }
+    return pins;
+  }
+
+  static void
+  copyFromEntry(const cache::CachePin& pin, size_t bytes, uint8_t* dst) {
+    auto* entry = pin.checkedEntry();
+    if (entry->hasContiguousData()) {
+      std::memcpy(dst, entry->contiguousData(), bytes);
+      return;
+    }
+    // Entries made by other readers may be split into several blocks.
+    for (const auto& block : entry->dataRanges(bytes)) {
+      std::memcpy(dst, block.data(), block.size());
+      dst += block.size();
+    }
+  }
+
+  size_t readToHost(size_t offset, size_t size, uint8_t* dst) {
     const auto bytes = clamp(offset, size);
     if (bytes == 0) {
       return 0;
@@ -316,134 +355,91 @@ struct CachingDataSource::State {
     VELOX_CHECK_NOT_NULL(dst);
     size_t copied = 0;
     while (copied < bytes) {
-      const auto remaining = bytes - copied;
-      auto pin = pinFragment(offset + copied, remaining);
+      const auto wanted = bytes - copied;
+      auto pin = cachePiece(offset + copied, wanted);
       if (pin.empty()) {
-        // Already consumed prefixes remain useful, even when the remaining
-        // suffix cannot be cached. Never bypass/refetch the whole request.
-        const auto actual =
-            delegate->host_read(offset + copied, remaining, dst + copied);
-        addBytes("cudfKvikioCacheBypassBytes", actual);
-        return copied + actual;
+        // Keep the pieces already copied. Read only the rest.
+        const auto bytesRead =
+            delegate->host_read(offset + copied, wanted, dst + copied);
+        countBytes("cudfKvikioCacheBypassBytes", bytesRead);
+        return copied + bytesRead;
       }
-      const auto fragmentBytes = fragmentSize(pin, remaining);
-      copyCached(pin, fragmentBytes, dst + copied);
-      copied += fragmentBytes;
+      const auto pieceBytes = pieceSize(pin, wanted);
+      copyFromEntry(pin, pieceBytes, dst + copied);
+      copied += pieceBytes;
     }
     return copied;
   }
 
-  static void
-  copyCached(const cache::CachePin& pin, size_t bytes, uint8_t* dst) {
-    auto* entry = pin.checkedEntry();
-    if (entry->hasContiguousData()) {
-      std::memcpy(dst, entry->contiguousData(), bytes);
-      return;
-    }
-    // Another reader may have populated this key using page-run allocation.
-    // contiguous=true controls new allocations, not the layout of cache hits.
-    for (const auto& range : entry->dataRanges(bytes)) {
-      std::memcpy(dst, range.data(), range.size());
-      dst += range.size();
-    }
-  }
-
-  std::unique_ptr<cudf::io::datasource::buffer> readHost(
+  std::unique_ptr<cudf::io::datasource::buffer> readToHost(
       size_t offset,
       size_t size) {
     std::vector<uint8_t> bytes(clamp(offset, size));
-    bytes.resize(readHost(offset, bytes.size(), bytes.data()));
+    bytes.resize(readToHost(offset, bytes.size(), bytes.data()));
     return cudf::io::datasource::buffer::create(std::move(bytes));
   }
 
-  // Pins the cache entries that cover the range from 'offset', filling misses.
-  // Stops at the first piece that cannot be cached.
-  std::vector<cache::CachePin> pinRange(size_t offset, size_t bytes) {
-    std::vector<cache::CachePin> pins;
-    size_t pinned = 0;
-    while (pinned < bytes) {
-      auto pin = pinFragment(offset + pinned, bytes - pinned);
-      if (pin.empty()) {
-        break;
-      }
-      pinned += fragmentSize(pin, bytes - pinned);
-      pins.push_back(std::move(pin));
-    }
-    return pins;
-  }
-
-  // Submits the H2D copies of 'pins' from pinRange(), then reads the rest of
-  // the range uncached. Returns the number of bytes submitted.
-  size_t submitDeviceRead(
-      std::vector<cache::CachePin> pins,
-      size_t offset,
-      size_t bytes,
-      uint8_t* dst,
-      cuda::stream_ref stream,
-      int device) {
-    const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
-    size_t submitted = 0;
-    try {
-      for (auto& pin : pins) {
-        const auto fragmentBytes = fragmentSize(pin, bytes - submitted);
-        submitted += submitReadyDeviceRead(
-            std::move(pin),
-            offset + submitted,
-            fragmentBytes,
-            dst + submitted,
-            stream,
-            device);
-      }
-      if (submitted < bytes) {
-        submitted += submitReadyDeviceRead(
-            {},
-            offset + submitted,
-            bytes - submitted,
-            dst + submitted,
-            stream,
-            device);
-      }
-      return submitted;
-    } catch (...) {
-      // A later read can fail while an earlier prefix is still in flight.
-      // Fence before the destination can be released.
-      finishDeviceRead(stream, device);
-      throw;
-    }
-  }
-
-  // Stages one fragment through the thread's pinned buffer and submits its
-  // H2D copy. 'pin' is shared and fully filled, or empty for an uncached
-  // range that is read synchronously from the delegate. Returns the number of
-  // bytes submitted.
-  size_t submitReadyDeviceRead(
+  // Queues the GPU copy of one piece, through this thread's pinned buffer.
+  // 'pin' holds the piece, or is empty to read the piece from the delegate.
+  // Returns the number of bytes queued.
+  size_t copyPieceToGpu(
       cache::CachePin pin,
       size_t offset,
       size_t bytes,
       uint8_t* dst,
       cuda::stream_ref stream,
       int device) {
-    const rmm::cuda_set_device_raii scope{rmm::cuda_device_id{device}};
-    auto& slot = stagingSlot(device);
-    auto* staging = slot.reserve(bytes);
-    size_t actual;
-    if (!pin.empty()) {
-      copyCached(pin, bytes, staging);
-      actual = bytes;
-      pin.clear();
+    auto& buffer = pinnedBuffer(device);
+    auto* pinned = buffer.take(bytes);
+    size_t bytesRead = bytes;
+    if (pin.empty()) {
+      bytesRead = delegate->host_read(offset, bytes, pinned);
+      countBytes("cudfKvikioCacheBypassBytes", bytesRead);
     } else {
-      actual = delegate->host_read(offset, bytes, staging);
-      addBytes("cudfKvikioCacheBypassBytes", actual);
+      copyFromEntry(pin, bytes, pinned);
+      // The bytes are in the pinned buffer. The cache may evict the entry.
+      pin.clear();
     }
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dst, pinned, bytesRead, cudaMemcpyHostToDevice, stream.get()));
+    buffer.copyQueued(stream.get());
+    return bytesRead;
+  }
+
+  // Queues the GPU copies of the cached pieces in 'pins', from cacheRange(),
+  // then reads the rest of the range without the cache. Returns the number of
+  // bytes queued.
+  size_t copyToGpu(
+      std::vector<cache::CachePin> pins,
+      size_t offset,
+      size_t bytes,
+      uint8_t* dst,
+      cuda::stream_ref stream,
+      int device) {
+    const rmm::cuda_set_device_raii onDevice{rmm::cuda_device_id{device}};
+    size_t queued = 0;
     try {
-      CUDF_CUDA_TRY(cudaMemcpyAsync(
-          dst, staging, actual, cudaMemcpyHostToDevice, stream.get()));
-      slot.recordCopy(stream.get());
+      for (auto& pin : pins) {
+        const auto pieceBytes = pieceSize(pin, bytes - queued);
+        queued += copyPieceToGpu(
+            std::move(pin),
+            offset + queued,
+            pieceBytes,
+            dst + queued,
+            stream,
+            device);
+      }
+      if (queued < bytes) {
+        queued += copyPieceToGpu(
+            {}, offset + queued, bytes - queued, dst + queued, stream, device);
+      }
+      return queued;
     } catch (...) {
-      finishDeviceRead(stream, device);
+      // Copies queued before the failure may still write to 'dst'. Wait for
+      // them before the caller can free it.
+      waitForStream(stream, device);
       throw;
     }
-    return actual;
   }
 };
 
@@ -476,17 +472,18 @@ bool CachingDataSource::is_device_read_preferred(size_t bytes) const {
 std::unique_ptr<cudf::io::datasource::buffer> CachingDataSource::host_read(
     size_t offset,
     size_t bytes) {
-  return state_->readHost(offset, bytes);
+  return state_->readToHost(offset, bytes);
 }
 
 size_t CachingDataSource::host_read(size_t offset, size_t bytes, uint8_t* dst) {
-  return state_->readHost(offset, bytes, dst);
+  return state_->readToHost(offset, bytes, dst);
 }
 
+// The host reads run when cuDF calls get(), on cuDF's thread.
 std::future<std::unique_ptr<cudf::io::datasource::buffer>>
 CachingDataSource::host_read_async(size_t offset, size_t bytes) {
   return std::async(std::launch::deferred, [state = state_, offset, bytes] {
-    return state->readHost(offset, bytes);
+    return state->readToHost(offset, bytes);
   });
 }
 
@@ -494,7 +491,7 @@ std::future<size_t>
 CachingDataSource::host_read_async(size_t offset, size_t bytes, uint8_t* dst) {
   return std::async(
       std::launch::deferred, [state = state_, offset, bytes, dst] {
-        return state->readHost(offset, bytes, dst);
+        return state->readToHost(offset, bytes, dst);
       });
 }
 
@@ -505,51 +502,48 @@ std::future<size_t> CachingDataSource::device_read_async(
     cuda::stream_ref stream) {
   bytes = state_->clamp(offset, bytes);
   if (bytes == 0) {
-    std::promise<size_t> ready;
-    ready.set_value(0);
-    return ready.get_future();
+    std::promise<size_t> nothingToRead;
+    nothingToRead.set_value(0);
+    return nothingToRead.get_future();
   }
   VELOX_CHECK_NOT_NULL(dst);
-  const auto device = streamDevice(stream);
-  auto promise = std::make_shared<std::promise<size_t>>();
-  auto published = std::make_shared<std::atomic<bool>>(false);
-  // Construct the destination-lifetime fence before starting any I/O.
-  auto completion = std::async(
-      std::launch::deferred,
-      [completion = DeviceReadCompletion(
-           promise->get_future(), stream, device, published)]() mutable {
-        return completion.get();
+  const auto device = deviceOf(stream);
+  auto copiesQueued = std::make_shared<std::promise<size_t>>();
+  auto copiesQueuedFuture = copiesQueued->get_future();
+
+  // Step 1 on a fill thread, then step 2 on a copy thread.
+  fillThreads()->add(
+      [state = state_, copiesQueued, offset, bytes, dst, stream, device] {
+        try {
+          auto pins = state->cacheRange(offset, bytes);
+          copyThreads()->add([state,
+                              copiesQueued,
+                              pins = std::move(pins),
+                              offset,
+                              bytes,
+                              dst,
+                              stream,
+                              device]() mutable {
+            try {
+              copiesQueued->set_value(state->copyToGpu(
+                  std::move(pins), offset, bytes, dst, stream, device));
+            } catch (...) {
+              copiesQueued->set_exception(std::current_exception());
+            }
+          });
+        } catch (...) {
+          copiesQueued->set_exception(std::current_exception());
+        }
       });
-  published->store(true);
-  try {
-    cacheFillExecutor()->add(
-        [state = state_, promise, offset, bytes, dst, stream, device] {
-          try {
-            auto pins = state->pinRange(offset, bytes);
-            cacheCopyExecutor()->add([state,
-                                      promise,
-                                      pins = std::move(pins),
-                                      offset,
-                                      bytes,
-                                      dst,
-                                      stream,
-                                      device]() mutable {
-              try {
-                promise->set_value(state->submitDeviceRead(
-                    std::move(pins), offset, bytes, dst, stream, device));
-              } catch (...) {
-                promise->set_exception(std::current_exception());
-              }
-            });
-          } catch (...) {
-            promise->set_exception(std::current_exception());
-          }
-        });
-  } catch (...) {
-    promise->set_exception(std::current_exception());
-    throw;
-  }
-  return completion;
+
+  // The read is running now. If creating the future below throws, the
+  // WaitForGpuCopies inside it is destroyed first, which waits for the read.
+  return std::async(
+      std::launch::deferred,
+      [wait = WaitForGpuCopies(
+           std::move(copiesQueuedFuture), stream, device)]() mutable {
+        return wait.get();
+      });
 }
 
 size_t CachingDataSource::device_read(
@@ -562,16 +556,13 @@ size_t CachingDataSource::device_read(
     return 0;
   }
   VELOX_CHECK_NOT_NULL(dst);
-  const auto device = streamDevice(stream);
-  // A synchronous caller may already occupy the connector executor. Queuing
-  // the read back to that executor and waiting would deadlock when all its
-  // threads are occupied by such callers. Keep scheduling in the async API;
-  // perform synchronous reads inline, including the destination-lifetime fence.
-  return DeviceReadCompletion::finish(
-      state_->submitDeviceRead(
-          state_->pinRange(offset, bytes), offset, bytes, dst, stream, device),
-      stream,
-      device);
+  const auto device = deviceOf(stream);
+  // Run on the caller's thread. Handing the read to a pool and waiting could
+  // deadlock if the caller is itself a pool thread that the read needs.
+  const auto queued = state_->copyToGpu(
+      state_->cacheRange(offset, bytes), offset, bytes, dst, stream, device);
+  waitForStream(stream, device);
+  return queued;
 }
 
 std::unique_ptr<cudf::io::datasource::buffer> CachingDataSource::device_read(
@@ -581,9 +572,9 @@ std::unique_ptr<cudf::io::datasource::buffer> CachingDataSource::device_read(
   const auto readSize = state_->clamp(offset, bytes);
   rmm::device_buffer result(
       readSize, stream, cudf::get_current_device_resource_ref());
-  const auto actual = device_read(
+  const auto bytesRead = device_read(
       offset, readSize, static_cast<uint8_t*>(result.data()), stream);
-  result.resize(actual, stream);
+  result.resize(bytesRead, stream);
   return datasource::buffer::create(std::move(result));
 }
 
