@@ -94,6 +94,16 @@ class HybridFlatMap {
 
 namespace detail {
 
+// Checks the rules for one group's own keys, shared by whole-schema validation
+// and HybridFlatMapTypeBuilder::addGroup(). Configured keys must be non-empty
+// and strictly ascending because lookups binary search them. Default keys keep
+// their first-seen order, which is their key-presence bitmap order, so only
+// empty keys are rejected here. Callers check that every key is unique across
+// all groups.
+void checkHybridFlatMapGroupKeys(
+    uint32_t groupId,
+    const std::vector<std::string>& groupKeys);
+
 template <typename GroupIdAt, typename GroupKeysAt>
 void validateHybridFlatMapGroups(
     size_t groupCount,
@@ -112,35 +122,25 @@ void validateHybridFlatMapGroups(
         groupIdAt(0));
   }
   folly::F14FastSet<uint32_t> groupIds;
-  folly::F14FastSet<std::string> keys;
+  // Callers keep every group's keys alive and unchanged during validation, so
+  // views avoid copying each key.
+  folly::F14FastSet<std::string_view> keys;
   bool foundDefault{false};
   for (size_t i = 0; i < groupCount; ++i) {
     const auto groupId = groupIdAt(i);
     const auto& groupKeys = groupKeysAt(i);
+    const bool isNewGroupId = groupIds.insert(groupId).second;
     NIMBLE_CHECK(
-        groupIds.insert(groupId).second,
-        "Duplicate Hybrid FlatMap group ID: {}.",
-        groupId);
+        isNewGroupId, "Duplicate Hybrid FlatMap group ID: {}.", groupId);
     if (i > 0) {
       NIMBLE_CHECK_LT(
           groupIdAt(i - 1),
           groupId,
           "Hybrid FlatMap group IDs must be in ascending order.");
     }
-    if (HybridFlatMap::isDefaultGroup(groupId)) {
-      foundDefault = true;
-    } else {
-      NIMBLE_CHECK(
-          !groupKeys.empty(),
-          "Hybrid FlatMap group must contain at least one key: {}.",
-          groupId);
-      NIMBLE_CHECK(
-          std::is_sorted(groupKeys.begin(), groupKeys.end()),
-          "Hybrid FlatMap group keys must be sorted: {}.",
-          groupId);
-    }
+    foundDefault |= HybridFlatMap::isDefaultGroup(groupId);
+    checkHybridFlatMapGroupKeys(groupId, groupKeys);
     for (const auto& key : groupKeys) {
-      NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
       NIMBLE_CHECK(
           keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
     }

@@ -1477,7 +1477,7 @@ void SharedArbitrator::freeCapacityLocked(
   if (FOLLY_UNLIKELY(
           freeNonReservedCapacity_ + freeReservedCapacity_ > capacity_)) {
     VELOX_FAIL(
-        "Free capacity {}/{} is larger than the max capacity {}, {}",
+        "Free capacity {}/{} is larger than the max capacity {}",
         succinctBytes(freeNonReservedCapacity_),
         succinctBytes(freeReservedCapacity_),
         succinctBytes(capacity_));
@@ -1546,6 +1546,7 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   stats.maxCapacityBytes = capacity_;
   stats.freeCapacityBytes = freeNonReservedCapacity_ + freeReservedCapacity_;
   stats.freeReservedCapacityBytes = freeReservedCapacity_;
+  stats.reservedCapacityBytes = reservedCapacity_;
   stats.numNonReclaimableAttempts = numNonReclaimableAttempts_;
   return stats;
 }

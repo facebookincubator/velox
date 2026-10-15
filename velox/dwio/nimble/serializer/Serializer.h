@@ -95,6 +95,12 @@ class Serializer {
   // In-map stream offsets for skipping constant FlatMap key-presence streams.
   // Mutable because FlatMap keys can be added during const serialize().
   mutable folly::F14FastSet<uint32_t> inMapStreamOffsets_;
+  // Hybrid metadata offsets whose all-false streams can be omitted. Registered
+  // during initialize() and only read during serialize().
+  folly::F14FastSet<uint32_t> hybridMetadataStreamOffsets_;
+  // Non-Default groups have fixed key catalogs, so all-true key-presence
+  // streams at these offsets can also be omitted.
+  folly::F14FastSet<uint32_t> hybridNonDefaultGroupKeyPresenceOffsets_;
 };
 
 template <typename T>
@@ -123,13 +129,19 @@ void Serializer::serialize(
         continue;
       }
     }
-    if (!inMapStreamOffsets_.empty()) {
-      const auto streamOffset = streamData->descriptor().offset();
-      if (inMapStreamOffsets_.contains(streamOffset)) {
-        streamData->materialize();
-        if (isConstantBoolStream(streamData->data())) {
-          continue;
-        }
+    const auto streamOffset = streamData->descriptor().offset();
+    const bool isHybridMetadataStream =
+        hybridMetadataStreamOffsets_.contains(streamOffset);
+    if (inMapStreamOffsets_.contains(streamOffset) || isHybridMetadataStream) {
+      streamData->materialize();
+      const auto data = streamData->data();
+      const bool shouldOmit = isHybridMetadataStream
+          ? (isAllFalseBoolStream(data) ||
+             (hybridNonDefaultGroupKeyPresenceOffsets_.contains(streamOffset) &&
+              isAllTrueBoolStream(data)))
+          : isConstantBoolStream(data);
+      if (shouldOmit) {
+        continue;
       }
     }
     streamWriter.writeData(*streamData);

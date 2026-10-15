@@ -36,6 +36,15 @@ namespace facebook::velox::functions {
 
 namespace {
 
+// Boost's default discrete-quantile policy is integer_round_outwards, which
+// rounds the inverse CDF down for p < 0.5 and up for p > 0.5. Presto (Apache
+// Commons Math) instead returns the smallest integer k with CDF(k) >= p, which
+// corresponds to Boost's integer_round_up policy. Using the default policy
+// biases inverse_poisson_cdf / inverse_binomial_cdf low for p < 0.5.
+using InverseDiscreteCdfPolicy =
+    boost::math::policies::policy<boost::math::policies::discrete_quantile<
+        boost::math::policies::integer_round_up>>;
+
 template <typename T>
 struct BetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -425,7 +434,7 @@ struct InverseBinomialCDFFunction {
         numberOfTrials > 0,
         "inverseBinomialCdf Function: numberOfTrials must be greater than 0");
 
-    boost::math::binomial_distribution<> dist(
+    boost::math::binomial_distribution<double, InverseDiscreteCdfPolicy> dist(
         numberOfTrials, successProbability);
     result = static_cast<int32_t>(boost::math::quantile(dist, p));
   }
@@ -445,7 +454,8 @@ struct InversePoissonCDFFunction {
         (lambda > 0) && (lambda != kInf),
         "inversePoissonCdf Function: lambda must be greater than 0");
 
-    boost::math::poisson_distribution<> dist(lambda);
+    boost::math::poisson_distribution<double, InverseDiscreteCdfPolicy> dist(
+        lambda);
     double quantile = boost::math::quantile(dist, p);
     if (quantile > std::numeric_limits<int32_t>::max()) {
       result = std::numeric_limits<int32_t>::max();

@@ -279,7 +279,7 @@ endif()
 
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
-velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
+velox_link_libraries(velox_cursor velox_core velox_exception velox_expression Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

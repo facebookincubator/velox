@@ -204,7 +204,8 @@ class SelectiveNimbleReaderTest
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
       std::shared_ptr<const ExternalDictionaryResolver>
-          externalDictionaryResolver = nullptr) {
+          externalDictionaryResolver = nullptr,
+      bool dictionaryAwareReads = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -265,6 +266,7 @@ class SelectiveNimbleReaderTest
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setLazyColumnIo(lazyColumnIo);
+    rowOptions.setNimbleDictionaryAwareReads(dictionaryAwareReads);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
   }
@@ -278,6 +280,239 @@ class SelectiveNimbleReaderTest
         test::createNimbleFile(*rootPool(), input),
         scanSpec,
         stringDecoderZeroCopy);
+  }
+
+  // Writes 'input', which has columns c0 and c1, to a Nimble file with c0
+  // dictionary encoded over FixedBitWidth indices. A small
+  // 'maxStreamChunkRawSize' splits c0 into many chunks.
+  std::string createDictionaryFile(
+      const RowVectorPtr& input,
+      std::optional<uint64_t> maxStreamChunkRawSize) {
+    EncodingLayout indicesLayout{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+    EncodingLayout dictionaryLayout{
+        EncodingType::Dictionary,
+        {},
+        CompressionType::Uncompressed,
+        {std::nullopt, std::move(indicesLayout)}};
+    WriterOptions writerOptions;
+    writerOptions.encodingLayoutTree.emplace(
+        Kind::Row,
+        std::unordered_map<
+            EncodingLayoutTree::StreamIdentifier,
+            EncodingLayout>{},
+        "",
+        std::vector<EncodingLayoutTree>{
+            EncodingLayoutTree{
+                Kind::Scalar, {{0, std::move(dictionaryLayout)}}, "c0"},
+            EncodingLayoutTree{Kind::Scalar, {}, "c1"}});
+    if (maxStreamChunkRawSize.has_value()) {
+      writerOptions.maxStreamChunkRawSize = maxStreamChunkRawSize.value();
+      writerOptions.minStreamChunkRawSize = 1;
+    }
+    return test::createNimbleFile(*rootPool(), input, writerOptions);
+  }
+
+  // Runs the dictionary-aware read cases shared by every numeric type.
+  template <typename T>
+  void testDictionaryAwareReadsCases() {
+    {
+      SCOPED_TRACE("no nulls");
+      testDictionaryAwareReads<T>(nullptr, 127);
+    }
+    {
+      SCOPED_TRACE("every 17th row null");
+      testDictionaryAwareReads<T>(nullEvery(17), 127);
+    }
+    {
+      SCOPED_TRACE("long leading nulls");
+      testDictionaryAwareReads<T>([](auto row) { return row < 3'073; }, 127);
+    }
+    {
+      SCOPED_TRACE("one batch spanning every chunk");
+      testDictionaryAwareReads<T>(nullEvery(17), /*batchSize=*/4'097);
+    }
+    {
+      SCOPED_TRACE("all null");
+      testDictionaryAwareReads<T>([](auto /*row*/) { return true; }, 127);
+    }
+  }
+
+  // Writes a multi-chunk dictionary-encoded column with nulls where 'isNullAt'
+  // is true, then checks dictionary-aware reads of it: projection, range
+  // filters that accept or reject nulls, filter-only reads, IS NOT NULL, and
+  // sparse row selections. Each read takes 'batchSize' rows per batch.
+  template <typename T>
+  void testDictionaryAwareReads(
+      const std::function<bool(vector_size_t)>& isNullAt,
+      vector_size_t batchSize) {
+    constexpr vector_size_t kNumRows{4'097};
+    constexpr int64_t kCardinality{1'000};
+    const auto valueAt = [](auto row) {
+      const auto value = (static_cast<int64_t>(row) * 9'973) % kCardinality;
+      if constexpr (std::is_floating_point_v<T>) {
+        return static_cast<T>(value) / 4 - 125.5;
+      } else {
+        return static_cast<T>(value);
+      }
+    };
+    auto values = makeFlatVector<T>(kNumRows, valueAt, isNullAt);
+    auto rowIds = makeFlatVector<int64_t>(kNumRows, folly::identity);
+    auto input = makeRowVector({"c0", "c1"}, {values, rowIds});
+    const auto file =
+        createDictionaryFile(input, /*maxStreamChunkRawSize=*/512);
+
+    constexpr T kFilterMin = std::is_floating_point_v<T> ? -75.5 : 200;
+    constexpr T kFilterMax = std::is_floating_point_v<T> ? 75.5 : 800;
+    const auto makeFilter =
+        [&](bool nullAllowed) -> std::unique_ptr<common::Filter> {
+      if constexpr (std::is_floating_point_v<T>) {
+        return std::make_unique<common::FloatingPointRange<T>>(
+            kFilterMin,
+            /*lowerUnbounded=*/false,
+            /*lowerExclusive=*/false,
+            kFilterMax,
+            /*upperUnbounded=*/false,
+            /*upperExclusive=*/false,
+            nullAllowed);
+      } else {
+        return std::make_unique<common::BigintRange>(
+            kFilterMin, kFilterMax, nullAllowed);
+      }
+    };
+    const auto validateRead = [&](std::optional<bool> nullAllowed,
+                                  bool filterOnly) {
+      SCOPED_TRACE(
+          nullAllowed.has_value() ? fmt::format(
+                                        "nullAllowed={} filterOnly={}",
+                                        nullAllowed.value(),
+                                        filterOnly)
+                                  : "no filter");
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      if (nullAllowed.has_value()) {
+        auto* valueSpec = scanSpec->childByName("c0");
+        valueSpec->setFilter(makeFilter(nullAllowed.value()));
+        if (filterOnly) {
+          valueSpec->setProjectOut(false);
+          valueSpec->setChannel(common::ScanSpec::kNoChannel);
+          scanSpec->childByName("c1")->setChannel(0);
+        }
+      }
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/false,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(
+          *input,
+          *readers.rowReader,
+          batchSize,
+          filterOnly ? 0 : -1,
+          [&, nullAllowed](auto row) {
+            if (!nullAllowed.has_value()) {
+              return true;
+            }
+            if (values->isNullAt(row)) {
+              return nullAllowed.value();
+            }
+            const auto value = valueAt(row);
+            return value >= kFilterMin && value <= kFilterMax;
+          });
+    };
+
+    validateRead(std::nullopt, /*filterOnly=*/false);
+    if (isNullAt) {
+      validateRead(true, /*filterOnly=*/false);
+      validateRead(false, /*filterOnly=*/false);
+      validateRead(true, /*filterOnly=*/true);
+      validateRead(false, /*filterOnly=*/true);
+    } else {
+      validateRead(false, /*filterOnly=*/false);
+      validateRead(false, /*filterOnly=*/true);
+    }
+
+    if (isNullAt) {
+      // The dictionary visitor treats IS NOT NULL as no filter, so this read
+      // takes its unfiltered translation path.
+      SCOPED_TRACE("IS NOT NULL");
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::IsNotNull>());
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/false,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(*input, *readers.rowReader, batchSize, [&](auto row) {
+        return !values->isNullAt(row);
+      });
+    }
+
+    if (isNullAt) {
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      std::vector<int64_t> evenRows;
+      evenRows.reserve((kNumRows + 1) / 2);
+      for (vector_size_t row = 0; row < kNumRows; row += 2) {
+        evenRows.push_back(row);
+      }
+      scanSpec->childByName("c1")->setFilter(
+          std::make_unique<common::BigintValuesUsingBitmask>(
+              0, kNumRows - 1, std::move(evenRows), /*nullAllowed=*/false));
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/true,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(*input, *readers.rowReader, batchSize, [](auto row) {
+        return row % 2 == 0;
+      });
+
+      scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      scanSpec->childByName("c0")->setFilter(makeFilter(/*nullAllowed=*/true));
+      std::vector<int64_t> sparseRows;
+      sparseRows.reserve((kNumRows + 7) / 8);
+      for (vector_size_t row = 0; row < kNumRows; row += 8) {
+        sparseRows.push_back(row);
+      }
+      scanSpec->childByName("c1")->setFilter(
+          std::make_unique<common::BigintValuesUsingBitmask>(
+              0, kNumRows - 1, std::move(sparseRows), /*nullAllowed=*/false));
+      readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          stringDecoderZeroCopy(),
+          /*preserveFlatMapsInMemory=*/false,
+          /*lazyColumnIo=*/true,
+          /*externalDictionaryResolver=*/nullptr,
+          /*dictionaryAwareReads=*/true);
+      validate(*input, *readers.rowReader, batchSize, [&](auto row) {
+        if (row % 8 != 0) {
+          return false;
+        }
+        if (values->isNullAt(row)) {
+          return true;
+        }
+        const auto value = valueAt(row);
+        return value >= kFilterMin && value <= kFilterMax;
+      });
+    }
   }
 
   uint32_t readerIdCounter_{0};
@@ -340,7 +575,7 @@ class SelectiveNimbleReaderTest
           ASSERT_TRUE(result->equalValueAt(&input, j, i));
         } else {
           auto* resultRow = result->asUnchecked<RowVector>();
-          for (int k = 0, kk = 0; k < resultRow->childrenSize(); ++k) {
+          for (int k = 0, kk = 0; k < input.childrenSize(); ++k) {
             if (k != dropColumn) {
               auto& expected = input.childAt(k);
               auto& actual = resultRow->childAt(kk++);
@@ -1448,6 +1683,82 @@ TEST_P(SelectiveNimbleReaderTest, dictionary) {
   scanSpec->addAllChildFields(*input->type());
   auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsBigint) {
+  testDictionaryAwareReadsCases<int64_t>();
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsInteger) {
+  testDictionaryAwareReadsCases<int32_t>();
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsSmallint) {
+  testDictionaryAwareReadsCases<int16_t>();
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsReal) {
+  testDictionaryAwareReadsCases<float>();
+}
+
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsDouble) {
+  testDictionaryAwareReadsCases<double>();
+}
+
+// Changes the filter between two batches of one dictionary chunk. The verdicts
+// cached under the first filter must not leak into the second batch.
+TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
+  constexpr vector_size_t kNumRows{4'096};
+  constexpr vector_size_t kFirstBatchSize{1'000};
+  const auto valueAt = [](vector_size_t row) {
+    return (static_cast<int64_t>(row) * 9'973) % 1'000;
+  };
+  auto input = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>(kNumRows, valueAt),
+       makeFlatVector<int64_t>(kNumRows, folly::identity)});
+  const auto file =
+      createDictionaryFile(input, /*maxStreamChunkRawSize=*/std::nullopt);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto* valueSpec = scanSpec->childByName("c0");
+  valueSpec->setFilter(
+      std::make_unique<common::BigintRange>(200, 800, /*nullAllowed=*/false));
+  auto readers = makeReaders(
+      input,
+      file,
+      scanSpec,
+      stringDecoderZeroCopy(),
+      /*preserveFlatMapsInMemory=*/false,
+      /*lazyColumnIo=*/false,
+      /*externalDictionaryResolver=*/nullptr,
+      /*dictionaryAwareReads=*/true);
+
+  vector_size_t nextRow{0};
+  const auto readBatch = [&](vector_size_t numRows, int64_t min, int64_t max) {
+    std::vector<vector_size_t> expectedRows;
+    for (auto row = nextRow; row < nextRow + numRows; ++row) {
+      if (valueAt(row) >= min && valueAt(row) <= max) {
+        expectedRows.push_back(row);
+      }
+    }
+    nextRow += numRows;
+    VectorPtr result = BaseVector::create(input->type(), 0, pool());
+    ASSERT_EQ(
+        readers.rowReader->next(numRows, result),
+        static_cast<uint64_t>(numRows));
+    ASSERT_EQ(result->size(), expectedRows.size());
+    for (vector_size_t index = 0; index < result->size(); ++index) {
+      ASSERT_TRUE(
+          result->equalValueAt(input.get(), index, expectedRows[index]));
+    }
+  };
+
+  readBatch(kFirstBatchSize, 200, 800);
+  valueSpec->setFilter(
+      std::make_unique<common::BigintRange>(0, 100, /*nullAllowed=*/false));
+  readers.rowReader->resetFilterCaches();
+  readBatch(kNumRows - kFirstBatchSize, 0, 100);
 }
 
 TEST_P(SelectiveNimbleReaderTest, smallDictionaryValue) {
@@ -2925,6 +3236,39 @@ TEST_P(SelectiveNimbleReaderTest, nativeFlatMap) {
   }
 }
 
+TEST_P(SelectiveNimbleReaderTest, nativeFlatMapSharesKeyIndexAcrossBatches) {
+  auto input = makeRowVector({makeFlatMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+      {{2, 22}},
+      {{1, 13}, {2, 23}},
+  })});
+  WriterOptions writerOptions;
+  writerOptions.flatMapColumns = {{"c0", {}}};
+  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers = makeReaders(
+      input,
+      file,
+      scanSpec,
+      stringDecoderZeroCopy(),
+      /*preserveFlatMapsInMemory=*/true);
+
+  VectorPtr result = BaseVector::create(input->type(), 0, pool());
+  ASSERT_EQ(readers.rowReader->next(2, result), 2);
+  // Holding the first batch keeps the reader from reusing it for the second.
+  auto firstBatch =
+      BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+  ASSERT_EQ(readers.rowReader->next(2, result), 2);
+  auto secondBatch =
+      BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+
+  ASSERT_NE(firstBatch, secondBatch);
+  EXPECT_TRUE(secondBatch->as<FlatMapVector>()->testingSharesKeyIndex(
+      *firstBatch->as<FlatMapVector>()));
+}
+
 TEST_P(SelectiveNimbleReaderTest, mapAsStruct) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
@@ -3012,9 +3356,6 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructAllNulls) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
-  GTEST_SKIP() << "Per column decode counters moved from RuntimeStats to "
-                  "SplitStats, which readers own privately and do not expose. "
-                  "Re-enable once Velox provides caller access.";
   const int numRows = 100'000;
   auto input = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto i) { return i * 7 + 13; }),
@@ -3047,8 +3388,6 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
-  // zeroCopy=true uses nimble::EncodingFactory (not legacy), which forwards
-  // Encoding::Options including decodingStats to encoding constructors.
   rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setCollectColumnStats(true);
   rowOptions.setEagerFirstStripeLoad(true);
@@ -3065,11 +3404,29 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   }
   EXPECT_EQ(totalRows, numRows) << "should read all rows";
 
-  // The per column decode and decompress assertions that used to live here
-  // read counters off RuntimeStatistics::columnReaderStats. Velox moved those
-  // counters onto SplitStats, which every reader owns privately and none
-  // exposes, so there is no supported way to reach them from a caller. The
-  // skip above records that this coverage is currently unavailable.
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+
+  // The schema is ROW(BIGINT, VARCHAR). Node IDs: 0=root, 1=bigint, 2=varchar.
+  // Both leaf columns should have per-column decodeCPUTimeNanos populated via
+  // splitStats_.mergeFrom.
+  ASSERT_FALSE(stats.columnStats.empty());
+  const auto nimbleFormat = dwio::common::FileFormat::NIMBLE;
+  for (uint32_t nodeId : {1, 2}) {
+    SCOPED_TRACE(fmt::format("nodeId={}", nodeId));
+    auto nodeIt = stats.columnStats.find(nodeId);
+    ASSERT_NE(nodeIt, stats.columnStats.end());
+    auto formatIt = nodeIt->second.find(nimbleFormat);
+    ASSERT_NE(formatIt, nodeIt->second.end());
+    ASSERT_TRUE(formatIt->second.decodingStats.has_value());
+    EXPECT_GT(formatIt->second.decodingStats->decodeCPUTimeNanos.count(), 0);
+  }
+
+  // Verify per-column stats also surface through toRuntimeMetricMap with
+  // the nimble.column_{id}.{type} prefix.
+  auto metrics = stats.toRuntimeMetricMap();
+  EXPECT_TRUE(metrics.count("nimble.column_1.BIGINT.decodeCPUTimeNanos") > 0);
+  EXPECT_TRUE(metrics.count("nimble.column_2.VARCHAR.decodeCPUTimeNanos") > 0);
 }
 
 // Tests for FixedBitWidthEncoding fast path.

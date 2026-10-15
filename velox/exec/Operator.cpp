@@ -82,6 +82,7 @@ OperatorCtx::createConnectorQueryCtx(
               driverCtx_->queryConfig().adjustTimestampToTimezone())
           .cancellationToken(task->getCancellationToken())
           .tokenProvider(task->queryCtx()->fsTokenProvider())
+          .customPools(customPools_)
           .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
@@ -266,12 +267,12 @@ int32_t OperatorCtx::numPeers() const {
   return numDrivers - 1;
 }
 
-bool OperatorCtx::allPeersFinished(
+bool OperatorCtx::allPeersArrived(
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
     std::vector<std::shared_ptr<Operator>>& peerOperators) const {
   std::vector<std::shared_ptr<Driver>> peerDrivers;
-  if (!driverCtx_->task->allPeersFinished(
+  if (!driverCtx_->task->allPeersArrived(
           planNodeId_, driverCtx_->driver, future, promises, peerDrivers)) {
     return false;
   }

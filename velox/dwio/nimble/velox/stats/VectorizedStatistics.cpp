@@ -305,9 +305,25 @@ void VectorizedFileStats::createVectorizedStats(
 
 VectorizedFileStats::VectorizedFileStats(
     const std::vector<ColumnStatistics*>& columnStats,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    VectorizedFileStats::Options options)
+    : options_{options} {
   createVectorizedStats(columnStats, pool);
 }
+
+namespace {
+// A value over the limit is dropped rather than truncated, as in DWRF: an
+// absent bound is unknown to readers, while a truncated max would no longer be
+// an upper bound.
+std::optional<std::string_view> applyStringLengthLimit(
+    std::string_view value,
+    uint32_t lengthLimit) {
+  if (value.size() > lengthLimit) {
+    return std::nullopt;
+  }
+  return value;
+}
+} // namespace
 
 void VectorizedFileStats::addColumnStat(ColumnStatistics* stat) {
   // All column statistics have the base DEFAULT stats
@@ -331,12 +347,20 @@ void VectorizedFileStats::addColumnStat(ColumnStatistics* stat) {
     }
     case StatType::STRING: {
       auto stringColumnStat = stat->as<StringStatistics>();
+      const auto min = stringColumnStat->getMin();
+      const auto max = stringColumnStat->getMax();
       statStreams_.at(StatStreamType::STRING_MIN)
           ->as<StringVectorizedStatistics>()
-          ->append(stringColumnStat->getMin());
+          ->append(
+              min.has_value() ? applyStringLengthLimit(
+                                    *min, options_.stringStatsLengthLimit)
+                              : std::nullopt);
       statStreams_.at(StatStreamType::STRING_MAX)
           ->as<StringVectorizedStatistics>()
-          ->append(stringColumnStat->getMax());
+          ->append(
+              max.has_value() ? applyStringLengthLimit(
+                                    *max, options_.stringStatsLengthLimit)
+                              : std::nullopt);
       break;
     }
     case StatType::INTEGRAL: {
@@ -850,7 +874,8 @@ VectorizedFileStats::toColumnStatistics(
 VectorizedStripeStats::VectorizedStripeStats(
     const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
         stripeStats,
-    velox::memory::MemoryPool* pool)
+    velox::memory::MemoryPool* pool,
+    VectorizedFileStats::Options options)
     : numStripes_{static_cast<uint32_t>(stripeStats.size())},
       numColumns_{
           numStripes_ == 0
@@ -865,7 +890,7 @@ VectorizedStripeStats::VectorizedStripeStats(
       columnStats.push_back(stat.get());
     }
     stripeFileStats_.push_back(
-        std::make_unique<VectorizedFileStats>(columnStats, pool));
+        std::make_unique<VectorizedFileStats>(columnStats, pool, options));
   }
 }
 

@@ -37,8 +37,10 @@ velox_add_library(
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  Elt.cpp
   FilterFunction.cpp
   FormatNumber.cpp
+  FormatString.cpp
   GetJsonObject.cpp
   Hash.cpp
   In.cpp
@@ -76,8 +78,10 @@ velox_add_library(
   DecimalUtil.h
   detail/DecimalArithmeticFunctions.h
   detail/DecimalCeilFunction.h
+  Elt.h
   Factorial.h
   FormatNumber.h
+  FormatString.h
   GetJsonObject.h
   Hash.h
   In.h

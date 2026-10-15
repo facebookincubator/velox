@@ -1155,6 +1155,39 @@ std::string_view encodeWithFallback(
   }
 }
 
+// Returns the layout to cache for a stream, generalizing Constant to
+// MainlyConstant and passing every other layout through unchanged.
+//
+// A stream that is constant in its first chunk is often not constant in the
+// next. Caching Constant verbatim makes every later chunk fail the replay --
+// ConstantEncoding rejects non-constant data -- and fall back to the full
+// selection cascade, which is what the cache exists to avoid. MainlyConstant
+// covers both shapes: while the data stays constant its encode() falls back to
+// ConstantEncoding and emits byte-identical output, and once uncommon values
+// appear it absorbs them without discarding the cached layout. Both child slots
+// are left absent so each sub-stream still runs its own selection.
+template <typename T>
+EncodingLayout cacheEncodingLayout(EncodingLayout captured) {
+  // MainlyConstant is not defined for bool streams (EncodingFactory rejects
+  // it), so a constant bool stream keeps its captured layout.
+  if constexpr (std::is_same_v<T, bool>) {
+    return captured;
+  } else {
+    if (captured.encodingType() != EncodingType::Constant) {
+      return captured;
+    }
+    std::vector<std::optional<const EncodingLayout>> children;
+    children.reserve(2);
+    children.emplace_back(std::nullopt);
+    children.emplace_back(std::nullopt);
+    return EncodingLayout{
+        EncodingType::MainlyConstant,
+        /*encodingConfig=*/{},
+        CompressionType::Uncompressed,
+        std::move(children)};
+  }
+}
+
 template <typename T>
 std::string_view encodeStreamTyped(
     detail::WriterContext& context,
@@ -1198,8 +1231,8 @@ std::string_view encodeStreamTyped(
   if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
-            EncodingLayoutCapture::capture(
-                encoded, context.options().buildEncodingOptions()));
+            cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
+                encoded, context.options().buildEncodingOptions())));
   }
   return encoded;
 }
@@ -2163,7 +2196,30 @@ bool Writer::flushInputBuffers(bool finalize) {
   return anyStripeFlushed;
 }
 
+void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
+  if (hasTopLevelNulls_) {
+    return;
+  }
+  const auto numRows = input->size();
+  bool batchHasTopLevelNulls{false};
+  const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      !context_->options().ignoreTopLevelNulls;
+  if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      if (input->isNullAt(row)) {
+        batchHasTopLevelNulls = true;
+        break;
+      }
+    }
+  }
+  NIMBLE_USER_CHECK(
+      clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
+      "Cluster-indexed Nimble files cannot contain top-level null rows");
+  hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
+}
+
 void Writer::writeBatch(const velox::VectorPtr& input) {
+  checkTopLevelNulls(input);
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
   {
@@ -2254,14 +2310,17 @@ void Writer::writeColumnStats() {
   }
 
   if (context_->options().enableVectorizedStats) {
+    VectorizedFileStats::Options statsOptions{
+        .stringStatsLengthLimit =
+            context_->options().vectorizedStatsStringLengthLimit};
     VectorizedFileStats fileStats{
-        context_->columnStats(), encodingMemoryPool_.get()};
+        context_->columnStats(), encodingMemoryPool_.get(), statsOptions};
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
     if (context_->stripeStatsWriteEnabled()) {
       VectorizedStripeStats stripeStats{
-          context_->stripeStats(), encodingMemoryPool_.get()};
+          context_->stripeStats(), encodingMemoryPool_.get(), statsOptions};
       Buffer stripeStatsBuffer{*encodingMemoryPool_};
       tabletWriter_->writeOptionalSection(
           std::string(kStripeStatsSection),
@@ -2420,11 +2479,11 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   }
 
   // Read back from the tablet writer rather than from options, so the recorded
-  // flag cannot drift from what was actually written.
-  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+  // trailer cannot drift from what was actually written.
+  auto streamTrailerLayout = tabletWriter_->streamTrailerLayout();
 
   if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
-      !hasStreamChecksums) {
+      streamTrailerLayout.empty() && !hasTopLevelNulls_) {
     return;
   }
 
@@ -2433,7 +2492,9 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          hasStreamChecksums}
+          /*hasStreamChecksums=*/false,
+          std::move(streamTrailerLayout),
+          hasTopLevelNulls_}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -2819,6 +2880,28 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
 
 namespace {
 
+const velox::exec::DriverCtx* getDriverContext() {
+  const auto* driverThreadCtx = velox::exec::driverThreadContext();
+  return driverThreadCtx == nullptr ? nullptr : driverThreadCtx->driverCtx();
+}
+
+// Encoder callbacks run on executor threads while the TableWrite driver waits
+// on the ExecutorBarrier. Memory arbitration started by an encoder allocation
+// must suspend that driver; otherwise arbitration waits on the driver's task
+// while the driver waits on the encoder, and both deadlock. Installing the
+// caller's DriverCtx on the executor thread lets arbitration find and suspend
+// the driver. Returns std::nullopt for a null DriverCtx because
+// ScopedDriverThreadContext installs a context even then, and its driverCtx()
+// fails a non-null check.
+std::optional<velox::exec::ScopedDriverThreadContext>
+maybeSetupScopedDriverContext(const velox::exec::DriverCtx* driverCtx) {
+  if (driverCtx == nullptr) {
+    return std::nullopt;
+  }
+  return std::optional<velox::exec::ScopedDriverThreadContext>{
+      std::in_place, driverCtx};
+}
+
 // Encode tasks are dispatched in fixed-size batches that each wait on their
 // slowest member, so a batch mixing one large stream with small ones leaves
 // most of it idle. Grouping comparable sizes into the same batch keeps the
@@ -2943,10 +3026,7 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
-      const velox::exec::DriverCtx* driverCtx = nullptr;
-      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
-        driverCtx = driverThreadCtx->driverCtx();
-      }
+      const auto* driverCtx = getDriverContext();
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
@@ -2957,11 +3037,8 @@ void Writer::writeStreams() {
                      taskId,
                      encodingScratchBufferPool,
                      encodingBufferPool]() {
-          std::optional<velox::exec::ScopedDriverThreadContext>
-              scopedDriverThreadContext;
-          if (driverCtx != nullptr) {
-            scopedDriverThreadContext.emplace(driverCtx);
-          }
+          const auto scopedDriverContext =
+              maybeSetupScopedDriverContext(driverCtx);
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
@@ -3139,8 +3216,8 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are constant, since the
-    // reader recovers the in-map state from value stream presence.
+    // When enabled, skip encoding constant in-map streams, since the reader
+    // recovers the in-map state from value stream presence.
     //
     // All-false is dropped here: the key really is absent from this stripe,
     // which is exactly what the reader concludes from two missing streams.
@@ -3363,10 +3440,7 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
-      const velox::exec::DriverCtx* driverCtx = nullptr;
-      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
-        driverCtx = driverThreadCtx->driverCtx();
-      }
+      const auto* driverCtx = getDriverContext();
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
@@ -3377,11 +3451,8 @@ bool Writer::writeChunks(
                      taskId,
                      encodingScratchBufferPool,
                      encodingBufferPool] {
-          std::optional<velox::exec::ScopedDriverThreadContext>
-              scopedDriverThreadContext;
-          if (driverCtx != nullptr) {
-            scopedDriverThreadContext.emplace(driverCtx);
-          }
+          const auto scopedDriverContext =
+              maybeSetupScopedDriverContext(driverCtx);
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));

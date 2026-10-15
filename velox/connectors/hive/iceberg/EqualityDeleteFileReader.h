@@ -87,8 +87,8 @@ class EqualityDeleteFileReader {
   ///
   /// @param output The base data output vector to filter.
   /// @param deleteBitmap Output bitmap. Bit i is set if row i matches an
-  ///   equality delete. The bitmap must be pre-allocated to cover at least
-  ///   output->size() rows.
+  ///   equality delete. Rows whose bit is already set are skipped. The bitmap
+  ///   must be pre-allocated to cover at least output->size() rows.
   void applyDeletes(const RowVectorPtr& output, BufferPtr deleteBitmap);
 
   /// Returns the number of delete key tuples loaded from the file.

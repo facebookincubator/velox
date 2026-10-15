@@ -25,6 +25,8 @@ class GeometryType final : public VarbinaryType {
   GeometryType() = default;
 
  public:
+  static std::shared_ptr<const GeometryType> create() = delete;
+
   static std::shared_ptr<const GeometryType> get() {
     VELOX_CONSTEXPR_SINGLETON GeometryType kInstance;
     return {std::shared_ptr<const GeometryType>{}, &kInstance};

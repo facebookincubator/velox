@@ -68,8 +68,8 @@ class TableEvolutionFuzzer {
 
     int64_t numStripeLoads{0};
     int64_t numIndexFilterConversions{0};
-    int64_t numStringDictionaryEncodingPreserved{0};
-    int64_t numStringDictionaryEncodingAbandoned{0};
+    /// Format-specific runtime stats collected by the fuzzer driver.
+    std::map<std::string, int64_t, std::less<>> customRuntimeStats;
     int64_t numQueriesWithValueHook{0};
     uint64_t numValuesLoadedToValueHook{0};
     int64_t numQueriesWithRemainingFilterEvaluation{0};
@@ -281,6 +281,12 @@ class TableEvolutionFuzzer {
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
 
+    /// Runtime stat keys to collect from operator stats into
+    /// ScanPlanCoverage::customRuntimeStats. Format-specific drivers populate
+    /// this so the generic fuzzer collects the stats without knowing what they
+    /// mean.
+    std::vector<std::string_view> customRuntimeStatKeys;
+
     /// Observes one attempted query while its correlated file, plan, feature,
     /// execution, and verification details are available. Called before an
     /// execution or verification failure is rethrown.
@@ -366,6 +372,17 @@ class TableEvolutionFuzzer {
   static std::vector<std::string> projectedColumnNames(
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
+
+  /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
+  /// order. If any cursor fails, waits for the others to finish, then rethrows
+  /// the error of the first failed cursor in 'cursors'. With OOM injection
+  /// enabled, an injected OOM ends a cursor early with the rows read so far.
+  /// When this returns, 'executor' holds no reference to any cursor, so the
+  /// caller holds the last reference to every task and can destroy the tasks
+  /// before the memory pools their plans reference.
+  static std::vector<std::vector<RowVectorPtr>> runTaskCursors(
+      const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+      folly::Executor& executor);
 
   void run();
 

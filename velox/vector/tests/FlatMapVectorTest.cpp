@@ -20,6 +20,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/RandomSeed.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -40,6 +43,20 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     auto mapVector = maker_.mapVector<TKey, TValue>(mapData);
     auto flatMapVector = maker_.flatMapVectorNullable<TKey, TValue>(mapData);
     assertEqualVectors(mapVector, flatMapVector->toMapVector());
+    assertEqualVectors(
+        flatMapVector,
+        FlatMapVector::fromMapVector(*flatMapVector->toMapVector()));
+  }
+
+  template <typename TKey, typename TValue>
+  void testMapToFlatMap(
+      const std::vector<
+          std::optional<std::vector<std::pair<TKey, std::optional<TValue>>>>>&
+          mapData) {
+    auto mapVector = maker_.mapVector<TKey, TValue>(mapData);
+    auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
+    assertEqualVectors(mapVector, flatMapVector);
+    assertEqualVectors(mapVector, flatMapVector->toMapVector());
   }
 
   void testFlatMapCopy(
@@ -57,16 +74,7 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     // Validate that the updated flat map matches the expectation.
     auto expectedFlatMap =
         makeFlatMapVectorFromJson<int64_t, int32_t>(expectedData);
-    EXPECT_EQ(baseFlatMap->size(), expectedFlatMap->size());
-
-    for (vector_size_t i = 0; i < baseFlatMap->size(); ++i) {
-      EXPECT_EQ(
-          baseFlatMap->compare(
-              expectedFlatMap.get(), i, i, CompareFlags{.equalsOnly = true}),
-          0)
-          << "Failed at index " << i << ":\n  " << baseFlatMap->toString(i)
-          << "\nvs.\n  " << expectedFlatMap->toString(i);
-    }
+    assertEqualVectors(expectedFlatMap, baseFlatMap);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -443,6 +451,551 @@ TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
   assertEqualVectors(source, target);
 }
 
+TEST_F(FlatMapVectorTest, copyRangesKeepsKeysOutsideRanges) {
+  // Target key 4 has no in-map buffer, so it is in both rows.  The source
+  // lacks key 4, so copying source row 0 removes it from target row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({40, 41})},
+      std::vector<BufferPtr>{nullptr});
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{4, 41}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesKeepsSharedKeysOutsideRanges) {
+  // Key 1 has no in-map buffer in the target, so it is in both rows.  In the
+  // source it is only in row 1, so copying source row 0 removes it from target
+  // row 0 only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+  auto sourceInMap = AlignedBuffer::allocate<bool>(2, pool_.get(), false);
+  bits::setBit(sourceInMap->asMutable<uint64_t>(), 1);
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({100, 101})},
+      std::vector<BufferPtr>{sourceInMap});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesClearsTargetNulls) {
+  auto target = maker_.flatMapVectorNullable<int32_t, int32_t>({
+      std::nullopt,
+      {{{1, 11}}},
+  });
+  auto source = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 101}},
+  });
+  ASSERT_FALSE(source->mayHaveNulls());
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 1}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  auto expected = maker_.mapVector<int32_t, int32_t>({
+      {{1, 100}},
+      {{1, 11}},
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyFlatMapIntoMapVector) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "{1: 11, 2: 21}",
+      "null",
+  });
+
+  // Row 1 keeps its map, and the other rows get the flat map rows.
+  {
+    auto target = makeMapVectorFromJson<int32_t, int32_t>({
+        "{7: 70}",
+        "{8: 80}",
+        "{9: 90}",
+        "{6: 60}",
+    });
+    SelectivityVector rows(4);
+    rows.setValid(1, false);
+    rows.updateBounds();
+    std::vector<vector_size_t> toSourceRow{0, 0, 1, 2};
+    target->copy(flatMap.get(), rows, toSourceRow.data());
+
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "{1: 10}",
+        "{8: 80}",
+        "{1: 11, 2: 21}",
+        "null",
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // Dictionary-wrapped source that reverses the rows.
+  {
+    auto target = makeMapVectorFromJson<int32_t, int32_t>({
+        "{7: 70}",
+        "{8: 80}",
+        "{9: 90}",
+    });
+    auto source = wrapInDictionary(makeIndices({2, 1, 0}), 3, flatMap);
+    target->copy(source.get(), 0, 0, 3);
+
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "null",
+        "{1: 11, 2: 21}",
+        "{1: 10}",
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // Constant-wrapped source.
+  {
+    auto target = makeMapVectorFromJson<int32_t, int32_t>({
+        "{7: 70}",
+        "{8: 80}",
+    });
+    auto source = BaseVector::wrapInConstant(2, 1, flatMap);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "{1: 11, 2: 21}",
+        "{1: 11, 2: 21}",
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // An empty map is copied as an empty map, and null target rows become
+  // non-null.
+  {
+    auto source = makeFlatMapVectorFromJson<int32_t, int32_t>({
+        "{1: 10}",
+        "{}",
+    });
+    auto target = makeMapVectorFromJson<int32_t, int32_t>({
+        "null",
+        "null",
+    });
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "{1: 10}",
+        "{}",
+    });
+    assertEqualVectors(expected, target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyFlatMapIntoMapVectorKeysInAllRows) {
+  // Key 1 has no in-map buffer, so it is in every row.
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+  auto target = makeMapVectorFromJson<int32_t, int32_t>({
+      "{7: 70}",
+      "{8: 80}",
+  });
+  target->copy(flatMap.get(), 0, 0, 2);
+
+  auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "{1: 11}",
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyMapIntoFlatMapVector) {
+  {
+    auto target = makeFlatMapVectorFromJson<int32_t, int32_t>({
+        "{1: 10, 2: 20}",
+        "{1: 11}",
+        "{1: 12}",
+        "null",
+        "{1: 14}",
+    });
+    auto map = makeMapVectorFromJson<int32_t, int32_t>({
+        "{2: 200, 3: 300}",
+        "null",
+        "{3: 301}",
+        "{}",
+    });
+
+    // Row 0 keeps its map. Row 1 gets an existing and a new key, and row 2
+    // becomes null. Null row 3 gets the new key again, and row 4 becomes
+    // empty.
+    SelectivityVector rows(5);
+    rows.setValid(0, false);
+    rows.updateBounds();
+    std::vector<vector_size_t> toSourceRow{0, 0, 1, 2, 3};
+    target->copy(map.get(), rows, toSourceRow.data());
+
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "{1: 10, 2: 20}",
+        "{2: 200, 3: 300}",
+        "null",
+        "{3: 301}",
+        "{}",
+    });
+    assertEqualVectors(expected, target);
+    EXPECT_EQ(target->numDistinctKeys(), 3);
+  }
+
+  // Dictionary-wrapped source that reverses the rows.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{1, 10}},
+        {{1, 11}},
+    });
+    auto map = maker_.mapVector<int32_t, int32_t>({
+        {{2, 20}},
+        {{3, 31}},
+    });
+    auto source = wrapInDictionary(makeIndices({1, 0}), 2, map);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = maker_.mapVector<int32_t, int32_t>({
+        {{3, 31}},
+        {{2, 20}},
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // Constant-wrapped source.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{1, 10}},
+        {{1, 11}},
+    });
+    auto map = maker_.mapVector<int32_t, int32_t>({
+        {{2, 20}},
+    });
+    auto source = BaseVector::wrapInConstant(2, 0, map);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = maker_.mapVector<int32_t, int32_t>({
+        {{2, 20}},
+        {{2, 20}},
+    });
+    assertEqualVectors(expected, target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyMapIntoFlatMapVectorKeysInAllRows) {
+  // Key 1 has no in-map buffer, so it is in every row. Copying into row 1
+  // removes it from that row only.
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({10, 11})},
+      std::vector<BufferPtr>{nullptr});
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({
+      "{2: 200}",
+  });
+  target->copy(map.get(), 1, 0, 1);
+
+  auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "{2: 200}",
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRoundTrip) {
+  // Copies every row of 'source' into a new MapVector, or into a new
+  // FlatMapVector without keys.
+  auto copyAll = [&](const VectorPtr& source, bool toFlatMap) {
+    VectorPtr target = toFlatMap
+        ? std::make_shared<FlatMapVector>(
+              pool_.get(),
+              source->type(),
+              nullptr,
+              source->size(),
+              nullptr,
+              std::vector<VectorPtr>{},
+              std::vector<BufferPtr>{})
+        : BaseVector::create(source->type(), source->size(), pool_.get());
+    target->copy(source.get(), 0, 0, source->size());
+    return target;
+  };
+
+  VectorFuzzer::Options options;
+  options.nullRatio = 0.1;
+  const auto seed = common::testutil::getRandomSeed(42);
+  VectorFuzzer mapFuzzer(options, pool_.get(), seed);
+  options.allowFlatMapVector = true;
+  options.flatMapRatio = 1.0;
+  VectorFuzzer flatMapFuzzer(options, pool_.get(), seed);
+
+  for (const auto& type :
+       {MAP(INTEGER(), BIGINT()), MAP(VARCHAR(), ARRAY(INTEGER()))}) {
+    for (int i = 0; i < 20; ++i) {
+      SCOPED_TRACE(fmt::format("type={} i={}", type->toString(), i));
+
+      // Map to flat map and back.
+      auto map = mapFuzzer.fuzz(type);
+      assertEqualVectors(map, copyAll(copyAll(map, true), false));
+
+      // Flat map to map and back.
+      auto flatMap = flatMapFuzzer.fuzz(type);
+      assertEqualVectors(flatMap, copyAll(copyAll(flatMap, false), true));
+    }
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyWrappedFlatMapIntoFlatMapVector) {
+  auto flatMap = maker_.flatMapVector<int32_t, int32_t>({
+      {{2, 20}},
+      {{3, 31}},
+  });
+
+  // Dictionary that reverses the rows.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{1, 10}},
+        {{1, 11}},
+    });
+    auto source = wrapInDictionary(makeIndices({1, 0}), 2, flatMap);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = maker_.mapVector<int32_t, int32_t>({
+        {{3, 31}},
+        {{2, 20}},
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // Dictionary that adds a null.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{1, 10}},
+        {{1, 11}},
+    });
+    auto nulls = allocateNulls(2, pool_.get());
+    bits::setNull(nulls->asMutable<uint64_t>(), 1);
+    auto source =
+        BaseVector::wrapInDictionary(nulls, makeIndices({1, 0}), 2, flatMap);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = makeNullableMapVector<int32_t, int32_t>({
+        {{{3, 31}}},
+        std::nullopt,
+    });
+    assertEqualVectors(expected, target);
+  }
+
+  // Constant.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{1, 10}},
+        {{1, 11}},
+    });
+    auto source = BaseVector::wrapInConstant(2, 1, flatMap);
+    target->copy(source.get(), 0, 0, 2);
+
+    auto expected = maker_.mapVector<int32_t, int32_t>({
+        {{3, 31}},
+        {{3, 31}},
+    });
+    assertEqualVectors(expected, target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyNullConstantIntoFlatMapVector) {
+  auto target = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{1, 11}},
+  });
+  auto source =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 2, pool());
+  target->copy(source.get(), 1, 0, 1);
+
+  auto expected = makeNullableMapVector<int32_t, int32_t>({
+      {{{1, 10}}},
+      std::nullopt,
+  });
+  assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyBetweenMapEncodingsWithStrings) {
+  // Strings longer than 12 bytes live in separate buffers, which the target
+  // must keep alive after the source is gone.
+  auto makeMap = [&]() {
+    return maker_.mapVector<StringView, StringView>({
+        {{StringView("second long key"), StringView("first long value")}},
+        {{StringView("third long key"), StringView("second long value")},
+         {StringView("second long key"), StringView("third long value")}},
+        {{StringView("third long key"), StringView("fourth long value")}},
+    });
+  };
+
+  // Map into flat map. Row 1 adds two new keys, and row 2 finds one again.
+  {
+    auto target = maker_.flatMapVector<StringView, StringView>({
+        {{StringView("first long key"), StringView("old long value")}},
+        {{StringView("first long key"), StringView("old long value")}},
+        {{StringView("first long key"), StringView("old long value")}},
+    });
+    auto source = makeMap();
+    target->copy(source.get(), 0, 0, 3);
+    source.reset();
+
+    assertEqualVectors(makeMap(), target);
+    EXPECT_EQ(target->numDistinctKeys(), 3);
+  }
+
+  // Flat map into map.
+  {
+    auto target = BaseVector::create(MAP(VARCHAR(), VARCHAR()), 3, pool());
+    auto source = maker_.flatMapVector<StringView, StringView>({
+        {{StringView("second long key"), StringView("first long value")}},
+        {{StringView("third long key"), StringView("second long value")},
+         {StringView("second long key"), StringView("third long value")}},
+        {{StringView("third long key"), StringView("fourth long value")}},
+    });
+    target->copy(source.get(), 0, 0, 3);
+    source.reset();
+
+    assertEqualVectors(makeMap(), target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyBetweenMapEncodingsWithArrayValues) {
+  // Key 1 is in both rows and key 2 is in row 1 only.
+  auto inMap = AlignedBuffer::allocate<bool>(2, pool_.get(), false);
+  bits::setBit(inMap->asMutable<uint64_t>(), 1);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), ARRAY(INTEGER())),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1, 2}),
+      std::vector<VectorPtr>{
+          makeArrayVector<int32_t>({{10, 11}, {12}}),
+          makeArrayVector<int32_t>({{}, {20, 21, 22}}),
+      },
+      std::vector<BufferPtr>{nullptr, inMap});
+  auto map = makeMapVector(
+      {0, 1},
+      makeFlatVector<int32_t>({1, 1, 2}),
+      makeArrayVector<int32_t>({{10, 11}, {12}, {20, 21, 22}}));
+
+  // Flat map into map.
+  {
+    auto target = BaseVector::create(map->type(), 2, pool());
+    target->copy(flatMap.get(), 0, 0, 2);
+    assertEqualVectors(map, target);
+  }
+
+  // Map into flat map.
+  {
+    auto target = std::make_shared<FlatMapVector>(
+        pool_.get(),
+        map->type(),
+        nullptr,
+        2,
+        makeFlatVector<int32_t>({3}),
+        std::vector<VectorPtr>{makeArrayVector<int32_t>({{30}, {31}})},
+        std::vector<BufferPtr>{nullptr});
+    target->copy(map.get(), 0, 0, 2);
+    assertEqualVectors(map, target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyFromLazyMapSources) {
+  auto flatMap = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{2, 20}},
+  });
+  auto map = maker_.mapVector<int32_t, int32_t>({
+      {{3, 30}},
+      {{4, 40}},
+  });
+
+  // Lazy flat map into map.
+  {
+    auto target = maker_.mapVector<int32_t, int32_t>({
+        {{7, 70}},
+        {{8, 80}},
+    });
+    target->copy(wrapInLazyDictionary(flatMap).get(), 0, 0, 2);
+    assertEqualVectors(flatMap, target);
+  }
+
+  // Lazy map into flat map.
+  {
+    auto target = maker_.flatMapVector<int32_t, int32_t>({
+        {{7, 70}},
+        {{8, 80}},
+    });
+    target->copy(wrapInLazyDictionary(map).get(), 0, 0, 2);
+    assertEqualVectors(map, target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyRejectsNonMapSources) {
+  auto array = makeArrayVector<int32_t>({{1}, {2}});
+  auto map = maker_.mapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{2, 20}},
+  });
+  VELOX_ASSERT_THROW(
+      map->copy(array.get(), 0, 0, 1),
+      "MapVector::copyRanges expects a map source");
+
+  auto flatMap = maker_.flatMapVector<int32_t, int32_t>({
+      {{1, 10}},
+      {{2, 20}},
+  });
+  VELOX_ASSERT_THROW(
+      flatMap->copy(array.get(), 0, 0, 1),
+      "FlatMapVector::copyRanges expects a map source");
+}
+
 struct MockBufferViewReleaser {
   void addRef() {}
   void release() {}
@@ -602,6 +1155,111 @@ TEST_F(FlatMapVectorTest, complexKeys) {
   EXPECT_EQ(projectedKey->valueAt(1), 202);
 }
 
+TEST_F(FlatMapVectorTest, getKeyChannels) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{3: 30}",
+      "{1: 13}",
+      "{1: 14}",
+  });
+  auto channel = [&](int32_t key) { return *flatMap->getKeyChannel(key); };
+  constexpr auto kNone = FlatMapVector::kNoChannel;
+
+  // Row 1 finds key 1 even though its map lacks it: in-map bits are not
+  // checked. Row 3 has a null key and row 4 a key the flat map does not have.
+  auto keys = makeNullableFlatVector<int32_t>({2, 1, 3, std::nullopt, 9});
+  SelectivityVector rows(5);
+  DecodedVector decodedKeys(*keys, rows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(rows, decodedKeys),
+      ::testing::ElementsAre(channel(2), channel(1), channel(3), kNone, kNone));
+
+  // Unselected rows are kNoChannel.
+  rows.setValid(0, false);
+  rows.updateBounds();
+  EXPECT_EQ(flatMap->getKeyChannels(rows, decodedKeys)[0], kNone);
+
+  // Dictionary-encoded keys, without and with nulls added by the dictionary.
+  SelectivityVector allRows(4);
+  auto baseKeys = makeFlatVector<int32_t>({1, 2, 3, 9});
+  auto wrappedKeys = BaseVector::wrapInDictionary(
+      nullptr, makeIndices({3, 0, 2, 1}), 4, baseKeys);
+  DecodedVector decodedWrappedKeys(*wrappedKeys, allRows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(allRows, decodedWrappedKeys),
+      ::testing::ElementsAre(kNone, channel(1), channel(3), channel(2)));
+
+  auto dictionaryNulls = allocateNulls(4, pool());
+  bits::setNull(dictionaryNulls->asMutable<uint64_t>(), 2);
+  auto wrappedNullableKeys = BaseVector::wrapInDictionary(
+      dictionaryNulls, makeIndices({3, 0, 2, 1}), 4, baseKeys);
+  DecodedVector decodedWrappedNullableKeys(*wrappedNullableKeys, allRows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(allRows, decodedWrappedNullableKeys),
+      ::testing::ElementsAre(kNone, channel(1), kNone, channel(2)));
+
+  // Constant keys: one the flat map has, one it does not, and a null one.
+  auto constantKeys = [&](const VectorPtr& keys) {
+    DecodedVector decoded(*keys, allRows);
+    return flatMap->getKeyChannels(allRows, decoded);
+  };
+  EXPECT_THAT(
+      constantKeys(BaseVector::wrapInConstant(4, 1, baseKeys)),
+      ::testing::Each(channel(2)));
+  EXPECT_THAT(
+      constantKeys(BaseVector::wrapInConstant(4, 3, baseKeys)),
+      ::testing::Each(kNone));
+  EXPECT_THAT(
+      constantKeys(BaseVector::createNullConstant(INTEGER(), 4, pool())),
+      ::testing::Each(kNone));
+}
+
+TEST_F(FlatMapVectorTest, getKeyChannelsKeyTypes) {
+  // Each case has keys that look up the first key, the second key and a key
+  // the flat map does not have.
+  auto check = [&](const VectorPtr& flatMapVector, const VectorPtr& keys) {
+    SCOPED_TRACE(keys->type()->toString());
+    const auto* flatMap = flatMapVector->as<FlatMapVector>();
+    SelectivityVector rows(keys->size());
+    DecodedVector decodedKeys(*keys, rows);
+    EXPECT_THAT(
+        flatMap->getKeyChannels(rows, decodedKeys),
+        ::testing::ElementsAre(
+            *flatMap->getKeyChannel(keys, 0),
+            *flatMap->getKeyChannel(keys, 1),
+            FlatMapVector::kNoChannel));
+  };
+
+  // Typed lookups.
+  check(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{1: 1, 2: 2}"}),
+      makeFlatVector<int64_t>({1, 2, 3}));
+  check(
+      makeFlatMapVectorFromJson<std::string, int32_t>({R"({"a": 1, "b": 2})"}),
+      makeFlatVector<std::string>({"a", "b", "c"}));
+
+  // Generic lookup, for a key type without a typed one.
+  check(
+      makeFlatMapVectorFromJson<int16_t, int32_t>({"{1: 1, 2: 2}"}),
+      makeFlatVector<int16_t>({1, 2, 3}));
+
+  // Generic lookup for keys with custom comparison, where 256 equals 0 and 257
+  // equals 1.
+  auto customType = test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
+  check(
+      std::make_shared<FlatMapVector>(
+          pool(),
+          MAP(customType, INTEGER()),
+          nullptr,
+          1,
+          makeFlatVector<int64_t>({0, 1}, customType),
+          std::vector<VectorPtr>{
+              makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({1})},
+          std::vector<BufferPtr>{}),
+      makeFlatVector<int64_t>({256, 257, 3}, customType));
+}
+
 TEST_F(FlatMapVectorTest, setDistinctKeys) {
   // Distinct keys vector.
   auto distinctKeys = maker_.flatVector<int64_t>({
@@ -642,6 +1300,37 @@ TEST_F(FlatMapVectorTest, setDistinctKeys) {
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)101), std::nullopt);
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)102), std::nullopt);
   EXPECT_EQ(flatMapVector->getKeyChannel((int64_t)103), std::nullopt);
+}
+
+TEST_F(FlatMapVectorTest, appendDistinctKey) {
+  auto makeVector = [&] {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(BIGINT(), REAL()),
+        nullptr,
+        2,
+        maker_.flatVector<int64_t>({101, 102}),
+        std::vector<VectorPtr>{nullptr, nullptr},
+        std::vector<BufferPtr>{});
+  };
+  auto newKeys = maker_.flatVector<int64_t>({103});
+
+  // Append before any lookup.
+  {
+    auto vector = makeVector();
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
+
+  // Append after a lookup.
+  {
+    auto vector = makeVector();
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), std::nullopt);
+    vector->appendDistinctKey(newKeys, 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{101}), 0);
+    EXPECT_EQ(vector->getKeyChannel(int64_t{103}), 2);
+  }
 }
 
 TEST_F(FlatMapVectorTest, sortedKeyIndices) {
@@ -825,6 +1514,73 @@ TEST_F(FlatMapVectorTest, slice) {
   EXPECT_NE(slicedVector->compare(vector.get(), 0, 0), 0);
 }
 
+TEST_F(FlatMapVectorTest, shareKeyIndex) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({"{1:10, 2:20}"});
+  EXPECT_TRUE(
+      vector->slice(0, 1)->as<FlatMapVector>()->testingSharesKeyIndex(*vector));
+
+  auto sameKeys = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      vector->type(),
+      nullptr,
+      vector->size(),
+      vector->distinctKeys(),
+      vector->mapValues(),
+      vector->inMaps());
+  EXPECT_FALSE(sameKeys->testingSharesKeyIndex(*vector));
+  sameKeys->shareKeyIndex(*vector);
+  EXPECT_TRUE(sameKeys->testingSharesKeyIndex(*vector));
+
+  // Equal keys in a different vector are not enough.
+  auto equalKeys =
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{1:10, 2:20}"});
+  equalKeys->shareKeyIndex(*vector);
+  EXPECT_FALSE(equalKeys->testingSharesKeyIndex(*vector));
+}
+
+TEST_F(FlatMapVectorTest, appendKeyAfterSlice) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20}",
+      "{1:11}",
+  });
+  const auto channel = vector->getKeyChannel(int64_t{2});
+  ASSERT_TRUE(channel.has_value());
+
+  auto slice = vector->slice(0, 1);
+  auto* slicedVector = slice->as<FlatMapVector>();
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{2}), channel);
+
+  // Appending a key to the original must leave the slice's keys unchanged.
+  vector->ensureWritable(SelectivityVector(vector->size()));
+  auto source = makeFlatMapVectorFromJson<int64_t, int32_t>({"{3:30}"});
+  std::vector<BaseVector::CopyRange> ranges = {{0, 1, 1}};
+  vector->copyRanges(source.get(), ranges);
+
+  EXPECT_TRUE(vector->getKeyChannel(int64_t{3}).has_value());
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{3}), std::nullopt);
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{2}), channel);
+  EXPECT_EQ(slicedVector->numDistinctKeys(), 2);
+}
+
+TEST_F(FlatMapVectorTest, appendKeyAfterSliceBeforeLookup) {
+  auto vector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20}",
+      "{1:11}",
+  });
+  auto slice = vector->slice(0, 1);
+  auto* slicedVector = slice->as<FlatMapVector>();
+
+  // Append to the original before either vector has looked up a key.
+  vector->ensureWritable(SelectivityVector(vector->size()));
+  auto source = makeFlatMapVectorFromJson<int64_t, int32_t>({"{3:30}"});
+  vector->appendDistinctKey(source->distinctKeys(), 0);
+
+  // The slice looks up first, which must not decide the original's index.
+  EXPECT_EQ(slicedVector->getKeyChannel(int64_t{3}), std::nullopt);
+  EXPECT_TRUE(vector->getKeyChannel(int64_t{3}).has_value());
+  EXPECT_TRUE(slicedVector->getKeyChannel(int64_t{2}).has_value());
+}
+
 TEST_F(FlatMapVectorTest, toMapVector) {
   testFlatMapToMap<int64_t, int64_t>({});
   testFlatMapToMap<int64_t, int64_t>({
@@ -844,6 +1600,84 @@ TEST_F(FlatMapVectorTest, toMapVector) {
       {{{101, 11}, {103, 13}, {105, std::nullopt}}},
       {{{101, 1}, {102, 2}, {103, 3}}},
   });
+}
+
+TEST_F(FlatMapVectorTest, fromMapVector) {
+  testMapToFlatMap<int64_t, int64_t>({});
+  testMapToFlatMap<int64_t, int64_t>({
+      {{{0, 0}}},
+  });
+  testMapToFlatMap<int32_t, StringView>({
+      {{{0, "0"}}},
+      {{{1, "1"}}},
+      {{{2, "2"}}},
+      {{{3, std::nullopt}}},
+  });
+  testMapToFlatMap<int64_t, int64_t>({
+      {{{101, 1}, {102, 2}, {103, 3}}},
+      {{{105, 0}, {106, 0}}},
+      {std::nullopt},
+      std::vector<std::pair<int64_t, std::optional<int64_t>>>{},
+      {{{101, 11}, {103, 13}, {105, std::nullopt}}},
+  });
+
+  // Complex keys: [1] and [2] in row 0, [1] in row 1.
+  auto mapVector = makeMapVector(
+      {0, 2},
+      makeArrayVector<int64_t>({{1}, {2}, {1}}),
+      makeFlatVector<int64_t>({10, 20, 30}));
+  auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
+  EXPECT_EQ(flatMapVector->numDistinctKeys(), 2);
+  assertEqualVectors(mapVector, flatMapVector);
+}
+
+TEST_F(FlatMapVectorTest, withFlatMapBaseAndWithMapBase) {
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "null",
+      "{2: 20, 1: 11}",
+  });
+  auto dictionaryNulls = allocateNulls(3, pool());
+  bits::setNull(dictionaryNulls->asMutable<uint64_t>(), 0);
+
+  // Each input keeps its wrapping, and only its base map changes encoding.
+  for (const auto& input : std::vector<VectorPtr>{
+           map,
+           BaseVector::wrapInDictionary(
+               dictionaryNulls, makeIndicesInReverse(3), 3, map),
+           BaseVector::wrapInConstant(3, 2, map),
+       }) {
+    SCOPED_TRACE(input->toString());
+    const bool wrapped = input->wrappedVector() != input.get();
+
+    auto flatMapBased = withFlatMapBase(input);
+    EXPECT_EQ(
+        flatMapBased->wrappedVector()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    if (wrapped) {
+      EXPECT_EQ(flatMapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, flatMapBased);
+
+    auto mapBased = withMapBase(flatMapBased);
+    EXPECT_EQ(
+        mapBased->wrappedVector()->encoding(), VectorEncoding::Simple::MAP);
+    if (wrapped) {
+      EXPECT_EQ(mapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, mapBased);
+  }
+
+  // A null constant stays a null constant.
+  auto nullConstant =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 3, pool());
+  auto flatMapBased = withFlatMapBase(nullConstant);
+  EXPECT_TRUE(flatMapBased->isConstantEncoding());
+  assertEqualVectors(nullConstant, flatMapBased);
+  assertEqualVectors(nullConstant, withMapBase(flatMapBased));
+
+  // A base that already has the requested encoding is returned as is.
+  EXPECT_EQ(withMapBase(map), map);
 }
 
 TEST_F(FlatMapVectorTest, copyRanges) {

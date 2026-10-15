@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Parallel Encoding and Decoding in Nimble: Faster Flushes and Reads](https://velox-lib.io/blog/nimble-parallel-encoding-decoding) (2026-10-05)
 - [Slicing Encoded Streams Efficiently in Velox Nimble](https://velox-lib.io/blog/nimble-stream-slicing) (2026-09-08)
 - [Native Delta Statistics with Velox Task Barriers](https://velox-lib.io/blog/native-delta-statistics) (2026-08-25)
-- [Build Once, Probe Many: Hash Table Caching in Velox](https://velox-lib.io/blog/hash-table-caching) (2026-08-03)
 
 ## Community
 
